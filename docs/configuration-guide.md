@@ -950,30 +950,23 @@ Changing extension parent origins also requires redistributing its generated ZIP
 CORS values are runtime API configuration and must exactly match the browser
 origin.
 
-## Authentication Token
+## JWT Signing Secret and Session Tokens
 
-**Location:** `~/.config/dam-hopper/server-token`
+`~/.config/dam-hopper/server-token` stores a 32-character hexadecimal UUIDv4
+used only as the server's JWT signing secret. On Unix it is created with mode
+`0600`; it is not a client bearer token.
 
-**Permissions:** 0600 (read-only to user)
-
-**Format:** Hex-encoded UUID (64 characters)
-
-### Generate New Token
+`--new-token` rotates this signing secret and invalidates existing signed
+sessions:
 
 ```bash
 cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
 ```
 
-Saves to `~/.config/dam-hopper/server-token`.
-
-### Use Token
-
-Include in all API requests:
-
-```bash
-curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
-  http://localhost:4800/api/projects
-```
+Normal login returns an MFA challenge, not a bearer token. Use the `token`
+returned by `/api/auth/mfa/confirm` or `/api/auth/mfa/verify`, or the
+`damhopper-auth` cookie where accepted. Never send the signing-secret file as
+`Authorization: Bearer`; see [Authentication API](./authentication-api.md).
 
 ## Plugin Management Administrator Allowlist
 
@@ -1180,11 +1173,14 @@ layouts/history discarded by the fresh reset cannot be restored by rollback.
 
 ## SSH Key Management
 
-SSH credentials are loaded on-demand via `/api/ssh/keys/load`:
+SSH credentials are loaded on-demand via `/api/ssh/keys/load`. Use an
+MFA-issued session JWT, not `server-token` (the server signing secret); see
+[Authentication API](./authentication-api.md).
 
 ```bash
+session_jwt="<session JWT returned by MFA confirmation or verification>"
 curl -X POST \
-  -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
+  -H "Authorization: Bearer $session_jwt" \
   -H "Content-Type: application/json" \
   -d '{"privateKeyPath": "/home/user/.ssh/id_rsa"}' \
   http://localhost:4800/api/ssh/keys/load
@@ -1350,16 +1346,11 @@ Verify in dam-hopper.toml:
 ls -la /configured/project/path
 ```
 
-### Token issues
+### Session token issues
 
-Regenerate token:
-
-```bash
-cargo run -- --config /path/to/dam-hopper.toml --new-token
-cat ~/.config/dam-hopper/server-token
-```
-
-Include in Authorization header for all requests.
+When a session expires or stops validating, sign in with password and complete
+MFA again. The `server-token` file is a signing secret, not a bearer token;
+see [Authentication API](./authentication-api.md).
 
 ## Example: Multi-Project Workspace
 

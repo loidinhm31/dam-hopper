@@ -153,6 +153,34 @@ pub struct AuthClaims {
     pub exp: usize,
 }
 
+impl AuthClaims {
+    /// Encode and sign claims into a V2 JWT.
+    pub fn encode(&self, secret: &str) -> anyhow::Result<String> {
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            self,
+            &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .map_err(|e| anyhow::anyhow!("JWT encoding failed: {}", e))
+    }
+
+    /// Decode and verify claims from a V2 JWT.
+    ///
+    /// Expiration validation is disabled in the JWT decoder so that our server-authoritative
+    /// clock policy evaluator enforces exact zero-grace deadlines.
+    pub fn decode(token: &str, secret: &str) -> Option<Self> {
+        let mut validation = jsonwebtoken::Validation::default();
+        validation.validate_exp = false;
+        jsonwebtoken::decode::<Self>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        )
+        .ok()
+        .map(|token_data| token_data.claims)
+    }
+}
+
 /// Decision returned by the pure policy evaluator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthDecision {

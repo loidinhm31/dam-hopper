@@ -5230,50 +5230,33 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 
 ## Authentication & Security
 
-**Current authentication (before the proposed MFA cutover):**
+**Phase 02 authentication API (implemented; broader session enforcement remains in Phase 03):**
 
-- `server/src/api/auth.rs` verifies enabled MongoDB accounts with bcrypt and
-  issues signed JWTs containing `sub` and `exp`, with a 30-day lifetime.
-- `~/.config/dam-hopper/server-token` supplies the JWT signing secret, not a
-  user access token. REST accepts Bearer credentials or the HttpOnly auth cookie.
-- Protected-route middleware and WebSocket admission validate JWTs; public
-  health/auth routes and capability-authorized media streams have separate gates.
-
-### Proposed mandatory MFA and session lifecycle — not implemented
-
-Design dated 2026-09-26; implementation tracked in
-[the token rotation and MFA plan](../plans/260926-2157-token-rotation-mfa/plan.md).
-
-- Password verification yields only a short-lived, purpose-bound challenge.
-  Accounts without confirmed MFA must enroll using an authenticator QR code or
-  its identical manual Base32 key, then prove a TOTP code before gaining access.
-- Every new password session requires TOTP. Existing sessions must prove TOTP
-  again after **10 days**; session lifetime remains a fixed **30 days**.
-  At 30 days, password plus fresh TOTP creates a replacement session.
-  Periodic MFA must not move the original absolute expiry.
-- Mandatory versioned session claims reject all pre-cutover JWTs. MongoDB
-  sessions and a per-user `authVersion` provide revocation; authentication checks
-  current account enablement, enrollment, session revision, and both deadlines.
-- Session freshness belongs to a session, not the whole account. A code entered
-  on one device must not refresh other devices. Challenge credentials never
-  authorize workbench APIs, WebSockets, media, or plugin operations.
-- One server auth policy covers HTTP, auth status, WebSocket admission and
-  ongoing traffic, plugin epochs, and media capabilities. Known expiry deadlines
-  terminate live access; direct MongoDB resets invalidate new admissions and
-  retire existing streams within the documented revalidation bound.
-- TOTP secrets are encrypted with a dedicated server-managed key, separate from
-  JWT signing and OPAQUE keys. QR payloads, setup keys, and codes are never logged
-  or persisted by clients. Enrollment and verification require rate limits,
-  single-use challenge consumption, and atomic TOTP replay protection.
-- Recovery is an operator-controlled MongoDB update: increment `authVersion`
-  and unset MFA state atomically. No admin page, reset endpoint, or new recovery
-  CLI. Password login and new enrollment are required afterward.
-- Preserve profile/generation ownership in the shared UI. An MFA-blocked profile
-  must not gate healthy profiles. Keep explicit local `--no-auth` behavior and its
-  existing production restrictions; do not add an authenticated-mode bypass.
-
-Implementation contract and recovery runbook design:
-[security contract](../plans/260926-2157-token-rotation-mfa/security-contract.md).
+- In normal mode, `POST /api/auth/login` verifies the password and returns
+  `enrollmentRequired` or `mfaRequired` with a five-minute challenge. It does
+  not create a session or set an auth cookie.
+- `/api/auth/mfa/setup` returns the pending TOTP secret, provisioning URI, and
+  matching parameters. `/confirm` enrolls the factor and creates the first
+  session; `/verify` completes login MFA or a session-bound step-up.
+- Successful confirmation and verification return a V2 session JWT and set the
+  HttpOnly auth cookie. Sessions expire after 30 days; MFA freshness expires
+  after 10 days and step-up does not extend the absolute expiry.
+- `/api/auth/status` evaluates V2 claims against persisted session/account state,
+  returns issue/expiry/MFA deadlines, and reports `MFA_REQUIRED` without
+  treating the stale session as authenticated. Logout revokes a supplied
+  session and clears the cookie even when MFA is stale.
+- `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user
+  bearer token. Use the session JWT returned by confirmation or verification.
+- General protected-route `require_auth` still checks JWT signature/expiry
+  without validating the persisted session policy. Full REST, WebSocket, media,
+  plugin, and stream enforcement remains in the
+  [Phase 03 transport-enforcement plan](../plans/260926-2157-token-rotation-mfa/phase-03-transport-enforcement.md).
+- The step-up challenge handler currently accepts either Bearer or cookie
+  credentials, although the security contract specifies Bearer-only use. The
+  [Authentication API](./authentication-api.md) documents this deviation.
+- MFA key provisioning, encrypted factor state, replay protection, and the
+  operator-only MongoDB recovery boundary are documented in the
+  [Phase 01 auth guide](./phase-01-auth-state-cryptography-and-policy.md).
 
 ### Existing resource security boundaries
 

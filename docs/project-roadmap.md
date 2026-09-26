@@ -9,10 +9,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Mandatory MFA and token lifecycle (2026-09-26)
 
-- **Plan status: IN PROGRESS (1/5 phases; 20%; updated 2026-09-26).** Phase 01 is complete; Phases 02–05 remain pending.
+- **Plan status: IN PROGRESS (2/5 phases; 40%; updated 2026-09-27).** Phases 01–02 are complete; Phases 03–05 remain pending.
 - **Phase 01 — Auth state, cryptography, and policy — DONE (2026-09-26; 100%).** Established auth/session state, key-backed TOTP secret encryption, replay/concurrency controls, and deterministic session policy.
+- **Phase 02 — Enrollment, verification, and session API — DONE (2026-09-27; 100%).** Replaced password-only token issuance with challenge-driven enrollment/login/step-up and session creation only after MFA proof. See the [phase plan](../plans/260926-2157-token-rotation-mfa/phase-02-authentication-api.md).
 - **Validation:** The code-review report records targeted auth tests **5/5** and the server suite **1,515 passed, 0 failed, 5 ignored**; review score **9.0/10**, no critical issues. The key-file loader metadata/read TOCTOU warning and other review follow-ups remain qualification work; no release or production rollout is claimed. See the [plan](../plans/260926-2157-token-rotation-mfa/plan.md), [Phase 01 plan](../plans/260926-2157-token-rotation-mfa/phase-01-auth-state-and-policy.md), and [review report](../plans/reports/code-review-260926-2258-phase01-auth-state-and-policy.md).
-- **Next:** Phase 02 — Enrollment, MFA, and session APIs; keep production rollout gated on Phases 02–05 and qualification.
+- **Phase 02 validation:** Scoped tests passed **28/28**; code review approved **8.5/10 with findings**. Findings remain follow-up items; no production rollout or qualification is claimed. See the [tester report](../plans/reports/tester-260927-0056-phase-02-authentication-api.md) and [review report](../plans/reports/code-review-260927-0031-phase-02-auth-api.md).
+- **Next:** Phase 03 — enforce authentication and session policy across remaining subsystems (REST/live transport, media, plugin runner/epochs, filesystem/terminal); Phase 04 consumes the frozen DTOs in the UI. Keep production rollout gated on Phases 03–05 and qualification.
 
 
 ### All-project advisor history integration (2026-09-24)

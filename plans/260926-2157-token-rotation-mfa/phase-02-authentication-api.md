@@ -6,7 +6,7 @@
 
 ## Overview
 
-Date: 2026-09-26. Priority: P1. Implementation: pending. Review: pending. Replace password-only token issuance with purpose-bound enrollment/login/step-up flows.
+Date: 2026-09-27. Priority: P1. Status: DONE (2026-09-27; 100%). Implementation: complete. Review: approved with findings.
 
 ## Key Insights
 
@@ -40,10 +40,10 @@ Create: `server/src/api/auth_mfa.rs` if splitting enrollment handlers keeps `aut
 
 ## Todo list
 
-- [ ] Replace login token response with restricted states.
-- [ ] Implement setup, confirm, login verify, and periodic challenge/verify.
-- [ ] Converge status/logout with durable policy.
-- [ ] Freeze error/deadline DTOs for Phase 04.
+- [x] Replace login token response with restricted states.
+- [x] Implement setup, confirm, login verify, and periodic challenge/verify.
+- [x] Converge status/logout with durable policy.
+- [x] Freeze error/deadline DTOs for Phase 04.
 
 ## Success Criteria
 
@@ -52,6 +52,7 @@ Password alone cannot call a protected endpoint. First code completes enrollment
 ## Risk Assessment
 
 Lost successful response may require full login; never accept an old credential as a convenience fallback. Old clients will not understand challenges and must fail closed, with an actionable upgrade/login message in new clients.
+Code review approved Phase 02 with findings (8.5/10); account-enumeration/timing, public-login body/IP throttling, the legacy status fallback, and the step-up credential policy require explicit follow-up disposition before release. See [review report](../reports/code-review-260927-0031-phase-02-auth-api.md).
 
 ## Security Considerations
 
@@ -59,4 +60,4 @@ Session and challenge tokens are distinct types/purposes. Restrict stale credent
 
 ## Next steps
 
-Phase 03 enforces the policy everywhere; Phase 04 uses the frozen DTOs. No intermediate deployment before both are complete.
+Phase 02 — DONE (2026-09-27; 100%). Scoped tests passed 28/28. Review approved with findings; this is not production qualification. Next is Phase 03: enforce authentication and session policy across remaining subsystems (WebSocket, media streaming, plugin runner/epochs, and filesystem/terminal routes). Phase 04 consumes the frozen DTOs in the React workbench UI. See the [test report](../reports/tester-260927-0056-phase-02-authentication-api.md) and [review report](../reports/code-review-260927-0031-phase-02-auth-api.md).

@@ -11,7 +11,7 @@ created: 2026-09-26
 
 # Mandatory MFA and token lifecycle
 
-Phase 01 implementation completed 2026-09-26; Phases 02–05 remain pending. No production data changed.
+Phase 01 implementation completed 2026-09-26; Phase 02 completed 2026-09-27. Phases 03–05 remain pending. No production data changed.
 
 ## Policy
 
@@ -27,20 +27,20 @@ Phase 01 implementation completed 2026-09-26; Phases 02–05 remain pending. No 
 
 Keep bcrypt, JWT transport, MongoDB, existing shared UI, and `react-qr-code`. Add MongoDB session/challenge state, encrypted TOTP secrets, user authVersion, and session credentialVersion. Challenge-only credentials never authorize workbench access. One policy covers REST, WebSockets, plugin epochs, and media capabilities. No refresh-token subsystem or identity-provider migration.
 
-[Security contract](./security-contract.md) specifies states, schemas, API responses, concurrency, deadlines, secret provisioning, and MongoDB recovery. Phase 01 implements the auth-state/policy foundation; full cutover remains pending completion of Phases 02–05.
+The [security contract](./security-contract.md) specifies states, schemas, API responses, concurrency, deadlines, secret provisioning, and MongoDB recovery. Phases 01–02 implement the auth-state/policy foundation and enrollment/session API; full cutover remains pending completion of Phases 03–05.
 
 ## Phases
 
 | # | Phase | Status | Progress |
 | --- | --- | --- | --- |
 | 01 | [Auth state, cryptography, and policy](./phase-01-auth-state-and-policy.md) | DONE (2026-09-26) | 100% |
-| 02 | [Enrollment, MFA, and session APIs](./phase-02-authentication-api.md) | Pending | 0% |
+| 02 | [Enrollment, MFA, and session APIs](./phase-02-authentication-api.md) | DONE (2026-09-27) | 100% |
 | 03 | [REST/live transport enforcement](./phase-03-transport-enforcement.md) | Pending | 0% |
 | 04 | [Profile-owned enrollment and MFA UI](./phase-04-profile-mfa-flow.md) | Pending | 0% |
 | 05 | [Qualification, rollout, and recovery](./phase-05-qualification-and-rollout.md) | Pending | 0% |
 
 
-Plan progress: **IN PROGRESS (1/5 phases; 20%; updated 2026-09-26).**
+Plan progress: **IN PROGRESS (2/5 phases; 40%; updated 2026-09-27).**
 Dependencies: 01 -> 02 -> 03; 04 can proceed against frozen 02 contracts while 03 is implemented; 05 requires all phases. Do not deploy any intermediate password-only or UI-only state.
 
 ## Evidence and risks
@@ -53,6 +53,7 @@ Pre-Phase 01 baseline: `server/src/api/auth.rs` minted 30-day `sub`/`exp` JWTs a
 - [Acceptance matrix](./acceptance-matrix.md): exact deadline edges, replay races, legacy logout, live sockets/streams, profile isolation, recovery, fail-closed outages.
 - Deployment prerequisites: dedicated protected MFA key file, compatible client/server rollout, isolated MongoDB for auth qualification, encrypted network transport.
 - Manual MongoDB reset is privileged recovery. New admissions fail immediately; existing output has a documented bounded revalidation delay. Restart/disconnect instances for immediate containment.
+- Phase 02 evidence: scoped validation passed 28/28; code review approved (8.5/10) with findings. Review items remain follow-ups before release qualification; see [tester report](../reports/tester-260927-0056-phase-02-authentication-api.md) and [review report](../reports/code-review-260927-0031-phase-02-auth-api.md).
 
 ## Workflow status
 
@@ -68,8 +69,9 @@ Validated: 2026-09-26. Questions asked: 3. User explicitly confirmed:
 
 Action for Phase 04: implement a narrow native-input exemption covering username/password/TOTP and required login controls, including the global input-policy guard; do not build a custom auth keyboard. This validation resolves the phase's interaction decision; phase files remain unchanged per validation workflow.
 
-Phase 01 implementation authorization and development are complete; production rollout and Phases 02–05 remain pending.
+Phase 01 and Phase 02 implementation and development are complete; production rollout and Phases 03–05 remain pending.
 
 ## Unresolved questions
 
-None. Key-file provisioning, isolated MongoDB, and actual desktop/native/mobile qualification remain implementation prerequisites, not unanswered product decisions.
+Product decisions: none. Phase 02 engineering follow-ups: (1) enforce the contract's Bearer-only step-up challenge policy (the current handler accepts cookie credentials); (2) decide whether source-IP throttling is proxy-owned or implemented in-process. See the [review report](../reports/code-review-260927-0031-phase-02-auth-api.md).
+Key-file provisioning, isolated MongoDB, and actual desktop/native/mobile qualification remain implementation prerequisites, not unanswered product decisions.

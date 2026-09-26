@@ -4,13 +4,13 @@
 
 ## Scope and integration boundary
 
-Phase 01 adds the MongoDB-backed auth-state model, persistence primitives, cryptographic helpers, TOTP verification, and a deterministic session-policy evaluator. It does **not** complete the HTTP MFA flow or switch protected-route admission to this evaluator:
+Phase 01 adds the MongoDB-backed auth-state model, persistence primitives, cryptographic helpers, TOTP verification, and deterministic session-policy evaluator. Phase 02 wires them into challenge-based login, enrollment, verification, status, and logout; see the [Authentication API](./authentication-api.md).
 
 - `AppState` owns an `Arc<AuthService>`. `AuthService::evaluate_claims` loads the session and user, then calls the pure policy evaluator.
-- The current `server/src/api/auth.rs` login and `require_auth` paths still use the existing subject/expiry JWT flow; `require_auth` does not call `evaluate_claims`.
-- No MFA setup, enrollment-confirmation, challenge, or step-up HTTP routes are exposed by this phase. API integration is a later phase in the [auth plan](../plans/260926-2157-token-rotation-mfa/plan.md).
+- `server/src/api/auth.rs` uses this evaluator for session status, but `require_auth` still checks JWT signature/expiry without validating persisted session state.
+- Broader session-policy admission across protected REST, WebSocket, and streaming paths remains the Phase 03 integration boundary in the [auth plan](../plans/260926-2157-token-rotation-mfa/phase-03-transport-enforcement.md).
 
-Treat the 30-day session and 10-day MFA rules below as implemented state/policy primitives, not as an end-to-end enforcement claim for current HTTP requests.
+Session issuance and status enforce the 30-day absolute and 10-day MFA freshness deadlines; they are not yet universal rules on every protected request.
 
 ## Module map
 
@@ -23,8 +23,10 @@ Treat the 30-day session and 10-day MFA rules below as implemented state/policy 
 | `server/src/auth/totp.rs` | Secret generation/encoding, `otpauth://` URI construction, TOTP verification, and replay check |
 | `server/src/auth/mod.rs` | `AuthService`, opaque challenge-token generation/digesting, and state-backed claim evaluation |
 | `server/src/state.rs`, `server/src/main.rs` | `AppState` ownership, key loading, and auth-store index initialization |
-| `server/src/api/auth.rs` | Existing API/JWT middleware and routes; not yet wired to the Phase 01 session evaluator |
-| `server/tests/auth_state_and_policy.rs` | Focused policy, encryption, TOTP/replay, throttle, and MongoDB store coverage |
+| `server/src/api/auth.rs` | Password login challenges, session-backed status/logout, and existing protected-route JWT middleware |
+| `server/src/api/auth_mfa.rs` | Challenge-gated TOTP enrollment, login verification, and step-up handlers |
+| `server/tests/auth_mfa_api.rs` | HTTP lifecycle coverage for enrollment, login MFA, session step-up/status/logout, and edge cases |
+| `server/tests/auth_state_and_policy.rs` | Focused policy, encryption, TOTP/replay, throttle, and MongoDB-store coverage |
 
 ## Persisted state and policy
 
@@ -70,7 +72,8 @@ The MFA key is encryption material, not the JWT signing secret. Do not put it in
 
 ## Related documentation
 
-- [API Reference](./api-reference.md#authentication) — current route behavior and Phase 01 API boundary
+- [Authentication API](./authentication-api.md) — Phase 02 route contract and JSON examples
+- [API Reference](./api-reference.md#authentication) — server-wide route index
 - [Configuration Guide](./configuration-guide.md#environment-variables) — environment-variable index
 - [System Architecture](./system-architecture.md) — server-wide subsystem architecture
 - [Phase 01 plan](../plans/260926-2157-token-rotation-mfa/phase-01-auth-state-and-policy.md) and [parent auth plan](../plans/260926-2157-token-rotation-mfa/plan.md) — implementation record and next-phase sequencing

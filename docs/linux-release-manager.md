@@ -598,13 +598,10 @@ Role-aware collection reads the role from `/etc/dam-hopper/host.toml`:
 - Missing or unknown role remains unknown and prevents a complete historical
   result; it is not converted to `notApplicable`.
 
-The host command adapter invokes only fixed `systemctl`, `journalctl`, and
-`systemd-inhibit` forms. It uses locale `C`, null stdin, discarded stderr,
-five-second deadlines, and bounded stdout. The local API adapter uses only
-`http://127.0.0.1:4801/api/system/idle-suspend/v1/status` with token
-`/var/lib/dam-hopper/.config/dam-hopper/server-token`, no redirects, a
-five-second deadline, and a 256 KiB body cap. Probes are read-only and redact
-journal message text, credentials, terminal data, arguments, and addresses.
+The host adapter invokes only fixed `systemctl`, `journalctl`, and `systemd-inhibit` forms (locale `C`, null stdin, discarded stderr, five-second deadlines, bounded stdout).
+The local API probe sends `/var/lib/dam-hopper/.config/dam-hopper/server-token` as Bearer to `/api/system/idle-suspend/v1/status` (no redirects, five-second deadline, 256 KiB cap).
+The file is the JWT signing secret, not an MFA session JWT, so this probe cannot authenticate in normal mode; see [Authentication API](./authentication-api.md).
+Probes are read-only and redact journal text, credentials, terminal data, arguments, and addresses.
 Non-root collection never calls `sudo`, setuid helpers, or other escalation;
 helper audit is `permissionDenied`, so an applicable non-root run is partial.
 
