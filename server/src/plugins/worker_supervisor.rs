@@ -331,6 +331,9 @@ impl InstallationSupervisor {
                 )));
             }
         }
+        if matches!(self.status(), SupervisorStatus::Stopped) && inst.enabled {
+            self.activate().await?;
+        }
         let (worker, context_id, expires_at_secs) = {
             let mut inner = self.inner.lock();
             if !matches!(inner.status, SupervisorStatus::Ready) {
@@ -493,6 +496,9 @@ impl InstallationSupervisor {
         let is_long_running =
             params.operation == "advisor.scan" || params.deadline_ms.map_or(false, |d| d > 10_000);
 
+        if matches!(self.status(), SupervisorStatus::Stopped) && inst.enabled {
+            self.activate().await?;
+        }
         let (worker, req_timeout, req_payload) = {
             let mut inner = self.inner.lock();
             if !matches!(inner.status, SupervisorStatus::Ready) {
@@ -753,6 +759,9 @@ impl SupervisorManager {
     ) -> Result<Arc<InstallationSupervisor>, PluginError> {
         let mut map = self.supervisors.lock().await;
         if let Some(sup) = map.get(installation_id) {
+            if matches!(sup.status(), SupervisorStatus::Stopped) {
+                sup.activate().await?;
+            }
             return Ok(sup.clone());
         }
 
@@ -797,6 +806,8 @@ impl SupervisorManager {
             inst.activation_generation,
             self.registry.clone(),
         ));
+        sup.activate().await?;
+
 
         map.insert(installation_id.to_string(), sup.clone());
         Ok(sup)

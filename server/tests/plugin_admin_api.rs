@@ -124,7 +124,7 @@ struct TestHarness {
 
 async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
     let uri = std::env::var("TEST_MONGODB_URI").unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
-    let mut client = mongodb::Client::with_uri_str(&uri).await.ok();
+    let client = mongodb::Client::with_uri_str(&uri).await.ok();
     let mut db = client.as_ref().map(|c| c.database(db_name));
     let mut is_connected = if let Some(ref d) = db {
         d.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_ok()
