@@ -46,8 +46,10 @@ const FS_CHAN_CAP: usize = 512;
 const ALERT_CHAN_CAP: usize = 32;
 
 /// WS close code for backpressure overflow (deprecated with channel split).
-const CLOSE_OVERFLOW: u16 = 4001;
-
+pub const CLOSE_OVERFLOW: u16 = 4001;
+pub const CLOSE_MFA_REQUIRED: u16 = 4403;
+pub const CLOSE_FULL_LOGIN_REQUIRED: u16 = 4401;
+pub const CLOSE_AUTH_UNAVAILABLE: u16 = 1013;
 /// Max file size for unrestricted WS read (5 MB). Larger files require range reads.
 const FS_WS_READ_MAX: u64 = 5 * 1024 * 1024;
 
@@ -151,34 +153,89 @@ pub async fn ws_handler(
             axum::Json(serde_json::json!({ "error": "Origin not allowed" })),
         ));
     }
-
-    let authenticated_actor = if state.no_auth {
-        Some(crate::api::auth::AuthenticatedActor {
-            subject: "dev-user".to_string(),
-            exp: None,
-        })
-    } else if let Some(t) = &token {
-        crate::api::auth::authenticate_token(t, &state.jwt_secret)
+    let (actor, epoch_id) = if state.no_auth {
+        (crate::api::auth::AuthenticatedActor::dev_user(), 0)
     } else {
-        None
-    };
-
-    let Some(actor) = authenticated_actor else {
-        return axum::response::IntoResponse::into_response((
-            StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({ "error": "Unauthorized" })),
-        ));
-    };
-
-    let epoch_id = if !state.no_auth {
-        let exp_secs = actor.exp.map(|e| e as u64);
-        state
-            .plugin_service
-            .auth_service()
-            .epoch_registry()
-            .issue_epoch(&actor.subject, exp_secs)
-    } else {
-        0
+        let Some(t) = token else {
+            return axum::response::IntoResponse::into_response((
+                StatusCode::UNAUTHORIZED,
+                axum::Json(serde_json::json!({
+                    "error": "Authentication required",
+                    "code": "AUTH_REQUIRED"
+                })),
+            ));
+        };
+        let Some(claims) = crate::auth::model::AuthClaims::decode(&t, &state.jwt_secret) else {
+            return axum::response::IntoResponse::into_response((
+                StatusCode::UNAUTHORIZED,
+                axum::Json(serde_json::json!({
+                    "error": "Session token invalid or legacy format",
+                    "code": "AUTH_REQUIRED"
+                })),
+            ));
+        };
+        match state.auth_service.evaluate_claims(&claims).await {
+            crate::auth::model::AuthDecision::Authenticated { session, user } => {
+                let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
+                let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);
+                let effective_deadline = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
+                let actor = crate::api::auth::AuthenticatedActor::with_session(
+                    user.username.clone(),
+                    Some(expires_at.timestamp() as usize),
+                    session.id.clone(),
+                    session.auth_version,
+                    session.credential_version,
+                    effective_deadline,
+                    user.role,
+                );
+                let exp_secs = Some(effective_deadline.timestamp() as u64);
+                let epoch_id = state
+                    .plugin_service
+                    .auth_service()
+                    .epoch_registry()
+                    .issue_epoch(&actor.subject, exp_secs);
+                (actor, epoch_id)
+            }
+            crate::auth::model::AuthDecision::MfaRequired { .. } => {
+                return axum::response::IntoResponse::into_response((
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": "MFA verification required",
+                        "code": "MFA_REQUIRED"
+                    })),
+                ));
+            }
+            crate::auth::model::AuthDecision::FullLoginRequired { reason } => {
+                let code = if reason.contains("expired") {
+                    "SESSION_EXPIRED"
+                } else if reason.contains("revoked")
+                    || reason.contains("superseded")
+                    || reason.contains("version")
+                {
+                    "SESSION_REVOKED"
+                } else if reason.contains("disabled") {
+                    "ACCOUNT_DISABLED"
+                } else {
+                    "AUTH_REQUIRED"
+                };
+                return axum::response::IntoResponse::into_response((
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": reason,
+                        "code": code
+                    })),
+                ));
+            }
+            crate::auth::model::AuthDecision::Unavailable { reason } => {
+                return axum::response::IntoResponse::into_response((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(serde_json::json!({
+                        "error": format!("Authentication backend unavailable: {reason}"),
+                        "code": "AUTH_UNAVAILABLE"
+                    })),
+                ));
+            }
+        }
     };
 
     upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, epoch_id))
@@ -203,7 +260,7 @@ pub(crate) fn websocket_auth_ok(no_auth: bool, token: Option<String>, jwt_secret
     no_auth
         || token
             .as_deref()
-            .and_then(|t| crate::api::auth::authenticate_token(t, jwt_secret))
+            .and_then(|t| crate::auth::model::AuthClaims::decode(t, jwt_secret))
             .is_some()
 }
 // ---------------------------------------------------------------------------
@@ -225,6 +282,8 @@ async fn handle_socket(
     let (alert_tx, mut alert_rx) = mpsc::channel::<WireMsg>(ALERT_CHAN_CAP);
 
     // Writer task: drains both channels → WS sink using select.
+    let writer_state = state.clone();
+    let writer_actor = actor.clone();
     let writer = tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
@@ -247,7 +306,37 @@ async fn handle_socket(
                         .await;
                     break;
                 }
+                WireMsg::CloseAuth { code, reason } => {
+                    let _ = ws_tx
+                        .send(Message::Close(Some(CloseFrame {
+                            code,
+                            reason: reason.into(),
+                        })))
+                        .await;
+                    break;
+                }
             };
+
+            if !writer_state.no_auth {
+                if let Some(deadline) = writer_actor.effective_deadline {
+                    if writer_state.auth_service.clock().now() >= deadline {
+                        let is_expired = writer_actor.exp.map(|e| writer_state.auth_service.clock().now().timestamp() as usize >= e).unwrap_or(false);
+                        let (code, reason) = if is_expired {
+                            (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
+                        } else {
+                            (CLOSE_MFA_REQUIRED, "MFA verification required")
+                        };
+                        let _ = ws_tx
+                            .send(Message::Close(Some(CloseFrame {
+                                code,
+                                reason: reason.into(),
+                            })))
+                            .await;
+                        break;
+                    }
+                }
+            }
+
             if ws_tx.send(wire).await.is_err() {
                 break;
             }
@@ -263,8 +352,120 @@ async fn handle_socket(
     let host_alert_rx = state.event_sink.subscribe_host_alerts();
     let host_alert_pump = tokio::spawn(pump_host_alerts(host_alert_rx, alert_tx.clone()));
     let idle_suspend_rx = state.event_sink.subscribe_idle_suspend();
-    let idle_suspend_pump = tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx));
+    let idle_suspend_pump = tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx.clone()));
 
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    let auth_watcher = if !state.no_auth && actor.session_id.is_some() {
+        let state_c = state.clone();
+        let actor_c = actor.clone();
+        let alert_tx_c = alert_tx.clone();
+        let cancel_tx_c = cancel_tx.clone();
+        let mut cancel_rx_c = cancel_rx.clone();
+        Some(tokio::spawn(async move {
+            let session_id = actor_c.session_id.clone().unwrap();
+            let auth_version = actor_c.auth_version.unwrap_or(0);
+            let credential_version = actor_c.credential_version.unwrap_or(0);
+            let effective_deadline = actor_c.effective_deadline;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = cancel_rx_c.changed() => break,
+                    _ = interval.tick() => {
+                        let now = state_c.auth_service.clock().now();
+                        if let Some(deadline) = effective_deadline {
+                            if now >= deadline {
+                                let is_expired = actor_c.exp.map(|e| now.timestamp() as usize >= e).unwrap_or(false);
+                                let (code, reason) = if is_expired {
+                                    (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
+                                } else {
+                                    (CLOSE_MFA_REQUIRED, "MFA verification required")
+                                };
+                                let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                    code,
+                                    reason: reason.to_string(),
+                                }).await;
+                                let _ = cancel_tx_c.send(true);
+                                break;
+                            }
+                        }
+
+                        let store = state_c.auth_service.store();
+                        if let Some(store) = store {
+                            let check_res = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                                let session = store.get_session(&session_id).await?;
+                                let user = store.get_user(&actor_c.subject).await?;
+                                Ok::<_, crate::auth::store::StoreError>((session, user))
+                            }).await;
+
+                            match check_res {
+                                Ok(Ok((Some(session), Some(user)))) => {
+                                    if !user.is_enabled
+                                        || session.revoked_at.is_some()
+                                        || session.auth_version != auth_version
+                                        || session.credential_version != credential_version
+                                    {
+                                        let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                            code: CLOSE_FULL_LOGIN_REQUIRED,
+                                            reason: "Session revoked or account modified".into(),
+                                        }).await;
+                                        let _ = cancel_tx_c.send(true);
+                                        break;
+                                    }
+                                    let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
+                                    let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);
+                                    let mfa_due_at = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
+                                    if now >= mfa_due_at {
+                                        let is_expired = now >= expires_at;
+                                        let (code, reason) = if is_expired {
+                                            (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
+                                        } else {
+                                            (CLOSE_MFA_REQUIRED, "MFA verification required")
+                                        };
+                                        let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                            code,
+                                            reason: reason.to_string(),
+                                        }).await;
+                                        let _ = cancel_tx_c.send(true);
+                                        break;
+                                    }
+                                }
+                                Ok(Ok((None, _))) | Ok(Ok((_, None))) => {
+                                    let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                        code: CLOSE_FULL_LOGIN_REQUIRED,
+                                        reason: "Session or user not found".into(),
+                                    }).await;
+                                    let _ = cancel_tx_c.send(true);
+                                    break;
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(error = %e, "Auth verification DB error during live WS check");
+                                    let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                        code: CLOSE_AUTH_UNAVAILABLE,
+                                        reason: "Authentication verification failed".into(),
+                                    }).await;
+                                    let _ = cancel_tx_c.send(true);
+                                    break;
+                                }
+                                Err(_) => {
+                                    tracing::warn!("Auth verification DB timeout (2s exceeded) during live WS check; failing closed");
+                                    let _ = alert_tx_c.send(WireMsg::CloseAuth {
+                                        code: CLOSE_AUTH_UNAVAILABLE,
+                                        reason: "Authentication check timed out".into(),
+                                    }).await;
+                                    let _ = cancel_tx_c.send(true);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
     // Per-conn fs subscription pumps: sub_id → JoinHandle
     let mut fs_pumps: HashMap<u64, tokio::task::JoinHandle<()>> = HashMap::new();
 
@@ -310,11 +511,35 @@ async fn handle_socket(
     let mut aes_keys: HashMap<String, Zeroizing<Vec<u8>>> = HashMap::new();
 
     // Reader loop
-    while let Some(msg) = ws_rx.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(_) => break,
+    loop {
+        let msg = tokio::select! {
+            _ = cancel_rx.changed() => break,
+            m = ws_rx.next() => {
+                match m {
+                    Some(Ok(msg)) => msg,
+                    _ => break,
+                }
+            }
         };
+
+        if !state.no_auth {
+            if let Some(deadline) = actor.effective_deadline {
+                if state.auth_service.clock().now() >= deadline {
+                    let is_expired = actor.exp.map(|e| state.auth_service.clock().now().timestamp() as usize >= e).unwrap_or(false);
+                    let (code, reason) = if is_expired {
+                        (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
+                    } else {
+                        (CLOSE_MFA_REQUIRED, "MFA verification required")
+                    };
+                    let _ = alert_tx.send(WireMsg::CloseAuth {
+                        code,
+                        reason: reason.to_string(),
+                    }).await;
+                    let _ = cancel_tx.send(true);
+                    break;
+                }
+            }
+        }
 
         // Handle binary frames for upload chunks and binary write chunks
         if let Message::Binary(bytes) = msg {
@@ -1688,6 +1913,10 @@ async fn handle_socket(
     }
 
     // Cleanup
+    let _ = cancel_tx.send(true);
+    if let Some(watcher) = auth_watcher {
+        watcher.abort();
+    }
     for (sub_id, handle) in fs_pumps {
         handle.abort();
         state.fs.unsubscribe_tree(sub_id);
@@ -1695,7 +1924,8 @@ async fn handle_socket(
     pty_pump.abort();
     host_alert_pump.abort();
     idle_suspend_pump.abort();
-    writer.abort();
+    // Allow writer up to 500ms to flush pending close frames before aborting
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(500), writer).await;
     if epoch_id != 0 {
         state.plugin_service.revoke_epoch(epoch_id).await;
     }

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Date: 2026-09-26. Priority: P1. Implementation: pending. Review: pending. Close JWT-only and capability-only paths, including already-open connections.
+Date: 2026-09-27. Priority: P1. Status: DONE (2026-09-27; 100%). Implementation: complete. Review: approved with warnings (8.8/10); warnings remain Phase 05 follow-ups.
 
 ## Key Insights
 
@@ -18,7 +18,7 @@ All protected admissions share policy. Legacy tokens denied server-side; day-10/
 
 ## Architecture
 
-Extend authenticated actor with non-secret session binding and effective authorization deadline. Introduce one session lease/cancellation guard reusable by live surfaces; no per-byte database query. HTTP admissions remain authoritative reads. WS incoming operations recheck before dispatch/commit, outgoing data checks local cutoff; a deadline watcher bypasses full queues. Live revocation watcher uses <=5-second interval and bounded database timeouts, failing closed.
+Extend authenticated actor with non-secret session binding and effective authorization deadline. Use a local session-lease/deadline guard before each inbound frame is dispatched or committed; do not query MongoDB per operation or byte. HTTP admissions remain authoritative reads. A shared watcher revalidates persisted account/session state at <=5-second intervals with a 2-second query timeout, failing closed; this bounds out-of-band revocation to <=7 seconds. Outbound data checks the local cutoff, and a deadline watcher bypasses full queues.
 
 ## Related code files
 
@@ -40,10 +40,16 @@ During implementation inventory all additional streaming/upgrade routes and Auth
 
 ## Todo list
 
-- [ ] Shared policy across all admissions; eliminate JWT-only path.
-- [ ] Deadline/revocation-aware WS teardown and pending-operation cleanup.
-- [ ] Session-bound plugin and media capabilities, including active bodies.
-- [ ] Explicit live-revocation bound and complete surface inventory.
+- [x] Shared policy across all admissions; eliminate JWT-only path.
+- [x] Deadline/revocation-aware WS teardown and pending-operation cleanup.
+- [x] Session-bound plugin and media capabilities, including active bodies.
+- [x] Explicit live-revocation bound and complete surface inventory.
+
+## Completion evidence
+
+- `cargo test --test transport_enforcement_phase03`: 5 passed; `cargo test media_ticket`: 16 passed; `cargo test api::tests`: 160 passed. The review reports the full server suite passed (1,529 passed, 0 failed).
+- Architecture: inbound operations check the local auth deadline before dispatch/commit; persisted revocation is handled by the bounded background watcher, not a per-operation database read. The review confirms 5-second watcher / 2-second timeout fail-closed behavior.
+- Review approved with warnings (8.8/10). Resolve the media cross-session revocation, graceful WebSocket close, and production-environment detection warnings before Phase 05 qualification; see the [review report](../reports/code-review-260927-0302-phase03-transport-enforcement.md).
 
 ## Success Criteria
 
@@ -51,12 +57,10 @@ An open socket at day 10/day 30 closes even if idle or output-backpressured; cop
 
 ## Risk Assessment
 
-Per-message database reads can affect high-rate terminal input; use indexed narrow projections and one evaluation per admitted frame/batch, not per byte. Share periodic outbound-stream checks per session, but keep incoming operation admission authoritative. Prove throughput remains usable without weakening policy. Long-lived body cleanup must release file descriptors and tasks.
+Per-byte/per-operation database reads would affect high-rate terminal input. Use the local auth-deadline guard before each inbound operation and the shared bounded persisted-state watcher for out-of-band revocation; never let continuous traffic or backpressure starve either check. Long-lived body cleanup must release file descriptors and tasks.
 
 ## Security Considerations
 
 MFA remains server-authoritative. A UI timer, claims-only timestamp, expired media cookie, or a plugin grant cannot independently authorize access. Do not allow no-auth to instantiate production plugin authority.
 
-## Next steps
-
-Integrate Phase 04 state transitions and Phase 05 actual socket/media qualification; no deployment of middleware-only enforcement.
+Phase 03 is DONE. Phase 04 integrates profile-owned enrollment and MFA UI; Phase 05 performs qualification, rollout, and recovery. Do not deploy before Phase 05 gates pass.

@@ -47,6 +47,49 @@ pub(crate) async fn respond(
     ) else {
         return empty(StatusCode::NOT_FOUND);
     };
+
+    if !state.no_auth {
+        if let Some(deadline) = authorization.auth_deadline {
+            if std::time::SystemTime::now() >= deadline {
+                state.media_tickets.revoke(&ticket, expected_kind);
+                return empty(StatusCode::NOT_FOUND);
+            }
+        }
+        if let Some(session_id) = &authorization.auth_session_id {
+            if let Some(store) = state.auth_service.store() {
+                let check = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    let s = store.get_session(session_id).await?;
+                    let u = store.get_user(&authorization.binding.actor_subject).await?;
+                    Ok::<_, crate::auth::store::StoreError>((s, u))
+                })
+                .await;
+                match check {
+                    Ok(Ok((Some(s), Some(u)))) => {
+                        if !u.is_enabled
+                            || s.revoked_at.is_some()
+                            || s.auth_version != authorization.auth_version.unwrap_or(0)
+                            || s.credential_version != authorization.credential_version.unwrap_or(0)
+                        {
+                            state.media_tickets.revoke(&ticket, expected_kind);
+                            return empty(StatusCode::NOT_FOUND);
+                        }
+                        let expires_at = crate::auth::model::bson_to_chrono(s.expires_at);
+                        let mfa_verified_at = crate::auth::model::bson_to_chrono(s.mfa_verified_at);
+                        let mfa_due_at = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
+                        if state.auth_service.clock().now() >= mfa_due_at {
+                            state.media_tickets.revoke(&ticket, expected_kind);
+                            return empty(StatusCode::NOT_FOUND);
+                        }
+                    }
+                    _ => {
+                        state.media_tickets.revoke(&ticket, expected_kind);
+                        return empty(StatusCode::NOT_FOUND);
+                    }
+                }
+            }
+        }
+    }
+
     let record = authorization.record.clone();
     let Some(disposition) = disposition_for(&record, expected_kind) else {
         return empty(StatusCode::NOT_FOUND);
@@ -93,7 +136,7 @@ pub(crate) async fn respond(
         Some(range) => (StatusCode::PARTIAL_CONTENT, Some(range)),
         None => (StatusCode::OK, None),
     };
-    let body = match stream_body(file, body_range, record.file.size).await {
+    let body = match stream_body(file, body_range, record.file.size, state.clone(), &authorization).await {
         Some(body) => body,
         None => return stale_response(&state, &ticket, expected_kind),
     };
@@ -333,10 +376,23 @@ fn normalize_windows_path(path: &str) -> String {
     normalized.trim_end_matches('\\').to_ascii_lowercase()
 }
 
+struct StreamGuardState {
+    reader: ReaderStream<tokio::io::Take<tokio::fs::File>>,
+    state: AppState,
+    auth_session_id: Option<String>,
+    auth_version: Option<i64>,
+    credential_version: Option<i64>,
+    auth_deadline: Option<std::time::SystemTime>,
+    username: String,
+    last_revalidation: std::time::Instant,
+}
+
 async fn stream_body(
     mut file: tokio::fs::File,
     range: Option<ByteRange>,
     size: u64,
+    state: AppState,
+    authorization: &crate::fs::MediaTicketAuthorization,
 ) -> Option<Body> {
     if size == 0 {
         return Some(Body::empty());
@@ -346,10 +402,71 @@ async fn stream_body(
         end: size.checked_sub(1)?,
     });
     file.seek(SeekFrom::Start(range.start)).await.ok()?;
-    Some(Body::from_stream(ReaderStream::with_capacity(
+    let reader = ReaderStream::with_capacity(
         file.take(range.len()?),
         STREAM_BUFFER_BYTES,
-    )))
+    );
+
+    let guard_state = StreamGuardState {
+        reader,
+        state,
+        auth_session_id: authorization.auth_session_id.clone(),
+        auth_version: authorization.auth_version,
+        credential_version: authorization.credential_version,
+        auth_deadline: authorization.auth_deadline,
+        username: authorization.binding.actor_subject.clone(),
+        last_revalidation: std::time::Instant::now(),
+    };
+
+    let stream = futures_util::stream::unfold(guard_state, |mut s| async move {
+        if !s.state.no_auth {
+            if let Some(deadline) = s.auth_deadline {
+                if std::time::SystemTime::now() >= deadline {
+                    return None;
+                }
+            }
+            if let Some(session_id) = &s.auth_session_id {
+                if s.last_revalidation.elapsed() >= std::time::Duration::from_secs(5) {
+                    if let Some(store) = s.state.auth_service.store() {
+                        let check = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                            let sess = store.get_session(session_id).await?;
+                            let user = store.get_user(&s.username).await?;
+                            Ok::<_, crate::auth::store::StoreError>((sess, user))
+                        })
+                        .await;
+                        match check {
+                            Ok(Ok((Some(sess), Some(user)))) => {
+                                if !user.is_enabled
+                                    || sess.revoked_at.is_some()
+                                    || sess.auth_version != s.auth_version.unwrap_or(0)
+                                    || sess.credential_version != s.credential_version.unwrap_or(0)
+                                {
+                                    return None;
+                                }
+                                let expires_at = crate::auth::model::bson_to_chrono(sess.expires_at);
+                                let mfa_verified_at = crate::auth::model::bson_to_chrono(sess.mfa_verified_at);
+                                let mfa_due_at = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
+                                if s.state.auth_service.clock().now() >= mfa_due_at {
+                                    return None;
+                                }
+                            }
+                            _ => return None,
+                        }
+                        s.last_revalidation = std::time::Instant::now();
+                    }
+                }
+            }
+        }
+
+        use futures_util::StreamExt;
+        match s.reader.next().await {
+            Some(Ok(chunk)) => Some((Ok(chunk), s)),
+            Some(Err(e)) => Some((Err(e), s)),
+            None => None,
+        }
+    });
+
+    Some(Body::from_stream(stream))
 }
 
 fn empty(status: StatusCode) -> Response {

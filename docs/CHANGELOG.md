@@ -1,4 +1,8 @@
 # 2026-09-27
+- **Mandatory MFA and token lifecycle — Phase 03 DONE (2026-09-27; 100%).** Enforced shared session policy at REST/WS admission; inbound WS operations check the local auth deadline before dispatch/commit, while a bounded 5-second watcher revalidates persisted account/session state. Media tickets are session-bound; ongoing WS/media output is guarded by deadline/revocation checks.
+- Reported validation: transport enforcement **5/5**, media tickets **16/16**, API tests **160/160**, full server suite **1,529 passed / 0 failed**. Review approved with warnings (**8.8/10**); media cross-session revocation, graceful WebSocket close, and environment detection warnings remain Phase 05 qualification follow-ups. Plan remains **IN PROGRESS (3/5 phases; 60%)**.
+- See the [plan](../plans/260926-2157-token-rotation-mfa/plan.md), [Phase 03 plan](../plans/260926-2157-token-rotation-mfa/phase-03-transport-enforcement.md), and [review report](../plans/reports/code-review-260927-0302-phase03-transport-enforcement.md).
+
 - **Mandatory MFA and token lifecycle — Phase 02 DONE (2026-09-27; 100%).** Delivered challenge-driven enrollment, login verification, step-up, and persisted session issuance after successful MFA. Scoped authentication tests passed **28/28**; review approved **8.5/10 with findings**. Follow-up disposition remains required before release qualification; no production rollout claimed. See the [plan](../plans/260926-2157-token-rotation-mfa/plan.md), [Phase 02 plan](../plans/260926-2157-token-rotation-mfa/phase-02-authentication-api.md), [tester report](../plans/reports/tester-260927-0056-phase-02-authentication-api.md), and [review report](../plans/reports/code-review-260927-0031-phase-02-auth-api.md).
 
 # 2026-09-26

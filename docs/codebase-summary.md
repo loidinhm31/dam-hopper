@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-26 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-27 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -390,16 +390,19 @@ and [multi-server guide](./user-guide-multi-server-profiles.md).
 
 ## Backend boundaries
 
-`server/src/main.rs` starts the HTTP/WebSocket service and assembles `AppState`,
-which owns an `auth::AuthService` backed by the optional MongoDB store and
-injectable clock. `server/src/auth/` defines user/session/challenge state,
-MongoDB CAS and TTL-index operations, a V2 session-policy evaluator,
-Phase 02 exposes login, enrollment, TOTP verification, step-up, status, and
-logout through `api/auth.rs` and `api/auth_mfa.rs`. The general `require_auth`
-middleware still checks JWT signature/expiry only; broad session-policy
-admission remains a separate transport integration. See the
+`server/src/main.rs` assembles `AppState` with a MongoDB-backed `AuthService`;
+non-production no-DB startup uses an in-memory mock. `server/src/auth/` defines
+user/session/challenge state, CAS/TTL operations, and V2 policy. Phase 02 owns
+challenge login, enrollment, verification, status, and logout. Async
+`require_auth` evaluates claims against current state per protected REST request
+and adds non-secret session/version/deadline metadata to `AuthenticatedActor`.
+WebSocket admission shares that policy; deadline checks guard inbound frames
+and outbound writes, while a 5s watcher checks persisted revocation with a 2s
+lookup timeout. Inbound dispatch/commit checks the local session lease/deadline
+rather than reading MongoDB per frame. Media tickets bind session/version/
+deadline; HEAD/GET and streamed bodies revalidate access.
+Five integration tests live in `transport_enforcement_phase03.rs`. See the
 [Authentication API](./authentication-api.md).
-
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
 browser-debug, host-resource, and idle-suspend surfaces. Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,

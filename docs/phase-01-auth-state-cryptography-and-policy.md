@@ -6,11 +6,11 @@
 
 Phase 01 adds the MongoDB-backed auth-state model, persistence primitives, cryptographic helpers, TOTP verification, and deterministic session-policy evaluator. Phase 02 wires them into challenge-based login, enrollment, verification, status, and logout; see the [Authentication API](./authentication-api.md).
 
-- `AppState` owns an `Arc<AuthService>`. `AuthService::evaluate_claims` loads the session and user, then calls the pure policy evaluator.
-- `server/src/api/auth.rs` uses this evaluator for session status, but `require_auth` still checks JWT signature/expiry without validating persisted session state.
-- Broader session-policy admission across protected REST, WebSocket, and streaming paths remains the Phase 03 integration boundary in the [auth plan](../plans/260926-2157-token-rotation-mfa/phase-03-transport-enforcement.md).
+- `AppState` owns an `Arc<AuthService>`; `evaluate_claims` loads current session/user state and invokes the shared policy evaluator.
+- Phase 03 uses that evaluator for protected REST middleware and WebSocket admission. `AuthenticatedActor` carries non-secret session identity/version and effective deadline; no raw bearer material is retained.
+- WebSockets check the local deadline on inbound frames and outbound writes, with a five-second background session/revocation watcher. Image/video media capabilities bind to the auth session and versions, clamp absolute TTL to the effective deadline, and revalidate live streams.
 
-Session issuance and status enforce the 30-day absolute and 10-day MFA freshness deadlines; they are not yet universal rules on every protected request.
+Session issuance and every protected REST admission enforce the 30-day absolute and 10-day MFA freshness deadlines. Existing WebSocket and media streams also enforce deadline and bounded revocation checks; see the [Phase 03 plan](../plans/260926-2157-token-rotation-mfa/phase-03-transport-enforcement.md) and [security contract](../plans/260926-2157-token-rotation-mfa/security-contract.md).
 
 ## Module map
 
@@ -23,10 +23,11 @@ Session issuance and status enforce the 30-day absolute and 10-day MFA freshness
 | `server/src/auth/totp.rs` | Secret generation/encoding, `otpauth://` URI construction, TOTP verification, and replay check |
 | `server/src/auth/mod.rs` | `AuthService`, opaque challenge-token generation/digesting, and state-backed claim evaluation |
 | `server/src/state.rs`, `server/src/main.rs` | `AppState` ownership, key loading, and auth-store index initialization |
-| `server/src/api/auth.rs` | Password login challenges, session-backed status/logout, and existing protected-route JWT middleware |
+| `server/src/api/auth.rs` | Password login challenges, full-policy protected-route middleware, status/logout |
 | `server/src/api/auth_mfa.rs` | Challenge-gated TOTP enrollment, login verification, and step-up handlers |
 | `server/tests/auth_mfa_api.rs` | HTTP lifecycle coverage for enrollment, login MFA, session step-up/status/logout, and edge cases |
 | `server/tests/auth_state_and_policy.rs` | Focused policy, encryption, TOTP/replay, throttle, and MongoDB-store coverage |
+| `server/tests/transport_enforcement_phase03.rs` | REST, WebSocket admission/live revocation, logout, and reset integration coverage |
 
 ## Persisted state and policy
 

@@ -14,7 +14,7 @@ The server also accepts an HttpOnly SameSite=Strict authentication cookie. `GET
 /api/health` and authentication endpoints have public/flow-specific exceptions;
 consult each route group below rather than assuming every request is protected.
 
-Auth protocol 2 normal login returns a restricted challenge; enrollment or verification is required before a normal session is issued. `GET /api/auth/status` rejects legacy tokens, while general protected-route session enforcement remains outside Phase 02. See the [Authentication API](./authentication-api.md) for request/response schemas and the [security contract](../plans/260926-2157-token-rotation-mfa/security-contract.md) for lifecycle and security details.
+Auth protocol 2 login returns a restricted challenge; enrollment or verification is required before a normal session is issued. `GET /api/auth/status` rejects legacy tokens. Protected REST routes evaluate each request against current account/session policy; WebSocket and media streams enforce the same deadlines and bounded revocation checks. See the [Authentication API](./authentication-api.md) for request/response schemas and the [security contract](../plans/260926-2157-token-rotation-mfa/security-contract.md) for lifecycle and security details.
 
 ### Dev Mode (--no-auth)
 

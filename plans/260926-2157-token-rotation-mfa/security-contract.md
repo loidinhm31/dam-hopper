@@ -1,6 +1,6 @@
 # Mandatory MFA and session lifecycle contract
 
-Status: implementation in progress (Phases 01–02 complete; Phases 03–05 pending). Date: 2026-09-27.
+Status: Phases 01–03 complete; Phase 03 DONE (100%); Phases 04–05 pending. Date: 2026-09-27.
 
 ## Enhanced `/cmd-plan__hard` task
 
@@ -111,13 +111,13 @@ Preserve `workbenchProtocol: 2` for transport compatibility; auth payloads intro
 ## Continuous access enforcement
 
 - One server auth service resolves signed claims + current session + enabled/enrolled user. Both full-access and restricted challenge eligibility call the same evaluator; no JWT-signature-only production admission remains.
-- REST checks MongoDB at each protected request. WebSocket admission checks full policy. Per-message commands recheck current authorization before dispatch/commit; local deadline check before outbound emission.
+- REST admissions are authoritative current-state reads; WebSocket admission uses the same full policy. The local session lease/effective deadline gates inbound dispatch/commit and outbound emission, avoiding per-frame database reads.
 - A cancellation/deadline guard ends an already-open WebSocket at `min(mfaDueAt, expiresAt)`, even with no inbound messages or saturated output. Same teardown cancels pumps/uploads/subscriptions and revokes plugin epoch. Do not kill server PTY processes merely to require reauthentication.
 - Live sockets/stream bodies revalidate account/session revocation at most every 5 seconds, sharing a per-session check where feasible rather than per-byte MongoDB reads. Bound each complete auth-state evaluation to 2 seconds, including driver selection/retries; fail closed on timeout. No output after known deadline; out-of-band reset cutoff is at most 7 seconds (5-second interval + 2-second evaluation). New HTTP/WS admission does not use this cache.
 - Direct MongoDB updates have no application broadcast: document the above bound. For immediate operational containment, disconnect/restart serving instances during reset. Do not promise zero-latency invalidation from an out-of-band database edit.
 - Media session/ticket records bind actual auth session ID/version and deadline in addition to actor/profile/client. Exact-origin ticket-only and cookie stream paths consult the same session policy; ticket possession cannot skip MFA.
 - Media issue/reuse clamps capability expiry to auth deadline. HEAD/GET/range admissions recheck auth and preserve non-disclosing `404`; ongoing bodies terminate via deadline/revocation guard. Bytes already delivered/cached cannot be recalled.
-- Plugin epochs expire no later than auth deadline; HTTP and socket operations enforce current session before authorization. Preserve role/grant checks and host-action password confirmations; MFA is additional, not a substitute.
+- Plugin epochs expire no later than the auth deadline. HTTP admissions use current session policy; WebSocket operation boundaries enforce the local lease/deadline, while the watcher bounds out-of-band revocation. Preserve role/grant checks and host-action password confirmations; MFA is additional, not a substitute.
 - Scope includes long-lived authenticated streams discovered during implementation inventory, not a login-only patch. Public exceptions must remain explicitly enumerated.
 - WebSocket private close codes: `4403` MFA required; `4401` full login required (expired/revoked/legacy); standard `1013` temporary auth-backend unavailable. Keep existing `4001` overflow distinct. Browser handshake failures may hide HTTP bodies, so client performs typed HTTP status evaluation before deciding to reconnect.
 

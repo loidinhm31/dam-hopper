@@ -765,9 +765,9 @@ this phase is not lifecycle, isolated-UI, or Linux release completion.
 - Mount protected `GET /api/plugins` visibility plus
   `POST /api/plugins/contexts/open`, `contexts/close`, `invoke`, and `cancel`.
   Use bounded camelCase DTOs and typed `{ error, code }` failures.
-- Retain `AuthenticatedActor.subject` and JWT expiry for HTTP and WebSocket
-  work. Issue a random epoch per authenticated `/ws` socket and require that
-  actor/epoch pair for every plugin context and request.
+- Retain `AuthenticatedActor.subject` plus non-secret session/version metadata
+  and effective auth deadline for HTTP and WebSocket work. Issue a random
+  per-socket epoch and cap it at that deadline.
 - Deny plugin operations in `--no-auth` mode, including service-level calls
   that bypass route middleware. Do not let browser profile identity, roots, or
   client grant claims become server authority.

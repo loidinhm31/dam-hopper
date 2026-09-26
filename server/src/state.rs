@@ -371,7 +371,11 @@ impl AppState {
         } else {
             None
         };
-        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+        let auth_service = if let Some(store) = auth_store {
+            Arc::new(crate::auth::AuthService::with_system_clock(Some(store), mfa_key))
+        } else {
+            Arc::new(crate::auth::AuthService::new_mock_default().0)
+        };
 
         Ok(Self {
             workspace_dir,

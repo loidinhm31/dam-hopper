@@ -40,7 +40,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
-- **[Authentication API (Phase 02)](./authentication-api.md)** — TOTP enrollment, login/step-up verification, session status, and logout
+- **[Authentication API (Phases 02–03)](./authentication-api.md)** — TOTP enrollment, session lifecycle, and protected REST/live-transport enforcement
 - **[Workflow API](./workflow-api.md)** — Phase 02–03 workflow REST, lifecycle correlation, CAS/replay, and retention
 - **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing

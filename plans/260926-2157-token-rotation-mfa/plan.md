@@ -11,7 +11,7 @@ created: 2026-09-26
 
 # Mandatory MFA and token lifecycle
 
-Phase 01 implementation completed 2026-09-26; Phase 02 completed 2026-09-27. Phases 03–05 remain pending. No production data changed.
+Phase 01 implementation completed 2026-09-26; Phase 02 and Phase 03 completed 2026-09-27. Phases 04–05 remain pending. No production data changed.
 
 ## Policy
 
@@ -27,7 +27,7 @@ Phase 01 implementation completed 2026-09-26; Phase 02 completed 2026-09-27. Pha
 
 Keep bcrypt, JWT transport, MongoDB, existing shared UI, and `react-qr-code`. Add MongoDB session/challenge state, encrypted TOTP secrets, user authVersion, and session credentialVersion. Challenge-only credentials never authorize workbench access. One policy covers REST, WebSockets, plugin epochs, and media capabilities. No refresh-token subsystem or identity-provider migration.
 
-The [security contract](./security-contract.md) specifies states, schemas, API responses, concurrency, deadlines, secret provisioning, and MongoDB recovery. Phases 01–02 implement the auth-state/policy foundation and enrollment/session API; full cutover remains pending completion of Phases 03–05.
+The [security contract](./security-contract.md) specifies states, schemas, API responses, concurrency, deadlines, secret provisioning, and MongoDB recovery. Phases 01–03 implement the auth-state/policy foundation, enrollment/session API, and transport enforcement; the remaining cutover is Phases 04–05.
 
 ## Phases
 
@@ -35,20 +35,20 @@ The [security contract](./security-contract.md) specifies states, schemas, API r
 | --- | --- | --- | --- |
 | 01 | [Auth state, cryptography, and policy](./phase-01-auth-state-and-policy.md) | DONE (2026-09-26) | 100% |
 | 02 | [Enrollment, MFA, and session APIs](./phase-02-authentication-api.md) | DONE (2026-09-27) | 100% |
-| 03 | [REST/live transport enforcement](./phase-03-transport-enforcement.md) | Pending | 0% |
+| 03 | [REST/live transport enforcement](./phase-03-transport-enforcement.md) | DONE (2026-09-27) | 100% |
 | 04 | [Profile-owned enrollment and MFA UI](./phase-04-profile-mfa-flow.md) | Pending | 0% |
 | 05 | [Qualification, rollout, and recovery](./phase-05-qualification-and-rollout.md) | Pending | 0% |
 
 
-Plan progress: **IN PROGRESS (2/5 phases; 40%; updated 2026-09-27).**
-Dependencies: 01 -> 02 -> 03; 04 can proceed against frozen 02 contracts while 03 is implemented; 05 requires all phases. Do not deploy any intermediate password-only or UI-only state.
+Plan progress: **IN PROGRESS (3/5 phases; 60%; updated 2026-09-27).**
+Dependencies: 01 -> 02 -> 03 are complete; Phase 04 can proceed against frozen Phase 02 contracts; Phase 05 requires all phases. Do not deploy any intermediate password-only or UI-only state.
 
 ## Evidence and risks
 
-Pre-Phase 01 baseline: `server/src/api/auth.rs` minted 30-day `sub`/`exp` JWTs after password verification, with no MFA/session revocation state. WebSocket authorization occurred at upgrade; media used independent capability auth. Phase 03 must close those remaining bypass paths.
+Pre-Phase 01 baseline: `server/src/api/auth.rs` minted 30-day `sub`/`exp` JWTs after password verification, with no MFA/session revocation state. WebSocket authorization occurred at upgrade; media used independent capability auth. Phase 03 closes the remaining transport admission and live-session enforcement gaps; see its [phase plan](./phase-03-transport-enforcement.md) and [review](../reports/code-review-260927-0302-phase03-transport-enforcement.md).
 
 - Shared UI owns connections by profile and generation; a global login gate would regress multi-server operation.
-- Existing tests mint legacy JWTs directly; migrate fixtures to real isolated session state, not compatibility bypasses.
+- Legacy JWT fixtures were migrated to V2 claims and hermetic mock-session evaluation; legacy-token rejection remains covered by Phase 03 transport tests. See the [review report](../reports/code-review-260927-0302-phase03-transport-enforcement.md).
 - [Server findings](./research/server-auth-inventory.md), [TOTP security research](./research/totp-security.md), [client flow research](./research/client-auth-flow.md).
 - [Acceptance matrix](./acceptance-matrix.md): exact deadline edges, replay races, legacy logout, live sockets/streams, profile isolation, recovery, fail-closed outages.
 - Deployment prerequisites: dedicated protected MFA key file, compatible client/server rollout, isolated MongoDB for auth qualification, encrypted network transport.
@@ -69,7 +69,7 @@ Validated: 2026-09-26. Questions asked: 3. User explicitly confirmed:
 
 Action for Phase 04: implement a narrow native-input exemption covering username/password/TOTP and required login controls, including the global input-policy guard; do not build a custom auth keyboard. This validation resolves the phase's interaction decision; phase files remain unchanged per validation workflow.
 
-Phase 01 and Phase 02 implementation and development are complete; production rollout and Phases 03–05 remain pending.
+Phases 01–03 implementation and development are complete; Phase 04 UI implementation and Phase 05 qualification/rollout remain pending.
 
 ## Unresolved questions
 
