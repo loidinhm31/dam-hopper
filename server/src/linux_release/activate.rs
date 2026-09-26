@@ -143,7 +143,11 @@ pub async fn execute_activation_locked_with_args(
                 validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
                 let targets = build_candidate_health_targets(layout, &active_candidate)?;
                 if active_candidate.role.includes_server() {
-                    let _ = super::account::ensure_default_plugin_runner_user_and_dir();
+                    let api_group = fs::read_to_string(layout.systemd_unit_dir.join(API_SERVICE_UNIT))
+                        .ok()
+                        .and_then(|c| super::unit_parser::ParsedUnit::parse(&c).ok())
+                        .and_then(|u| u.get_value("Service", "Group").map(|s| s.to_string()));
+                    let _ = super::account::ensure_default_plugin_runner_user_and_dir(api_group.as_deref());
                     if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
                         let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
                     }
@@ -464,7 +468,15 @@ async fn execute_activation_pipeline(
     }
 
     if candidate.role.includes_server() {
-        let _ = super::account::ensure_default_plugin_runner_user_and_dir();
+        let api_group = candidate
+            .pending_units_path
+            .as_deref()
+            .map(Path::new)
+            .map(|p| p.join(API_SERVICE_UNIT))
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|c| super::unit_parser::ParsedUnit::parse(&c).ok())
+            .and_then(|u| u.get_value("Service", "Group").map(|s| s.to_string()));
+        let _ = super::account::ensure_default_plugin_runner_user_and_dir(api_group.as_deref());
         if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
             let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
         }
