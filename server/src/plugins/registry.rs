@@ -8,26 +8,22 @@ use super::registry_layout::PluginRegistryLayout;
 use super::registry_recovery::run_crash_recovery;
 use super::registry_state::RegistryV1Record;
 use super::stage::ActiveStageUpload;
-use super::trust::{AdminSubjectList, StageReviewDto};
+use super::trust::StageReviewDto;
 
 pub struct PluginRegistry {
     pub layout: PluginRegistryLayout,
-    pub admin_subjects: AdminSubjectList,
     pub state_lock: Mutex<()>,
     pub active_stages: Mutex<HashMap<String, ActiveStageUpload>>,
     pub stage_reviews: Mutex<HashMap<String, StageReviewDto>>,
 }
 
 impl PluginRegistry {
-    pub fn new(
-        layout: PluginRegistryLayout,
-        admin_subjects: AdminSubjectList,
-    ) -> Result<Self, PluginError> {
+    pub fn new(layout: PluginRegistryLayout) -> Result<Self, PluginError> {
         layout.ensure_layout()?;
 
         let registry_file = layout.registry_file();
         if !registry_file.exists() {
-            let initial = RegistryV1Record::new_empty(admin_subjects.config_digest());
+            let initial = RegistryV1Record::new_empty();
             let bytes = serde_json::to_vec_pretty(&initial).map_err(|e| {
                 PluginError::runner_unavailable(format!(
                     "Failed to serialize initial registry: {e}"
@@ -45,17 +41,37 @@ impl PluginRegistry {
             let content = fs::read_to_string(&registry_file).map_err(|e| {
                 PluginError::runner_unavailable(format!("Failed to read registry: {e}"))
             })?;
-            let record: RegistryV1Record = serde_json::from_str(&content).map_err(|e| {
+            let mut json_val: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+                PluginError::invalid_input(format!("Registry corruption detected: {e}"))
+            })?;
+            let had_legacy_digest = if let Some(map) = json_val.as_object_mut() {
+                map.remove("adminConfigDigest").is_some()
+            } else {
+                false
+            };
+            let record: RegistryV1Record = serde_json::from_value(json_val).map_err(|e| {
                 PluginError::invalid_input(format!("Registry corruption detected: {e}"))
             })?;
             record.validate()?;
+            if had_legacy_digest {
+                let bytes = serde_json::to_vec_pretty(&record).map_err(|e| {
+                    PluginError::runner_unavailable(format!("Failed to serialize migrated registry: {e}"))
+                })?;
+                crate::linux_release::durable_fs::atomic_write_file(
+                    &registry_file,
+                    &bytes,
+                    Some(0o600),
+                )
+                .map_err(|e| {
+                    PluginError::runner_unavailable(format!("Failed to write migrated registry: {e}"))
+                })?;
+            }
         }
 
         run_crash_recovery(&layout)?;
 
         Ok(Self {
             layout,
-            admin_subjects,
             state_lock: Mutex::new(()),
             active_stages: Mutex::new(HashMap::new()),
             stage_reviews: Mutex::new(HashMap::new()),
@@ -67,10 +83,35 @@ impl PluginRegistry {
         let content = fs::read_to_string(&path).map_err(|e| {
             PluginError::runner_unavailable(format!("Failed to read registry: {e}"))
         })?;
-        let record: RegistryV1Record = serde_json::from_str(&content)
+        let mut json_val: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            PluginError::invalid_input(format!("Registry corrupted: {e}"))
+        })?;
+        if let Some(map) = json_val.as_object_mut() {
+            map.remove("adminConfigDigest");
+        }
+        let record: RegistryV1Record = serde_json::from_value(json_val)
             .map_err(|e| PluginError::invalid_input(format!("Registry corrupted: {e}")))?;
         record.validate()?;
         Ok(record)
+    }
+
+    pub fn get_actor_grants(
+        &self,
+        actor_subject: &str,
+    ) -> Result<Vec<super::contract::GrantKey>, PluginError> {
+        let state = self.read_state()?;
+        let mut grants = Vec::new();
+        for inst in state.installations.values() {
+            if !inst.enabled {
+                continue;
+            }
+            for g in &inst.grants {
+                if g.actor_subject == actor_subject {
+                    grants.push(g.clone());
+                }
+            }
+        }
+        Ok(grants)
     }
 
     pub fn write_state(&self, record: &RegistryV1Record) -> Result<(), PluginError> {

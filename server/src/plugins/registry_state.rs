@@ -223,18 +223,16 @@ pub struct RegistryV1Record {
     pub version: u32,
     pub registry_revision: u64,
     pub security_revision: u64,
-    pub admin_config_digest: String,
     pub packages: BTreeMap<String, RegisteredPackageRecord>,
     pub installations: BTreeMap<String, InstallationRecord>,
 }
 
 impl RegistryV1Record {
-    pub fn new_empty(admin_config_digest: impl Into<String>) -> Self {
+    pub fn new_empty() -> Self {
         Self {
             version: REGISTRY_SCHEMA_VERSION,
             registry_revision: 1,
             security_revision: 1,
-            admin_config_digest: admin_config_digest.into(),
             packages: BTreeMap::new(),
             installations: BTreeMap::new(),
         }
@@ -252,12 +250,6 @@ impl RegistryV1Record {
         }
         if self.security_revision == 0 {
             return Err(PluginError::invalid_input("security_revision must be >= 1"));
-        }
-        if !SHA256_REGEX.is_match(&self.admin_config_digest) {
-            return Err(PluginError::invalid_input(format!(
-                "Invalid admin_config_digest: '{}'",
-                self.admin_config_digest
-            )));
         }
 
         for (key, pkg) in &self.packages {

@@ -39,7 +39,6 @@ pub fn stage_release_bundle(
         is_role_set,
         reinstall,
         None,
-        &[],
     )
 }
 
@@ -53,7 +52,6 @@ pub fn stage_release_bundle_with_options(
     is_role_set: bool,
     reinstall: bool,
     plugin_owner_user: Option<String>,
-    plugin_admin_subjects: &[String],
 ) -> Result<PendingState, ReleaseError> {
     let _lock = DeploymentLock::acquire(&layout.deploy_lock_path())?;
 
@@ -129,7 +127,6 @@ pub fn stage_release_bundle_with_options(
         allow_origins,
         is_role_set,
         plugin_owner_user,
-        plugin_admin_subjects,
     )?;
 
     let tx_id = uuid::Uuid::new_v4().to_string();

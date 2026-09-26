@@ -421,6 +421,13 @@ async fn dispatch_method(
             };
             Ok(serde_json::to_value(PluginListResult { plugins: filtered }).unwrap())
         }
+        "plugin.actorGrants" => {
+            let params: PluginActorGrantsParams = serde_json::from_value(params).map_err(|e| {
+                PluginError::invalid_input(format!("Invalid plugin.actorGrants params: {e}"))
+            })?;
+            let grants = registry.get_actor_grants(&params.actor_subject)?;
+            Ok(serde_json::to_value(PluginActorGrantsResult { grants }).unwrap())
+        }
         "plugin.readUi" => {
             let params: PluginReadUiParams = serde_json::from_value(params).map_err(|e| {
                 PluginError::invalid_input(format!("Invalid plugin.readUi params: {e}"))

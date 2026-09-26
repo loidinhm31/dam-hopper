@@ -20,9 +20,8 @@ use super::package::inspect_and_validate_package;
 use super::package_extract::{extract_package_archive, publish_extracted_package};
 use super::registry::PluginRegistry;
 use super::registry_state::{InstallationRecord, OwnerHistorySource, RegisteredPackageRecord, RollbackPackageSnapshot};
-use super::trust::{validate_stage_approval, AdminSubjectList};
+use super::trust::validate_stage_approval;
 use super::worker_supervisor::SupervisorManager;
-
 pub struct LifecycleCoordinator {
     registry: Arc<PluginRegistry>,
     supervisor_manager: Arc<SupervisorManager>,
@@ -49,9 +48,6 @@ impl LifecycleCoordinator {
         &self.supervisor_manager
     }
 
-    pub fn admin_subjects(&self) -> &AdminSubjectList {
-        &self.registry.admin_subjects
-    }
 
     async fn get_installation_lock(&self, installation_id: &str) -> Arc<Mutex<()>> {
         let mut map = self.installation_locks.lock().await;
@@ -99,13 +95,8 @@ impl LifecycleCoordinator {
     /// List all installations with admin lifecycle and worker details.
     pub async fn list_installations(
         &self,
-        actor: &str,
+        _actor: &str,
     ) -> Result<Vec<AdminInstallationDto>, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let state = self.registry.read_state()?;
         let mut list = Vec::new();
@@ -135,14 +126,9 @@ impl LifecycleCoordinator {
     /// Get single installation with admin lifecycle and worker details.
     pub async fn get_installation(
         &self,
-        actor: &str,
+        _actor: &str,
         installation_id: &str,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let state = self.registry.read_state()?;
         let inst = state
@@ -182,14 +168,9 @@ impl LifecycleCoordinator {
         expected_sha256: &str,
         expected_security_revision: u64,
         initial_bindings: BTreeMap<String, String>,
-        initial_grants: Vec<GrantKey>,
+        initial_grants: Vec<super::admin::InitialGrant>,
         owner_history_source: Option<OwnerHistorySource>,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let review: StageReviewDto = {
             let reviews = self.registry.stage_reviews.lock();
@@ -213,7 +194,6 @@ impl LifecycleCoordinator {
 
         let current_state = self.registry.read_state()?;
         validate_stage_approval(
-            self.admin_subjects(),
             actor,
             expected_sha256,
             expected_security_revision,
@@ -232,6 +212,55 @@ impl LifecycleCoordinator {
             .as_ref()
             .map(|i| i.installation_id.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let is_update = existing_inst.is_some();
+        let effective_final_bindings = if is_update && initial_bindings.is_empty() {
+            existing_inst.as_ref().map(|i| i.bindings.clone()).unwrap_or_default()
+        } else {
+            initial_bindings.clone()
+        };
+
+        let mut mapped_initial_grants = Vec::new();
+        for g in &initial_grants {
+            let actor = g.actor_subject.trim();
+            if actor.is_empty() {
+                return Err(PluginError::invalid_input("Grant actorSubject cannot be empty"));
+            }
+            let target = g.configured_project_target.trim();
+            if target.is_empty() {
+                return Err(PluginError::invalid_input("Grant configuredProjectTarget cannot be empty"));
+            }
+            if target != "*" && !effective_final_bindings.contains_key(target) {
+                return Err(PluginError::invalid_input(format!(
+                    "Grant project target '{target}' is not registered in effective installation bindings"
+                )));
+            }
+            if g.allowed_operations.is_empty() {
+                return Err(PluginError::invalid_input("Grant allowedOperations cannot be empty"));
+            }
+            let mut resolved_ops = Vec::new();
+            for op in &g.allowed_operations {
+                if op == "*" {
+                    for cap in &review.capabilities {
+                        if !resolved_ops.contains(cap) {
+                            resolved_ops.push(cap.clone());
+                        }
+                    }
+                } else if !review.capabilities.contains(op) {
+                    return Err(PluginError::invalid_input(format!(
+                        "Grant operation '{op}' is not in reviewed plugin capabilities"
+                    )));
+                } else if !resolved_ops.contains(op) {
+                    resolved_ops.push(op.clone());
+                }
+            }
+            mapped_initial_grants.push(GrantKey {
+                actor_subject: actor.to_string(),
+                installation_id: installation_id.clone(),
+                configured_project_target: target.to_string(),
+                allowed_operations: resolved_ops,
+                allow_current_account_policy: g.allow_current_account_policy,
+            });
+        }
 
         let inst_lock = self.get_installation_lock(&installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -245,7 +274,6 @@ impl LifecycleCoordinator {
             )));
         }
 
-        let is_update = existing_inst.is_some();
         let old_gen = existing_inst
             .as_ref()
             .map(|i| i.activation_generation)
@@ -426,15 +454,11 @@ impl LifecycleCoordinator {
                     published_at: i.updated_at.clone(),
                 });
 
-                let final_bindings = if is_update && initial_bindings.is_empty() {
-                    existing_item.map(|i| i.bindings.clone()).unwrap_or(initial_bindings)
+                let final_bindings = effective_final_bindings.clone();
+                let final_grants = if is_update && mapped_initial_grants.is_empty() {
+                    existing_item.map(|i| i.grants.clone()).unwrap_or(mapped_initial_grants)
                 } else {
-                    initial_bindings
-                };
-                let final_grants = if is_update && initial_grants.is_empty() {
-                    existing_item.map(|i| i.grants.clone()).unwrap_or(initial_grants)
-                } else {
-                    initial_grants
+                    mapped_initial_grants
                 };
                 let final_owner_history_source = if is_update && owner_history_source.is_none() {
                     existing_item.and_then(|i| i.owner_history_source.clone())
@@ -531,11 +555,6 @@ impl LifecycleCoordinator {
         installation_id: &str,
         expected_security_revision: u64,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -744,11 +763,6 @@ impl LifecycleCoordinator {
         installation_id: &str,
         expected_security_revision: u64,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -839,11 +853,6 @@ impl LifecycleCoordinator {
         installation_id: &str,
         expected_security_revision: u64,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -966,11 +975,6 @@ impl LifecycleCoordinator {
         installation_id: &str,
         expected_security_revision: u64,
     ) -> Result<AdminRemoveResult, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -1082,11 +1086,6 @@ impl LifecycleCoordinator {
         expected_security_revision: u64,
         grants: Vec<GrantKey>,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -1165,11 +1164,6 @@ impl LifecycleCoordinator {
         expected_security_revision: u64,
         bindings: BTreeMap<String, String>,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         let inst_lock = self.get_installation_lock(installation_id).await;
         let _guard = inst_lock.lock().await;
@@ -1233,11 +1227,6 @@ impl LifecycleCoordinator {
         expected_security_revision: u64,
         owner_history_source: Option<OwnerHistorySource>,
     ) -> Result<AdminInstallationDto, PluginError> {
-        if !self.admin_subjects().is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized plugin administrator"
-            )));
-        }
 
         if let Some(source) = &owner_history_source {
             source.validate()?;

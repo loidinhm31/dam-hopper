@@ -24,7 +24,7 @@ use super::admin::*;
 #[cfg(unix)]
 use super::contract::budgets::HANDSHAKE_TIMEOUT_SECS;
 use super::contract::{
-    ContextCloseParams, ContextCloseResult, ContextOpenParams, ContextOpenResult,
+    ContextCloseParams, ContextCloseResult, ContextOpenParams, ContextOpenResult, GrantKey,
     PluginActivateParams, PluginActivateResult, PluginDeactivateParams, PluginDeactivateResult,
     PluginInvokeParams, PluginInvokeResult, PluginListParams, PluginListResult, PluginReadUiParams,
     PluginReadUiResult, RequestCancelParams, RequestCancelResult, RunnerHelloResult,
@@ -427,6 +427,25 @@ impl RunnerClient {
             .await?;
         serde_json::from_value(res)
             .map_err(|e| PluginError::invalid_input(format!("Failed to parse list result: {e}")))
+    }
+
+    pub async fn get_actor_grants(
+        &self,
+        actor_subject: &str,
+    ) -> Result<Vec<GrantKey>, PluginError> {
+        let res = self
+            .execute_call(
+                "plugin.actorGrants",
+                serde_json::to_value(PluginActorGrantsParams {
+                    actor_subject: actor_subject.to_string(),
+                })
+                .unwrap(),
+            )
+            .await?;
+        let parsed: PluginActorGrantsResult = serde_json::from_value(res).map_err(|e| {
+            PluginError::invalid_input(format!("Failed to parse actor grants result: {e}"))
+        })?;
+        Ok(parsed.grants)
     }
 
     pub async fn read_ui(

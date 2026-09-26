@@ -20,7 +20,7 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::plugins::contract::{GrantKey, PluginReadUiParams};
 use dam_hopper_server::plugins::{
-    AdminSubjectList, EpochRegistry, OwnerHistorySource, PluginApiService,
+    EpochRegistry, OwnerHistorySource, PluginApiService,
     PluginAuthorizationService, PluginContextTable, PluginRegistry, PluginRegistryLayout,
     RunnerClient, RunnerClientConfig, RunnerServer, RunnerServerConfig, SupervisorManager,
 };
@@ -224,7 +224,6 @@ async fn main() -> anyhow::Result<()> {
 
     let registry = Arc::new(PluginRegistry::new(
         PluginRegistryLayout::new(state_dir.join("registry")),
-        AdminSubjectList::new(vec!["g2-admin".to_string()]),
     )?);
     let stage = registry.stage_begin("g2-admin", &package_sha256, archive.len() as u64)?;
     for (sequence, chunk) in archive.chunks(stage.max_chunk_size).enumerate() {

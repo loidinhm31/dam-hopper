@@ -86,7 +86,6 @@ async fn main() -> ExitCode {
                 false,
                 args.reinstall,
                 args.plugin_owner_user,
-                &args.plugin_admin_subjects,
             ) {
                 Ok(pending) => {
                     println!("Successfully staged candidate release '{}'", pending.tag);
@@ -146,7 +145,6 @@ async fn main() -> ExitCode {
                     true,
                     args.reinstall,
                     args.plugin_owner_user,
-                    &args.plugin_admin_subjects,
                 ) {
                     Ok(pending) => {
                         println!("Successfully staged candidate role view '{}'", pending.role);

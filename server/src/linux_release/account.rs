@@ -313,15 +313,6 @@ fn provision_runner_state(path: &std::path::Path, info: &UserInfo) -> Result<(),
     dir.sync_all().map_err(io_error)
 }
 
-/// Publish the explicit administrator allowlist, including empty deny-all policy.
-pub fn sync_plugin_admins_file(
-    admins_file: &std::path::Path,
-    admin_subjects: &[String],
-) -> Result<(), ReleaseError> {
-    let json_content = serde_json::json!({ "adminSubjects": admin_subjects });
-    super::durable_fs::atomic_write_json(admins_file, &json_content, Some(0o644))
-}
-
 /// Verify that the API service account exists, has a primary group, and is not root.
 pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseError> {
     let trimmed = username.trim();
@@ -543,31 +534,4 @@ pub fn verify_plugin_owner_account(
     Ok(user)
 }
 
-#[cfg(test)]
-mod provisioning_tests {
-    use super::*;
 
-    #[test]
-    fn admin_policy_escapes_subjects_and_revokes_previous_grants() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("plugin-admins.json");
-        let subjects = vec!["subject\"with\\escapes\n".to_string()];
-        sync_plugin_admins_file(&path, &subjects).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(json["adminSubjects"], serde_json::json!(subjects));
-        sync_plugin_admins_file(&path, &[]).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(json["adminSubjects"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn admin_policy_reports_publication_failure() {
-        let root = tempfile::tempdir().unwrap();
-        let parent = root.path().join("not-a-directory");
-        std::fs::write(&parent, b"preserve").unwrap();
-        assert!(sync_plugin_admins_file(&parent.join("plugin-admins.json"), &[]).is_err());
-        assert_eq!(std::fs::read(parent).unwrap(), b"preserve");
-    }
-}

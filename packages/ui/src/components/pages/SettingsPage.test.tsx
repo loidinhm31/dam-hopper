@@ -70,6 +70,10 @@ vi.mock("@/api/queries.js", () => ({
     mutateAsync: mockImportMutate,
     isPending: false,
   }),
+  useProjects: () => ({
+    data: [],
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/components/templates/AppLayout.js", () => ({
@@ -99,6 +103,9 @@ vi.mock("@/components/pages/settings-page/SettingsMaintenancePanel.js", () => ({
 vi.mock("@/components/pages/settings-page/SettingsConfigPanels.js", () => ({
   SettingsGlobalConfigPanel: () => <div>GlobalConfigPanel</div>,
   SettingsWorkspaceConfigPanel: () => <div>WorkspaceConfigPanel</div>,
+}));
+vi.mock("@/components/pages/settings-page/PluginManagementSection.js", () => ({
+  PluginManagementSection: () => <div>PluginManagementSection</div>,
 }));
 
 describe("SettingsPage Import / Export integration", () => {

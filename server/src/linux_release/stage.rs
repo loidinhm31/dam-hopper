@@ -58,7 +58,6 @@ pub fn determine_host_role(
         allow_origins,
         is_role_set,
         None,
-        &[],
     )
 }
 
@@ -69,7 +68,6 @@ pub fn determine_host_role_with_plugins(
     allow_origins: &[String],
     is_role_set: bool,
     plugin_owner_user: Option<String>,
-    plugin_admin_subjects: &[String],
 ) -> Result<(TargetRole, HostConfig), ReleaseError> {
     let existing_config = load_host_config(&layout.host_config_path())?;
 
@@ -78,14 +76,6 @@ pub fn determine_host_role_with_plugins(
             .as_ref()
             .and_then(|config| config.plugin_owner_user.clone())
     });
-    let admins = if plugin_admin_subjects.is_empty() {
-        existing_config
-            .as_ref()
-            .map(|config| config.plugin_admin_subjects.clone())
-            .unwrap_or_default()
-    } else {
-        plugin_admin_subjects.to_vec()
-    };
 
     if is_role_set {
         let role = requested_role.ok_or(ReleaseError::MissingRole)?;
@@ -103,7 +93,7 @@ pub fn determine_host_role_with_plugins(
             role,
             HostConfig::new(role, origins)?
                 .with_service_user(existing_service_user)
-                .with_plugin_config(owner, admins),
+                .with_plugin_config(owner),
         ));
     }
 
@@ -128,14 +118,14 @@ pub fn determine_host_role_with_plugins(
                 role,
                 HostConfig::new(role, origins)?
                     .with_service_user(existing_service_user)
-                    .with_plugin_config(owner, admins),
+                    .with_plugin_config(owner),
             ))
         }
         None => {
             let role = requested_role.ok_or(ReleaseError::MissingRole)?;
             Ok((
                 role,
-                HostConfig::new(role, allow_origins.to_vec())?.with_plugin_config(owner, admins),
+                HostConfig::new(role, allow_origins.to_vec())?.with_plugin_config(owner),
             ))
         }
     }
@@ -168,38 +158,21 @@ mod tests {
         let layout = Layout::with_root(root.path());
         let original = HostConfig::new(TargetRole::Server, vec![])
             .unwrap()
-            .with_plugin_config(Some("existing-owner".into()), vec!["existing-admin".into()]);
+            .with_plugin_config(Some("existing-owner".into()));
         save_host_config(&layout.host_config_path(), &original).unwrap();
 
         for role_set in [false, true] {
-            let (_, changed_admins) = determine_host_role_with_plugins(
-                &layout,
-                Some(TargetRole::Server),
-                &[],
-                role_set,
-                None,
-                &["new-admin".into()],
-            )
-            .unwrap();
-            assert_eq!(changed_admins.plugin_owner_user, original.plugin_owner_user);
-            assert_eq!(changed_admins.plugin_admin_subjects, ["new-admin"]);
-
             let (_, changed_owner) = determine_host_role_with_plugins(
                 &layout,
                 Some(TargetRole::Server),
                 &[],
                 role_set,
                 Some("new-owner".into()),
-                &[],
             )
             .unwrap();
             assert_eq!(
                 changed_owner.plugin_owner_user.as_deref(),
                 Some("new-owner")
-            );
-            assert_eq!(
-                changed_owner.plugin_admin_subjects,
-                original.plugin_admin_subjects
             );
         }
         assert_eq!(

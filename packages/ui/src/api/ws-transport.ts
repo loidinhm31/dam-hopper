@@ -1411,6 +1411,14 @@ function channelToEndpoint(
         body,
       };
     }
+    case "plugins:adminReplaceOwnerHistorySource": {
+      const { id, body } = (data ?? {}) as { id: string; body: unknown };
+      return {
+        method: "PUT",
+        url: `/api/plugins/admin/installations/${encodeURIComponent(id)}/owner-history-source`,
+        body,
+      };
+    }
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

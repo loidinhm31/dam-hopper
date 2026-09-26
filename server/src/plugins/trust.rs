@@ -1,66 +1,8 @@
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::error::PluginError;
 use super::manifest::{ManifestContracts, ManifestEntrypoints, ManifestV1};
-
-/// Root-seeded list of administrator subjects authorized for plugin management operations.
-#[derive(Debug, Clone)]
-pub struct AdminSubjectList {
-    subjects: HashSet<String>,
-    config_digest: String,
-}
-
-impl AdminSubjectList {
-    pub fn new(subjects: impl IntoIterator<Item = String>) -> Self {
-        let mut set = HashSet::new();
-        let mut sorted = Vec::new();
-        for s in subjects {
-            let trimmed = s.trim().to_string();
-            if !trimmed.is_empty() {
-                if set.insert(trimmed.clone()) {
-                    sorted.push(trimmed);
-                }
-            }
-        }
-        sorted.sort();
-
-        let mut hasher = Sha256::new();
-        for s in &sorted {
-            hasher.update(s.as_bytes());
-            hasher.update(b"\n");
-        }
-        let config_digest = hex::encode(hasher.finalize());
-
-        Self {
-            subjects: set,
-            config_digest,
-        }
-    }
-
-    pub fn is_admin(&self, subject: &str) -> bool {
-        if self.subjects.contains(subject) {
-            return true;
-        }
-        if subject == "dev-user" && !Self::is_production() {
-            return true;
-        }
-        false
-    }
-
-    fn is_production() -> bool {
-        std::env::var("RUST_ENV").unwrap_or_default() == "production"
-            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-    }
-
-    pub fn config_digest(&self) -> &str {
-        &self.config_digest
-    }
-}
-
 /// Strict review DTO returned after a package has been streamed and inspected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -112,18 +54,12 @@ impl StageReviewDto {
 
 /// Validates that an approval request satisfies all security revision, actor, and digest constraints.
 pub fn validate_stage_approval(
-    admin_subjects: &AdminSubjectList,
-    actor_subject: &str,
+    _actor_subject: &str,
     expected_sha256: &str,
     requested_security_revision: u64,
     current_security_revision: u64,
     review: &StageReviewDto,
 ) -> Result<(), PluginError> {
-    if !admin_subjects.is_admin(actor_subject) {
-        return Err(PluginError::unauthorized(format!(
-            "Actor subject '{actor_subject}' is not in authorized plugin admin list"
-        )));
-    }
 
     if requested_security_revision != current_security_revision {
         return Err(PluginError::forbidden(format!(

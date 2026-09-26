@@ -196,7 +196,6 @@ fn test_privilege_enforcement_matrix() {
         verify_attestation: false,
         service_user: None,
         plugin_owner_user: None,
-        plugin_admin_subjects: vec![],
         reinstall: false,
     });
     // install must run as root
@@ -218,7 +217,6 @@ fn test_privilege_enforcement_matrix() {
             verify_attestation: false,
             service_user: None,
             plugin_owner_user: None,
-            plugin_admin_subjects: vec![],
             reinstall: false,
         }),
     };

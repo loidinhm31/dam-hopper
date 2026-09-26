@@ -24,9 +24,8 @@ use dam_hopper_server::config::{
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
 use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
-use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 use dam_hopper_server::plugins::{
-    AdminSubjectList, EpochRegistry, PluginApiService, PluginAuthorizationService,
+    EpochRegistry, PluginApiService, PluginAuthorizationService,
     PluginContextTable, PluginRegistry, PluginRegistryLayout, RunnerClient, RunnerClientConfig,
     RunnerServer, RunnerServerConfig, SupervisorManager,
 };
@@ -147,8 +146,7 @@ fn find_node_bin() -> PathBuf {
 
 fn setup_test_installation(temp_dir: &TempDir) -> (Arc<PluginRegistry>, String, String) {
     let layout = PluginRegistryLayout::new(temp_dir.path().join("registry"));
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
 
     let worker_code = real_node_worker_code();
     let manifest_str = build_manifest_json(
@@ -174,8 +172,15 @@ fn setup_test_installation(temp_dir: &TempDir) -> (Arc<PluginRegistry>, String, 
 
     let mut bindings = BTreeMap::new();
     bindings.insert("test-proj".to_string(), "approved-source".to_string());
+    let initial_grant = dam_hopper_server::plugins::contract::GrantKey {
+        actor_subject: "admin-user".to_string(),
+        installation_id: "".to_string(),
+        configured_project_target: "*".to_string(),
+        allowed_operations: vec!["*".to_string()],
+        allow_current_account_policy: false,
+    };
     let inst = registry
-        .approve_stage("admin-user", &begin.stage_id, &digest, 1, bindings, vec![])
+        .approve_stage("admin-user", &begin.stage_id, &digest, 1, bindings, vec![initial_grant])
         .unwrap();
 
     (registry, inst.installation_id, digest)
@@ -189,6 +194,54 @@ struct TestHarness {
     pub socket_path: PathBuf,
     pub shutdown_tx: watch::Sender<bool>,
     pub project_dir: PathBuf,
+}
+
+async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
+    let uri = std::env::var("TEST_MONGODB_URI").unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
+    let mut client = mongodb::Client::with_uri_str(&uri).await.ok();
+    let mut db = client.as_ref().map(|c| c.database(db_name));
+    let mut is_connected = if let Some(ref d) = db {
+        d.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_ok()
+    } else {
+        false
+    };
+
+    if !is_connected {
+        let _ = std::process::Command::new("podman")
+            .args(["run", "-d", "--rm", "-p", "27018:27017", "--name", "test-mongo-dam-hopper", "docker.io/library/mongo:8.2"])
+            .output();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Ok(c) = mongodb::Client::with_uri_str(&uri).await {
+            let d = c.database(db_name);
+            if d.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_ok() {
+                db = Some(d);
+                is_connected = true;
+            }
+        }
+    }
+
+    if is_connected {
+        let d = db?;
+        use bcrypt::{hash, DEFAULT_COST};
+        let password_hash = hash("password", DEFAULT_COST).unwrap();
+        let col = d.collection::<mongodb::bson::Document>("users");
+        let _ = col.delete_many(mongodb::bson::doc! {}).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "admin-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+            "role": "admin",
+        }).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "bob-new-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+            "role": "user",
+        }).await;
+        Some(d)
+    } else {
+        None
+    }
 }
 
 async fn create_test_harness(temp_dir: &TempDir, no_auth: bool) -> TestHarness {
@@ -299,7 +352,7 @@ async fn create_test_harness(temp_dir: &TempDir, no_auth: bool) -> TestHarness {
         event_sink,
         "test-jwt-secret".to_string(),
         FsSubsystem::new(vec![]),
-        None,
+        if no_auth { None } else { setup_test_mongo(&format!("test_int_{}", uuid::Uuid::new_v4().simple())).await },
         no_auth,
         tunnel_manager,
         None,
@@ -581,8 +634,7 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
     let temp_dir = TempDir::new().unwrap();
     let socket_path = temp_dir.path().join("runner.sock");
     let layout = PluginRegistryLayout::new(temp_dir.path().join("registry"));
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
 
     let tar_gz = fs::read(&candidate_path).unwrap();
     let digest = hex::encode(Sha256::digest(&tar_gz));
@@ -713,7 +765,7 @@ async fn test_real_evcrate_candidate_package_g1_snapshot_summary() {
         event_sink,
         "test-jwt-secret".to_string(),
         FsSubsystem::new(vec![]),
-        None,
+        setup_test_mongo(&format!("test_int_worker_{}", uuid::Uuid::new_v4().simple())).await,
         false,
         tunnel_manager,
         None,

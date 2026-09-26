@@ -68,11 +68,7 @@ pub struct HostConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_user: Option<String>,
     /// Dedicated system user for the owner plugin runner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_owner_user: Option<String>,
-    /// Admin subjects permitted to manage plugins.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugin_admin_subjects: Vec<String>,
 }
 
 impl HostConfig {
@@ -84,7 +80,6 @@ impl HostConfig {
             allowed_web_origins: validated_origins,
             service_user: None,
             plugin_owner_user: None,
-            plugin_admin_subjects: Vec::new(),
         })
     }
 
@@ -98,10 +93,8 @@ impl HostConfig {
     pub fn with_plugin_config(
         mut self,
         plugin_owner_user: Option<String>,
-        plugin_admin_subjects: Vec<String>,
     ) -> Self {
         self.plugin_owner_user = plugin_owner_user;
-        self.plugin_admin_subjects = plugin_admin_subjects;
         self
     }
 }
@@ -119,13 +112,21 @@ pub fn load_host_config(path: &Path) -> Result<Option<HostConfig>, ReleaseError>
         ))
     })?;
 
-    let config: HostConfig = toml::from_str(&content).map_err(|e| {
+    let mut toml_val: toml::Value = toml::from_str(&content).map_err(|e| {
         ReleaseError::Config(format!(
             "failed to parse host config at '{}': {e}",
             path.display()
         ))
     })?;
-
+    if let toml::Value::Table(ref mut table) = toml_val {
+        table.remove("plugin_admin_subjects");
+    }
+    let config: HostConfig = toml_val.try_into().map_err(|e| {
+        ReleaseError::Config(format!(
+            "failed to parse host config at '{}': {e}",
+            path.display()
+        ))
+    })?;
     validate_web_origins(&config.allowed_web_origins)?;
     Ok(Some(config))
 }

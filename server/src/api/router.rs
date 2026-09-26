@@ -561,6 +561,10 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
+            auth::require_plugin_admin,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
             auth::require_bearer_auth,
         ))
         .route_layer(middleware::from_fn_with_state(

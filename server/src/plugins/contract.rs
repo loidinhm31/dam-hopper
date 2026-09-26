@@ -40,6 +40,7 @@ pub mod budgets {
 pub const PUBLIC_RUNNER_METHODS: &[&str] = &[
     "runner.hello",
     "plugin.list",
+    "plugin.actorGrants",
     "plugin.readUi",
     "plugin.activate",
     "plugin.deactivate",

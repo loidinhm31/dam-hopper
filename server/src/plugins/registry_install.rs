@@ -45,7 +45,6 @@ impl PluginRegistry {
 
         let current_state = self.read_state()?;
         validate_stage_approval(
-            &self.admin_subjects,
             actor,
             expected_sha256,
             requested_security_revision,
@@ -146,6 +145,13 @@ impl PluginRegistry {
             published_at: i.updated_at.clone(),
         });
 
+        let mut mapped_grants = initial_grants;
+        for g in &mut mapped_grants {
+            if g.installation_id.is_empty() {
+                g.installation_id = installation_id.clone();
+            }
+        }
+
         let inst_record = InstallationRecord {
             installation_id: installation_id.clone(),
             plugin_id: review.plugin_id.clone(),
@@ -154,7 +160,7 @@ impl PluginRegistry {
             activation_generation: existing_gen + 1,
             enabled: true,
             bindings: initial_bindings,
-            grants: initial_grants,
+            grants: mapped_grants,
             owner_history_source: existing.and_then(|i| i.owner_history_source.clone()),
             previous_package,
             created_at: existing

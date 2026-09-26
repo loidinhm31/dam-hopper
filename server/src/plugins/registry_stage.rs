@@ -26,11 +26,6 @@ impl PluginRegistry {
         expected_sha256: &str,
         total_bytes: u64,
     ) -> Result<StageBeginResult, PluginError> {
-        if !self.admin_subjects.is_admin(actor) {
-            return Err(PluginError::unauthorized(format!(
-                "Actor '{actor}' is not authorized admin"
-            )));
-        }
 
         let state = self.read_state()?;
         let session = ActiveStageUpload::new(
@@ -69,7 +64,7 @@ impl PluginRegistry {
             ))
         })?;
 
-        if session.actor_subject != actor || !self.admin_subjects.is_admin(actor) {
+        if session.actor_subject != actor {
             return Err(PluginError::unauthorized(format!(
                 "Actor '{actor}' cannot write to stage '{stage_id}'"
             )));
@@ -83,7 +78,7 @@ impl PluginRegistry {
             PluginError::invalid_input(format!("No active stage session '{stage_id}'"))
         })?;
 
-        if session.actor_subject != actor || !self.admin_subjects.is_admin(actor) {
+        if session.actor_subject != actor {
             return Err(PluginError::unauthorized(format!(
                 "Actor '{actor}' not authorized for stage '{stage_id}'"
             )));

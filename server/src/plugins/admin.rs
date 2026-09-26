@@ -1,93 +1,22 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use super::contract::GrantKey;
-use super::error::PluginError;
 pub use super::registry_state::OwnerHistorySource;
-pub use super::trust::{AdminSubjectList, StageReviewDto};
+pub use super::trust::StageReviewDto;
 
-/// Configuration file format for host-seeded plugin administrators.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AdminConfigWire {
+/// Grant configuration supplied at approval before the installation ID is known.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitialGrant {
+    pub actor_subject: String,
+    pub configured_project_target: String,
+    pub allowed_operations: Vec<String>,
     #[serde(default)]
-    pub admin_subjects: Vec<String>,
+    pub allow_current_account_policy: bool,
 }
-
-/// Load an AdminSubjectList from a JSON file.
-/// If the file does not exist, returns an empty list (deny all).
-pub fn load_admin_subjects_from_file(path: &Path) -> Result<AdminSubjectList, PluginError> {
-    if !path.exists() {
-        return Ok(AdminSubjectList::new(Vec::<String>::new()));
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let perm = meta.permissions().mode();
-            if perm & 0o022 != 0 {
-                return Err(PluginError::runner_unavailable(format!(
-                    "Admin configuration file '{}' has unsafe writable permissions ({:o}); rejecting group/world-writable permissions",
-                    path.display(),
-                    perm
-                )));
-            }
-        }
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| {
-        PluginError::runner_unavailable(format!(
-            "Failed to read admin configuration at '{}': {e}",
-            path.display()
-        ))
-    })?;
-
-    // Try parsing as AdminConfigWire or directly as Vec<String>
-    if let Ok(config) = serde_json::from_str::<AdminConfigWire>(&content) {
-        Ok(AdminSubjectList::new(config.admin_subjects))
-    } else if let Ok(list) = serde_json::from_str::<Vec<String>>(&content) {
-        Ok(AdminSubjectList::new(list))
-    } else {
-        Err(PluginError::invalid_input(format!(
-            "Failed to parse admin config at '{}': expected JSON object with adminSubjects array or JSON array of strings",
-            path.display()
-        )))
-    }
-}
-
-/// Load host-seeded admin subjects from the default host location or environment variable.
-/// Defaults to empty list (deny-all) when no configuration is found.
-pub fn load_host_admin_subjects() -> AdminSubjectList {
-    if let Ok(env_path) = std::env::var("DAM_HOPPER_PLUGIN_ADMINS_FILE") {
-        let p = Path::new(&env_path);
-        match load_admin_subjects_from_file(p) {
-            Ok(list) => return list,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to load admin subjects from DAM_HOPPER_PLUGIN_ADMINS_FILE; denying all");
-                return AdminSubjectList::new(Vec::<String>::new());
-            }
-        }
-    }
-
-    let default_path = Path::new("/etc/dam-hopper/plugin-admins.json");
-    if default_path.exists() {
-        match load_admin_subjects_from_file(default_path) {
-            Ok(list) => return list,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to load /etc/dam-hopper/plugin-admins.json; denying all");
-                return AdminSubjectList::new(Vec::<String>::new());
-            }
-        }
-    }
-
-    AdminSubjectList::new(Vec::<String>::new())
-}
-
 // ---------------------------------------------------------------------------
 // Admin RPC DTOs (used over Unix domain socket RPC)
 // ---------------------------------------------------------------------------
@@ -133,7 +62,7 @@ pub struct ApproveStageParams {
     #[serde(default)]
     pub initial_bindings: BTreeMap<String, String>,
     #[serde(default)]
-    pub initial_grants: Vec<GrantKey>,
+    pub initial_grants: Vec<InitialGrant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_history_source: Option<OwnerHistorySource>,
     pub actor_subject: String,
@@ -200,11 +129,21 @@ pub struct ReplaceOwnerHistorySourceParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminListParams {
     pub actor_subject: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginActorGrantsParams {
+    pub actor_subject: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginActorGrantsResult {
+    pub grants: Vec<GrantKey>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminGetParams {
@@ -273,7 +212,7 @@ pub struct ApproveStageRequest {
     #[serde(default)]
     pub initial_bindings: BTreeMap<String, String>,
     #[serde(default)]
-    pub initial_grants: Vec<GrantKey>,
+    pub initial_grants: Vec<InitialGrant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_history_source: Option<OwnerHistorySource>,
 }
