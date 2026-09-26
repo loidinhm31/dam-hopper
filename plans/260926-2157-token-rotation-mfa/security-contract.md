@@ -1,6 +1,6 @@
 # Mandatory MFA and session lifecycle contract
 
-Status: proposed; no implementation. Date: 2026-09-26.
+Status: implementation in progress (Phases 01–02 complete; Phases 03–05 pending). Date: 2026-09-27.
 
 ## Enhanced `/cmd-plan__hard` task
 

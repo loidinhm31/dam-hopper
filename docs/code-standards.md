@@ -2313,13 +2313,12 @@ pub async fn require_auth(
 
 The Phase 01 auth-bypass design is historical; the source plan is no longer present. Current auth and safety rules are maintained in [API Reference](./api-reference.md).
 
-### JWT Pattern
+### Session JWT and cookie
 
-- **Token Storage**: `~/.config/dam-hopper/server-token` (hex UUID)
-- **Signing Algorithm**: HS256 (HMAC-SHA256)
-- **Cookie Transport**: auth cookies are `HttpOnly; SameSite=Strict`; media uses a host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie without `Secure` for HTTP compatibility
-- **Validation**: Constant-time comparison via `subtle` crate
-- **Expiry**: 30 days for production, 30 days for dev mode
+- `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token. The normal login flow returns a session token only after TOTP; see [Authentication API](./authentication-api.md).
+- Auth protocol 2 JWTs bind the user and session ID to auth/credential versions and a fixed expiry. Sessions expire after 30 days; MFA must be refreshed after 10 days without extending absolute expiry.
+- The `damhopper-auth` cookie is `HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`.
+- `--no-auth` is a development bypass; do not apply its direct-token response to normal password login.
 
 ## Project Registry (dam-hopper.toml)
 

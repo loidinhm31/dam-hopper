@@ -1,7 +1,7 @@
 use axum::extract::Request;
 use axum::{
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -13,6 +13,17 @@ use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+use crate::api::auth_mfa::{
+    auth_error_response, no_store_json_response, LoginChallengeResponse,
+};
+use crate::auth::model::{
+    bson_to_chrono, chrono_to_bson, AuthChallenge, AuthClaims, AuthDecision, ChallengePurpose,
+};
+use crate::auth::policy::{
+    check_account_throttle, compute_mfa_due_at, AUTH_PROTOCOL_VERSION, CHALLENGE_LIFETIME_SECS,
+};
+use crate::auth::totp::TotpEngine;
+use crate::auth::AuthService;
 use crate::state::AppState;
 
 pub const AUTH_COOKIE: &str = "damhopper-auth";
@@ -26,21 +37,19 @@ struct ErrorBody {
     error: String,
 }
 
-fn auth_cookie_header(value: &str, clear: bool) -> String {
-    let max_age = if clear { "; Max-Age=0" } else { "" };
+pub(crate) fn auth_cookie_header(value: &str, clear: bool) -> String {
+    let max_age = if clear { "; Max-Age=0" } else { "; Max-Age=2592000" };
     format!("{AUTH_COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/{max_age}")
 }
 
-fn unauthorized() -> Response {
-    (
+pub(crate) fn unauthorized() -> Response {
+    auth_error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ErrorBody {
-            error: "Unauthorized".into(),
-        }),
+        "AUTH_REQUIRED",
+        "Authentication required",
+        None,
     )
-        .into_response()
 }
-
 // ---------------------------------------------------------------------------
 // Token / JWT helpers
 // ---------------------------------------------------------------------------
@@ -232,15 +241,6 @@ pub struct LoginBody {
 
 pub use crate::auth::model::UserRole;
 
-#[derive(Serialize)]
-struct LoginResponse {
-    ok: bool,
-    token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dev_mode: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<UserRole>,
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -410,149 +410,410 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
             Ok(token) => token,
             Err(e) => {
                 tracing::error!("Dev mode JWT generation failed: {}", e);
-                return (
+                return auth_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorBody {
-                        error: "Failed to generate dev token".into(),
-                    }),
-                )
-                    .into_response();
+                    "INTERNAL_ERROR",
+                    "Failed to generate dev token",
+                    None,
+                );
             }
         };
 
         let cookie_attrs = auth_cookie_header(&jwt_token, false);
-
-        return (
+        let mut response = (
             StatusCode::OK,
             [(header::SET_COOKIE, cookie_attrs)],
-            Json(LoginResponse {
-                ok: true,
-                token: Some(jwt_token),
-                dev_mode: Some(true),
-                role: Some(UserRole::User),
-            }),
+            Json(serde_json::json!({
+                "ok": true,
+                "token": jwt_token,
+                "dev_mode": true,
+                "devMode": true,
+                "role": UserRole::User,
+                "workbenchProtocol": 2,
+                "authProtocol": AUTH_PROTOCOL_VERSION,
+            })),
         )
             .into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        return response;
     }
 
-    let (Some(username), Some(password)) = (body.username.take(), body.password.as_mut()) else {
-        return unauthorized();
+    let (Some(username), Some(raw_password)) = (body.username.take(), body.password.take()) else {
+        return auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_CREDENTIALS",
+            "Invalid credentials",
+            None,
+        );
     };
-    let verification = verify_enabled_user(state.db.as_ref(), &username, password).await;
-    let role = match verification {
-        Ok(r) => r,
-        Err(error) => {
-            let message = if error == CredentialVerificationError::AccountDisabled {
-                "Account is pending approval or disabled"
-            } else {
-                "Invalid credentials"
-            };
-            return (
+    let mut password = zeroize::Zeroizing::new(raw_password);
+
+    let (Some(store), Some(mfa_key)) = (state.auth_service.store(), state.auth_service.mfa_key()) else {
+        return auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_CREDENTIALS",
+            "Invalid credentials",
+            None,
+        );
+    };
+
+    let now = state.auth_service.clock().now();
+    let user = match store.get_user(&username).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return auth_error_response(
                 StatusCode::UNAUTHORIZED,
-                Json(ErrorBody {
-                    error: message.into(),
-                }),
-            )
-                .into_response();
+                "INVALID_CREDENTIALS",
+                "Invalid credentials",
+                None,
+            );
         }
-    };
-    let logged_in_sub = username;
-    let jwt_token = match generate_jwt(&logged_in_sub, &state.jwt_secret) {
-        Ok(token) => token,
         Err(e) => {
-            tracing::error!("JWT generation failed for user {}: {}", logged_in_sub, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorBody {
-                    error: "Failed to generate authentication token".into(),
-                }),
-            )
-                .into_response();
+            tracing::error!("Error reading user {}: {}", username, e);
+            return auth_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "AUTH_UNAVAILABLE",
+                "Database error retrieving user",
+                None,
+            );
         }
     };
 
-    let cookie_attrs = auth_cookie_header(&jwt_token, false);
+    let (is_throttled, retry_after) = check_account_throttle(&user, now);
+    if is_throttled {
+        return auth_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "RATE_LIMITED",
+            "Too many failed attempts. Please wait before retrying.",
+            retry_after,
+        );
+    }
 
-    (
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie_attrs)],
-        Json(LoginResponse {
-            ok: true,
-            token: Some(jwt_token),
-            dev_mode: None,
-            role: Some(role),
-        }),
-    )
-        .into_response()
+    if !user.is_enabled {
+        return auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "ACCOUNT_DISABLED",
+            "Account is pending approval or disabled",
+            None,
+        );
+    }
+
+    let password_valid = verify(&password, &user.password_hash).unwrap_or(false);
+    password.zeroize();
+
+    if !password_valid {
+        let _ = store.record_failed_attempt(&username, now).await;
+        return auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_CREDENTIALS",
+            "Invalid credentials",
+            None,
+        );
+    }
+
+    let challenge_expires_at = now + chrono::Duration::seconds(CHALLENGE_LIFETIME_SECS);
+    let (token_hex, digest) = AuthService::generate_challenge_token();
+
+    if user.mfa.is_none() {
+        let secret = TotpEngine::generate_secret();
+        let (ciphertext, nonce) = match mfa_key.encrypt(&username, "enrollment-pending", &secret) {
+            Ok(enc) => enc,
+            Err(e) => {
+                tracing::error!("Failed to encrypt pending MFA secret for {}: {}", username, e);
+                return auth_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    "Failed to generate enrollment challenge",
+                    None,
+                );
+            }
+        };
+
+        let challenge = AuthChallenge {
+            id: digest,
+            username: user.username,
+            auth_version: user.auth_version,
+            purpose: ChallengePurpose::Enroll,
+            created_at: chrono_to_bson(now),
+            expires_at: chrono_to_bson(challenge_expires_at),
+            attempts: 0,
+            consumed_at: None,
+            pending_secret_ciphertext: Some(ciphertext),
+            pending_secret_nonce: Some(nonce),
+            pending_secret_key_id: Some(mfa_key.key_id().to_string()),
+            session_id: None,
+            credential_version: None,
+        };
+
+        if let Err(e) = store.create_challenge(challenge).await {
+            tracing::error!("Failed to persist enrollment challenge for {}: {}", username, e);
+            return auth_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "AUTH_UNAVAILABLE",
+                "Failed to persist enrollment challenge",
+                None,
+            );
+        }
+
+        no_store_json_response(
+            StatusCode::OK,
+            LoginChallengeResponse {
+                state: "enrollmentRequired".to_string(),
+                challenge_token: token_hex,
+                challenge_expires_at: challenge_expires_at.to_rfc3339(),
+                auth_protocol: AUTH_PROTOCOL_VERSION,
+            },
+        )
+    } else {
+        let challenge = AuthChallenge {
+            id: digest,
+            username: user.username,
+            auth_version: user.auth_version,
+            purpose: ChallengePurpose::LoginMfa,
+            created_at: chrono_to_bson(now),
+            expires_at: chrono_to_bson(challenge_expires_at),
+            attempts: 0,
+            consumed_at: None,
+            pending_secret_ciphertext: None,
+            pending_secret_nonce: None,
+            pending_secret_key_id: None,
+            session_id: None,
+            credential_version: None,
+        };
+
+        if let Err(e) = store.create_challenge(challenge).await {
+            tracing::error!("Failed to persist login challenge for {}: {}", username, e);
+            return auth_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "AUTH_UNAVAILABLE",
+                "Failed to persist login challenge",
+                None,
+            );
+        }
+
+        no_store_json_response(
+            StatusCode::OK,
+            LoginChallengeResponse {
+                state: "mfaRequired".to_string(),
+                challenge_token: token_hex,
+                challenge_expires_at: challenge_expires_at.to_rfc3339(),
+                auth_protocol: AUTH_PROTOCOL_VERSION,
+            },
+        )
+    }
 }
-/// POST /api/auth/logout — clears auth credentials.
+
+/// POST /api/auth/logout — clears auth credentials and revokes active session.
 pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
+    let now = state.auth_service.clock().now();
     if let Some(token) = extract_token(&request, &jar) {
-        if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
+        if let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) {
+            if let Some(store) = state.auth_service.store() {
+                let _ = store.revoke_session(&claims.sid, now).await;
+            }
+            state.plugin_service.revoke_actor(&claims.sub).await;
+        } else if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
             state.plugin_service.revoke_actor(&actor.subject).await;
         }
     }
     let clear = auth_cookie_header("", true);
-    (
+    let mut resp = (
         StatusCode::OK,
         [(header::SET_COOKIE, clear)],
-        Json(LoginResponse {
-            ok: true,
-            token: None,
-            dev_mode: None,
-            role: None,
-        }),
+        Json(serde_json::json!({
+            "ok": true,
+            "token": null,
+            "role": null
+        })),
     )
-        .into_response()
+        .into_response();
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    resp
 }
 
 /// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.
 pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
     // Dev mode: always authenticated
     if state.no_auth {
-        return Json(serde_json::json!({
+        let mut resp = Json(serde_json::json!({
             "authenticated": true,
             "dev_mode": true,
+            "devMode": true,
             "user": "dev-user",
             "role": "user",
-            "workbenchProtocol": 2
+            "workbenchProtocol": 2,
+            "authProtocol": AUTH_PROTOCOL_VERSION,
         }))
         .into_response();
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        return resp;
     }
 
-    let token_sub = extract_token(&request, &jar)
-        .and_then(|t| authenticate_token(&t, &state.jwt_secret));
-
-    if let Some(actor) = token_sub {
-        let role = match state.db.as_ref() {
-            Some(db) => match get_user_role(Some(db), &actor.subject).await {
-                Some(r) => Some(r),
-                None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "authenticated": false,
-                            "error": "Account unavailable or disabled"
-                        })),
-                    )
-                        .into_response();
-                }
-            },
-            None => None,
-        };
-        Json(serde_json::json!({
-            "authenticated": true,
-            "user": actor.subject,
-            "role": role,
-            "workbenchProtocol": 2
-        }))
-        .into_response()
-    } else {
-        (
+    let Some(token) = extract_token(&request, &jar) else {
+        let mut resp = (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "authenticated": false })),
+            Json(serde_json::json!({
+                "authenticated": false,
+                "code": "AUTH_REQUIRED",
+                "error": "Authentication required",
+                "workbenchProtocol": 2,
+                "authProtocol": AUTH_PROTOCOL_VERSION,
+            })),
         )
-            .into_response()
+            .into_response();
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        return resp;
+    };
+
+    let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) else {
+        // Fallback for tests running without DB where store is None:
+        if state.auth_service.store().is_none() {
+            if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
+                let mut resp = (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "authenticated": true,
+                        "user": actor.subject,
+                        "role": UserRole::User,
+                        "workbenchProtocol": 2,
+                        "authProtocol": AUTH_PROTOCOL_VERSION,
+                    })),
+                )
+                    .into_response();
+                resp.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-store"),
+                );
+                return resp;
+            }
+        }
+        let mut resp = (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "authenticated": false,
+                "code": "AUTH_REQUIRED",
+                "error": "Session token invalid or legacy format",
+                "workbenchProtocol": 2,
+                "authProtocol": AUTH_PROTOCOL_VERSION,
+            })),
+        )
+            .into_response();
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        return resp;
+    };
+
+    match state.auth_service.evaluate_claims(&claims).await {
+        AuthDecision::Authenticated { session, user } => {
+            let expires_at = bson_to_chrono(session.expires_at);
+            let mfa_verified_at = bson_to_chrono(session.mfa_verified_at);
+            let mfa_due_at = compute_mfa_due_at(mfa_verified_at, expires_at);
+            let issued_at = bson_to_chrono(session.issued_at);
+
+            let mut resp = (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "authenticated": true,
+                    "user": user.username,
+                    "role": user.role,
+                    "workbenchProtocol": 2,
+                    "authProtocol": AUTH_PROTOCOL_VERSION,
+                    "issuedAt": issued_at.to_rfc3339(),
+                    "expiresAt": expires_at.to_rfc3339(),
+                    "mfaDueAt": mfa_due_at.to_rfc3339(),
+                })),
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            resp
+        }
+        AuthDecision::MfaRequired { session, mfa_due_at } => {
+            let expires_at = bson_to_chrono(session.expires_at);
+            let mut resp = (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "authenticated": false,
+                    "code": "MFA_REQUIRED",
+                    "error": "MFA verification required",
+                    "user": session.username,
+                    "expiresAt": expires_at.to_rfc3339(),
+                    "mfaDueAt": mfa_due_at.to_rfc3339(),
+                    "workbenchProtocol": 2,
+                    "authProtocol": AUTH_PROTOCOL_VERSION,
+                })),
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            resp
+        }
+        AuthDecision::FullLoginRequired { reason } => {
+            let code = if reason.contains("expired") {
+                "SESSION_EXPIRED"
+            } else if reason.contains("revoked")
+                || reason.contains("superseded")
+                || reason.contains("version")
+            {
+                "SESSION_REVOKED"
+            } else if reason.contains("disabled") {
+                "ACCOUNT_DISABLED"
+            } else {
+                "AUTH_REQUIRED"
+            };
+            let mut resp = (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "authenticated": false,
+                    "code": code,
+                    "error": reason,
+                    "workbenchProtocol": 2,
+                    "authProtocol": AUTH_PROTOCOL_VERSION,
+                })),
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            resp
+        }
+        AuthDecision::Unavailable { reason } => {
+            let mut resp = (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "authenticated": false,
+                    "code": "AUTH_UNAVAILABLE",
+                    "error": reason,
+                    "workbenchProtocol": 2,
+                    "authProtocol": AUTH_PROTOCOL_VERSION,
+                })),
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            resp
+        }
     }
 }
 

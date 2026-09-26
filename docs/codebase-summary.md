@@ -394,9 +394,11 @@ and [multi-server guide](./user-guide-multi-server-profiles.md).
 which owns an `auth::AuthService` backed by the optional MongoDB store and
 injectable clock. `server/src/auth/` defines user/session/challenge state,
 MongoDB CAS and TTL-index operations, a V2 session-policy evaluator,
-AES-256-GCM MFA-secret protection, and TOTP/replay checks. Phase 01 does not yet
-wire this evaluator into the existing `api/auth.rs` JWT middleware or expose MFA
-HTTP endpoints; see [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md).
+Phase 02 exposes login, enrollment, TOTP verification, step-up, status, and
+logout through `api/auth.rs` and `api/auth_mfa.rs`. The general `require_auth`
+middleware still checks JWT signature/expiry only; broad session-policy
+admission remains a separate transport integration. See the
+[Authentication API](./authentication-api.md).
 
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
 browser-debug, host-resource, and idle-suspend surfaces. Shared state owns

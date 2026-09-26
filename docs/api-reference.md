@@ -14,7 +14,7 @@ The server also accepts an HttpOnly SameSite=Strict authentication cookie. `GET
 /api/health` and authentication endpoints have public/flow-specific exceptions;
 consult each route group below rather than assuming every request is protected.
 
-Token stored at `~/.config/dam-hopper/server-token`. Phase 01 introduces the auth-state foundation without MFA HTTP endpoints or `require_auth` integration; see [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md).
+Auth protocol 2 normal login returns a restricted challenge; enrollment or verification is required before a normal session is issued. `GET /api/auth/status` rejects legacy tokens, while general protected-route session enforcement remains outside Phase 02. See the [Authentication API](./authentication-api.md) for request/response schemas and the [security contract](../plans/260926-2157-token-rotation-mfa/security-contract.md) for lifecycle and security details.
 
 ### Dev Mode (--no-auth)
 
@@ -27,56 +27,62 @@ handler.
 ### Auth Endpoints
 
 **POST /api/auth/login**
-Authenticate and receive auth token.
 
-Body (normal mode):
+Normal mode body:
 
 ```json
 { "username": "user", "password": "pass" }
 ```
 
-Body (--no-auth mode): `{}`
-
-Response:
+Returns a restricted, five-minute MFA challenge, not an authenticated session or cookie:
 
 ```json
 {
-  "ok": true,
-  "token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "role": "user"
+  "state": "enrollmentRequired",
+  "challengeToken": "...",
+  "challengeExpiresAt": "...",
+  "authProtocol": 2
 }
 ```
 
-**GET /api/auth/status**
-Check authentication status.
+For an enrolled account, `state` is `mfaRequired`. In `--no-auth` mode, send `{}`; development mode returns its development session directly.
 
-Response (authenticated):
+**POST /api/auth/mfa/setup**
+
+Body: `{ "challengeToken": "..." }`. Returns the pending TOTP secret, `otpauthUri`, issuer/account metadata, algorithm, digits, and period. Repeated setup fetches for the same challenge return the same secret. Keep setup values ephemeral.
+
+**POST /api/auth/mfa/confirm** and **POST /api/auth/mfa/verify**
+
+Body: `{ "challengeToken": "...", "code": "123456" }`. `confirm` completes first enrollment; `verify` completes login MFA or session step-up. Success creates the full session and auth cookie, and returns `state`, `token`, `expiresAt`, `mfaDueAt`, `user`, `role`, and `authProtocol`.
+
+**POST /api/auth/mfa/challenge**
+
+Creates a five-minute step-up challenge bound to the current unexpired session and credential revision. The security contract specifies Bearer authentication; code review flagged that cookie-only credentials are currently accepted and requires follow-up before release.
+
+**GET /api/auth/status**
+
+Returns the current session state without granting access. A fresh session includes `issuedAt`, `expiresAt`, and `mfaDueAt`:
 
 ```json
 {
   "authenticated": true,
   "user": "username",
   "role": "user",
-  "workbenchProtocol": 2
+  "workbenchProtocol": 2,
+  "authProtocol": 2,
+  "issuedAt": "...",
+  "expiresAt": "...",
+  "mfaDueAt": "..."
 }
 ```
 
-Response (--no-auth mode):
-
-```json
-{
-  "authenticated": true,
-  "dev_mode": true,
-  "user": "dev-user",
-  "role": "user",
-  "workbenchProtocol": 2
-}
-```
+When MFA is due, status returns `401` with `code: "MFA_REQUIRED"` and deadline metadata. At absolute expiry, full password login and TOTP are required. `--no-auth` continues to return its development-mode status.
 
 **POST /api/auth/logout**
-Clear the auth cookie; when a valid token is supplied, revoke that actor's plugin epochs and contexts.
 
-Response: `{ "ok": true }`
+Revokes the supplied session when valid and clears the auth cookie; stale MFA does not prevent logout.
+
+Auth challenge/session responses use `Cache-Control: no-store`. Authentication errors use `{ "error": "...", "code": "...", "retryAfter"?: number }`.
 
 ## Trusted Plugin API (Phases D03 and D05)
 
