@@ -291,6 +291,10 @@ fn test_transition_graph_strict_boundaries() {
     assert!(validate_transition(Active, Staged).is_ok());
     assert!(validate_transition(Staged, Pending).is_ok());
     assert!(validate_transition(Pending, Quiesced).is_ok());
+    assert!(validate_transition(Staged, Quiesced).is_ok());
+    assert!(validate_transition(Quiesced, Quiesced).is_ok());
+    assert!(validate_transition(Pending, Pending).is_ok());
+    assert!(validate_transition(Active, Active).is_ok());
     assert!(validate_transition(Quiesced, Switched).is_ok());
     assert!(validate_transition(Switched, Probing).is_ok());
     assert!(validate_transition(Probing, Committed).is_ok());

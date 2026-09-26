@@ -58,8 +58,11 @@ pub struct UserInfo {
     pub shell: String,
 }
 
+static LIBC_NSS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Retrieve user account information by username.
 pub fn get_user_by_name(username: &str) -> Option<UserInfo> {
+    let _guard = LIBC_NSS_MUTEX.lock().ok()?;
     let c_name = CString::new(username).ok()?;
     let pwd = unsafe { libc::getpwnam(c_name.as_ptr()) };
     if pwd.is_null() {
@@ -126,6 +129,7 @@ pub fn verify_web_sysuser_account(username: &str) -> Result<UserInfo, ReleaseErr
 
 /// Retrieve group name by GID.
 pub fn get_group_by_gid(gid: u32) -> Option<String> {
+    let _guard = LIBC_NSS_MUTEX.lock().ok()?;
     let grp = unsafe { libc::getgrgid(gid) };
     if grp.is_null() {
         return None;
@@ -139,6 +143,7 @@ pub fn get_group_by_gid(gid: u32) -> Option<String> {
 }
 /// Retrieve group ID by name.
 pub fn get_group_gid_by_name(groupname: &str) -> Option<u32> {
+    let _guard = LIBC_NSS_MUTEX.lock().ok()?;
     let c_name = CString::new(groupname).ok()?;
     let grp = unsafe { libc::getgrnam(c_name.as_ptr()) };
     if grp.is_null() {
