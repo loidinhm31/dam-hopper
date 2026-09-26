@@ -500,6 +500,12 @@ pub async fn rollback_activation_failure(
             let _ = super::systemd::systemctl_stop(unit);
             let _ = super::systemd::disable_if_enabled(unit);
         }
+        if super::systemd::systemctl_is_active(super::constants::HELPER_SOCKET_UNIT)
+            .unwrap_or(false)
+        {
+            let _ = super::systemd::systemctl_stop(super::constants::HELPER_SOCKET_UNIT);
+        }
+        let _ = super::systemd::disable_if_enabled(super::constants::HELPER_SOCKET_UNIT);
         let _ = super::process::terminate_stray_listeners(&[
             super::constants::API_SERVICE_PORT,
             super::constants::WEB_SERVICE_PORT,
@@ -563,11 +569,19 @@ pub async fn rollback_activation_failure(
     // Case 2: Restore currently active release from backups
     let active = state.active.clone().unwrap();
     for &unit in ALL_SERVICE_UNITS {
-        if layout.systemd_unit_dir.join(unit).exists() {
-            systemctl_stop(unit)?;
+        if layout.systemd_unit_dir.join(unit).exists()
+            || super::systemd::systemctl_is_active(unit).unwrap_or(false)
+        {
+            let _ = super::systemd::systemctl_stop(unit);
         }
     }
-    super::runtime_cleanup::cleanup_stopped_plugin_runtime(layout)?;
+    if super::systemd::systemctl_is_active(super::constants::HELPER_SOCKET_UNIT).unwrap_or(false) {
+        let _ = super::systemd::systemctl_stop(super::constants::HELPER_SOCKET_UNIT);
+    }
+    let _ = super::systemd::disable_if_enabled(super::constants::HELPER_SOCKET_UNIT);
+    if let Err(e) = super::runtime_cleanup::cleanup_stopped_plugin_runtime(layout) {
+        tracing::warn!("runtime IPC cleanup during rollback encountered an error: {e}");
+    }
     let _ = super::process::terminate_stray_listeners(&[
         super::constants::API_SERVICE_PORT,
         super::constants::WEB_SERVICE_PORT,

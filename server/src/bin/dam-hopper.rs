@@ -5,11 +5,10 @@ use clap::Parser;
 #[cfg(target_os = "linux")]
 use dam_hopper_server::linux_release::{
     acquire_release, current_euid, execute_activation_with_args, execute_manual_rollback,
-    execute_recovery, load_host_config, load_or_init_manager_state, save_host_config,
-    stage_release_bundle_with_options, verify_api_service_account,
-    verify_plugin_owner_account, verify_privileges, Cli, CollectorAdapters, Commands, HostConfig,
-    Layout, ReleaseError, RoleCommands, TargetRole, ALL_SERVICE_UNITS, DEFAULT_API_SERVICE_USER,
-    run_diagnose,
+    execute_recovery, load_host_config, load_or_init_manager_state, run_diagnose, save_host_config,
+    stage_release_bundle_with_options, verify_api_service_account, verify_plugin_owner_account,
+    verify_privileges, Cli, CollectorAdapters, Commands, HostConfig, Layout, ReleaseError,
+    RoleCommands, TargetRole, ALL_SERVICE_UNITS, DEFAULT_API_SERVICE_USER,
 };
 #[cfg(target_os = "linux")]
 use std::process::ExitCode;
@@ -191,6 +190,23 @@ async fn main() -> ExitCode {
                     } else {
                         println!("  Stopped {unit}");
                     }
+                }
+            }
+            if let Ok(true) = dam_hopper_server::linux_release::systemctl_is_active(
+                dam_hopper_server::linux_release::HELPER_SOCKET_UNIT,
+            ) {
+                if let Err(e) = dam_hopper_server::linux_release::systemctl_stop(
+                    dam_hopper_server::linux_release::HELPER_SOCKET_UNIT,
+                ) {
+                    eprintln!(
+                        "warning: failed to stop {}: {e}",
+                        dam_hopper_server::linux_release::HELPER_SOCKET_UNIT
+                    );
+                } else {
+                    println!(
+                        "  Stopped {}",
+                        dam_hopper_server::linux_release::HELPER_SOCKET_UNIT
+                    );
                 }
             }
             let _ = dam_hopper_server::linux_release::terminate_stray_listeners(&[

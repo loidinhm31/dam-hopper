@@ -55,6 +55,8 @@ pub const RECOVERY_SERVICE_UNIT: &str = "dam-hopper-recovery.service";
 
 /// Systemd unit name for the idle-suspend helper service.
 pub const HELPER_SERVICE_UNIT: &str = "dam-hopper-idle-suspend-helper.service";
+/// Systemd unit name for the idle-suspend helper socket.
+pub const HELPER_SOCKET_UNIT: &str = "dam-hopper-idle-suspend-helper.socket";
 
 /// Systemd unit name for the owner plugin runner service.
 pub const RUNNER_SERVICE_UNIT: &str = "dam-hopper-plugin-runner.service";

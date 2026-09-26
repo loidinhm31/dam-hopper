@@ -50,6 +50,7 @@ pub fn validate_transition(
         (Absent, Staged) => true,
         (Active, Staged) => true,
         (Staged, Pending) => true,
+        (Staged, Quiesced) => true,
         (Pending, Quiesced) => true,
         (Quiesced, Switched) => true,
         (Switched, Probing) => true,
@@ -62,6 +63,7 @@ pub fn validate_transition(
         (RolledBack, Active) => true,
         (RolledBack, Absent) => true,
         (Committed, Active) => true,
+        (s1, s2) if s1 == s2 => true,
         (_, RecoveryRequired) => true,
         _ => false,
     };

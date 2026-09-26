@@ -12,13 +12,13 @@ use super::constants::{
 };
 use super::legacy_format2::LEGACY_FORMAT2_UNIT;
 
+use super::api_runtime::provision_installed_api_runtime;
 use super::durable_fs::atomic_symlink;
 use super::error::ReleaseError;
 use super::journal::{classify_recovery, RecoveryAction};
 use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::process::inspect_service_process;
-use super::api_runtime::provision_installed_api_runtime;
 use super::rollback::rollback_activation_failure;
 use super::state::{load_or_init_manager_state, save_manager_state};
 use super::state_record::{PendingCandidateRecord, ReleaseRecord};
@@ -208,5 +208,9 @@ fn stop_and_disable_services(units: &[&str]) -> Result<(), ReleaseError> {
         }
         disable_if_enabled(unit)?;
     }
+    if systemctl_is_active(super::constants::HELPER_SOCKET_UNIT).unwrap_or(false) {
+        let _ = systemctl_stop(super::constants::HELPER_SOCKET_UNIT);
+    }
+    let _ = disable_if_enabled(super::constants::HELPER_SOCKET_UNIT);
     Ok(())
 }

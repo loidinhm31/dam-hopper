@@ -25,7 +25,7 @@ use super::state::{load_or_init_manager_state, save_manager_state, ManagerState}
 use super::state_record::{PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
-    systemctl_enable, systemctl_start, systemctl_stop, systemd_sysusers,
+    systemctl_enable, systemctl_is_active, systemctl_start, systemctl_stop, systemd_sysusers,
 };
 use super::transaction::ActivationTransaction;
 use chrono::Utc;
@@ -328,6 +328,10 @@ pub async fn execute_activation_locked_with_args(
                 });
             }
             Err(rollback_err) => {
+                if let Some(tx_rec) = &mut state.transaction {
+                    tx_rec.phase = TransactionPhase::Failed;
+                }
+                let _ = save_manager_state(&layout.manager_state_path(), &mut state);
                 let record_suffix = failure_record_error
                     .map(|record_error| {
                         format!("; failure state persistence also failed ({record_error})")
@@ -391,10 +395,15 @@ async fn execute_activation_pipeline(
     }
 
     for &unit in ALL_SERVICE_UNITS {
-        if layout.systemd_unit_dir.join(unit).exists() {
+        if layout.systemd_unit_dir.join(unit).exists() || systemctl_is_active(unit).unwrap_or(false)
+        {
             systemctl_stop(unit)?;
         }
     }
+    if systemctl_is_active(super::constants::HELPER_SOCKET_UNIT).unwrap_or(false) {
+        systemctl_stop(super::constants::HELPER_SOCKET_UNIT)?;
+    }
+    let _ = super::systemd::disable_if_enabled(super::constants::HELPER_SOCKET_UNIT);
     super::runtime_cleanup::cleanup_stopped_plugin_runtime(layout)?;
     let _ = systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT);
     let _ = super::process::terminate_stray_listeners(&[
