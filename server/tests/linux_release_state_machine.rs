@@ -5,12 +5,7 @@
 mod common;
 
 use dam_hopper_server::linux_release::*;
-use std::{
-    cell::RefCell,
-    env,
-    fs,
-    rc::Rc,
-};
+use std::{cell::RefCell, env, fs, rc::Rc};
 use tempfile::tempdir;
 
 #[test]
@@ -132,9 +127,7 @@ fn test_api_runtime_lifecycle_matrix_records_route_ordering() {
                 )
                 .unwrap();
             } else {
-                events
-                    .borrow_mut()
-                    .push(format!("{route}:no-api-gate"));
+                events.borrow_mut().push(format!("{route}:no-api-gate"));
             }
         } else {
             // Recovery provisions an active server during boot preflight but
@@ -144,9 +137,7 @@ fn test_api_runtime_lifecycle_matrix_records_route_ordering() {
                     .borrow_mut()
                     .push(format!("{route}:runtime-provisioned"));
             } else {
-                events
-                    .borrow_mut()
-                    .push(format!("{route}:no-api-gate"));
+                events.borrow_mut().push(format!("{route}:no-api-gate"));
             }
             events.borrow_mut().push(format!("{route}:recovery-ready"));
         }
@@ -452,6 +443,7 @@ fn test_reference_safe_retention() {
     manifest.components.api.version = "0.8.0".to_string();
     manifest.components.web_host.version = "0.8.0".to_string();
     manifest.components.web_assets.version = "0.8.0".to_string();
+    manifest.components.runner.as_mut().unwrap().version = "0.8.0".to_string();
     manifest.archive.name = "dam-hopper-v0.8.0-fedora44-x86_64-systemd.tar.gz".to_string();
     fs::write(
         old_dir.join("release-manifest.json"),

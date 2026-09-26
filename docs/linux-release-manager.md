@@ -397,12 +397,14 @@ The unit runs the owner account with its primary group/home, passes the
 immutable release root, `/run/dam-hopper/plugin-runner.sock`,
 `@DAM_HOPPER_STATE_DIR@/plugins`, `@NODE_BIN@`, expected API UID, and the
 hardening policy in [Linux systemd](./linux-systemd.md).
-`--plugin-owner-user` is validated before staging: no root/API/web identity,
-missing account, zero primary GID, symlink/restricted/world-writable home.
-Repeatable `--plugin-admin-subject` values persist in
-`/etc/dam-hopper/host.toml`; the D05 runner allowlist still loads from
-`--admin-config`, `DAM_HOPPER_PLUGIN_ADMINS_FILE`, or
-`/etc/dam-hopper/plugin-admins.json`, which must stay synchronized.
+An omitted owner provisions the dedicated default account automatically.
+`--plugin-owner-user` selects an existing account and rejects root/API/web
+identities, missing accounts, zero primary GID, and unsafe homes.
+Repeatable explicit `--plugin-admin-subject` values persist in
+`/etc/dam-hopper/host.toml`; activation atomically synchronizes
+`/etc/dam-hopper/plugin-admins.json`, including an empty deny-all policy.
+Do not override the runner's admin-config path unless managing that policy
+separately. Omitted owner/admin options independently retain recorded values.
 
 Server staging writes the rendered `dam-hopper-plugin-runner.conf` beside
 pending units. Activation installs the unit at `/etc/systemd/system/` and the
@@ -410,14 +412,15 @@ tmpfiles file at `/etc/dam-hopper/tmpfiles.d/`, then invokes
 `systemd-tmpfiles --create` for that file:
 
 ```text
-d /run/dam-hopper 0750 @API_USER@ @PLUGIN_SHARED_GROUP@ -
-d /run/dam-hopper/plugin-runner 0750 @ADVISOR_OWNER_USER@ @PLUGIN_SHARED_GROUP@ -
+d /run/dam-hopper 3770 root @PLUGIN_SHARED_GROUP@ -
 ```
 
-Activation starts the helper, then the runner, then the API. Runner start and
-enable failures are warnings so API/web health remains the activation gate;
-web-only roles disable the runner. Runner unit/tmpfiles digests and owner
-metadata are retained in manager state for matched rollback and recovery.
+Each API/helper/runner unit invokes the installed tmpfiles file before startup.
+No service manages this shared path with `RuntimeDirectory`, avoiding recursive
+ownership changes and sibling socket removal. Activation starts helper and
+runner before API. Runner provisioning/start/enable failures block activation;
+runner unit and socket checks follow HTTP stabilization. Automatic rollback
+also restarts and checks the runner. Web-only roles disable the runner.
 
 ## Verification and end-to-end coverage
 

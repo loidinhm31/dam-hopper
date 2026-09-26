@@ -153,6 +153,8 @@ execute bit.
 | `bin/dam-hopper-manager`                         | file      | `common`      | executable                                |
 | `bin/dam-hopper-server`                          | file      | `server`      | executable                                |
 | `bin/dam-hopper-plugin-runner`                   | file      | `server`      | executable; mode `0755`                  |
+| `bin/node`                                      | file      | `server`      | bundled Linux x64 worker runtime; `0755` |
+| `NOTICES`                                       | file      | `common`      | Node distribution license; publisher requires it |
 | `systemd/dam-hopper-plugin-runner.service`      | file      | `server`      | unit template; mode `0644`                |
 | `tmpfiles.d/dam-hopper-plugin-runner.conf`      | file      | `server`      | tmpfiles input; mode `0644`                |
 | `bin/dam-hopper-web`                             | file      | `web`         | executable                                |

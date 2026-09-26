@@ -766,7 +766,8 @@ and kill the old process group. Context IDs use
 disablement through the D01 registry and leave the supervisor `Failed` until an
 explicit lifecycle action re-enables it.
 
-The service template adds owner `User`/`Group`, `RuntimeDirectoryMode=0750`,
+The service template adds owner `User`/`Group`, a shared supplementary group,
+and a privileged tmpfiles prestart (root/shared directory mode `3770`),
 `UMask=0027`, `KillMode=mixed`, `MemoryMax=1G`, `TasksMax=64`,
 `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`,
 `PrivateTmp`, and restricted address families. These controls isolate the

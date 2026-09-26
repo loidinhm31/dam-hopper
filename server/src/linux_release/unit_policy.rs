@@ -4,6 +4,37 @@ use super::error::ReleaseError;
 use super::unit::UnitRenderContext;
 use super::unit_parser::ParsedUnit;
 
+const RUNTIME_TMPFILES_PRE: &str =
+    "+/usr/bin/systemd-tmpfiles --create /etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf";
+
+fn validate_shared_runtime(
+    unit: &ParsedUnit,
+    name: &str,
+    ctx: &UnitRenderContext,
+) -> Result<(), ReleaseError> {
+    for key in [
+        "RuntimeDirectory",
+        "RuntimeDirectoryMode",
+        "RuntimeDirectoryPreserve",
+    ] {
+        if !unit.get_all_values("Service", key).is_empty() {
+            return Err(ReleaseError::UnitPolicyViolation {
+                unit: name.into(),
+                reason: format!(
+                    "{key} must not manage the tmpfiles-owned shared runtime directory"
+                ),
+            });
+        }
+    }
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "SupplementaryGroups",
+        &ctx.plugin_shared_group,
+    )
+}
+
 /// Validate rendered API unit strictly matches the Phase 04 contract.
 pub fn validate_api_unit_policy(
     unit: &ParsedUnit,
@@ -39,9 +70,11 @@ pub fn validate_api_unit_policy(
     assert_eq_prop(unit, name, "Service", "Type", "exec")?;
     assert_eq_prop(unit, name, "Service", "User", &ctx.api_user)?;
     assert_eq_prop(unit, name, "Service", "Group", &ctx.api_group)?;
-    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
+    validate_shared_runtime(unit, name, ctx)?;
     if !unit.get_all_values("Service", "StateDirectory").is_empty()
-        || !unit.get_all_values("Service", "StateDirectoryMode").is_empty()
+        || !unit
+            .get_all_values("Service", "StateDirectoryMode")
+            .is_empty()
     {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
@@ -49,14 +82,14 @@ pub fn validate_api_unit_policy(
         });
     }
     let provision_pre = unit.get_all_values("Service", "ExecStartPre");
-    let expected_pre =
-        format!("+{}/bin/dam-hopper-manager provision-api-runtime", ctx.release_root.display());
-    if provision_pre.len() != 1 || provision_pre[0] != expected_pre {
+    let expected_pre = format!(
+        "+{}/bin/dam-hopper-manager provision-api-runtime",
+        ctx.release_root.display()
+    );
+    if provision_pre != vec![RUNTIME_TMPFILES_PRE, expected_pre.as_str()] {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
-            reason: format!(
-                "API unit requires exactly one fixed privileged ExecStartPre '{expected_pre}'"
-            ),
+            reason: "API unit requires exactly the fixed tmpfiles and provision-api-runtime ExecStartPre commands, in order".into(),
         });
     }
     assert_eq_prop(unit, name, "Service", "WorkingDirectory", &ctx.api_home)?;
@@ -79,7 +112,7 @@ pub fn validate_api_unit_policy(
         name,
         "Service",
         "ExecStartPost",
-        "/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'",
+        "/usr/bin/sh -c 'umask 0027; echo $MAINPID > /run/dam-hopper/server.pid'",
     )?;
     assert_eq_prop(
         unit,
@@ -139,7 +172,9 @@ pub fn validate_helper_unit_policy(
 ) -> Result<(), ReleaseError> {
     let name = "dam-hopper-idle-suspend-helper.service";
     if !unit.get_all_values("Service", "StateDirectory").is_empty()
-        || !unit.get_all_values("Service", "StateDirectoryMode").is_empty()
+        || !unit
+            .get_all_values("Service", "StateDirectoryMode")
+            .is_empty()
     {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
@@ -149,8 +184,9 @@ pub fn validate_helper_unit_policy(
     assert_eq_prop(unit, name, "Service", "Type", "simple")?;
     assert_eq_prop(unit, name, "Service", "User", "root")?;
     assert_eq_prop(unit, name, "Service", "Group", &ctx.api_group)?;
-    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
-    assert_eq_prop(unit, name, "Service", "RuntimeDirectoryMode", "0775")?;
+    validate_shared_runtime(unit, name, ctx)?;
+    assert_eq_prop(unit, name, "Service", "ReadWritePaths", "/run/dam-hopper")?;
+    assert_eq_prop(unit, name, "Service", "ExecStartPre", RUNTIME_TMPFILES_PRE)?;
     assert_eq_prop(unit, name, "Service", "LogsDirectory", "dam-hopper")?;
     assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
     assert_eq_prop(unit, name, "Service", "RestartSec", "5s")?;
@@ -178,8 +214,8 @@ pub fn validate_helper_unit_policy(
     )?;
 
     let expected_exec = format!(
-        "{}/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid",
-        ctx.release_root.display()
+        "{}/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid --enrolled-uid {}",
+        ctx.release_root.display(), ctx.api_uid
     );
     assert_eq_prop(unit, name, "Service", "ExecStart", &expected_exec)?;
 
@@ -261,9 +297,24 @@ pub fn validate_runner_unit_policy(
     assert_eq_prop(unit, name, "Service", "Type", "simple")?;
     assert_eq_prop(unit, name, "Service", "User", &ctx.advisor_owner_user)?;
     assert_eq_prop(unit, name, "Service", "Group", &ctx.advisor_owner_group)?;
-    assert_eq_prop(unit, name, "Service", "WorkingDirectory", &ctx.advisor_owner_home)?;
-    assert_eq_prop(unit, name, "Service", "RuntimeDirectory", "dam-hopper")?;
-    assert_eq_prop(unit, name, "Service", "RuntimeDirectoryMode", "0750")?;
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "WorkingDirectory",
+        &ctx.advisor_owner_home,
+    )?;
+    validate_shared_runtime(unit, name, ctx)?;
+    assert_eq_prop(unit, name, "Service", "ExecStartPre", RUNTIME_TMPFILES_PRE)?;
+    if !unit
+        .get_all_values("Service", "ReadWritePaths")
+        .contains(&"/run/dam-hopper")
+    {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: "runner requires writable shared runtime directory".into(),
+        });
+    }
     assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
     assert_eq_prop(unit, name, "Service", "RestartSec", "3s")?;
     assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;
@@ -276,20 +327,32 @@ pub fn validate_runner_unit_policy(
     assert_eq_prop(unit, name, "Service", "ProtectSystem", "strict")?;
     assert_eq_prop(unit, name, "Service", "ProtectHome", "read-only")?;
     assert_eq_prop(unit, name, "Service", "PrivateTmp", "true")?;
-    assert_eq_prop(unit, name, "Service", "RestrictAddressFamilies", "AF_UNIX AF_INET AF_INET6")?;
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "RestrictAddressFamilies",
+        "AF_UNIX AF_INET AF_INET6",
+    )?;
     assert_eq_prop(unit, name, "Service", "RestrictRealtime", "true")?;
     assert_eq_prop(unit, name, "Service", "RestrictSUIDSGID", "true")?;
-    assert_eq_prop(unit, name, "Service", "SyslogIdentifier", "dam-hopper-plugin-runner")?;
+    assert_eq_prop(
+        unit,
+        name,
+        "Service",
+        "SyslogIdentifier",
+        "dam-hopper-plugin-runner",
+    )?;
 
-    let exec_val = unit.get_value("Service", "ExecStart").unwrap_or_default();
-    if !exec_val.contains("dam-hopper-plugin-runner")
-        || !exec_val.contains("--socket-path")
-        || !exec_val.contains("--registry-dir")
-        || !exec_val.contains("--node-bin")
-    {
+    let expected_exec = format!(
+        "{}/bin/dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir {}/plugins --node-bin {} --expected-api-uid {}",
+        ctx.release_root.display(), ctx.dam_hopper_state_dir, ctx.node_bin, ctx.api_uid
+    );
+    if unit.get_all_values("Service", "ExecStart") != vec![expected_exec.as_str()] {
         return Err(ReleaseError::UnitPolicyViolation {
             unit: name.into(),
-            reason: format!("invalid ExecStart for {name}: {exec_val}"),
+            reason: "runner requires the fixed socket, registry, Node and expected API UID command"
+                .into(),
         });
     }
 

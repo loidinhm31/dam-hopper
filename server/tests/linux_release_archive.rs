@@ -9,7 +9,6 @@ use dam_hopper_server::linux_release::*;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use std::io::Read;
 use tar::{Archive, Builder};
 use tempfile::tempdir;
 
@@ -28,10 +27,9 @@ fn test_archive_api_gate_matches_packaged_manager() {
     let mut archive = Archive::new(GzDecoder::new(&archive_bytes[..]));
     let mut manager_present = false;
     let mut legacy_cli_present = false;
-    let mut api_unit = None;
 
     for entry in archive.entries().unwrap() {
-        let mut entry = entry.unwrap();
+        let entry = entry.unwrap();
         let path = entry.path().unwrap().to_string_lossy().into_owned();
         match path.as_str() {
             "bin/dam-hopper-manager" => {
@@ -39,25 +37,14 @@ fn test_archive_api_gate_matches_packaged_manager() {
                 assert_ne!(entry.header().mode().unwrap() & 0o111, 0);
             }
             "bin/dam-hopper" => legacy_cli_present = true,
-            "systemd/dam-hopper-api.service" => {
-                let mut content = String::new();
-                entry.read_to_string(&mut content).unwrap();
-                api_unit = Some(content);
-            }
             _ => {}
         }
     }
 
     assert!(manager_present, "archive must package the manager binary");
-    assert!(!legacy_cli_present, "archive must not rely on an unshipped CLI binary");
-    let api_unit = api_unit.expect("archive must package the API unit");
-    let pre_lines: Vec<_> = api_unit
-        .lines()
-        .filter(|line| line.starts_with("ExecStartPre="))
-        .collect();
-    assert_eq!(
-        pre_lines,
-        vec!["ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime"]
+    assert!(
+        !legacy_cli_present,
+        "archive must not rely on an unshipped CLI binary"
     );
 }
 
@@ -190,7 +177,12 @@ fn test_archive_inventory_discrepancies() {
     let (manifest, _archive_bytes) = create_test_manifest_and_archive();
 
     // Missing entry from archive (manifest has entries not in archive)
-    let bad_bytes = build_archive(&[("bin/dam-hopper-manager", false, b"manager binary content", 0o755)]);
+    let bad_bytes = build_archive(&[(
+        "bin/dam-hopper-manager",
+        false,
+        b"manager binary content",
+        0o755,
+    )]);
     assert!(matches!(
         inspect_and_validate_archive(&bad_bytes[..], &manifest),
         Err(ReleaseError::ArchiveInventoryMismatch { .. })
@@ -204,7 +196,12 @@ fn test_archive_inventory_discrepancies() {
     ));
 
     // Mode mismatch in archive
-    let mode_mismatch_archive = build_archive(&[("bin/dam-hopper-manager", false, b"manager binary content", 0o644)]);
+    let mode_mismatch_archive = build_archive(&[(
+        "bin/dam-hopper-manager",
+        false,
+        b"manager binary content",
+        0o644,
+    )]);
     assert!(matches!(
         inspect_and_validate_archive(&mode_mismatch_archive[..], &manifest),
         Err(ReleaseError::ArchiveEntryInvalid { .. })

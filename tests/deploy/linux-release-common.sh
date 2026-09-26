@@ -105,6 +105,7 @@ create_mock_release_bundle() {
     local server_bin="$out_dir/staging/bin/dam-hopper-server"
     local helper_bin="$out_dir/staging/bin/dam-hopper-idle-suspend-helper"
     local runner_bin="$out_dir/staging/bin/dam-hopper-plugin-runner"
+    local node_bin="$out_dir/staging/bin/node"
     local web_bin="$out_dir/staging/bin/dam-hopper-web"
 
     printf '#!/bin/sh\necho manager %s\n' "$ver" > "$manager_bin"
@@ -130,6 +131,10 @@ create_mock_release_bundle() {
         "$out_dir/staging/tmpfiles.d/dam-hopper-plugin-runner.conf"
     printf '<!doctype html><html><body>DamHopper %s</body></html>\n' "$ver" > "$out_dir/staging/web/index.html"
     printf 'MIT License\n' > "$out_dir/staging/LICENSE"
+    printf '#!/bin/sh\necho v24.16.0\n' > "$node_bin"
+    chmod 755 "$node_bin"
+    cp "$out_dir/staging/LICENSE" "$out_dir/staging/NOTICES"
+    chmod 644 "$out_dir/staging/NOTICES"
     chmod 644 "$out_dir/staging/systemd/"* "$out_dir/staging/sysusers.d/"* "$out_dir/staging/tmpfiles.d/"* "$out_dir/staging/web/"* "$out_dir/staging/LICENSE"
 
     local archive_name="dam-hopper-${tag}-linux-x86_64-systemd.tar.gz"
@@ -141,6 +146,7 @@ create_mock_release_bundle() {
         bin/dam-hopper-server \
         bin/dam-hopper-idle-suspend-helper \
         bin/dam-hopper-plugin-runner \
+        bin/node \
         bin/dam-hopper-web \
         systemd/dam-hopper-api.service \
         systemd/dam-hopper-idle-suspend-helper.service \
@@ -150,6 +156,7 @@ create_mock_release_bundle() {
         sysusers.d/dam-hopper-web.conf \
         tmpfiles.d/dam-hopper-plugin-runner.conf \
         web \
+        NOTICES \
         LICENSE
     local archive_sha
     archive_sha="$(sha256sum "$archive_path" | awk '{print $1}')"
@@ -172,6 +179,8 @@ create_mock_release_bundle() {
     tmpfiles_sha="$(sha256sum "$out_dir/staging/tmpfiles.d/dam-hopper-plugin-runner.conf" | awk '{print $1}')"
     html_sha="$(sha256sum "$out_dir/staging/web/index.html" | awk '{print $1}')"
     lic_sha="$(sha256sum "$out_dir/staging/LICENSE" | awk '{print $1}')"
+    local node_sha
+    node_sha="$(sha256sum "$node_bin" | awk '{print $1}')"
     local manifest_path="$out_dir/release-manifest.json"
     cat > "$manifest_path" <<EOF
 {
@@ -207,6 +216,8 @@ create_mock_release_bundle() {
     { "path": "bin/dam-hopper-server", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$server_bin"), "sha256": "$srv_sha" },
     { "path": "bin/dam-hopper-idle-suspend-helper", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$helper_bin"), "sha256": "$helper_sha" },
     { "path": "bin/dam-hopper-plugin-runner", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$runner_bin"), "sha256": "$runner_sha" },
+    { "path": "bin/node", "kind": "file", "roles": ["server"], "mode": 493, "size": $(stat -c '%s' "$node_bin"), "sha256": "$node_sha" },
+    { "path": "NOTICES", "kind": "file", "roles": ["common"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/NOTICES"), "sha256": "$lic_sha" },
     { "path": "bin/dam-hopper-web", "kind": "file", "roles": ["web"], "mode": 493, "size": $(stat -c '%s' "$web_bin"), "sha256": "$web_sha" },
     { "path": "systemd/dam-hopper-api.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-api.service"), "sha256": "$api_unit_sha" },
     { "path": "systemd/dam-hopper-idle-suspend-helper.service", "kind": "file", "roles": ["server"], "mode": 420, "size": $(stat -c '%s' "$out_dir/staging/systemd/dam-hopper-idle-suspend-helper.service"), "sha256": "$helper_unit_sha" },

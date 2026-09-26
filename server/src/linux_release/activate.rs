@@ -4,6 +4,7 @@ use super::account::verify_web_sysuser_account;
 use super::activate_preflight::{
     build_candidate_health_targets, validate_active_preflight, validate_candidate_preflight,
 };
+use super::api_runtime::provision_and_start_api;
 use super::constants::{
     ALL_SERVICE_UNITS, API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
     RUNNER_SERVICE_UNIT, RUNNER_TMPFILES_CONF, WEB_SERVICE_UNIT,
@@ -26,12 +27,74 @@ use super::systemd::{
     backup_unit_files, disable_if_enabled, install_unit_file, systemctl_daemon_reload,
     systemctl_enable, systemctl_start, systemctl_stop, systemd_sysusers,
 };
-use super::api_runtime::provision_and_start_api;
 use super::transaction::ActivationTransaction;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+
+pub(crate) fn provision_plugin_runtime(layout: &Layout) -> Result<(), ReleaseError> {
+    let runner_path = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT);
+    if !runner_path.try_exists().map_err(|error| ReleaseError::Io {
+        action: "inspect installed plugin runner unit",
+        details: error.to_string(),
+    })? {
+        return Ok(());
+    }
+    let read_unit = |path: &Path| -> Result<super::unit_parser::ParsedUnit, ReleaseError> {
+        let content = fs::read_to_string(path).map_err(|error| ReleaseError::Io {
+            action: "read plugin runtime identity",
+            details: format!("{}: {error}", path.display()),
+        })?;
+        super::unit_parser::ParsedUnit::parse(&content)
+    };
+    let api = super::account::resolve_api_runtime_identity(&read_unit(
+        &layout.systemd_unit_dir.join(API_SERVICE_UNIT),
+    )?)?;
+    let runner = read_unit(&runner_path)?;
+    let identity = super::account::resolve_api_runtime_identity(&runner)?;
+    super::account::ensure_plugin_runner_state(&identity.user, &api.user)?;
+    let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+    let subjects = host_config
+        .as_ref()
+        .map(|config| config.plugin_admin_subjects.as_slice())
+        .unwrap_or_default();
+    super::account::sync_plugin_admins_file(&layout.etc_dir.join("plugin-admins.json"), subjects)?;
+    super::systemd::systemd_tmpfiles_create(&layout.runner_tmpfiles_conf_path(), None)?;
+    Ok(())
+}
+
+pub(crate) async fn verify_started_plugin_runner(layout: &Layout) -> Result<(), ReleaseError> {
+    let path = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT);
+    if !path.try_exists().map_err(|error| ReleaseError::Io {
+        action: "inspect plugin runner health unit",
+        details: error.to_string(),
+    })? {
+        return Ok(());
+    }
+    if !super::systemd::systemctl_is_active(RUNNER_SERVICE_UNIT)? {
+        return Err(ReleaseError::ProcessInspectionFailed {
+            reason: "plugin runner service is not active after API health stabilization".into(),
+        });
+    }
+    let content = fs::read_to_string(path).map_err(|error| ReleaseError::Io {
+        action: "read plugin runner health identity",
+        details: error.to_string(),
+    })?;
+    let identity = super::account::resolve_api_runtime_identity(
+        &super::unit_parser::ParsedUnit::parse(&content)?,
+    )?;
+    let socket = layout
+        .trusted_root()
+        .join(super::constants::DEFAULT_RUNNER_SOCKET_PATH.trim_start_matches('/'));
+    match super::health::probe_runner_health(&socket, Some(identity.uid)).await {
+        super::health::HttpProbeOutcome::Success => Ok(()),
+        super::health::HttpProbeOutcome::Transient(reason)
+        | super::health::HttpProbeOutcome::Fatal(reason) => {
+            Err(ReleaseError::ProcessInspectionFailed { reason })
+        }
+    }
+}
 
 pub async fn execute_activation(layout: &Layout) -> Result<(), ReleaseError> {
     execute_activation_with_args(layout, &super::cli::StartArgs::default()).await
@@ -143,13 +206,9 @@ pub async fn execute_activation_locked_with_args(
                 validate_active_preflight(layout, &active_candidate, &allowed_sqlite_pids)?;
                 let targets = build_candidate_health_targets(layout, &active_candidate)?;
                 if active_candidate.role.includes_server() {
-                    let api_group = fs::read_to_string(layout.systemd_unit_dir.join(API_SERVICE_UNIT))
-                        .ok()
-                        .and_then(|c| super::unit_parser::ParsedUnit::parse(&c).ok())
-                        .and_then(|u| u.get_value("Service", "Group").map(|s| s.to_string()));
-                    let _ = super::account::ensure_default_plugin_runner_user_and_dir(api_group.as_deref());
-                    if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
-                        let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
+                    provision_plugin_runtime(layout)?;
+                    if layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists() {
+                        systemctl_start(RUNNER_SERVICE_UNIT)?;
                     }
                     if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
                         tracing::warn!(
@@ -176,6 +235,9 @@ pub async fn execute_activation_locked_with_args(
                     DEFAULT_PROBE_INTERVAL,
                 )
                 .await?;
+                if active_candidate.role.includes_server() {
+                    verify_started_plugin_runner(layout).await?;
+                }
                 return Ok(());
             }
         }
@@ -329,8 +391,11 @@ async fn execute_activation_pipeline(
     }
 
     for &unit in ALL_SERVICE_UNITS {
-        let _ = systemctl_stop(unit);
+        if layout.systemd_unit_dir.join(unit).exists() {
+            systemctl_stop(unit)?;
+        }
     }
+    super::runtime_cleanup::cleanup_stopped_plugin_runtime(layout)?;
     let _ = systemctl_stop(super::legacy_format2::LEGACY_FORMAT2_UNIT);
     let _ = super::process::terminate_stray_listeners(&[
         super::constants::API_SERVICE_PORT,
@@ -468,21 +533,7 @@ async fn execute_activation_pipeline(
     }
 
     if candidate.role.includes_server() {
-        let api_group = candidate
-            .pending_units_path
-            .as_deref()
-            .map(Path::new)
-            .map(|p| p.join(API_SERVICE_UNIT))
-            .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|c| super::unit_parser::ParsedUnit::parse(&c).ok())
-            .and_then(|u| u.get_value("Service", "Group").map(|s| s.to_string()));
-        let _ = super::account::ensure_default_plugin_runner_user_and_dir(api_group.as_deref());
-        if let Some(host_cfg) = super::host_config::load_host_config(&layout.host_config_path()).ok().flatten() {
-            let _ = super::account::sync_plugin_admins_file(&host_cfg.plugin_admin_subjects);
-        }
-        if layout.runner_tmpfiles_conf_path().exists() {
-            let _ = super::systemd::systemd_tmpfiles_create(&layout.runner_tmpfiles_conf_path(), None);
-        }
+        provision_plugin_runtime(layout)?;
     }
 
     match fs::symlink_metadata(&layout.host_config_json_path()) {
@@ -592,11 +643,7 @@ async fn execute_activation_pipeline(
         }
         let runner_unit_installed = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists();
         if runner_unit_installed {
-            if let Err(e) = systemctl_start(RUNNER_SERVICE_UNIT) {
-                tracing::warn!(
-                    "plugin runner service startup failed (continuing API startup): {e}"
-                );
-            }
+            systemctl_start(RUNNER_SERVICE_UNIT)?;
         }
         provision_and_start_api(
             layout,
@@ -621,6 +668,9 @@ async fn execute_activation_pipeline(
         DEFAULT_PROBE_INTERVAL,
     )
     .await?;
+    if candidate.role.includes_server() {
+        verify_started_plugin_runner(layout).await?;
+    }
 
     // Enable/disable units, propagating any failure
     if candidate.role.includes_server() {
@@ -629,9 +679,7 @@ async fn execute_activation_pipeline(
         }
         let runner_unit_installed = layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists();
         if runner_unit_installed {
-            if let Err(e) = systemctl_enable(RUNNER_SERVICE_UNIT) {
-                tracing::warn!("plugin runner service enable failed: {e}");
-            }
+            systemctl_enable(RUNNER_SERVICE_UNIT)?;
         }
         systemctl_enable(API_SERVICE_UNIT)?;
     } else {

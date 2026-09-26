@@ -181,6 +181,14 @@ The archive contains these `server`-role entries for every release; the
 `server` and `both` role projections include them, while `web` excludes them
 when the manager extracts a role view.
 
+The package also includes `bin/node` (server role, `0755`) and its distribution
+license in `NOTICES` (common role, `0644`). The Linux packaging job selects Node
+`24.16.0`; local builders can supply `NODE_BIN` and `NODE_LICENSE`, or use their
+active Linux x64 Node distribution (minimum 22.19). Both files are mandatory
+publisher inventory entries. Rendered runner units use the absolute release
+Node path, so service users need no separately installed Node or shell PATH.
+
+
 Staged directories are `0755`, binaries `0755`, and other regular files `0644`.
 The script sets every mtime to the selected epoch, sorts the file list under
 `LC_ALL=C`, and creates a GNU tar archive with numeric uid/gid zero,

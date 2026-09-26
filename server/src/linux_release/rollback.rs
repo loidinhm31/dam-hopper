@@ -2,9 +2,10 @@
 
 use super::account::get_user_by_name;
 use super::activate_preflight::{build_candidate_health_targets, validate_active_preflight};
+use super::api_runtime::provision_and_start_api;
 use super::constants::{
     ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, HELPER_SERVICE_UNIT,
-    RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT, RUNNER_SERVICE_UNIT, WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
@@ -23,7 +24,6 @@ use super::manifest::ReleaseManifest;
 use super::process::{check_ports_free, inspect_service_process, is_port_listening_wildcard};
 use super::stage_units::stage_candidate_units_for_release_with_render_root_and_config;
 use super::state::{load_or_init_manager_state, save_manager_state};
-use super::api_runtime::provision_and_start_api;
 use super::state_record::{FailureRecord, PendingCandidateRecord, ReleaseRecord, TransactionPhase};
 use super::systemd::{
     remove_unit_file, restore_unit_files, systemctl_daemon_reload, systemctl_disable,
@@ -563,8 +563,11 @@ pub async fn rollback_activation_failure(
     // Case 2: Restore currently active release from backups
     let active = state.active.clone().unwrap();
     for &unit in ALL_SERVICE_UNITS {
-        let _ = systemctl_stop(unit);
+        if layout.systemd_unit_dir.join(unit).exists() {
+            systemctl_stop(unit)?;
+        }
     }
+    super::runtime_cleanup::cleanup_stopped_plugin_runtime(layout)?;
     let _ = super::process::terminate_stray_listeners(&[
         super::constants::API_SERVICE_PORT,
         super::constants::WEB_SERVICE_PORT,
@@ -645,6 +648,10 @@ pub async fn rollback_activation_failure(
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
     if active.role.includes_server() {
+        super::activate::provision_plugin_runtime(layout)?;
+        if layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists() {
+            systemctl_start(RUNNER_SERVICE_UNIT)?;
+        }
         if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
             tracing::warn!("idle-suspend helper service startup failed on rollback: {e}");
         }
@@ -658,14 +665,21 @@ pub async fn rollback_activation_failure(
         systemctl_start(WEB_SERVICE_UNIT)?;
     }
 
-    if let Err(e) = wait_for_health_stability(
-        &targets,
-        DEFAULT_STARTUP_DEADLINE,
-        DEFAULT_REQUIRED_CONSECUTIVE,
-        DEFAULT_PROBE_INTERVAL,
-    )
-    .await
-    {
+    let health_result = async {
+        wait_for_health_stability(
+            &targets,
+            DEFAULT_STARTUP_DEADLINE,
+            DEFAULT_REQUIRED_CONSECUTIVE,
+            DEFAULT_PROBE_INTERVAL,
+        )
+        .await?;
+        if active.role.includes_server() {
+            super::activate::verify_started_plugin_runner(layout).await?;
+        }
+        Ok::<(), ReleaseError>(())
+    }
+    .await;
+    if let Err(e) = health_result {
         if let Some(tx) = &mut state.transaction {
             tx.phase = TransactionPhase::Failed;
         }

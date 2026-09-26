@@ -257,7 +257,7 @@ are:
 
 | Boundary | Directives |
 | --- | --- |
-| Identity/runtime | `User=@ADVISOR_OWNER_USER@`, `Group=@ADVISOR_OWNER_GROUP@`, `RuntimeDirectory=dam-hopper`, `RuntimeDirectoryMode=0750`, `UMask=0027`. |
+| Identity/runtime | `User=@ADVISOR_OWNER_USER@`, `Group=@ADVISOR_OWNER_GROUP@`, shared supplementary group, tmpfiles-owned runtime directory (`3770`, root/shared group), `UMask=0027`. No shared `RuntimeDirectory` directive. |
 | Startup | `ExecStart=.../dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir @DAM_HOPPER_STATE_DIR@/plugins --node-bin @NODE_BIN@ --expected-api-uid @API_UID@`. |
 | Lifecycle | `Restart=on-failure`, `RestartSec=3s`, `KillSignal=SIGTERM`, `KillMode=mixed`, `TimeoutStopSec=15s`. |
 | Resource caps | `MemoryMax=1G`, `TasksMax=64`. |

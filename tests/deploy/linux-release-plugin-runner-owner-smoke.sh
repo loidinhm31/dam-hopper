@@ -59,20 +59,6 @@ grep -q "SupplementaryGroups=@PLUGIN_SHARED_GROUP@" "$API_SERVICE_IN" || fail "A
 log "✓ API service identity preservation and supplementary socket group verified"
 
 # -----------------------------------------------------------------------------
-# 3. Socket directory & tmpfiles rules
-# -----------------------------------------------------------------------------
-log "3. Verifying tmpfiles.d runtime directory configuration"
-
-RUNNER_TMPFILES_IN="$REPO_ROOT/deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in"
-assert_file_exists "$RUNNER_TMPFILES_IN" "Plugin runner tmpfiles template must exist"
-
-grep -q "d /run/dam-hopper 0750" "$RUNNER_TMPFILES_IN" || fail "tmpfiles must provision /run/dam-hopper mode 0750"
-grep -q "d /run/dam-hopper/plugin-runner 0750 @ADVISOR_OWNER_USER@ @PLUGIN_SHARED_GROUP@" "$RUNNER_TMPFILES_IN" || \
-    fail "tmpfiles must provision /run/dam-hopper/plugin-runner mode 0750 owner:shared-group"
-
-log "✓ Tmpfiles runtime directory configuration verified"
-
-# -----------------------------------------------------------------------------
 # 4. Plugin runner service hardening and cgroup limits
 # -----------------------------------------------------------------------------
 log "4. Verifying plugin runner service hardening directives"

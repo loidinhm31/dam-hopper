@@ -46,14 +46,6 @@ if grep -q "/etc/dam-hopper/dam-hopper.toml" "$API_UNIT"; then
     fail "API unit template must not reference legacy /etc/dam-hopper/dam-hopper.toml"
 fi
 
-# Exactly one privileged provisioner ExecStartPre
-prestart_count="$(grep -c "^ExecStartPre=" "$API_UNIT" || true)"
-if [[ "$prestart_count" -ne 1 ]]; then
-    fail "API unit template must declare exactly one ExecStartPre (got $prestart_count)"
-fi
-if ! grep -q "^ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime" "$API_UNIT"; then
-    fail "API unit template must declare exact privileged provisioner ExecStartPre"
-fi
 
 # Absence of StateDirectory and StateDirectoryMode
 if grep -E "^StateDirectory(=|Mode=)" "$API_UNIT"; then

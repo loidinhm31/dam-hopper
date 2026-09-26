@@ -3,7 +3,9 @@
 use super::constants::{HELPER_SERVICE_UNIT, RUNNER_SERVICE_UNIT, RUNNER_TMPFILES_CONF};
 use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
-use super::host_config::{load_host_public_config, save_host_public_config, HostPublicConfig};
+use super::host_config::{
+    load_host_public_config, save_host_public_config, HostConfig, HostPublicConfig,
+};
 use super::inventory::TargetRole;
 use super::layout::Layout;
 use super::manifest::ReleaseManifest;
@@ -37,6 +39,7 @@ pub fn stage_candidate_units(
         true,
         false,
         None,
+        None,
     )
 }
 
@@ -64,6 +67,7 @@ pub(crate) fn stage_candidate_units_for_release_with_identity(
         false,
         true,
         service_user,
+        None,
     )
 }
 
@@ -90,8 +94,37 @@ pub(crate) fn stage_candidate_units_for_release_with_render_root_and_config(
         false,
         true,
         None,
+        None,
     )
 }
+/// Render using the selected host configuration, before it is persisted.
+pub(crate) fn stage_candidate_units_for_release_with_host_config(
+    layout: &Layout,
+    target_dir: &Path,
+    render_root: &Path,
+    manifest: &ReleaseManifest,
+    role: TargetRole,
+    allow_origins: &[String],
+    pending_units_dir: &Path,
+    pending_host_config_path: &Path,
+    host_config: &HostConfig,
+) -> Result<PathBuf, ReleaseError> {
+    stage_candidate_units_inner(
+        layout,
+        target_dir,
+        render_root,
+        manifest,
+        role,
+        allow_origins,
+        pending_units_dir,
+        pending_host_config_path,
+        false,
+        true,
+        None,
+        Some(host_config),
+    )
+}
+
 fn stage_candidate_units_inner(
     layout: &Layout,
     target_dir: &Path,
@@ -104,6 +137,7 @@ fn stage_candidate_units_inner(
     allow_checked_in_fallback: bool,
     require_systemd_validation: bool,
     service_user_override: Option<&str>,
+    selected_host_config: Option<&HostConfig>,
 ) -> Result<PathBuf, ReleaseError> {
     match fs::symlink_metadata(pending_units_dir) {
         Ok(meta) if meta.file_type().is_dir() => {
@@ -145,7 +179,13 @@ fn stage_candidate_units_inner(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let api_url = existing_public_config.and_then(|config| config.api_url);
 
-    let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+    let stored_host_config;
+    let host_config = if let Some(selected) = selected_host_config {
+        Some(selected)
+    } else {
+        stored_host_config = super::host_config::load_host_config(&layout.host_config_path())?;
+        stored_host_config.as_ref()
+    };
     let explicit_user = service_user_override.or_else(|| {
         host_config
             .as_ref()
@@ -170,21 +210,37 @@ fn stage_candidate_units_inner(
             service_group,
             super::constants::API_SERVICE_HOME.to_string(),
         )?;
-        if let Some(owner) = host_config.as_ref().and_then(|c| c.plugin_owner_user.as_deref()) {
-            if let Ok(owner_info) =
-                super::account::verify_plugin_owner_account(owner, Some(&service_user))
-            {
-                let owner_group = super::account::get_group_by_gid(owner_info.gid)
-                    .unwrap_or_else(|| owner.to_string());
-                server_ctx = server_ctx.with_plugin_runner_identity(
-                    owner.to_string(),
-                    owner_group,
-                    owner_info.home,
-                    user_info.uid,
-                    None,
-                    None,
-                )?;
-            }
+        server_ctx.api_uid = user_info.uid.to_string();
+        let selected_owner = host_config.and_then(|config| config.plugin_owner_user.as_deref());
+        let owner_info = if layout == &Layout::new() {
+            Some(super::account::ensure_plugin_runner_account(
+                selected_owner,
+                &service_user,
+            )?)
+        } else if let Some(owner) = selected_owner {
+            Some(super::account::verify_plugin_owner_account(
+                owner,
+                Some(&service_user),
+            )?)
+        } else {
+            None
+        };
+        if let Some(owner_info) = owner_info {
+            let owner = selected_owner.unwrap_or("dam-hopper-plugin-runner");
+            let owner_group =
+                super::account::get_group_by_gid(owner_info.gid).ok_or_else(|| {
+                    ReleaseError::Config(format!(
+                        "primary group for plugin owner '{owner}' does not resolve"
+                    ))
+                })?;
+            server_ctx = server_ctx.with_plugin_runner_identity(
+                owner.to_string(),
+                owner_group,
+                owner_info.home,
+                user_info.uid,
+                None,
+                None,
+            )?;
         }
         server_ctx
     } else {
@@ -203,6 +259,16 @@ fn stage_candidate_units_inner(
     staged_unit_paths.push(recovery_unit_path);
 
     if role.includes_server() {
+        let node_path = target_dir.join("bin/node");
+        let node_meta = fs::symlink_metadata(&node_path).map_err(|error| ReleaseError::Io {
+            action: "inspect bundled plugin worker runtime",
+            details: format!("{}: {error}", node_path.display()),
+        })?;
+        if !node_meta.is_file() || node_meta.permissions().mode() & 0o111 == 0 {
+            return Err(ReleaseError::Config(
+                "bundled plugin worker runtime must be a regular executable".into(),
+            ));
+        }
         let template = load_release_template(
             target_dir,
             "systemd/dam-hopper-api.service.in",
@@ -225,20 +291,18 @@ fn stage_candidate_units_inner(
         write_file_with_mode(&helper_unit_path, rendered_helper.as_bytes(), 0o644)?;
         staged_unit_paths.push(helper_unit_path);
 
-        let runner_template_res = load_release_template(
+        let runner_template = load_release_template(
             target_dir,
             "systemd/dam-hopper-plugin-runner.service.in",
             "systemd/dam-hopper-plugin-runner.service",
             allow_checked_in_fallback,
-        );
-        if let Ok(runner_template) = runner_template_res {
-            let rendered_runner = render_runner_unit(&runner_template, &ctx)?;
-            let runner_unit_path = pending_units_dir.join(RUNNER_SERVICE_UNIT);
-            write_file_with_mode(&runner_unit_path, rendered_runner.as_bytes(), 0o644)?;
-            staged_unit_paths.push(runner_unit_path);
-        }
+        )?;
+        let rendered_runner = render_runner_unit(&runner_template, &ctx)?;
+        let runner_unit_path = pending_units_dir.join(RUNNER_SERVICE_UNIT);
+        write_file_with_mode(&runner_unit_path, rendered_runner.as_bytes(), 0o644)?;
+        staged_unit_paths.push(runner_unit_path);
 
-        let tmpfiles_template_res = load_template(
+        let tmpfiles_template = load_template(
             target_dir,
             "tmpfiles.d/dam-hopper-plugin-runner.conf.in",
             allow_checked_in_fallback,
@@ -249,12 +313,10 @@ fn stage_candidate_units_inner(
                 "tmpfiles.d/dam-hopper-plugin-runner.conf",
                 allow_checked_in_fallback,
             )
-        });
-        if let Ok(tmpfiles_template) = tmpfiles_template_res {
-            let rendered_tmpfiles = render_unit(&tmpfiles_template, &ctx)?;
-            let tmpfiles_dest = pending_units_dir.join(RUNNER_TMPFILES_CONF);
-            write_file_with_mode(&tmpfiles_dest, rendered_tmpfiles.as_bytes(), 0o644)?;
-        }
+        })?;
+        let rendered_tmpfiles = render_unit(&tmpfiles_template, &ctx)?;
+        let tmpfiles_dest = pending_units_dir.join(RUNNER_TMPFILES_CONF);
+        write_file_with_mode(&tmpfiles_dest, rendered_tmpfiles.as_bytes(), 0o644)?;
     }
 
     if role.includes_web() {

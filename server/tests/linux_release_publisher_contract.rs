@@ -160,12 +160,14 @@ fn test_publisher_contract_disallowed_files_rejected() {
 fn test_publisher_contract_missing_required_asset_rejected() {
     let (mut manifest, _) = create_test_manifest_and_archive();
 
-    // Remove LICENSE
-    manifest.inventory.retain(|e| e.path != "LICENSE");
+    // Neither accepted legal notice remains.
+    manifest
+        .inventory
+        .retain(|e| e.path != "LICENSE" && e.path != "NOTICES");
 
     let json = serde_json::to_vec(&manifest).unwrap();
     let err = ReleaseManifest::parse_and_validate(&json)
-        .expect_err("missing required LICENSE asset should be rejected");
+        .expect_err("missing legal notices should be rejected");
     assert!(matches!(err, ReleaseError::MissingRequiredPath { .. }));
 }
 
@@ -265,7 +267,9 @@ fn test_publisher_end_to_end_scripts_and_manager_validation() {
 }
 
 fn sha256_file(path: &Path) -> String {
-    hex::encode(Sha256::digest(fs::read(path).expect("read file for digest")))
+    hex::encode(Sha256::digest(
+        fs::read(path).expect("read file for digest"),
+    ))
 }
 fn sha256_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -302,7 +306,6 @@ fn build_rollback_archive(archive_bytes: &[u8], manager_content: &[u8]) -> Vec<u
     build_archive(&references)
 }
 
-
 fn run_migration_gate(asset_dir: &Path, evidence_path: &Path) -> Output {
     Command::new("node")
         .args([
@@ -327,7 +330,9 @@ fn run_remote_asset_gate(assets_json_path: &Path) -> Output {
             "--tag",
             "v0.2.0",
             "--assets-json",
-            assets_json_path.to_str().expect("asset metadata path is UTF-8"),
+            assets_json_path
+                .to_str()
+                .expect("asset metadata path is UTF-8"),
         ])
         .current_dir("..")
         .output()
@@ -342,7 +347,9 @@ fn run_remote_asset_gate_with_dir(asset_dir: &Path, assets_json_path: &Path) -> 
             "--dir",
             asset_dir.to_str().expect("asset path is UTF-8"),
             "--assets-json",
-            assets_json_path.to_str().expect("asset metadata path is UTF-8"),
+            assets_json_path
+                .to_str()
+                .expect("asset metadata path is UTF-8"),
         ])
         .current_dir("..")
         .output()
@@ -359,11 +366,7 @@ fn run_remote_selector_gate(args: &[&str]) -> Output {
         .expect("run remote selector gate")
 }
 
-fn run_remote_api_asset_gate(
-    args: &[&str],
-    gh_dir: &Path,
-    fixture_path: &Path,
-) -> Output {
+fn run_remote_api_asset_gate(args: &[&str], gh_dir: &Path, fixture_path: &Path) -> Output {
     let mut path_entries = vec![gh_dir.to_path_buf()];
     if let Some(path) = std::env::var_os("PATH") {
         path_entries.extend(std::env::split_paths(&path));
@@ -390,8 +393,7 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
 
     let (manifest, archive_bytes) = create_test_manifest_and_archive();
     let rollback_manager_content = b"manager binary content for v0.1.0";
-    let rollback_archive_bytes =
-        build_rollback_archive(&archive_bytes, rollback_manager_content);
+    let rollback_archive_bytes = build_rollback_archive(&archive_bytes, rollback_manager_content);
     assert_ne!(
         sha256_bytes(&rollback_archive_bytes),
         sha256_bytes(&archive_bytes),
@@ -402,8 +404,11 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
     let archive_path = assets_dir.join(&manifest.archive.name);
     fs::write(&manifest_path, &manifest_bytes).expect("write forward manifest");
     fs::write(&archive_path, &archive_bytes).expect("write release archive");
-    fs::write(assets_dir.join("dam-hopper-install.sh"), b"#!/usr/bin/env bash\nset -e\n")
-        .expect("write installer");
+    fs::write(
+        assets_dir.join("dam-hopper-install.sh"),
+        b"#!/usr/bin/env bash\nset -e\n",
+    )
+    .expect("write installer");
     fs::write(
         assets_dir.join("dam-hopper-v0.2.0-linux-x86_64-systemd.spdx.json"),
         br#"{"spdxVersion":"SPDX-2.3","name":"dam-hopper"}"#,
@@ -426,7 +431,9 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
         .expect("rollback inventory array");
     let manager_entry = rollback_inventory
         .iter_mut()
-        .find(|entry| entry.get("path").and_then(|path| path.as_str()) == Some("bin/dam-hopper-manager"))
+        .find(|entry| {
+            entry.get("path").and_then(|path| path.as_str()) == Some("bin/dam-hopper-manager")
+        })
         .expect("rollback manager inventory entry");
     manager_entry["size"] = serde_json::json!(rollback_manager_content.len());
     manager_entry["sha256"] = serde_json::json!(sha256_bytes(rollback_manager_content));
@@ -454,10 +461,8 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
             .expect("rollback archive must match its regenerated inventory");
     assert_eq!(rollback_validated.release.version, "0.1.0");
 
-    let generated_at =
-        (Utc::now() - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    let expires_at =
-        (Utc::now() + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let generated_at = (Utc::now() - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let expires_at = (Utc::now() + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
     let forward_digest = sha256_file(&manifest_path);
     let forward_archive_digest = sha256_file(&archive_path);
     let rollback_digest = sha256_file(&rollback_manifest_path);
@@ -558,7 +563,10 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
         let hidden_link = assets_dir.join(".hidden-link");
         symlink(&archive_path, &hidden_link).expect("create hidden symlink");
         let output = run_migration_gate(&assets_dir, &evidence_path);
-        assert!(!output.status.success(), "hidden symlink unexpectedly passed");
+        assert!(
+            !output.status.success(),
+            "hidden symlink unexpectedly passed"
+        );
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -652,7 +660,10 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
     )
     .expect("write mismatched remote asset metadata");
     let remote_invalid = run_remote_asset_gate_with_dir(&assets_dir, &remote_assets_path);
-    assert!(!remote_invalid.status.success(), "remote digest mismatch passed");
+    assert!(
+        !remote_invalid.status.success(),
+        "remote digest mismatch passed"
+    );
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&remote_invalid.stdout),
@@ -664,11 +675,7 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
     );
 
     for (name, mut invalid, expected_error) in [
-        (
-            "mixed-manager",
-            evidence.clone(),
-            "schema version 2",
-        ),
+        ("mixed-manager", evidence.clone(), "schema version 2"),
         (
             "manager-inventory-too-large",
             evidence.clone(),
@@ -679,61 +686,33 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
             evidence.clone(),
             "exceeds 128 UTF-8 bytes",
         ),
-        (
-            "stale",
-            evidence.clone(),
-            "evidence is stale",
-        ),
-        (
-            "invalid-calendar",
-            evidence.clone(),
-            "valid UTC",
-        ),
+        ("stale", evidence.clone(), "evidence is stale"),
+        ("invalid-calendar", evidence.clone(), "valid UTC"),
         (
             "missing-web-directory",
             evidence.clone(),
             "missing required paths",
         ),
-        (
-            "utf8-path",
-            evidence.clone(),
-            "normalized relative path",
-        ),
+        ("utf8-path", evidence.clone(), "normalized relative path"),
         (
             "unsigned-forward",
             evidence.clone(),
             "signature must be verified",
         ),
-        (
-            "reused-rollback",
-            evidence.clone(),
-            "must be distinct",
-        ),
+        ("reused-rollback", evidence.clone(), "must be distinct"),
         (
             "api-identity",
             evidence.clone(),
             "services.api must contain exactly",
         ),
-        (
-            "wrong-environment",
-            evidence.clone(),
-            "must be production",
-        ),
+        ("wrong-environment", evidence.clone(), "must be production"),
         (
             "future-evidence",
             evidence.clone(),
             "generatedAt is in the future",
         ),
-        (
-            "long-expiry",
-            evidence.clone(),
-            "maximum lifetime",
-        ),
-        (
-            "detached-forward",
-            evidence.clone(),
-            "safe relative path",
-        ),
+        ("long-expiry", evidence.clone(), "maximum lifetime"),
+        ("detached-forward", evidence.clone(), "safe relative path"),
         (
             "rollback-archive",
             evidence.clone(),
@@ -744,16 +723,8 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
             evidence.clone(),
             "does not match the published manager",
         ),
-        (
-            "schema1-forward",
-            evidence.clone(),
-            "schema version 2",
-        ),
-        (
-            "malformed-nested",
-            evidence.clone(),
-            "must contain exactly",
-        ),
+        ("schema1-forward", evidence.clone(), "schema version 2"),
+        ("malformed-nested", evidence.clone(), "must contain exactly"),
     ] {
         let restore_manifest = matches!(
             name,
@@ -783,10 +754,9 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
                 invalid["managerInventory"][0]["id"] = serde_json::json!("x".repeat(129));
             }
             "stale" => {
-                invalid["generatedAt"] = serde_json::json!(
-                    (Utc::now() - Duration::hours(48))
-                        .to_rfc3339_opts(SecondsFormat::Secs, true)
-                );
+                invalid["generatedAt"] =
+                    serde_json::json!((Utc::now() - Duration::hours(48))
+                        .to_rfc3339_opts(SecondsFormat::Secs, true));
             }
             "invalid-calendar" => {
                 invalid["generatedAt"] = serde_json::json!("2026-02-31T00:00:00Z");
@@ -849,8 +819,7 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
             "api-identity" => {
                 let mut identity_manifest =
                     serde_json::to_value(&manifest).expect("serialize identity manifest");
-                identity_manifest["services"]["api"]["identity"] =
-                    serde_json::json!("dam-hopper");
+                identity_manifest["services"]["api"]["identity"] = serde_json::json!("dam-hopper");
                 fs::write(
                     &manifest_path,
                     serde_json::to_vec_pretty(&identity_manifest)
@@ -866,20 +835,17 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
                 invalid["environment"] = serde_json::json!("staging");
             }
             "future-evidence" => {
-                invalid["generatedAt"] = serde_json::json!(
-                    (Utc::now() + Duration::hours(1))
-                        .to_rfc3339_opts(SecondsFormat::Secs, true)
-                );
-                invalid["expiresAt"] = serde_json::json!(
-                    (Utc::now() + Duration::hours(2))
-                        .to_rfc3339_opts(SecondsFormat::Secs, true)
-                );
+                invalid["generatedAt"] =
+                    serde_json::json!((Utc::now() + Duration::hours(1))
+                        .to_rfc3339_opts(SecondsFormat::Secs, true));
+                invalid["expiresAt"] =
+                    serde_json::json!((Utc::now() + Duration::hours(2))
+                        .to_rfc3339_opts(SecondsFormat::Secs, true));
             }
             "long-expiry" => {
-                invalid["expiresAt"] = serde_json::json!(
-                    (Utc::now() + Duration::hours(48))
-                        .to_rfc3339_opts(SecondsFormat::Secs, true)
-                );
+                invalid["expiresAt"] =
+                    serde_json::json!((Utc::now() + Duration::hours(48))
+                        .to_rfc3339_opts(SecondsFormat::Secs, true));
             }
             "detached-forward" => {
                 invalid["forward"]["manifestPath"] =
@@ -931,7 +897,10 @@ fn test_publisher_migration_gate_requires_homogeneous_fresh_signed_v2_evidence()
         )
         .expect("write invalid evidence");
         let output = run_migration_gate(&assets_dir, &scenario_path);
-        assert!(!output.status.success(), "{name} evidence unexpectedly passed");
+        assert!(
+            !output.status.success(),
+            "{name} evidence unexpectedly passed"
+        );
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -984,7 +953,9 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
         "--tag",
         "foo",
         "--assets-json",
-        assets_json_path.to_str().expect("asset metadata path is UTF-8"),
+        assets_json_path
+            .to_str()
+            .expect("asset metadata path is UTF-8"),
     ];
     let invalid_tag = run_remote_selector_gate(&invalid_tag_args);
     assert!(
@@ -1032,7 +1003,10 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
     )
     .expect("write duplicate assets");
     let invalid = run_remote_asset_gate(&assets_json_path);
-    assert!(!invalid.status.success(), "duplicate remote assets unexpectedly passed");
+    assert!(
+        !invalid.status.success(),
+        "duplicate remote assets unexpectedly passed"
+    );
     let duplicate_combined = format!(
         "{}{}",
         String::from_utf8_lossy(&invalid.stdout),
@@ -1044,7 +1018,10 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
     );
     let missing_path = temp.path().join("missing-assets.json");
     let missing = run_remote_asset_gate(&missing_path);
-    assert!(!missing.status.success(), "missing asset metadata unexpectedly passed");
+    assert!(
+        !missing.status.success(),
+        "missing asset metadata unexpectedly passed"
+    );
     let missing_combined = format!(
         "{}{}",
         String::from_utf8_lossy(&missing.stdout),
@@ -1056,7 +1033,10 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
     );
 
     let missing_repo = run_remote_selector_gate(&["--tag", "v0.2.0", "--release-id", "123"]);
-    assert!(!missing_repo.status.success(), "release ID without repo unexpectedly passed");
+    assert!(
+        !missing_repo.status.success(),
+        "release ID without repo unexpectedly passed"
+    );
     let missing_repo_combined = format!(
         "{}{}",
         String::from_utf8_lossy(&missing_repo.stdout),
@@ -1087,7 +1067,9 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
         "--tag",
         "v0.2.0",
         "--assets-json",
-        assets_json_path.to_str().expect("asset metadata path is UTF-8"),
+        assets_json_path
+            .to_str()
+            .expect("asset metadata path is UTF-8"),
         "--release-id",
         "123",
     ]);
@@ -1109,7 +1091,9 @@ fn test_publisher_remote_asset_gate_rejects_duplicate_names() {
         "--tag",
         "v0.2.0",
         "--assets-json",
-        assets_json_path.to_str().expect("asset metadata path is UTF-8"),
+        assets_json_path
+            .to_str()
+            .expect("asset metadata path is UTF-8"),
         "--repo",
         "owner/repository",
     ]);
@@ -1209,7 +1193,10 @@ fn test_publisher_remote_api_asset_gate_bounds_and_decodes_output() {
         String::from_utf8_lossy(&invalid_utf8.stdout),
         String::from_utf8_lossy(&invalid_utf8.stderr)
     );
-    assert!(!invalid_utf8.status.success(), "invalid UTF-8 output unexpectedly passed");
+    assert!(
+        !invalid_utf8.status.success(),
+        "invalid UTF-8 output unexpectedly passed"
+    );
     assert!(
         invalid_utf8_combined.contains("not valid UTF-8"),
         "invalid UTF-8 error missing: {invalid_utf8_combined}"
@@ -1224,4 +1211,3 @@ fn test_publisher_remote_api_asset_gate_bounds_and_decodes_output() {
         "oversized GitHub API output unexpectedly passed"
     );
 }
-

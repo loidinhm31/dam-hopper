@@ -120,6 +120,7 @@ function assignRoles(relPath) {
   if (relPath === "bin/dam-hopper-manager") return ["common"];
   if (relPath === "bin/dam-hopper-server") return ["server"];
   if (relPath === "bin/dam-hopper-plugin-runner") return ["server"];
+  if (relPath === "bin/node") return ["server"];
   if (relPath === "bin/dam-hopper-web") return ["web"];
   if (relPath === "bin/dam-hopper-idle-suspend-helper") return ["server"];
   if (relPath === "systemd/dam-hopper-api.service") return ["server"];

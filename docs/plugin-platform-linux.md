@@ -18,10 +18,11 @@ Host Systemd Services
 
 ## Operator Inputs
 
-Enabling plugins requires explicit operator input during installation or role configuration:
+The manager provisions the default non-root `dam-hopper-plugin-runner` account,
+shared group, and private state directory automatically. Optional inputs:
 
-- `--plugin-owner-user <username>`: The dedicated, non-root system account that runs `dam-hopper-plugin-runner` and owns worker processes.
-- `--plugin-admin-subject <subject>`: Authorized subject identifier permitted to perform administrative plugin actions (install, update, rollback, remove). May be specified multiple times.
+- `--plugin-owner-user <username>`: Select an existing dedicated non-root account. Explicit accounts are validated, never created or recursively repaired.
+- `--plugin-admin-subject <subject>`: Explicit authenticated subject permitted to administer plugins; repeatable. No repository owner or OS username is inferred. Omitted owner/admin options independently preserve recorded settings; a fresh empty policy denies all administration.
 
 ### Account Validation Rules
 
@@ -39,15 +40,25 @@ The release manager enforces strict security validation on the chosen owner acco
 ## Filesystem Layout & Socket Permissions
 
 1. **Volatile Runtime Directory (`/run/dam-hopper`)**:
-   Provisioned at boot via systemd tmpfiles rule (`/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf`):
+   A single tmpfiles rule owns the directory:
    ```text
-   d /run/dam-hopper 0750 dam-hopper dam-hopper-plugins -
-   d /run/dam-hopper/plugin-runner 0750 <plugin-owner-user> dam-hopper-plugins -
+   d /run/dam-hopper 3770 root dam-hopper-plugins -
    ```
+   The installer/manager installs the rule in `/etc/dam-hopper/tmpfiles.d/`.
+   API, helper, and runner each invoke that exact file in a privileged
+   `ExecStartPre`; the custom directory is not automatically discovered at boot.
+   None declares `RuntimeDirectory=dam-hopper`. Setgid preserves the socket
+   group; sticky permissions prevent cross-owner unlinking. Repeated starts
+   must not change live socket ownership or remove another service's socket.
+   Upgrade/rollback cleanup removes only stale managed socket/PID paths after
+   verifying the services are stopped. Live listeners, symlinks, and unexpected
+   artifact types fail closed; unrelated directory contents are preserved.
 2. **Socket Path (`/run/dam-hopper/plugin-runner.sock`)**:
    Created by `dam-hopper-plugin-runner` with mode `0660`. Ownership is `<plugin-owner-user>:dam-hopper-plugins`. The API service belongs to `dam-hopper-plugins` via `SupplementaryGroups=dam-hopper-plugins` in `dam-hopper-api.service`.
 3. **State Directory (`/var/lib/dam-hopper-plugin-runner`)**:
    Durable registry state (`registry-v1.json`, journals, and staging directories) is isolated in `/var/lib/dam-hopper-plugin-runner` with mode `0700` owned by `<plugin-owner-user>`.
+   Existing state owned by another account is rejected rather than recursively
+   reassigned. Account changes require a deliberate state migration.
 
 ## Systemd Service Hardening
 
@@ -76,7 +87,12 @@ dam-hopper-plugin-runner.service (binds socket, validates parent directory)
 dam-hopper-api.service (connects to socket, retries on transient readiness)
 ```
 
-The runner service is ordered after `local-fs.target` and tmpfiles creation. The API server connects to the runner socket over non-blocking streams; if the runner is temporarily restarting or unavailable, API endpoints report typed plugin unavailability without crashing unrelated server functions.
+Each service provisions the shared directory before its main process starts.
+Activation and rollback start the runner before the API and require its unit
+and socket owner/permissions to pass checks after HTTP stabilization. This
+pathname check is not a protocol handshake. If the runner later becomes
+unavailable, plugin endpoints return typed unavailability while unrelated API
+functions remain available.
 
 ## Lifecycle Transactions
 
@@ -111,26 +127,23 @@ sudo dam-hopper start
 
 ## Code Review Warnings & Risk Dispositions
 
-1. **RuntimeDirectory Ownership Contention**: Both API and runner units utilize `RuntimeDirectory=dam-hopper`.
-   - *Affected Paths:* `deploy/systemd/dam-hopper-api.service.in`, `deploy/systemd/dam-hopper-plugin-runner.service.in`
-   - *Severity:* Low
-   - *Disposition:* Accepted Risk. systemd provisions `/run/dam-hopper` shared group permissions safely via tmpfiles rule `d /run/dam-hopper 0750 @API_USER@ @PLUGIN_SHARED_GROUP@ -`. Socket directory `/run/dam-hopper/plugin-runner` provides sub-path isolation.
-2. **Silent Fallback on Owner Verification in Stage Units**: `verify_plugin_owner_account` returns error if owner is unconfigured or invalid, falling back to safe defaults during initial unit staging.
-   - *Affected Paths:* `server/src/linux_release/stage_units.rs`
-   - *Severity:* Low
-   - *Disposition:* Accepted Design. Packaging and staging allow offline preparation before owner configuration is committed. Full verification is enforced strictly during `install` and `role set` CLI commands.
-3. **Probe Runner Health in Activation Health Checks**: Health check primarily monitors API HTTP readiness.
-   - *Affected Paths:* `server/src/linux_release/health.rs`, `server/src/linux_release/activate.rs`
-   - *Severity:* Low
-   - *Disposition:* Accepted Risk. The API server client connects to the runner socket over non-blocking streams and reports typed plugin unavailability without crashing API routes, conforming to Requirement 9. Dedicated socket health verification is provided via `probe_runner_health`.
+1. **Shared runtime ownership**: Fixed by exclusive tmpfiles ownership. Service
+   restarts no longer recursively chown a directory shared by distinct UIDs.
+2. **Owner selection**: Invalid explicit owners fail staging. Selected pending
+   configuration, not stale live configuration, controls unit rendering.
+3. **Activation readiness**: Runner start/enable/provisioning errors fail the
+   transaction. Runner activity and socket checks supplement HTTP health.
+   Authenticated end-to-end plugin requests remain a deployment verification
+   requirement; `/api/health` alone does not certify plugin readiness.
 4. **LAN Qualification Harness Synthetic Timing Mode**: `plugin-platform-lan-qualification.mjs` executes deterministic simulated measurements under `--dry-run`.
    - *Affected Paths:* `tests/deploy/plugin-platform-lan-qualification.mjs`
    - *Severity:* Low
    - *Disposition:* Deferred Non-Goal. Full multi-machine physical LAN testing requires hardware deployment, which is deferred to deployment operational qualification at Gate G4.
-5. **Node Runtime Bundling at Gate G0**: Release archive bundles templates and runner binary, with Node binary bundling deferred to G0 distribution freeze.
-   - *Affected Paths:* `deploy/release/build-release-archive.sh`
-   - *Severity:* Low
-   - *Disposition:* Deferred Non-Goal. Freezing exact Node >=22.19 distribution and SHA-256 for target Linux profiles is tracked as an unresolved deployment question for Gate G0.
+5. **Worker runtime**: Linux archives include `bin/node` and its license text in
+   `NOTICES`. Packaging requires a Linux x64 Node distribution (>=22.19); the
+   manifest hashes the executable. Rendered units use its absolute immutable
+   release path, never the operator's PATH. Builders can provide `NODE_BIN` and
+   `NODE_LICENSE`; otherwise the active Node distribution is used.
 
 ## Observed LAN Qualification Evidence (Phase D06 / G4)
 
