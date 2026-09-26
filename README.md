@@ -28,17 +28,20 @@ A web-based app for managing multi-project development environments. Manage git 
 DamHopper releases are published as immutable, attested GitHub release bundles for Linux x86_64 systemd hosts (Ubuntu, Debian, Fedora, Arch, CentOS/RHEL, etc.). Target hosts do not require a compiler, Node.js, or Rust toolchain.
 
 **Prerequisites:**
+
 - Linux x86_64 with systemd (Ubuntu 24.04+, Fedora, Arch, etc.; glibc >= 2.39, systemd >= 245)
 - `curl`, `tar`, `sha256sum`, `sudo`
 - Optional: `gh` CLI (for GitHub artifact attestation verification)
 
 1. **Download the bootstrap installer:**
+
    ```bash
    curl -fsSLO https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.sh
    chmod +x dam-hopper-install.sh
    ```
 
 2. **Stage a candidate release (unprivileged fetch + staged candidate):**
+
    ```bash
    # API server role (0.0.0.0:4801)
    ./dam-hopper-install.sh --latest --role server
@@ -48,10 +51,15 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
 
    # Both roles in lockstep
    ./dam-hopper-install.sh --latest --role both --allow-web-origin http://localhost:4802
+
+   # Optional: For single-user workstations where plugins need access to local repos:
+   ./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
    ```
-   *Note:* The bootstrap installer stages candidate files, installs the CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`. It never starts or activates services automatically.
+
+   _Note:_ The bootstrap installer stages candidate files, installs the CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`. It never starts or activates services automatically.
 
 3. **Inspect status:**
+
    ```bash
    dam-hopper status
    # Or JSON format:
@@ -59,12 +67,15 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
    ```
 
 4. **Explicitly activate the release:**
+
    ```bash
    sudo dam-hopper start
    ```
+
    `start` installs concrete systemd units, reloads the daemon, starts configured units, and enforces a strict health gate (20s startup deadline + 20 consecutive 500ms probes / 10s stability window).
 
 5. **Rollback & Recovery:**
+
    ```bash
    # Roll back to the recorded previous release
    sudo dam-hopper rollback
@@ -75,22 +86,48 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
 
 For complete operator instructions, systemd unit definitions, security boundaries, and format-2 migration, see [Linux systemd guide](./docs/linux-systemd.md).
 
+### Plugin Runner & Workspace Permissions (Linux)
+
+When deploying DamHopper with the plugin platform on Linux, the plugin runner (`dam-hopper-plugin-runner.service`) executes untrusted plugin code (e.g. `evcrate.advisor`).
+
+- **Single-User Workstation (Recommended for personal development):**
+  Pass `--plugin-owner-user <your-linux-username>` during install:
+
+  ```bash
+  ./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
+  ```
+
+  The runner will run under your own user account, sharing permissions with your workspaces and `~/.evcrate` state without any extra configuration.
+
+- **Multi-User / Dedicated Daemon Account (Default):**
+  If installed without `--plugin-owner-user`, the runner executes under a dedicated system user (`dam-hopper-plugin-runner`). Because Linux user home directories typically have restrictive mode `0700` (`rwx------`), you must grant the runner traversal and read permissions on target project directories:
+  ```bash
+  # Grant traversal through your home directory
+  setfacl -m u:dam-hopper-plugin-runner:x /home/<your-user>
+  # Grant read & execute to your workspace and tool state
+  setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS ~/.evcrate
+  setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS ~/.evcrate
+  ```
+
 ### Quickstart: Windows Release Installer (x86_64 Direct Server)
 
 DamHopper releases provide a verified PowerShell bootstrap installer and deterministic zip archive for Windows `x86_64-pc-windows-msvc`. No compiler, Node.js, or administrative elevation is required.
 
 **Prerequisites:**
+
 - 64-bit Windows 10 / 11 / Server 2022+ (x86_64)
 - PowerShell 5.1+ or PowerShell 7+
 - Internet access for downloading GitHub release assets
 - Optional: GitHub CLI (`gh`) for artifact attestation verification
 
 1. **Download and run the installer (one-liner):**
+
    ```powershell
    Invoke-WebRequest -Uri "https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.ps1" -OutFile "$env:TEMP\dam-hopper-install.ps1"; & "$env:TEMP\dam-hopper-install.ps1" -Latest -AddToPath; Remove-Item "$env:TEMP\dam-hopper-install.ps1"
    ```
 
 2. **Or run with explicit parameters:**
+
    ```powershell
    # Install specific version with User PATH registration
    .\dam-hopper-install.ps1 -Version v0.4.2 -AddToPath
@@ -105,13 +142,14 @@ DamHopper releases provide a verified PowerShell bootstrap installer and determi
    .\dam-hopper-install.ps1 -Latest -DryRun
    ```
 
-   *Note:*
+   _Note:_
    - Default install directory is `%LOCALAPPDATA%\Programs\dam-hopper` (`bin\dam-hopper-server.exe`).
    - The installer is non-admin: it never requests elevation, never starts background processes, and preserves existing configuration files (`dam-hopper.toml`).
    - When `-AddToPath` is used, the install `bin` directory is added to your **User PATH**. Open a fresh PowerShell or Command Prompt terminal for PATH changes to take effect in your shell session.
 
 3. **Launch the server:**
    After opening a fresh terminal (or using the full binary path):
+
    ```powershell
    # Using PATH with default global config
    dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml"
@@ -120,17 +158,17 @@ DamHopper releases provide a verified PowerShell bootstrap installer and determi
    dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
    ```
 
-   *Development note:* For local unauthenticated development without MongoDB, `--no-auth` can be used on a trusted loopback interface (`127.0.0.1:4801`). `--no-auth` is strictly forbidden in production environments.
+   _Development note:_ For local unauthenticated development without MongoDB, `--no-auth` can be used on a trusted loopback interface (`127.0.0.1:4801`). `--no-auth` is strictly forbidden in production environments.
 
 4. **Upgrading:**
    Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server binary while preserving your existing `dam-hopper.toml` configuration:
    ```powershell
    .\dam-hopper-install.ps1 -Latest
    ```
-For the complete Windows asset contract, profile-specific release gates,
-attestation behavior, and configuration/smoke runbook, see
-[Windows Release Asset Packaging](./docs/windows-release-packaging.md) and the
-[Configuration Guide](./docs/configuration-guide.md#windows-direct-server-installation-and-configuration).
+   For the complete Windows asset contract, profile-specific release gates,
+   attestation behavior, and configuration/smoke runbook, see
+   [Windows Release Asset Packaging](./docs/windows-release-packaging.md) and the
+   [Configuration Guide](./docs/configuration-guide.md#windows-direct-server-installation-and-configuration).
 
 ### Build from source (Contributors)
 
@@ -148,6 +186,7 @@ pnpm build:server
 # Run the backend directly (default 0.0.0.0:4800)
 ./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
 ```
+
 ## Configuration
 
 Create `~/.config/dam-hopper/dam-hopper.toml`:
@@ -222,6 +261,7 @@ pnpm format
 ```
 
 The generated Android Studio project lives in `apps/native/src-tauri/gen/android`. Tauri now runs the native package's local `npm run dev` / `npm run build` hooks, so Android Studio and Gradle do not depend on a globally installed `pnpm`.
+
 ### Windows Development & Qualification
 
 `dam-hopper-server` is qualified on Windows 11 MSVC (`x86_64-pc-windows-msvc`). Commands can be run directly from PowerShell or `cmd.exe`:
@@ -244,10 +284,11 @@ cargo run --manifest-path server/Cargo.toml -- --config "C:\path\to\dam-hopper.t
 ```
 
 **Platform Boundaries:**
+
 - Linux-only utilities (`dam-hopper` release manager and `dam-hopper-idle-suspend-helper`) intentionally exit 1 with an explanatory message on Windows.
 - Windows does not bind Unix helper sockets, probe sysfs/procfs, or attempt RTC/systemd suspend (`UnavailableExecutor` fail-closed behavior).
 - Linux deployment qualification and systemd live tests require a Linux host.
-For the full path/TOML and health-cleanup procedure, see the [Windows server loopback smoke checklist](./docs/configuration-guide.md#windows-server-loopback-smoke-checklist). Terminal shell behavior is documented in the [API Reference](./docs/api-reference.md#terminals).
+  For the full path/TOML and health-cleanup procedure, see the [Windows server loopback smoke checklist](./docs/configuration-guide.md#windows-server-loopback-smoke-checklist). Terminal shell behavior is documented in the [API Reference](./docs/api-reference.md#terminals).
 
 ```text
 server/        # Rust binary (Axum + Tokio) — all backend logic
