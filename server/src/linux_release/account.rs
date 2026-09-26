@@ -169,7 +169,9 @@ pub fn ensure_plugin_shared_group() -> Result<(), ReleaseError> {
     Ok(())
 }
 /// Ensure that the default plugin runner user and state directories exist on the host.
-pub fn ensure_default_plugin_runner_user_and_dir() -> Result<(), ReleaseError> {
+pub fn ensure_default_plugin_runner_user_and_dir(
+    api_group: Option<&str>,
+) -> Result<(), ReleaseError> {
     ensure_plugin_shared_group()?;
 
     let owner_user = "dam-hopper-plugin-runner";
@@ -185,9 +187,20 @@ pub fn ensure_default_plugin_runner_user_and_dir() -> Result<(), ReleaseError> {
             super::constants::DEFAULT_RUNNER_STATE_DIR,
             "-g",
             super::constants::PLUGIN_SHARED_GROUP,
-            owner_user,
         ]);
+        if let Some(grp) = api_group {
+            if get_group_gid_by_name(grp).is_some() {
+                cmd.args(["-G", grp]);
+            }
+        }
+        cmd.arg(owner_user);
         let _ = cmd.output();
+    } else if let Some(grp) = api_group {
+        if get_group_gid_by_name(grp).is_some() {
+            let mut cmd = std::process::Command::new("usermod");
+            cmd.args(["-aG", grp, owner_user]);
+            let _ = cmd.output();
+        }
     }
 
     if let Some(user_info) = get_user_by_name(owner_user) {

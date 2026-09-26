@@ -9,6 +9,7 @@ User=@API_USER@
 Group=@API_GROUP@
 SupplementaryGroups=@PLUGIN_SHARED_GROUP@
 RuntimeDirectory=dam-hopper
+RuntimeDirectoryPreserve=yes
 PIDFile=/run/dam-hopper/server.pid
 WorkingDirectory=@API_HOME@
 Environment=HOME=@API_HOME@
