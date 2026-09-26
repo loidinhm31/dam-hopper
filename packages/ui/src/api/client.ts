@@ -82,6 +82,7 @@ import type {
   PluginUiAssetRequest,
   ReplaceBindingsRequest,
   ReplaceGrantsRequest,
+  ReplaceOwnerHistorySourceRequest,
   RequestCancelResult,
   RollbackPackageSnapshotDto,
   StageReviewDto,
@@ -110,6 +111,7 @@ export type {
   PluginUiAssetRequest,
   ReplaceBindingsRequest,
   ReplaceGrantsRequest,
+  ReplaceOwnerHistorySourceRequest,
   RequestCancelResult,
   RollbackPackageSnapshotDto,
   StageReviewDto,
@@ -2872,6 +2874,11 @@ export function createApiClient(
           id,
           body: req,
         }),
+      adminReplaceOwnerHistorySource: (id: string, req: ReplaceOwnerHistorySourceRequest) =>
+        transport.invoke<AdminInstallationDto>("plugins:adminReplaceOwnerHistorySource", {
+          id,
+          body: req,
+        }),
       onLifecycleRevision: (
         listener: (event: PluginLifecycleRevisionEvent) => void,
       ) =>
@@ -3380,6 +3387,10 @@ export interface ApiClient {
     adminReplaceBindings: (
       id: string,
       req: ReplaceBindingsRequest,
+    ) => Promise<AdminInstallationDto>;
+    adminReplaceOwnerHistorySource: (
+      id: string,
+      req: ReplaceOwnerHistorySourceRequest,
     ) => Promise<AdminInstallationDto>;
     onLifecycleRevision: (
       listener: (event: PluginLifecycleRevisionEvent) => void,

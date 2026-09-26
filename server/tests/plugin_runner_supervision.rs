@@ -11,7 +11,7 @@ use std::os::unix::fs::MetadataExt;
 use dam_hopper_server::plugins::contract::{ContextScopeDescriptor, ContextScopeKind};
 use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 use dam_hopper_server::plugins::{
-    AdminSubjectList, CancelOutcome, ContextCloseParams, ContextOpenParams, PluginErrorCode,
+    CancelOutcome, ContextCloseParams, ContextOpenParams, PluginErrorCode,
     PluginInvokeParams, PluginRegistry, PluginRegistryLayout, RequestCancelParams, RunnerClient,
     RunnerClientConfig, RunnerServer, RunnerServerConfig, SupervisorManager, SupervisorStatus,
 };
@@ -121,8 +121,7 @@ function handleMessage(msg) {
 
 fn setup_test_installation(temp_dir: &TempDir) -> (Arc<PluginRegistry>, String, String) {
     let layout = PluginRegistryLayout::new(temp_dir.path().join("registry"));
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
 
     let worker_code = real_node_worker_code();
     let manifest_str = build_manifest_json(
@@ -148,10 +147,25 @@ fn setup_test_installation(temp_dir: &TempDir) -> (Arc<PluginRegistry>, String, 
 
     let mut bindings = BTreeMap::new();
     bindings.insert("target".to_string(), "default".to_string());
+    let initial_grants = vec![
+        dam_hopper_server::plugins::contract::GrantKey {
+            actor_subject: "user-bob".to_string(),
+            installation_id: "".to_string(),
+            configured_project_target: "*".to_string(),
+            allowed_operations: vec!["*".to_string()],
+            allow_current_account_policy: true,
+        },
+        dam_hopper_server::plugins::contract::GrantKey {
+            actor_subject: "user-alice".to_string(),
+            installation_id: "".to_string(),
+            configured_project_target: "*".to_string(),
+            allowed_operations: vec!["*".to_string()],
+            allow_current_account_policy: true,
+        },
+    ];
     let inst = registry
-        .approve_stage("admin-user", &begin.stage_id, &digest, 1, bindings, vec![])
+        .approve_stage("admin-user", &begin.stage_id, &digest, 1, bindings, initial_grants)
         .unwrap();
-
     (registry, inst.installation_id, digest)
 }
 

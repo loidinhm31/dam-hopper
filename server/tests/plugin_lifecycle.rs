@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dam_hopper_server::plugins::{
-    write_lifecycle_journal_record, AdminSubjectList, GrantKey, LifecycleCandidate,
+    write_lifecycle_journal_record, InitialGrant, LifecycleCandidate,
     LifecycleCoordinator, LifecycleOperation, LifecyclePhase, LifecycleTransactionRecord,
     PluginRegistry, PluginRegistryLayout, SupervisorManager,
 };
@@ -77,8 +77,7 @@ fn create_test_package(id: &str, version: &str) -> (Vec<u8>, String) {
 
 fn setup_coordinator(temp_dir: &TempDir) -> LifecycleCoordinator {
     let layout = PluginRegistryLayout::new(temp_dir.path().join("registry"));
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
     let node_bin = find_node_bin();
     let supervisor_mgr = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
     LifecycleCoordinator::new(registry, supervisor_mgr)
@@ -111,9 +110,8 @@ async fn test_lifecycle_update_atomicity_and_drain() {
             &digest_v1,
             1,
             BTreeMap::from([("proj-a".to_string(), "approved-source".to_string())]),
-            vec![GrantKey {
+            vec![InitialGrant {
                 actor_subject: "alice".to_string(),
-                installation_id: "".to_string(), // will be matched
                 configured_project_target: "proj-a".to_string(),
                 allowed_operations: vec!["advisor.scan".to_string()],
                 allow_current_account_policy: false,
@@ -194,9 +192,8 @@ async fn test_lifecycle_rollback_preserves_current_security_intent() {
             &digest_v1,
             1,
             BTreeMap::from([("proj".to_string(), "bound-src".to_string())]),
-            vec![GrantKey {
+            vec![InitialGrant {
                 actor_subject: "admin-user".to_string(),
-                installation_id: "".to_string(),
                 configured_project_target: "proj".to_string(),
                 allowed_operations: vec!["advisor.scan".to_string()],
                 allow_current_account_policy: false,
@@ -408,7 +405,7 @@ async fn test_lifecycle_activation_failure_leaves_registry_untouched() {
     coordinator.registry().stage_finish("admin-user", &stage.stage_id).unwrap();
 
     // Approve should fail during worker candidate activation
-    let result = coordinator
+    let _result = coordinator
         .approve_and_install_stage("admin-user", &stage.stage_id, &digest, 1, BTreeMap::new(), vec![], None)
         .await;
 
@@ -461,7 +458,7 @@ async fn test_lifecycle_update_activation_failure_preserves_prior_installation()
     coordinator.registry().stage_finish("admin-user", &stage2.stage_id).unwrap();
 
     // Update fails during candidate activation
-    let update_res = coordinator
+    let _update_res = coordinator
         .approve_and_install_stage("admin-user", &stage2.stage_id, &digest_v2, 1, BTreeMap::new(), vec![], None)
         .await;
 

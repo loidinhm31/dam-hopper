@@ -205,7 +205,6 @@ fn test_privilege_mutating_commands_still_require_root() {
         verify_attestation: false,
         service_user: None,
         plugin_owner_user: None,
-        plugin_admin_subjects: vec![],
         reinstall: false,
     });
     assert!(verify_privileges(&install_cmd, 0).is_ok());

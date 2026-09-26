@@ -253,13 +253,13 @@ impl InstallationSupervisor {
                 "Plugin activation changed before context open",
             ));
         }
+        let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
+            PluginError::context_revoked("Installation not found")
+        })?;
+        if !inst.enabled {
+            return Err(PluginError::context_revoked("Installation is disabled"));
+        }
         if params.scope.as_ref().map(|s| s.kind) == Some(ContextScopeKind::HistoryRoot) {
-            let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
-                PluginError::context_revoked("Installation not found")
-            })?;
-            if !inst.enabled {
-                return Err(PluginError::context_revoked("Installation is disabled"));
-            }
             let Some(owner_source) = &inst.owner_history_source else {
                 return Err(PluginError::forbidden(format!(
                     "Installation '{}' has no owner-history source configured",
@@ -316,6 +316,19 @@ impl InstallationSupervisor {
                         "Owner history root directory is not owned by the runner owner UID",
                     ));
                 }
+            }
+        } else {
+            let has_valid_grant = inst.grants.iter().any(|g| {
+                g.actor_subject == params.actor_subject
+                    && (g.configured_project_target == "*" || g.configured_project_target == params.configured_project_target)
+                    && (!params.allow_current_account_policy || g.allow_current_account_policy)
+                    && params.allowed_operations.iter().all(|op| g.allowed_operations.contains(&"*".to_string()) || g.allowed_operations.contains(op))
+            });
+            if !has_valid_grant {
+                return Err(PluginError::forbidden(format!(
+                    "Actor '{}' has no active grant for installation '{}' on target '{}'",
+                    params.actor_subject, self.installation_id, params.configured_project_target
+                )));
             }
         }
         let (worker, context_id, expires_at_secs) = {
@@ -432,33 +445,49 @@ impl InstallationSupervisor {
         request_id: &str,
         params: PluginInvokeParams,
     ) -> Result<PluginInvokeResult, PluginError> {
-        if let Some(scope) = {
+        let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
+            PluginError::context_revoked("Installation not found")
+        })?;
+        if !inst.enabled {
+            return Err(PluginError::context_revoked("Installation is disabled"));
+        }
+
+        let (ctx_actor, ctx_target, ctx_scope) = {
             let inner = self.inner.lock();
-            inner.contexts.get(&params.context_id).and_then(|c| c.scope.clone())
-        } {
-            if scope.kind == ContextScopeKind::HistoryRoot {
-                let inst = self.registry.get_installation(&self.installation_id)?.ok_or_else(|| {
-                    PluginError::context_revoked("Installation not found")
-                })?;
-                if !inst.enabled {
-                    return Err(PluginError::context_revoked("Installation is disabled"));
+            let c = inner.contexts.get(&params.context_id).ok_or_else(|| {
+                PluginError::invalid_input(format!("Context '{}' not found", params.context_id))
+            })?;
+            (c.actor_subject.clone(), c.configured_project_target.clone(), c.scope.clone())
+        };
+
+        if ctx_scope.as_ref().map(|s| s.kind) == Some(ContextScopeKind::HistoryRoot) {
+            let Some(owner_source) = &inst.owner_history_source else {
+                return Err(PluginError::context_revoked("Owner history root is revoked"));
+            };
+            if !owner_source.all_authenticated_history_read {
+                return Err(PluginError::context_revoked("Authenticated history read is revoked"));
+            }
+            if let Some(req_id) = ctx_scope.as_ref().and_then(|s| s.root_identity.as_ref()) {
+                if req_id != &owner_source.root_identity {
+                    return Err(PluginError::context_revoked("Owner history root identity changed"));
                 }
-                let Some(owner_source) = &inst.owner_history_source else {
-                    return Err(PluginError::context_revoked("Owner history root is revoked"));
-                };
-                if !owner_source.all_authenticated_history_read {
-                    return Err(PluginError::context_revoked("Authenticated history read is revoked"));
+            }
+            if let Some(rev) = ctx_scope.as_ref().and_then(|s| s.source_revision) {
+                if rev != owner_source.source_revision {
+                    return Err(PluginError::context_revoked("Owner history source revision changed"));
                 }
-                if let Some(req_id) = &scope.root_identity {
-                    if req_id != &owner_source.root_identity {
-                        return Err(PluginError::context_revoked("Owner history root identity changed"));
-                    }
-                }
-                if let Some(rev) = scope.source_revision {
-                    if rev != owner_source.source_revision {
-                        return Err(PluginError::context_revoked("Owner history source revision changed"));
-                    }
-                }
+            }
+        } else {
+            let has_valid_grant = inst.grants.iter().any(|g| {
+                g.actor_subject == ctx_actor
+                    && (g.configured_project_target == "*" || g.configured_project_target == ctx_target)
+                    && (g.allowed_operations.contains(&"*".to_string()) || g.allowed_operations.contains(&params.operation))
+            });
+            if !has_valid_grant {
+                return Err(PluginError::context_revoked(format!(
+                    "Grant revoked for actor '{}' operation '{}' on target '{}'",
+                    ctx_actor, params.operation, ctx_target
+                )));
             }
         }
         let is_long_running =

@@ -11,6 +11,22 @@ import type {
   StageReviewDto,
 } from "@/api/plugin-types.js";
 
+vi.mock("@/hooks/use-aggregated-projects.js", () => ({
+  useAggregatedProjects: () => ({
+    groups: [],
+    allProjects: [
+      {
+        profileId: "test-profile",
+        profileName: "Test Profile",
+        serverUrl: "http://localhost:4801",
+        project: { name: "test-proj", path: "/path/to/test-proj" },
+        ref: { profileId: "test-profile", project: "test-proj" },
+      },
+    ],
+    isLoading: false,
+  }),
+}));
+
 describe("PluginManagementSection", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -19,6 +35,23 @@ describe("PluginManagementSection", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/api/auth/status")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            authenticated: true,
+            user: "admin-user",
+            role: "admin",
+            workbenchProtocol: 2,
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -26,6 +59,7 @@ describe("PluginManagementSection", () => {
       root.unmount();
     });
     container.remove();
+    vi.restoreAllMocks();
   });
 
   function createMockClient(overrides: Partial<ApiClient["plugins"]> = {}): ApiClient {
@@ -51,6 +85,7 @@ describe("PluginManagementSection", () => {
       adminRemove: vi.fn(),
       adminReplaceGrants: vi.fn(),
       adminReplaceBindings: vi.fn(),
+      adminReplaceOwnerHistorySource: vi.fn(),
       onLifecycleRevision: vi.fn(() => () => {}),
       ...overrides,
     };
@@ -87,6 +122,41 @@ describe("PluginManagementSection", () => {
     expect(container.textContent).toContain("Administrator Access Required");
   });
 
+  it("renders user account and role badge", async () => {
+    const mockClient = createMockClient();
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    expect(container.querySelector('[data-testid="auth-user-name"]')?.textContent).toBe("admin-user");
+    expect(container.querySelector('[data-testid="auth-role-badge"]')?.textContent).toContain("admin");
+  });
+
+  it("renders non-admin warning and hides staging controls when role is user", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        authenticated: true,
+        user: "standard-user",
+        role: "user",
+        workbenchProtocol: 2,
+      }),
+    } as unknown as Response);
+
+    const mockClient = createMockClient();
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    expect(container.querySelector('[data-testid="plugin-admin-role-warning"]')).toBeTruthy();
+    expect(container.textContent).toContain("Non-Administrator Account");
+    // Stage upload form is hidden for non-admin
+    expect(container.querySelector('[data-testid="stage-file-input"]')).toBeNull();
+  });
+
   it("renders empty state when no plugins are installed", async () => {
     const mockClient = createMockClient({
       adminList: vi.fn().mockResolvedValue({
@@ -103,7 +173,7 @@ describe("PluginManagementSection", () => {
     expect(container.textContent).toContain("No plugins installed");
   });
 
-  it("renders installed plugins with version, digest, and action buttons", async () => {
+  it("renders installed plugins with version, digest, action buttons, and diagnostic chip", async () => {
     const testInst: AdminInstallationDto = {
       installationId: "inst-1",
       pluginId: "evcrate-advisor",
@@ -144,6 +214,8 @@ describe("PluginManagementSection", () => {
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).toContain("gen 1");
     expect(container.textContent).toContain("worker: ready");
+    expect(container.querySelector('[data-testid="diagnostic-chip-inst-1"]')?.textContent).toContain("0 Grants");
+    expect(container.querySelector('[data-testid="manage-access-inst-1"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="rollback-inst-1"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="remove-inst-1"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="toggle-enable-inst-1"]')).toBeTruthy();
@@ -196,7 +268,7 @@ describe("PluginManagementSection", () => {
     });
   });
 
-  it("handles staging package upload and displays immutable review card", async () => {
+  it("handles staging package upload and displays immutable review card with access setup", async () => {
     const mockReview: StageReviewDto = {
       stageId: "stage-123",
       transactionId: "tx-456",
@@ -254,19 +326,18 @@ describe("PluginManagementSection", () => {
     await act(async () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
-    expect(adminStage).toHaveBeenCalledTimes(1);
 
-    // Verify review card displayed
+    // Verify review card displayed with access setup fields
     expect(container.querySelector('[data-testid="stage-review-card"]')).toBeTruthy();
     expect(container.textContent).toContain("test-plugin");
     expect(container.textContent).toContain("v2.0.0");
-    expect(container.textContent).toContain("Publisher: test-org");
-    expect(container.textContent).toContain("Verified Integrity");
+    expect(container.querySelector('[data-testid="stage-project-select"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="stage-actor-input"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="approve-stage-btn"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="discard-stage-btn"]')).toBeTruthy();
   });
 
-  it("calls adminApprove when Approve & Activate is clicked on review card", async () => {
+  it("calls adminApprove with initialBindings and initialGrants when Approve & Activate is clicked", async () => {
     const mockReview: StageReviewDto = {
       stageId: "stage-123",
       transactionId: "tx-456",
@@ -293,8 +364,16 @@ describe("PluginManagementSection", () => {
       activeVersion: "2.0.0",
       activationGeneration: 1,
       enabled: true,
-      bindings: {},
-      grants: [],
+      bindings: { "test-proj": "/path/to/test-proj" },
+      grants: [
+        {
+          actorSubject: "admin-user",
+          installationId: "inst-new",
+          configuredProjectTarget: "test-proj",
+          allowedOperations: ["advisor.scan"],
+          allowCurrentAccountPolicy: false,
+        },
+      ],
       hasUi: false,
       workerStatus: "ready",
       canRollback: false,
@@ -316,7 +395,6 @@ describe("PluginManagementSection", () => {
     const file = new File(["dummy content"], "plugin.tar.gz", { type: "application/gzip" });
     const fileInput = container.querySelector<HTMLInputElement>('[data-testid="stage-file-input"]');
     const shaInput = container.querySelector<HTMLInputElement>('[data-testid="expected-sha256-input"]');
-    const uploadBtn = container.querySelector<HTMLButtonElement>('[data-testid="stage-upload-btn"]');
 
     await act(async () => {
       Object.defineProperty(fileInput, "files", {
@@ -339,17 +417,137 @@ describe("PluginManagementSection", () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
 
+    const projectSelect = container.querySelector<HTMLSelectElement>('[data-testid="stage-project-select"]');
+    const actorInput = container.querySelector<HTMLInputElement>('[data-testid="stage-actor-input"]');
+    const opsInput = container.querySelector<HTMLInputElement>('[data-testid="stage-ops-input"]');
     const approveBtn = container.querySelector<HTMLButtonElement>('[data-testid="approve-stage-btn"]');
     expect(approveBtn).toBeTruthy();
 
     await act(async () => {
+      if (projectSelect) {
+        projectSelect.value = "test-proj";
+        projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (actorInput) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        nativeSetter?.call(actorInput, "admin-user");
+        actorInput.dispatchEvent(new Event("input", { bubbles: true }));
+        actorInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (opsInput) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        nativeSetter?.call(opsInput, "advisor.scan");
+        opsInput.dispatchEvent(new Event("input", { bubbles: true }));
+        opsInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       approveBtn?.click();
     });
 
     expect(adminApprove).toHaveBeenCalledWith("stage-123", {
       expectedSha256: "d".repeat(64),
       expectedSecurityRevision: 1,
+      initialBindings: { "test-proj": "/path/to/test-proj" },
+      initialGrants: [
+        {
+          actorSubject: "admin-user",
+          configuredProjectTarget: "test-proj",
+          allowedOperations: ["advisor.scan"],
+          allowCurrentAccountPolicy: false,
+        },
+      ],
+      ownerHistorySource: undefined,
     });
+  });
+
+  it("opens PluginAccessModal on Manage Access and saves updated access settings", async () => {
+    const testInst: AdminInstallationDto = {
+      installationId: "inst-1",
+      pluginId: "evcrate-advisor",
+      activePackageDigest: "a".repeat(64),
+      activeVersion: "1.0.0",
+      activationGeneration: 1,
+      enabled: true,
+      bindings: { "test-proj": "/path/to/test-proj" },
+      grants: [],
+      hasUi: true,
+      workerStatus: "ready",
+      canRollback: false,
+      securityRevision: 1,
+      createdAt: "2026-09-22T00:00:00Z",
+      updatedAt: "2026-09-22T00:00:00Z",
+    };
+
+    const adminReplaceGrants = vi.fn().mockResolvedValue({
+      ...testInst,
+      securityRevision: 2,
+    });
+    const adminReplaceBindings = vi.fn().mockResolvedValue({
+      ...testInst,
+      securityRevision: 2,
+    });
+    const adminReplaceOwnerHistorySource = vi.fn().mockResolvedValue({
+      ...testInst,
+      securityRevision: 3,
+    });
+
+    const mockClient = createMockClient({
+      adminList: vi.fn().mockResolvedValue({
+        installations: [testInst],
+        securityRevision: 1,
+      }),
+      adminReplaceGrants,
+      adminReplaceBindings,
+      adminReplaceOwnerHistorySource,
+    });
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    const manageBtn = container.querySelector<HTMLButtonElement>('[data-testid="manage-access-inst-1"]');
+    expect(manageBtn).toBeTruthy();
+
+    await act(async () => {
+      manageBtn?.click();
+    });
+
+    // Modal is open
+    expect(document.querySelector('[data-testid="plugin-access-modal"]')).toBeTruthy();
+
+    // Add a grant
+    const actorInput = document.querySelector<HTMLInputElement>('[data-testid="grant-actor-input"]');
+    const addGrantBtn = document.querySelector<HTMLButtonElement>('[data-testid="add-grant-btn"]');
+    expect(actorInput).toBeTruthy();
+    expect(addGrantBtn).toBeTruthy();
+
+    await act(async () => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      nativeSetter?.call(actorInput, "developer-alice");
+      actorInput?.dispatchEvent(new Event("input", { bubbles: true }));
+      actorInput?.dispatchEvent(new Event("change", { bubbles: true }));
+      addGrantBtn?.click();
+    });
+
+    // Save access settings
+    const saveBtn = document.querySelector<HTMLButtonElement>('[data-testid="save-access-btn"]');
+    expect(saveBtn).toBeTruthy();
+
+    await act(async () => {
+      saveBtn?.click();
+    });
+
+    expect(adminReplaceBindings).toHaveBeenCalled();
+    expect(adminReplaceGrants).toHaveBeenCalled();
+    expect(adminReplaceOwnerHistorySource).toHaveBeenCalled();
   });
 
   it("handles rollback confirmation dialog and calls adminRollback", async () => {
@@ -379,9 +577,6 @@ describe("PluginManagementSection", () => {
     const adminRollback = vi.fn().mockResolvedValue({
       ...testInst,
       activeVersion: "1.0.0",
-      activePackageDigest: "b".repeat(64),
-      activationGeneration: 3,
-      canRollback: false,
     });
 
     const mockClient = createMockClient({
@@ -399,16 +594,14 @@ describe("PluginManagementSection", () => {
     const rollbackBtn = container.querySelector<HTMLButtonElement>('[data-testid="rollback-inst-1"]');
     expect(rollbackBtn).toBeTruthy();
 
-    // Open rollback dialog
     await act(async () => {
       rollbackBtn?.click();
     });
 
-    expect(document.body.textContent).toContain("Rollback plugin package?");
+    expect(document.body.textContent).toContain("Confirm Rollback");
 
-    // Confirm rollback
     const confirmBtn = Array.from(document.body.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Confirm Rollback"),
+      (b) => b.textContent?.includes("Rollback Plugin"),
     );
     expect(confirmBtn).toBeTruthy();
 
@@ -460,14 +653,12 @@ describe("PluginManagementSection", () => {
     const removeBtn = container.querySelector<HTMLButtonElement>('[data-testid="remove-inst-1"]');
     expect(removeBtn).toBeTruthy();
 
-    // Open remove dialog
     await act(async () => {
       removeBtn?.click();
     });
 
-    expect(document.body.textContent).toContain("Remove plugin installation?");
+    expect(document.body.textContent).toContain("Permanently remove installation");
 
-    // Confirm remove
     const confirmBtn = Array.from(document.body.querySelectorAll("button")).find(
       (b) => b.textContent?.includes("Remove Installation"),
     );

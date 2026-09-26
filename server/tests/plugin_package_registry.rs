@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use plugin_test_helpers::{build_manifest_json, create_regular_tar_gz};
 use dam_hopper_server::plugins::{
-    AdminSubjectList, GrantKey, PluginRegistry, PluginRegistryLayout,
+    GrantKey, PluginRegistry, PluginRegistryLayout,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -14,8 +14,7 @@ use tempfile::TempDir;
 fn test_package_stream_inspect_approve_lifecycle() {
     let temp_dir = TempDir::new().unwrap();
     let layout = PluginRegistryLayout::new(temp_dir.path());
-    let admin_subjects = AdminSubjectList::new(vec!["admin-alice".to_string()]);
-    let registry = PluginRegistry::new(layout.clone(), admin_subjects).unwrap();
+    let registry = PluginRegistry::new(layout.clone()).unwrap();
 
     let worker_code = b"console.log('worker running');";
     let manifest_str = build_manifest_json(
@@ -64,11 +63,10 @@ fn test_package_stream_inspect_approve_lifecycle() {
 }
 
 #[test]
-fn test_approval_rejects_non_admin_or_wrong_revision() {
+fn test_approval_rejects_wrong_revision_or_digest() {
     let temp_dir = TempDir::new().unwrap();
     let layout = PluginRegistryLayout::new(temp_dir.path());
-    let admin_subjects = AdminSubjectList::new(vec!["admin-alice".to_string()]);
-    let registry = PluginRegistry::new(layout, admin_subjects).unwrap();
+    let registry = PluginRegistry::new(layout).unwrap();
 
     let worker_code = b"console.log('worker');";
     let manifest_str = build_manifest_json("test-plugin", "1.0.0", &[("backend/worker.cjs", worker_code, 0o644)]);
@@ -77,7 +75,6 @@ fn test_approval_rejects_non_admin_or_wrong_revision() {
         ("backend/worker.cjs", worker_code, 0o644),
     ]);
 
-    assert!(registry.stage_begin("bob", &digest, tar_gz.len() as u64).is_err());
 
     let begin = registry.stage_begin("admin-alice", &digest, tar_gz.len() as u64).unwrap();
     registry.stage_chunk("admin-alice", &begin.stage_id, 0, &tar_gz).unwrap();
@@ -92,8 +89,7 @@ fn test_approval_rejects_non_admin_or_wrong_revision() {
 fn test_streaming_chunk_sequence_and_overflow_errors() {
     let temp_dir = TempDir::new().unwrap();
     let layout = PluginRegistryLayout::new(temp_dir.path());
-    let admin_subjects = AdminSubjectList::new(vec!["admin-alice".to_string()]);
-    let registry = PluginRegistry::new(layout, admin_subjects).unwrap();
+    let registry = PluginRegistry::new(layout).unwrap();
 
     let data = vec![1u8; 1000];
     let digest = hex::encode(Sha256::digest(&data));
@@ -108,8 +104,7 @@ fn test_streaming_chunk_sequence_and_overflow_errors() {
 fn test_cas_grants_and_bindings() {
     let temp_dir = TempDir::new().unwrap();
     let layout = PluginRegistryLayout::new(temp_dir.path());
-    let admin_subjects = AdminSubjectList::new(vec!["admin-alice".to_string()]);
-    let registry = PluginRegistry::new(layout, admin_subjects).unwrap();
+    let registry = PluginRegistry::new(layout).unwrap();
 
     let worker_code = b"console.log('worker');";
     let manifest_str = build_manifest_json("test-plugin", "1.0.0", &[("backend/worker.cjs", worker_code, 0o644)]);
@@ -146,13 +141,12 @@ fn test_cas_grants_and_bindings() {
 fn test_crash_recovery_cleans_incomplete_staging() {
     let temp_dir = TempDir::new().unwrap();
     let layout = PluginRegistryLayout::new(temp_dir.path());
-    let admin_subjects = AdminSubjectList::new(vec!["admin-alice".to_string()]);
-    let registry = PluginRegistry::new(layout.clone(), admin_subjects.clone()).unwrap();
+    let registry = PluginRegistry::new(layout.clone()).unwrap();
 
     let begin = registry.stage_begin("admin-alice", &"a".repeat(64), 500).unwrap();
     let stage_dir = layout.stage_dir(&begin.stage_id);
     assert!(stage_dir.exists());
 
-    let _recovered_reg = PluginRegistry::new(layout.clone(), admin_subjects).unwrap();
+    let _recovered_reg = PluginRegistry::new(layout.clone()).unwrap();
     assert!(!stage_dir.exists());
 }

@@ -101,6 +101,12 @@ impl PluginApiService {
         self.context_table.revoke_by_installation(installation_id);
     }
 
+    pub async fn refresh_actor_grants(&self, actor_subject: &str) -> Result<(), PluginError> {
+        let grants = self.runner_client.get_actor_grants(actor_subject).await?;
+        self.auth_service.set_actor_grants(actor_subject, grants);
+        Ok(())
+    }
+
     /// List plugins visible to the authenticated actor for a target.
     pub async fn list_plugins(
         &self,
@@ -124,15 +130,13 @@ impl PluginApiService {
         // Include disabled durable records so authorized navigation can render
         // an honest non-executable state instead of silently hiding them.
         let plugins = self.runner_client.list_plugins(true).await?.plugins;
+        self.refresh_actor_grants(&actor.subject).await?;
 
         // Hydrate in-memory authorization service with durable owner-history sources from runner
         for p in &plugins {
-            if let Some(source) = &p.owner_history_source {
-                self.auth_service
-                    .set_owner_history_source(&p.id, Some(source.clone()));
-            }
+            self.auth_service
+                .set_owner_history_source(&p.id, p.owner_history_source.clone());
         }
-
         // Visibility remains explicit default-deny for this actor and target.
         let target_str = &target_ref.project;
         let visible = plugins
@@ -171,6 +175,7 @@ impl PluginApiService {
             .await
             .map_err(|_| PluginError::invalid_input("Project target is unavailable"))?;
 
+        self.refresh_actor_grants(&actor.subject).await?;
         if !self.auth_service.has_actor_visibility(
             &actor.subject,
             installation_id,
@@ -251,6 +256,7 @@ impl PluginApiService {
 
         self.check_runner_generation();
 
+        self.refresh_actor_grants(&actor.subject).await?;
         // Hydrate durable plugin activation and owner-history source from runner before authorization
         let active_plugin = self
             .runner_client
@@ -261,10 +267,8 @@ impl PluginApiService {
             .find(|plugin| plugin.id == installation_id && plugin.enabled)
             .ok_or_else(|| PluginError::context_revoked("Plugin activation is unavailable"))?;
 
-        if let Some(source) = &active_plugin.owner_history_source {
-            self.auth_service
-                .set_owner_history_source(installation_id, Some(source.clone()));
-        }
+        self.auth_service
+            .set_owner_history_source(installation_id, active_plugin.owner_history_source.clone());
 
         let target_str = target_ref.project.clone();
         let effective_scope_kind = scope_kind.or_else(|| {
@@ -417,6 +421,7 @@ impl PluginApiService {
         };
 
         // 2. Recheck authorization on EVERY invoke!
+        self.refresh_actor_grants(&actor.subject).await?;
         self.auth_service.check_invoke_authorization(
             actor,
             epoch_id,

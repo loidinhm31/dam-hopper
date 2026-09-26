@@ -16,7 +16,7 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::plugins::{
     record_admin_audit, AdminAuditRecord, AdminInstallationDto, AdminInstallationListResult,
-    AdminSubjectList, EpochRegistry, PluginApiService, PluginAuthorizationService,
+    EpochRegistry, PluginApiService, PluginAuthorizationService,
     PluginContextTable, PluginRegistry, PluginRegistryLayout, RunnerClient, RunnerClientConfig,
     RunnerServer, RunnerServerConfig, StageReviewDto, SupervisorManager,
 };
@@ -122,12 +122,69 @@ struct TestHarness {
     pub shutdown_tx: watch::Sender<bool>,
 }
 
+async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
+    let uri = std::env::var("TEST_MONGODB_URI").unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
+    let mut client = mongodb::Client::with_uri_str(&uri).await.ok();
+    let mut db = client.as_ref().map(|c| c.database(db_name));
+    let mut is_connected = if let Some(ref d) = db {
+        d.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_ok()
+    } else {
+        false
+    };
+
+    if !is_connected {
+        let _ = std::process::Command::new("podman")
+            .args(["run", "-d", "--rm", "-p", "27018:27017", "--name", "test-mongo-dam-hopper", "docker.io/library/mongo:8.2"])
+            .output();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Ok(c) = mongodb::Client::with_uri_str(&uri).await {
+            let d = c.database(db_name);
+            if d.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_ok() {
+                db = Some(d);
+                is_connected = true;
+            }
+        }
+    }
+
+    if is_connected {
+        let d = db?;
+        use bcrypt::{hash, DEFAULT_COST};
+        let password_hash = hash("password", DEFAULT_COST).unwrap();
+        let col = d.collection::<mongodb::bson::Document>("users");
+        let _ = col.delete_many(mongodb::bson::doc! {}).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "admin-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+            "role": "admin",
+        }).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "normal-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+            "role": "user",
+        }).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "legacy-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+        }).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "disabled-admin",
+            "passwordHash": &password_hash,
+            "isEnabled": false,
+            "role": "admin",
+        }).await;
+        Some(d)
+    } else {
+        None
+    }
+}
+
 async fn create_admin_test_harness(temp_dir: &TempDir, no_auth: bool) -> TestHarness {
     let socket_path = temp_dir.path().join("runner.sock");
     let layout = PluginRegistryLayout::new(temp_dir.path().join("registry"));
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
-
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
     let node_bin = find_node_bin();
     let supervisor_mgr = Arc::new(SupervisorManager::new(registry.clone(), node_bin));
 
@@ -208,7 +265,7 @@ async fn create_admin_test_harness(temp_dir: &TempDir, no_auth: bool) -> TestHar
         event_sink,
         "test-jwt-secret".to_string(),
         FsSubsystem::new(vec![]),
-        None,
+        if no_auth { None } else { setup_test_mongo(&format!("test_admin_{}", uuid::Uuid::new_v4().simple())).await },
         no_auth,
         tunnel_manager,
         None,
@@ -240,7 +297,7 @@ async fn test_empty_deny_allowlist() {
     // Non-admin user with valid JWT
     let non_admin_token = generate_auth_token("normal-user", "test-jwt-secret");
 
-    // GET /api/plugins/admin -> 401 Unauthorized
+    // GET /api/plugins/admin -> 403 Forbidden
     let req = Request::builder()
         .method(Method::GET)
         .uri("/api/plugins/admin")
@@ -253,19 +310,33 @@ async fn test_empty_deny_allowlist() {
     let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let err_str = String::from_utf8_lossy(&body_bytes);
-    println!("DEBUG resp: status={status}, body={err_str}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
     let err_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let err_msg = err_json["error"].as_str().unwrap();
-    assert!(
-        err_msg.contains("not authorized plugin administrator")
-            || err_msg.contains("not in authorized plugin admin list"),
-        "Expected admin allowlist denial, got: {:?}",
-        err_json
-    );
+    assert_eq!(err_json["code"], "AdminRoleRequired");
 
-    // POST /api/plugins/admin/stages as non-admin -> 401 Unauthorized
+    // Legacy user without role field -> 403 Forbidden
+    let legacy_token = generate_auth_token("legacy-user", "test-jwt-secret");
+    let legacy_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/plugins/admin")
+        .header(header::AUTHORIZATION, format!("Bearer {legacy_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let legacy_resp = router.clone().oneshot(legacy_req).await.unwrap();
+    assert_eq!(legacy_resp.status(), StatusCode::FORBIDDEN);
+
+    // Disabled admin user -> 403 Forbidden
+    let disabled_token = generate_auth_token("disabled-admin", "test-jwt-secret");
+    let disabled_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/plugins/admin")
+        .header(header::AUTHORIZATION, format!("Bearer {disabled_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let disabled_resp = router.clone().oneshot(disabled_req).await.unwrap();
+    assert_eq!(disabled_resp.status(), StatusCode::FORBIDDEN);
+
+    // POST /api/plugins/admin/stages as non-admin -> 403 Forbidden
     let (tar_gz, sha) = sample_plugin_archive("test-plugin", "1.0.0");
     let stage_req = Request::builder()
         .method(Method::POST)
@@ -278,9 +349,8 @@ async fn test_empty_deny_allowlist() {
         .unwrap();
 
     let stage_resp = router.oneshot(stage_req).await.unwrap();
-    assert_eq!(stage_resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(stage_resp.status(), StatusCode::FORBIDDEN);
 }
-
 #[tokio::test]
 async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
     let temp_dir = TempDir::new().unwrap();
@@ -308,7 +378,7 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
     let err_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(err_json["code"], "BearerRequired");
 
-    // 2. Request under --no-auth mode in develop environment is permitted -> 200 OK
+    // 2. Request under --no-auth mode is strictly rejected -> 403 Forbidden (NoAuthForbidden)
     let temp_dir_no_auth = TempDir::new().unwrap();
     let harness_no_auth = create_admin_test_harness(&temp_dir_no_auth, true).await;
     let router_no_auth = build_router(harness_no_auth.state);
@@ -320,14 +390,14 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
         .unwrap();
 
     let resp_no_auth = router_no_auth.clone().oneshot(req_no_auth).await.unwrap();
-    assert_eq!(resp_no_auth.status(), StatusCode::OK);
+    assert_eq!(resp_no_auth.status(), StatusCode::FORBIDDEN);
     let body_bytes = axum::body::to_bytes(resp_no_auth.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(json.get("installations").is_some());
+    assert_eq!(json["code"], "NoAuthForbidden");
 
-    // 3. Staging a package under --no-auth mode without any Bearer token succeeds
+    // 3. Staging a package under --no-auth mode is rejected -> 403 Forbidden
     let (tar_gz, sha) = sample_plugin_archive("dev-plugin", "0.1.0");
     let stage_req_no_auth = Request::builder()
         .method(Method::POST)
@@ -339,18 +409,12 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
         .unwrap();
 
     let stage_resp_no_auth = router_no_auth.clone().oneshot(stage_req_no_auth).await.unwrap();
-    assert_eq!(stage_resp_no_auth.status(), StatusCode::CREATED);
-    let stage_bytes = axum::body::to_bytes(stage_resp_no_auth.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let stage_json: serde_json::Value = serde_json::from_slice(&stage_bytes).unwrap();
-    assert_eq!(stage_json["pluginId"], "dev-plugin");
+    assert_eq!(stage_resp_no_auth.status(), StatusCode::FORBIDDEN);
 
-    // 4. Approve stage under --no-auth mode without any Bearer token succeeds
-    let stage_id = stage_json["stageId"].as_str().unwrap();
+    // 4. Approve stage under --no-auth mode is rejected -> 403 Forbidden
     let approve_req_no_auth = Request::builder()
         .method(Method::POST)
-        .uri(format!("/api/plugins/admin/stages/{stage_id}/approve"))
+        .uri("/api/plugins/admin/stages/dummy-stage/approve")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::to_vec(&serde_json::json!({
@@ -362,13 +426,7 @@ async fn test_bearer_only_mutation_rejects_cookie_and_no_auth() {
         .unwrap();
 
     let approve_resp_no_auth = router_no_auth.oneshot(approve_req_no_auth).await.unwrap();
-    assert_eq!(approve_resp_no_auth.status(), StatusCode::OK);
-    let approve_bytes = axum::body::to_bytes(approve_resp_no_auth.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let inst_json: serde_json::Value = serde_json::from_slice(&approve_bytes).unwrap();
-    assert_eq!(inst_json["pluginId"], "dev-plugin");
-    assert_eq!(inst_json["enabled"], true);
+    assert_eq!(approve_resp_no_auth.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -639,29 +697,37 @@ fn test_redacted_audit() {
     assert_eq!(record.outcome, "success");
 }
 
-#[cfg(unix)]
-#[test]
-fn test_admin_config_group_writable_rejected() {
-    use std::os::unix::fs::PermissionsExt;
+#[tokio::test]
+async fn test_auth_status_reports_db_role() {
     let temp_dir = TempDir::new().unwrap();
-    let config_path = temp_dir.path().join("admins.json");
-    fs::write(&config_path, r#"{"adminSubjects":["admin-user"]}"#).unwrap();
+    let harness = create_admin_test_harness(&temp_dir, false).await;
+    let router = build_router(harness.state);
 
-    // Safe permissions: 0o644
-    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o644)).unwrap();
-    let safe_res = dam_hopper_server::plugins::load_admin_subjects_from_file(&config_path);
-    assert!(safe_res.is_ok());
-    assert!(safe_res.unwrap().is_admin("admin-user"));
+    let admin_token = generate_auth_token("admin-user", "test-jwt-secret");
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/status")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["role"], "admin");
+    assert_eq!(json["user"], "admin-user");
 
-    // Unsafe group-writable permissions: 0o664 (perm & 0o022 != 0)
-    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o664)).unwrap();
-    let group_writable_res = dam_hopper_server::plugins::load_admin_subjects_from_file(&config_path);
-    assert!(group_writable_res.is_err());
-    let err_msg = group_writable_res.unwrap_err().to_string();
-    assert!(err_msg.contains("unsafe writable permissions"));
-
-    // Unsafe world-writable permissions: 0o646
-    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o646)).unwrap();
-    let world_writable_res = dam_hopper_server::plugins::load_admin_subjects_from_file(&config_path);
-    assert!(world_writable_res.is_err());
+    let user_token = generate_auth_token("normal-user", "test-jwt-secret");
+    let req2 = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/status")
+        .header(header::AUTHORIZATION, format!("Bearer {user_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = router.oneshot(req2).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let bytes2 = axum::body::to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
+    let json2: serde_json::Value = serde_json::from_slice(&bytes2).unwrap();
+    assert_eq!(json2["role"], "user");
+    assert_eq!(json2["user"], "normal-user");
 }

@@ -105,9 +105,6 @@ pub struct InstallArgs {
     #[arg(long = "plugin-owner-user")]
     pub plugin_owner_user: Option<String>,
 
-    /// Admin subjects permitted to manage plugins (repeatable).
-    #[arg(long = "plugin-admin-subject")]
-    pub plugin_admin_subjects: Vec<String>,
 
     /// Stop and overwrite existing active or previous release destination for rebuilds.
     #[arg(long)]
@@ -148,9 +145,6 @@ pub struct RoleSetArgs {
     #[arg(long = "plugin-owner-user")]
     pub plugin_owner_user: Option<String>,
 
-    /// Admin subjects permitted to manage plugins (repeatable).
-    #[arg(long = "plugin-admin-subject")]
-    pub plugin_admin_subjects: Vec<String>,
 
     /// Stop and overwrite existing active or previous release destination for rebuilds.
     #[arg(long)]

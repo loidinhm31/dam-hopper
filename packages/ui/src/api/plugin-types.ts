@@ -115,6 +115,20 @@ export interface GrantKey {
   allowCurrentAccountPolicy: boolean;
 }
 
+export interface InitialGrant {
+  actorSubject: string;
+  configuredProjectTarget: string;
+  allowedOperations: string[];
+  allowCurrentAccountPolicy: boolean;
+}
+
+export interface OwnerHistorySource {
+  rootPath: string;
+  rootIdentity: string;
+  sourceRevision: number;
+  allAuthenticatedHistoryRead: boolean;
+}
+
 export interface StageReviewDto {
   stageId: string;
   transactionId: string;
@@ -154,6 +168,7 @@ export interface AdminInstallationDto {
   enabled: boolean;
   bindings: Record<string, string>;
   grants: GrantKey[];
+  ownerHistorySource?: OwnerHistorySource | null;
   hasUi: boolean;
   workerStatus: string;
   previousPackage?: RollbackPackageSnapshotDto;
@@ -172,7 +187,8 @@ export interface ApproveStageRequest {
   expectedSha256: string;
   expectedSecurityRevision: number;
   initialBindings?: Record<string, string>;
-  initialGrants?: GrantKey[];
+  initialGrants?: InitialGrant[];
+  ownerHistorySource?: OwnerHistorySource | null;
 }
 
 export interface LifecycleActionRequest {
@@ -189,6 +205,11 @@ export interface ReplaceBindingsRequest {
   bindings: Record<string, string>;
 }
 
+export interface ReplaceOwnerHistorySourceRequest {
+  expectedSecurityRevision: number;
+  ownerHistorySource?: OwnerHistorySource | null;
+}
+
 export interface AdminRemoveResult {
   installationId: string;
   removed: boolean;
@@ -201,4 +222,13 @@ export interface PluginLifecycleRevisionEvent {
   activationGeneration: number;
   securityRevision: number;
   enabled: boolean;
+}
+
+export interface AuthStatusResponse {
+  authenticated: boolean;
+  user?: string;
+  role?: "user" | "admin";
+  dev_mode?: boolean;
+  workbenchProtocol: number;
+  error?: string;
 }

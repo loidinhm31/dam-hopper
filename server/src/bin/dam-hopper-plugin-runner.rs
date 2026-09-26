@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use dam_hopper_server::plugins::{
-    load_admin_subjects_from_file, load_host_admin_subjects, PluginRegistry,
-    PluginRegistryLayout, RunnerServer, RunnerServerConfig, SupervisorManager,
+    PluginRegistry, PluginRegistryLayout, RunnerServer, RunnerServerConfig, SupervisorManager,
 };
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
@@ -35,9 +34,6 @@ struct Args {
     /// Allow root (UID 0) peer connections
     #[arg(long, default_value_t = false)]
     allow_root_peer: bool,
-    /// Optional path to root-seeded admin configuration JSON
-    #[arg(long)]
-    admin_config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -59,12 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let layout = PluginRegistryLayout::new(&args.registry_dir);
-    let admin_subjects = if let Some(admin_path) = &args.admin_config {
-        load_admin_subjects_from_file(admin_path)?
-    } else {
-        load_host_admin_subjects()
-    };
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects)?);
+    let registry = Arc::new(PluginRegistry::new(layout)?);
     let supervisor_manager = Arc::new(SupervisorManager::new(registry.clone(), args.node_bin));
 
     let server_config = RunnerServerConfig {

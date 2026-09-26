@@ -230,20 +230,32 @@ pub struct LoginBody {
     pub password: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    #[default]
+    User,
+    Admin,
+}
+
 #[derive(Serialize)]
 struct LoginResponse {
     ok: bool,
     token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dev_mode: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<UserRole>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct User {
-    username: String,
-    password_hash: String,
-    is_enabled: bool,
+pub struct User {
+    pub username: String,
+    pub password_hash: String,
+    pub is_enabled: bool,
+    #[serde(default)]
+    pub role: UserRole,
 }
 
 /// Verify an enabled MongoDB user without minting or refreshing a session.
@@ -252,7 +264,7 @@ pub async fn verify_enabled_user(
     db: Option<&mongodb::Database>,
     username: &str,
     password: &mut String,
-) -> Result<(), CredentialVerificationError> {
+) -> Result<UserRole, CredentialVerificationError> {
     let result = match db {
         None => Err(CredentialVerificationError::AuthenticationUnavailable),
         Some(db) => {
@@ -260,7 +272,7 @@ pub async fn verify_enabled_user(
             match collection.find_one(doc! { "username": username }).await {
                 Ok(Some(user)) if verify(&mut *password, &user.password_hash).unwrap_or(false) => {
                     if user.is_enabled {
-                        Ok(())
+                        Ok(user.role)
                     } else {
                         Err(CredentialVerificationError::AccountDisabled)
                     }
@@ -287,6 +299,54 @@ pub async fn is_enabled_user(db: Option<&mongodb::Database>, username: &str) -> 
         .is_some_and(|user| user.is_enabled)
 }
 
+/// Get the enabled user's role from MongoDB.
+/// Returns None if MongoDB is unavailable, user does not exist, or account is disabled.
+pub async fn get_user_role(db: Option<&mongodb::Database>, username: &str) -> Option<UserRole> {
+    let db = db?;
+    let collection = db.collection::<User>("users");
+    let user = collection
+        .find_one(doc! { "username": username })
+        .await
+        .ok()?
+        .filter(|u| u.is_enabled)?;
+    Some(user.role)
+}
+
+/// Middleware that enforces the MongoDB administrator role on protected routes.
+/// Denies --no-auth mode and accounts without the admin role.
+pub async fn require_plugin_admin(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.no_auth {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Plugin management operations are strictly denied in --no-auth mode",
+                "code": "NoAuthForbidden",
+            })),
+        )
+            .into_response();
+    }
+
+    let actor = request.extensions().get::<AuthenticatedActor>();
+    let Some(actor) = actor else {
+        return unauthorized();
+    };
+
+    match get_user_role(state.db.as_ref(), &actor.subject).await {
+        Some(UserRole::Admin) => next.run(request).await,
+        _ => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Administrator role required for plugin management operations",
+                "code": "AdminRoleRequired",
+            })),
+        )
+            .into_response(),
+    }
+}
 /// Re-authentication accepts credentials only for the same JWT subject.
 pub async fn verify_actor_credentials(
     state: &AppState,
@@ -298,7 +358,7 @@ pub async fn verify_actor_credentials(
         password.zeroize();
         return Err(CredentialVerificationError::ActorMismatch);
     }
-    verify_enabled_user(state.db.as_ref(), username, password).await
+    verify_enabled_user(state.db.as_ref(), username, password).await.map(|_| ())
 }
 
 /// POST /api/auth/register — registers a user in mongodb
@@ -337,6 +397,7 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
         username,
         password_hash,
         is_enabled: false,
+        role: UserRole::User,
     };
     let _ = collection.insert_one(new_user).await;
 
@@ -371,6 +432,7 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
                 ok: true,
                 token: Some(jwt_token),
                 dev_mode: Some(true),
+                role: Some(UserRole::User),
             }),
         )
             .into_response();
@@ -380,22 +442,24 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         return unauthorized();
     };
     let verification = verify_enabled_user(state.db.as_ref(), &username, password).await;
-    if let Err(error) = verification {
-        let message = if error == CredentialVerificationError::AccountDisabled {
-            "Account is pending approval or disabled"
-        } else {
-            "Invalid credentials"
-        };
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody {
-                error: message.into(),
-            }),
-        )
-            .into_response();
-    }
+    let role = match verification {
+        Ok(r) => r,
+        Err(error) => {
+            let message = if error == CredentialVerificationError::AccountDisabled {
+                "Account is pending approval or disabled"
+            } else {
+                "Invalid credentials"
+            };
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorBody {
+                    error: message.into(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let logged_in_sub = username;
-
     let jwt_token = match generate_jwt(&logged_in_sub, &state.jwt_secret) {
         Ok(token) => token,
         Err(e) => {
@@ -419,11 +483,11 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
             ok: true,
             token: Some(jwt_token),
             dev_mode: None,
+            role: Some(role),
         }),
     )
         .into_response()
 }
-
 /// POST /api/auth/logout — clears auth credentials.
 pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
     if let Some(token) = extract_token(&request, &jar) {
@@ -439,6 +503,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
             ok: true,
             token: None,
             dev_mode: None,
+            role: None,
         }),
     )
         .into_response()
@@ -452,6 +517,7 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
             "authenticated": true,
             "dev_mode": true,
             "user": "dev-user",
+            "role": "user",
             "workbenchProtocol": 2
         }))
         .into_response();
@@ -461,9 +527,26 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
         .and_then(|t| authenticate_token(&t, &state.jwt_secret));
 
     if let Some(actor) = token_sub {
+        let role = match state.db.as_ref() {
+            Some(db) => match get_user_role(Some(db), &actor.subject).await {
+                Some(r) => Some(r),
+                None => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "authenticated": false,
+                            "error": "Account unavailable or disabled"
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+            None => None,
+        };
         Json(serde_json::json!({
             "authenticated": true,
             "user": actor.subject,
+            "role": role,
             "workbenchProtocol": 2
         }))
         .into_response()
@@ -475,3 +558,4 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
             .into_response()
     }
 }
+

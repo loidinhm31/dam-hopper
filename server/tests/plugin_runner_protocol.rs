@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dam_hopper_server::plugins::{
-    build_json_rpc_request, encode_frame, validate_json_rpc_message, AdminSubjectList,
+    build_json_rpc_request, encode_frame, validate_json_rpc_message,
     FrameDecoder, PluginErrorCode, PluginRegistry, PluginRegistryLayout, RunnerClient,
     RunnerClientConfig, RunnerServer, RunnerServerConfig, SupervisorManager, FRAME_HEADER_LEN,
     MAX_FRAME_PAYLOAD_BYTES, RUNNER_PROTOCOL_VERSION,
@@ -112,8 +112,7 @@ async fn test_runner_server_handshake_and_method_dispatch() {
     let registry_dir = temp_dir.path().join("registry");
 
     let layout = PluginRegistryLayout::new(&registry_dir);
-    let admin_subjects = AdminSubjectList::new(vec!["admin-user".to_string()]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
     let supervisor_manager = Arc::new(SupervisorManager::new(
         registry.clone(),
         std::path::PathBuf::from("node"),
@@ -177,10 +176,8 @@ async fn test_runner_server_rejects_mismatched_protocol_version() {
     let temp_dir = TempDir::new().unwrap();
     let socket_path = temp_dir.path().join("runner.sock");
     let registry_dir = temp_dir.path().join("registry");
-
     let layout = PluginRegistryLayout::new(&registry_dir);
-    let admin_subjects = AdminSubjectList::new(vec![]);
-    let registry = Arc::new(PluginRegistry::new(layout, admin_subjects).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
     let supervisor_manager = Arc::new(SupervisorManager::new(
         registry.clone(),
         std::path::PathBuf::from("node"),
@@ -241,7 +238,7 @@ async fn test_runner_server_peer_uid_validation() {
     let registry_dir = temp_dir.path().join("registry");
 
     let layout = PluginRegistryLayout::new(&registry_dir);
-    let registry = Arc::new(PluginRegistry::new(layout, AdminSubjectList::new(vec![])).unwrap());
+    let registry = Arc::new(PluginRegistry::new(layout).unwrap());
     let supervisor_manager = Arc::new(SupervisorManager::new(
         registry.clone(),
         std::path::PathBuf::from("node"),

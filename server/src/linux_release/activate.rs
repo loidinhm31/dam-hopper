@@ -54,12 +54,6 @@ pub(crate) fn provision_plugin_runtime(layout: &Layout) -> Result<(), ReleaseErr
     let runner = read_unit(&runner_path)?;
     let identity = super::account::resolve_api_runtime_identity(&runner)?;
     super::account::ensure_plugin_runner_state(&identity.user, &api.user)?;
-    let host_config = super::host_config::load_host_config(&layout.host_config_path())?;
-    let subjects = host_config
-        .as_ref()
-        .map(|config| config.plugin_admin_subjects.as_slice())
-        .unwrap_or_default();
-    super::account::sync_plugin_admins_file(&layout.etc_dir.join("plugin-admins.json"), subjects)?;
     super::systemd::systemd_tmpfiles_create(&layout.runner_tmpfiles_conf_path(), None)?;
     Ok(())
 }
