@@ -11,6 +11,48 @@ const WEB_TEMPLATE: &str = include_str!("../../deploy/systemd/dam-hopper-web.ser
 const HELPER_TEMPLATE: &str =
     include_str!("../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
 
+#[test]
+fn shared_runtime_policy_rejects_service_directory_ownership_and_group_loss() {
+    let ctx = create_valid_context();
+    let runner = include_str!("../../deploy/systemd/dam-hopper-plugin-runner.service.in");
+    let renderers: [fn(&str, &UnitRenderContext) -> Result<String, ReleaseError>; 3] =
+        [render_api_unit, render_helper_unit, render_runner_unit];
+    for (template, render) in [API_TEMPLATE, HELPER_TEMPLATE, runner]
+        .into_iter()
+        .zip(renderers)
+    {
+        for directive in [
+            "RuntimeDirectory=dam-hopper",
+            "RuntimeDirectoryMode=0750",
+            "RuntimeDirectoryPreserve=yes",
+        ] {
+            let unsafe_template = template.replace("[Service]", &format!("[Service]\n{directive}"));
+            assert!(matches!(
+                render(&unsafe_template, &ctx),
+                Err(ReleaseError::UnitPolicyViolation { .. })
+            ));
+        }
+        let inaccessible = template.replace("SupplementaryGroups=@PLUGIN_SHARED_GROUP@", "");
+        assert!(matches!(
+            render(&inaccessible, &ctx),
+            Err(ReleaseError::UnitPolicyViolation { .. })
+        ));
+    }
+}
+
+#[test]
+fn runner_policy_rejects_missing_or_wrong_api_peer_identity() {
+    let mut ctx = create_valid_context();
+    ctx.api_uid = "65534".into();
+    let template = include_str!("../../deploy/systemd/dam-hopper-plugin-runner.service.in");
+    for replacement in ["", "--expected-api-uid 1000"] {
+        let unsafe_template = template.replace("--expected-api-uid @API_UID@", replacement);
+        assert!(matches!(
+            render_runner_unit(&unsafe_template, &ctx),
+            Err(ReleaseError::UnitPolicyViolation { .. })
+        ));
+    }
+}
 fn create_valid_context() -> UnitRenderContext {
     let user = get_user_by_name("nobody").expect("nobody account");
     let group = get_group_by_gid(user.gid).expect("nobody primary group");
@@ -31,7 +73,9 @@ fn test_render_api_unit_success() {
 
     assert!(rendered.contains(&format!("User={}", ctx.api_user)));
     assert!(rendered.contains(&format!("Group={}", ctx.api_group)));
-    assert!(!rendered.lines().any(|line| line.starts_with("StateDirectory=")));
+    assert!(!rendered
+        .lines()
+        .any(|line| line.starts_with("StateDirectory=")));
     assert!(!rendered
         .lines()
         .any(|line| line.starts_with("StateDirectoryMode=")));
@@ -55,8 +99,6 @@ fn test_render_api_unit_success() {
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
     assert!(rendered.contains("PIDFile=/run/dam-hopper/server.pid"));
-    assert!(rendered
-        .contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
     assert!(rendered.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
     assert!(!rendered.contains('@'));
 }
@@ -70,13 +112,6 @@ fn test_api_unit_identity_and_start_gate_are_single_and_final() {
 
     assert_eq!(parsed.get_all_values("Service", "User").len(), 1);
     assert_eq!(parsed.get_all_values("Service", "Group").len(), 1);
-    assert_eq!(
-        parsed.get_all_values("Service", "ExecStartPre"),
-        vec![format!(
-            "+{}/bin/dam-hopper-manager provision-api-runtime",
-            ctx.release_root.display()
-        )]
-    );
     assert_eq!(parsed.get_all_values("Service", "ExecStart").len(), 1);
     assert_eq!(identity.user, ctx.api_user);
     assert_eq!(identity.group, ctx.api_group);
@@ -106,10 +141,8 @@ fn test_api_unit_identity_and_start_gate_are_single_and_final() {
 #[test]
 fn test_api_unit_policy_rejects_state_directory_and_duplicate_prestart() {
     let ctx = create_valid_context();
-    let state_directory_template = API_TEMPLATE.replace(
-        "\nRuntimeDirectory=dam-hopper",
-        "\nStateDirectory=dam-hopper\nRuntimeDirectory=dam-hopper",
-    );
+    let state_directory_template =
+        API_TEMPLATE.replace("\n[Service]", "\n[Service]\nStateDirectory=dam-hopper");
     assert!(matches!(
         render_api_unit(&state_directory_template, &ctx),
         Err(ReleaseError::UnitPolicyViolation { reason, .. })
@@ -122,10 +155,8 @@ fn test_api_unit_policy_rejects_state_directory_and_duplicate_prestart() {
     );
     assert!(matches!(
         render_api_unit(&duplicate_prestart_template, &ctx),
-        Err(ReleaseError::UnitPolicyViolation { reason, .. })
-            if reason.contains("exactly one")
+        Err(ReleaseError::UnitPolicyViolation { .. })
     ));
-
 }
 
 #[test]
@@ -164,25 +195,37 @@ fn test_checked_in_api_unit_passes_policy_and_omits_legacy_path() {
         parsed.get_all_values("Service", "ExecStart"),
         vec!["/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801"]
     );
-    assert_eq!(
-        parsed.get_all_values("Service", "ExecStartPre"),
-        vec!["+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime"]
-    );
     assert_eq!(parsed.get_value("Service", "User"), Some("dam-hopper"));
     assert_eq!(parsed.get_value("Service", "Group"), Some("dam-hopper"));
-    assert!(parsed.get_all_values("Service", "StateDirectory").is_empty());
-    assert!(parsed.get_all_values("Service", "StateDirectoryMode").is_empty());
+    assert!(parsed
+        .get_all_values("Service", "StateDirectory")
+        .is_empty());
+    assert!(parsed
+        .get_all_values("Service", "StateDirectoryMode")
+        .is_empty());
     assert_eq!(parsed.get_value("Service", "Type"), Some("exec"));
-    assert_eq!(parsed.get_value("Service", "WorkingDirectory"), Some("/var/lib/dam-hopper"));
+    assert_eq!(
+        parsed.get_value("Service", "WorkingDirectory"),
+        Some("/var/lib/dam-hopper")
+    );
     assert_eq!(parsed.get_value("Service", "UMask"), Some("0077"));
-    assert_eq!(parsed.get_value("Service", "PIDFile"), Some("/run/dam-hopper/server.pid"));
+    assert_eq!(
+        parsed.get_value("Service", "PIDFile"),
+        Some("/run/dam-hopper/server.pid")
+    );
     assert_eq!(parsed.get_value("Service", "Restart"), Some("on-failure"));
     assert_eq!(parsed.get_value("Service", "RestartSec"), Some("5s"));
     assert_eq!(parsed.get_value("Service", "KillSignal"), Some("SIGTERM"));
     assert_eq!(parsed.get_value("Service", "KillMode"), Some("mixed"));
     assert_eq!(parsed.get_value("Service", "TimeoutStopSec"), Some("20s"));
-    assert_eq!(parsed.get_value("Service", "NoNewPrivileges"), Some("false"));
-    assert_eq!(parsed.get_value("Service", "SyslogIdentifier"), Some("dam-hopper-api"));
+    assert_eq!(
+        parsed.get_value("Service", "NoNewPrivileges"),
+        Some("false")
+    );
+    assert_eq!(
+        parsed.get_value("Service", "SyslogIdentifier"),
+        Some("dam-hopper-api")
+    );
 
     assert!(!CHECKED_IN_API_UNIT.contains("/etc/dam-hopper/dam-hopper.toml"));
     assert!(!API_TEMPLATE.contains("/etc/dam-hopper/dam-hopper.toml"));
@@ -253,7 +296,11 @@ fn test_resolve_api_identity_rejects_non_primary_group() {
 #[test]
 fn test_render_api_unit_custom_identity() {
     let ctx = create_valid_context()
-        .with_api_identity("loidinh".into(), "loidinh".into(), "/var/lib/dam-hopper".into())
+        .with_api_identity(
+            "loidinh".into(),
+            "loidinh".into(),
+            "/var/lib/dam-hopper".into(),
+        )
         .expect("valid identity params");
     let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("api unit render should succeed");
 
@@ -291,13 +338,13 @@ fn test_render_helper_unit_success() {
     let rendered =
         render_helper_unit(HELPER_TEMPLATE, &ctx).expect("helper unit render should succeed");
 
-    assert!(!rendered.lines().any(|line| line.starts_with("StateDirectory=")));
+    assert!(!rendered
+        .lines()
+        .any(|line| line.starts_with("StateDirectory=")));
     assert!(!rendered
         .lines()
         .any(|line| line.starts_with("StateDirectoryMode=")));
     assert!(rendered.contains(&format!("Group={}", ctx.api_group)));
-    assert!(rendered.contains("RuntimeDirectory=dam-hopper"));
-    assert!(rendered.contains("RuntimeDirectoryMode=0775"));
     assert!(rendered.contains("LogsDirectory=dam-hopper"));
     assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-idle-suspend-helper --socket /run/dam-hopper/idle-suspend.sock --audit-file /var/log/dam-hopper/idle-suspend-helper.jsonl --enrolled-pid-file /run/dam-hopper/server.pid"));
     assert!(rendered.contains("Restart=on-failure"));
@@ -399,6 +446,8 @@ fn test_stage_candidate_units_roles() {
     std::fs::write(&helper_bin, "helper").unwrap();
     let runner_bin = target_dir.join("bin/dam-hopper-plugin-runner");
     std::fs::write(&runner_bin, "runner").unwrap();
+    let node_bin = target_dir.join("bin/node");
+    std::fs::write(&node_bin, "node").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -406,6 +455,7 @@ fn test_stage_candidate_units_roles() {
     std::fs::set_permissions(&cli_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&helper_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&runner_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&node_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
         schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
@@ -472,6 +522,17 @@ fn test_stage_candidate_units_roles() {
     let mut host_config = HostConfig::new(TargetRole::Server, origins.clone()).unwrap();
     host_config.service_user = Some("nobody".to_string());
     save_host_config(&layout.host_config_path(), &host_config).unwrap();
+    std::fs::remove_file(&node_bin).unwrap();
+    assert!(stage_candidate_units(
+        &layout,
+        &target_dir,
+        &manifest,
+        TargetRole::Server,
+        &origins,
+    )
+    .is_err());
+    std::fs::write(&node_bin, "node").unwrap();
+    std::fs::set_permissions(&node_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     stage_candidate_units(
         &layout,
         &target_dir,

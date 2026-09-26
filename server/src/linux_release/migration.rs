@@ -98,6 +98,7 @@ pub fn stage_migration_candidate(
     manifest: &super::manifest::ReleaseManifest,
     role: super::inventory::TargetRole,
     allow_origins: &[String],
+    host_config: &super::host_config::HostConfig,
 ) -> Result<(PathBuf, PathBuf, MigrationRecord), ReleaseError> {
     let api_version = super::legacy_format2::verify_format2_live_preflight(layout)?;
     let manifest_info = super::legacy_format2::inspect_format2_root(&layout.opt_dir, false)?;
@@ -195,18 +196,17 @@ pub fn stage_migration_candidate(
 
     let pending_units_dir = layout.transaction_pending_units_dir(tx_id);
     let pending_host_config_path = layout.transaction_pending_host_config_json_path(tx_id);
-    if let Err(error) =
-        super::stage_units::stage_candidate_units_for_release_with_render_root_and_config(
-            layout,
-            &target_dir,
-            &layout.release_role_dir(&manifest.release.tag, role.as_str()),
-            manifest,
-            role,
-            allow_origins,
-            &pending_units_dir,
-            &pending_host_config_path,
-        )
-    {
+    if let Err(error) = super::stage_units::stage_candidate_units_for_release_with_host_config(
+        layout,
+        &target_dir,
+        &layout.release_role_dir(&manifest.release.tag, role.as_str()),
+        manifest,
+        role,
+        allow_origins,
+        &pending_units_dir,
+        &pending_host_config_path,
+        host_config,
+    ) {
         cleanup_dir_if_present(&pending_units_dir, "remove failed pending unit staging")?;
         cleanup_file_if_present(
             &pending_host_config_path,

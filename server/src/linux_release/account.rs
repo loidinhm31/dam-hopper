@@ -146,113 +146,176 @@ pub fn get_group_gid_by_name(groupname: &str) -> Option<u32> {
     }
     Some(unsafe { (*grp).gr_gid })
 }
-/// Ensure that the dedicated plugin shared group exists; provisions it via groupadd if absent.
+/// Ensure the shared socket group exists and never resolves to root.
 pub fn ensure_plugin_shared_group() -> Result<(), ReleaseError> {
-    if get_group_gid_by_name(super::constants::PLUGIN_SHARED_GROUP).is_some() {
-        return Ok(());
+    let name = super::constants::PLUGIN_SHARED_GROUP;
+    if get_group_gid_by_name(name).is_none() {
+        run_account_command("groupadd", &["-r", name])?;
     }
-    let mut cmd = std::process::Command::new("groupadd");
-    cmd.args(["-r", super::constants::PLUGIN_SHARED_GROUP]);
-    let output = cmd.output().map_err(|e| ReleaseError::Io {
-        action: "execute groupadd for plugin shared group",
-        details: e.to_string(),
-    })?;
+    match get_group_gid_by_name(name) {
+        Some(gid) if gid != 0 => Ok(()),
+        _ => Err(ReleaseError::Config(format!(
+            "required plugin shared group '{name}' must resolve to a non-root GID"
+        ))),
+    }
+}
+
+fn run_account_command(program: &str, args: &[&str]) -> Result<(), ReleaseError> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|error| ReleaseError::Io {
+            action: "execute plugin account provisioning",
+            details: format!("{program}: {error}"),
+        })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if get_group_gid_by_name(super::constants::PLUGIN_SHARED_GROUP).is_none() {
+        return Err(ReleaseError::Config(format!(
+            "{program} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Only the implicit default account is manager-created. Explicit owners are
+/// verified without changing their home, primary group, or supplementary groups.
+pub fn ensure_plugin_runner_account(
+    owner: Option<&str>,
+    api_user: &str,
+) -> Result<UserInfo, ReleaseError> {
+    if let Some(owner) = owner {
+        return verify_plugin_owner_account(owner, Some(api_user));
+    }
+    let owner = "dam-hopper-plugin-runner";
+    ensure_plugin_shared_group()?;
+    if get_user_by_name(owner).is_none() {
+        run_account_command(
+            "useradd",
+            &[
+                "-r",
+                "-M",
+                "-s",
+                "/sbin/nologin",
+                "-d",
+                super::constants::DEFAULT_RUNNER_STATE_DIR,
+                "-g",
+                super::constants::PLUGIN_SHARED_GROUP,
+                owner,
+            ],
+        )?;
+    }
+    let info = verify_api_service_account(owner)?;
+    if info.home != super::constants::DEFAULT_RUNNER_STATE_DIR
+        || ![
+            "/sbin/nologin",
+            "/usr/sbin/nologin",
+            "/bin/false",
+            "/usr/bin/false",
+        ]
+        .contains(&info.shell.as_str())
+        || get_user_by_name(api_user).is_some_and(|api| api.uid == info.uid)
+        || get_user_by_name(super::constants::WEB_SERVICE_IDENTITY)
+            .is_some_and(|web| web.uid == info.uid)
+    {
+        return Err(ReleaseError::Config(
+            "default plugin runner account has unsafe identity, home, or shell".into(),
+        ));
+    }
+    provision_runner_state(
+        std::path::Path::new(super::constants::DEFAULT_RUNNER_STATE_DIR),
+        &info,
+    )?;
+    verify_plugin_owner_account(owner, Some(api_user))
+}
+
+/// Provision only runner-owned state, never a custom owner's home or account.
+pub fn ensure_plugin_runner_state(owner: &str, api_user: &str) -> Result<(), ReleaseError> {
+    let info = verify_plugin_owner_account(owner, Some(api_user))?;
+    ensure_plugin_shared_group()?;
+    provision_runner_state(
+        std::path::Path::new(super::constants::DEFAULT_RUNNER_STATE_DIR),
+        &info,
+    )
+}
+
+fn provision_runner_state(path: &std::path::Path, info: &UserInfo) -> Result<(), ReleaseError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let io_error = |error: std::io::Error| ReleaseError::Io {
+        action: "provision plugin runner state directory",
+        details: format!("{}: {error}", path.display()),
+    };
+    // Walk every ancestor through pinned descriptors; owner-controlled symlinks
+    // must never turn root provisioning into chmod/chown of an unrelated path.
+    let mut dir = std::fs::File::open("/").map_err(io_error)?;
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            if matches!(component, std::path::Component::RootDir) {
+                continue;
+            }
+            return Err(ReleaseError::Config("invalid runner state path".into()));
+        };
+        use std::os::unix::ffi::OsStrExt;
+        let name = CString::new(name.as_bytes())
+            .map_err(|_| ReleaseError::Config("runner state path contains NUL".into()))?;
+        let managed = components.peek().is_none();
+        let created = if managed {
+            let result = unsafe { libc::mkdirat(dir.as_raw_fd(), name.as_ptr(), 0o700) };
+            if result != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(io_error(error));
+                }
+            }
+            result == 0
+        } else {
+            false
+        };
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        dir = unsafe { std::fs::File::from_raw_fd(fd) };
+        let meta = dir.metadata().map_err(io_error)?;
+        if !managed {
+            if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+                return Err(ReleaseError::Config("unsafe runner state ancestor".into()));
+            }
+            continue;
+        }
+        if !created && (meta.uid() != info.uid || meta.gid() != info.gid) {
             return Err(ReleaseError::Config(format!(
-                "failed to create required plugin shared group '{}': {stderr}",
-                super::constants::PLUGIN_SHARED_GROUP
+                "runner state '{}' ownership differs from selected owner; migrate it explicitly",
+                path.display()
             )));
         }
+        if created && unsafe { libc::fchown(dir.as_raw_fd(), info.uid, info.gid) } != 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        dir.set_permissions(std::fs::Permissions::from_mode(0o700))
+            .map_err(io_error)?;
     }
-    Ok(())
+    // The runner creates its registry children itself. Do not recursively chown
+    // existing packages, and do not follow an owner-controlled plugins symlink.
+    dir.sync_all().map_err(io_error)
 }
-/// Ensure that the default plugin runner user and state directories exist on the host.
-pub fn ensure_default_plugin_runner_user_and_dir(
-    api_group: Option<&str>,
+
+/// Publish the explicit administrator allowlist, including empty deny-all policy.
+pub fn sync_plugin_admins_file(
+    admins_file: &std::path::Path,
+    admin_subjects: &[String],
 ) -> Result<(), ReleaseError> {
-    ensure_plugin_shared_group()?;
-
-    let owner_user = "dam-hopper-plugin-runner";
-    let state_dir = std::path::Path::new(super::constants::DEFAULT_RUNNER_STATE_DIR);
-
-    if get_user_by_name(owner_user).is_none() {
-        let mut cmd = std::process::Command::new("useradd");
-        cmd.args([
-            "-r",
-            "-s",
-            "/sbin/nologin",
-            "-d",
-            super::constants::DEFAULT_RUNNER_STATE_DIR,
-            "-g",
-            super::constants::PLUGIN_SHARED_GROUP,
-        ]);
-        if let Some(grp) = api_group {
-            if get_group_gid_by_name(grp).is_some() {
-                cmd.args(["-G", grp]);
-            }
-        }
-        cmd.arg(owner_user);
-        let _ = cmd.output();
-    } else if let Some(grp) = api_group {
-        if get_group_gid_by_name(grp).is_some() {
-            let mut cmd = std::process::Command::new("usermod");
-            cmd.args(["-aG", grp, owner_user]);
-            let _ = cmd.output();
-        }
-    }
-
-    if let Some(user_info) = get_user_by_name(owner_user) {
-        if !state_dir.exists() {
-            let _ = std::fs::create_dir_all(state_dir);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o700));
-            if let Ok(c_path) = std::ffi::CString::new(state_dir.to_string_lossy().as_bytes()) {
-                unsafe { libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid) };
-            }
-        }
-        let plugins_dir = state_dir.join("plugins");
-        if !plugins_dir.exists() {
-            let _ = std::fs::create_dir_all(&plugins_dir);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&plugins_dir, std::fs::Permissions::from_mode(0o700));
-            if let Ok(c_path) = std::ffi::CString::new(plugins_dir.to_string_lossy().as_bytes()) {
-                unsafe { libc::chown(c_path.as_ptr(), user_info.uid, user_info.gid) };
-            }
-        }
-    }
-
-    Ok(())
+    let json_content = serde_json::json!({ "adminSubjects": admin_subjects });
+    super::durable_fs::atomic_write_json(admins_file, &json_content, Some(0o644))
 }
-/// Synchronize plugin administrator subjects to /etc/dam-hopper/plugin-admins.json.
-pub fn sync_plugin_admins_file(admin_subjects: &[String]) -> Result<(), ReleaseError> {
-    if admin_subjects.is_empty() {
-        return Ok(());
-    }
-    let admins_file = std::path::Path::new("/etc/dam-hopper/plugin-admins.json");
-    if let Some(parent) = admins_file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let json_content = serde_json::json!({
-        "adminSubjects": admin_subjects
-    });
-    let content = serde_json::to_string_pretty(&json_content).map_err(|e| ReleaseError::Io {
-        action: "serialize plugin admins config",
-        details: e.to_string(),
-    })?;
-    super::durable_fs::atomic_write_file(admins_file, content.as_bytes(), Some(0o644))?;
-    Ok(())
-}
-
-
-
 
 /// Verify that the API service account exists, has a primary group, and is not root.
 pub fn verify_api_service_account(username: &str) -> Result<UserInfo, ReleaseError> {
@@ -376,12 +439,21 @@ pub fn verify_plugin_owner_account(
         }
     }
 
-    let user = get_user_by_name(trimmed)
-        .ok_or_else(|| ReleaseError::Config(format!("plugin owner user '{trimmed}' does not exist")))?;
+    let user = get_user_by_name(trimmed).ok_or_else(|| {
+        ReleaseError::Config(format!("plugin owner user '{trimmed}' does not exist"))
+    })?;
 
     if user.uid == 0 {
         return Err(ReleaseError::Config(format!(
             "plugin owner user '{trimmed}' cannot be root (UID 0)"
+        )));
+    }
+
+    if get_user_by_name(super::constants::WEB_SERVICE_IDENTITY)
+        .is_some_and(|web| web.uid == user.uid)
+    {
+        return Err(ReleaseError::Config(format!(
+            "plugin owner user '{trimmed}' cannot share the web service UID"
         )));
     }
 
@@ -410,7 +482,14 @@ pub fn verify_plugin_owner_account(
         )));
     }
 
-    let disallowed_homes = ["/", "/root", "/tmp", "/var/tmp", "/dev/null", "/nonexistent"];
+    let disallowed_homes = [
+        "/",
+        "/root",
+        "/tmp",
+        "/var/tmp",
+        "/dev/null",
+        "/nonexistent",
+    ];
     if disallowed_homes.contains(&user.home.as_str()) {
         return Err(ReleaseError::Config(format!(
             "plugin owner user '{trimmed}' has unsafe or restricted home directory '{}'",
@@ -432,6 +511,18 @@ pub fn verify_plugin_owner_account(
         )));
     }
 
+    let resolved_home = std::fs::canonicalize(home_path).map_err(|error| {
+        ReleaseError::Config(format!("cannot resolve plugin owner home: {error}"))
+    })?;
+    if disallowed_homes
+        .iter()
+        .any(|path| resolved_home == std::path::Path::new(path))
+    {
+        return Err(ReleaseError::Config(
+            "plugin owner home resolves to an unsafe or restricted directory".into(),
+        ));
+    }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -445,4 +536,33 @@ pub fn verify_plugin_owner_account(
     }
 
     Ok(user)
+}
+
+#[cfg(test)]
+mod provisioning_tests {
+    use super::*;
+
+    #[test]
+    fn admin_policy_escapes_subjects_and_revokes_previous_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("plugin-admins.json");
+        let subjects = vec!["subject\"with\\escapes\n".to_string()];
+        sync_plugin_admins_file(&path, &subjects).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["adminSubjects"], serde_json::json!(subjects));
+        sync_plugin_admins_file(&path, &[]).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["adminSubjects"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn admin_policy_reports_publication_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("not-a-directory");
+        std::fs::write(&parent, b"preserve").unwrap();
+        assert!(sync_plugin_admins_file(&parent.join("plugin-admins.json"), &[]).is_err());
+        assert_eq!(std::fs::read(parent).unwrap(), b"preserve");
+    }
 }

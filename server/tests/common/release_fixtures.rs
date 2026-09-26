@@ -44,10 +44,9 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         include_bytes!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
     let f11_data = b"helper binary content";
     let f12_data = b"runner binary content";
-    let f13_data =
-        include_bytes!("../../../deploy/systemd/dam-hopper-plugin-runner.service.in");
-    let f14_data =
-        include_bytes!("../../../deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in");
+    let f13_data = include_bytes!("../../../deploy/systemd/dam-hopper-plugin-runner.service.in");
+    let f14_data = include_bytes!("../../../deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in");
+    let node_data = b"node runtime content";
 
     let entries = vec![
         ("bin/dam-hopper-manager", false, &f1_data[..], 0o755),
@@ -60,6 +59,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             0o755,
         ),
         ("bin/dam-hopper-plugin-runner", false, &f12_data[..], 0o755),
+        ("bin/node", false, &node_data[..], 0o755),
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
         (
@@ -90,6 +90,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         ("web", true, &[][..], 0o755),
         ("web/index.html", false, &f8_data[..], 0o644),
         ("LICENSE", false, &f9_data[..], 0o644),
+        ("NOTICES", false, &f9_data[..], 0o644),
     ];
 
     let archive_bytes = build_archive(&entries);
@@ -127,6 +128,14 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             mode: 0o755,
             size: Some(f12_data.len() as u64),
             sha256: Some(hex::encode(Sha256::digest(f12_data))),
+        },
+        InventoryEntry {
+            path: "bin/node".to_string(),
+            kind: EntryKind::File,
+            roles: vec![ReleaseRole::Server],
+            mode: 0o755,
+            size: Some(node_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(node_data))),
         },
         InventoryEntry {
             path: "bin/dam-hopper-web".to_string(),
@@ -210,6 +219,14 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
         },
         InventoryEntry {
             path: "LICENSE".to_string(),
+            kind: EntryKind::File,
+            roles: vec![ReleaseRole::Common],
+            mode: 0o644,
+            size: Some(f9_data.len() as u64),
+            sha256: Some(hex::encode(Sha256::digest(f9_data))),
+        },
+        InventoryEntry {
+            path: "NOTICES".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Common],
             mode: 0o644,

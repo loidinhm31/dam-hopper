@@ -169,18 +169,17 @@ remain separate operational gates and are not implied by automated tests.
 
 - `dam-hopper-api.service` declares `PIDFile=/run/dam-hopper/server.pid`.
   `ExecStartPost` writes systemd `$MAINPID` after startup; `ExecStopPost`
-  removes the file on shutdown. The API unit's `UMask=0077` keeps the
-  ephemeral PID file server-private.
-- Both API unit templates and concrete units use the `dam-hopper` runtime
-  directory. The helper unit passes
+  removes the file on shutdown. Its creation command uses `umask 0027`,
+  yielding an API-owned, shared-group-readable `0640` PID file.
+- API and helper use the tmpfiles-owned shared runtime directory. The helper passes
   `/run/dam-hopper/server.pid` as `--enrolled-pid-file`; for each IPC peer it
   reads the current PID and requires the Unix peer PID to match that enrolled
   systemd MainPID (plus UID policy). A stale, missing, malformed, or mismatched
   PID fails authentication.
-- The helper service sets `RuntimeDirectoryMode=0775`; the helper socket sets
-  `DirectoryMode=0775`, `SocketGroup=dam-hopper`, and `SocketMode=0660`.
-  These modes permit the enrolled server/helper group to reach the runtime
-  socket while keeping the PID file mode controlled by the API unit.
+- Tmpfiles alone manages `/run/dam-hopper` as root/shared-group mode `3770`.
+  API, runner, and helper have shared-group access; no service declares a
+  competing `RuntimeDirectory`. The helper pins the rendered API UID and reads
+  its enrolled PID without adding broad DAC-override capabilities.
 
 ### Phase 02 status (2026-09-06)
 

@@ -286,7 +286,8 @@ fn query_unit_failure_log(unit_name: &str) -> Option<String> {
     None
 }
 
-/// Probe plugin runner socket and protocol health.
+/// Validate the runner socket pathname, permissions, and expected owner.
+/// Protocol readiness requires a separate handshake as the enrolled API identity.
 pub async fn probe_runner_health(
     socket_path: &std::path::Path,
     expected_owner_uid: Option<u32>,

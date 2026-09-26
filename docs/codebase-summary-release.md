@@ -14,18 +14,18 @@ socket with peer credentials.
 
 ### Linux runner packaging invariant and v0.5.1 release
 
-Every published Linux archive requires `bin/dam-hopper-plugin-runner`,
-`systemd/dam-hopper-plugin-runner.service`, and
-`tmpfiles.d/dam-hopper-plugin-runner.conf`. The archive builder fails before
-staging if a required input is missing and copies the three assets
-unconditionally; the release inventory gate enforces their paths and server
-role, plus an execute bit for the binary. They remain server-role entries in
-every archive and are excluded from a web-only role projection.
+Published Linux archives require `bin/dam-hopper-plugin-runner`, bundled
+`bin/node`, the runner service, and its tmpfiles rule. `NOTICES` carries the
+Node distribution license. The builder and asset gate reject missing inputs;
+Node/runner executables are server-role entries excluded from web-only installs.
+The runner uses an absolute Node path inside the immutable release.
 
-The published v0.5.0 Linux archive omitted the runner binary, so `server` and
-`both` staging fails unit verification. Release a corrected v0.5.1 tag and
-follow the [publisher checklist and operator advisory](./linux-release-publisher-bootstrap.md);
-the source fix does not alter existing v0.5.0 assets.
+The original v0.5.0 archive omitted the runner binary. Subsequent retagged
+builds included it, but version alone cannot distinguish their contents:
+inspect `release.commitSha` in the installed manifest. Production review found
+commit `93e29cc4` still installed after the `673c7535` release build succeeded.
+The newer runtime/provisioning fixes remain unpublished; prefer a new immutable
+release tag rather than replacing v0.5.0 again.
 
 ### Phase 01–02 Windows direct-server release and installer
 

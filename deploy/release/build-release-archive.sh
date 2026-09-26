@@ -138,6 +138,16 @@ if [[ ! -f "${RUNNER_BIN}" ]]; then
     exit 1
 fi
 
+# Ship the worker runtime; service accounts must not depend on an operator's PATH.
+NODE_BIN="${NODE_BIN:-$(command -v node)}"
+NODE_BIN="$(readlink -f "${NODE_BIN}")"
+NODE_LICENSE="${NODE_LICENSE:-$(dirname "$(dirname "${NODE_BIN}")")/LICENSE}"
+if [[ ! -x "${NODE_BIN}" || ! -f "${NODE_LICENSE}" ]]; then
+    echo "Error: Node distribution executable and LICENSE are required (NODE_BIN/NODE_LICENSE)" >&2
+    exit 1
+fi
+"${NODE_BIN}" -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (process.platform !== "linux" || process.arch !== "x64" || major < 22 || (major === 22 && minor < 19)) process.exit(1)'
+
 
 if [[ ! -d "${WEB_DIST}" || ! -f "${WEB_DIST}/index.html" ]]; then
     echo "Error: Web dist directory '${WEB_DIST}' does not exist or lacks index.html" >&2
@@ -191,6 +201,11 @@ chmod 0755 "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 
 cp -p "${RUNNER_BIN}" "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
 chmod 0755 "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
+
+cp -p "${NODE_BIN}" "${TMP_STAGE}/bin/node"
+chmod 0755 "${TMP_STAGE}/bin/node"
+cp -p "${NODE_LICENSE}" "${TMP_STAGE}/NOTICES"
+chmod 0644 "${TMP_STAGE}/NOTICES"
 # Copy systemd units and sysusers
 cp -p "${API_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-api.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-api.service"

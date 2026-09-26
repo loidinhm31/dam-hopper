@@ -23,11 +23,16 @@ fn test_verify_plugin_owner_account_rejects_empty_and_root() {
 
 #[test]
 fn test_verify_plugin_owner_account_rejects_api_and_web_identities() {
-    let err_web = verify_plugin_owner_account(WEB_SERVICE_IDENTITY, Some("dam-hopper")).unwrap_err();
-    assert!(matches!(err_web, ReleaseError::Config(msg) if msg.contains("cannot be the web service user")));
+    let err_web =
+        verify_plugin_owner_account(WEB_SERVICE_IDENTITY, Some("dam-hopper")).unwrap_err();
+    assert!(
+        matches!(err_web, ReleaseError::Config(msg) if msg.contains("cannot be the web service user"))
+    );
 
     let err_api = verify_plugin_owner_account("dam-hopper", Some("dam-hopper")).unwrap_err();
-    assert!(matches!(err_api, ReleaseError::Config(msg) if msg.contains("cannot be the API service user")));
+    assert!(
+        matches!(err_api, ReleaseError::Config(msg) if msg.contains("cannot be the API service user"))
+    );
 }
 
 #[test]
@@ -42,7 +47,11 @@ fn test_verify_plugin_owner_account_accepts_current_non_root_user() {
     let current_user = std::env::var("USER").unwrap_or_default();
     if current_user != "root" && !current_user.is_empty() {
         let result = verify_plugin_owner_account(&current_user, Some("nonexistent_api_user"));
-        assert!(result.is_ok(), "Current user should pass validation: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Current user should pass validation: {:?}",
+            result
+        );
         let user_info = result.unwrap();
         assert_ne!(user_info.uid, 0);
         assert_ne!(user_info.gid, 0);
@@ -91,50 +100,17 @@ fn test_runner_unit_policy_rejects_missing_hardening() {
     let release_root = root.path().join("opt/dam-hopper/releases/v0.1.0/server");
     let public_cfg = root.path().join("etc/dam-hopper/public.json");
 
-    let ctx = UnitRenderContext::new(
-        release_root,
-        "0.1.0".to_string(),
-        public_cfg,
-        vec![],
-    )
-    .unwrap();
+    let ctx =
+        UnitRenderContext::new(release_root, "0.1.0".to_string(), public_cfg, vec![]).unwrap();
 
-    // Template missing NoNewPrivileges
-    let bad_template = r#"
-[Unit]
-Description=Bad Runner
-
-[Service]
-Type=simple
-User=dam-hopper-plugin-runner
-Group=dam-hopper-plugins
-WorkingDirectory=/var/lib/dam-hopper-plugin-runner
-RuntimeDirectory=dam-hopper
-RuntimeDirectoryMode=0750
-Restart=on-failure
-RestartSec=3s
-KillSignal=SIGTERM
-KillMode=mixed
-TimeoutStopSec=15s
-UMask=0027
-MemoryMax=1G
-TasksMax=64
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictRealtime=true
-RestrictSUIDSGID=true
-SyslogIdentifier=dam-hopper-plugin-runner
-ExecStart=/opt/dam-hopper/bin/dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir /var/lib/dam-hopper-plugin-runner/plugins --node-bin /bin/node
-
-[Install]
-WantedBy=multi-user.target
-"#;
-
-    let parsed = ParsedUnit::parse(bad_template).unwrap();
+    let bad_template = include_str!("../../deploy/systemd/dam-hopper-plugin-runner.service.in")
+        .replace("NoNewPrivileges=true", "");
+    let rendered = dam_hopper_server::linux_release::render_unit(&bad_template, &ctx).unwrap();
+    let parsed = ParsedUnit::parse(&rendered).unwrap();
     let err = validate_runner_unit_policy(&parsed, &ctx).unwrap_err();
-    assert!(matches!(err, ReleaseError::UnitPolicyViolation { reason, .. } if reason.contains("NoNewPrivileges")));
+    assert!(
+        matches!(err, ReleaseError::UnitPolicyViolation { reason, .. } if reason.contains("NoNewPrivileges"))
+    );
 }
 
 #[test]
@@ -178,7 +154,10 @@ fn test_manager_state_schema_migration_preserves_plugin_fields() {
     let reloaded = load_or_init_manager_state(&state_path).expect("reload state");
     assert_eq!(reloaded.schema_version, MANAGER_STATE_SCHEMA_VERSION);
     let reloaded_active = reloaded.active.unwrap();
-    assert_eq!(reloaded_active.plugin_owner_user.as_deref(), Some("advisor-owner"));
+    assert_eq!(
+        reloaded_active.plugin_owner_user.as_deref(),
+        Some("advisor-owner")
+    );
     assert_eq!(reloaded_active.plugin_owner_uid, Some(1005));
     assert_eq!(reloaded_active.plugin_platform_enabled, Some(true));
 }
@@ -188,5 +167,8 @@ async fn test_probe_runner_health_transient_when_socket_missing() {
     let root = tempdir().unwrap();
     let missing_sock = root.path().join("nonexistent.sock");
     let outcome = probe_runner_health(&missing_sock, Some(1000)).await;
-    assert!(matches!(outcome, dam_hopper_server::linux_release::HttpProbeOutcome::Transient(_)));
+    assert!(matches!(
+        outcome,
+        dam_hopper_server::linux_release::HttpProbeOutcome::Transient(_)
+    ));
 }

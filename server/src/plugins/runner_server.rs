@@ -86,8 +86,12 @@ impl RunnerServer {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ =
-                fs::set_permissions(&self.config.socket_path, fs::Permissions::from_mode(0o660));
+            fs::set_permissions(&self.config.socket_path, fs::Permissions::from_mode(0o660))
+                .map_err(|e| {
+                    PluginError::runner_unavailable(format!(
+                        "Failed to set runner socket permissions: {e}"
+                    ))
+                })?;
         }
 
         tracing::info!(

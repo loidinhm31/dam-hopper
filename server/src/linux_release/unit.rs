@@ -73,6 +73,7 @@ impl UnitRenderContext {
         validate_version(&release_version)?;
         let validated_origins = validate_web_origins(&api_origins)?;
 
+        let node_bin = release_root.join("bin/node").display().to_string();
         Ok(Self {
             release_root,
             release_version,
@@ -85,7 +86,7 @@ impl UnitRenderContext {
             advisor_owner_group: super::constants::PLUGIN_SHARED_GROUP.to_string(),
             advisor_owner_home: "/var/lib/dam-hopper-plugin-runner".to_string(),
             dam_hopper_state_dir: super::constants::DEFAULT_RUNNER_STATE_DIR.to_string(),
-            node_bin: "node".to_string(),
+            node_bin,
             api_uid: "1000".to_string(),
             plugin_shared_group: super::constants::PLUGIN_SHARED_GROUP.to_string(),
         })

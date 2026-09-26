@@ -73,18 +73,18 @@ pub fn determine_host_role_with_plugins(
 ) -> Result<(TargetRole, HostConfig), ReleaseError> {
     let existing_config = load_host_config(&layout.host_config_path())?;
 
-    let (owner, admins) = if plugin_owner_user.is_some() || !plugin_admin_subjects.is_empty() {
-        (plugin_owner_user, plugin_admin_subjects.to_vec())
+    let owner = plugin_owner_user.or_else(|| {
+        existing_config
+            .as_ref()
+            .and_then(|config| config.plugin_owner_user.clone())
+    });
+    let admins = if plugin_admin_subjects.is_empty() {
+        existing_config
+            .as_ref()
+            .map(|config| config.plugin_admin_subjects.clone())
+            .unwrap_or_default()
     } else {
-        (
-            existing_config
-                .as_ref()
-                .and_then(|c| c.plugin_owner_user.clone()),
-            existing_config
-                .as_ref()
-                .map(|c| c.plugin_admin_subjects.clone())
-                .unwrap_or_default(),
-        )
+        plugin_admin_subjects.to_vec()
     };
 
     if is_role_set {
@@ -156,4 +156,57 @@ pub fn resolve_host_role(
     let (role, config) = determine_host_role(layout, requested_role, allow_origins, is_role_set)?;
     persist_host_role(layout, &config)?;
     Ok(role)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_options_preserve_independently_omitted_host_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(root.path());
+        let original = HostConfig::new(TargetRole::Server, vec![])
+            .unwrap()
+            .with_plugin_config(Some("existing-owner".into()), vec!["existing-admin".into()]);
+        save_host_config(&layout.host_config_path(), &original).unwrap();
+
+        for role_set in [false, true] {
+            let (_, changed_admins) = determine_host_role_with_plugins(
+                &layout,
+                Some(TargetRole::Server),
+                &[],
+                role_set,
+                None,
+                &["new-admin".into()],
+            )
+            .unwrap();
+            assert_eq!(changed_admins.plugin_owner_user, original.plugin_owner_user);
+            assert_eq!(changed_admins.plugin_admin_subjects, ["new-admin"]);
+
+            let (_, changed_owner) = determine_host_role_with_plugins(
+                &layout,
+                Some(TargetRole::Server),
+                &[],
+                role_set,
+                Some("new-owner".into()),
+                &[],
+            )
+            .unwrap();
+            assert_eq!(
+                changed_owner.plugin_owner_user.as_deref(),
+                Some("new-owner")
+            );
+            assert_eq!(
+                changed_owner.plugin_admin_subjects,
+                original.plugin_admin_subjects
+            );
+        }
+        assert_eq!(
+            load_host_config(&layout.host_config_path())
+                .unwrap()
+                .unwrap(),
+            original
+        );
+    }
 }

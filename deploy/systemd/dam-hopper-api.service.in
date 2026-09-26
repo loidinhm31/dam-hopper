@@ -8,8 +8,6 @@ Type=exec
 User=@API_USER@
 Group=@API_GROUP@
 SupplementaryGroups=@PLUGIN_SHARED_GROUP@
-RuntimeDirectory=dam-hopper
-RuntimeDirectoryPreserve=yes
 PIDFile=/run/dam-hopper/server.pid
 WorkingDirectory=@API_HOME@
 Environment=HOME=@API_HOME@
@@ -22,9 +20,10 @@ Environment=GIT_CONFIG_VALUE_0=*
 Environment=DAM_HOPPER_CORS_ORIGINS=@API_ORIGINS@
 EnvironmentFile=-/etc/dam-hopper/server.env
 EnvironmentFile=-/etc/dam-hopper/server-safety.env
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf
 ExecStartPre=+@RELEASE_ROOT@/bin/dam-hopper-manager provision-api-runtime
 ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801
-ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'
+ExecStartPost=/usr/bin/sh -c 'umask 0027; echo $MAINPID > /run/dam-hopper/server.pid'
 ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid
 Restart=on-failure
 RestartSec=5s

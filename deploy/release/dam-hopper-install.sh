@@ -312,13 +312,6 @@ if [[ "${MANAGER_MODE}" != "755" ]]; then
     exit 1
 fi
 
-if [[ ${#PLUGIN_ADMIN_SUBJECTS[@]} -eq 0 && ("${ROLE}" == "server" || "${ROLE}" == "both") ]]; then
-    PLUGIN_ADMIN_SUBJECTS+=("${REPO_OWNER}")
-    ACTOR="${SUDO_USER:-$USER}"
-    if [[ -n "${ACTOR}" && "${ACTOR}" != "root" && "${ACTOR}" != "${REPO_OWNER}" ]]; then
-        PLUGIN_ADMIN_SUBJECTS+=("${ACTOR}")
-    fi
-fi
 
 # Execute manager install via sudo
 INSTALL_CMD=("${MANAGER_BIN}" "install" "--bundle" "${BUNDLE_DIR}" "--role" "${ROLE}")
@@ -370,72 +363,10 @@ echo "============================================================"
 
 
 if [[ $EUID -eq 0 ]]; then
-    if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
-        PLUGIN_USER="${PLUGIN_OWNER_USER:-dam-hopper-plugin-runner}"
-        getent group dam-hopper-plugins >/dev/null 2>&1 || groupadd -r dam-hopper-plugins 2>/dev/null || true
-        API_GRP="$(id -gn "${SERVICE_USER:-${SUDO_USER:-$USER}}" 2>/dev/null || echo "")"
-        if ! id "${PLUGIN_USER}" >/dev/null 2>&1; then
-            if [[ -n "${API_GRP}" ]]; then
-                useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins -G "${API_GRP}" "${PLUGIN_USER}" 2>/dev/null || true
-            else
-                useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins "${PLUGIN_USER}" 2>/dev/null || true
-            fi
-        elif [[ -n "${API_GRP}" ]]; then
-            usermod -aG "${API_GRP}" "${PLUGIN_USER}" 2>/dev/null || true
-        fi
-        mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
-        chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
-
-        ADMIN_JSON="{\"adminSubjects\":["
-        FIRST_ADMIN=1
-        for a in "${PLUGIN_ADMIN_SUBJECTS[@]}"; do
-            if [[ ${FIRST_ADMIN} -eq 1 ]]; then
-                ADMIN_JSON+="\"${a}\""
-                FIRST_ADMIN=0
-            else
-                ADMIN_JSON+=",\"${a}\""
-            fi
-        done
-        ADMIN_JSON+="]}"
-        mkdir -p /etc/dam-hopper
-        echo "${ADMIN_JSON}" > /etc/dam-hopper/plugin-admins.json
-        chmod 0644 /etc/dam-hopper/plugin-admins.json
-    fi
     "${INSTALL_CMD[@]}"
     mkdir -p -m 0755 /usr/local/bin
     install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper
 else
-    if [[ "${ROLE}" == "server" || "${ROLE}" == "both" ]]; then
-        PLUGIN_USER="${PLUGIN_OWNER_USER:-dam-hopper-plugin-runner}"
-        sudo getent group dam-hopper-plugins >/dev/null 2>&1 || sudo groupadd -r dam-hopper-plugins 2>/dev/null || true
-        API_GRP="$(id -gn "${SERVICE_USER:-${SUDO_USER:-$USER}}" 2>/dev/null || echo "")"
-        if ! id "${PLUGIN_USER}" >/dev/null 2>&1; then
-            if [[ -n "${API_GRP}" ]]; then
-                sudo useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins -G "${API_GRP}" "${PLUGIN_USER}" 2>/dev/null || true
-            else
-                sudo useradd -r -s /sbin/nologin -d /var/lib/dam-hopper-plugin-runner -g dam-hopper-plugins "${PLUGIN_USER}" 2>/dev/null || true
-            fi
-        elif [[ -n "${API_GRP}" ]]; then
-            sudo usermod -aG "${API_GRP}" "${PLUGIN_USER}" 2>/dev/null || true
-        fi
-        sudo mkdir -p -m 0700 /var/lib/dam-hopper-plugin-runner/plugins
-        sudo chown -R "${PLUGIN_USER}:dam-hopper-plugins" /var/lib/dam-hopper-plugin-runner 2>/dev/null || true
-
-        ADMIN_JSON="{\"adminSubjects\":["
-        FIRST_ADMIN=1
-        for a in "${PLUGIN_ADMIN_SUBJECTS[@]}"; do
-            if [[ ${FIRST_ADMIN} -eq 1 ]]; then
-                ADMIN_JSON+="\"${a}\""
-                FIRST_ADMIN=0
-            else
-                ADMIN_JSON+=",\"${a}\""
-            fi
-        done
-        ADMIN_JSON+="]}"
-        sudo mkdir -p /etc/dam-hopper
-        echo "${ADMIN_JSON}" | sudo tee /etc/dam-hopper/plugin-admins.json > /dev/null
-        sudo chmod 0644 /etc/dam-hopper/plugin-admins.json
-    fi
     sudo "${INSTALL_CMD[@]}"
     sudo mkdir -p -m 0755 /usr/local/bin
     sudo install -m 0755 "${MANAGER_BIN}" /usr/local/bin/dam-hopper

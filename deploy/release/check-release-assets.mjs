@@ -58,6 +58,8 @@ const REQUIRED_INVENTORY_PATHS = Object.freeze([
   "bin/dam-hopper-server",
   "bin/dam-hopper-idle-suspend-helper",
   "bin/dam-hopper-plugin-runner",
+  "bin/node",
+  "NOTICES",
   "bin/dam-hopper-web",
   "web",
   "systemd/dam-hopper-api.service",
@@ -263,6 +265,7 @@ function validateInventory(inventory, label) {
       case "bin/dam-hopper-server":
       case "bin/dam-hopper-idle-suspend-helper":
       case "bin/dam-hopper-plugin-runner":
+      case "bin/node":
         if (!isFile) failMigration(`${entryLabel} must be a file`);
         requires("server", true);
         break;

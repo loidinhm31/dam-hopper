@@ -9,12 +9,11 @@ Type=simple
 # Owner UID execution: runner runs as the configured non-root advisor owner
 User=@ADVISOR_OWNER_USER@
 Group=@ADVISOR_OWNER_GROUP@
-SupplementaryGroups=@API_GROUP@
+SupplementaryGroups=@PLUGIN_SHARED_GROUP@
 
-# Restrictive runtime directory shared with API service
-RuntimeDirectory=dam-hopper
-RuntimeDirectoryMode=0750
-RuntimeDirectoryPreserve=yes
+# Tmpfiles is the sole owner of the shared socket directory.
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf
+ReadWritePaths=/run/dam-hopper
 
 # State directory for durable plugin registry and packages
 StateDirectory=dam-hopper-plugin-runner

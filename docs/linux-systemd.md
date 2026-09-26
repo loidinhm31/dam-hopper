@@ -65,16 +65,19 @@ coordinated by a root-only recovery unit:
 - `web`: Deploys only `dam-hopper-web.service` (listening on `0.0.0.0:4802`).
 - `both`: Deploys server and web units in lockstep.
 
-`dam-hopper-plugin-runner.service` runs as the explicit non-root
-`--plugin-owner-user` account. `install` and `role set` accept repeatable
-`--plugin-admin-subject SUBJECT` values; omitted plugin arguments inherit
-`/etc/dam-hopper/host.toml`. The rendered tmpfiles contract is:
-`d /run/dam-hopper 0750 @API_USER@ @PLUGIN_SHARED_GROUP@ -` and
-`d /run/dam-hopper/plugin-runner 0750 @ADVISOR_OWNER_USER@ @PLUGIN_SHARED_GROUP@ -`.
+`dam-hopper-plugin-runner.service` runs as the automatically provisioned default
+account, or a validated existing `--plugin-owner-user` account. Explicit
+`--plugin-admin-subject SUBJECT` values seed administration; omitted plugin
+arguments independently inherit `/etc/dam-hopper/host.toml`.
+The sole runtime-directory owner is tmpfiles:
+`d /run/dam-hopper 3770 root @PLUGIN_SHARED_GROUP@ -`.
+All three services run privileged tmpfiles prestarts and use the shared group;
+none declares `RuntimeDirectory` for that path.
 
-The recovery unit is staged for every role. The helper and runner are
-server-role companions started before the API; startup/enablement failures are
-warnings so non-plugin API operations remain available.
+The recovery unit is staged for every role. Helper and runner are server-role
+companions started before the API. Runner provisioning/start/enable failures
+block activation, and its socket is checked after HTTP stabilization. The
+optional idle-suspend helper retains warning-only startup behavior.
 
 ---
 
@@ -460,7 +463,7 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
   - `ProtectHome=yes`
   - `PrivateTmp=yes`
   - `CapabilityBoundingSet=CAP_WAKE_ALARM`
-- **Socket permissions**: The service uses `RuntimeDirectory=dam-hopper` with mode `0775`; the helper binds the socket and sets mode `0660`.
+- **Socket permissions**: Tmpfiles owns the shared directory (`root:dam-hopper-plugins`, `3770`); the helper binds its socket with mode `0660`. The API PID file is API-owned, shared-group-readable (`0640`), and enrollment pins the actual API UID as well as the PID.
 - **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The Phase 03 release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: The single `/var/log/dam-hopper/idle-suspend-helper.jsonl`

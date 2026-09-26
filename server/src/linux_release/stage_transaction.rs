@@ -12,7 +12,7 @@ use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
 use super::stage::PendingState;
 use super::stage::{determine_host_role_with_plugins, persist_host_role};
-use super::stage_units::stage_candidate_units_for_release_with_render_root_and_config;
+use super::stage_units::stage_candidate_units_for_release_with_host_config;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -144,6 +144,7 @@ pub fn stage_release_bundle_with_options(
             &manifest,
             role,
             allow_origins,
+            &host_config,
         )?;
         (t, u, Some(m))
     } else {
@@ -186,7 +187,7 @@ pub fn stage_release_bundle_with_options(
             )));
         }
         let pending_units_dir = layout.transaction_pending_units_dir(&tx_id);
-        if let Err(stage_error) = stage_candidate_units_for_release_with_render_root_and_config(
+        if let Err(stage_error) = stage_candidate_units_for_release_with_host_config(
             layout,
             &target_dir,
             &target_dir,
@@ -195,6 +196,7 @@ pub fn stage_release_bundle_with_options(
             allow_origins,
             &pending_units_dir,
             &pending_host_config_path,
+            &host_config,
         ) {
             let cleanup_result =
                 remove_dir_if_present(&target_dir, "remove failed release staging")
@@ -231,9 +233,6 @@ pub fn stage_release_bundle_with_options(
             previous_host_config.as_ref(),
         ));
     }
-    if role.includes_server() && !host_config.plugin_admin_subjects.is_empty() {
-        let _ = super::account::sync_plugin_admins_file(&host_config.plugin_admin_subjects);
-    }
 
     let digests = (|| {
         let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
@@ -265,21 +264,20 @@ pub fn stage_release_bundle_with_options(
         runner_unit_sha256,
         runner_tmpfiles_sha256,
         host_config_sha256,
-    ) =
-        match digests {
-            Ok(digests) => digests,
-            Err(error) => {
-                return Err(cleanup_staging_failure(
-                    error,
-                    layout,
-                    &target_dir,
-                    &pending_units_dir,
-                    &pending_host_config_path,
-                    migration_opt.as_ref(),
-                    previous_host_config.as_ref(),
-                ));
-            }
-        };
+    ) = match digests {
+        Ok(digests) => digests,
+        Err(error) => {
+            return Err(cleanup_staging_failure(
+                error,
+                layout,
+                &target_dir,
+                &pending_units_dir,
+                &pending_host_config_path,
+                migration_opt.as_ref(),
+                previous_host_config.as_ref(),
+            ));
+        }
+    };
 
     let pending_record = super::state_record::PendingCandidateRecord {
         tag: manifest.release.tag.clone(),

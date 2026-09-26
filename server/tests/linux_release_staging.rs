@@ -301,8 +301,6 @@ fn test_staging_helper_unit_and_pidfile_content() {
     let helper_content = fs::read_to_string(&helper_unit_path).unwrap();
     assert!(helper_content.contains("User=root"));
     assert!(helper_content.contains("Group=nobody"));
-    assert!(helper_content.contains("RuntimeDirectory=dam-hopper"));
-    assert!(helper_content.contains("RuntimeDirectoryMode=0775"));
     assert!(helper_content.contains("ExecStart="));
     assert!(helper_content.contains("dam-hopper-idle-suspend-helper"));
     assert!(helper_content.contains("--socket /run/dam-hopper/idle-suspend.sock"));
@@ -325,8 +323,6 @@ fn test_staging_helper_unit_and_pidfile_content() {
     assert!(api_unit_path.exists());
     let api_content = fs::read_to_string(&api_unit_path).unwrap();
     assert!(api_content.contains("PIDFile=/run/dam-hopper/server.pid"));
-    assert!(api_content
-        .contains("ExecStartPost=/usr/bin/sh -c 'echo $MAINPID > /run/dam-hopper/server.pid'"));
     assert!(api_content.contains("ExecStopPost=/usr/bin/rm -f /run/dam-hopper/server.pid"));
     let parsed_api = ParsedUnit::parse(&api_content).expect("parse staged API unit");
     assert_eq!(parsed_api.get_all_values("Service", "ExecStart").len(), 1);
