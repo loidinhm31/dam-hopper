@@ -8,7 +8,6 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use bcrypt::{hash, verify, DEFAULT_COST};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -54,12 +53,6 @@ pub(crate) fn unauthorized() -> Response {
 // Token / JWT helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    exp: usize,
-}
-
 /// Identity established by the protected-route middleware.
 ///
 /// This intentionally contains no bearer material. Sensitive routes use it to
@@ -68,6 +61,11 @@ struct Claims {
 pub struct AuthenticatedActor {
     pub subject: String,
     pub exp: Option<usize>,
+    pub session_id: Option<String>,
+    pub auth_version: Option<i64>,
+    pub credential_version: Option<i64>,
+    pub effective_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    pub role: Option<UserRole>,
 }
 
 impl AuthenticatedActor {
@@ -75,6 +73,43 @@ impl AuthenticatedActor {
         Self {
             subject: subject.into(),
             exp,
+            session_id: None,
+            auth_version: None,
+            credential_version: None,
+            effective_deadline: None,
+            role: None,
+        }
+    }
+
+    pub fn with_session(
+        subject: impl Into<String>,
+        exp: Option<usize>,
+        session_id: impl Into<String>,
+        auth_version: i64,
+        credential_version: i64,
+        effective_deadline: chrono::DateTime<chrono::Utc>,
+        role: UserRole,
+    ) -> Self {
+        Self {
+            subject: subject.into(),
+            exp,
+            session_id: Some(session_id.into()),
+            auth_version: Some(auth_version),
+            credential_version: Some(credential_version),
+            effective_deadline: Some(effective_deadline),
+            role: Some(role),
+        }
+    }
+
+    pub fn dev_user() -> Self {
+        Self {
+            subject: "dev-user".to_string(),
+            exp: None,
+            session_id: None,
+            auth_version: None,
+            credential_version: None,
+            effective_deadline: None,
+            role: Some(UserRole::User),
         }
     }
 }
@@ -121,47 +156,6 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
     extract_token_and_mechanism(request, jar).map(|(token, _)| token)
 }
 
-pub fn validate_jwt(provided: &str, secret: &str) -> bool {
-    validated_claims(provided, secret).is_some()
-}
-
-pub fn authenticate_token(provided: &str, secret: &str) -> Option<AuthenticatedActor> {
-    validated_claims(provided, secret).map(|c| AuthenticatedActor {
-        subject: c.sub,
-        exp: Some(c.exp),
-    })
-}
-
-fn validated_claims(provided: &str, secret: &str) -> Option<Claims> {
-    let mut validation = Validation::default();
-    validation.validate_exp = true;
-    decode::<Claims>(
-        provided,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )
-    .ok()
-    .map(|token| token.claims)
-}
-
-/// Generate JWT token for a given subject (username) with 30-day expiration.
-///
-/// Returns `Ok(token)` on success, or `Err` if encoding fails.
-/// Callers should handle errors appropriately (log and return error response).
-fn generate_jwt(subject: &str, secret: &str) -> anyhow::Result<String> {
-    let exp = (chrono::Utc::now().timestamp() as usize) + 30 * 24 * 3600;
-    let claims = Claims {
-        sub: subject.to_string(),
-        exp,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .map_err(|e| anyhow::anyhow!("JWT encoding failed: {}", e))
-}
 
 // ---------------------------------------------------------------------------
 // Auth middleware
@@ -176,10 +170,7 @@ pub async fn require_auth(
 ) -> Response {
     // Dev mode has a fixed actor so ticket binding remains identical to production.
     if state.no_auth {
-        request.extensions_mut().insert(AuthenticatedActor {
-            subject: "dev-user".into(),
-            exp: None,
-        });
+        request.extensions_mut().insert(AuthenticatedActor::dev_user());
         request
             .extensions_mut()
             .insert(CredentialMechanism::NoAuthDev);
@@ -190,17 +181,60 @@ pub async fn require_auth(
         return unauthorized();
     };
 
-    let Some(claims) = validated_claims(&token, &state.jwt_secret) else {
+    let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) else {
         return unauthorized();
     };
 
-    request.extensions_mut().insert(AuthenticatedActor {
-        subject: claims.sub,
-        exp: Some(claims.exp),
-    });
-    request.extensions_mut().insert(mechanism);
-
-    next.run(request).await
+    match state.auth_service.evaluate_claims(&claims).await {
+        AuthDecision::Authenticated { session, user } => {
+            let expires_at = bson_to_chrono(session.expires_at);
+            let mfa_verified_at = bson_to_chrono(session.mfa_verified_at);
+            let effective_deadline = compute_mfa_due_at(mfa_verified_at, expires_at);
+            let actor = AuthenticatedActor::with_session(
+                user.username.clone(),
+                Some(expires_at.timestamp() as usize),
+                session.id.clone(),
+                session.auth_version,
+                session.credential_version,
+                effective_deadline,
+                user.role,
+            );
+            request.extensions_mut().insert(actor);
+            request.extensions_mut().insert(mechanism);
+            next.run(request).await
+        }
+        AuthDecision::MfaRequired { .. } => {
+            auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                "MFA_REQUIRED",
+                "MFA verification required",
+                None,
+            )
+        }
+        AuthDecision::FullLoginRequired { reason } => {
+            let code = if reason.contains("expired") {
+                "SESSION_EXPIRED"
+            } else if reason.contains("revoked")
+                || reason.contains("superseded")
+                || reason.contains("version")
+            {
+                "SESSION_REVOKED"
+            } else if reason.contains("disabled") {
+                "ACCOUNT_DISABLED"
+            } else {
+                "AUTH_REQUIRED"
+            };
+            auth_error_response(StatusCode::UNAUTHORIZED, code, reason, None)
+        }
+        AuthDecision::Unavailable { reason } => {
+            auth_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "AUTH_UNAVAILABLE",
+                format!("Authentication backend unavailable: {reason}"),
+                None,
+            )
+        }
+    }
 }
 
 /// Middleware that enforces bearer token authentication for protected management operations
@@ -406,7 +440,18 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
     // Explicit dev mode (--no-auth): return token immediately without credentials check
     if state.no_auth {
         let user = body.username.as_deref().unwrap_or("dev-user");
-        let jwt_token = match generate_jwt(user, &state.jwt_secret) {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let exp = now + 30 * 24 * 3600;
+        let claims = AuthClaims {
+            v: AUTH_PROTOCOL_VERSION,
+            sub: user.to_string(),
+            sid: "dev-session".to_string(),
+            auth_version: 0,
+            credential_version: 0,
+            iat: now,
+            exp,
+        };
+        let jwt_token = match claims.encode(&state.jwt_secret) {
             Ok(token) => token,
             Err(e) => {
                 tracing::error!("Dev mode JWT generation failed: {}", e);
@@ -418,7 +463,6 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
                 );
             }
         };
-
         let cookie_attrs = auth_cookie_header(&jwt_token, false);
         let mut response = (
             StatusCode::OK,
@@ -615,8 +659,9 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                 let _ = store.revoke_session(&claims.sid, now).await;
             }
             state.plugin_service.revoke_actor(&claims.sub).await;
-        } else if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
-            state.plugin_service.revoke_actor(&actor.subject).await;
+            state
+                .media_tickets
+                .revoke_by_actor_or_session(&claims.sub, Some(&claims.sid));
         }
     }
     let clear = auth_cookie_header("", true);
@@ -678,27 +723,6 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
     };
 
     let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) else {
-        // Fallback for tests running without DB where store is None:
-        if state.auth_service.store().is_none() {
-            if let Some(actor) = authenticate_token(&token, &state.jwt_secret) {
-                let mut resp = (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "authenticated": true,
-                        "user": actor.subject,
-                        "role": UserRole::User,
-                        "workbenchProtocol": 2,
-                        "authProtocol": AUTH_PROTOCOL_VERSION,
-                    })),
-                )
-                    .into_response();
-                resp.headers_mut().insert(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("no-store"),
-                );
-                return resp;
-            }
-        }
         let mut resp = (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({

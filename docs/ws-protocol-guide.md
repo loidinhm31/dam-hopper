@@ -519,8 +519,14 @@ On conflict:
 - fs:event, terminal:output fan-out to all subscribed clients
 - No ACK required by receiver
 
-**Connection Lifecycle:**
-
-- Auth: append `?token={bearer_token}` to WS URL
-- Server validates token before accepting messages
-- Graceful close on auth failure or idle timeout
+- Authenticated handshakes validate the V2 session policy from the query token
+  or auth cookie, subject to the configured origin checks. Legacy or stale
+  sessions are rejected before upgrade.
+- Open sockets check the effective auth deadline on inbound frames and before
+  outbound writes; a five-second watcher rechecks persisted session state with
+  a two-second lookup timeout. Close codes: `4403` MFA required, `4401` full
+  login required, `1013` auth state unavailable; `4001` remains queue overflow.
+  Auth close is a WebSocket close frame, not a JSON `kind` message.
+- Revocation observed by the watcher can take up to seven seconds to close an
+  existing socket. Inbound dispatch/commit checks the local session lease/
+  deadline, not MongoDB per frame; the watcher covers persisted revocation.

@@ -89,13 +89,15 @@ impl ImageStreamTicketStore {
         client_id: &MediaClientId,
         existing: Option<MediaSessionToken>,
         record: ImageTicketRecord,
+        auth_context: Option<&super::media_ticket::MediaAuthContext>,
     ) -> Result<(ImageTicketLease, super::media_session::MediaSessionLease), ImageTicketIssue> {
-        match self.media.issue_bound(
+        match self.media.issue_bound_with_context(
             expected_generation,
             actor_subject,
             client_id,
             existing,
             record.into_media(),
+            auth_context,
         ) {
             MediaTicketBoundIssue::Issued(lease) => Ok((
                 ImageTicketLease {

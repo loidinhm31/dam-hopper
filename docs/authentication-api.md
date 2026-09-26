@@ -1,4 +1,4 @@
-# Authentication API (Phase 02)
+# Authentication API and Protected Access (Phases 02–03)
 
 This reference covers password login, TOTP enrollment and verification, MFA step-up, session status, and logout. JSON field names use `camelCase`; timestamps are RFC 3339 UTC strings. Auth handler responses set `Cache-Control: no-store`.
 
@@ -10,7 +10,7 @@ The `server-token` file is the server's JWT signing secret, not a client bearer
 credential. Use the session `token` returned after successful MFA for bearer
 requests.
 
-All MFA endpoints validate their challenge or session credential directly. A challenge is not an authenticated session. The Phase 02 endpoints do not by themselves establish that every other REST, WebSocket, or streaming route enforces the session policy; that integration is tracked separately.
+All MFA endpoints validate their challenge or session credential directly; a challenge is not a session. Phase 03 extends the same policy to protected REST, WebSocket, and media access; see [Protected REST and live transports](#protected-rest-and-live-transports-phase-03).
 
 ## Endpoints
 
@@ -205,5 +205,32 @@ With `--no-auth`, status remains authenticated and reports the development actor
 ```
 
 MFA endpoint errors use `{ "error": "...", "code": "..." }`; `retryAfter` (seconds) is included only when applicable, with a matching `Retry-After` header. Errors are not cacheable. Challenge, code, account, and backend failures remain distinct through the returned `code`; do not treat any error as an authenticated session.
+
+## Protected REST and live transports (Phase 03)
+
+Protected REST routes evaluate signed V2 claims against the current account and
+session. Stale MFA, expired/revoked sessions, disabled accounts, legacy tokens,
+and unavailable auth state are denied; auth-store failures return
+`503 AUTH_UNAVAILABLE`. Public health and flow-specific auth routes remain
+explicit exceptions. `--no-auth` is development-only and bypasses this policy.
+
+The WebSocket handshake applies the same session policy. An open socket checks
+the effective deadline before each inbound frame and before outbound writes;
+a background watcher checks persisted user/session state every five seconds
+with a two-second lookup timeout. It closes with `4403` for MFA required,
+`4401` for full login required, or `1013` when auth state is unavailable.
+`CloseAuth` is an internal writer control that sends a WebSocket close frame,
+not a new JSON `kind`; `4001` remains queue overflow. Revocation detected by
+the periodic watcher can take up to seven seconds to close an existing socket.
+The local session lease/effective-deadline guard runs before inbound
+dispatch/commit without per-frame database reads; the shared watcher enforces
+persisted revocation at the bounded interval above.
+
+Image/video ticket issue routes use the protected REST actor. Tickets and media
+sessions bind the auth session, account/credential versions, and effective
+deadline; absolute capability lifetimes are clamped to that deadline. Every
+HEAD/GET admission revalidates session state, and active bodies check the
+deadline and poll for revocation on the same five-second/two-second bounds.
+Exact-origin ticket-only access is a media-cookie fallback, not an auth bypass.
 
 See [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md) for persistence, TOTP, encryption-key, and policy details, and [API Reference](./api-reference.md#authentication) for the server-wide route index.

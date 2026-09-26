@@ -63,24 +63,18 @@ fn make_state(tmp: &tempfile::TempDir) -> AppState {
 }
 
 fn auth_cookie() -> String {
-    #[derive(serde::Serialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-    }
-    let claims = Claims {
-        sub: "test-user".into(),
-        exp: (chrono::Utc::now().timestamp() + 3600) as usize,
+    use dam_hopper_server::auth::model::AuthClaims;
+    use dam_hopper_server::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+    let claims = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: MOCK_USER.to_string(),
+        sid: MOCK_SESSION_ID.to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: chrono::Utc::now().timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
     };
-    format!(
-        "damhopper-auth={}",
-        encode(
-            &Header::default(),
-            &claims,
-            &EncodingKey::from_secret(TOKEN.as_bytes())
-        )
-        .unwrap()
-    )
+    format!("damhopper-auth={}", claims.encode(TOKEN).unwrap())
 }
 
 async fn request(
