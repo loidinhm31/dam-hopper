@@ -83,8 +83,9 @@ preflight identities, stage a fixed release, and activate it.
 API service and plugin runner must have distinct non-zero UIDs. If
 `/etc/dam-hopper/host.toml` records `service_user` as your login, explicitly
 passing `--service-user dam-hopper` overrides that recorded API identity for
-the candidate. Omitting it can preserve the conflicting value.
-
+the candidate. Changing recorded configuration in `host.toml` alone is not
+sufficient to reconfigure active services; always pass explicit `--service-user`
+during installer invocation to stage and generate updated unit identities.
 **Filesystem access benefits:** The runner executes with your developer UID,
 so the Linux VFS grants owner access to project directories with mode `0700`
 without POSIX ACLs. `ProtectHome=read-only` still prevents writes under
@@ -189,6 +190,7 @@ installation has no previous release to restore.
 ### Scenario B: Multi-User / Sandboxed Deployment
 
 If using the default dedicated runner account (`dam-hopper-plugin-runner`), developer home directories with mode `0700` (`rwx------`) block access at the filesystem layer. Note that external tools executing `chmod 0700` will collapse POSIX ACL masks (`mask::---`), so Scenario A is strongly recommended for workstations running tools that generate `0700` state. If using Scenario B, grant traversal and read permissions explicitly:
+
 ```bash
 # 1. Allow the runner service to traverse your home directory
 setfacl -m u:dam-hopper-plugin-runner:x "$HOME"
@@ -201,6 +203,29 @@ setfacl -R -d -m u:dam-hopper-plugin-runner:rX "$HOME/WS"
 setfacl -R -m u:dam-hopper-plugin-runner:rX "$HOME/.evcrate"
 setfacl -R -d -m u:dam-hopper-plugin-runner:rX "$HOME/.evcrate"
 ```
+
+### Configuring Global Owner History Source (Settings UI)
+
+When enabling plugins that read global tool history outside project directories (such as `evcrate.advisor`), administrators configure the **Global Owner History Source** in **Settings → Plugin Management**:
+
+1. **Enable History Root:** Toggle the checkbox on.
+2. **Absolute Host History Path:** Full absolute path on the host to the history root directory (e.g. `/home/<your-user>/.evcrate/advisor-history`).
+   - Must be an absolute path without relative dots, `~` tilde shorthand, or trailing slashes.
+3. **Root Identity (SHA-256):** The 64-character lowercase SHA-256 hex digest of the normalized absolute path string. DamHopper uses this cryptographic digest to pin the directory binding and prevent symlink or path-traversal attacks.
+
+**How to calculate the Root Identity (SHA-256):**
+
+```bash
+printf '%s' "/home/$(id -un)/.evcrate/advisor-history" | sha256sum | awk '{print $1}'
+```
+
+_Example:_ For `/home/developer/.evcrate/advisor-history`, the Root Identity is:
+
+```text
+8f0502d523c23fed2199adad18f14bfc6b4434bc695f5566151512ed18fe054d
+```
+
+4. **Allow all authenticated users to read history root:** Check this option if non-admin DamHopper users should be allowed to browse analysis history.
 
 ## Systemd Service Hardening
 
