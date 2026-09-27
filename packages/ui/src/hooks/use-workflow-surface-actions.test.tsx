@@ -232,4 +232,47 @@ describe("useWorkflowSurfaceActions", () => {
       }),
     );
   });
+
+  it("creates item when effectiveTarget includes profileId", async () => {
+    const createSpy = vi.spyOn(api.workflow, "createItem").mockResolvedValue({
+      resource: mockItem,
+      replayed: false,
+      eventId: "ev-create-1",
+    });
+
+    let actionsResult!: WorkflowSurfaceActions;
+
+    function TestComponent() {
+      actionsResult = useWorkflowSurfaceActions({
+        profileId: "prof-1",
+        project: "test-proj",
+      });
+      return null;
+    }
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TestComponent />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await actionsResult.handleCreateItem({
+        target: { profileId: "prof-1", project: "test-proj" },
+        kind: "plan",
+        title: "Test Plan",
+        status: "backlog",
+      });
+    });
+
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "plan",
+        title: "Test Plan",
+        status: "backlog",
+      }),
+    );
+  });
 });

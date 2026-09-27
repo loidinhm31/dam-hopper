@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createApiClient } from "./client.js";
+import type { Transport } from "./transport.js";
 import {
   assertOwnerMatch,
   connectionKey,
@@ -144,5 +146,74 @@ describe("owner matching and rejection", () => {
     expect(() => assertOwnerMatch(expected, actual)).toThrowError(
       ConnectionOwnerError,
     );
+  });
+});
+
+describe("createApiClient workflow target wire projection", () => {
+  it("projects workflow targets to server wire targets and enforces owner checks", async () => {
+    const invokeMock = vi.fn().mockResolvedValue({ resource: {} });
+    const mockTransport: Transport = {
+      invoke: invokeMock,
+      onEvent: vi.fn(),
+      offEvent: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const client = createApiClient(
+      { profileId: "prof-1", generation: 1 },
+      mockTransport,
+    );
+
+    // createItem strips profileId and passes owner check
+    await client.workflow.createItem({
+      requestId: "r1",
+      target: { profileId: "prof-1", project: "evcrate" },
+      kind: "plan",
+      title: "Plan 1",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("workflow:createItem", {
+      requestId: "r1",
+      target: { project: "evcrate" },
+      kind: "plan",
+      title: "Plan 1",
+    });
+
+    // createSession strips profileId and preserves worktreePath
+    await client.workflow.createSession({
+      requestId: "r2",
+      target: {
+        profileId: "prof-1",
+        project: "evcrate",
+        worktreePath: "/trees/wt",
+      },
+      startedAt: "2026-09-02T10:00:00.000Z",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("workflow:createSession", {
+      requestId: "r2",
+      target: { project: "evcrate", worktreePath: "/trees/wt" },
+      startedAt: "2026-09-02T10:00:00.000Z",
+    });
+
+    // patchItem strips profileId when target is present
+    await client.workflow.patchItem("item-1", {
+      requestId: "r3",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      target: { profileId: "prof-1", project: "evcrate" },
+    });
+    expect(invokeMock).toHaveBeenCalledWith("workflow:patchItem", {
+      id: "item-1",
+      requestId: "r3",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      target: { project: "evcrate" },
+    });
+
+    // Reject mismatched profileId on createItem
+    expect(() =>
+      client.workflow.createItem({
+        requestId: "r4",
+        target: { profileId: "other-prof", project: "evcrate" },
+        kind: "plan",
+        title: "Plan 2",
+      }),
+    ).toThrowError(ConnectionOwnerError);
   });
 });

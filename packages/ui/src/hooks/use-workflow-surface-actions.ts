@@ -52,16 +52,17 @@ export interface WorkflowSurfaceActions {
   handleDeleteNote: (note: NoteDto) => Promise<unknown>;
 }
 export function useWorkflowSurfaceActions(effectiveTarget: ProjectTargetRef): WorkflowSurfaceActions {
-  const createItem = useCreateWorkflowItem();
-  const patchItem = usePatchWorkflowItem();
-  const createNote = useCreateWorkflowNote();
-  const createSession = useCreateWorkflowSession();
-  const endSession = useEndWorkflowSession();
-  const abandonSession = useAbandonWorkflowSession();
-  const linkResource = useLinkWorkflowResource();
-  const unlinkResource = useUnlinkWorkflowResource();
-  const deleteItem = useDeleteWorkflowItem();
-  const deleteNote = useDeleteWorkflowNote();
+  const options = effectiveTarget.profileId ? { profileId: effectiveTarget.profileId } : undefined;
+  const createItem = useCreateWorkflowItem(options);
+  const patchItem = usePatchWorkflowItem(options);
+  const createNote = useCreateWorkflowNote(options);
+  const createSession = useCreateWorkflowSession(options);
+  const endSession = useEndWorkflowSession(options);
+  const abandonSession = useAbandonWorkflowSession(options);
+  const linkResource = useLinkWorkflowResource(options);
+  const unlinkResource = useUnlinkWorkflowResource(options);
+  const deleteItem = useDeleteWorkflowItem(options);
+  const deleteNote = useDeleteWorkflowNote(options);
 
   const handleCreateItem = async (item: {
     target: ProjectTargetRef;

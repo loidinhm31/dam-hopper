@@ -1264,14 +1264,31 @@ function channelToEndpoint(
           qs.length > 0 ? `/api/workflow/events?${qs}` : "/api/workflow/events",
       };
     }
-    case "workflow:createItem":
-      return { method: "POST", url: "/api/workflow/items", body: data };
+    case "workflow:createItem": {
+      const body = data as
+        | ({ target?: unknown } & Record<string, unknown>)
+        | undefined;
+      return {
+        method: "POST",
+        url: "/api/workflow/items",
+        body:
+          body?.target != null
+            ? { ...body, target: restTargetFields(body.target) }
+            : data,
+      };
+    }
     case "workflow:patchItem": {
-      const { id, ...body } = data as { id: string } & Record<string, unknown>;
+      const { id, target, ...body } = data as {
+        id: string;
+        target?: unknown;
+      } & Record<string, unknown>;
       return {
         method: "PATCH",
         url: `/api/workflow/items/${encodeURIComponent(id)}`,
-        body,
+        body: {
+          ...body,
+          ...(target != null ? { target: restTargetFields(target) } : {}),
+        },
       };
     }
     case "workflow:deleteItem": {
@@ -1282,8 +1299,19 @@ function channelToEndpoint(
         body,
       };
     }
-    case "workflow:createSession":
-      return { method: "POST", url: "/api/workflow/sessions", body: data };
+    case "workflow:createSession": {
+      const body = data as
+        | ({ target?: unknown } & Record<string, unknown>)
+        | undefined;
+      return {
+        method: "POST",
+        url: "/api/workflow/sessions",
+        body:
+          body?.target != null
+            ? { ...body, target: restTargetFields(body.target) }
+            : data,
+      };
+    }
     case "workflow:endSession": {
       const { id, ...body } = data as { id: string } & Record<string, unknown>;
       return {

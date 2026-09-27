@@ -1042,6 +1042,81 @@ describe("WsTransport workflow operations", () => {
     transport.destroy();
   });
 
+  it("sanitizes target in workflow item and session requests by stripping profileId", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({
+            resource: { id: "item-1" },
+            replayed: false,
+            eventId: "ev-1",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // Create item with profileId in target
+    await transport.invoke("workflow:createItem", {
+      requestId: "r1",
+      target: {
+        profileId: "66246e88-132d-4371-ba90-8dd10a9b0e4c",
+        project: "evcrate",
+      },
+      kind: "plan",
+      title: "New Plan",
+      status: "backlog",
+      parentId: null,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/workflow/items",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      requestId: "r1",
+      target: { project: "evcrate" },
+      kind: "plan",
+      title: "New Plan",
+      status: "backlog",
+      parentId: null,
+    });
+
+    // Patch item with profileId and worktreePath in target
+    await transport.invoke("workflow:patchItem", {
+      id: "item/1",
+      requestId: "r2",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      target: {
+        profileId: "66246e88-132d-4371-ba90-8dd10a9b0e4c",
+        project: "evcrate",
+        worktreePath: "/worktrees/feat",
+      },
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      requestId: "r2",
+      updatedAt: "2026-09-02T10:00:00.000Z",
+      target: { project: "evcrate", worktreePath: "/worktrees/feat" },
+    });
+
+    // Create session with profileId in target
+    await transport.invoke("workflow:createSession", {
+      requestId: "r3",
+      target: {
+        profileId: "66246e88-132d-4371-ba90-8dd10a9b0e4c",
+        project: "evcrate",
+      },
+      startedAt: "2026-09-02T10:00:00.000Z",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      requestId: "r3",
+      target: { project: "evcrate" },
+      startedAt: "2026-09-02T10:00:00.000Z",
+    });
+
+    transport.destroy();
+  });
+
   it("maps workflow notes and purge operations", async () => {
     installMockWebSocket();
     const fetchMock = vi.fn().mockImplementation(
