@@ -66,7 +66,27 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
    dam-hopper status --json
    ```
 
-4. **Explicitly activate the release:**
+4. **Configure production environment & MFA key (`server` or `both` roles):**
+
+   In production authenticated mode (`RUST_ENV=production` with MongoDB configured), a dedicated 32-byte encryption key is mandatory for encrypting TOTP secrets at rest (`DAM_HOPPER_MFA_KEY_FILE`). Startup fails closed if the key is missing or has insecure permissions (must be mode `0600`, regular file only).
+
+   ```bash
+   # Generate dedicated 32-byte MFA encryption key (64 hex characters) with strict 0600 permissions
+   sudo mkdir -p /etc/dam-hopper
+   openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
+   sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
+   sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
+
+   # Add configuration to /etc/dam-hopper/server.env (see deploy/server.env.example)
+   sudo tee -a /etc/dam-hopper/server.env <<EOF
+   MONGODB_URI=mongodb://127.0.0.1:27017
+   MONGODB_DATABASE=damHopper
+   DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
+   EOF
+   sudo chmod 600 /etc/dam-hopper/server.env
+   ```
+
+5. **Explicitly activate the release:**
 
    ```bash
    sudo dam-hopper start
@@ -74,7 +94,7 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
 
    `start` installs concrete systemd units, reloads the daemon, starts configured units, and enforces a strict health gate (20s startup deadline + 20 consecutive 500ms probes / 10s stability window).
 
-5. **Rollback & Recovery:**
+6. **Rollback & Recovery:**
 
    ```bash
    # Roll back to the recorded previous release

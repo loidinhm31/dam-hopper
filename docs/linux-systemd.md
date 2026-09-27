@@ -7,15 +7,15 @@ Authoritative Linux x86_64 guide to roles, activation, rollback, recovery, and f
 Manifest v2 targets Linux `x86_64-unknown-linux-gnu`; supported hosts need no
 checkout, compiler, Node.js, pnpm, Cargo, or Rust toolchain.
 
-| Requirement                | Specification                                         | Verification / Fallback                                       |
-| -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
-| **Operating System**       | Linux (systemd host)                                  | `/etc/os-release`; profile `linux-x86_64-systemd`             |
-| **Architecture**           | x86_64 (amd64)                                        | Required; `uname -m` == `x86_64`                              |
-| **C Library**              | GNU libc >= 2.39                                      | Dynamically linked against system glibc                       |
-| **Init & Service Manager** | systemd >= 245                                        | Unified cgroup v2; PID 1 system manager                       |
-| **Security Module**        | SELinux policy as deployed                            | Units use native systemd sandboxing                           |
-| **Host Utilities**         | `curl`, `tar`, `gzip`, `sha256sum`, `sudo`, `systemd` | Required on path for bootstrap/archive handling               |
-| **Attestation Verifier**   | GitHub CLI (`gh`)                                     | Optional; only with `--verify-attestation`                    |
+| Requirement                | Specification                                         | Verification / Fallback                           |
+| -------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| **Operating System**       | Linux (systemd host)                                  | `/etc/os-release`; profile `linux-x86_64-systemd` |
+| **Architecture**           | x86_64 (amd64)                                        | Required; `uname -m` == `x86_64`                  |
+| **C Library**              | GNU libc >= 2.39                                      | Dynamically linked against system glibc           |
+| **Init & Service Manager** | systemd >= 245                                        | Unified cgroup v2; PID 1 system manager           |
+| **Security Module**        | SELinux policy as deployed                            | Units use native systemd sandboxing               |
+| **Host Utilities**         | `curl`, `tar`, `gzip`, `sha256sum`, `sudo`, `systemd` | Required on path for bootstrap/archive handling   |
+| **Attestation Verifier**   | GitHub CLI (`gh`)                                     | Optional; only with `--verify-attestation`        |
 
 ---
 
@@ -40,13 +40,14 @@ exclude environment files, tokens, passwords, databases, and host-local state.
 DamHopper provides role-scoped API, helper, runner, and web services
 coordinated by a root-only recovery unit:
 
-| Unit                                     | Process Binary                   | User / Group                           | Listener                            | Sandboxing & Capabilities                                                                            |
-| ---------------------------------------- | -------------------------------- | -------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                            | None                                | Oneshot pre-boot gate before application units                                                       |
-| `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
-| `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
-| `dam-hopper-plugin-runner.service`       | `dam-hopper-plugin-runner`       | `@ADVISOR_OWNER_USER@:@ADVISOR_OWNER_GROUP@` | `/run/dam-hopper/plugin-runner.sock` | `NoNewPrivileges=true`, `ProtectSystem=strict`, `PrivateTmp=true`, `MemoryMax=1G`, `TasksMax=64` |
-| `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`        | `0.0.0.0:4802`                      | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
+| Unit                                     | Process Binary                   | User / Group                                        | Listener                             | Sandboxing & Capabilities                                                                            |
+| ---------------------------------------- | -------------------------------- | --------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                                         | None                                 | Oneshot pre-boot gate before application units                                                       |
+| `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group)              | `/run/dam-hopper/idle-suspend.sock`  | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
+| `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                       | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
+| `dam-hopper-plugin-runner.service`       | `dam-hopper-plugin-runner`       | `@ADVISOR_OWNER_USER@:@ADVISOR_OWNER_GROUP@`        | `/run/dam-hopper/plugin-runner.sock` | `NoNewPrivileges=true`, `ProtectSystem=strict`, `PrivateTmp=true`, `MemoryMax=1G`, `TasksMax=64`     |
+| `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`                     | `0.0.0.0:4802`                       | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
+
 > **API identity and command contract:** The checked-in API unit and the
 > default release-manager render run `dam-hopper-api.service` as the
 > unprivileged `dam-hopper:dam-hopper` account. Custom identities must remain
@@ -58,6 +59,7 @@ coordinated by a root-only recovery unit:
 > `ExecStartPre=+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime`
 > and exactly one `ExecStart`; strict policy rejects legacy `/etc` paths,
 > alternate config operands, duplicates, and extra arguments.
+
 ### Deployment Roles
 
 - `server`: Deploys helper, `dam-hopper-plugin-runner.service`, and
@@ -109,8 +111,9 @@ DamHopper enforces strict separation between immutable release assets, durable m
 /etc/dam-hopper/             # 0755 root:root (Installer/host config; API gate reads legacy only)
 ├── host.toml                # 0644 root:root (Recorded deployment role and allowed web origins)
 ├── host-config.json         # 0644 root:root (Committed public runtime config)
+├── server.env               # 0600 root:root (Optional production env: MONGODB_*, DAM_HOPPER_MFA_KEY_FILE)
+├── mfa-encryption.key       # 0600 API UID:GID (Dedicated 32-byte AES-256-GCM TOTP encryption key)
 └── dam-hopper.toml          # 0644 root:root (Optional read-only legacy migration source)
-
 /etc/systemd/system/
 ├── dam-hopper-recovery.service
 ├── dam-hopper-idle-suspend-helper.service # Present only if role is 'server' or 'both'
@@ -165,7 +168,31 @@ the release manager's managed lifecycle list covers the helper service itself.
    dam-hopper status --json
    ```
 
-4. **Explicitly activate the release:**
+4. **Configure production environment & MFA key (`server` or `both` roles):**
+
+   In production authenticated mode (`RUST_ENV=production` with MongoDB configured), `DAM_HOPPER_MFA_KEY_FILE` is mandatory:
+   - Must contain exactly 32 raw bytes, 64 hex characters, or 44 Base64 characters.
+   - File permissions must be strictly mode `0600`, regular file only (symlinks or group/world bits are rejected).
+   - Dedicated to encrypting confirmed and pending TOTP secrets at rest via AES-256-GCM.
+   - Must be backed up separately from MongoDB and deployed to all server instances.
+
+   ```bash
+   # Generate dedicated 32-byte key (64 hex characters)
+   sudo mkdir -p /etc/dam-hopper
+   openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
+   sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
+   sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
+
+   # Configure /etc/dam-hopper/server.env
+   sudo tee -a /etc/dam-hopper/server.env <<EOF
+   MONGODB_URI=mongodb://127.0.0.1:27017
+   MONGODB_DATABASE=damHopper
+   DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
+   EOF
+   sudo chmod 600 /etc/dam-hopper/server.env
+   ```
+
+5. **Explicitly activate the release:**
    ```bash
    sudo dam-hopper start
    ```
@@ -395,6 +422,7 @@ host/configuration/audit hashes, RTC wakealarm content, and API/helper
 
 See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
 for fixed source paths and adapter details.
+
 ### Inspecting Service Logs
 
 ```bash
@@ -493,6 +521,7 @@ or unsupported capability suppresses suspend. Intent and completion records
 retain `wakeAfterSeconds: 0`; the helper audit remains mode `0600` and bounded.
 The server audit's recent-read APIs are capped; its append retention and
 rotation are operator-managed.
+
 #### Phase 04 helper audit v2
 
 The helper audit evolves in place with independent schema version `2`; the
@@ -521,7 +550,6 @@ half through an exclusive mode-`0600` no-follow temporary file, syncs the
 retained file and parent directory before atomic replacement, and removes the
 temporary file on failure. A helper restart creates a new producer instance
 and restarts its sequence at one.
-
 
 The Phase 02 canonical server event stream is separate from both audit files.
 The isolated writer targets
@@ -570,21 +598,23 @@ or real RTC hardware; qualify a real host separately.
 ### 11.4 Rollback and Emergency Reset
 
 To disenroll the helper and disable idle suspend, verify no active/in-flight handoff, then run:
+
 ```bash
 ./deploy/reset-linux-production.sh --dry-run --config /var/lib/dam-hopper/dam-hopper.toml
 sudo ./deploy/reset-linux-production.sh --config /var/lib/dam-hopper/dam-hopper.toml
 ```
+
 The default is `/var/lib/dam-hopper/dam-hopper.toml`; normal changes use authenticated API writes, not root file replacement. The live reset parses the installed API unit's exact non-root `User=`/`Group=`, refuses missing/link/non-regular or wrong-owner/group/mode (`0600`) files, and never repairs unsafe metadata. It drops to that API identity, writes a mode-`0600` same-directory temporary, `fsync`s, atomically renames, syncs the parent, and verifies parseable TOML with `[server.idle_suspend] enabled = false`.
 If dry-run refuses, inspect `systemctl cat dam-hopper-api.service` and `stat`, restore trusted content/metadata through a controlled API-identity repair procedure, rerun dry-run, then run live reset. Preserve canonical/legacy config evidence, `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, helper audit, and foreign RTC alarms.
 
 Rollback guarantees:
+
 1. Reset leaves services untouched until metadata and handoff checks pass.
 2. It atomically disables `enabled = false` under `[server.idle_suspend]`.
 3. It stops/disables helper units and removes only manifest-owned helper assets.
 4. It preserves external RTC alarms.
 5. It runs `systemctl daemon-reload` after unit removal.
 6. It preserves audit logs for post-mortem analysis.
-
 
 ### 11.5 Manual Force Sleep Qualification & Canary Runbook
 
@@ -635,7 +665,7 @@ Before enabling the `agent-activity` automatic policy on any host, qualify that 
      activity_live_linux_pty_tcp_smoke -- --ignored --exact --nocapture --test-threads=1
    ```
 
-   *Expected Result*: Test passes within 1.00 second (the Phase 08 QA run measured 0.74s). This is observer evidence only, not a target-host or suspend-canary guarantee. The test uses real Linux loopback TCP, managed PTYs, and direct procfs/netlink observation, with a panic executor that guarantees zero host suspend calls.
+   _Expected Result_: Test passes within 1.00 second (the Phase 08 QA run measured 0.74s). This is observer evidence only, not a target-host or suspend-canary guarantee. The test uses real Linux loopback TCP, managed PTYs, and direct procfs/netlink observation, with a panic executor that guarantees zero host suspend calls.
    Run the command from a source checkout with the deployed API service's
    effective UID/GID, procfs visibility, mount view, and network namespace (or
    an equivalent `systemd-run` sandbox). Do not add root privileges, capabilities,
@@ -706,6 +736,7 @@ interval; complete available recovery clears it, and a later failure starts a ne
 interval. The warning appears only in authenticated, `Cache-Control: no-store`
 status; logs, audits, WebSocket hints, and rollout artifacts contain no process
 details.
+
 ### 11.9 Bounded Automatic Canary Runbook (Operations Gate)
 
 Executing a real automatic host suspend canary is an explicit Operations procedure requiring written approval:
@@ -720,6 +751,7 @@ Executing a real automatic host suspend canary is an explicit Operations procedu
 
 2. **Enablement**:
    In `/var/lib/dam-hopper/dam-hopper.toml`, set:
+
    ```toml
    [server.idle_suspend]
    enabled = true
@@ -727,6 +759,7 @@ Executing a real automatic host suspend canary is an explicit Operations procedu
    quiet_period_seconds = 900
    wake_after_seconds = 180
    ```
+
    Restart API: `sudo systemctl restart dam-hopper-api.service`.
 
 3. **Execution and Verification**:
