@@ -502,6 +502,26 @@ async fn test_mongodb_auth_store_cas_and_indexes() {
     let ok = store.advance_totp_step("grace", 1, 99).await.unwrap();
     assert!(!ok, "Advancing to older step must fail CAS (monotonicity)");
 
+    // 4b. Legacy user without authVersion field in MongoDB
+    db.collection::<mongodb::bson::Document>("users")
+        .insert_one(mongodb::bson::doc! {
+            "username": "legacy_grace",
+            "passwordHash": "$2b$12$hashed",
+            "isEnabled": true,
+            "role": "user"
+        })
+        .await
+        .unwrap();
+
+    let legacy_user = store.get_user("legacy_grace").await.unwrap().unwrap();
+    assert_eq!(legacy_user.auth_version, 0, "Default auth_version must be 0 for legacy user");
+
+    let ok = store.confirm_enrollment("legacy_grace", legacy_user.auth_version, mfa.clone()).await.unwrap();
+    assert!(ok, "Enrollment confirmation for legacy user without authVersion field must succeed");
+
+    let ok = store.advance_totp_step("legacy_grace", 0, 105).await.unwrap();
+    assert!(ok, "Step advancement for legacy user must succeed");
+
     // 5. Challenges: create, attempt increment, and atomic consumption
     let challenge = AuthChallenge {
         id: "digest-grace-1".to_string(),
