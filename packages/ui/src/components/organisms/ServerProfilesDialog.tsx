@@ -10,6 +10,7 @@ import {
   Square,
   LogIn,
   LogOut,
+  ShieldCheck,
 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import type { ServerProfile } from "@/api/server-config.js";
@@ -65,6 +66,15 @@ function StatusBadge({ snapshot }: { snapshot: ConnectionSnapshot | null }) {
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/15 text-red-400">
         <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
         Login required
+      </span>
+    );
+  }
+
+  if (status === "mfa-required") {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/15 text-amber-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+        MFA required
       </span>
     );
   }
@@ -302,6 +312,23 @@ export function ServerProfilesDialog({
                         >
                           <Play size={12} />
                           Connect
+                        </button>
+                      )}
+
+                      {snapshot?.status === "mfa-required" && (
+                        <button
+                          onClick={() => {
+                            if (onLoginProfile) {
+                              onLoginProfile(profile);
+                            } else {
+                              onEditProfile(profile);
+                            }
+                          }}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 font-medium transition-colors"
+                          title="Complete MFA verification for this server"
+                        >
+                          <ShieldCheck size={12} />
+                          MFA
                         </button>
                       )}
 
