@@ -52,11 +52,12 @@ DamHopper releases are published as immutable, attested GitHub release bundles f
    # Both roles in lockstep
    ./dam-hopper-install.sh --latest --role both --allow-web-origin http://localhost:4802
 
-   # Optional: For single-user workstations where plugins need access to local repos:
-   ./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
-   ```
+   # Single-user developer workstation (API runs as your user account with native workspace access):
+   ./dam-hopper-install.sh --latest --role both --service-user $(id -un)
 
    _Note:_ The bootstrap installer stages candidate files, installs the CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`. It never starts or activates services automatically.
+
+   ```
 
 3. **Inspect status:**
 
@@ -108,26 +109,71 @@ For complete operator instructions, systemd unit definitions, security boundarie
 
 ### Plugin Runner & Workspace Permissions (Linux)
 
-When deploying DamHopper with the plugin platform on Linux, the plugin runner (`dam-hopper-plugin-runner.service`) executes untrusted plugin code (e.g. `evcrate.advisor`).
+When deploying DamHopper with the plugin platform on Linux, the release manager enforces strict security boundaries between the API server (`dam-hopper-api.service`) and the plugin runner (`dam-hopper-plugin-runner.service`).
 
-- **Single-User Workstation (Recommended for personal development):**
-  Pass `--plugin-owner-user <your-linux-username>` during install:
+> **Security Invariant:** The API service user and plugin runner user **cannot be the same user or share a UID**. The installer will reject identical identities (`plugin owner user cannot be the API service user`).
+
+Choose one of the two supported deployment architectures:
+
+#### Mode 1: Developer Workstation (Recommended for Most Workflows)
+
+The API server runs directly under your own user login (`--service-user $(id -un)`), while the plugin runner executes as the isolated system daemon `dam-hopper-plugin-runner` (UID 979):
+
+```bash
+# Install: omit --plugin-owner-user so the runner defaults to dam-hopper-plugin-runner
+./dam-hopper-install.sh --latest --role both --service-user $(id -un)
+```
+
+- **Filesystem access:** The API server runs as you, giving it native, frictionless read/write access to all your project repositories (`~/WS`), build outputs (`dist/`), and configs without permission errors.
+- **Granting the runner access to tool history (`~/.evcrate`):** Allow the isolated runner service to traverse your home directory and read/write tool history:
 
   ```bash
-  ./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
+  # 1. Allow runner traversal through your home directory
+  setfacl -m u:dam-hopper-plugin-runner:x "$HOME"
+
+  # 2. Grant full recursive access and default inheritance on tool history
+  setfacl -R -m u:dam-hopper-plugin-runner:rwx,m::rwx "$HOME/.evcrate"
+  setfacl -R -d -m u:dam-hopper-plugin-runner:rwx,m::rwx "$HOME/.evcrate"
+  chmod -R a+rX "$HOME/.evcrate"
   ```
 
-  The runner will run under your own user account, sharing permissions with your workspaces and `~/.evcrate` state without any extra configuration.
+#### Mode 2: Dedicated Daemon Account (Strict Process Isolation)
 
-- **Multi-User / Dedicated Daemon Account (Default):**
-  If installed without `--plugin-owner-user`, the runner executes under a dedicated system user (`dam-hopper-plugin-runner`). Because Linux user home directories typically have restrictive mode `0700` (`rwx------`), you must grant the runner traversal and read permissions on target project directories:
-  ```bash
-  # Grant traversal through your home directory
-  setfacl -m u:dam-hopper-plugin-runner:x /home/<your-user>
-  # Grant read & execute to your workspace and tool state
-  setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS ~/.evcrate
-  setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS ~/.evcrate
-  ```
+The API server runs as dedicated system user `dam-hopper`, and the plugin runner runs as your login:
+
+```bash
+# Requires creating system account 'dam-hopper' first
+sudo useradd -r -U -M -s /sbin/nologin -d /var/lib/dam-hopper dam-hopper
+./dam-hopper-install.sh --latest --role both --service-user dam-hopper --plugin-owner-user $(id -un)
+```
+
+- **Caveat:** Because the API server runs under daemon user `dam-hopper` (UID 978), any project files or build outputs with owner-only permissions (`0700` directories or `0600` files) will return `{"error":"FS error: permission denied"}` when browsed through the UI unless read permissions (`chmod -R a+rX`) or POSIX ACLs are explicitly granted.
+
+---
+
+### Configuring Global Owner History Source (Settings UI)
+
+When enabling plugins that read global tool history (such as `evcrate.advisor`), administrators configure the **Global Owner History Source** in **Settings → Plugin Management**:
+
+1. **Enable History Root:** Toggle the checkbox on.
+2. **Absolute Host History Path:** Enter the full absolute path on the host to the history root directory (e.g. `/home/<your-user>/.evcrate/advisor-history`).
+   - _Must be an absolute path._ Do not use relative paths, `~` tilde shorthand, or trailing slashes.
+3. **Root Identity (SHA-256):** Enter the 64-character lowercase SHA-256 hex digest of the normalized absolute path string. DamHopper uses this cryptographic digest to pin the directory binding and prevent symlink or path-traversal attacks.
+
+**How to calculate the Root Identity (SHA-256):**
+Run this command in your terminal, replacing the path with your exact history directory:
+
+```bash
+printf '%s' "/home/$(id -un)/.evcrate/advisor-history" | sha256sum | awk '{print $1}'
+```
+
+_Example:_ For path `/home/developer/.evcrate/advisor-history`, the Root Identity is:
+
+```text
+8f0502d523c23fed2199adad18f14bfc6b4434bc695f5566151512ed18fe054d
+```
+
+4. **Allow all authenticated users to read history root:** Check this option if non-admin DamHopper users should be able to view analysis history.
 
 ### Quickstart: Windows Release Installer (x86_64 Direct Server)
 
