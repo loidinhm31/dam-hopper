@@ -2723,11 +2723,15 @@ export function createApiClient(
       events: (query: EventsQuery = {}) =>
         transport.invoke<EventsDto>("workflow:events", query),
       createItem: (req: CreateItemRequest) =>
-        transport.invoke<MutationDto<ItemDto>>("workflow:createItem", req),
+        transport.invoke<MutationDto<ItemDto>>("workflow:createItem", {
+          ...req,
+          target: toWireTarget(req.target),
+        }),
       patchItem: (id: string, req: PatchItemRequest) =>
         transport.invoke<MutationDto<ItemDto>>("workflow:patchItem", {
           id,
           ...req,
+          ...(req.target != null ? { target: toWireTarget(req.target) } : {}),
         }),
       deleteItem: (id: string, req: DeleteItemRequest) =>
         transport.invoke<MutationDto<TombstoneDto>>("workflow:deleteItem", {
@@ -2737,7 +2741,10 @@ export function createApiClient(
       createSession: (req: CreateSessionRequest) =>
         transport.invoke<MutationDto<SessionDto>>(
           "workflow:createSession",
-          req,
+          {
+            ...req,
+            target: toWireTarget(req.target),
+          },
         ),
       endSession: (id: string, req: EndSessionRequest) =>
         transport.invoke<MutationDto<SessionDto>>("workflow:endSession", {
