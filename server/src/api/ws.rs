@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use axum::{
     extract::{
-        ws::{CloseFrame, Message, WebSocket},
         State, WebSocketUpgrade,
+        ws::{CloseFrame, Message, WebSocket},
     },
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use axum_extra::extract::CookieJar;
 use base64::{
-    engine::general_purpose::STANDARD as BASE64,
-    engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64, Engine as _,
+    Engine as _, engine::general_purpose::STANDARD as BASE64,
+    engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64,
 };
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
@@ -28,11 +28,11 @@ use zeroize::Zeroizing;
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
 use crate::crypto::opaque::{
-    handle_login_finish, handle_login_start, handle_register_finish, handle_register_start,
-    validate_identifier, DamHopperOpaqueSuite,
+    DamHopperOpaqueSuite, handle_login_finish, handle_login_start, handle_register_finish,
+    handle_register_start, validate_identifier,
 };
 use crate::fs::{
-    mutate, ops, secure_path, tree_snapshot_sync, EncUploadState, UploadState, MAX_UPLOAD_BYTES,
+    EncUploadState, MAX_UPLOAD_BYTES, UploadState, mutate, ops, secure_path, tree_snapshot_sync,
 };
 use crate::state::AppState;
 use crate::workspace_target::{ProjectTargetRef, ResolvedProjectTarget};
@@ -178,7 +178,8 @@ pub async fn ws_handler(
             crate::auth::model::AuthDecision::Authenticated { session, user } => {
                 let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
                 let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);
-                let effective_deadline = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
+                let effective_deadline =
+                    crate::auth::policy::compute_mfa_due_at(mfa_verified_at, expires_at);
                 let actor = crate::api::auth::AuthenticatedActor::with_session(
                     user.username.clone(),
                     Some(expires_at.timestamp() as usize),
@@ -320,7 +321,12 @@ async fn handle_socket(
             if !writer_state.no_auth {
                 if let Some(deadline) = writer_actor.effective_deadline {
                     if writer_state.auth_service.clock().now() >= deadline {
-                        let is_expired = writer_actor.exp.map(|e| writer_state.auth_service.clock().now().timestamp() as usize >= e).unwrap_or(false);
+                        let is_expired = writer_actor
+                            .exp
+                            .map(|e| {
+                                writer_state.auth_service.clock().now().timestamp() as usize >= e
+                            })
+                            .unwrap_or(false);
                         let (code, reason) = if is_expired {
                             (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
                         } else {
@@ -352,7 +358,8 @@ async fn handle_socket(
     let host_alert_rx = state.event_sink.subscribe_host_alerts();
     let host_alert_pump = tokio::spawn(pump_host_alerts(host_alert_rx, alert_tx.clone()));
     let idle_suspend_rx = state.event_sink.subscribe_idle_suspend();
-    let idle_suspend_pump = tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx.clone()));
+    let idle_suspend_pump =
+        tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx.clone()));
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     let auth_watcher = if !state.no_auth && actor.session_id.is_some() {
@@ -404,6 +411,8 @@ async fn handle_socket(
                                     if !user.is_enabled
                                         || session.revoked_at.is_some()
                                         || session.auth_version != auth_version
+                                        || user.auth_version != auth_version
+                                        || session.auth_version != user.auth_version
                                         || session.credential_version != credential_version
                                     {
                                         let _ = alert_tx_c.send(WireMsg::CloseAuth {
@@ -525,16 +534,21 @@ async fn handle_socket(
         if !state.no_auth {
             if let Some(deadline) = actor.effective_deadline {
                 if state.auth_service.clock().now() >= deadline {
-                    let is_expired = actor.exp.map(|e| state.auth_service.clock().now().timestamp() as usize >= e).unwrap_or(false);
+                    let is_expired = actor
+                        .exp
+                        .map(|e| state.auth_service.clock().now().timestamp() as usize >= e)
+                        .unwrap_or(false);
                     let (code, reason) = if is_expired {
                         (CLOSE_FULL_LOGIN_REQUIRED, "Session expired")
                     } else {
                         (CLOSE_MFA_REQUIRED, "MFA verification required")
                     };
-                    let _ = alert_tx.send(WireMsg::CloseAuth {
-                        code,
-                        reason: reason.to_string(),
-                    }).await;
+                    let _ = alert_tx
+                        .send(WireMsg::CloseAuth {
+                            code,
+                            reason: reason.to_string(),
+                        })
+                        .await;
                     let _ = cancel_tx.send(true);
                     break;
                 }
@@ -2697,7 +2711,7 @@ async fn do_enc_put_begin(
                             ("FORBIDDEN".into(), "dir resolves outside workspace".into())
                         }
                         _ => ("INVALID_PATH".into(), e.to_string()),
-                    })
+                    });
                 }
             }
         }
@@ -2830,7 +2844,6 @@ async fn pump_idle_suspend_hints(
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // FS subscribe helper
@@ -2968,11 +2981,11 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
 
     use super::{
-        pump_fs_events, pump_host_alerts, pump_pty, websocket_auth_ok, websocket_origin_allowed,
-        FsSubscriptionGuard,
+        FsSubscriptionGuard, pump_fs_events, pump_host_alerts, pump_pty, websocket_auth_ok,
+        websocket_origin_allowed,
     };
     use crate::api::ws_protocol::WireMsg;
-    use crate::fs::{event::FsEventKind, FsEvent, FsSubsystem};
+    use crate::fs::{FsEvent, FsSubsystem, event::FsEventKind};
 
     #[test]
     fn no_auth_mode_allows_websocket_without_a_token() {

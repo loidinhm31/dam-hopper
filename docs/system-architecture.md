@@ -5230,7 +5230,7 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 
 ## Authentication & Security
 
-**Authentication and access enforcement (Phases 02–03):**
+**Authentication and access enforcement (Phases 02–05):**
 
 - Password login yields a five-minute enrollment/login-MFA challenge; only confirmation/verification creates a V2 session. Sessions expire absolutely after 30 days; MFA freshness is 10 days; step-up does not extend expiry.
 - `require_auth` checks signed claims against current session/account on each protected REST request; legacy, stale, expired, revoked, superseded, and disabled sessions fail closed; backend failure returns `503 AUTH_UNAVAILABLE`.
@@ -5238,8 +5238,8 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 - `/ws` applies the same policy before upgrade. Open-socket local deadline guards run for every inbound frame and before outbound writes.
 - WebSocket close codes are `4403` for MFA required, `4401` for full login, and `1013` for auth-state unavailability; out-of-band DB edits have no immediate broadcast.
 - Inbound WS dispatch/commit rechecks the local session lease/effective deadline;
-  persisted revocation uses a five-second watcher (two-second DB timeout, at most
-  seven-second propagation), avoiding per-frame database reads.
+  persisted revocation uses a 5s watcher checking user `authVersion` and session
+  `authVersion`/`credentialVersion` (2s DB cap; ≤7s bound); no per-frame reads.
 - Media issue routes use protected auth; tickets/sessions bind session ID, auth/credential versions, and effective deadline; absolute capability TTL is clamped to it.
 - HEAD/GET admissions revalidate current session state; active bodies check the deadline and poll revocation every five seconds with a two-second lookup timeout.
 - Plugin epochs expire at the effective auth deadline; role/grant checks remain additive, and PTY processes survive reauthentication.
