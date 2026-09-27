@@ -141,17 +141,35 @@ impl AuthStore {
         expected_auth_version: i64,
         mfa: MfaConfirmed,
     ) -> Result<bool, StoreError> {
+        let auth_version_clause = if expected_auth_version == 0 {
+            doc! {
+                "$or": [
+                    { "authVersion": 0 },
+                    { "authVersion": { "$exists": false } },
+                    { "authVersion": { "$eq": null } },
+                ]
+            }
+        } else {
+            doc! { "authVersion": expected_auth_version }
+        };
         let filter = doc! {
             "username": username,
-            "authVersion": expected_auth_version,
-            "$or": [
-                { "mfa": { "$eq": null } },
-                { "mfa": { "$exists": false } }
+            "$and": [
+                auth_version_clause,
+                doc! {
+                    "$or": [
+                        { "mfa": { "$eq": null } },
+                        { "mfa": { "$exists": false } }
+                    ]
+                }
             ]
         };
         let mfa_bson = to_bson(&mfa)?;
         let update = doc! {
-            "$set": { "mfa": mfa_bson }
+            "$set": {
+                "mfa": mfa_bson,
+                "authVersion": expected_auth_version,
+            }
         };
         let res = self.users.update_one(filter, update).await?;
         Ok(res.modified_count == 1)
@@ -168,16 +186,34 @@ impl AuthStore {
         expected_auth_version: i64,
         matched_step: i64,
     ) -> Result<bool, StoreError> {
+        let auth_version_clause = if expected_auth_version == 0 {
+            doc! {
+                "$or": [
+                    { "authVersion": 0 },
+                    { "authVersion": { "$exists": false } },
+                    { "authVersion": { "$eq": null } },
+                ]
+            }
+        } else {
+            doc! { "authVersion": expected_auth_version }
+        };
         let filter = doc! {
             "username": username,
-            "authVersion": expected_auth_version,
-            "$or": [
-                { "mfa.lastAcceptedStep": { "$lt": matched_step } },
-                { "mfa.lastAcceptedStep": { "$exists": false } }
+            "$and": [
+                auth_version_clause,
+                doc! {
+                    "$or": [
+                        { "mfa.lastAcceptedStep": { "$lt": matched_step } },
+                        { "mfa.lastAcceptedStep": { "$exists": false } }
+                    ]
+                }
             ]
         };
         let update = doc! {
-            "$set": { "mfa.lastAcceptedStep": matched_step }
+            "$set": {
+                "mfa.lastAcceptedStep": matched_step,
+                "authVersion": expected_auth_version,
+            }
         };
         let res = self.users.update_one(filter, update).await?;
         Ok(res.modified_count == 1)
