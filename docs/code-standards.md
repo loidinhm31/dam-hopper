@@ -2316,9 +2316,9 @@ The Phase 01 auth-bypass design is historical; the source plan is no longer pres
 ### Session JWT and cookie
 
 - `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token. The normal login flow returns a session token only after TOTP; see [Authentication API](./authentication-api.md).
-- Auth protocol 2 JWTs bind the user and session ID to auth/credential versions and a fixed expiry. Sessions expire after 30 days; MFA must be refreshed after 10 days without extending absolute expiry.
+- Auth protocol 2 JWTs bind the user and session ID to `authVersion` and `credentialVersion`: sessions expire after 30 days, MFA freshness is ten days per session, and step-up retains absolute expiry while invalidating the old credential.
 - The `damhopper-auth` cookie is `HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`.
-- `--no-auth` is a development bypass; do not apply its direct-token response to normal password login.
+- `--no-auth` is development-only; never use its direct-token response for normal login. Live WebSockets revalidate user/session versions every five seconds with a two-second database timeout (≤7-second bound); operator recovery must use immutable `_id` plus expected-`authVersion` CAS. See the [MongoDB recovery runbook](./configuration-guide.md#mfa-encryption-key-and-operator-recovery-runbook).
 
 ## Project Registry (dam-hopper.toml)
 

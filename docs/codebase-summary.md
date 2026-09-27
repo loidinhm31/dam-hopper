@@ -393,16 +393,15 @@ and [multi-server guide](./user-guide-multi-server-profiles.md).
 `server/src/main.rs` assembles `AppState` with a MongoDB-backed `AuthService`;
 non-production no-DB startup uses an in-memory mock. `server/src/auth/` defines
 user/session/challenge state, CAS/TTL operations, and V2 policy. Phase 02 owns
-challenge login, enrollment, verification, status, and logout. Async
-`require_auth` evaluates claims against current state per protected REST request
-and adds non-secret session/version/deadline metadata to `AuthenticatedActor`.
-WebSocket admission shares that policy; deadline checks guard inbound frames
-and outbound writes, while a 5s watcher checks persisted revocation with a 2s
-lookup timeout. Inbound dispatch/commit checks the local session lease/deadline
-rather than reading MongoDB per frame. Media tickets bind session/version/
-deadline; HEAD/GET and streamed bodies revalidate access.
-Five integration tests live in `transport_enforcement_phase03.rs`. See the
-[Authentication API](./authentication-api.md).
+challenge login, enrollment, verification, status, and logout. `require_auth`
+checks current claims per protected REST request and adds non-secret session/version/deadline metadata to `AuthenticatedActor`.
+WebSocket admission shares that policy; local deadline guards check inbound
+dispatch/commit and outbound writes. A 5s watcher checks user `authVersion` and session `authVersion`/`credentialVersion` (2s DB cap; ≤7s bound).
+Inbound handlers use the local lease, not per-frame DB reads. Media tickets bind
+session/version/deadline; HEAD/GET/live bodies revalidate access.
+Thirteen Phase 05 tests in `server/tests/auth_mfa.rs` use `AuthTestFixture`;
+the common fixture isolates MongoDB and cleans the temporary DB on `Drop`.
+See the [Authentication API](./authentication-api.md).
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
 browser-debug, host-resource, and idle-suspend surfaces. Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,

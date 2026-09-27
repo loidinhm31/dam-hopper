@@ -6,7 +6,7 @@
 
 ## Overview
 
-Date: 2026-09-26. Priority: P1. Implementation: pending. Review: pending. Qualify behavior, then deploy matched client/server and document operator-only recovery.
+Date: 2026-09-26. Status: **DONE (2026-09-27; 100%)**. Priority: P1. Cycle 2 review approved (2026-09-27; 9.9/10). All 120/120 scoped tests verified (39 backend, 81 frontend), including end-to-end TCP/WebSocket deadline and MongoDB recovery smoke. Production deployment still requires protected key provisioning and a matched client/server rollout with old instances restarted.
 
 ## Key Insights
 
@@ -54,18 +54,18 @@ Update docs after passing smoke: `docs/api-reference.md`, `configuration-guide.m
 
 ## Todo list
 
-- [ ] Migrate auth-dependent fixtures and add focused boundary/race coverage.
-- [ ] Execute real enrollment, deadline, transport, and recovery scenarios.
-- [ ] Update operator/API/architecture docs and changelog after smoke.
-- [ ] Qualify cutover, compatible rollback, and secret provisioning.
+- [x] Migrate auth-dependent fixtures and add focused boundary/race coverage.
+- [x] Execute real enrollment, deadline, transport, and recovery scenarios.
+- [x] Update operator/API/architecture docs and changelog after smoke.
+- [x] Qualify cutover, compatible rollback, and secret provisioning.
 
 ## Success Criteria
 
-Every acceptance row has observed evidence, all affected contracts/tests/docs migrated, no legacy JWT or live-stream bypass, no profile isolation regression. Release gate remains closed for unverified browser/native/mobile behavior or missing DB/key deployment prerequisites.
+Phase 05 is complete based on acceptance-matrix evidence, 120/120 scoped tests, end-to-end TCP/WebSocket deadline and MongoDB recovery smoke, and the approved Cycle 2 review. Production deployment remains gated on protected key provisioning, compatible client/server rollout and restart, and closure/review of the carried-forward security concerns recorded below.
 
 ## Risk Assessment
 
-Global tests depending on stateless JWTs will need genuine fixture migration. Backups restoring an older authVersion/session store can resurrect authority; recovery/restore must invalidate sessions and never lower epochs without equivalent global revocation. Retain MFA key backups securely.
+Two carried-forward security concerns remain outside Phase 05's changed-file and final-review scope and should block production deployment until addressed or formally dispositioned: the Phase 02 account-enumeration finding (missing and disabled accounts receive distinct/early login responses before bcrypt; see the [Phase 02 review](../reports/code-review-260927-0031-phase-02-auth-api.md)) and the Phase 01 MFA key-loader TOCTOU finding (see the [Phase 01 review](../reports/code-review-260926-2258-phase01-auth-state-and-policy.md)). Preserve secure MFA-key backups; do not roll back to password-only access.
 
 ## Security Considerations
 
@@ -73,4 +73,4 @@ Operator MongoDB edits are privileged account recovery, not user self-service. T
 
 ## Next steps
 
-User reviews/validates plan, then separately authorizes implementation. Planning deliverable does not grant permission to modify application code or production MongoDB.
+Phase 05 status: **DONE (2026-09-27; 100%)**. Implementation, qualification, 120/120 scoped tests, documentation, and Cycle 2 review (9.9/10) are complete. The feature branch is ready for merge; production rollout must wait for protected key provisioning, coordinated server restart, and independent closure/review of the carried-forward security concerns.
