@@ -92,12 +92,25 @@ pub(crate) struct MediaTicketLease {
     pub expires_at_epoch_ms: u128,
 }
 
+/// Optional authentication session binding context for media tickets/sessions.
+#[derive(Clone, Debug, Default)]
+pub struct MediaAuthContext {
+    pub session_id: Option<String>,
+    pub auth_version: Option<i64>,
+    pub credential_version: Option<i64>,
+    pub auth_deadline: Option<SystemTime>,
+}
+
 /// Authorization snapshot that must be finalized after async file validation.
 #[derive(Clone)]
 pub(crate) struct MediaTicketAuthorization {
     pub record: MediaTicketRecord,
-    ticket_incarnation: u64,
-    binding: MediaSessionBinding,
+    pub(crate) ticket_incarnation: u64,
+    pub(crate) binding: MediaSessionBinding,
+    pub(crate) auth_session_id: Option<String>,
+    pub(crate) auth_version: Option<i64>,
+    pub(crate) credential_version: Option<i64>,
+    pub(crate) auth_deadline: Option<SystemTime>,
 }
 
 pub(crate) struct MediaTicketBoundLease {
@@ -141,6 +154,10 @@ struct StoredMediaTicket {
     incarnation: u64,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
+    auth_session_id: Option<String>,
+    auth_version: Option<i64>,
+    credential_version: Option<i64>,
+    auth_deadline: Option<SystemTime>,
 }
 
 struct StoredMediaSession {
@@ -149,8 +166,11 @@ struct StoredMediaSession {
     token: MediaSessionToken,
     idle_expires_at: Instant,
     absolute_expires_at: Instant,
+    auth_session_id: Option<String>,
+    auth_version: Option<i64>,
+    credential_version: Option<i64>,
+    auth_deadline: Option<SystemTime>,
 }
-
 pub(crate) trait MediaTicketClock: Send + Sync {
     fn now_instant(&self) -> Instant;
     fn now_system(&self) -> SystemTime;
@@ -205,12 +225,27 @@ impl MediaTicketStore {
         client_id: &MediaClientId,
         existing: Option<MediaSessionToken>,
     ) -> MediaSessionIssue {
+        self.establish_session_with_context(actor_subject, client_id, existing, None)
+    }
+
+    pub(crate) fn establish_session_with_context(
+        &self,
+        actor_subject: &str,
+        client_id: &MediaClientId,
+        existing: Option<MediaSessionToken>,
+        auth_context: Option<&MediaAuthContext>,
+    ) -> MediaSessionIssue {
         let now = self.clock.now_instant();
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         prune_expired(&mut inner, now);
+
+        let target_sid = auth_context.and_then(|c| c.session_id.as_deref());
+        let target_av = auth_context.and_then(|c| c.auth_version);
+        let target_cv = auth_context.and_then(|c| c.credential_version);
+        let target_deadline = auth_context.and_then(|c| c.auth_deadline);
 
         if let Some(token) = existing {
             let digest = token.digest();
@@ -219,7 +254,12 @@ impl MediaTicketStore {
                 .iter_mut()
                 .find(|(stored_digest, _)| stored_digest.matches(&digest))
             {
-                if session.actor_subject == actor_subject && session.client_id == *client_id {
+                if session.actor_subject == actor_subject
+                    && session.client_id == *client_id
+                    && session.auth_session_id.as_deref() == target_sid
+                    && session.auth_version == target_av
+                    && session.credential_version == target_cv
+                {
                     session.idle_expires_at =
                         std::cmp::min(now + MEDIA_SESSION_IDLE_TTL, session.absolute_expires_at);
                     return MediaSessionIssue::Issued(MediaSessionLease {
@@ -234,13 +274,22 @@ impl MediaTicketStore {
             }
         }
 
+        let session_ttl = if let Some(deadline) = target_deadline {
+            let remaining = deadline
+                .duration_since(self.clock.now_system())
+                .unwrap_or(Duration::ZERO);
+            std::cmp::min(MEDIA_SESSION_ABSOLUTE_TTL, remaining)
+        } else {
+            MEDIA_SESSION_ABSOLUTE_TTL
+        };
+
         for _ in 0..4 {
             let token = MediaSessionToken::new();
             let digest = token.digest();
             if inner.sessions.contains_key(&digest) {
                 continue;
             }
-            let absolute_expires_at = now + MEDIA_SESSION_ABSOLUTE_TTL;
+            let absolute_expires_at = now + session_ttl;
             inner.sessions.insert(
                 digest,
                 StoredMediaSession {
@@ -249,6 +298,10 @@ impl MediaTicketStore {
                     token: token.clone(),
                     idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
                     absolute_expires_at,
+                    auth_session_id: target_sid.map(str::to_owned),
+                    auth_version: target_av,
+                    credential_version: target_cv,
+                    auth_deadline: target_deadline,
                 },
             );
             return MediaSessionIssue::Issued(MediaSessionLease {
@@ -272,6 +325,25 @@ impl MediaTicketStore {
         existing: Option<MediaSessionToken>,
         record: MediaTicketRecord,
     ) -> MediaTicketBoundIssue {
+        self.issue_bound_with_context(
+            expected_generation,
+            actor_subject,
+            client_id,
+            existing,
+            record,
+            None,
+        )
+    }
+
+    pub(crate) fn issue_bound_with_context(
+        &self,
+        expected_generation: u64,
+        actor_subject: &str,
+        client_id: &MediaClientId,
+        existing: Option<MediaSessionToken>,
+        record: MediaTicketRecord,
+        auth_context: Option<&MediaAuthContext>,
+    ) -> MediaTicketBoundIssue {
         let now = self.clock.now_instant();
         let mut inner = self
             .inner
@@ -282,6 +354,11 @@ impl MediaTicketStore {
             return MediaTicketBoundIssue::ContextChanged;
         }
 
+        let target_sid = auth_context.and_then(|c| c.session_id.as_deref());
+        let target_av = auth_context.and_then(|c| c.auth_version);
+        let target_cv = auth_context.and_then(|c| c.credential_version);
+        let target_deadline = auth_context.and_then(|c| c.auth_deadline);
+
         let reusable = if let Some(token) = existing {
             let digest = token.digest();
             inner
@@ -291,6 +368,9 @@ impl MediaTicketStore {
                     stored_digest.matches(&digest)
                         && stored.actor_subject == actor_subject
                         && stored.client_id == *client_id
+                        && stored.auth_session_id.as_deref() == target_sid
+                        && stored.auth_version == target_av
+                        && stored.credential_version == target_cv
                 })
                 .map(|(stored_digest, stored)| MediaSessionLease {
                     token: stored.token.clone(),
@@ -305,7 +385,11 @@ impl MediaTicketStore {
                 .sessions
                 .iter()
                 .find(|(_, stored)| {
-                    stored.actor_subject == actor_subject && stored.client_id == *client_id
+                    stored.actor_subject == actor_subject
+                        && stored.client_id == *client_id
+                        && stored.auth_session_id.as_deref() == target_sid
+                        && stored.auth_version == target_av
+                        && stored.credential_version == target_cv
                 })
                 .map(|(stored_digest, stored)| MediaSessionLease {
                     token: stored.token.clone(),
@@ -341,6 +425,14 @@ impl MediaTicketStore {
             else {
                 return MediaTicketBoundIssue::Capacity;
             };
+            let session_ttl = if let Some(deadline) = target_deadline {
+                let remaining = deadline
+                    .duration_since(self.clock.now_system())
+                    .unwrap_or(Duration::ZERO);
+                std::cmp::min(MEDIA_SESSION_ABSOLUTE_TTL, remaining)
+            } else {
+                MEDIA_SESSION_ABSOLUTE_TTL
+            };
             inner.sessions.insert(
                 digest,
                 StoredMediaSession {
@@ -348,7 +440,11 @@ impl MediaTicketStore {
                     client_id: client_id.clone(),
                     token: token.clone(),
                     idle_expires_at: now + MEDIA_SESSION_IDLE_TTL,
-                    absolute_expires_at: now + MEDIA_SESSION_ABSOLUTE_TTL,
+                    absolute_expires_at: now + session_ttl,
+                    auth_session_id: target_sid.map(str::to_owned),
+                    auth_version: target_av,
+                    credential_version: target_cv,
+                    auth_deadline: target_deadline,
                 },
             );
             MediaSessionLease {
@@ -360,6 +456,16 @@ impl MediaTicketStore {
                 },
             }
         };
+
+        let ticket_ttl = if let Some(deadline) = target_deadline {
+            let remaining = deadline
+                .duration_since(self.clock.now_system())
+                .unwrap_or(Duration::ZERO);
+            std::cmp::min(MEDIA_TICKET_ABSOLUTE_TTL, remaining)
+        } else {
+            MEDIA_TICKET_ABSOLUTE_TTL
+        };
+
         let incarnation = next_ticket_incarnation(&mut inner);
         inner.tickets.insert(
             ticket.clone(),
@@ -368,7 +474,11 @@ impl MediaTicketStore {
                 binding: Some(session.binding.clone()),
                 incarnation,
                 idle_expires_at: now + MEDIA_TICKET_IDLE_TTL,
-                absolute_expires_at: now + MEDIA_TICKET_ABSOLUTE_TTL,
+                absolute_expires_at: now + ticket_ttl,
+                auth_session_id: target_sid.map(str::to_owned),
+                auth_version: target_av,
+                credential_version: target_cv,
+                auth_deadline: target_deadline,
             },
         );
         MediaTicketBoundIssue::Issued(MediaTicketBoundLease {
@@ -437,6 +547,10 @@ impl MediaTicketStore {
                     incarnation,
                     idle_expires_at,
                     absolute_expires_at,
+                    auth_session_id: None,
+                    auth_version: None,
+                    credential_version: None,
+                    auth_deadline: None,
                 },
             );
             return MediaTicketIssue::Issued(MediaTicketLease {
@@ -487,6 +601,10 @@ impl MediaTicketStore {
             record: stored.record.clone(),
             ticket_incarnation: stored.incarnation,
             binding,
+            auth_session_id: stored.auth_session_id.clone(),
+            auth_version: stored.auth_version,
+            credential_version: stored.credential_version,
+            auth_deadline: stored.auth_deadline,
         })
     }
 
@@ -566,6 +684,10 @@ impl MediaTicketStore {
             record: stored.record.clone(),
             ticket_incarnation: stored.incarnation,
             binding,
+            auth_session_id: stored.auth_session_id.clone(),
+            auth_version: stored.auth_version,
+            credential_version: stored.credential_version,
+            auth_deadline: stored.auth_deadline,
         })
     }
 
@@ -592,6 +714,10 @@ impl MediaTicketStore {
             record: stored.record.clone(),
             ticket_incarnation: stored.incarnation,
             binding,
+            auth_session_id: stored.auth_session_id.clone(),
+            auth_version: stored.auth_version,
+            credential_version: stored.credential_version,
+            auth_deadline: stored.auth_deadline,
         })
     }
 
@@ -845,6 +971,28 @@ impl MediaTicketStore {
         inner.tickets.clear();
         inner.sessions.clear();
         inner.generation = inner.generation.wrapping_add(1);
+    }
+    pub(crate) fn revoke_by_actor_or_session(&self, actor: &str, session_id: Option<&str>) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.tickets.retain(|_, ticket| {
+            let should_revoke = if let Some(sid) = session_id {
+                ticket.auth_session_id.as_deref() == Some(sid)
+            } else {
+                ticket.binding.as_ref().is_some_and(|b| b.actor_subject == actor)
+            };
+            !should_revoke
+        });
+        inner.sessions.retain(|_, session| {
+            let should_revoke = if let Some(sid) = session_id {
+                session.auth_session_id.as_deref() == Some(sid)
+            } else {
+                session.actor_subject == actor
+            };
+            !should_revoke
+        });
     }
 
     #[cfg(test)]
@@ -1465,5 +1613,84 @@ mod tests {
         assert!(store
             .authorize_stream(&issued_b.ticket.ticket, MediaTicketKind::Image, &headers, false)
             .is_some());
+    }
+
+    #[test]
+    fn auth_context_binding_clamping_and_revocation() {
+        let (store, clock) = store();
+        let client_id = test_client_id();
+        let now_sys = clock.now_system();
+        let short_deadline = now_sys + Duration::from_secs(300); // 5 minutes
+
+        let auth_ctx = MediaAuthContext {
+            session_id: Some("sess-1".to_string()),
+            auth_version: Some(1),
+            credential_version: Some(1),
+            auth_deadline: Some(short_deadline),
+        };
+
+        let issued = match store.issue_bound_with_context(
+            store.generation(),
+            "actor",
+            &client_id,
+            None,
+            record(MediaTicketKind::Video),
+            Some(&auth_ctx),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("Expected issue_bound to succeed"),
+        };
+
+        // Ticket authorization carries auth context
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!(
+                "{}={}",
+                super::super::media_session::media_session_cookie_name(&client_id),
+                issued.session.token.as_str()
+            )
+            .parse()
+            .unwrap(),
+        );
+
+        let auth = store
+            .authorize_stream(&issued.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .expect("Stream must be authorized");
+        assert_eq!(auth.auth_session_id.as_deref(), Some("sess-1"));
+        assert_eq!(auth.auth_version, Some(1));
+        assert_eq!(auth.credential_version, Some(1));
+        assert_eq!(auth.auth_deadline, Some(short_deadline));
+
+        // Reusing with changed credentialVersion is rejected and creates a fresh session
+        let rotated_auth_ctx = MediaAuthContext {
+            session_id: Some("sess-1".to_string()),
+            auth_version: Some(1),
+            credential_version: Some(2), // Rotated!
+            auth_deadline: Some(short_deadline),
+        };
+
+        let issued_rotated = match store.issue_bound_with_context(
+            store.generation(),
+            "actor",
+            &client_id,
+            Some(issued.session.token.clone()),
+            record(MediaTicketKind::Video),
+            Some(&rotated_auth_ctx),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("Expected issue_bound to succeed with new session"),
+        };
+        assert_ne!(
+            issued.session.token.as_str(),
+            issued_rotated.session.token.as_str(),
+            "Rotated credentialVersion must not reuse old session token"
+        );
+
+        // Revoking by session revokes tickets and sessions
+        store.revoke_by_actor_or_session("actor", Some("sess-1"));
+        assert!(store
+            .authorize_stream(&issued.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .is_none());
     }
 }

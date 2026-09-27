@@ -25,8 +25,10 @@ pub(crate) use image_ticket::ImageTicketIssue;
 pub use image_ticket::{
     image_mime, is_supported_image, ImageStreamTicketStore, ImageTicketPurpose, ImageTicketRecord,
 };
+pub use media_ticket::MediaAuthContext;
 pub(crate) use media_ticket::{
-    MediaFileVersion, MediaTicketKind, MediaTicketPurpose, MediaTicketRecord, MediaTicketStore,
+    MediaFileVersion, MediaTicketAuthorization, MediaTicketKind, MediaTicketPurpose,
+    MediaTicketRecord, MediaTicketStore,
 };
 pub use mutate::{assert_safe_mutation, create_dir, create_file, delete, move_path, rename};
 pub use ops::{

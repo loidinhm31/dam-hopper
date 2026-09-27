@@ -50,9 +50,19 @@ vi.mock("./server-config.js", () => ({
   getAuthToken: vi.fn((profileId?: string) =>
     profileId ? mockTokens[profileId] ?? null : null,
   ),
+  setAuthToken: vi.fn((token: string, profileId?: string) => {
+    if (profileId) mockTokens[profileId] = token;
+    return true;
+  }),
+  clearAuthToken: vi.fn((profileId?: string) => {
+    if (profileId) delete mockTokens[profileId];
+    return true;
+  }),
   getServerUrl: vi.fn(() => "http://localhost:4801"),
   getActiveProfileId: vi.fn(() => "prof-valid"),
   isSameOriginProfile: vi.fn(() => true),
+  normalizeServerUrl: vi.fn((u: string) => u),
+  subscribeToProfileChanges: vi.fn(() => () => {}),
 }));
 
 // Mock WebSocket so WsTransport doesn't attempt real network calls

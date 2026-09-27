@@ -40,7 +40,7 @@ deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 - Config: `~/.config/dam-hopper/server.conf`
 - Log: `~/.config/dam-hopper/output.log`
 - PID: `~/.config/dam-hopper/server.pid`
-- Token: `~/.config/dam-hopper/server-token`
+- JWT signing secret: `~/.config/dam-hopper/server-token`
 
 ## Configuration
 

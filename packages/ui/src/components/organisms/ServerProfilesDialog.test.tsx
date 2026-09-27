@@ -32,6 +32,15 @@ vi.mock("@/api/connections.js", () => ({
         error: null,
       };
     }
+    if (profileId === "profile-mfa") {
+      return {
+        owner: { profileId, generation: 1 },
+        status: "mfa-required",
+        intent: true,
+        serverUrl: "https://mfa.test",
+        error: "MFA verification required",
+      };
+    }
     return {
       owner: { profileId, generation: 1 },
       status: "disconnected",
@@ -255,5 +264,46 @@ describe("ServerProfilesDialog", () => {
     });
 
     expect(getProfiles()[0].autoConnect).toBe(false);
+  });
+
+  it("renders MFA required badge and calls onLoginProfile on MFA button click", async () => {
+    const profileMfa = {
+      id: "profile-mfa",
+      name: "MFA Server",
+      url: "https://mfa.test",
+      authType: "basic" as const,
+      username: "alice",
+      createdAt: 1,
+      autoConnect: true,
+    };
+    saveProfiles([profileMfa]);
+    setAuthToken("restricted-token", profileMfa.id);
+
+    const onLoginMock = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <ServerProfilesDialog
+          open
+          onClose={() => undefined}
+          onEditProfile={() => undefined}
+          onLoginProfile={onLoginMock}
+        />,
+      );
+    });
+
+    expect(document.body.textContent).toContain("MFA required");
+
+    const mfaBtn = document.querySelector<HTMLButtonElement>(
+      'button[title="Complete MFA verification for this server"]',
+    );
+    expect(mfaBtn).not.toBeNull();
+    await act(async () => {
+      mfaBtn?.click();
+    });
+
+    expect(onLoginMock).toHaveBeenCalledWith(profileMfa);
   });
 });

@@ -1068,7 +1068,8 @@ export function subscribeToProfileChanges(
       callback({ type: "profileListChanged" });
     } else if (
       event.key === KEY_TOKEN ||
-      event.key?.startsWith(`${KEY_TOKEN}_`)
+      event.key?.startsWith(`${KEY_TOKEN}_`) ||
+      event.key?.startsWith(KEY_PROFILE_AUTH_V2_PREFIX)
     ) {
       profileChangeVersion += 1;
       callback({ type: "dataChanged" });

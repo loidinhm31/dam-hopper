@@ -160,6 +160,7 @@ fn make_state(tmp: &TempDir) -> AppState {
         ),
     )
     .expect("make_state failed")
+    .with_auth_service(Arc::new(crate::auth::AuthService::new_mock_default().0))
     .with_codex_exporter(
         crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
             tmp.path().join(".codex/config.toml"),
@@ -216,6 +217,7 @@ fn make_state_with_idle_suspend_config(
         ),
     )
     .expect("make_state_with_idle_suspend_config failed")
+    .with_auth_service(Arc::new(crate::auth::AuthService::new_mock_default().0))
     .with_codex_exporter(
         crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
             tmp.path().join(".codex/config.toml"),
@@ -249,22 +251,18 @@ fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
 }
 
 fn test_jwt() -> String {
-    use jsonwebtoken::{EncodingKey, Header, encode};
-    #[derive(serde::Serialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-    }
-    let claims = Claims {
-        sub: "test-user".to_string(),
-        exp: (chrono::Utc::now().timestamp() as usize) + 3600,
+    use crate::auth::model::AuthClaims;
+    use crate::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+    let claims = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: MOCK_USER.to_string(),
+        sid: MOCK_SESSION_ID.to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: chrono::Utc::now().timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
     };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(TEST_TOKEN.as_bytes()),
-    )
-    .unwrap()
+    claims.encode(TEST_TOKEN).unwrap()
 }
 
 fn auth_cookie() -> String {

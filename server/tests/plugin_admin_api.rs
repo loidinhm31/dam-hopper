@@ -98,22 +98,21 @@ function handleMessage(msg) {
 "#
 }
 
+const TEST_SESSION_EXPIRY_SECS: usize = 2_000_000_000;
+
 fn generate_auth_token(subject: &str, secret: &str) -> String {
-    let exp = (chrono::Utc::now().timestamp() as usize) + 3600;
-    #[derive(serde::Serialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-    }
-    jsonwebtoken::encode(
-        &jsonwebtoken::Header::default(),
-        &Claims {
-            sub: subject.to_string(),
-            exp,
-        },
-        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .unwrap()
+    let now = chrono::Utc::now();
+    let sid = format!("session-{}", subject.trim_end_matches("-user"));
+    let claims = dam_hopper_server::auth::model::AuthClaims {
+        v: 2,
+        sub: subject.to_string(),
+        sid,
+        auth_version: 0,
+        credential_version: 0,
+        iat: now.timestamp() as usize,
+        exp: TEST_SESSION_EXPIRY_SECS,
+    };
+    claims.encode(secret).unwrap()
 }
 
 struct TestHarness {
@@ -175,6 +174,28 @@ async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
             "isEnabled": false,
             "role": "admin",
         }).await;
+
+        let now = chrono::Utc::now();
+        let expires_at_chrono = chrono::DateTime::from_timestamp(TEST_SESSION_EXPIRY_SECS as i64, 0).unwrap();
+        let mfa_verified_at = now;
+        let sess_col = d.collection::<mongodb::bson::Document>("authSessions");
+        let _ = sess_col.delete_many(mongodb::bson::doc! {}).await;
+        for (username, sid) in [
+            ("admin-user", "session-admin"),
+            ("normal-user", "session-normal"),
+            ("legacy-user", "session-legacy"),
+            ("disabled-admin", "session-disabled-admin"),
+        ] {
+            let _ = sess_col.insert_one(mongodb::bson::doc! {
+                "_id": sid,
+                "username": username,
+                "authVersion": 0i64,
+                "credentialVersion": 0i64,
+                "issuedAt": mongodb::bson::DateTime::from_millis(now.timestamp_millis()),
+                "expiresAt": mongodb::bson::DateTime::from_millis(expires_at_chrono.timestamp_millis()),
+                "mfaVerifiedAt": mongodb::bson::DateTime::from_millis(mfa_verified_at.timestamp_millis()),
+            }).await;
+        }
         Some(d)
     } else {
         None
@@ -325,7 +346,7 @@ async fn test_empty_deny_allowlist() {
     let legacy_resp = router.clone().oneshot(legacy_req).await.unwrap();
     assert_eq!(legacy_resp.status(), StatusCode::FORBIDDEN);
 
-    // Disabled admin user -> 403 Forbidden
+    // Disabled admin user -> 401 Unauthorized (disabled account rejected by require_auth)
     let disabled_token = generate_auth_token("disabled-admin", "test-jwt-secret");
     let disabled_req = Request::builder()
         .method(Method::GET)
@@ -334,8 +355,7 @@ async fn test_empty_deny_allowlist() {
         .body(Body::empty())
         .unwrap();
     let disabled_resp = router.clone().oneshot(disabled_req).await.unwrap();
-    assert_eq!(disabled_resp.status(), StatusCode::FORBIDDEN);
-
+    assert_eq!(disabled_resp.status(), StatusCode::UNAUTHORIZED);
     // POST /api/plugins/admin/stages as non-admin -> 403 Forbidden
     let (tar_gz, sha) = sample_plugin_archive("test-plugin", "1.0.0");
     let stage_req = Request::builder()

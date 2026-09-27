@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import type { ApiClient } from "@/api/client.js";
 import { getApiClientForProfile } from "@/api/connections.js";
-import { buildAuthHeaders, getProfiles, getServerUrl } from "@/api/server-config.js";
+import { getAuthToken, getProfiles, getServerUrl } from "@/api/server-config.js";
+import { checkAuthStatus } from "@/api/auth-client.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import type {
@@ -81,20 +82,34 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
     const fetchAuth = async () => {
       try {
         setAuthLoading(true);
-        const res = await fetch(`${serverUrl}/api/auth/status`, {
-          headers: buildAuthHeaders(profileId ?? undefined),
-          credentials: "omit",
-        });
+        if (!serverUrl) return;
+        const token = getAuthToken(profileId ?? undefined);
+        const result = await checkAuthStatus(serverUrl, token);
         if (cancelled) return;
-        if (res.ok) {
-          const data: AuthStatusResponse = await res.json();
-          setAuthStatus(data);
+        if (result.authenticated) {
+          setAuthStatus({
+            authenticated: true,
+            user: result.user,
+            role: result.role,
+            dev_mode: result.dev_mode,
+            workbenchProtocol: result.workbenchProtocol,
+          });
+          setUnauthorized(false);
         } else {
-          setAuthStatus({ authenticated: false, workbenchProtocol: 2 });
+          setAuthStatus({
+            authenticated: false,
+            workbenchProtocol: result.workbenchProtocol ?? 2,
+            error: result.error,
+          });
+          setUnauthorized(true);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setAuthStatus({ authenticated: false, workbenchProtocol: 2, error: "Network error" });
+          setAuthStatus({
+            authenticated: false,
+            workbenchProtocol: 2,
+            error: err instanceof Error ? err.message : "Network error",
+          });
         }
       } finally {
         if (!cancelled) {

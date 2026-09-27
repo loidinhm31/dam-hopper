@@ -175,30 +175,30 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 
 **Functional Requirements:**
 
-- Support Bearer REST authentication plus HttpOnly SameSite=Strict cookie sessions and public health/auth exceptions.
-- Enforce exact HTTP(S) CORS origins; wildcard, path, query, duplicate, and userinfo entries are rejected.
-- Structured error responses and content negotiation for binary vs. text responses.
-- Diagnostics export from Settings > Maintenance with canonical frontend snapshot payload and capped terminal tails.
+- Require authenticator-app TOTP for every enabled password account; password login yields only a five-minute enrollment/login-MFA challenge, and QR/manual Base32 setup must agree before the first valid code grants access.
+- Enforce a fixed 30-day absolute session lifetime and ten-day per-session MFA freshness; step-up replaces credentials without extending expiry, while expiry requires password plus fresh TOTP.
+- Provide operator-only lost-factor recovery through an atomic MongoDB `authVersion` reset using immutable account identity and expected version; do not add recovery codes or reset endpoints/CLI.
+- Support Bearer REST authentication, HttpOnly SameSite=Strict cookies, explicit public health/auth exceptions, exact-origin CORS, structured errors, and content negotiation.
 
 **Acceptance Criteria:**
 
-- ✓ Native image/video streams require an opaque ticket bound to an authenticated actor, profile, and UUIDv4 `mediaClientId`
-- ✓ Ticket clients require `session-cookie-v2`, a namespaced media cookie, and a credentialed successful `HEAD` before native source/download exposure
-- ✓ The stored ticket binding selects the cookie namespace; duplicate selected cookies fail closed, while ticket-only fallback is limited to the exact allowed origin
-- ✓ Profile change/logout revokes only the matching `(actor.subject, mediaClientId)` media session and tickets, including stale dialog profiles
-- ✓ Unknown, expired, revoked, stale-generation, or wrong-kind media tickets fail as non-disclosing `404` without bearer/blob fallback
+- ✓ Enrollment/login issue no authenticated credential before a valid TOTP; QR/manual setup agree; legacy JWTs and disabled, stale, or revoked sessions fail closed; `--no-auth` remains development-restricted.
+- ✓ Exact day-10/day-30 policy precedence is enforced; step-up increments `credentialVersion`, rejects the prior token, and preserves `expiresAt`.
+- ✓ REST and open WebSockets share the session policy; the live watcher checks current user/session versions every five seconds with a two-second lookup cap (≤7-second revocation bound).
+- ✓ MongoDB recovery matches immutable `users._id` plus expected `authVersion`, increments the account version and clears MFA/throttle state atomically; old sessions/challenges fail, while password, approval, and role remain unchanged.
+- ✓ Media tickets bind actor/session/profile/client; cookie namespace selection and duplicate rejection are enforced, ticket-only fallback requires exact origin, logout is owner-scoped, and invalid/stale tickets return non-disclosing `404`.
 
 **Non-Functional Requirements:**
 
-- Token generation on first start
-- Store token securely (0600 file permissions)
-- Log auth failures without leaking tokens
-- Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing
-- Media uses an HTTP-compatible host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie; auth remains `HttpOnly; SameSite=Strict`, and ticket/session auth is preserved
-- Separate browser clients use exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden
-- Cleartext HTTP permits interception or modification of Bearer/auth cookies, ticket URLs, actions, and media bytes
+- Generate and protect the JWT signing secret on first start; it is not a user bearer token.
+- Require a dedicated 32-byte MFA encryption key in authenticated production, separate from MongoDB and the JWT key; restrict it to the owner (`0600` on Unix) and fail closed when absent or invalid.
+- Keep passwords, bearer tokens, OTPs, setup keys/URIs, and encryption material out of logs; setup values are not persisted in browser storage.
+- Diagnostics exports include recent terminal output tails by default and must be reviewed before sharing.
+- Media uses an HTTP-compatible host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie; auth remains `HttpOnly; SameSite=Strict`, and ticket/session auth is preserved.
+- Separate browser clients use exact `DAM_HOPPER_CORS_ORIGINS` entries; wildcard CORS is forbidden.
+- Cleartext HTTP permits interception or modification of Bearer/auth cookies, ticket URLs, actions, and media bytes.
 - Historical qualification record (Chromium 151, 116 browser tests including 11 media tests; 1,018 UI and 691 Rust tests) is retained for provenance only, not a current release guarantee.
-- Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process
+- Media session/ticket state is process-local; multi-instance deployments require sticky routing to the issuing process.
 
 ### PR-007: Unified Multi-Server Workbench (Phases 02–09; web qualified, native S13 blocked — 2026-09-17)
 
@@ -765,9 +765,9 @@ this phase is not lifecycle, isolated-UI, or Linux release completion.
 - Mount protected `GET /api/plugins` visibility plus
   `POST /api/plugins/contexts/open`, `contexts/close`, `invoke`, and `cancel`.
   Use bounded camelCase DTOs and typed `{ error, code }` failures.
-- Retain `AuthenticatedActor.subject` and JWT expiry for HTTP and WebSocket
-  work. Issue a random epoch per authenticated `/ws` socket and require that
-  actor/epoch pair for every plugin context and request.
+- Retain `AuthenticatedActor.subject` plus non-secret session/version metadata
+  and effective auth deadline for HTTP and WebSocket work. Issue a random
+  per-socket epoch and cap it at that deadline.
 - Deny plugin operations in `--no-auth` mode, including service-level calls
   that bypass route middleware. Do not let browser profile identity, roots, or
   client grant claims become server authority.

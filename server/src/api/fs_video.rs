@@ -105,12 +105,22 @@ pub async fn issue_ticket(
             )));
         }
     };
+    let auth_context = crate::fs::media_ticket::MediaAuthContext {
+        session_id: actor.session_id.clone(),
+        auth_version: actor.auth_version,
+        credential_version: actor.credential_version,
+        auth_deadline: actor.effective_deadline.map(|d| {
+            std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(d.timestamp().max(0) as u64)
+        }),
+    };
     let (lease, session) = match state.video_stream_tickets.issue_bound(
         expected_generation,
         &actor.subject,
         &request.media_client_id,
         existing,
         record,
+        Some(&auth_context),
     ) {
         Ok(lease) => lease,
         Err(VideoTicketIssue::Capacity) => return Ok(capacity_response()),

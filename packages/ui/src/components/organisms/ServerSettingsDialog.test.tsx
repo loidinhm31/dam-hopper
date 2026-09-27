@@ -47,7 +47,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     vi.useRealTimers();
   });
 
-  it("blocks server text fields and text-dependent actions", () => {
+  it("blocks profile name text field while exempting auth fields on Android Chrome", () => {
     mockPolicy.enabled = true;
     const markup = renderToStaticMarkup(
       createElement(ServerSettingsDialog, {
@@ -57,10 +57,9 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       }),
     );
 
-    expect(markup).toContain('placeholder="http://127.0.0.1:4801" disabled=""');
-    expect(markup).toContain(
-      "Unavailable on Android Chrome: text entry is disabled",
-    );
+    expect(markup).toContain('placeholder="My Server" disabled=""');
+    expect(markup).toContain('placeholder="Username" data-auth-input="true"');
+    expect(markup).toContain('placeholder="Password" data-auth-input="true"');
     expect(markup).toContain(">Cancel</button>");
   });
 

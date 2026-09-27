@@ -6,6 +6,7 @@ import {
   getConnectionSnapshot,
   getTransport as getConnectionsTransport,
   isCurrentConnection,
+  type ConnectionStatus,
 } from "@/api/connections.js";
 import { getProfiles } from "@/api/server-config.js";
 import { toServerProjectTarget, type ConnectionRef } from "@/api/ownership.js";
@@ -40,14 +41,7 @@ const MAX_AGGREGATE_MATCHES = 500;
 export interface ProfileSearchStatus {
   profileId: string;
   profileName: string;
-  status:
-    | "connected"
-    | "connecting"
-    | "disconnected"
-    | "login-required"
-    | "offline"
-    | "unsupported"
-    | "error";
+  status: ConnectionStatus | "error";
   matchCount: number;
   truncated?: boolean;
   error?: string | null;

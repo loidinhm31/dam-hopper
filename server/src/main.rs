@@ -351,6 +351,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MongoDB not configured — running without database");
         None
     };
+    if let Some(database) = &db {
+        let auth_store = dam_hopper_server::auth::AuthStore::new(database.clone());
+        if let Err(e) = auth_store.init_indexes().await {
+            tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
+        }
+    }
+
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
     let opaque_server_setup =

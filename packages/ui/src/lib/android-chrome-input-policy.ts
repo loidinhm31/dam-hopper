@@ -36,10 +36,21 @@ export function isAndroidChrome(userAgent?: string): boolean {
   );
 }
 
+export function isAuthExemptInput(element: Element): boolean {
+  return (
+    element.hasAttribute("data-auth-input") ||
+    element.getAttribute("data-dh-allow-native-input") === "true" ||
+    element.closest("[data-auth-input]") !== null ||
+    element.closest("[data-auth-container]") !== null ||
+    element.closest("[data-dh-allow-native-input]") !== null
+  );
+}
+
 /** Classify only controls that can accept ordinary text entry. */
 export function classifyAndroidChromeInput(
   element: Element,
 ): AndroidChromeInputKind | null {
+  if (isAuthExemptInput(element)) return null;
   const tagName = element.localName.toLowerCase();
   if (tagName === "textarea") return "text-input";
   if (tagName === "input") {

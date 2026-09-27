@@ -12,6 +12,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Feature Guides
 
+- **[Phase 01 Auth State, Cryptography, and Policy](./phase-01-auth-state-cryptography-and-policy.md)** — MongoDB-backed auth state, MFA cryptography, and session-policy primitives
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
@@ -39,6 +40,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Reference Documentation
 
 - **[API Reference](./api-reference.md)** — REST endpoints, WebSocket protocol, response formats
+- **[Authentication API (Phases 02–04)](./authentication-api.md)** — TOTP enrollment, session lifecycle, and protected REST/live-transport enforcement
 - **[Workflow API](./workflow-api.md)** — Phase 02–03 workflow REST, lifecycle correlation, CAS/replay, and retention
 - **[Workflow Client State](./workflow-client-state.md)** — Phase 04 shared UI DTOs, transport mapping, and React Query isolation
 - **[Code Standards](./code-standards.md)** — Rust & TypeScript conventions, patterns, testing
@@ -249,7 +251,7 @@ cd server
 cargo run -- --config /path/to/dam-hopper.toml --port 4800
 ```
 
-See token at `~/.config/dam-hopper/server-token`.
+Normal authenticated requests use a session JWT returned after MFA, not the server signing secret. See the [Authentication API](./authentication-api.md).
 
 ### Understand a Component
 
@@ -273,7 +275,7 @@ incarnation or `exited`/`crashed` after final exit; explicit removal and
 missing startup identities detach links that were still `attached` or `stale`.
 See [Workflow API](./workflow-api.md#resource-links).
 
-See [Frontend Components](./frontend-components.md#terminal-workspace-shell) for the UI flow.
+See [Terminal and IDE Components](./frontend-components/terminal-and-ide.md#terminal-workspace-shell) for the UI flow.
 
 ## Recent Changes
 
@@ -357,19 +359,23 @@ type = "cargo"
 
 ### Use File Explorer API
 
+Use a session bearer token returned by successful MFA confirmation or
+verification; `server-token` is the server signing secret, not a bearer token.
+See the [Authentication API](./authentication-api.md).
+
 ```bash
-TOKEN=$(cat ~/.config/dam-hopper/server-token)
+session_jwt="<session JWT returned by MFA confirmation or verification>"
 
 # List directory
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $session_jwt" \
   'http://localhost:4800/api/fs/list?project=backend&path=src'
 
 # Read file
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $session_jwt" \
   'http://localhost:4800/api/fs/read?project=backend&path=src/main.rs'
 
 # Get metadata
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $session_jwt" \
   'http://localhost:4800/api/fs/stat?project=backend&path=src'
 ```
 
@@ -452,7 +458,7 @@ Always verify docs against actual code implementation before publishing.
 
 - **GitHub:** https://github.com/loidinhm31/dam-hopper
 - **Config File:** dam-hopper.toml
-- **Token Location:** ~/.config/dam-hopper/server-token
+- **JWT Signing Secret:** ~/.config/dam-hopper/server-token
 - **Agent Store:** .dam-hopper/agent-store/
 - **Global Config:** ~/.config/dam-hopper/config.toml
 
