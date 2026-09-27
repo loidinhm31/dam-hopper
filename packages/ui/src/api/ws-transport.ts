@@ -13,12 +13,19 @@
 
 import type { Transport, TransportInvokeOptions } from "./transport.js";
 
+export interface WsTransportCloseInfo {
+  code?: number;
+  reason?: string;
+  source?: "ws" | "rest";
+  authCode?: string;
+}
+
 export interface WsTransportOptions {
   baseUrl?: string;
   profileId?: string;
   authToken?: string | null;
   generation?: number;
-  onDrop?: (transport: WsTransport) => void;
+  onDrop?: (transport: WsTransport, info?: WsTransportCloseInfo) => void;
 }
 import {
   ApiRequestError,
@@ -1439,7 +1446,7 @@ export class WsTransport implements Transport {
   private readonly baseUrl: string;
   private readonly profileId?: string;
   public readonly generation: number;
-  private readonly onDrop?: (transport: WsTransport) => void;
+  private readonly onDrop?: (transport: WsTransport, info?: WsTransportCloseInfo) => void;
   private readonly activeAbortControllers = new Set<AbortController>();
 
   private wsStatus: WsStatus = "connecting";
@@ -1710,6 +1717,10 @@ export class WsTransport implements Transport {
 
   getStatus(): WsStatus {
     return this.wsStatus;
+  }
+
+  getAuthToken(): string | null {
+    return this.authToken ?? null;
   }
 
   onStatusChange(cb: (status: WsStatus) => void): () => void {
@@ -2354,21 +2365,35 @@ export class WsTransport implements Transport {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event?: CloseEvent | { code?: number; reason?: string }) => {
       if (
         this.closed ||
         this.ws !== capturedWs ||
         this.generation !== capturedGeneration
       )
         return;
+      const code = event && "code" in event ? event.code : undefined;
+      const reason = event && "reason" in event ? event.reason : undefined;
       logger.debug("WsTransport", "disconnected", {
         baseUrl: this.baseUrl,
         generation: this.generation,
+        code,
+        reason,
       });
       this.failAllPending("WebSocket disconnected");
       this.setStatus("disconnected");
       if (this.onDrop) {
-        this.onDrop(this);
+        this.onDrop(this, {
+          code,
+          reason,
+          source: "ws",
+          authCode:
+            code === 4403
+              ? "MFA_REQUIRED"
+              : code === 4401
+                ? "AUTH_REQUIRED"
+                : undefined,
+        });
       } else {
         this.scheduleReconnect();
       }
@@ -2491,6 +2516,26 @@ export class WsTransport implements Transport {
           error?: string;
           code?: string;
         };
+        if (response.status === 401 && err.code === "MFA_REQUIRED") {
+          this.onDrop?.(this, {
+            code: 4403,
+            reason: err.error ?? "MFA required",
+            source: "rest",
+            authCode: "MFA_REQUIRED",
+          });
+        } else if (
+          response.status === 401 &&
+          (err.code === "SESSION_EXPIRED" ||
+            err.code === "SESSION_REVOKED" ||
+            err.code === "AUTH_REQUIRED")
+        ) {
+          this.onDrop?.(this, {
+            code: 4401,
+            reason: err.error ?? "Authentication required",
+            source: "rest",
+            authCode: "AUTH_REQUIRED",
+          });
+        }
         throw new ApiRequestError(
           err.error ?? `HTTP ${response.status}`,
           response.status,

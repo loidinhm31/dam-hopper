@@ -1,4 +1,4 @@
-# Authentication API and Protected Access (Phases 02–03)
+# Authentication API and Protected Access (Phases 02–04)
 
 This reference covers password login, TOTP enrollment and verification, MFA step-up, session status, and logout. JSON field names use `camelCase`; timestamps are RFC 3339 UTC strings. Auth handler responses set `Cache-Control: no-store`.
 
@@ -234,3 +234,16 @@ deadline and poll for revocation on the same five-second/two-second bounds.
 Exact-origin ticket-only access is a media-cookie fallback, not an auth bypass.
 
 See [Phase 01 auth state, cryptography, and policy](./phase-01-auth-state-cryptography-and-policy.md) for persistence, TOTP, encryption-key, and policy details, and [API Reference](./api-reference.md#authentication) for the server-wide route index.
+
+## Profile-owned UI client (Phase 04)
+
+The shared UI implements these routes through
+`packages/ui/src/api/auth-client.ts`, with typed protocol-v2 DTOs and
+`AuthClientError` in `packages/ui/src/api/auth-types.ts`. `connections.ts`
+maps `MFA_REQUIRED` status responses and WebSocket close `4403` to a
+profile-local `mfa-required` state, pausing reconnect until user interaction.
+The UI keeps enrollment challenges and TOTP setup values in the current
+interaction rather than profile storage. See [Profile-owned enrollment and MFA
+UI](./frontend-components.md#profile-owned-enrollment-and-mfa-ui-phase-04) for
+the challenge form, owner-bound session replacement, and Android Chrome
+authentication-input exception.

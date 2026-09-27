@@ -728,13 +728,13 @@ installer harness.
 
 ## Frontend architecture
 
-The shared UI package provides shell/layout, project/worktree targeting,
-explorer, editor, Git, workflow, terminal, host-resource, settings, and
-browser-debug components. Browser and native hosts supply transport/auth
-bootstrapping while preserving shared DTO validation. React Query and Zustand
-state is scoped by server profile, project, and target where applicable.
-Terminal notification, touch scrolling, media, and workflow features remain
-separate from idle-suspend execution authority.
+The shared UI spans shell, profile/worktree targeting, explorer, editor, Git,
+workflow, terminal, host-resource, settings, and browser-debug surfaces. Hosts
+provide transport/auth bootstrap; UI state stays profile/project/target-scoped.
+Phase 04 adds typed protocol-v2 auth DTOs, a challenge/session client, local
+QR/manual-key TOTP form, per-profile `mfa-required` transport recovery, and a
+narrow Android Chrome native-input exception. Terminal, media, workflow, and
+diagnostics UI do not control idle-suspend execution authority.
 
 Phase 07 media preview remains a native URL capability: the UI does not read
 image/video bytes into Blobs or object URLs. Encryption is profile/generation

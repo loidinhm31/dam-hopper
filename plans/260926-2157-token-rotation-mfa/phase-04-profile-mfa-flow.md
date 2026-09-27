@@ -6,7 +6,7 @@
 
 ## Overview
 
-Date: 2026-09-26. Priority: P1. Implementation: pending. Review: pending. Shared web/native login and periodic MFA flow; no app-wide lockout for a single stale profile.
+Date: 2026-09-27. Priority: P1. Status: DONE (2026-09-27; 100%). Implementation: complete. Review: Cycle 2 approved (9.6/10). Shared web/native login and periodic MFA flow; no app-wide lockout for a single stale profile.
 
 ## Key Insights
 
@@ -43,11 +43,11 @@ Inspect/modify only as required: `packages/ui/src/contexts/AndroidChromeInputPol
 
 ## Todo list
 
-- [ ] Typed auth client and owner-fenced dialog state.
-- [ ] QR/manual setup and first-code confirmation.
-- [ ] Periodic MFA state, token replacement, and transport recreation.
-- [ ] Full expiry, reset, multi-tab, storage failure, and profile isolation.
-- [ ] Accessible web/native/mobile authentication entry verified.
+- [x] Typed auth client and owner-fenced dialog state.
+- [x] QR/manual setup and first-code confirmation.
+- [x] Periodic MFA state, token replacement, and transport recreation.
+- [x] Full expiry, reset, multi-tab, storage failure, and profile isolation.
+- [x] Accessible web/native/mobile authentication entry verified.
 
 ## Success Criteria
 
@@ -63,4 +63,4 @@ Never persist setup URI/key/code; never trust frontend due timers; never transmi
 
 ## Next steps
 
-Phase 05 exercises actual enrollment and transport cutoff on isolated backend/browser. Native/mobile failures must be fixed or explicitly block release, not silently waived.
+Phase 04 implementation and review remediation are complete (Cycle 2 review: approved, 9.6/10; no critical issues or warnings). The four Cycle 1 warnings were resolved; Cycle 2 records three non-blocking suggestions. Ready for Phase 05 qualification, browser enrollment testing, cutoff enforcement, and rollout.

@@ -8,19 +8,34 @@ import {
   getTransport as getAmbientTransport,
 } from "./transport.js";
 import { IdleTransport } from "./idle-transport.js";
-import { WsTransport } from "./ws-transport.js";
+import { WsTransport, type WsTransportCloseInfo } from "./ws-transport.js";
 import {
   type ConnectionRef,
   type ProfileId,
   ConnectionOwnerError,
   connectionKey,
 } from "./ownership.js";
+import * as serverConfig from "./server-config.js";
+const getProfiles = () =>
+  typeof serverConfig.getProfiles === "function" ? serverConfig.getProfiles() : [];
+const getAuthToken = (id?: string) =>
+  typeof serverConfig.getAuthToken === "function" ? serverConfig.getAuthToken(id) : null;
+const setAuthToken = (tok: string, id?: string) =>
+  typeof serverConfig.setAuthToken === "function" ? serverConfig.setAuthToken(tok, id) : true;
+const clearAuthToken = (id?: string) =>
+  typeof serverConfig.clearAuthToken === "function" ? serverConfig.clearAuthToken(id) : true;
+const isSameOriginProfile = (profile: serverConfig.ServerProfile) =>
+  typeof serverConfig.isSameOriginProfile === "function" ? serverConfig.isSameOriginProfile(profile) : true;
+const getActiveProfileId = () =>
+  typeof serverConfig.getActiveProfileId === "function" ? serverConfig.getActiveProfileId() : null;
+const normalizeServerUrl = (url: string) =>
+  typeof serverConfig.normalizeServerUrl === "function" ? serverConfig.normalizeServerUrl(url) : url;
 import {
-  getProfiles,
-  getAuthToken,
-  isSameOriginProfile,
-  getActiveProfileId,
-} from "./server-config.js";
+  checkAuthStatus,
+  requestMfaStepUpChallenge,
+  verifyMfa,
+  AuthClientError,
+} from "./auth-client.js";
 import {
   installTransportBridge,
   removeProfileListeners,
@@ -54,6 +69,7 @@ export type ConnectionStatus =
   | "connecting"
   | "connected"
   | "login-required"
+  | "mfa-required"
   | "offline"
   | "unsupported";
 
@@ -63,6 +79,9 @@ export interface ConnectionSnapshot {
   readonly intent: boolean;
   readonly serverUrl: string;
   readonly error: string | null;
+  readonly mfaDueAt?: string | null;
+  readonly expiresAt?: string | null;
+  readonly authCode?: string | null;
 }
 
 interface ConnectionEntry {
@@ -72,6 +91,9 @@ interface ConnectionEntry {
   intent: boolean;
   serverUrl: string;
   error: string | null;
+  mfaDueAt?: string | null;
+  expiresAt?: string | null;
+  authCode?: string | null;
   transport: Transport | null;
   api: ApiClient | null;
   unsubBridge?: (() => void) | null;
@@ -136,6 +158,9 @@ function freezeSnapshot(
     intent: entry.intent,
     serverUrl: entry.serverUrl,
     error: entry.error,
+    mfaDueAt: entry.mfaDueAt,
+    expiresAt: entry.expiresAt,
+    authCode: entry.authCode,
   });
 }
 
@@ -169,7 +194,16 @@ function getOrCreateEntry(
 function updateSnapshot(
   profileId: ProfileId,
   patch: Partial<
-    Pick<ConnectionEntry, "status" | "intent" | "serverUrl" | "error">
+    Pick<
+      ConnectionEntry,
+      | "status"
+      | "intent"
+      | "serverUrl"
+      | "error"
+      | "mfaDueAt"
+      | "expiresAt"
+      | "authCode"
+    >
   >,
 ): void {
   const entry = entries.get(profileId);
@@ -179,6 +213,9 @@ function updateSnapshot(
   if (patch.intent !== undefined) entry.intent = patch.intent;
   if (patch.serverUrl !== undefined) entry.serverUrl = patch.serverUrl;
   if (patch.error !== undefined) entry.error = patch.error;
+  if (patch.mfaDueAt !== undefined) entry.mfaDueAt = patch.mfaDueAt;
+  if (patch.expiresAt !== undefined) entry.expiresAt = patch.expiresAt;
+  if (patch.authCode !== undefined) entry.authCode = patch.authCode;
 
   entry.snapshot = freezeSnapshot(entry);
   notifyListeners();
@@ -217,7 +254,11 @@ function scheduleReconnect(profileId: ProfileId): void {
   }, delay);
 }
 
-function handleDrop(profileId: ProfileId, generation: number): void {
+function handleDrop(
+  profileId: ProfileId,
+  generation: number,
+  info?: WsTransportCloseInfo,
+): void {
   const entry = entries.get(profileId);
   if (!entry || entry.generation !== generation || tombstones.has(profileId)) {
     return;
@@ -231,6 +272,36 @@ function handleDrop(profileId: ProfileId, generation: number): void {
   entry.transport?.destroy?.();
   entry.transport = null;
   entry.api = null;
+
+  // Handle MFA required close (4403) or REST MFA_REQUIRED
+  if (info?.code === 4403 || info?.authCode === "MFA_REQUIRED") {
+    entry.status = "mfa-required";
+    entry.error = "MFA verification required (session step-up)";
+    entry.authCode = "MFA_REQUIRED";
+    // Stop generic reconnect loops while waiting for user interaction
+    updateSnapshot(profileId, {
+      status: "mfa-required",
+      error: entry.error,
+      authCode: "MFA_REQUIRED",
+    });
+    return;
+  }
+
+  // Handle full auth required / expired close (4401)
+  if (info?.code === 4401 || info?.authCode === "AUTH_REQUIRED") {
+    clearAuthToken(profileId);
+    entry.status = "login-required";
+    entry.error = "Session expired or revoked. Please log in again.";
+    entry.authCode = "AUTH_REQUIRED";
+    // Stop generic reconnect loops
+    updateSnapshot(profileId, {
+      status: "login-required",
+      error: entry.error,
+      authCode: "AUTH_REQUIRED",
+    });
+    return;
+  }
+
   if (entry.intent) {
     updateSnapshot(profileId, {
       status: "offline",
@@ -369,45 +440,35 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   }
 
   try {
-    const statusHeaders: Record<string, string> = {
-      Accept: "application/json",
-    };
-    if (token) {
-      statusHeaders["Authorization"] = `Bearer ${token}`;
-    }
-
-    const res = await fetch(`${cleanUrl}/api/auth/status`, {
-      method: "GET",
-      headers: statusHeaders,
-      credentials: "omit",
-    });
-
+    const statusResult = await checkAuthStatus(cleanUrl, token);
     if (isStale(profileId, nextGen)) return;
 
-    if (res.status === 401 || res.status === 403) {
+    if (!statusResult.authenticated) {
+      if (statusResult.code === "MFA_REQUIRED") {
+        updateSnapshot(profileId, {
+          status: "mfa-required",
+          error: statusResult.error || "MFA verification required",
+          mfaDueAt: "mfaDueAt" in statusResult ? statusResult.mfaDueAt : undefined,
+          expiresAt: "expiresAt" in statusResult ? statusResult.expiresAt : undefined,
+          authCode: "MFA_REQUIRED",
+        });
+        return;
+      }
+      if (
+        statusResult.code === "SESSION_EXPIRED" ||
+        statusResult.code === "SESSION_REVOKED"
+      ) {
+        clearAuthToken(profileId);
+      }
       updateSnapshot(profileId, {
         status: "login-required",
-        error: "Authentication failed. Please log in again.",
+        error: statusResult.error || "Authentication failed. Please log in again.",
+        authCode: statusResult.code,
       });
       return;
     }
 
-    if (!res.ok) {
-      updateSnapshot(profileId, {
-        status: "offline",
-        error: `Server responded with HTTP ${res.status}`,
-      });
-      scheduleReconnect(profileId);
-      return;
-    }
-
-    const data = (await res.json()) as {
-      authenticated?: boolean;
-      workbenchProtocol?: unknown;
-    };
-    if (isStale(profileId, nextGen)) return;
-
-    if (data.workbenchProtocol !== 2) {
+    if (statusResult.workbenchProtocol !== 2) {
       updateSnapshot(profileId, {
         status: "unsupported",
         intent: false,
@@ -418,6 +479,28 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     }
   } catch (fetchErr) {
     if (isStale(profileId, nextGen)) return;
+    if (
+      fetchErr instanceof AuthClientError &&
+      (fetchErr.status === 401 ||
+        fetchErr.code === "AUTH_REQUIRED" ||
+        fetchErr.code === "MFA_REQUIRED")
+    ) {
+      if (fetchErr.code === "MFA_REQUIRED") {
+        updateSnapshot(profileId, {
+          status: "mfa-required",
+          error: fetchErr.message || "MFA verification required",
+          authCode: "MFA_REQUIRED",
+        });
+        return;
+      }
+      clearAuthToken(profileId);
+      updateSnapshot(profileId, {
+        status: "login-required",
+        error: fetchErr.message || "Authentication failed. Please log in again.",
+        authCode: fetchErr.code,
+      });
+      return;
+    }
     updateSnapshot(profileId, {
       status: "offline",
       error:
@@ -438,8 +521,8 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     profileId,
     authToken: token,
     generation: nextGen,
-    onDrop: () => {
-      handleDrop(profileId, nextGen);
+    onDrop: (_t, info) => {
+      handleDrop(profileId, nextGen, info);
     },
   });
 
@@ -488,7 +571,6 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       }
       settle();
     } else if (wsStatus === "disconnected" || wsStatus === "error") {
-      handleDrop(profileId, nextGen);
       settle();
     }
   });
@@ -710,5 +792,74 @@ export function syncActiveProfileConnection(
     }
   } else {
     reconfigureTransport(new IdleTransport());
+  }
+}
+
+export async function stepUpProfileMfa(
+  profileId: ProfileId,
+  code: string,
+): Promise<boolean> {
+  const profiles = getProfiles();
+  const profile = profiles.find((p) => p.id === profileId);
+  if (!profile) return false;
+  const token = getAuthToken(profileId);
+  if (!token) return false;
+
+  const cleanUrl = normalizeServerUrl(profile.url);
+  try {
+    const challenge = await requestMfaStepUpChallenge(cleanUrl, token);
+    const session = await verifyMfa(cleanUrl, challenge.challengeToken, code);
+    if (!setAuthToken(session.token, profileId)) {
+      return false;
+    }
+    disconnectProfile(profileId);
+    await connectProfile(profileId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (typeof window !== "undefined") {
+  try {
+    const subscribe = serverConfig.subscribeToProfileChanges;
+    if (typeof subscribe === "function") {
+      subscribe(() => {
+        const profiles = getProfiles();
+        for (const profile of profiles) {
+          const entry = entries.get(profile.id);
+          if (!entry) continue;
+          const currentStoredToken = getAuthToken(profile.id);
+          const transportToken =
+            entry.transport instanceof WsTransport
+              ? entry.transport.getAuthToken()
+              : null;
+
+          if (currentStoredToken !== transportToken) {
+            if (
+              entry.status === "mfa-required" ||
+              entry.status === "login-required" ||
+              entry.status === "connected" ||
+              entry.status === "offline"
+            ) {
+              if (currentStoredToken) {
+                disconnectProfile(profile.id);
+                if (entry.intent) {
+                  void connectProfile(profile.id);
+                }
+              } else if (profile.authType === "basic") {
+                disconnectProfile(profile.id);
+                updateSnapshot(profile.id, {
+                  status: "login-required",
+                  error: "Login required for this profile",
+                });
+              }
+            }
+          }
+        }
+      });
+    }
+  } catch {
+    // Server-config mock in test environments may omit subscribeToProfileChanges
   }
 }
