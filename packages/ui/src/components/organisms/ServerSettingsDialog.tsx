@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import {
@@ -42,10 +42,7 @@ import {
   updateProfile,
   setActiveProfile,
 } from "@/api/server-config.js";
-import {
-  connectProfile,
-  disconnectProfile,
-} from "@/api/connections.js";
+import { connectProfile, disconnectProfile } from "@/api/connections.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
@@ -93,11 +90,17 @@ export function ServerSettingsDialog({
   const [testError, setTestError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [autoConnect, setAutoConnect] = useState(true);
-  const [mfaMode, setMfaMode] = useState<"enrollment" | "verification">("verification");
+  const [mfaMode, setMfaMode] = useState<"enrollment" | "verification">(
+    "verification",
+  );
   const [mfaChallengeToken, setMfaChallengeToken] = useState("");
-  const [mfaSetupData, setMfaSetupData] = useState<MfaSetupResponse | null>(null);
+  const [mfaSetupData, setMfaSetupData] = useState<MfaSetupResponse | null>(
+    null,
+  );
   const [mfaError, setMfaError] = useState<string | null>(null);
-  const [mfaRetryAfter, setMfaRetryAfter] = useState<number | undefined>(undefined);
+  const [mfaRetryAfter, setMfaRetryAfter] = useState<number | undefined>(
+    undefined,
+  );
   const [mfaSubmitting, setMfaSubmitting] = useState(false);
   const [mfaLoading, setMfaLoading] = useState(false);
   const latestUrlRef = useRef("");
@@ -106,6 +109,47 @@ export function ServerSettingsDialog({
   latestProfileIdRef.current = profile?.id;
 
   const isEditMode = profile !== undefined;
+  const clearAuthDraft = useCallback(() => {
+    setMfaChallengeToken("");
+    setMfaSetupData(null);
+    setMfaError(null);
+    setMfaRetryAfter(undefined);
+    setMfaSubmitting(false);
+    setMfaLoading(false);
+  }, []);
+
+  const initiateStepUp = useCallback(
+    async (serverUrl: string, existingToken: string, profileId?: string) => {
+      const requestId = ++testRequestIdRef.current;
+      const isCurrent = () =>
+        requestId === testRequestIdRef.current &&
+        latestProfileIdRef.current === profileId;
+
+      setMfaMode("verification");
+      setMfaLoading(true);
+      setTestState("challenge");
+      try {
+        const challenge = await requestMfaStepUpChallenge(
+          serverUrl,
+          existingToken,
+        );
+        if (!isCurrent()) return;
+        setMfaChallengeToken(challenge.challengeToken);
+        setMfaSetupData(null);
+      } catch (err) {
+        if (!isCurrent()) return;
+        setTestState("idle");
+        setTestError(
+          err instanceof Error
+            ? err.message
+            : "Step-up challenge request failed",
+        );
+      } finally {
+        if (isCurrent()) setMfaLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (open) {
@@ -155,16 +199,18 @@ export function ServerSettingsDialog({
       if (profile && storedToken) {
         const snap = getConnectionSnapshot(profile.id);
         if (snap?.status === "mfa-required") {
-          void initiateStepUp(normalizeServerUrl(storedUrl), storedToken, profile.id);
+          void initiateStepUp(
+            normalizeServerUrl(storedUrl),
+            storedToken,
+            profile.id,
+          );
         }
       }
     }
     return () => {
       clearAuthDraft();
     };
-  }, [open, profile, isEditMode]);
-
-  if (!open) return null;
+  }, [open, profile, isEditMode, clearAuthDraft, initiateStepUp]);
 
   const rawUrl = url.trim();
   // Auto-prepend protocol for display normalization (matches setServerUrl behavior)
@@ -182,43 +228,6 @@ export function ServerSettingsDialog({
       /^https?:\/\/.+/i.test(normalized));
   const crossOrigin =
     urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
-  const clearAuthDraft = () => {
-    setMfaChallengeToken("");
-    setMfaSetupData(null);
-    setMfaError(null);
-    setMfaRetryAfter(undefined);
-    setMfaSubmitting(false);
-    setMfaLoading(false);
-  };
-
-  async function initiateStepUp(
-    serverUrl: string,
-    existingToken: string,
-    profileId?: string,
-  ) {
-    const requestId = ++testRequestIdRef.current;
-    const isCurrent = () =>
-      requestId === testRequestIdRef.current &&
-      latestProfileIdRef.current === profileId;
-
-    setMfaMode("verification");
-    setMfaLoading(true);
-    setTestState("challenge");
-    try {
-      const challenge = await requestMfaStepUpChallenge(serverUrl, existingToken);
-      if (!isCurrent()) return;
-      setMfaChallengeToken(challenge.challengeToken);
-      setMfaSetupData(null);
-    } catch (err) {
-      if (!isCurrent()) return;
-      setTestState("idle");
-      setTestError(
-        err instanceof Error ? err.message : "Step-up challenge request failed",
-      );
-    } finally {
-      if (isCurrent()) setMfaLoading(false);
-    }
-  }
 
   const invalidateConnectionTest = () => {
     testRequestIdRef.current += 1;
@@ -529,7 +538,10 @@ export function ServerSettingsDialog({
       // Invalidate the runtime connection for this profile so changes take effect without reloading
       if (urlChanged || tokenMustBeCleared || t) {
         disconnectProfile(savedProfile.id);
-        if (savedProfile.autoConnect && (savedProfile.authType === "none" || getAuthToken(savedProfile.id))) {
+        if (
+          savedProfile.autoConnect &&
+          (savedProfile.authType === "none" || getAuthToken(savedProfile.id))
+        ) {
           void connectProfile(savedProfile.id);
         }
       }
@@ -561,7 +573,9 @@ export function ServerSettingsDialog({
           await revokeCurrentMediaSession(
             initialUrl || getServerUrl(),
             previousLegacyToken!,
-            activeProfileId ? getMediaClientIdForProfile(activeProfileId) : null,
+            activeProfileId
+              ? getMediaClientIdForProfile(activeProfileId)
+              : null,
           );
         }
         if (!clearAuthToken(activeProfileId)) {
@@ -706,6 +720,8 @@ export function ServerSettingsDialog({
     profile?.id ??
     (profile === undefined ? (getActiveProfileId() ?? undefined) : undefined);
   const hasToken = profile !== null && Boolean(getAuthToken(targetProfileId));
+
+  if (!open) return null;
 
   return (
     <div

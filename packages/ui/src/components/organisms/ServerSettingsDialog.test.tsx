@@ -47,6 +47,51 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     vi.useRealTimers();
   });
 
+  it("mounts safely when closed and unmounts without throwing TDZ ReferenceError", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+
+    // Initial render with open: false (matches application startup state)
+    expect(() => {
+      act(() => {
+        root?.render(
+          createElement(ServerSettingsDialog, {
+            open: false,
+            profile: null,
+            onClose: vi.fn(),
+          }),
+        );
+      });
+    }).not.toThrow();
+    expect(container.innerHTML).toBe("");
+
+    // Open and close cycle
+    await act(async () => {
+      root?.render(
+        createElement(ServerSettingsDialog, {
+          open: true,
+          profile: null,
+          onClose: vi.fn(),
+        }),
+      );
+    });
+    expect(container.innerHTML).not.toBe("");
+
+    expect(() => {
+      act(() => {
+        root?.render(
+          createElement(ServerSettingsDialog, {
+            open: false,
+            profile: null,
+            onClose: vi.fn(),
+          }),
+        );
+      });
+    }).not.toThrow();
+    expect(container.innerHTML).toBe("");
+  });
+
   it("blocks profile name text field while exempting auth fields on Android Chrome", () => {
     mockPolicy.enabled = true;
     const markup = renderToStaticMarkup(
@@ -224,7 +269,9 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",
-        headers: expect.objectContaining({ Authorization: "Bearer http-token" }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer http-token",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
