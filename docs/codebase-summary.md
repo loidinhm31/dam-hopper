@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-25 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-27 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -390,7 +390,18 @@ and [multi-server guide](./user-guide-multi-server-profiles.md).
 
 ## Backend boundaries
 
-`server/src/main.rs` starts the HTTP/WebSocket service and assembles `AppState`.
+`server/src/main.rs` assembles `AppState` with a MongoDB-backed `AuthService`;
+non-production no-DB startup uses an in-memory mock. `server/src/auth/` defines
+user/session/challenge state, CAS/TTL operations, and V2 policy. Phase 02 owns
+challenge login, enrollment, verification, status, and logout. `require_auth`
+checks current claims per protected REST request and adds non-secret session/version/deadline metadata to `AuthenticatedActor`.
+WebSocket admission shares that policy; local deadline guards check inbound
+dispatch/commit and outbound writes. A 5s watcher checks user `authVersion` and session `authVersion`/`credentialVersion` (2s DB cap; ≤7s bound).
+Inbound handlers use the local lease, not per-frame DB reads. Media tickets bind
+session/version/deadline; HEAD/GET/live bodies revalidate access.
+Thirteen Phase 05 tests in `server/tests/auth_mfa.rs` use `AuthTestFixture`;
+the common fixture isolates MongoDB and cleans the temporary DB on `Drop`.
+See the [Authentication API](./authentication-api.md).
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
 browser-debug, host-resource, and idle-suspend surfaces. Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,
@@ -716,13 +727,13 @@ installer harness.
 
 ## Frontend architecture
 
-The shared UI package provides shell/layout, project/worktree targeting,
-explorer, editor, Git, workflow, terminal, host-resource, settings, and
-browser-debug components. Browser and native hosts supply transport/auth
-bootstrapping while preserving shared DTO validation. React Query and Zustand
-state is scoped by server profile, project, and target where applicable.
-Terminal notification, touch scrolling, media, and workflow features remain
-separate from idle-suspend execution authority.
+The shared UI spans shell, profile/worktree targeting, explorer, editor, Git,
+workflow, terminal, host-resource, settings, and browser-debug surfaces. Hosts
+provide transport/auth bootstrap; UI state stays profile/project/target-scoped.
+Phase 04 adds typed protocol-v2 auth DTOs, a challenge/session client, local
+QR/manual-key TOTP form, per-profile `mfa-required` transport recovery, and a
+narrow Android Chrome native-input exception. Terminal, media, workflow, and
+diagnostics UI do not control idle-suspend execution authority.
 
 Phase 07 media preview remains a native URL capability: the UI does not read
 image/video bytes into Blobs or object URLs. Encryption is profile/generation

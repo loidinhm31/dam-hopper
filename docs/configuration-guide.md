@@ -938,7 +938,7 @@ path = "/tmp/test-workspace"
 | `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
 | `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
 | `RUST_LOG`                                 | string  | Rust logging filter                                                       |
-| `MONGODB_URI` / `MONGODB_DATABASE`         | string  | Optional API authentication database                                      |
+| `MONGODB_URI` / `MONGODB_DATABASE` / `DAM_HOPPER_MFA_KEY_FILE` | string/path | Optional API auth database; dedicated MFA key required for production authenticated startup. See [Phase 01 auth guide](./phase-01-auth-state-cryptography-and-policy.md). |
 | `DAM_HOPPER_PLUGIN_ADMINS_FILE`              | path    | Optional root-seeded plugin administrator JSON override                       |
 
 Plugin management administrators are not configured in `dam-hopper.toml`; the
@@ -950,30 +950,58 @@ Changing extension parent origins also requires redistributing its generated ZIP
 CORS values are runtime API configuration and must exactly match the browser
 origin.
 
-## Authentication Token
+## JWT Signing Secret and Session Tokens
 
-**Location:** `~/.config/dam-hopper/server-token`
+`~/.config/dam-hopper/server-token` stores a 32-character hexadecimal UUIDv4
+used only as the server's JWT signing secret. On Unix it is created with mode
+`0600`; it is not a client bearer token.
 
-**Permissions:** 0600 (read-only to user)
-
-**Format:** Hex-encoded UUID (64 characters)
-
-### Generate New Token
+`--new-token` rotates this signing secret and invalidates existing signed
+sessions:
 
 ```bash
 cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
 ```
 
-Saves to `~/.config/dam-hopper/server-token`.
+Normal login returns an MFA challenge, not a bearer token. Use the `token`
+returned by `/api/auth/mfa/confirm` or `/api/auth/mfa/verify`, or the
+`damhopper-auth` cookie where accepted. Never send the signing-secret file as
+`Authorization: Bearer`; see [Authentication API](./authentication-api.md).
 
-### Use Token
+## MFA Encryption Key and Operator Recovery Runbook
 
-Include in all API requests:
+### Key File Provisioning (`DAM_HOPPER_MFA_KEY_FILE`)
 
-```bash
-curl -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
-  http://localhost:4800/api/projects
+In authenticated production mode, `DAM_HOPPER_MFA_KEY_FILE` is mandatory:
+- Contains exactly 32 raw bytes (or 64 hexadecimal characters / 44 Base64 characters).
+- File permissions must be strictly restricted to the owner (`chmod 600` on Unix). The server rejects symlinks, non-regular files, and files with group or world permissions.
+- Dedicated to encrypting confirmed and pending TOTP secrets at rest via AES-256-GCM.
+- Must be backed up separately from MongoDB and deployed to all server instances.
+
+### Operator Recovery Runbook (Lost TOTP Authenticator)
+
+This privileged reset is not self-service. Verify identity out of band; use
+immutable MongoDB `_id` plus current `authVersion`, never username alone.
+In authenticated `mongosh`, replace placeholders; for legacy rows lacking
+`authVersion`, filter by `_id` plus `authVersion: { $exists: false }` instead.
+
+```javascript
+const userId = ObjectId("<verified-24-hex-id>");
+const expectedVersion = NumberLong("<observed-authVersion>");
+db.users.updateOne(
+  { _id: userId, authVersion: expectedVersion },
+  {
+    $inc: { authVersion: NumberLong(1) },
+    $unset: { mfa: "", mfaAttemptWindowStartedAt: "", mfaAttemptCount: "", mfaBlockedUntil: "" }
+  }
+);
 ```
+
+**Verification & Invariants:**
+1. Require `matchedCount === 1` and `modifiedCount === 1`; otherwise stop and re-read. Never retry blindly.
+2. The version bump invalidates sessions/challenges; `authSessions`/`authChallenges` TTL indexes clean later, so no direct deletion is needed for authorization.
+3. WebSockets/live streams poll state every 5s with a 2s DB cap (≤7s; smoke timeout 8s); restart/disconnect instances for immediate containment.
+4. Next password login requires fresh TOTP enrollment. Do not change `passwordHash`, `isEnabled`, `role`, signing keys/settings, or install an unencrypted factor/bypass.
 
 ## Plugin Management Administrator Allowlist
 
@@ -1180,11 +1208,14 @@ layouts/history discarded by the fresh reset cannot be restored by rollback.
 
 ## SSH Key Management
 
-SSH credentials are loaded on-demand via `/api/ssh/keys/load`:
+SSH credentials are loaded on-demand via `/api/ssh/keys/load`. Use an
+MFA-issued session JWT, not `server-token` (the server signing secret); see
+[Authentication API](./authentication-api.md).
 
 ```bash
+session_jwt="<session JWT returned by MFA confirmation or verification>"
 curl -X POST \
-  -H "Authorization: Bearer $(cat ~/.config/dam-hopper/server-token)" \
+  -H "Authorization: Bearer $session_jwt" \
   -H "Content-Type: application/json" \
   -d '{"privateKeyPath": "/home/user/.ssh/id_rsa"}' \
   http://localhost:4800/api/ssh/keys/load
@@ -1350,16 +1381,11 @@ Verify in dam-hopper.toml:
 ls -la /configured/project/path
 ```
 
-### Token issues
+### Session token issues
 
-Regenerate token:
-
-```bash
-cargo run -- --config /path/to/dam-hopper.toml --new-token
-cat ~/.config/dam-hopper/server-token
-```
-
-Include in Authorization header for all requests.
+When a session expires or stops validating, sign in with password and complete
+MFA again. The `server-token` file is a signing secret, not a bearer token;
+see [Authentication API](./authentication-api.md).
 
 ## Example: Multi-Project Workspace
 

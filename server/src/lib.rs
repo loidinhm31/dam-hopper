@@ -1,5 +1,6 @@
 pub mod agent_store;
 pub mod api;
+pub mod auth;
 pub mod browser_debug;
 pub mod commands;
 pub mod config;

@@ -12,6 +12,7 @@ import {
   classifyAndroidChromeInput,
   installAndroidChromeInputPolicy,
   isAndroidChrome,
+  isAuthExemptInput,
 } from "./android-chrome-input-policy.js";
 const ANDROID_CHROME_UA =
   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -449,5 +450,40 @@ describe("AndroidChromeInputPolicyProvider and notice", () => {
       document.querySelector("[data-testid=policy-state]")?.textContent,
     ).toBe("false");
     expect(document.querySelector('[role="status"]')).toBeNull();
+  });
+});
+
+describe("auth input exemption", () => {
+  it("exempts elements with data-auth-input or data-dh-allow-native-input", () => {
+    const authInput = document.createElement("input");
+    authInput.setAttribute("data-auth-input", "true");
+    expect(isAuthExemptInput(authInput)).toBe(true);
+    expect(classifyAndroidChromeInput(authInput)).toBeNull();
+
+    const container = document.createElement("form");
+    container.setAttribute("data-auth-container", "true");
+    const nestedInput = document.createElement("input");
+    container.append(nestedInput);
+    expect(isAuthExemptInput(nestedInput)).toBe(true);
+    expect(classifyAndroidChromeInput(nestedInput)).toBeNull();
+  });
+
+  it("does not lock or disable auth-exempt inputs when policy is installed", () => {
+    const authInput = document.createElement("input");
+    authInput.setAttribute("data-auth-input", "true");
+    authInput.setAttribute("type", "text");
+    document.body.append(authInput);
+
+    const normalInput = document.createElement("input");
+    normalInput.setAttribute("type", "text");
+    document.body.append(normalInput);
+
+    const uninstall = installAndroidChromeInputPolicy();
+    try {
+      expect(normalInput.hasAttribute("disabled")).toBe(true);
+      expect(authInput.hasAttribute("disabled")).toBe(false);
+    } finally {
+      uninstall();
+    }
   });
 });

@@ -512,6 +512,7 @@ pub enum WireMsg {
     Binary(Vec<u8>),
     /// Signal the writer task to send a close frame with the given code.
     CloseOverflow,
+    CloseAuth { code: u16, reason: String },
 }
 
 #[cfg(test)]

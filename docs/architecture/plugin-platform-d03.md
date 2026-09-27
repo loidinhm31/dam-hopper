@@ -21,7 +21,7 @@ pending the cross-repository installed-worker sign-off.
 owner-bound UI client
   ├─ Bearer/cookie-authenticated REST + live /ws
   └─ local profile/generation (never sent as server authority)
-       │ actor subject + JWT expiry + random connection epoch
+       │ subject + session/revisions + effective deadline + random epoch
        ▼
 Axum auth/router ── PluginApiService
        │ current grant + epoch + registered project target
@@ -154,11 +154,13 @@ advances security/registry revisions and invalidates affected contexts.
 
 ## WebSocket connection epoch lifecycle
 
-1. **Authenticate:** `/ws` accepts the bearer query token or auth cookie after
-   origin checks. A valid token becomes `AuthenticatedActor { subject, exp }`.
-2. **Issue:** for authenticated sockets the server issues a cryptographically
-   random, non-zero epoch and binds it to the actor and JWT expiry. `--no-auth`
-   sockets use epoch `0`, but plugin REST/service operations still deny them.
+1. **Authenticate:** `/ws` accepts a bearer query token or auth cookie after
+   origin checks and applies current session policy. `AuthenticatedActor`
+   carries subject, session ID, auth/credential versions, role, and effective
+   deadline; it never contains bearer material.
+2. **Issue:** authenticated sockets receive a random, non-zero epoch capped at
+   the effective auth deadline (MFA due or absolute expiry). `--no-auth` sockets
+   use epoch `0`, but plugin REST/service operations still deny them.
 3. **Discover:** the client may send `{ "kind": "plugin:get_epoch", "req_id": 1 }`.
    The socket replies with `plugin:epoch` carrying `req_id`, `epoch`, `actor`,
    and optional `expiresAt`. The epoch is supplied in plugin REST DTOs.
@@ -167,9 +169,9 @@ advances security/registry revisions and invalidates affected contexts.
    actors, sockets, or client generations.
 5. **Revoke:** socket teardown calls `revoke_epoch`, removes its contexts, and
    best-effort closes runner contexts. HTTP logout calls `revoke_actor`, which
-   revokes that actor's epochs and contexts. Epoch validation also fails after
-   JWT expiry. Runner reconnect invalidates the local context table so stale
-   contexts cannot reach a new worker generation.
+   revokes that actor's epochs and contexts. Epoch validation also fails at the
+   effective auth deadline, not merely JWT expiry. Runner reconnect invalidates
+   the local context table so stale contexts cannot reach a new worker generation.
 
 `plugin:revoked` is defined as a bounded server message for context revocation,
 but the current D03 teardown path enforces revocation by removing the context

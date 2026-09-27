@@ -55,16 +55,18 @@ struct TestClaims {
 }
 
 fn make_auth_cookie() -> String {
-    let claims = TestClaims {
-        sub: "admin-tester".to_string(),
-        exp: (Utc::now().timestamp() as usize) + 3600,
+    use dam_hopper_server::auth::model::AuthClaims;
+    use dam_hopper_server::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+    let claims = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: MOCK_USER.to_string(),
+        sid: MOCK_SESSION_ID.to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: chrono::Utc::now().timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
     };
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(TEST_SECRET.as_bytes()),
-    )
-    .expect("jwt encode");
+    let token = claims.encode(TEST_SECRET).expect("jwt encode");
     format!("damhopper-auth={token}")
 }
 

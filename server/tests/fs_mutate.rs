@@ -26,22 +26,18 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const TEST_TOKEN: &str = "mutate-test-token";
 fn test_jwt() -> String {
-    use jsonwebtoken::{encode, EncodingKey, Header};
-    #[derive(serde::Serialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-    }
-    let claims = Claims {
-        sub: "test-user".into(),
-        exp: (chrono::Utc::now().timestamp() as usize) + 3600,
+    use dam_hopper_server::auth::model::AuthClaims;
+    use dam_hopper_server::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+    let claims = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: MOCK_USER.to_string(),
+        sid: MOCK_SESSION_ID.to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: chrono::Utc::now().timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
     };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(TEST_TOKEN.as_bytes()),
-    )
-    .unwrap()
+    claims.encode(TEST_TOKEN).unwrap()
 }
 
 fn make_state(tmp: &TempDir) -> AppState {

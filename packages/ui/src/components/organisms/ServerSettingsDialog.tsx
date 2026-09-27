@@ -1,10 +1,23 @@
 import { useState, useEffect, useRef } from "react";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
-import { getMediaClientIdForProfile } from "@/api/connections.js";
+import {
+  getMediaClientIdForProfile,
+  getConnectionSnapshot,
+} from "@/api/connections.js";
 import type { ServerProfile } from "@/api/server-config.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
+import {
+  login,
+  fetchMfaSetup,
+  confirmMfaEnrollment,
+  verifyMfa,
+  requestMfaStepUpChallenge,
+  AuthClientError,
+  type MfaSetupResponse,
+} from "@/api/auth-client.js";
+import { MfaChallengeForm } from "@/components/molecules/MfaChallengeForm.js";
 import {
   getServerUrl,
   haveServerUrlsChanged,
@@ -43,7 +56,7 @@ interface Props {
   onSaved?: (profile: ServerProfile) => void;
 }
 
-type TestState = "idle" | "testing" | "ok" | "fail";
+type TestState = "idle" | "testing" | "challenge" | "ok" | "fail";
 
 function secureBearerHeaders(
   serverUrl: string,
@@ -80,6 +93,13 @@ export function ServerSettingsDialog({
   const [testError, setTestError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [autoConnect, setAutoConnect] = useState(true);
+  const [mfaMode, setMfaMode] = useState<"enrollment" | "verification">("verification");
+  const [mfaChallengeToken, setMfaChallengeToken] = useState("");
+  const [mfaSetupData, setMfaSetupData] = useState<MfaSetupResponse | null>(null);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [mfaRetryAfter, setMfaRetryAfter] = useState<number | undefined>(undefined);
+  const [mfaSubmitting, setMfaSubmitting] = useState(false);
+  const [mfaLoading, setMfaLoading] = useState(false);
   const latestUrlRef = useRef("");
   const latestProfileIdRef = useRef<string | undefined>(profile?.id);
   const testRequestIdRef = useRef(0);
@@ -130,8 +150,18 @@ export function ServerSettingsDialog({
       setToken(storedToken);
       setTestState("idle");
       setTestError(null);
+      clearAuthDraft();
       setSaved(false);
+      if (profile && storedToken) {
+        const snap = getConnectionSnapshot(profile.id);
+        if (snap?.status === "mfa-required") {
+          void initiateStepUp(normalizeServerUrl(storedUrl), storedToken, profile.id);
+        }
+      }
     }
+    return () => {
+      clearAuthDraft();
+    };
   }, [open, profile, isEditMode]);
 
   if (!open) return null;
@@ -152,14 +182,57 @@ export function ServerSettingsDialog({
       /^https?:\/\/.+/i.test(normalized));
   const crossOrigin =
     urlSchemeValid && normalized ? isCrossOriginServer(normalized) : false;
+  const clearAuthDraft = () => {
+    setMfaChallengeToken("");
+    setMfaSetupData(null);
+    setMfaError(null);
+    setMfaRetryAfter(undefined);
+    setMfaSubmitting(false);
+    setMfaLoading(false);
+  };
+
+  async function initiateStepUp(
+    serverUrl: string,
+    existingToken: string,
+    profileId?: string,
+  ) {
+    const requestId = ++testRequestIdRef.current;
+    const isCurrent = () =>
+      requestId === testRequestIdRef.current &&
+      latestProfileIdRef.current === profileId;
+
+    setMfaMode("verification");
+    setMfaLoading(true);
+    setTestState("challenge");
+    try {
+      const challenge = await requestMfaStepUpChallenge(serverUrl, existingToken);
+      if (!isCurrent()) return;
+      setMfaChallengeToken(challenge.challengeToken);
+      setMfaSetupData(null);
+    } catch (err) {
+      if (!isCurrent()) return;
+      setTestState("idle");
+      setTestError(
+        err instanceof Error ? err.message : "Step-up challenge request failed",
+      );
+    } finally {
+      if (isCurrent()) setMfaLoading(false);
+    }
+  }
+
   const invalidateConnectionTest = () => {
     testRequestIdRef.current += 1;
     setTestState("idle");
     setTestError(null);
+    setMfaChallengeToken("");
+    setMfaSetupData(null);
+    setMfaError(null);
+    setMfaRetryAfter(undefined);
+    setMfaSubmitting(false);
+    setMfaLoading(false);
   };
 
   async function testConnection() {
-    if (isAndroidChromeNativeInputSuppressed) return;
     if (!normalized || !urlSchemeValid) return;
     const requestId = ++testRequestIdRef.current;
     const requestUrl = normalized;
@@ -172,37 +245,55 @@ export function ServerSettingsDialog({
 
     setTestState("testing");
     setTestError(null);
+    setMfaError(null);
+    setMfaRetryAfter(undefined);
     try {
-      // Different body based on auth type
       const u = username.trim();
       const p = password.trim();
-      const bodyContent =
+      if (authType === "basic" && (!u || !p)) {
+        setTestState("fail");
+        setTestError("Username and password are required");
+        return;
+      }
+      const credentials =
         authType === "none" ? {} : { username: u, password: p };
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 10000);
       try {
-        const res = await fetch(`${normalized}/api/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(bodyContent),
-          signal: controller.signal,
-        });
-        const data = await res.json().catch(() => null);
-
+        const result = await login(normalized, credentials, controller.signal);
         if (!isCurrentRequest()) return;
 
-        if (res.ok && data?.token) {
-          setToken(data.token);
+        if (result.kind === "session") {
+          setToken(result.data.token);
           setTestState("ok");
-
-          // Show dev mode indicator if applicable
-          if (data.dev_mode) {
+          clearAuthDraft();
+          if (result.data.dev_mode || result.data.devMode) {
             setTestError("✓ Dev mode active");
           }
-        } else {
-          setTestState("fail");
-          setTestError(data?.error || `HTTP ${res.status}`);
+        } else if (result.kind === "challenge") {
+          const { state, challengeToken } = result.data;
+          setMfaChallengeToken(challengeToken);
+          if (state === "enrollmentRequired") {
+            setMfaMode("enrollment");
+            setMfaLoading(true);
+            setTestState("challenge");
+            try {
+              const setup = await fetchMfaSetup(
+                normalized,
+                challengeToken,
+                controller.signal,
+              );
+              if (!isCurrentRequest()) return;
+              setMfaSetupData(setup);
+            } finally {
+              if (isCurrentRequest()) setMfaLoading(false);
+            }
+          } else {
+            setMfaMode("verification");
+            setMfaSetupData(null);
+            setTestState("challenge");
+          }
         }
       } finally {
         clearTimeout(timeout);
@@ -210,13 +301,79 @@ export function ServerSettingsDialog({
     } catch (e) {
       if (isCurrentRequest()) {
         setTestState("fail");
-        setTestError(e instanceof Error ? e.message : String(e));
+        if (e instanceof AuthClientError) {
+          setTestError(e.message);
+          setMfaRetryAfter(e.retryAfter);
+        } else {
+          setTestError(e instanceof Error ? e.message : String(e));
+        }
       }
     }
   }
 
+  async function handleMfaCodeSubmit(code: string) {
+    if (!normalized || !mfaChallengeToken) return;
+    const requestId = testRequestIdRef.current;
+    const requestUrl = normalized;
+    const requestProfileId = profile?.id;
+    const isCurrentRequest = () =>
+      requestId === testRequestIdRef.current &&
+      requestUrl === latestUrlRef.current &&
+      requestProfileId === latestProfileIdRef.current;
+
+    setMfaSubmitting(true);
+    setMfaError(null);
+    setMfaRetryAfter(undefined);
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const session =
+          mfaMode === "enrollment"
+            ? await confirmMfaEnrollment(
+                normalized,
+                mfaChallengeToken,
+                code,
+                controller.signal,
+              )
+            : await verifyMfa(
+                normalized,
+                mfaChallengeToken,
+                code,
+                controller.signal,
+              );
+
+        if (!isCurrentRequest()) return;
+        setToken(session.token);
+        setTestState("ok");
+        clearAuthDraft();
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (e) {
+      if (isCurrentRequest()) {
+        if (e instanceof AuthClientError) {
+          setMfaError(e.message);
+          setMfaRetryAfter(e.retryAfter);
+        } else {
+          setMfaError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    } finally {
+      if (isCurrentRequest()) {
+        setMfaSubmitting(false);
+      }
+    }
+  }
+
+  function handleMfaCancel() {
+    clearAuthDraft();
+    testRequestIdRef.current += 1;
+    setTestState("idle");
+  }
+
   async function handleSave() {
-    if (isAndroidChromeNativeInputSuppressed) return;
     if (!urlSchemeValid) return;
 
     const t = token.trim();
@@ -618,7 +775,7 @@ export function ServerSettingsDialog({
                 setTestState("idle");
               }}
               placeholder="http://127.0.0.1:4801"
-              disabled={isAndroidChromeNativeInputSuppressed}
+              data-auth-input="true"
               className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
               style={{
                 background: "var(--color-background)",
@@ -706,7 +863,7 @@ export function ServerSettingsDialog({
                     setUsername(e.target.value);
                   }}
                   placeholder="Username"
-                  disabled={isAndroidChromeNativeInputSuppressed}
+                  data-auth-input="true"
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2"
                   style={{
                     background: "var(--color-background)",
@@ -729,7 +886,7 @@ export function ServerSettingsDialog({
                     setPassword(e.target.value);
                   }}
                   placeholder="Password"
-                  disabled={isAndroidChromeNativeInputSuppressed}
+                  data-auth-input="true"
                   className="w-full rounded-lg border px-3.5 py-2 text-sm font-mono transition-colors focus:outline-none focus:ring-2 mb-2"
                   style={{
                     background: "var(--color-background)",
@@ -747,15 +904,10 @@ export function ServerSettingsDialog({
             <button
               onClick={testConnection}
               disabled={
-                isAndroidChromeNativeInputSuppressed ||
                 !normalized ||
                 !urlSchemeValid ||
-                testState === "testing"
-              }
-              title={
-                isAndroidChromeNativeInputSuppressed
-                  ? "Unavailable on Android Chrome: text entry is disabled"
-                  : undefined
+                testState === "testing" ||
+                testState === "challenge"
               }
               className="rounded-lg px-3.5 py-2 text-xs font-semibold transition-opacity disabled:opacity-40"
               style={{
@@ -783,6 +935,21 @@ export function ServerSettingsDialog({
               </span>
             )}
           </div>
+
+          {testState === "challenge" && (
+            <div className="pt-2 border-t border-[var(--color-border)]/60">
+              <MfaChallengeForm
+                mode={mfaMode}
+                setupData={mfaSetupData}
+                loading={mfaLoading}
+                submitting={mfaSubmitting}
+                error={mfaError}
+                retryAfter={mfaRetryAfter}
+                onCodeSubmit={handleMfaCodeSubmit}
+                onCancel={handleMfaCancel}
+              />
+            </div>
+          )}
 
           {profile && (
             <div className="pt-3 border-t border-[var(--color-border)]">
@@ -826,16 +993,10 @@ export function ServerSettingsDialog({
             <button
               onClick={handleSave}
               disabled={
-                isAndroidChromeNativeInputSuppressed ||
                 saved ||
                 !urlSchemeValid ||
                 testState !== "ok" ||
-                (authType === "basic" && (!username || !password))
-              }
-              title={
-                isAndroidChromeNativeInputSuppressed
-                  ? "Unavailable on Android Chrome: text entry is disabled"
-                  : undefined
+                (authType === "basic" && (!username || !token))
               }
               className="rounded-lg px-4 py-2 text-xs font-semibold text-white transition-opacity disabled:opacity-60"
               style={{

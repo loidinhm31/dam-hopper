@@ -128,12 +128,12 @@ The complete endpoint and lifecycle contract is in
 
 ### Authorized plugin API and context standards (Phase D03)
 
-- Keep `AuthenticatedActor` separate from bearer/cookie material. The auth
-  middleware installs subject and JWT expiry; plugin handlers never accept an
-  actor subject from the request body.
-- Issue a random non-zero WebSocket epoch only after token/origin checks. Bind
-  it to actor and expiry; require the same actor/epoch on open, invoke, cancel,
-  and close. Revoke it on socket teardown and HTTP logout.
+- Keep `AuthenticatedActor` free of bearer/cookie material; after signed-claim
+  validation, `require_auth` attaches subject, session ID, auth/credential
+  versions, role, JWT expiry, and effective deadline. Never trust body actor fields.
+- Issue a random non-zero WebSocket epoch only after full session-policy and
+  origin checks. Cap it at the effective auth deadline, and require the same
+  actor/epoch on open, invoke, cancel, and close. Revoke it on teardown/logout.
 - Deny every production plugin operation under `--no-auth` at both route and
   service boundaries. Do not create a no-auth fallback that loads packages or
   worker data.
@@ -725,14 +725,14 @@ routes:
   stored ticket binding. A duplicate selected name is a hard authorization
   failure. Malformed token encoding/length is not a credential for another
   namespace.
-- Authorize the ticket before opening a file. Revalidate target and exact
-  identity/version after asynchronous checks, then verify incarnation and
-  binding again before streaming. Touch idle deadlines only after all checks
-  pass. Keep ticket idle/absolute bounds at 15 minutes/8 hours and session
-  idle/absolute bounds at 30 minutes/8 hours.
-- Restrict revocation to `(actor.subject, mediaClientId)` and the expected
-  media kind. Profile retirement or workspace replacement must not leave a
-  stale generation usable, and must not revoke another client namespace.
+- Evaluate the ticket and current auth session before file access. After async
+  file checks, revalidate target/version and ticket incarnation/binding/cookie.
+  Refresh idle TTLs only after validation; retain 15/30-minute idle bounds,
+  cap absolute capability lifetime at eight hours and the auth deadline. Active
+  bodies check deadlines and poll revocation every five seconds (two-second timeout).
+- Restrict revocation to `(actor.subject, mediaClientId)`/media kind; logout also
+  revokes matching auth-session media sessions/tickets. Keep stale generations
+  unusable without revoking unrelated client namespaces.
 - Keep stream routes outside bearer middleware for native credentialed
   requests. Ticket-only fallback is allowed only for the exact configured
   origin; absent or untrusted origins must not gain fallback authorization.
@@ -2313,13 +2313,12 @@ pub async fn require_auth(
 
 The Phase 01 auth-bypass design is historical; the source plan is no longer present. Current auth and safety rules are maintained in [API Reference](./api-reference.md).
 
-### JWT Pattern
+### Session JWT and cookie
 
-- **Token Storage**: `~/.config/dam-hopper/server-token` (hex UUID)
-- **Signing Algorithm**: HS256 (HMAC-SHA256)
-- **Cookie Transport**: auth cookies are `HttpOnly; SameSite=Strict`; media uses a host-only `HttpOnly; SameSite=Lax; Path=/api/fs` cookie without `Secure` for HTTP compatibility
-- **Validation**: Constant-time comparison via `subtle` crate
-- **Expiry**: 30 days for production, 30 days for dev mode
+- `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token. The normal login flow returns a session token only after TOTP; see [Authentication API](./authentication-api.md).
+- Auth protocol 2 JWTs bind the user and session ID to `authVersion` and `credentialVersion`: sessions expire after 30 days, MFA freshness is ten days per session, and step-up retains absolute expiry while invalidating the old credential.
+- The `damhopper-auth` cookie is `HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`.
+- `--no-auth` is development-only; never use its direct-token response for normal login. Live WebSockets revalidate user/session versions every five seconds with a two-second database timeout (≤7-second bound); operator recovery must use immutable `_id` plus expected-`authVersion` CAS. See the [MongoDB recovery runbook](./configuration-guide.md#mfa-encryption-key-and-operator-recovery-runbook).
 
 ## Project Registry (dam-hopper.toml)
 

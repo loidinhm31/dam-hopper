@@ -26,9 +26,9 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_store, auth, browser_debug, commands, config, diagnostics,
-    fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend, media_session,
-    plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
+    agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
+    diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
+    media_session, plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
     port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
     usage_sessions, workflow, workspace, ws,
 };
@@ -61,6 +61,13 @@ pub fn build_router_with_web_dir_and_origins(
             .collect(),
     );
 
+    let mfa_routes = Router::new()
+        .route("/api/auth/mfa/setup", post(auth_mfa::setup))
+        .route("/api/auth/mfa/confirm", post(auth_mfa::confirm))
+        .route("/api/auth/mfa/verify", post(auth_mfa::verify))
+        .route("/api/auth/mfa/challenge", post(auth_mfa::challenge))
+        .layer(RequestBodyLimitLayer::new(16 * 1024));
+
     // Public routes — no auth required
     let public = Router::new()
         .route("/api/health", get(settings::health))
@@ -68,8 +75,8 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))
+        .merge(mfa_routes)
         .route("/ws", get(ws::ws_handler));
-
     let workflow_routes = Router::new()
         .route("/api/workflow/overview", get(workflow::overview))
         .route("/api/workflow/events", get(workflow::events))

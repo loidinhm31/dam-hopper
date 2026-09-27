@@ -782,7 +782,7 @@ D03 places the authenticated API boundary in front of D02:
 ```text
 owner-bound UI ConnectionRef(profileId, generation)
   └─ bearer/cookie + live WebSocket epoch
-      └─ auth::require_auth → AuthenticatedActor { subject, exp }
+      └─ auth::require_auth → AuthenticatedActor { subject, sid, auth/credential versions, deadline }
           └─ PluginApiService
               ├─ PluginAuthorizationService (epoch + GrantKey checks)
               ├─ WorkspaceTargetResolver ({project, worktreePath?})
@@ -806,13 +806,13 @@ the grant tuple but never substitutes for invoke authorization. Every invoke
 revalidates actor/epoch, context ownership/expiry, operation, current grant,
 and runner generation before admitting opaque payload work.
 
-An authenticated WebSocket receives a cryptographically random epoch tied to
-the actor and JWT expiry. `plugin:get_epoch` returns a same-socket
-`plugin:epoch` message. Socket teardown revokes the epoch and its contexts;
-HTTP logout revokes the actor's epochs/contexts; runner reconnect invalidates
+An authenticated WebSocket passes current session policy and receives a
+cryptographically random epoch bound to the actor and effective auth deadline
+(the earlier MFA deadline or absolute expiry). `plugin:get_epoch` returns a
+same-socket `plugin:epoch` message. Socket teardown revokes the epoch and its
+contexts; HTTP logout revokes actor epochs/contexts; runner reconnect invalidates
 local contexts before a new worker generation. `plugin:revoked` is a bounded
-wire variant, but D03 currently enforces causes by local removal and later
-request rejection rather than claiming a push event for every cause.
+wire variant, but D03 does not promise a push notice for every revocation cause.
 
 Generic ceilings are 16 contexts/worker, four invokes/context, 16 invokes/
 worker, one long-running operation/worker, 15-minute idle TTL, 16 MiB payload,
@@ -832,7 +832,7 @@ D05 adds a separate administrator boundary in front of the D01/D02 runner:
 ```text
 Settings / owner-bound ApiClient
   └─ Authorization: Bearer <JWT>
-      └─ require_auth → AuthenticatedActor { subject, exp }
+      └─ require_auth → AuthenticatedActor { subject, session/revisions, deadline }
           └─ require_bearer_auth
               └─ /api/plugins/admin* handlers
                   └─ RunnerClient → RunnerServer
@@ -3307,14 +3307,14 @@ binds each ticket to one resource, immutable purpose, issuance metadata,
 actor, client namespace, session digest, and incarnation. Tickets are never
 persisted into editor state, browser storage, diagnostics, or logs.
 
-Ticket idle expiry is 15 minutes; media-session idle expiry is 30 minutes; both
-have an eight-hour absolute expiry. Stream authorization derives the exact
-cookie name from the stored ticket binding:
-`damhopper-media-session-<canonical-uuidv4>`. A duplicate selected cookie fails
-closed. A missing cookie is accepted only for the exact configured origin's
-ticket-only fallback; absent/untrusted origins and foreign namespaces return
-indistinguishable `404` responses. Idle TTL refreshes only after a fully
-validated stream response or ticket issuance, never past the absolute deadline.
+Ticket idle expiry is 15 minutes; media-session idle expiry is 30 minutes, and
+each absolute lifetime is capped at eight hours and the effective auth deadline.
+Tickets/sessions bind auth session ID, authVersion, credentialVersion, and
+deadline; reuse requires the same binding. Stream authorization selects the
+cookie namespace from stored ticket state; exact-origin ticket-only is a
+cookie fallback, not an authentication bypass. Every HEAD/GET checks current
+session state; streamed bodies check deadline before reading each chunk and
+poll session revocation every five seconds with a two-second lookup timeout.
 `DELETE /api/fs/media-session` accepts `{ "mediaClientId": "..." }`, requires
 Bearer authentication, and clears/revokes only that actor/client namespace.
 Ticket-specific image/video DELETEs likewise require Bearer authentication and
@@ -5230,11 +5230,24 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
 
 ## Authentication & Security
 
-**Bearer token:**
+**Authentication and access enforcement (Phases 02–05):**
 
-- Hex UUID stored in `~/.config/dam-hopper/server-token`
-- Validated via `subtle::constant_time_compare()`
-- All routes protected via middleware
+- Password login yields a five-minute enrollment/login-MFA challenge; only confirmation/verification creates a V2 session. Sessions expire absolutely after 30 days; MFA freshness is 10 days; step-up does not extend expiry.
+- `require_auth` checks signed claims against current session/account on each protected REST request; legacy, stale, expired, revoked, superseded, and disabled sessions fail closed; backend failure returns `503 AUTH_UNAVAILABLE`.
+- `AuthenticatedActor` contains subject, session ID, auth/credential versions, role, JWT expiry, and effective deadline—never bearer/cookie material.
+- `/ws` applies the same policy before upgrade. Open-socket local deadline guards run for every inbound frame and before outbound writes.
+- WebSocket close codes are `4403` for MFA required, `4401` for full login, and `1013` for auth-state unavailability; out-of-band DB edits have no immediate broadcast.
+- Inbound WS dispatch/commit rechecks the local session lease/effective deadline;
+  persisted revocation uses a 5s watcher checking user `authVersion` and session
+  `authVersion`/`credentialVersion` (2s DB cap; ≤7s bound); no per-frame reads.
+- Media issue routes use protected auth; tickets/sessions bind session ID, auth/credential versions, and effective deadline; absolute capability TTL is clamped to it.
+- HEAD/GET admissions revalidate current session state; active bodies check the deadline and poll revocation every five seconds with a two-second lookup timeout.
+- Plugin epochs expire at the effective auth deadline; role/grant checks remain additive, and PTY processes survive reauthentication.
+- `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token.
+- The step-up handler accepts Bearer or cookie credentials although the security contract requires Bearer-only use; see the [Authentication API](./authentication-api.md).
+- MFA key provisioning, encrypted factor state, replay protection, and operator-only MongoDB recovery are in the [Phase 01 auth guide](./phase-01-auth-state-cryptography-and-policy.md).
+
+### Existing resource security boundaries
 
 **Filesystem sandbox:**
 

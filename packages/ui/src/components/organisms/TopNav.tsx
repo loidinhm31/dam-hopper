@@ -222,6 +222,11 @@ export function TopNav({
           setEditingProfile(p);
           setServerSettingsOpen(true);
         }}
+        onLoginProfile={(p) => {
+          setProfilesDialogOpen(false);
+          setEditingProfile(p);
+          setServerSettingsOpen(true);
+        }}
       />
     </header>
   );
