@@ -114,6 +114,21 @@ if [[ -n "${BUNDLE_PATH}" && ${LATEST} -eq 1 ]]; then
     usage
 fi
 
+# Identity check & warning
+if [[ ("${ROLE}" == "server" || "${ROLE}" == "both") && -n "${PLUGIN_OWNER_USER}" ]]; then
+    CURRENT_USER="$(id -un 2>/dev/null || true)"
+    if [[ -z "${SERVICE_USER}" && "${PLUGIN_OWNER_USER}" == "${CURRENT_USER}" ]]; then
+        echo "Warning: --plugin-owner-user '${PLUGIN_OWNER_USER}' matches current user while --service-user is unset." >&2
+        echo "  If the API service runs under your user account (or recorded in /etc/dam-hopper/host.toml)," >&2
+        echo "  the installer will reject identical API and plugin runner identities." >&2
+        echo "  To avoid this conflict, specify a distinct dedicated service user, for example:" >&2
+        echo "    $0 ... --service-user dam-hopper --plugin-owner-user \"${PLUGIN_OWNER_USER}\"" >&2
+    elif [[ -n "${SERVICE_USER}" && "${SERVICE_USER}" == "${PLUGIN_OWNER_USER}" ]]; then
+        echo "Warning: --service-user and --plugin-owner-user both specify '${SERVICE_USER}'." >&2
+        echo "  The release manager requires distinct API and plugin runner identities." >&2
+    fi
+fi
+
 # Dependency check
 REQUIRED_CMDS=(sha256sum tar)
 if [[ -z "${BUNDLE_PATH}" ]]; then

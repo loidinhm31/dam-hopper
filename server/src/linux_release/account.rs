@@ -430,7 +430,7 @@ pub fn verify_plugin_owner_account(
     if let Some(api_user) = api_username {
         if trimmed == api_user.trim() {
             return Err(ReleaseError::Config(format!(
-                "plugin owner user '{trimmed}' cannot be the API service user ('{api_user}')"
+                "plugin owner user '{trimmed}' cannot be the API service user ('{api_user}'). Specify a distinct dedicated --service-user (e.g. '--service-user dam-hopper --plugin-owner-user {trimmed}') or check existing recorded service_user in /etc/dam-hopper/host.toml"
             )));
         }
     }
@@ -457,7 +457,7 @@ pub fn verify_plugin_owner_account(
         if let Some(api_info) = get_user_by_name(api_user.trim()) {
             if user.uid == api_info.uid {
                 return Err(ReleaseError::Config(format!(
-                    "plugin owner user '{trimmed}' cannot share UID {} with API service user '{api_user}'",
+                    "plugin owner user '{trimmed}' cannot share UID {} with API service user '{api_user}'. Specify a distinct dedicated --service-user (e.g. '--service-user dam-hopper --plugin-owner-user {trimmed}') or check existing recorded service_user in /etc/dam-hopper/host.toml",
                     user.uid
                 )));
             }

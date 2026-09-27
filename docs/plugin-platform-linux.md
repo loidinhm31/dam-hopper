@@ -57,9 +57,13 @@ The release manager enforces strict security validation on the chosen owner acco
 2. **Socket Path (`/run/dam-hopper/plugin-runner.sock`)**:
    Created by `dam-hopper-plugin-runner` with mode `0660`. Ownership is `<plugin-owner-user>:dam-hopper-plugins`. The API service belongs to `dam-hopper-plugins` via `SupplementaryGroups=dam-hopper-plugins` in `dam-hopper-api.service`.
 3. **State Directory (`/var/lib/dam-hopper-plugin-runner`)**:
-   Durable registry state (`registry-v1.json`, journals, and staging directories) is isolated in `/var/lib/dam-hopper-plugin-runner` with mode `0700` owned by `<plugin-owner-user>`.
-   Existing state owned by another account is rejected rather than recursively
-   reassigned. Account changes require a deliberate state migration.
+   Durable runner state lives under `/var/lib/dam-hopper-plugin-runner` with
+   mode `0700` owned by `<plugin-owner-user>`. Registry metadata, journals,
+   staging, and packages live under its `plugins/` subdirectory
+   (`registry-v1.json`, `journal/`, `staging/`, and `packages/`).
+   If the state directory owner or group differs from the selected runner,
+   activation is rejected rather than recursively reassigning files. Account
+   changes require a deliberate backup and state migration.
 
 ## Workspace Directory Access & Developer Permissions
 
@@ -67,29 +71,135 @@ By default, the plugin runner executes as the isolated system user `dam-hopper-p
 
 ### Scenario A: Single-User Developer Workstation (Recommended)
 
-If the server is your personal development machine, run the runner under your own account:
+On a single-user development workstation, use your normal login as
+`--plugin-owner-user` so plugins can read owner-only project and tool history.
+Run the API under a different, dedicated non-root account such as
+`dam-hopper`. The release manager rejects both matching usernames and
+different usernames with the same UID; explicit accounts must exist and are
+not silently created or repaired. Follow the operational steps below to
+preflight identities, stage a fixed release, and activate it.
+
+**Why distinct identities are required:** Even on a personal workstation, the
+API service and plugin runner must have distinct non-zero UIDs. If
+`/etc/dam-hopper/host.toml` records `service_user` as your login, explicitly
+passing `--service-user dam-hopper` overrides that recorded API identity for
+the candidate. Omitting it can preserve the conflicting value.
+
+**Filesystem access benefits:** The runner executes with your developer UID,
+so the Linux VFS grants owner access to project directories with mode `0700`
+without POSIX ACLs. `ProtectHome=read-only` still prevents writes under
+`/home`; this setup grants read access, not write access.
+
+Before staging, compare the selected accounts and existing state with the
+identities you plan to use. The manager validates explicit accounts but does
+not create or repair them:
 
 ```bash
-./dam-hopper-install.sh --latest --role both --plugin-owner-user $(id -un)
+# Create a dedicated API account only if it is absent.
+if ! getent passwd dam-hopper >/dev/null; then
+  sudo useradd -r -U -M -s /sbin/nologin \
+    -d /var/lib/dam-hopper dam-hopper
+fi
+
+owner_user="$(id -un)"
+owner_uid="$(id -u)"
+api_uid="$(id -u dam-hopper)"
+api_gid="$(id -g dam-hopper)"
+getent passwd dam-hopper
+printf 'plugin owner: %s (UID %s); API: dam-hopper (UID %s, GID %s)\n' \
+  "$owner_user" "$owner_uid" "$api_uid" "$api_gid"
+test "$owner_uid" -ne 0
+test "$api_uid" -ne 0
+test "$api_gid" -ne 0
+test "$api_uid" -ne "$owner_uid"
 ```
 
-Because the runner shares your UID, it can access all your workspaces and `~/.evcrate` files naturally without opening permissions.
+For an existing installation, inspect only the recorded identity fields and
+the current unit identities. Skip these checks on a fresh host without those
+files. Do not copy full configuration, environment files, or tokens into logs.
+
+```bash
+sudo grep -E '^(service_user|plugin_owner_user) *=' /etc/dam-hopper/host.toml
+sudo systemctl cat dam-hopper-api.service dam-hopper-plugin-runner.service \
+  | grep -E '^(User|Group|SupplementaryGroups)='
+```
+
+If runner state already exists, inspect ownership metadata before activation:
+
+```bash
+if sudo test -d /var/lib/dam-hopper-plugin-runner; then
+  sudo find /var/lib/dam-hopper-plugin-runner -maxdepth 2 \
+    -printf '%u:%g %m %p\n'
+fi
+```
+
+The top-level state directory owner and group must match the selected runner or
+activation is rejected. Inspect existing registry files and child directories
+for expected ownership too; the manager does not recursively repair them. If
+any required state has a different owner or group, stop and use a deliberate,
+reviewed backup and migration procedure before activation. Never work around
+ownership problems with recursive `chown` or manual registry edits.
+
+From the directory containing the bootstrap installer, stage a release that
+includes this fix. Use `--latest` only when the latest published release
+contains the fix; otherwise replace it with `--version <patched-tag>`. Add
+repeatable `--plugin-admin-subject <subject>` options when a fresh host needs
+plugin administrators; the OS login is not inferred as an admin subject.
+
+```bash
+./dam-hopper-install.sh --latest --role both \
+  --service-user dam-hopper \
+  --plugin-owner-user "$(id -un)"
+
+# Confirm the candidate is pending; staging does not activate it.
+dam-hopper status
+sudo dam-hopper start
+```
+
+`--reinstall` replaces the same installed tag and role, stops services, and
+removes that release path. Prefer a new patched tag to keep the current
+known-good release available for rollback until post-activation checks pass.
+
+After activation, confirm the recorded configuration, rendered identities,
+service state, API health, and runner socket:
+
+```bash
+sudo grep -E '^(service_user|plugin_owner_user) *=' /etc/dam-hopper/host.toml
+sudo systemctl cat dam-hopper-api.service dam-hopper-plugin-runner.service \
+  | grep -E '^(User|Group|SupplementaryGroups)='
+sudo systemctl is-active dam-hopper-api.service dam-hopper-plugin-runner.service
+curl -fsS http://127.0.0.1:4801/api/health
+sudo stat -c '%U:%G %a %n' /run/dam-hopper/plugin-runner.sock
+```
+
+Expect API `User=dam-hopper`, runner `User=<plugin-owner-user>`, distinct
+non-zero UIDs, and a `0660` socket in `dam-hopper-plugins`. API health alone
+does not prove plugin readiness.
+
+Hard-refresh the web UI, open Settings using the intended server profile, and
+confirm its Bearer-authenticated admin state and plugin installations. Then
+invoke the affected history-reading plugin against a real history directory
+with mode `0700`; confirm it completes without `WorkerFailed` or `EACCES`.
+Writes under `/home` can still fail because the runner's home mount is
+read-only. Do not expose Bearer tokens in logs. If post-activation checks fail
+and a previous release exists, roll back with
+[`sudo dam-hopper rollback`](./linux-systemd.md#manual-rollback); a fresh
+installation has no previous release to restore.
 
 ### Scenario B: Multi-User / Sandboxed Deployment
 
-If using the default dedicated runner account (`dam-hopper-plugin-runner`), developer home directories with mode `0700` (`rwx------`) block access at the filesystem layer. Grant traversal and read permissions explicitly using POSIX ACLs:
-
+If using the default dedicated runner account (`dam-hopper-plugin-runner`), developer home directories with mode `0700` (`rwx------`) block access at the filesystem layer. Note that external tools executing `chmod 0700` will collapse POSIX ACL masks (`mask::---`), so Scenario A is strongly recommended for workstations running tools that generate `0700` state. If using Scenario B, grant traversal and read permissions explicitly:
 ```bash
 # 1. Allow the runner service to traverse your home directory
-setfacl -m u:dam-hopper-plugin-runner:x /home/<your-user>
+setfacl -m u:dam-hopper-plugin-runner:x "$HOME"
 
 # 2. Grant recursive read & execute on your workspace repositories
-setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS
-setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/WS
+setfacl -R -m u:dam-hopper-plugin-runner:rX "$HOME/WS"
+setfacl -R -d -m u:dam-hopper-plugin-runner:rX "$HOME/WS"
 
 # 3. Grant recursive read & execute on tool history (if using evcrate)
-setfacl -R -m u:dam-hopper-plugin-runner:rX /home/<your-user>/.evcrate
-setfacl -R -d -m u:dam-hopper-plugin-runner:rX /home/<your-user>/.evcrate
+setfacl -R -m u:dam-hopper-plugin-runner:rX "$HOME/.evcrate"
+setfacl -R -d -m u:dam-hopper-plugin-runner:rX "$HOME/.evcrate"
 ```
 
 ## Systemd Service Hardening

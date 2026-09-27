@@ -1,7 +1,14 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
-import type { ApiClient } from "@/api/client.js";
+import { useEffect, useState, useCallback, useMemo, useSyncExternalStore } from "react";
+import { ApiRequestError, type ApiClient } from "@/api/client.js";
 import { getApiClientForProfile } from "@/api/connections.js";
-import { getAuthToken, getProfiles, getServerUrl } from "@/api/server-config.js";
+import {
+  getActiveProfileId,
+  getAuthToken,
+  getProfiles,
+  getServerUrl,
+  subscribeToProfileChanges,
+  getProfileChangeVersion,
+} from "@/api/server-config.js";
 import { checkAuthStatus } from "@/api/auth-client.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
@@ -55,15 +62,30 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
   const [accessTarget, setAccessTarget] = useState<AdminInstallationDto | null>(null);
   const [actionPending, setActionPending] = useState<boolean>(false);
 
+  const profileVersion = useSyncExternalStore(
+    subscribeToProfileChanges,
+    () => getProfileChangeVersion(),
+    () => 0,
+  );
+
+  const effectiveProfileId = useMemo(() => {
+    return profileId || getActiveProfileId() || null;
+  }, [profileId, profileVersion]);
+
   const resolvedClient = useMemo(() => {
-    return clientProp ?? getApiClientForProfile(profileId);
-  }, [clientProp, profileId]);
+    return clientProp ?? getApiClientForProfile(effectiveProfileId);
+  }, [clientProp, effectiveProfileId]);
 
   const targetProfile = useMemo(() => {
     const list = getProfiles();
-    return list.find((p) => p.id === profileId) ?? null;
-  }, [profileId]);
-  const serverUrl = profileId ? targetProfile?.url : getServerUrl();
+    return list.find((p) => p.id === effectiveProfileId) ?? null;
+  }, [effectiveProfileId, profileVersion]);
+
+  const serverUrl = useMemo(() => {
+    if (targetProfile?.url) return targetProfile.url;
+    if (effectiveProfileId) return undefined;
+    return getServerUrl();
+  }, [targetProfile, effectiveProfileId]);
 
   // Reset privilege and state immediately on profile switch
   useEffect(() => {
@@ -74,16 +96,19 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
     setError(null);
     setStageBoundProjects([]);
     setStageActor("");
-  }, [profileId]);
-
+  }, [effectiveProfileId]);
   // Load auth status for selected profile
   useEffect(() => {
     let cancelled = false;
     const fetchAuth = async () => {
       try {
         setAuthLoading(true);
-        if (!serverUrl) return;
-        const token = getAuthToken(profileId ?? undefined);
+        if (!serverUrl) {
+          setAuthStatus(null);
+          setUnauthorized(false);
+          return;
+        }
+        const token = getAuthToken(effectiveProfileId ?? undefined);
         const result = await checkAuthStatus(serverUrl, token);
         if (cancelled) return;
         if (result.authenticated) {
@@ -110,6 +135,7 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
             workbenchProtocol: 2,
             error: err instanceof Error ? err.message : "Network error",
           });
+          setError(err instanceof Error ? err.message : "Network error checking auth status");
         }
       } finally {
         if (!cancelled) {
@@ -121,16 +147,16 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
     return () => {
       cancelled = true;
     };
-  }, [serverUrl, profileId]);
+  }, [serverUrl, effectiveProfileId]);
 
   const isAdmin = authStatus?.role === "admin";
 
   const { allProjects } = useAggregatedProjects();
   const availableProjects = useMemo(() => {
     return allProjects
-      .filter((p) => !profileId || p.profileId === profileId)
+      .filter((p) => !effectiveProfileId || p.profileId === effectiveProfileId)
       .map((p) => ({ name: p.project.name, path: p.project.path }));
-  }, [allProjects, profileId]);
+  }, [allProjects, effectiveProfileId]);
 
 
   const loadInstallations = useCallback(async () => {
@@ -146,11 +172,25 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
       setInstallations(res.installations);
       setSecurityRevision(res.securityRevision);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("401") || msg.includes("403") || msg.includes("authorized") || msg.includes("Bearer")) {
-        setUnauthorized(true);
+      if (err instanceof ApiRequestError) {
+        if (err.status === 403 && (err.code === "AdminRoleRequired" || err.message.includes("Administrator role required"))) {
+          setUnauthorized(true);
+        } else if (err.status === 401) {
+          setUnauthorized(true);
+        } else if (err.status === 403 && err.code === "BearerRequired") {
+          setError("Bearer token authentication required for plugin management operations. Cookie-based sessions cannot administer plugins.");
+        } else if (err.status === 403 && err.code === "NoAuthForbidden") {
+          setError("Plugin management operations are disabled in --no-auth mode.");
+        } else {
+          setError(err.message || `HTTP ${err.status}`);
+        }
       } else {
-        setError(msg);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("AdminRoleRequired") || msg.includes("Administrator role required") || msg.includes("401") || msg.includes("authorized")) {
+          setUnauthorized(true);
+        } else {
+          setError(msg);
+        }
       }
     } finally {
       setLoading(false);

@@ -684,10 +684,49 @@ describe("managed runtime profile reconciliation", () => {
     expect(localStorage.getItem(`damhopper_profile_auth_v2_${p.id}`)).not.toBeNull();
   });
 
-  it("public getAuthToken requires profileId and returns null when omitted", () => {
+  it("public getAuthToken falls back to active profile when profileId is omitted or null", () => {
+    // When no active profile exists, returns null
+    expect(getActiveProfileId()).toBeNull();
     expect(getAuthToken()).toBeNull();
     expect(getAuthToken(undefined)).toBeNull();
+    expect(getAuthToken(null)).toBeNull();
     expect(getAuthToken("")).toBeNull();
+
+    // Create profiles with tokens
+    const profileA = createProfile({
+      name: "Server A",
+      url: "http://localhost:4801",
+      authType: "basic",
+    });
+    const profileB = createProfile({
+      name: "Server B",
+      url: "http://localhost:4802",
+      authType: "basic",
+    });
+
+    setAuthToken("token-a", profileA.id);
+    setAuthToken("token-b", profileB.id);
+
+    // Set profileA as active
+    setActiveProfile(profileA.id);
+    expect(getActiveProfileId()).toBe(profileA.id);
+
+    // Calling getAuthToken() without argument or with null/undefined returns active profile's token
+    expect(getAuthToken()).toBe("token-a");
+    expect(getAuthToken(undefined)).toBe("token-a");
+    expect(getAuthToken(null)).toBe("token-a");
+    expect(getAuthToken("")).toBe("token-a");
+
+    // Explicit ID takes precedence over active profile
+    expect(getAuthToken(profileB.id)).toBe("token-b");
+
+    // Switching active profile switches fallback token
+    setActiveProfile(profileB.id);
+    expect(getAuthToken()).toBe("token-b");
+    expect(getAuthToken(profileA.id)).toBe("token-a");
+
+    // Non-existent explicit ID returns null (never falls back to active profile)
+    expect(getAuthToken("nonexistent-profile")).toBeNull();
   });
 
   it("returns referentially identical array when localStorage has not changed", () => {
