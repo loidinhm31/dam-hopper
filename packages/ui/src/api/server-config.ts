@@ -261,19 +261,26 @@ function removeSessionStorage(key: string): boolean {
   }
 }
 
-/** Returns the profile-scoped auth token, requiring profileId and verifying endpoint binding. */
-export function getAuthToken(profileId?: string): string | null {
-  if (!profileId) {
+/** Returns the profile-scoped auth token, falling back to active profile if unspecified, and verifying endpoint binding. */
+export function getAuthToken(profileId?: string | null): string | null {
+  const explicitId = typeof profileId === "string" && profileId.length > 0;
+  const targetId = explicitId ? profileId : getActiveProfileId();
+  if (!targetId) {
     return null;
   }
-  const v2Key = profileAuthV2Key(profileId);
-  const v2Raw = readLocalStorage(v2Key);
   const profilesResult = readServerProfiles();
   const currentProfile =
     profilesResult.status === "available"
-      ? profilesResult.profiles.find((p) => p.id === profileId)
+      ? profilesResult.profiles.find((p) => p.id === targetId)
       : null;
 
+  // For an active ID absent from available profiles, fail closed rather than expose an orphaned token.
+  if (!explicitId && profilesResult.status === "available" && !currentProfile) {
+    return null;
+  }
+
+  const v2Key = profileAuthV2Key(targetId);
+  const v2Raw = readLocalStorage(v2Key);
   if (v2Raw) {
     try {
       const parsed = JSON.parse(v2Raw) as Partial<ProfileAuthV2>;
@@ -300,8 +307,8 @@ export function getAuthToken(profileId?: string): string | null {
     }
   }
 
-  // Check legacy key damhopper_auth_token_${profileId}
-  const legKey = legacyTokenKey(profileId);
+  // Check legacy key damhopper_auth_token_${targetId}
+  const legKey = legacyTokenKey(targetId);
   const legacyPersistent = readLocalStorage(legKey);
   const legacySession = readSessionStorage(legKey);
   const legacyToken = legacyPersistent || legacySession;

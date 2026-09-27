@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Plugin admin profile binding and Linux installer identity conflict (2026-09-27)
+
+- **Plan status: COMPLETED (3/3 phases; 100%; updated 2026-09-27 22:09:06 +07:00).** Settings now resolves the default plugin-admin target through the active profile and classifies typed auth failures; the Linux manager keeps enforcing distinct API and plugin-runner UIDs, with an early installer warning and updated Scenario A/activation guidance.
+- **Validation and caveats:** Review records 1,902/1,902 UI tests, 8/8 Linux runner tests, clean TypeScript/Cargo checks, installer syntax, and focused installer smoke scenarios; review scored 8.5/10 with no critical issues. Browser Settings smoke and host-level systemd activation were not performed. Review follow-ups remain for explicit-ID orphan-token rejection and stronger profile-switch assertions. See the [plan](../plans/260927-1944-fix-plugin-auth-and-install-identity/plan.md) and [code review](../plans/reports/code-review-260927-2154-fix-plugin-auth-and-install-identity.md).
+
 ### Linux release plugin runner packaging fix (2026-09-25)
 
 - **Implementation COMPLETE (4/4 phases; 100%; P1).** Validation passed 19/19 overall, including deterministic package smoke and 5/5 fail-closed cases; review 10/10, no critical issues. Hosted CI was not run.

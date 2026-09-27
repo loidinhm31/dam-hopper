@@ -31,7 +31,7 @@ fn test_verify_plugin_owner_account_rejects_api_and_web_identities() {
 
     let err_api = verify_plugin_owner_account("dam-hopper", Some("dam-hopper")).unwrap_err();
     assert!(
-        matches!(err_api, ReleaseError::Config(msg) if msg.contains("cannot be the API service user"))
+        matches!(&err_api, ReleaseError::Config(msg) if msg.contains("cannot be the API service user") && msg.contains("distinct dedicated --service-user"))
     );
 }
 

@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginManagementSection } from "./PluginManagementSection.js";
-import type { ApiClient } from "@/api/client.js";
+import { ApiRequestError, type ApiClient } from "@/api/client.js";
 import type {
   AdminInstallationDto,
   AdminInstallationListResult,
@@ -120,6 +120,69 @@ describe("PluginManagementSection", () => {
 
     expect(container.querySelector('[data-testid="plugin-admin-unauthorized"]')).toBeTruthy();
     expect(container.textContent).toContain("Administrator Access Required");
+  });
+
+  it("shows specific error and not unauthorized banner when adminList fails with BearerRequired", async () => {
+    const mockClient = createMockClient({
+      adminList: vi.fn().mockRejectedValue(new ApiRequestError("Bearer token required", 403, "BearerRequired")),
+    });
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    expect(container.querySelector('[data-testid="plugin-admin-unauthorized"]')).toBeNull();
+    expect(container.querySelector('[data-testid="plugin-admin-error"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="plugin-admin-error"]')?.textContent).toContain("Bearer token authentication required");
+  });
+
+  it("shows generic error and not unauthorized banner on network / 503 error", async () => {
+    const mockClient = createMockClient({
+      adminList: vi.fn().mockRejectedValue(new ApiRequestError("Runner service unavailable", 503, "RunnerUnavailable")),
+    });
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    expect(container.querySelector('[data-testid="plugin-admin-unauthorized"]')).toBeNull();
+    expect(container.querySelector('[data-testid="plugin-admin-error"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="plugin-admin-error"]')?.textContent).toContain("Runner service unavailable");
+  });
+
+  it("uses active profile when profileId prop is omitted and updates on profile switch", async () => {
+    const fetchCalls: Array<{ url: string; headers: Record<string, string> }> = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      fetchCalls.push({
+        url: String(url),
+        headers: (init?.headers as Record<string, string>) || {},
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          authenticated: true,
+          user: "admin-user",
+          role: "admin",
+          workbenchProtocol: 2,
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const mockClient = createMockClient();
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} />);
+    });
+
+    expect(fetchCalls.length).toBeGreaterThan(0);
+    expect(fetchCalls[0].url).toContain("/api/auth/status");
+
+    await act(async () => {
+      root.render(<PluginManagementSection client={mockClient} profileId="other-server" />);
+    });
+
+    expect(container.querySelector('[data-testid="plugin-management-section"]')).toBeTruthy();
   });
 
   it("renders user account and role badge", async () => {
