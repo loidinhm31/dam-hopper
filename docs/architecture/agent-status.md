@@ -1,18 +1,18 @@
 # Agent status — OMP-first architecture
 
-Status: **Phase 01 semantic contract and reducer implemented; Phases 02–05 planned**. Date: 2026-09-28.
+Status: **Phase 01 semantic contract and reducer implemented; Phase 02 reporter transport and PTY lifecycle completed; Phases 03–05 planned**. Date: 2026-09-28.
 Plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
 Evidence: [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
-Phase 01 adds the version-1 Rust contract and pure in-memory reducer/registry,
-plus matching public TypeScript DTOs and decoders. The existing broad
-`TerminalAgentType` union in `packages/ui/src/api/client.ts` includes `omp`;
-this does not add a status transport. This phase does not deliver reporter
-transport, PTY credential injection, an OMP adapter, snapshot or push routes,
-browser status UI, or notifications. Those integration and qualification
-phases remain planned.
+Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
+plus matching public TypeScript DTOs and decoders. Phase 02 implements the
+server-owned reporter runtime, private loopback collector, PTY-incarnation
+credentials, protected snapshot, and semantic WebSocket pushes. The existing
+`TerminalAgentType` union in `packages/ui/src/api/client.ts` includes `omp`,
+but no OMP adapter, browser consumer, badges, or notifications yet; those
+remain Phases 03–05.
 
-## Remaining scope and delivery (planned)
+## Remaining scope and delivery (Phases 03–05 planned)
 
 - The semantic contract is designed to be agent-neutral; `AgentKind` currently supports only OMP. Codex/others remain future work if needed.
 - Status badges in ordinary tabs, split tabs, and Fleet terminal rows. Existing history/toasts/sound/browser notification service; per browser-client delivery.
@@ -20,22 +20,26 @@ phases remain planned.
 - Linux runtime qualification first. Preserve Windows builds; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
 - No Herdr dependency, VT renderer, screen heuristics, task-success automation, workflow mutation, suspend-policy change, telemetry ingestion, or generic adapter/plugin loader.
 
-## Planned end-to-end data flow
+## End-to-end data flow (Phase 02 server path implemented; producer/UI pending)
 
 ```text
-managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
+future managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
           ^                                              |
-PTY spawn injects terminal-scoped capability              +-- protected REST snapshot
-                                                         +-- existing browser WebSocket
+PTY spawn injects scoped capability                       +-- protected REST snapshot
+                                                         +-- authenticated browser WebSocket
                                                                   |
-                                                  app-root per-profile watcher
+                                         future app-root per-profile watcher
                                                                   |
-                                                  status store + notification service
+                                         future status store + notification service
 ```
 
-A persistent local connection is preferred over OSC or per-event HTTP. It avoids credential-bearing terminal output and lets disconnect invalidate OMP activity even while its parent shell remains alive. Loopback TCP avoids Linux-only Unix-socket paths and Windows named-pipe branches. This listener is not exposed by the public API router or tunnel discovery.
+Phase 02 binds the private collector to Linux loopback TCP and keeps it off the
+public API router and tunnel discovery. A persistent local connection lets a
+reporter disconnect invalidate status while its parent shell remains alive;
+it avoids credentials in terminal output and avoids transcript parsing. The
+bundled reporter and browser consumer are future phases.
 
-## Planned runtime identity and ownership (Phase 02+)
+## Runtime identity and ownership (Phase 02 server; browser ownership planned)
 
 - Server runtime: random `serverEpoch` per process start; no persisted semantic status.
 - Terminal: existing `{id, incarnation}`. Browser additionally supplies owning `{profileId, connectionGeneration}` locally, never trusts it from a remote server.
@@ -44,7 +48,7 @@ A persistent local connection is preferred over OSC or per-event HTTP. It avoids
 - Logical turn: adapter-generated `turnId`; continuations/retries keep the current logical turn until actual settle.
 - One active reporter per terminal incarnation. Same reporter reconnect may atomically replace its old connection; a different reporter is rejected while the old one is live. Expiry, close, release or PTY retirement permits a new claimant.
 - Every callback/close/timeout is fenced by captured terminal incarnation and reporter epoch. An old socket cannot clear or overwrite its replacement.
-- This is scoped local reporting, not a sandbox against a malicious process running as the same OS account. Nested-session guards prevent accidental parent overwrites; capabilities are not proof of model truth.
+- This is scoped local reporting, not a sandbox against malicious code running as the same OS account. The Phase 03 adapter must use nested-session guards to avoid accidental parent overwrites; capabilities do not prove model truth.
 
 ## Implemented semantic contract v1
 
@@ -67,18 +71,18 @@ is the only current agent kind.
 
 Process alive/exited/crashed and terminal receiving/quiet remain separate. No semantic `done` or `success` state. Planned UI labels: Unknown, Idle, Running, Needs attention. A turn-ended notification is not task-success verification.
 
-### Planned private connection (Phase 02)
+### Implemented private reporter connection (Phase 02)
 
 Listener: `127.0.0.1:0`, fixed route `/v1/agent-status`, WebSocket upgrade. Endpoint injected only into managed PTY child environment.
 
 - Authenticate before upgrade with `Authorization: Bearer <terminal-capability>`; credential identifies exactly one current incarnation. Reject browser `Origin`, wrong Host, non-loopback peer and unexpected path/query. No cookies, CORS, query tokens or use of global server credentials.
 - Client sends hello: `{version:1, agentKind:"omp", reporterId, agentSessionId, adapterVersion}`. Unknown protocol/agent versions receive explicit rejection, not silent success.
 - Server accepts with `{kind:"accepted", serverEpoch, reporterEpoch, heartbeatMs:5000, leaseMs:15000}`. Admission is complete only after this acknowledgement.
-- Planned reports define outcomes `ended | interrupted | error | unknown` for settled `turn-ended` events. In the reducer, a snapshot may also carry an optional outcome; snapshots remain silent and do not emit attention.
+- Reports define outcomes `ended | interrupted | error | unknown` for settled `turn-ended` events. Snapshots may carry an optional outcome but remain silent and do not emit attention.
 - State-bearing heartbeat every 5 seconds; lease expires after 15 seconds without a valid current-epoch report. Heartbeats are extension-level, not automatic WebSocket pongs, so a hung extension cannot remain authoritative merely because the runtime answers pings.
-- Acknowledge accepted report sequence; duplicate identical sequence is idempotent, stale lower sequence is ignored, conflicting duplicate is rejected. Reports have a bounded in-flight queue. If the queue overflows or transport fails, discard notification history, mark unknown, reconnect with a fresh snapshot; never replay completed turns as fresh alerts.
-- Release/connection close immediately marks unknown and clears active authority. Timeout bounds missing-cleanup behavior. Neither creates a turn-ended notification.
-- Reconnect delays: 250 ms, 500 ms, 1 s, 2 s, then 5 s, one outstanding connection attempt; stop on retired/invalid capability or shutdown. Retry only transport admission, never AI work. On pending spawn or occupied reporter, bounded backoff may retry while OMP remains alive.
+- Every accepted report is validated, applied serially, and acknowledged by sequence. Identical duplicate sequences are idempotent, stale lower sequences are ignored, and conflicting duplicates are rejected. No application-level report queue; frames cap at 4 KiB and per-reporter rate is 20/s with burst 40.
+- Reporter disconnect/release immediately marks status unknown; missing heartbeats expire after 15 seconds. Neither creates turn-ended attention. WebSocket protocol pings do not renew the semantic lease.
+- Reconnect delays (250 ms, 500 ms, 1 s, 2 s, then 5 s), one outstanding attempt, and retry policy belong to the Phase 03 adapter. Retry transport admission only, never AI work.
 
 ### Implemented reducer and DTO contract
 
@@ -95,30 +99,37 @@ conflicting duplicates. Reports are validated before they update the row.
 - Record a terminal-local `attentionRevision` with each accepted attention event. Attention ID includes server epoch, terminal ID, incarnation and attention revision. Keep at most the latest attention summary in the status snapshot, not an event archive.
 - Snapshot revision advances for row membership, availability, or semantic status changes; identical heartbeats do not advance it. PTY removal removes its row. Credentials and raw reports never enter public state.
 
-The `AgentStatusSnapshotV1` DTO defines `{version, serverEpoch, revision, availability, terminals:[{id, incarnation, agentKind, agentSessionId, reporterEpoch, state, reason?, turnId?, attentionRevision, lastOutcome?}]}`. The protected `GET /api/agent-status/v1/snapshot` route is planned; Phase 01 defines its shape only. Plain shells do not gain an Unknown row; `availability` distinguishes ready, unavailable, and platform-unqualified.
+The `AgentStatusSnapshotV1` DTO defines `{version, serverEpoch, revision, availability, terminals:[{id, incarnation, agentKind, agentSessionId, reporterEpoch, state, reason?, turnId?, attentionRevision, lastOutcome?}]}`. The protected `GET /api/agent-status/v1/snapshot` route is implemented. Plain shells do not gain an Unknown row; `availability` distinguishes ready, unavailable, and platform-unqualified.
 
-Changed, removed, and invalidated payload DTOs are defined, but browser push is planned. Future events carry rows/optional attention with server epoch and snapshot revision; removal is explicit and invalidation requires snapshot reconciliation. A bounded semantic stream over the authenticated browser socket remains future work. Snapshot is authoritative.
+Changed, removed, and invalidated payloads are broadcast through the existing authenticated browser WebSocket as `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`. The 256-event stream sends invalidation after receiver lag; clients reconcile from the snapshot. Browser consumption and resnapshot handling remain Phase 04 work.
 
-Implementation: `server/src/agent_status/{types.rs,reducer.rs,tests.rs}`,
+Phase 01 implementation: `server/src/agent_status/{types.rs,reducer.rs,tests.rs}`,
 exported through `mod.rs` and `server/src/lib.rs`; public TypeScript DTOs and
 decoders are in `packages/ui/src/api/agent-status-types.ts`, with focused
 decoder tests in `agent-status-types.test.ts`. `client.ts` adds OMP to the
 existing terminal-agent type union; it does not wire status transport.
 Reducer test cases exercise normal turns, blockers, continuation/cancellation,
 outcomes, session switches, sequence/epoch fences, reconnect, leases, and
-retirement. See the [Phase 01 plan](../../plans/260928-0318-agent-status-omp-first/phase-01-semantic-contract-and-reducer.md).
+retirement. Phase 02 server integration lives in
+`server/src/agent_status/{runtime.rs,collector.rs}`, `server/src/api/agent_status.rs`,
+`server/src/api/{router.rs,ws.rs,ws_protocol.rs}`, `server/src/pty/manager.rs`,
+`server/src/state.rs`, and `server/src/main.rs`; lifecycle/socket coverage is in
+`server/tests/agent_status_runtime.rs` and focused PTY/API tests. Phase 02
+verification passed with 100% test success. See the
+[Phase 01 plan](../../plans/260928-0318-agent-status-omp-first/phase-01-semantic-contract-and-reducer.md)
+and [Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md).
 
-## Planned PTY/runtime lifecycle (Phase 02)
+## Implemented PTY/runtime lifecycle (Phase 02)
 
-- Initialize stable runtime and bind local listener before persisted PTYs are restored. Share one runtime handle with AppState and the PTY manager; avoid per-terminal runtimes.
-- For both initial create and automatic respawn, reserve a credential after allocating incarnation and before spawn. Apply `DAM_HOPPER_AGENT_STATUS_URL` and `DAM_HOPPER_AGENT_STATUS_TOKEN` directly to the private `CommandBuilder` after user env merge.
-- The runtime infers terminal identity from the credential; no public terminal identifiers or profile credentials need to be supplied by the extension.
-- Reserved names cannot be user-overridden, case-insensitively on Windows. Never store them in `PtyCreateOpts.env`, `RespawnOpts.env`, SessionMeta, SQLite, diagnostics or command strings. Suppress inherited stale status credentials when feature is unavailable.
-- Before PTY publication, credentials are pending: reject/defer reporter admission without publishing state. Activate on committed live publication; revoke on spawn failure, cancelled/disposed create, replacement, kill, exit and shutdown. Reader/supervisor callbacks must match incarnation.
-- Maintain existing lock ordering: short state-only runtime mutations; no network/file I/O under PTY manager lock; collector handlers never acquire the manager lock while holding runtime state.
-- Binding/admission failure disables status, not terminals. No injected credential when runtime unavailable. Do not auto-restart the listener mid-incarnation using a new endpoint; recover at server restart so child environment remains coherent.
-- No per-output-byte parsing, process-tree polling or transcript copying. State memory scales with current managed terminal records, with one socket per claimed terminal and bounded queues.
-- Bound private frames/messages to 4 KiB, hello deadline 3 s, pre-auth connection concurrency 32, report rate 20/s per reporter (burst 40), semantic broadcast capacity 256. Failure closes only offending reporter; unknown is safer than silently dropped state.
+- On Linux, initialize one runtime and bind the private listener before PTY restore. Share the stable runtime with AppState and PtySessionManager. Bind failure leaves ordinary terminal operation available and status unavailable; other server platforms report `platform-unqualified`.
+- For initial create and automatic respawn, reserve a credential after allocating incarnation and before spawn. Inject `DAM_HOPPER_AGENT_STATUS_URL` and `DAM_HOPPER_AGENT_STATUS_TOKEN` directly into the private `CommandBuilder` after user environment and shell integration setup.
+- The runtime infers terminal identity from the credential. No public terminal or profile credential is supplied to the reporter.
+- Credential names are reserved, including case-insensitive matching on Windows. Apply credentials only to the spawned child; never persist them in PTY options, respawn templates, session metadata, SQLite, diagnostics, or command strings. Strip stale inherited status variables when unavailable.
+- Credentials remain pending until the PTY is published live, then activate. Pending admission gets retryable service-unavailable; failed or cancelled publication revokes via the reservation guard. PTY retirement, replacement, kill, exit, and shutdown revoke status authority. Callbacks are fenced by incarnation and reporter epoch.
+- Runtime mutations are short and state-only; no network/file I/O under the PTY manager lock. Collector handlers do not acquire the manager lock while holding runtime state.
+- Collector bind/admission failure disables reporting, not terminals. No credential is injected when unavailable; listener is not restarted mid-incarnation with a new endpoint.
+- No output-byte parsing, process-tree polling, or transcript copying. Runtime state tracks managed terminal records, with one socket per claimed terminal.
+- Private frames/messages cap at 4 KiB; hello deadline 3 s; pre-auth concurrency 32; report rate 20/s (burst 40); semantic broadcast capacity 256. Invalid reports are rejected; transport failure affects only that reporter and status becomes unknown.
 
 ## Planned OMP adapter and installation (Phase 03)
 

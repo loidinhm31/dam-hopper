@@ -1,14 +1,9 @@
 # System Architecture
 
-## Agent status — Phase 01 semantic contract and reducer (Phases 02–05 planned)
+## Agent status — Phases 01–02 complete (Phases 03–05 planned)
 
-The [agent-status architecture](./architecture/agent-status.md) defines the
-contract and implementation boundary. Phase 01 implements Rust v1 DTOs and
-validation, the in-memory reducer/registry, and matching TypeScript DTO decoders.
-No reporter listener, PTY credential injection, public route, OMP adapter,
-browser push consumer, status badge, or notification delivery is wired yet.
-**Phases 02–05 remain planned.** Process/output status, workflow completion,
-and idle-suspend semantics remain separate; turn end does not prove task success.
+The [agent-status architecture](./architecture/agent-status.md) is normative. Phase 01 implements the Rust/TypeScript contract and reducer; Phase 02 adds the Linux private loopback reporter, PTY-scoped credentials, protected snapshot, and authenticated WebSocket status events.
+Linux bind failure preserves PTY use and reports unavailable; other server platforms remain platform-unqualified. The OMP producer, browser consumer, badges, notifications, and qualification remain planned for Phases 03–05. Process/output status, workflow completion, and idle-suspend remain separate; turn end does not prove task success.
 
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 

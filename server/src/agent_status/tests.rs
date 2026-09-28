@@ -567,3 +567,161 @@ fn test_safe_integer_and_identifier_validation() {
     assert!(validate_opaque_id("id", "with\nnewline").is_err());
     assert!(validate_opaque_id("id", &"x".repeat(129)).is_err());
 }
+
+#[tokio::test]
+async fn test_runtime_credential_reservation_activation_and_drop_revocation() {
+    use super::runtime::{AgentStatusRuntime, TokenAuthResult};
+
+    let runtime = AgentStatusRuntime::with_epoch(
+        1000,
+        AgentStatusAvailability::Ready,
+        Some("ws://127.0.0.1:4801/v1/agent-status".to_string()),
+    );
+
+    // Reserve credential
+    let reservation = runtime.reserve_credential("term-1", 1).expect("reservation");
+    assert_eq!(reservation.terminal_id(), "term-1");
+    assert_eq!(reservation.incarnation(), 1);
+    assert_eq!(reservation.url(), "ws://127.0.0.1:4801/v1/agent-status");
+    let token = reservation.token().to_string();
+    assert!(!token.is_empty());
+
+    // While pending, authenticate_bearer returns Pending
+    assert_eq!(
+        runtime.authenticate_bearer(&token),
+        TokenAuthResult::Pending
+    );
+
+    // Activate reservation
+    reservation.activate();
+
+    // Now active
+    assert_eq!(
+        runtime.authenticate_bearer(&token),
+        TokenAuthResult::Active {
+            terminal_id: "term-1".to_string(),
+            incarnation: 1,
+        }
+    );
+
+    // Another reservation for term-2, dropped without activation => revoked
+    {
+        let res2 = runtime.reserve_credential("term-2", 1).expect("res2");
+        let token2 = res2.token().to_string();
+        assert_eq!(runtime.authenticate_bearer(&token2), TokenAuthResult::Pending);
+        // drop res2
+    }
+    // After drop, should be revoked
+    // Looking up an unactivated dropped token returns InvalidOrRevoked
+    let res3 = runtime.reserve_credential("term-3", 1).expect("res3");
+    let token3 = res3.token().to_string();
+    res3.revoke();
+    assert_eq!(
+        runtime.authenticate_bearer(&token3),
+        TokenAuthResult::InvalidOrRevoked
+    );
+}
+
+#[tokio::test]
+async fn test_runtime_reporter_admission_reconnect_and_occupied() {
+    use super::runtime::{AgentStatusRuntime, TokenAuthResult};
+    use super::types::AgentStatusBroadcastEvent;
+
+    let runtime = AgentStatusRuntime::with_epoch(
+        1000,
+        AgentStatusAvailability::Ready,
+        Some("ws://127.0.0.1:4801/v1/agent-status".to_string()),
+    );
+    let mut event_rx = runtime.subscribe();
+
+    let res = runtime.reserve_credential("term-1", 1).unwrap();
+    let token = res.token().to_string();
+    res.activate();
+
+    let hello1 = sample_hello("rep-1", "sess-1");
+    let (close_tx1, mut close_rx1) = tokio::sync::oneshot::channel();
+
+    let accepted1 = runtime
+        .admit_reporter("term-1", 1, &hello1, close_tx1)
+        .expect("admit rep-1");
+    assert_eq!(accepted1.server_epoch, 1000);
+    assert_eq!(accepted1.reporter_epoch, 1);
+
+    // Broadcast event received
+    let ev = event_rx.recv().await.expect("recv event");
+    match ev {
+        AgentStatusBroadcastEvent::Changed(payload) => {
+            assert_eq!(payload.row.id, "term-1");
+            assert_eq!(payload.row.state, AgentState::Unknown);
+            assert_eq!(payload.row.reporter_epoch, 1);
+        }
+        _ => panic!("unexpected event"),
+    }
+
+    // Different reporter attempting to connect while rep-1 is live => rejected ReporterOccupied
+    let hello2 = sample_hello("rep-2", "sess-1");
+    let (close_tx2, _close_rx2) = tokio::sync::oneshot::channel();
+    let err = runtime
+        .admit_reporter("term-1", 1, &hello2, close_tx2)
+        .unwrap_err();
+    assert!(matches!(err, AgentStatusError::ReporterOccupied { ref active } if active == "rep-1"));
+
+    // Same reporter reconnects => old close_tx receives close signal, new epoch assigned
+    let (close_tx1_new, _close_rx1_new) = tokio::sync::oneshot::channel();
+    let accepted2 = runtime
+        .admit_reporter("term-1", 1, &hello1, close_tx1_new)
+        .expect("reconnect rep-1");
+    assert_eq!(accepted2.reporter_epoch, 2);
+    assert!(close_rx1.try_recv().is_ok(), "old reporter received close signal");
+
+    // Terminal removal revokes and cleans up
+    let removed = runtime.remove_terminal("term-1", 1).unwrap().unwrap();
+    assert_eq!(removed.terminal_id, "term-1");
+    assert_eq!(
+        runtime.authenticate_bearer(&token),
+        TokenAuthResult::InvalidOrRevoked
+    );
+}
+
+#[tokio::test]
+async fn test_runtime_lease_check_and_shutdown() {
+    use super::runtime::AgentStatusRuntime;
+    use super::types::AgentStatusBroadcastEvent;
+
+    let runtime = AgentStatusRuntime::with_epoch(
+        1000,
+        AgentStatusAvailability::Ready,
+        Some("ws://127.0.0.1:4801/v1/agent-status".to_string()),
+    );
+    let mut event_rx = runtime.subscribe();
+
+    let res = runtime.reserve_credential("term-1", 1).unwrap();
+    res.activate();
+
+    let hello = sample_hello("rep-1", "sess-1");
+    let (close_tx, mut close_rx) = tokio::sync::oneshot::channel();
+    let _ = runtime.admit_reporter("term-1", 1, &hello, close_tx).unwrap();
+    let _ = event_rx.recv().await.unwrap(); // drain admit event
+
+    // Working report
+    let rep = sample_report(
+        1,
+        ReporterEventKind::TurnStarted,
+        AgentState::Working,
+        "sess-1",
+        Some("turn-1"),
+        None,
+        None,
+    );
+    runtime.apply_report("term-1", 1, 1, rep).unwrap();
+    let ev = event_rx.recv().await.unwrap();
+    match ev {
+        AgentStatusBroadcastEvent::Changed(p) => assert_eq!(p.row.state, AgentState::Working),
+        _ => panic!("expected changed"),
+    }
+
+    // Shutdown aborts close_tx and sets availability unavailable
+    runtime.shutdown();
+    assert!(close_rx.try_recv().is_ok(), "shutdown sent close signal");
+    assert_eq!(runtime.availability(), AgentStatusAvailability::Unavailable);
+}

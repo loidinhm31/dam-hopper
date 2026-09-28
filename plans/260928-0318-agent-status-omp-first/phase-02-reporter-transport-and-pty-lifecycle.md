@@ -8,7 +8,7 @@
 
 ## Overview
 
-Date: 2026-09-28. Priority: P2. Implementation: pending. Review: pending implementation/security review.
+Date: 2026-09-28. Priority: P2. Status: DONE (2026-09-28; 100%). Implementation: completed. Review: completed (9.0/10; recommendations applied in current source).
 Run a private authenticated collector inside the existing server; connect it to PTY lifetimes and existing browser transport. No new daemon or public reporter endpoint.
 
 ## Key Insights
@@ -65,12 +65,11 @@ Intentionally unchanged: workflow reducers, idle-suspend admission, telemetry si
 
 ## Todo list
 
-- [ ] Implement local collector, scoped admission and acknowledgements.
-- [ ] Cover initial spawn, restore, respawn and cancellation cleanup.
-- [ ] Keep capability data out of persisted/user-visible environments.
-- [ ] Implement protected snapshot and independent semantic push.
-- [ ] Cover races, hung/lost connection and pressure boundaries.
-
+- [x] Implement local collector, scoped admission and acknowledgements.
+- [x] Cover initial spawn, restore, respawn and cancellation cleanup.
+- [x] Keep capability data out of persisted/user-visible environments.
+- [x] Implement protected snapshot and independent semantic push.
+- [x] Cover races, hung/lost connection and pressure boundaries.
 ## Success Criteria
 
 Scenarios C06–C12 and C18 pass. Real OMP-process/socket exit clears working even when shell lives. Old child/readers/socket callbacks cannot affect replacement terminal. Bind failure cannot prevent terminal operations. Browser authentication remains unchanged and remote unauthenticated reporting is impossible through the public router.
@@ -85,4 +84,5 @@ Constant-time capability comparison, sufficiently random tokens, no global crede
 
 ## Next steps
 
-Phase 03 supplies real OMP producer and bundled installer. Phase 04 consumes snapshot/events. All slices use phase 01 contract; integration owner resolves shared main/state/transport changes.
+- The review's three recommendations are applied in current source: lease expiry evicts/signals the reporter, credential revocation removes token-map entries, and the pre-auth semaphore enforces the 32-connection bound. Review recorded 5/5 Phase 02-specific suites, 1,563/1,563 Cargo tests, and 1,923/1,923 UI tests passing.
+- Phase 03 supplies the real OMP producer and bundled installer; Phase 04 consumes snapshots/events. All slices use the Phase 01 contract; the integration owner resolves shared main/state/transport changes.

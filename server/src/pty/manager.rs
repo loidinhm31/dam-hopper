@@ -589,6 +589,8 @@ pub struct PtySessionManager {
     /// Port forward manager — set after construction via `set_port_forward_manager`.
     /// Shared with supervisor_loop so restarted sessions also get stdout scanning.
     pub port_forward_manager: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
+    /// Agent status runtime — set after construction via `set_agent_status_runtime`.
+    pub agent_status: Arc<parking_lot::RwLock<Option<crate::agent_status::AgentStatusRuntime>>>,
     /// Backend diagnostics store — set after construction via `set_diagnostics`.
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
@@ -1056,6 +1058,7 @@ impl PtySessionManager {
             persist_tx,
             session_store,
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
+            agent_status: Arc::new(parking_lot::RwLock::new(None)),
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
             target_context: Arc::new(std::sync::RwLock::new(None)),
             workflow_recorder: Arc::new(std::sync::RwLock::new(Arc::new(
@@ -1083,6 +1086,7 @@ impl PtySessionManager {
         let lifecycle_gate = Arc::clone(&manager.lifecycle_gate);
         let persistence_gate = Arc::clone(&manager.persistence_gate);
         let readers = Arc::clone(&manager.readers);
+        let agent_status_cell = Arc::clone(&manager.agent_status);
         #[cfg(test)]
         let respawn_test_hook = Arc::clone(&manager.respawn_test_hook);
         #[cfg(test)]
@@ -1095,6 +1099,7 @@ impl PtySessionManager {
             persist_tx_clone,
             session_store_clone,
             pfm_cell,
+            agent_status_cell,
             diag_cell,
             target_context_cell,
             active_reader_count,
@@ -1347,6 +1352,17 @@ impl PtySessionManager {
         *cell = Some(store);
     }
 
+    /// Wire the agent status runtime after construction.
+    pub fn set_agent_status_runtime(&self, runtime: crate::agent_status::AgentStatusRuntime) {
+        let mut cell = self.agent_status.write();
+        *cell = Some(runtime);
+    }
+
+    /// Get a clone of the agent status runtime if wired.
+    pub fn agent_status_runtime(&self) -> Option<crate::agent_status::AgentStatusRuntime> {
+        self.agent_status.read().clone()
+    }
+
     /// Best-effort diagnostic event recording. Clones the cheap Arc-backed store
     /// out of the RwLock so no lock is held during `record_event`.
     fn record_diag(&self, source: &str, message: &str, fields: BTreeMap<String, String>) {
@@ -1413,6 +1429,9 @@ impl PtySessionManager {
             inner.publish_activity_invalidation();
             incarnation
         };
+        let status_reservation = self
+            .agent_status_runtime()
+            .and_then(|rt| rt.reserve_credential(&opts.id, incarnation));
         let mut failure_meta = SessionMeta::new_with_target(
             opts.id.clone(),
             opts.project.clone(),
@@ -1467,6 +1486,13 @@ impl PtySessionManager {
         apply_child_env(&mut cmd, &opts.env);
         if let Some(integration) = &integration {
             integration.apply(&mut cmd);
+        }
+        if let Some(res) = &status_reservation {
+            cmd.env(crate::agent_status::ENV_AGENT_STATUS_URL, res.url());
+            cmd.env(crate::agent_status::ENV_AGENT_STATUS_TOKEN, res.token());
+        } else {
+            cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_URL);
+            cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_TOKEN);
         }
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
@@ -1605,6 +1631,9 @@ impl PtySessionManager {
             inner.publish_activity_invalidation();
             creation_generation
         };
+        if let Some(res) = status_reservation {
+            res.activate();
+        }
 
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         if let Some(pfm) = &port_forward_manager {
@@ -1692,6 +1721,7 @@ impl PtySessionManager {
         let port_forward_manager = self.port_forward_manager.read().unwrap().clone();
         let rt_handle = tokio::runtime::Handle::try_current().ok();
         let diag_store = self.diagnostics.read().unwrap().clone();
+        let agent_status_runtime = self.agent_status_runtime();
         self.active_reader_count.fetch_add(1, Ordering::AcqRel);
         let workflow_recorder = self.workflow_recorder.read().unwrap().clone();
         let active_reader_count = Arc::clone(&self.active_reader_count);
@@ -1714,6 +1744,7 @@ impl PtySessionManager {
                     session_store,
                     persistence_gate,
                     port_forward_manager,
+                    agent_status_runtime,
                     project_name,
                     rt_handle,
                     diag_store,
@@ -2496,6 +2527,9 @@ impl PtySessionManager {
             session.terminate();
         }
         if was_live {
+            if let Some(status) = self.agent_status_runtime() {
+                let _ = status.remove_terminal(id, expected_incarnation);
+            }
             if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
                 pfm.unregister_session(id, expected_incarnation);
             }
@@ -2607,6 +2641,11 @@ impl PtySessionManager {
         for session in &sessions {
             session.terminate();
         }
+        if let Some(status) = self.agent_status_runtime() {
+            for (id, incarnation) in &live_session_ids {
+                let _ = status.remove_terminal(id, *incarnation);
+            }
+        }
         if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
             for (id, incarnation) in live_session_ids {
                 pfm.unregister_session(&id, incarnation);
@@ -2641,6 +2680,11 @@ impl PtySessionManager {
             inner.failed_replacements.clear();
             for session in inner.live.values() {
                 session.terminate();
+            }
+            if let Some(status) = self.agent_status_runtime() {
+                for (id, incarnation) in &sessions {
+                    let _ = status.remove_terminal(id, *incarnation);
+                }
             }
             if let Some(pfm) = &port_forward_manager {
                 for (id, incarnation) in &sessions {
@@ -2780,6 +2824,9 @@ impl PtySessionManager {
             None
         };
         if let Some(incarnation) = removed_incarnation {
+            if let Some(status) = self.agent_status_runtime() {
+                let _ = status.remove_terminal(id, incarnation);
+            }
             if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
                 pfm.unregister_session(id, incarnation);
             }
@@ -2831,6 +2878,7 @@ fn reader_thread(
     session_store: Option<Arc<SessionStore>>,
     persistence_gate: Arc<Mutex<()>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
+    agent_status: Option<crate::agent_status::AgentStatusRuntime>,
     project: Option<String>,
     rt_handle: Option<tokio::runtime::Handle>,
     diag_store: Option<DiagnosticStore>,
@@ -3258,6 +3306,10 @@ fn reader_thread(
     if let Some(pfm) = &port_forward_manager {
         pfm.unregister_session_with_runtime(&session_id, incarnation, rt_handle.as_ref());
     }
+
+    if let Some(status) = &agent_status {
+        let _ = status.remove_terminal(&session_id, incarnation);
+    }
 }
 
 /// Delivers prompt/output bytes before their validated lifecycle snapshots.
@@ -3311,6 +3363,7 @@ async fn supervisor_loop(
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<Arc<SessionStore>>,
     pfm_cell: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
+    agent_status_cell: Arc<parking_lot::RwLock<Option<crate::agent_status::AgentStatusRuntime>>>,
     diag_cell: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
     target_context_cell: Arc<std::sync::RwLock<Option<PtyTargetContext>>>,
     active_reader_count: Arc<AtomicUsize>,
@@ -3331,6 +3384,7 @@ async fn supervisor_loop(
         let target_path = cmd.respawn_opts.worktree_path.clone();
         let prev_exit_code = cmd._prev_exit_code;
         let restart_count = cmd.restart_count;
+        let agent_status = agent_status_cell.read().clone();
 
         // Wait for backoff delay.
         if cmd.delay_ms > 0 {
@@ -3402,6 +3456,7 @@ async fn supervisor_loop(
                         persist_tx.clone(),
                         session_store.clone(),
                         pfm,
+                        agent_status.clone(),
                         diag_store.clone(),
                         Arc::clone(&active_reader_count),
                         Arc::clone(&lifecycle_gate),
@@ -3434,6 +3489,7 @@ async fn supervisor_loop(
                 persist_tx.clone(),
                 session_store.clone(),
                 pfm,
+                agent_status.clone(),
                 diag_store.clone(),
                 Arc::clone(&active_reader_count),
                 Arc::clone(&lifecycle_gate),
@@ -4061,6 +4117,7 @@ async fn respawn_internal(
     persist_tx: Option<std::sync::mpsc::SyncSender<crate::persistence::PersistCmd>>,
     session_store: Option<Arc<SessionStore>>,
     port_forward_manager: Option<Arc<PortForwardManager>>,
+    agent_status: Option<crate::agent_status::AgentStatusRuntime>,
     diag_store: Option<DiagnosticStore>,
     active_reader_count: Arc<AtomicUsize>,
     lifecycle_gate: Arc<LifecycleGate>,
@@ -4118,6 +4175,9 @@ async fn respawn_internal(
         guard.publish_activity_invalidation();
         (inc, preserve_target_unavailable, source_buffer)
     };
+    let status_reservation = agent_status
+        .as_ref()
+        .and_then(|rt| rt.reserve_credential(session_id, replacement_incarnation));
     let opts = &cmd.respawn_opts;
 
     let Some(_lifecycle_permit) = lifecycle_gate.try_begin() else {
@@ -4190,6 +4250,13 @@ async fn respawn_internal(
     apply_child_env(&mut build_cmd, &opts.env);
     if let Some(integration) = &integration {
         integration.apply(&mut build_cmd);
+    }
+    if let Some(res) = &status_reservation {
+        build_cmd.env(crate::agent_status::ENV_AGENT_STATUS_URL, res.url());
+        build_cmd.env(crate::agent_status::ENV_AGENT_STATUS_TOKEN, res.token());
+    } else {
+        build_cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_URL);
+        build_cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_TOKEN);
     }
 
     let mut child = match pair.slave.spawn_command(build_cmd) {
@@ -4355,6 +4422,9 @@ async fn respawn_internal(
         inner_guard.fleet.publish_live(session_id, incarnation);
         inner_guard.publish_activity_invalidation();
     }
+    if let Some(res) = status_reservation {
+        res.activate();
+    }
 
     if let Some(pfm) = &port_forward_manager {
         pfm.register_session(session_id, incarnation);
@@ -4417,6 +4487,7 @@ async fn respawn_internal(
                 session_store_for_reader,
                 persistence_gate_clone,
                 port_forward_manager,
+                agent_status,
                 project_name,
                 rt_handle,
                 diag_store,
@@ -4679,7 +4750,14 @@ pub(crate) fn build_child_env_from_parent_snapshot(
         env.iter()
             .map(|(key, value)| (key.clone(), OsString::from(value))),
     );
+    child_env.retain(|(key, _)| !is_reserved_agent_status_env_var(key));
     child_env
+}
+
+/// Returns true if the environment variable name is reserved for private agent status reporting.
+pub fn is_reserved_agent_status_env_var(key: &str) -> bool {
+    key.eq_ignore_ascii_case(crate::agent_status::ENV_AGENT_STATUS_URL)
+        || key.eq_ignore_ascii_case(crate::agent_status::ENV_AGENT_STATUS_TOKEN)
 }
 
 fn safe_baseline_env_from(parent_env: &HashMap<String, OsString>) -> Vec<(&'static str, OsString)> {

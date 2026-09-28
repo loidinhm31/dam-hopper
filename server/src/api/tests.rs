@@ -7564,3 +7564,54 @@ async fn idle_suspend_force_suspend_disabled_actor_rejected() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "actorDisabled");
 }
+
+#[tokio::test]
+async fn test_get_agent_status_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    let runtime = crate::agent_status::AgentStatusRuntime::with_epoch(
+        5555,
+        crate::agent_status::AgentStatusAvailability::Ready,
+        Some("ws://127.0.0.1:4801/v1/agent-status".to_string()),
+    );
+    let state = make_state(&tmp).with_agent_status(runtime.clone());
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/agent-status/v1/snapshot")
+                .header("Cookie", auth_cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let snapshot: crate::agent_status::AgentStatusSnapshotV1 = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(snapshot.version, 1);
+    assert_eq!(snapshot.server_epoch, 5555);
+    assert_eq!(snapshot.availability, crate::agent_status::AgentStatusAvailability::Ready);
+    assert_eq!(snapshot.terminals.len(), 0);
+}
+
+#[tokio::test]
+async fn test_get_agent_status_snapshot_unauthorized() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_state(&tmp);
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/agent-status/v1/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
