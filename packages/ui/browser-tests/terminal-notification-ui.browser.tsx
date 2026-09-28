@@ -194,12 +194,27 @@ describe("terminal notification UI in Chromium", () => {
     const onSave = vi.fn();
     await render(
       <TerminalAgentNotificationSettings
-        enabled
-        toastEnabled
-        browserEnabled
-        soundEnabled
-        soundPattern="default"
-        soundVolume={100}
+        notifications={{
+          version: 1,
+          agents: {
+            codex: {
+              enabled: true,
+              toast: true,
+              browser: true,
+              sound: true,
+              pattern: "default",
+              volume: 100,
+            },
+            omp: {
+              enabled: false,
+              toast: true,
+              browser: true,
+              sound: true,
+              pattern: "default",
+              volume: 100,
+            },
+          },
+        }}
         onSave={onSave}
       />,
     );
@@ -213,12 +228,8 @@ describe("terminal notification UI in Chromium", () => {
     await act(async () => toast?.click());
     await act(async () => browser?.click());
 
-    expect(onSave).toHaveBeenNthCalledWith(1, {
-      terminalCodexNotificationToastEnabled: false,
-    });
-    expect(onSave).toHaveBeenNthCalledWith(2, {
-      terminalCodexBrowserNotificationsEnabled: false,
-    });
+    expect(onSave).toHaveBeenNthCalledWith(1, "codex", { toast: false });
+    expect(onSave).toHaveBeenNthCalledWith(2, "codex", { browser: false });
     expect(container.querySelector('[role="status"]')).not.toBeNull();
   });
 

@@ -1,9 +1,10 @@
 import { cn } from "@/lib/utils.js";
 import type { TerminalNotificationRecord } from "@/stores/terminal-notifications.js";
+import type { TerminalAgentNotification } from "@/lib/terminal-notification-signal-parser.js";
 
 interface TerminalNotificationFeedItemProps {
   notification: TerminalNotificationRecord;
-  onSelect: (id: string, sessionId: string) => void;
+  onSelect: (id: string, event: TerminalAgentNotification) => void;
 }
 
 const formatTime = (receivedAt: number) =>
@@ -20,7 +21,7 @@ export function TerminalNotificationFeedItem({
     <li className="border-b border-[var(--color-border)]/70 last:border-b-0">
       <button
         type="button"
-        onClick={() => onSelect(id, event.sessionId)}
+        onClick={() => onSelect(id, event)}
         aria-label={`${read ? "Read" : "Unread"} terminal notification: ${event.title}`}
         className={cn(
           "relative w-full px-3 py-3 text-left transition-colors hover:bg-[var(--color-surface-2)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-ring)]",

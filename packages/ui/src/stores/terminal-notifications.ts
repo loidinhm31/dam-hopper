@@ -42,7 +42,9 @@ export const useTerminalNotificationsStore = create<TerminalNotificationsState>(
     notifications: [],
     toasts: [],
     addNotification: (event, { showToast = true } = {}) => {
-      const id = createNotificationId(event);
+      const id = event.semanticEventId
+        ? JSON.stringify([event.profileId, event.semanticEventId])
+        : createNotificationId(event);
       const record: TerminalNotificationRecord = {
         id,
         event,
@@ -51,6 +53,12 @@ export const useTerminalNotificationsStore = create<TerminalNotificationsState>(
         terminalRef: event.terminalRef,
       };
       set((state) => {
+        if (
+          event.semanticEventId &&
+          state.notifications.some((entry) => entry.id === id)
+        ) {
+          return state;
+        }
         const notifications = [record, ...state.notifications].slice(
           0,
           MAX_TERMINAL_NOTIFICATION_HISTORY,

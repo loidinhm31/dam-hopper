@@ -178,3 +178,44 @@ describe("agent-status-types", () => {
     expect(invalidated.revision).toBe(4);
   });
 });
+
+describe("agent status attention identity", () => {
+  it("rejects attention that does not belong to the changed row and server epoch", () => {
+    const row = {
+      id: "term-1",
+      incarnation: 2,
+      agentKind: "omp",
+      agentSessionId: "session-1",
+      reporterEpoch: 3,
+      state: "idle",
+      attentionRevision: 4,
+    };
+    const attention = {
+      id: "8:term-1:2:4",
+      kind: "turn-ended",
+      terminalId: "term-1",
+      incarnation: 2,
+      agentKind: "omp",
+      agentSessionId: "session-1",
+      outcome: "ended",
+      attentionRevision: 4,
+      timestampMs: 100,
+    };
+    const valid = { serverEpoch: 8, revision: 5, row, attention };
+    expect(decodeAgentStatusChangedPayload(valid).attention?.id).toBe(
+      attention.id,
+    );
+    expect(() =>
+      decodeAgentStatusChangedPayload({
+        ...valid,
+        attention: { ...attention, id: "9:term-1:2:4" },
+      }),
+    ).toThrow(/inconsistent attention/);
+    expect(() =>
+      decodeAgentStatusChangedPayload({
+        ...valid,
+        attention: { ...attention, agentSessionId: "other-session" },
+      }),
+    ).toThrow(/inconsistent attention/);
+  });
+});

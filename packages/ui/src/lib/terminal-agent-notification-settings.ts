@@ -1,11 +1,4 @@
-import type {
-  AgentCommandPattern,
-  TerminalAgentNotificationPolicy,
-} from "@/api/client.js";
-
-export const DEFAULT_TERMINAL_AGENT_NOTIFICATION_POLICY: TerminalAgentNotificationPolicy =
-  "always";
-export const DEFAULT_TERMINAL_AGENT_QUIET_TIMEOUT_MS = 30_000;
+import type { AgentCommandPattern } from "@/api/client.js";
 export const MAX_TERMINAL_AGENT_COMMAND_PATTERNS = 32;
 export const MAX_TERMINAL_AGENT_COMMAND_ID_LENGTH = 64;
 export const MAX_TERMINAL_AGENT_COMMAND_LABEL_LENGTH = 64;

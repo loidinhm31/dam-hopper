@@ -425,7 +425,10 @@ pub fn validate_agent_executable_entry(entry: &str) -> Result<(), String> {
             entry, MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES
         ));
     }
-    if entry.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\0') {
+    if entry
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\0')
+    {
         return Err(format!(
             "server.idle_suspend.agent_executables entry '{}' contains whitespace or control characters",
             entry
@@ -434,7 +437,10 @@ pub fn validate_agent_executable_entry(entry: &str) -> Result<(), String> {
 
     let (_, basename) = if let Some(path_without_root) = entry.strip_prefix('/') {
         if path_without_root.is_empty() {
-            return Err("server.idle_suspend.agent_executables entry '/' is not a valid executable path".to_string());
+            return Err(
+                "server.idle_suspend.agent_executables entry '/' is not a valid executable path"
+                    .to_string(),
+            );
         }
         if path_without_root.ends_with('/') {
             return Err(format!(
@@ -486,12 +492,7 @@ pub fn validate_agent_executable_entry(entry: &str) -> Result<(), String> {
             ));
         }
         if !entry.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || c == '_'
-                || c == '-'
-                || c == '.'
-                || c == '+'
-                || c == '@'
+            c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '+' || c == '@'
         }) {
             return Err(format!(
                 "server.idle_suspend.agent_executables entry '{}' contains invalid characters",
@@ -555,17 +556,33 @@ impl IdleSuspendCapabilitySelection {
 pub struct IdleSuspendConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_idle_suspend_quiet_period_seconds", alias = "quiet_period_seconds")]
+    #[serde(
+        default = "default_idle_suspend_quiet_period_seconds",
+        alias = "quiet_period_seconds"
+    )]
     pub quiet_period_seconds: u64,
-    #[serde(default = "default_idle_suspend_wake_after_seconds", alias = "wake_after_seconds")]
+    #[serde(
+        default = "default_idle_suspend_wake_after_seconds",
+        alias = "wake_after_seconds"
+    )]
     pub wake_after_seconds: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "enrollment_reference")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "enrollment_reference"
+    )]
     pub enrollment_reference: Option<String>,
     #[serde(default, alias = "capability_selection")]
     pub capability_selection: IdleSuspendCapabilitySelection,
-    #[serde(default = "default_idle_suspend_automatic_policy", alias = "automatic_policy")]
+    #[serde(
+        default = "default_idle_suspend_automatic_policy",
+        alias = "automatic_policy"
+    )]
     pub automatic_policy: IdleSuspendAutomaticPolicy,
-    #[serde(default = "default_idle_suspend_agent_executables", alias = "agent_executables")]
+    #[serde(
+        default = "default_idle_suspend_agent_executables",
+        alias = "agent_executables"
+    )]
     pub agent_executables: Vec<String>,
 }
 
@@ -603,7 +620,9 @@ impl IdleSuspendConfig {
         }
         if let Some(enrollment) = &self.enrollment_reference {
             if enrollment.trim().is_empty() {
-                return Err("server.idle_suspend.enrollment_reference cannot be empty when provided".into());
+                return Err(
+                    "server.idle_suspend.enrollment_reference cannot be empty when provided".into(),
+                );
             }
             if enrollment.len() > 256 {
                 return Err("server.idle_suspend.enrollment_reference exceeds maximum length of 256 characters".into());
@@ -621,24 +640,42 @@ pub struct ServerConfig {
     #[serde(default = "default_session_db_path", alias = "session_db_path")]
     pub session_db_path: String,
     /// TTL for dead session buffers in hours (default: 24)
-    #[serde(default = "default_session_buffer_ttl_hours", alias = "session_buffer_ttl_hours")]
+    #[serde(
+        default = "default_session_buffer_ttl_hours",
+        alias = "session_buffer_ttl_hours"
+    )]
     pub session_buffer_ttl_hours: u64,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default, alias = "host_resources")]
     pub host_resources: HostResourceMonitorConfig,
-    #[serde(default = "default_workflow_event_retention_days", alias = "workflow_event_retention_days")]
+    #[serde(
+        default = "default_workflow_event_retention_days",
+        alias = "workflow_event_retention_days"
+    )]
     pub workflow_event_retention_days: u32,
-    #[serde(default = "default_workflow_deleted_note_retention_days", alias = "workflow_deleted_note_retention_days")]
+    #[serde(
+        default = "default_workflow_deleted_note_retention_days",
+        alias = "workflow_deleted_note_retention_days"
+    )]
     pub workflow_deleted_note_retention_days: u32,
-    #[serde(default = "default_workflow_stale_after_hours", alias = "workflow_stale_after_hours")]
+    #[serde(
+        default = "default_workflow_stale_after_hours",
+        alias = "workflow_stale_after_hours"
+    )]
     pub workflow_stale_after_hours: u32,
     #[serde(default, alias = "idle_suspend")]
     pub idle_suspend: IdleSuspendConfig,
 }
-pub const fn default_workflow_event_retention_days() -> u32 { 90 }
-pub const fn default_workflow_deleted_note_retention_days() -> u32 { 7 }
-pub const fn default_workflow_stale_after_hours() -> u32 { 24 }
+pub const fn default_workflow_event_retention_days() -> u32 {
+    90
+}
+pub const fn default_workflow_deleted_note_retention_days() -> u32 {
+    7
+}
+pub const fn default_workflow_stale_after_hours() -> u32 {
+    24
+}
 
 impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
@@ -647,7 +684,9 @@ impl ServerConfig {
             return Err("server.workflow_event_retention_days must be between 1 and 3650".into());
         }
         if !(1..=3650).contains(&self.workflow_deleted_note_retention_days) {
-            return Err("server.workflow_deleted_note_retention_days must be between 1 and 3650".into());
+            return Err(
+                "server.workflow_deleted_note_retention_days must be between 1 and 3650".into(),
+            );
         }
         if !(1..=8760).contains(&self.workflow_stale_after_hours) {
             return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
@@ -671,7 +710,6 @@ impl Default for ServerConfig {
         }
     }
 }
-
 
 // ──────────────────────────────────────────────
 // Top-level workspace config (on-disk)
@@ -768,7 +806,7 @@ fn default_mobile_custom_keyboard_padding() -> u16 {
 fn default_mobile_custom_keyboard_row_gap() -> u16 {
     4
 }
-fn default_terminal_codex_notification_sound_volume() -> u8 {
+fn default_terminal_notification_sound_volume() -> u8 {
     100
 }
 
@@ -786,12 +824,153 @@ fn default_terminal_font_size_decrease_shortcut() -> String {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum TerminalCodexNotificationSoundPattern {
+pub enum TerminalAgentNotificationSoundPattern {
     #[default]
     Default,
     Soft,
     TwoTone,
     Urgent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalAgentNotificationPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub toast: bool,
+    #[serde(default = "default_true")]
+    pub browser: bool,
+    #[serde(default = "default_true")]
+    pub sound: bool,
+    #[serde(default = "default_terminal_notification_sound_volume")]
+    pub volume: u8,
+    #[serde(default)]
+    pub pattern: TerminalAgentNotificationSoundPattern,
+}
+
+impl Default for TerminalAgentNotificationPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: default_terminal_notification_sound_volume(),
+            pattern: TerminalAgentNotificationSoundPattern::Default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalAgentNotificationAgents {
+    #[serde(default)]
+    pub codex: TerminalAgentNotificationPolicy,
+    #[serde(default)]
+    pub omp: TerminalAgentNotificationPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalAgentNotifications {
+    #[serde(default = "terminal_agent_notifications_version")]
+    pub version: u8,
+    #[serde(default)]
+    pub agents: TerminalAgentNotificationAgents,
+}
+
+fn terminal_agent_notifications_version() -> u8 {
+    1
+}
+
+impl Default for TerminalAgentNotifications {
+    fn default() -> Self {
+        Self {
+            version: terminal_agent_notifications_version(),
+            agents: TerminalAgentNotificationAgents::default(),
+        }
+    }
+}
+
+/// Normalizes persisted Codex-only keys at input boundaries. An explicit
+/// canonical object is authoritative; unsupported versions must not be replaced.
+pub(crate) fn migrate_terminal_agent_notifications(ui: &mut serde_json::Value) {
+    let Some(fields) = ui.as_object_mut() else {
+        return;
+    };
+    let mut legacy = serde_json::Map::new();
+    for (target, keys) in [
+        (
+            "enabled",
+            &[
+                "terminalCodexNotificationsEnabled",
+                "terminal_codex_notifications_enabled",
+                "terminalAgentNotificationsEnabled",
+                "terminal_agent_notifications_enabled",
+            ][..],
+        ),
+        (
+            "toast",
+            &[
+                "terminalCodexNotificationToastEnabled",
+                "terminal_codex_notification_toast_enabled",
+            ][..],
+        ),
+        (
+            "browser",
+            &[
+                "terminalCodexBrowserNotificationsEnabled",
+                "terminal_codex_browser_notifications_enabled",
+            ][..],
+        ),
+        (
+            "sound",
+            &[
+                "terminalCodexNotificationSoundEnabled",
+                "terminal_codex_notification_sound_enabled",
+            ][..],
+        ),
+        (
+            "volume",
+            &[
+                "terminalCodexNotificationSoundVolume",
+                "terminal_codex_notification_sound_volume",
+            ][..],
+        ),
+        (
+            "pattern",
+            &[
+                "terminalCodexNotificationSoundPattern",
+                "terminal_codex_notification_sound_pattern",
+            ][..],
+        ),
+    ] {
+        let mut selected = None;
+        for key in keys {
+            if let Some(value) = fields.remove(*key) {
+                if selected.is_none() {
+                    selected = Some(value);
+                }
+            }
+        }
+        if let Some(value) = selected {
+            legacy.insert(target.to_string(), value);
+        }
+    }
+
+    if fields.contains_key("terminalAgentNotifications") {
+        fields.remove("terminal_agent_notifications");
+    } else if let Some(snake) = fields.remove("terminal_agent_notifications") {
+        fields.insert("terminalAgentNotifications".to_string(), snake);
+    }
+    if fields.contains_key("terminalAgentNotifications") || legacy.is_empty() {
+        return;
+    }
+    fields.insert(
+        "terminalAgentNotifications".to_string(),
+        serde_json::json!({"version": 1, "agents": {"codex": legacy}}),
+    );
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -882,44 +1061,8 @@ pub struct UiConfig {
         alias = "terminalAutoSwitchProjectEnabled"
     )]
     pub terminal_auto_switch_project_enabled: bool,
-    #[serde(
-        default,
-        alias = "terminal_codex_notifications_enabled",
-        alias = "terminalCodexNotificationsEnabled",
-        alias = "terminal_agent_notifications_enabled",
-        alias = "terminalAgentNotificationsEnabled"
-    )]
-    pub terminal_codex_notifications_enabled: bool,
-    #[serde(
-        default = "default_true",
-        alias = "terminal_codex_notification_toast_enabled",
-        alias = "terminalCodexNotificationToastEnabled"
-    )]
-    pub terminal_codex_notification_toast_enabled: bool,
-    #[serde(
-        default = "default_true",
-        alias = "terminal_codex_browser_notifications_enabled",
-        alias = "terminalCodexBrowserNotificationsEnabled"
-    )]
-    pub terminal_codex_browser_notifications_enabled: bool,
-    #[serde(
-        default = "default_true",
-        alias = "terminal_codex_notification_sound_enabled",
-        alias = "terminalCodexNotificationSoundEnabled"
-    )]
-    pub terminal_codex_notification_sound_enabled: bool,
-    #[serde(
-        default = "default_terminal_codex_notification_sound_volume",
-        alias = "terminal_codex_notification_sound_volume",
-        alias = "terminalCodexNotificationSoundVolume"
-    )]
-    pub terminal_codex_notification_sound_volume: u8,
-    #[serde(
-        default,
-        alias = "terminal_codex_notification_sound_pattern",
-        alias = "terminalCodexNotificationSoundPattern"
-    )]
-    pub terminal_codex_notification_sound_pattern: TerminalCodexNotificationSoundPattern,
+    #[serde(default, alias = "terminal_agent_notifications")]
+    pub terminal_agent_notifications: TerminalAgentNotifications,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
@@ -1013,14 +1156,7 @@ impl Default for UiConfig {
             terminal_font_size_decrease_shortcut: default_terminal_font_size_decrease_shortcut(),
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
-            terminal_codex_notifications_enabled: false,
-            terminal_codex_notification_toast_enabled: true,
-            terminal_codex_browser_notifications_enabled: true,
-            terminal_codex_notification_sound_enabled: true,
-            terminal_codex_notification_sound_volume:
-                default_terminal_codex_notification_sound_volume(),
-            terminal_codex_notification_sound_pattern:
-                TerminalCodexNotificationSoundPattern::default(),
+            terminal_agent_notifications: TerminalAgentNotifications::default(),
             explorer_show_hidden: false,
             explorer_language_filter: ExplorerLanguageFilter::default(),
             mobile_custom_keyboard_enabled: true,
@@ -1068,11 +1204,20 @@ impl UiConfig {
     }
 
     pub fn validate_terminal_notification_sound_volume(&self) -> Result<(), String> {
-        if self.terminal_codex_notification_sound_volume <= 100 {
-            Ok(())
-        } else {
-            Err("Terminal notification sound volume must be between 0 and 100".to_string())
+        if self.terminal_agent_notifications.version != 1 {
+            return Err("Unsupported terminal agent notifications version".to_string());
         }
+        for policy in [
+            &self.terminal_agent_notifications.agents.codex,
+            &self.terminal_agent_notifications.agents.omp,
+        ] {
+            if policy.volume > 100 {
+                return Err(
+                    "Terminal notification sound volume must be between 0 and 100".to_string(),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn validate_font_size(size: u16) -> Result<(), String> {

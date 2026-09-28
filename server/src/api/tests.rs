@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
 };
 use tower::ServiceExt;
 
@@ -14,7 +14,7 @@ use crate::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
-    diagnostics::{DiagnosticEvent, DiagnosticStore, now_ms},
+    diagnostics::{now_ms, DiagnosticEvent, DiagnosticStore},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -23,10 +23,10 @@ use crate::{
         ResourceAlertState, ResourceAlertSummary,
     },
     telemetry::{
-        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality,
-        TELEMETRY_SCHEMA_VERSION, TelemetryCmd, TelemetryKeyRing, TelemetryStore,
-        TokenCounterSemantic, TokenQuality,
         worker::{TelemetryControl, TelemetryHandle},
+        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
+        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
+        TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
     workspace_target::ProjectTargetRef,
@@ -88,7 +88,10 @@ fn read_stdin_command() -> &'static str {
 
 #[cfg(windows)]
 fn print_env_and_hold_command(var: &str, seconds: u64) -> String {
-    format!("echo %{var}%& ping 127.0.0.1 -n {} >NUL", seconds.saturating_add(1))
+    format!(
+        "echo %{var}%& ping 127.0.0.1 -n {} >NUL",
+        seconds.saturating_add(1)
+    )
 }
 
 #[cfg(not(windows))]
@@ -98,7 +101,10 @@ fn print_env_and_hold_command(var: &str, seconds: u64) -> String {
 
 #[cfg(windows)]
 fn print_cwd_and_hold_command(seconds: u64) -> String {
-    format!("echo %CD%& ping 127.0.0.1 -n {} >NUL", seconds.saturating_add(1))
+    format!(
+        "echo %CD%& ping 127.0.0.1 -n {} >NUL",
+        seconds.saturating_add(1)
+    )
 }
 
 #[cfg(not(windows))]
@@ -443,12 +449,10 @@ async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist()
         .unwrap();
     let origin_response = router.clone().oneshot(origin_request).await.unwrap();
     assert_eq!(origin_response.status(), StatusCode::OK);
-    assert!(
-        origin_response
+    assert!(origin_response
             .headers()
             .keys()
-            .all(|name| !name.as_str().starts_with("access-control-"))
-    );
+        .all(|name| !name.as_str().starts_with("access-control-")));
 
     let preflight = Request::builder()
         .method("OPTIONS")
@@ -1028,21 +1032,15 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
         Some(backend_events.len() as u64)
     );
     assert_eq!(json["manifest"]["terminalSessionCount"], 1);
-    assert!(
-        backend_events
+    assert!(backend_events
             .iter()
-            .any(|event| event["message"] == "terminal.a")
-    );
-    assert!(
-        backend_events
+        .any(|event| event["message"] == "terminal.a"));
+    assert!(backend_events
             .iter()
-            .any(|event| event["message"] == "global")
-    );
-    assert!(
-        !backend_events
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
             .iter()
-            .any(|event| event["message"] == "terminal.b")
-    );
+        .any(|event| event["message"] == "terminal.b"));
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], "shell:diag-a");
 
@@ -1065,16 +1063,12 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
     assert_eq!(json["scope"]["terminalIds"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["sessions"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["tails"].as_array().unwrap().len(), 0);
-    assert!(
-        backend_events
+    assert!(backend_events
             .iter()
-            .any(|event| event["message"] == "global")
-    );
-    assert!(
-        !backend_events
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
             .iter()
-            .any(|event| event["message"] == "terminal.a")
-    );
+        .any(|event| event["message"] == "terminal.a"));
 
     state.pty_manager.kill("shell:diag-a").unwrap();
     state.pty_manager.kill("shell:diag-b").unwrap();
@@ -2001,11 +1995,9 @@ async fn language_files_returns_normalized_contract_and_enforces_project_boundar
     assert_eq!(json["files"][0]["language"], "rust");
     assert!(json["files"][0]["size"].is_u64());
     assert!(json["files"][0]["mtime"].is_i64());
-    assert!(
-        !bytes
+    assert!(!bytes
             .windows(alpha.to_string_lossy().len())
-            .any(|window| { window == alpha.to_string_lossy().as_bytes() })
-    );
+        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
 
     let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
     assert_eq!(empty.status(), StatusCode::OK);
@@ -2257,18 +2249,14 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         "gpt-5.6-sol"
     );
     assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
-    assert!(
-        !list_value["sessions"][0]
+    assert!(!list_value["sessions"][0]
             .as_object()
             .unwrap()
-            .contains_key("terminals")
-    );
-    assert!(
-        !list_value["sessions"][0]
+        .contains_key("terminals"));
+    assert!(!list_value["sessions"][0]
             .as_object()
             .unwrap()
-            .contains_key("lineage")
-    );
+        .contains_key("lineage"));
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -2365,12 +2353,10 @@ async fn usage_session_cursor_preserves_active_null_end() {
     let first_sessions = first_value["sessions"].as_array().unwrap();
     assert_eq!(first_sessions.len(), 2);
     assert_eq!(first_sessions[1]["id"], "b".repeat(64));
-    assert!(
-        first_sessions[1]
+    assert!(first_sessions[1]
             .as_object()
             .unwrap()
-            .contains_key("endedAtUtcMs")
-    );
+        .contains_key("endedAtUtcMs"));
     assert!(first_sessions[1]["endedAtUtcMs"].is_null());
     let cursor = first_value["nextCursor"].as_str().unwrap();
 
@@ -2448,14 +2434,12 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
         .unwrap();
     let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(
-        !first_ids.contains(
+    assert!(!first_ids.contains(
             &second_value["sessions"][0]["id"]
                 .as_str()
                 .unwrap()
                 .to_string()
-        )
-    );
+    ));
     let changed_scope = get(
         state.clone(),
         &format!(
@@ -2669,12 +2653,10 @@ async fn usage_session_detail_is_flat_and_caps_model_summaries() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(
-        !filtered_value["sessions"][0]
+    assert!(!filtered_value["sessions"][0]
             .as_object()
             .unwrap()
-            .contains_key("terminals")
-    );
+        .contains_key("terminals"));
 }
 
 #[tokio::test]
@@ -2743,11 +2725,9 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
     assert_eq!(updated.status(), StatusCode::OK);
     let telemetry = state.telemetry.read().unwrap().clone();
     assert!(!telemetry.control.is_enabled());
-    assert!(
-        std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
             .unwrap()
-            .contains("paused = true")
-    );
+        .contains("paused = true"));
 
     let rejected = delete_json(
         state.clone(),
@@ -3369,11 +3349,152 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     .unwrap();
 
     let written = std::fs::read_to_string(&gc_path).unwrap();
-    assert!(written.contains("terminal_codex_notifications_enabled = true"));
-    assert!(!written.contains("terminal_agent_notifications_enabled"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.codex]"));
+    assert!(!written.contains("terminal_codex_notifications_enabled"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
+}
+
+#[tokio::test]
+async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syncs_codex() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let path = tmp.path().join("dam-hopper").join("config.toml");
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state, &path,
+        Some(&serde_json::json!({"terminalAgentNotifications": {
+            "version": 1,
+            "agents": {
+                "codex": {"enabled": true, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"},
+                "omp": {"enabled": true, "toast": true, "browser": false, "sound": true, "volume": 35, "pattern": "soft"}
+            }
+        }})),
+        Some(tmp.path()),
+    ).await.unwrap();
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &path,
+        Some(
+            &serde_json::json!({"terminalAgentNotifications": {"agents": {"omp": {"volume": 20}}}}),
+        ),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let persisted = crate::config::read_global_config_at(&path)
+        .unwrap()
+        .unwrap();
+    let json = serde_json::to_value(persisted.ui.unwrap()).unwrap();
+    assert_eq!(
+        json["terminalAgentNotifications"]["agents"]["codex"],
+        serde_json::json!({
+            "enabled": true, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"
+        })
+    );
+    assert_eq!(
+        json["terminalAgentNotifications"]["agents"]["omp"]["volume"],
+        20
+    );
+    assert_eq!(
+        json["terminalAgentNotifications"]["agents"]["omp"]["enabled"],
+        true
+    );
+    assert_eq!(
+        json,
+        serde_json::to_value(state.global_config.read().await.ui.as_ref().unwrap()).unwrap()
+    );
+    assert!(json.get("terminalCodexNotificationsEnabled").is_none());
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert!(disk.contains("[ui.terminal_agent_notifications.agents.omp]"));
+    assert!(!disk.contains("terminal_codex_notification"));
+    let codex = std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap();
+    assert!(codex.contains("notifications = true"));
+    assert!(codex.contains("notification_method = \"osc9\""));
+}
+
+#[tokio::test]
+async fn omp_only_canonical_patch_persists_without_touching_malformed_codex_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+    let codex_config_path = tmp.path().join(".codex").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {"version": 1, "agents": {"codex": {"enabled": true}}}
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+    let malformed_codex_config = "[tui\nnotifications = true\n";
+    std::fs::write(&codex_config_path, malformed_codex_config).unwrap();
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {
+                "version": 1,
+                "agents": {"codex": {"enabled": true}, "omp": {"volume": 20}}
+            }
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&codex_config_path).unwrap(),
+        malformed_codex_config
+    );
+    let persisted = crate::config::read_global_config_at(&gc_path)
+        .unwrap()
+        .unwrap();
+    let ui = persisted.ui.unwrap();
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
+    assert_eq!(ui.terminal_agent_notifications.agents.omp.volume, 20);
+    let current_ui = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(current_ui.terminal_agent_notifications.agents.omp.volume, 20);
+
+    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {"agents": {"codex": {"enabled": false}}}
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+    assert_eq!(
+        std::fs::read_to_string(&codex_config_path).unwrap(),
+        malformed_codex_config
+    );
+}
+
+#[test]
+fn canonical_notification_values_win_over_legacy_patch_values() {
+    let config = crate::api::config::merge_global_ui_config(
+        None,
+        &serde_json::json!({
+            "terminalCodexNotificationsEnabled": true,
+            "terminalCodexNotificationSoundVolume": 75,
+            "terminalAgentNotifications": {"version": 1, "agents": {
+                "codex": {"enabled": false, "volume": 30},
+                "omp": {"enabled": false}
+            }}
+        }),
+    )
+    .unwrap();
+    assert!(!config.terminal_agent_notifications.agents.codex.enabled);
+    assert_eq!(config.terminal_agent_notifications.agents.codex.volume, 30);
+    assert!(!config.terminal_agent_notifications.agents.omp.enabled);
 }
 
 #[tokio::test]
@@ -3500,12 +3621,13 @@ async fn update_global_ui_at_path_persists_terminal_notification_sound_settings(
     .unwrap();
 
     let written = std::fs::read_to_string(&gc_path).unwrap();
-    assert!(written.contains("terminal_codex_notification_sound_enabled = false"));
-    assert!(written.contains("terminal_codex_notification_sound_volume = 45"));
+    assert!(written.contains("sound = false"));
+    assert!(written.contains("volume = 45"));
+    assert!(!written.contains("terminal_codex_notification_sound_volume"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(!ui.terminal_codex_notification_sound_enabled);
-    assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
+    assert!(!ui.terminal_agent_notifications.agents.codex.sound);
+    assert_eq!(ui.terminal_agent_notifications.agents.codex.volume, 45);
 }
 
 #[tokio::test]
@@ -3537,16 +3659,17 @@ async fn update_global_ui_at_path_persists_notification_delivery_and_pattern_set
     .unwrap();
 
     let written = std::fs::read_to_string(&gc_path).unwrap();
-    assert!(written.contains("terminal_codex_notification_toast_enabled = false"));
-    assert!(written.contains("terminal_codex_browser_notifications_enabled = false"));
-    assert!(written.contains("terminal_codex_notification_sound_pattern = \"soft\""));
+    assert!(written.contains("toast = false"));
+    assert!(written.contains("browser = false"));
+    assert!(written.contains("pattern = \"soft\""));
+    assert!(!written.contains("terminal_codex_notification_toast_enabled"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(!ui.terminal_codex_notification_toast_enabled);
-    assert!(!ui.terminal_codex_browser_notifications_enabled);
+    assert!(!ui.terminal_agent_notifications.agents.codex.toast);
+    assert!(!ui.terminal_agent_notifications.agents.codex.browser);
     assert_eq!(
-        ui.terminal_codex_notification_sound_pattern,
-        crate::config::schema::TerminalCodexNotificationSoundPattern::Soft
+        ui.terminal_agent_notifications.agents.codex.pattern,
+        crate::config::schema::TerminalAgentNotificationSoundPattern::Soft
     );
 }
 
@@ -3637,7 +3760,7 @@ async fn update_global_ui_at_path_creates_codex_tui_config_when_enabled() {
     assert!(written.contains("notification_condition = \"always\""));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
 }
 
 #[tokio::test]
@@ -3684,6 +3807,17 @@ async fn update_global_ui_at_path_disables_existing_codex_tui_notifications() {
         codex_dir.join("config.toml"),
         "[tui]\nnotifications = true\nnotification_method = \"osc9\"\nnotification_condition = \"always\"\n",
     )
+    .unwrap();
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalCodexNotificationsEnabled": true,
+        })),
+        Some(tmp.path()),
+    )
+    .await
     .unwrap();
 
     crate::api::config::update_global_ui_at_path_with_codex_home(
@@ -3855,13 +3989,11 @@ async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work()
             .get_buffer("terminal:otel-conflict")
             .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
     }));
-    assert!(
-        !state
+    assert!(!state
             .pty_manager
             .get_buffer("terminal:otel-conflict")
             .unwrap()
-            .contains("dam_hopper.run_id=")
-    );
+        .contains("dam_hopper.run_id="));
     state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 
@@ -3971,13 +4103,11 @@ async fn terminal_create_loads_target_worktree_env_file() {
             .get_buffer("target-env-session")
             .is_ok_and(|buffer| buffer.contains("feature"))
     }));
-    assert!(
-        !state
+    assert!(!state
             .pty_manager
             .get_buffer("target-env-session")
             .unwrap()
-            .contains("root")
-    );
+        .contains("root"));
     state.pty_manager.remove("target-env-session").unwrap();
 }
 
@@ -4304,13 +4434,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(
-        branches_json
+    assert!(branches_json
             .as_array()
             .unwrap()
             .iter()
-            .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true)
-    );
+        .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true));
 
     let status = get(
         state.clone(),
@@ -4338,13 +4466,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(
-        roots_json
+    assert!(roots_json
             .as_array()
             .unwrap()
             .iter()
-            .any(|root| root["rootId"] == "nested")
-    );
+        .any(|root| root["rootId"] == "nested"));
 
     let nested_branches = get(
         state.clone(),
@@ -4368,11 +4494,9 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .filter_map(|entry| entry["path"].as_str())
         .collect();
     assert!(root_paths.contains(&"root-only.txt"));
-    assert!(
-        !root_paths
+    assert!(!root_paths
             .iter()
-            .any(|path| path.ends_with("worktree-only.txt"))
-    );
+        .any(|path| path.ends_with("worktree-only.txt")));
 
     let target_diff = get(
         state,
@@ -4392,16 +4516,12 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .iter()
         .filter_map(|entry| entry["path"].as_str())
         .collect();
-    assert!(
-        target_paths
+    assert!(target_paths
             .iter()
-            .any(|path| path.ends_with("worktree-only.txt"))
-    );
-    assert!(
-        !target_paths
+        .any(|path| path.ends_with("worktree-only.txt")));
+    assert!(!target_paths
             .iter()
-            .any(|path| path.ends_with("root-only.txt"))
-    );
+        .any(|path| path.ends_with("root-only.txt")));
 }
 
 #[tokio::test]
@@ -4492,11 +4612,9 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     assert_eq!(invalid_json[0]["projectName"], "test-project");
     assert_eq!(invalid_json[0]["success"], false);
     assert_eq!(invalid_json[0]["targetUnavailable"], true);
-    assert!(
-        invalid_json[0]["error"]
+    assert!(invalid_json[0]["error"]
             .as_str()
-            .is_some_and(|error| error.contains("registered worktree"))
-    );
+        .is_some_and(|error| error.contains("registered worktree")));
 }
 
 #[tokio::test]
@@ -4587,12 +4705,10 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        json["error"]
+    assert!(json["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("configured project root cannot be removed")
-    );
+        .contains("configured project root cannot be removed"));
 
     let resp = post_json(
         state.clone(),
@@ -4609,9 +4725,7 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
-        crate::workspace_target::target_path_identity(Path::new(
-            json["path"].as_str().unwrap()
-        )),
+        crate::workspace_target::target_path_identity(Path::new(json["path"].as_str().unwrap())),
         crate::workspace_target::target_path_identity(&worktree_path)
     );
     assert_eq!(
@@ -4859,12 +4973,10 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         .await
         .unwrap();
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
-    assert!(
-        blocked_json["error"]
+    assert!(blocked_json["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("live terminal session")
-    );
+        .contains("live terminal session"));
 
     let killed = delete_json(
         state.clone(),
@@ -4935,9 +5047,7 @@ async fn terminal_target_metadata_projects_absolute_configured_root_cwd() {
         crate::workspace_target::target_path_identity(Path::new(&worktree_string))
     );
     assert_eq!(
-        crate::workspace_target::target_path_identity(Path::new(
-            session["cwd"].as_str().unwrap()
-        )),
+        crate::workspace_target::target_path_identity(Path::new(session["cwd"].as_str().unwrap())),
         crate::workspace_target::target_path_identity(&worktree_path.join("src"))
     );
 
@@ -5446,18 +5556,14 @@ async fn workspace_reinitialization_revokes_every_media_ticket() {
     .await;
     assert!(reinitialized.is_ok());
 
-    assert!(
-        state
+    assert!(state
             .video_stream_tickets
             .lookup_and_touch(&ticket)
-            .is_none()
-    );
-    assert!(
-        state
+        .is_none());
+    assert!(state
             .image_stream_tickets
             .lookup_and_touch(&image_ticket)
-            .is_none()
-    );
+        .is_none());
 }
 
 #[cfg(unix)]
@@ -5611,20 +5717,21 @@ async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
                     format!("{}; {owning_cookie}", auth_cookie()),
                 )
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::json!({
+                .body(Body::from(
+                    serde_json::json!({
                     "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
-                }).to_string()))
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(
-        response.headers()[header::SET_COOKIE]
+    assert!(response.headers()[header::SET_COOKIE]
             .to_str()
             .unwrap()
-            .contains("Max-Age=0")
-    );
+        .contains("Max-Age=0"));
     assert_eq!(
         stream_video(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
@@ -5720,12 +5827,10 @@ async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
     let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
     assert_eq!(full.status(), StatusCode::OK);
     assert_eq!(full.headers()["content-length"], "0");
-    assert!(
-        axum::body::to_bytes(full.into_body(), 1)
+    assert!(axum::body::to_bytes(full.into_body(), 1)
             .await
             .unwrap()
-            .is_empty()
-    );
+        .is_empty());
 
     let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
     assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -5774,12 +5879,10 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         assert!(stale.headers().get(name).is_none());
     }
     assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
-    assert!(
-        axum::body::to_bytes(stale.into_body(), 1)
+    assert!(axum::body::to_bytes(stale.into_body(), 1)
             .await
             .unwrap()
-            .is_empty()
-    );
+        .is_empty());
     assert_eq!(
         stream_video(state.clone(), &stale_ticket, "GET", &[])
             .await
@@ -5901,7 +6004,8 @@ async fn image_ticket_issuance_is_not_limited_by_live_ticket_count() {
                     "project": "test-project",
                     "path": "preview.png",
                     "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
-                }).to_string(),
+                })
+                .to_string(),
             ))
             .unwrap();
         let response = router.oneshot(request).await.unwrap();
@@ -5998,14 +6102,12 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     )
     .await;
     assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
-    assert!(
-        !String::from_utf8_lossy(
+    assert!(!String::from_utf8_lossy(
             &axum::body::to_bytes(traversal.into_body(), usize::MAX)
                 .await
                 .unwrap()
         )
-        .contains("outside.png")
-    );
+    .contains("outside.png"));
 }
 
 #[cfg(unix)]
@@ -6019,13 +6121,11 @@ async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
     std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
     std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
     let fifo = tmp.path().join("trap.gif");
-    assert!(
-        Command::new("mkfifo")
+    assert!(Command::new("mkfifo")
             .arg(&fifo)
             .status()
             .unwrap()
-            .success()
-    );
+        .success());
     let state = make_state_with_project(&tmp);
 
     for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
@@ -6215,12 +6315,10 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "10");
     assert!(head.headers().get("content-range").is_none());
-    assert!(
-        axum::body::to_bytes(head.into_body(), usize::MAX)
+    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
             .await
             .unwrap()
-            .is_empty()
-    );
+        .is_empty());
 
     let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
     assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6353,7 +6451,8 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
             serde_json::json!({
                 "ticket": image_ticket,
                 "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
-            }).to_string(),
+            })
+            .to_string(),
         ))
         .unwrap();
     let response = build_router(state.clone())
@@ -6363,18 +6462,14 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     state.media_tickets.revoke_all();
-    assert!(
-        state
+    assert!(state
             .image_stream_tickets
             .lookup_and_touch(&image_ticket)
-            .is_none()
-    );
-    assert!(
-        state
+        .is_none());
+    assert!(state
             .video_stream_tickets
             .lookup_and_touch(&video_ticket)
-            .is_none()
-    );
+        .is_none());
 }
 
 #[tokio::test]
@@ -6396,18 +6491,14 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(config_response.status(), StatusCode::OK);
-    assert!(
-        state
+    assert!(state
             .image_stream_tickets
             .lookup_and_touch(&config_image)
-            .is_none()
-    );
-    assert!(
-        state
+        .is_none());
+    assert!(state
             .video_stream_tickets
             .lookup_and_touch(&config_video)
-            .is_none()
-    );
+        .is_none());
 
     let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
@@ -6418,18 +6509,14 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(settings_response.status(), StatusCode::OK);
-    assert!(
-        state
+    assert!(state
             .image_stream_tickets
             .lookup_and_touch(&settings_image)
-            .is_none()
-    );
-    assert!(
-        state
+        .is_none());
+    assert!(state
             .video_stream_tickets
             .lookup_and_touch(&settings_video)
-            .is_none()
-    );
+        .is_none());
 }
 
 #[tokio::test]
@@ -6497,7 +6584,9 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
         .unwrap()
         .to_owned();
     assert!(cookie_a.starts_with(&format!("damhopper-media-session-{client_a}=")));
-    let first_body = axum::body::to_bytes(first_req.into_body(), usize::MAX).await.unwrap();
+    let first_body = axum::body::to_bytes(first_req.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let ticket_a1 = serde_json::from_slice::<serde_json::Value>(&first_body).unwrap()["ticket"]
         .as_str()
         .unwrap()
@@ -6523,7 +6612,9 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
         .unwrap()
         .to_owned();
     assert_eq!(cookie_a, cookie_a2);
-    let second_body = axum::body::to_bytes(second_req.into_body(), usize::MAX).await.unwrap();
+    let second_body = axum::body::to_bytes(second_req.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let ticket_a2 = serde_json::from_slice::<serde_json::Value>(&second_body).unwrap()["ticket"]
         .as_str()
         .unwrap()
@@ -6550,7 +6641,9 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
         .unwrap()
         .to_owned();
     assert!(cookie_b.starts_with(&format!("damhopper-media-session-{client_b}=")));
-    let b_body = axum::body::to_bytes(b_req.into_body(), usize::MAX).await.unwrap();
+    let b_body = axum::body::to_bytes(b_req.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let ticket_b = serde_json::from_slice::<serde_json::Value>(&b_body).unwrap()["ticket"]
         .as_str()
         .unwrap()
@@ -6562,16 +6655,24 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
 
     // 5. Selected-cookie duplicates in raw Cookie header fail closed (404)
     let duplicate_cookie = format!("{cookie_a}; {cookie_a}");
-    let stream_dup = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &duplicate_cookie)]).await;
+    let stream_dup = stream_image(
+        state.clone(),
+        &ticket_a1,
+        "GET",
+        &[("cookie", &duplicate_cookie)],
+    )
+    .await;
     assert_eq!(stream_dup.status(), StatusCode::NOT_FOUND);
 
     // 6. v1 and v2 cookies present together: v1 is ignored, valid v2 authorizes
     let v1_and_v2 = format!("damhopper-media-session=legacy-token; {cookie_a}");
-    let stream_v1_v2 = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &v1_and_v2)]).await;
+    let stream_v1_v2 =
+        stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &v1_and_v2)]).await;
     assert_eq!(stream_v1_v2.status(), StatusCode::OK);
 
     // 7. Forged/foreign namespace: B's cookie cannot authorize A's ticket
-    let stream_forged = stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &cookie_b)]).await;
+    let stream_forged =
+        stream_image(state.clone(), &ticket_a1, "GET", &[("cookie", &cookie_b)]).await;
     assert_eq!(stream_forged.status(), StatusCode::NOT_FOUND);
 
     // 8. Absent third-party cookie: cross-origin with allowed origin succeeds via ticket fallback
@@ -6617,7 +6718,9 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
                 .uri("/api/fs/media-session")
                 .header(header::COOKIE, auth_cookie())
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::json!({ "mediaClientId": client_a }).to_string()))
+                .body(Body::from(
+                    serde_json::json!({ "mediaClientId": client_a }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -6629,11 +6732,15 @@ async fn v2_media_suite_verifies_namespace_isolation_and_negative_cases() {
 
     // A's tickets are revoked
     assert_eq!(
-        stream_image(state.clone(), &ticket_a1, "GET", &origin).await.status(),
+        stream_image(state.clone(), &ticket_a1, "GET", &origin)
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        stream_image(state.clone(), &ticket_a2, "GET", &origin).await.status(),
+        stream_image(state.clone(), &ticket_a2, "GET", &origin)
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
 
@@ -7588,12 +7695,18 @@ async fn test_get_agent_status_snapshot() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let snapshot: crate::agent_status::AgentStatusSnapshotV1 = serde_json::from_slice(&body).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: crate::agent_status::AgentStatusSnapshotV1 =
+        serde_json::from_slice(&body).unwrap();
 
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.server_epoch, 5555);
-    assert_eq!(snapshot.availability, crate::agent_status::AgentStatusAvailability::Ready);
+    assert_eq!(
+        snapshot.availability,
+        crate::agent_status::AgentStatusAvailability::Ready
+    );
     assert_eq!(snapshot.terminals.len(), 0);
 }
 

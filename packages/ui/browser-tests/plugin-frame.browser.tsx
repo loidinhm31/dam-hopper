@@ -73,24 +73,24 @@ describe("PluginFrame opaque host", () => {
     const pluginScript = `
       const frameSession = window.__FRAME_SESSION__;
       const activationGeneration = window.__ACTIVATION_GENERATION__;
-      window.addEventListener("message", (event) => {
-        if (event.data?.type !== "host.bootstrap" || event.ports.length !== 1) return;
-        const port = event.ports[0];
-        port.start();
-        port.postMessage({
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => {
+        if (event.data?.type !== "host.bootstrap") return;
+        channel.port1.postMessage({
           type: "frame.portAck",
           bridgeVersion: "1.0.0",
           frameSession,
           activationGeneration,
           nonce: event.data.nonce,
         });
-      }, { once: true });
+      };
+      channel.port1.start();
       window.parent.postMessage({
         type: "frame.ready",
         bridgeVersion: "1.0.0",
         frameSession,
         activationGeneration,
-      }, "*");
+      }, "*", [channel.port2]);
     `;
     const source = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fixture</title><style>body{margin:0}</style></head><body><main>Fixture</main><script>${pluginScript}</script></body></html>`;
     const bytes = new TextEncoder().encode(source);

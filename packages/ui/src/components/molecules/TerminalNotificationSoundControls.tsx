@@ -9,6 +9,7 @@ interface TerminalNotificationSoundControlsProps {
   soundEnabled: boolean;
   soundPattern: TerminalCodexNotificationSoundPattern;
   soundVolume: number;
+  agentName?: "Codex" | "OMP";
   onSoundEnabledChange: (enabled: boolean) => void;
   onSoundPatternChange: (
     pattern: TerminalCodexNotificationSoundPattern,
@@ -31,6 +32,7 @@ export function TerminalNotificationSoundControls({
   soundEnabled,
   soundPattern,
   soundVolume,
+  agentName = "Codex",
   onSoundEnabledChange,
   onSoundPatternChange,
   onSoundVolumeChange,
@@ -41,11 +43,15 @@ export function TerminalNotificationSoundControls({
     <>
       <SettingRow
         title="Notification sound"
-        description="Play an in-app chime when Codex needs attention"
+        description={`Play an in-app chime when ${agentName} needs attention`}
       >
         <Switch
           checked={soundEnabled}
-          ariaLabel="Enable notification sound"
+          ariaLabel={
+            agentName === "Codex"
+              ? "Enable notification sound"
+              : "OMP Enable notification sound"
+          }
           disabled={!masterEnabled}
           onCheckedChange={onSoundEnabledChange}
         />
@@ -56,7 +62,7 @@ export function TerminalNotificationSoundControls({
         description="Choose the in-app chime style; browser and OS popup sounds are not customizable here"
       >
         <select
-          aria-label="Sound style"
+          aria-label={agentName === "Codex" ? "Sound style" : "OMP Sound style"}
           value={soundPattern}
           disabled={controlsDisabled}
           onChange={(event) =>
@@ -80,7 +86,11 @@ export function TerminalNotificationSoundControls({
       >
         <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
           <input
-            aria-label="Notification sound volume"
+            aria-label={
+              agentName === "Codex"
+                ? "Notification sound volume"
+                : "OMP Notification sound volume"
+            }
             type="range"
             min={0}
             max={100}
@@ -108,7 +118,7 @@ export function TerminalNotificationSoundControls({
             playTerminalNotificationSound(soundPattern, soundVolume)
           }
         >
-          Play sound
+          {agentName === "Codex" ? "Play sound" : "Play OMP sound"}
         </Button>
       </SettingRow>
     </>

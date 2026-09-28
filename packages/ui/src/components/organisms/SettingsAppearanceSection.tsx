@@ -21,12 +21,7 @@ export function SettingsAppearanceSection() {
     terminalFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
-    terminalCodexNotificationsEnabled,
-    terminalCodexNotificationToastEnabled,
-    terminalCodexBrowserNotificationsEnabled,
-    terminalCodexNotificationSoundEnabled,
-    terminalCodexNotificationSoundVolume,
-    terminalCodexNotificationSoundPattern,
+    terminalAgentNotifications,
     terminalScrollButtonsEnabled,
     terminalCommitStatusEnabled,
     terminalAutoSwitchProjectEnabled,
@@ -37,6 +32,7 @@ export function SettingsAppearanceSection() {
     mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap,
     saveDebounced,
+    saveAgentNotificationPolicy,
   } = useSettingsStore();
 
   return (
@@ -183,13 +179,8 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <TerminalAgentNotificationSettings
-        enabled={terminalCodexNotificationsEnabled}
-        toastEnabled={terminalCodexNotificationToastEnabled}
-        browserEnabled={terminalCodexBrowserNotificationsEnabled}
-        soundEnabled={terminalCodexNotificationSoundEnabled}
-        soundVolume={terminalCodexNotificationSoundVolume}
-        soundPattern={terminalCodexNotificationSoundPattern}
-        onSave={saveDebounced}
+        notifications={terminalAgentNotifications}
+        onSave={saveAgentNotificationPolicy}
       />
 
       <div className="border-t border-[var(--color-border)]" />

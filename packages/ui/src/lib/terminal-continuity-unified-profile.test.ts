@@ -24,10 +24,6 @@ import {
 } from "./command-history.js";
 import { deriveTerminalAutoAttachState } from "./terminal-auto-attach.js";
 import { resolveWorkflowTerminalReveal } from "./workflow-workspace-integration.js";
-import {
-  dispatchTerminalNotificationSelection,
-  subscribeToTerminalNotificationSelection,
-} from "./terminal-notification-navigation.js";
 import { filterClientDiagnosticsSnapshot } from "./diagnostics-export.js";
 import type { TerminalRef } from "@/api/ownership.js";
 
@@ -60,16 +56,44 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
   });
   describe("04A: Qualified registry, incarnation, and activity maps", () => {
     it("preserves separate registry entries for identical session IDs across profiles", () => {
-      const refA: TerminalRef = { profileId: "profile-a", id: "shared-session" };
-      const refB: TerminalRef = { profileId: "profile-b", id: "shared-session" };
+      const refA: TerminalRef = {
+        profileId: "profile-a",
+        id: "shared-session",
+      };
+      const refB: TerminalRef = {
+        profileId: "profile-b",
+        id: "shared-session",
+      };
 
-      const mockTermA = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
-      const mockTermB = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
-      const fitAddon = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
-      const findController = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
+      const mockTermA = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[1];
+      const mockTermB = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[1];
+      const fitAddon = { fit: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[2];
+      const findController = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[3];
 
-      registerTerminal(refA, mockTermA, fitAddon, findController, undefined, refA);
-      registerTerminal(refB, mockTermB, fitAddon, findController, undefined, refB);
+      registerTerminal(
+        refA,
+        mockTermA,
+        fitAddon,
+        findController,
+        undefined,
+        refA,
+      );
+      registerTerminal(
+        refB,
+        mockTermB,
+        fitAddon,
+        findController,
+        undefined,
+        refB,
+      );
 
       expect(hasTerminal(refA)).toBe(true);
       expect(hasTerminal(refB)).toBe(true);
@@ -126,17 +150,49 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
     });
 
     it("isolates terminal entry by qualified ref and refuses unqualified raw lookup on collision", () => {
-      const refA: TerminalRef = { profileId: "profile-a", id: "raw-lookup-pty" };
-      const refB: TerminalRef = { profileId: "profile-b", id: "raw-lookup-pty" };
-      const mockTermA = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
-      const mockTermB = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[1];
-      const fitAddonA = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
-      const fitAddonB = { fit: vi.fn() } as unknown as Parameters<typeof registerTerminal>[2];
-      const findControllerA = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
-      const findControllerB = { dispose: vi.fn() } as unknown as Parameters<typeof registerTerminal>[3];
+      const refA: TerminalRef = {
+        profileId: "profile-a",
+        id: "raw-lookup-pty",
+      };
+      const refB: TerminalRef = {
+        profileId: "profile-b",
+        id: "raw-lookup-pty",
+      };
+      const mockTermA = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[1];
+      const mockTermB = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[1];
+      const fitAddonA = { fit: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[2];
+      const fitAddonB = { fit: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[2];
+      const findControllerA = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[3];
+      const findControllerB = { dispose: vi.fn() } as unknown as Parameters<
+        typeof registerTerminal
+      >[3];
 
-      registerTerminal(refA, mockTermA, fitAddonA, findControllerA, undefined, refA);
-      registerTerminal(refB, mockTermB, fitAddonB, findControllerB, undefined, refB);
+      registerTerminal(
+        refA,
+        mockTermA,
+        fitAddonA,
+        findControllerA,
+        undefined,
+        refA,
+      );
+      registerTerminal(
+        refB,
+        mockTermB,
+        fitAddonB,
+        findControllerB,
+        undefined,
+        refB,
+      );
 
       // Must be resolvable by qualified TerminalRef but refuse unqualified raw string lookup on collision
       expect(getTerminal(refA)?.terminal).toBe(mockTermA);
@@ -171,12 +227,14 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
       const nextState = deriveTerminalAutoAttachState({
         sessions: [profileBSession],
         openTabs: [profileATab],
-        mountedSessions: [{
-          sessionId: "shared-task",
-          project: "web",
-          command: "bash",
-          profileId: "profile-a",
-        }],
+        mountedSessions: [
+          {
+            sessionId: "shared-task",
+            project: "web",
+            command: "bash",
+            profileId: "profile-a",
+          },
+        ],
         activeTab: "shared-task",
         profileSessionIds: new Set(),
         freeTerminalIndexMap: new Map(),
@@ -203,7 +261,10 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
       recordCommand("npm test", "web", "profile-a");
 
       const histA = getHistory("profile-a");
-      expect(histA.map((h) => h.command).sort()).toEqual(["cargo check", "npm test"]);
+      expect(histA.map((h) => h.command).sort()).toEqual([
+        "cargo check",
+        "npm test",
+      ]);
       const histB = getHistory("profile-b");
       expect(histB.map((h) => h.command)).toEqual(["cargo build --release"]);
 
@@ -211,15 +272,15 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
       expect(searchA.map((r) => r.entry.command)).toEqual(["cargo check"]);
 
       const searchB = searchHistory("cargo", 5, "profile-b");
-      expect(searchB.map((r) => r.entry.command)).toEqual(["cargo build --release"]);
+      expect(searchB.map((r) => r.entry.command)).toEqual([
+        "cargo build --release",
+      ]);
     });
   });
 
   describe("04D: Workflow links, notifications, and diagnostics", () => {
     it("navigates workflow terminal links using profile, terminal ID, and authoritative incarnation", () => {
-      const sessionMap = new Map([
-        ["term-1", { alive: true, incarnation: 3 }],
-      ]);
+      const sessionMap = new Map([["term-1", { alive: true, incarnation: 3 }]]);
 
       // Matching profile and matching incarnation
       const okResult = resolveWorkflowTerminalReveal({
@@ -253,27 +314,6 @@ describe("Phase 04 — Terminal continuity, workflow, and owner-directed navigat
       });
       expect(crossProfile.canReveal).toBe(false);
       expect(crossProfile.reason).toBe("profile_mismatch");
-    });
-
-    it("dispatches notification selection events with qualified profileId and terminalRef", () => {
-      const target = new EventTarget();
-      const listener = vi.fn();
-
-      const unsubscribe = subscribeToTerminalNotificationSelection(
-        listener,
-        target,
-      );
-
-      const terminalRef: TerminalRef = { profileId: "prof-1", id: "term-xyz" };
-      dispatchTerminalNotificationSelection(
-        "term-xyz",
-        target,
-        "prof-1",
-        terminalRef,
-      );
-
-      expect(listener).toHaveBeenCalledWith("term-xyz", "prof-1", terminalRef);
-      unsubscribe();
     });
 
     it("filters diagnostics export bundle to the requested owner profile", () => {

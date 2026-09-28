@@ -95,7 +95,9 @@ fn preserve_and_reject_idle_suspend_mutation(
             ))
         })?;
 
-    let requested = server.remove("idleSuspend").or_else(|| server.remove("idle_suspend"));
+    let requested = server
+        .remove("idleSuspend")
+        .or_else(|| server.remove("idle_suspend"));
     if let Some(requested_val) = requested {
         let requested_cfg: Result<crate::config::IdleSuspendConfig, _> =
             serde_json::from_value(requested_val.clone());
@@ -110,31 +112,57 @@ fn preserve_and_reject_idle_suspend_mutation(
     }
 
     let mut idle_map = serde_json::Map::new();
-    idle_map.insert("enabled".to_string(), Value::Bool(current.server.idle_suspend.enabled));
+    idle_map.insert(
+        "enabled".to_string(),
+        Value::Bool(current.server.idle_suspend.enabled),
+    );
     idle_map.insert(
         "quiet_period_seconds".to_string(),
-        Value::Number(serde_json::Number::from(current.server.idle_suspend.quiet_period_seconds)),
+        Value::Number(serde_json::Number::from(
+            current.server.idle_suspend.quiet_period_seconds,
+        )),
     );
     idle_map.insert(
         "wake_after_seconds".to_string(),
-        Value::Number(serde_json::Number::from(current.server.idle_suspend.wake_after_seconds)),
+        Value::Number(serde_json::Number::from(
+            current.server.idle_suspend.wake_after_seconds,
+        )),
     );
     if let Some(enrollment) = &current.server.idle_suspend.enrollment_reference {
-        idle_map.insert("enrollment_reference".to_string(), Value::String(enrollment.clone()));
+        idle_map.insert(
+            "enrollment_reference".to_string(),
+            Value::String(enrollment.clone()),
+        );
     }
     if current.server.idle_suspend.capability_selection != Default::default() {
         idle_map.insert(
             "capability_selection".to_string(),
-            Value::String(current.server.idle_suspend.capability_selection.as_str().to_string()),
+            Value::String(
+                current
+                    .server
+                    .idle_suspend
+                    .capability_selection
+                    .as_str()
+                    .to_string(),
+            ),
         );
     }
     if current.server.idle_suspend.automatic_policy != Default::default() {
         idle_map.insert(
             "automatic_policy".to_string(),
-            Value::String(current.server.idle_suspend.automatic_policy.as_str().to_string()),
+            Value::String(
+                current
+                    .server
+                    .idle_suspend
+                    .automatic_policy
+                    .as_str()
+                    .to_string(),
+            ),
         );
     }
-    if current.server.idle_suspend.agent_executables != crate::config::default_idle_suspend_agent_executables() {
+    if current.server.idle_suspend.agent_executables
+        != crate::config::default_idle_suspend_agent_executables()
+    {
         let execs: Vec<Value> = current
             .server
             .idle_suspend
@@ -230,7 +258,41 @@ pub(crate) fn merge_global_ui_config(
     }
     let mut merged = serde_json::to_value(existing.unwrap_or_default())
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    merge_json_objects(&mut merged, incoming);
+    let mut incoming = incoming.clone();
+    crate::config::schema::migrate_terminal_agent_notifications(&mut incoming);
+    if let (Some(base_policy), Some(patch_policy)) = (
+        merged.pointer_mut("/terminalAgentNotifications"),
+        incoming.pointer("/terminalAgentNotifications"),
+    ) {
+        if patch_policy.is_object() {
+            for (key, value) in patch_policy.as_object().unwrap() {
+                if key != "agents" {
+                    base_policy[key] = value.clone();
+                }
+            }
+            if let (Some(base_agents), Some(patch_agents)) =
+                (base_policy.get_mut("agents"), patch_policy.get("agents"))
+            {
+                for (agent, policy) in patch_agents.as_object().into_iter().flat_map(|a| a.iter()) {
+                    if let Some(base) = base_agents.get_mut(agent) {
+                        merge_json_objects(base, policy);
+                    } else {
+                        base_agents
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(agent.clone(), policy.clone());
+                    }
+                }
+            } else if let Some(agents) = patch_policy.get("agents") {
+                base_policy["agents"] = agents.clone();
+            }
+            incoming
+                .as_object_mut()
+                .unwrap()
+                .remove("terminalAgentNotifications");
+        }
+    }
+    merge_json_objects(&mut merged, &incoming);
     let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
     new_ui
@@ -263,14 +325,10 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
     codex_home_override: Option<&FsPath>,
 ) -> Result<(), AppError> {
     let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
-    let should_sync_codex_tui = incoming_ui
-        .and_then(|ui| ui.get("terminalCodexNotificationsEnabled"))
-        .is_some();
     let previous_codex_notifications_enabled = gc
         .ui
         .as_ref()
-        .map(|ui| ui.terminal_codex_notifications_enabled)
-        .unwrap_or(false);
+        .is_some_and(|ui| ui.terminal_agent_notifications.agents.codex.enabled);
 
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
@@ -279,12 +337,9 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
     let next_codex_notifications_enabled = gc
         .ui
         .as_ref()
-        .map(|ui| ui.terminal_codex_notifications_enabled)
-        .unwrap_or(false);
+        .is_some_and(|ui| ui.terminal_agent_notifications.agents.codex.enabled);
 
-    if should_sync_codex_tui
-        || next_codex_notifications_enabled != previous_codex_notifications_enabled
-    {
+    if next_codex_notifications_enabled != previous_codex_notifications_enabled {
         sync_codex_tui_config(codex_home_override, next_codex_notifications_enabled)?;
     }
 
@@ -621,7 +676,9 @@ pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiErro
     let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
     {
         let timing = state.idle_suspend_timing.read().await;
-        state.idle_suspend_policy.apply_to_config(&mut new_cfg, &timing);
+        state
+            .idle_suspend_policy
+            .apply_to_config(&mut new_cfg, &timing);
     }
     state.media_tickets.revoke_all();
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));

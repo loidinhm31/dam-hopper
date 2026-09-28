@@ -149,7 +149,11 @@ vi.mock("react-router-dom", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: projectList, isLoading: false }),
   useQueries: () => [],
-  useMutation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useMutation: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
   useQueryClient: () => ({
     invalidateQueries: vi.fn().mockResolvedValue(undefined),
     refetchQueries: vi.fn().mockResolvedValue(undefined),
@@ -245,8 +249,14 @@ vi.mock("@/api/queries.js", () => ({
   useGitUndoLastCommit: () => ({ mutateAsync: vi.fn() }),
   invalidateGitFileOperation: vi.fn().mockResolvedValue(undefined),
   markTargetUnavailableIfNeeded: vi.fn(),
-  resolveTargetOwner: (options?: { owner?: { profileId: string; generation: number }; profileId?: string }) =>
-    options?.owner ?? (options?.profileId ? { profileId: options.profileId, generation: 1 } : undefined),
+  resolveTargetOwner: (options?: {
+    owner?: { profileId: string; generation: number };
+    profileId?: string;
+  }) =>
+    options?.owner ??
+    (options?.profileId
+      ? { profileId: options.profileId, generation: 1 }
+      : undefined),
 }));
 
 vi.mock("@/api/client.js", () => ({
@@ -280,7 +290,10 @@ vi.mock("@/api/client.js", () => ({
   projectKey: (target: unknown) =>
     typeof target === "string"
       ? target
-      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+      : target &&
+          typeof target === "object" &&
+          "project" in target &&
+          typeof target.project === "string"
         ? target.project
         : "project-1",
 }));
@@ -338,8 +351,8 @@ vi.mock("@/stores/editor.js", () => ({
   countDirtyTabsForTarget: () => 0,
 }));
 
-vi.mock("@/stores/search-ui.js", () => ({
-  useSearchUiStore: () => ({
+vi.mock("@/stores/search-ui.js", () => {
+  const searchUiState = {
     open: false,
     close: vi.fn(),
     openWith: vi.fn(),
@@ -355,8 +368,12 @@ vi.mock("@/stores/search-ui.js", () => ({
     setCaseSensitive: vi.fn(),
     selectOnOpen: false,
     consumeSelectOnOpen: vi.fn(() => false),
-  }),
-}));
+  };
+  return {
+    useSearchUiStore: (selector?: (state: typeof searchUiState) => unknown) =>
+      selector ? selector(searchUiState) : searchUiState,
+  };
+});
 
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: (

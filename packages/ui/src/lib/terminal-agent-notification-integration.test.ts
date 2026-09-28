@@ -91,24 +91,54 @@ describe("attachTerminalAgentNotifications", () => {
     recordClientDiagnostic.mockReset();
     playTerminalNotificationSound.mockReset();
     useSettingsStore.setState({
-      terminalCodexNotificationsEnabled: true,
-      terminalCodexNotificationToastEnabled: true,
-      terminalCodexBrowserNotificationsEnabled: true,
-      terminalCodexNotificationSoundEnabled: true,
-      terminalCodexNotificationSoundVolume: 100,
-      terminalCodexNotificationSoundPattern: "default",
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: true,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          omp: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+        },
+      },
     });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
   });
 
   afterEach(() => {
     useSettingsStore.setState({
-      terminalCodexNotificationsEnabled: false,
-      terminalCodexNotificationToastEnabled: true,
-      terminalCodexBrowserNotificationsEnabled: true,
-      terminalCodexNotificationSoundEnabled: true,
-      terminalCodexNotificationSoundVolume: 100,
-      terminalCodexNotificationSoundPattern: "default",
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          omp: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+        },
+      },
     });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
     restoreNotificationGlobal();
@@ -155,7 +185,7 @@ describe("attachTerminalAgentNotifications", () => {
       options: {
         body: "Review the answer",
         renotify: true,
-        tag: "dam-hopper-agent-term-1-osc9",
+        tag: 'dam-hopper-agent-["[\\"\\",\\"term-1\\"]","osc9",null]',
         timestamp: 1_000,
       },
     });
@@ -164,7 +194,7 @@ describe("attachTerminalAgentNotifications", () => {
       options: {
         body: "Review the answer again",
         renotify: true,
-        tag: "dam-hopper-agent-term-1-osc9",
+        tag: 'dam-hopper-agent-["[\\"\\",\\"term-1\\"]","osc9",null]',
         timestamp: 2_001,
       },
     });
@@ -175,7 +205,18 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("does not deliver OSC 9 notifications when the Codex setting is disabled", () => {
     const created = installFakeNotification();
-    useSettingsStore.setState({ terminalCodexNotificationsEnabled: false });
+    useSettingsStore.setState((state) => ({
+      terminalAgentNotifications: {
+        ...state.terminalAgentNotifications,
+        agents: {
+          ...state.terminalAgentNotifications.agents,
+          codex: {
+            ...state.terminalAgentNotifications.agents.codex,
+            enabled: false,
+          },
+        },
+      },
+    }));
     const { getHandler, term } = createTerminal();
 
     attachTerminalAgentNotifications({
@@ -241,7 +282,18 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("delivers in-app when native browser notifications are denied", () => {
     installFakeNotification();
-    useSettingsStore.setState({ terminalCodexNotificationSoundVolume: 45 });
+    useSettingsStore.setState((state) => ({
+      terminalAgentNotifications: {
+        ...state.terminalAgentNotifications,
+        agents: {
+          ...state.terminalAgentNotifications.agents,
+          codex: {
+            ...state.terminalAgentNotifications.agents.codex,
+            volume: 45,
+          },
+        },
+      },
+    }));
     Object.defineProperty(globalThis.Notification, "permission", {
       configurable: true,
       value: "denied",
@@ -271,7 +323,18 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("delivers notifications without sound when the sound setting is disabled", () => {
     const created = installFakeNotification();
-    useSettingsStore.setState({ terminalCodexNotificationSoundEnabled: false });
+    useSettingsStore.setState((state) => ({
+      terminalAgentNotifications: {
+        ...state.terminalAgentNotifications,
+        agents: {
+          ...state.terminalAgentNotifications.agents,
+          codex: {
+            ...state.terminalAgentNotifications.agents.codex,
+            sound: false,
+          },
+        },
+      },
+    }));
     const { term, getHandler } = createTerminal();
 
     attachTerminalAgentNotifications({
@@ -290,11 +353,20 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("keeps bell history while suppressing only in-app toasts", () => {
     const created = installFakeNotification();
-    useSettingsStore.setState({
-      terminalCodexNotificationToastEnabled: false,
-      terminalCodexNotificationSoundPattern: "urgent",
-      terminalCodexNotificationSoundVolume: 45,
-    });
+    useSettingsStore.setState((state) => ({
+      terminalAgentNotifications: {
+        ...state.terminalAgentNotifications,
+        agents: {
+          ...state.terminalAgentNotifications.agents,
+          codex: {
+            ...state.terminalAgentNotifications.agents.codex,
+            toast: false,
+            pattern: "urgent",
+            volume: 45,
+          },
+        },
+      },
+    }));
     const { term, getHandler } = createTerminal();
 
     attachTerminalAgentNotifications({
@@ -316,11 +388,20 @@ describe("attachTerminalAgentNotifications", () => {
 
   it("suppresses only browser popups when browser delivery is disabled", () => {
     const created = installFakeNotification();
-    useSettingsStore.setState({
-      terminalCodexBrowserNotificationsEnabled: false,
-      terminalCodexNotificationSoundPattern: "soft",
-      terminalCodexNotificationSoundVolume: 60,
-    });
+    useSettingsStore.setState((state) => ({
+      terminalAgentNotifications: {
+        ...state.terminalAgentNotifications,
+        agents: {
+          ...state.terminalAgentNotifications.agents,
+          codex: {
+            ...state.terminalAgentNotifications.agents.codex,
+            browser: false,
+            pattern: "soft",
+            volume: 60,
+          },
+        },
+      },
+    }));
     const { term, getHandler } = createTerminal();
 
     attachTerminalAgentNotifications({
@@ -338,6 +419,36 @@ describe("attachTerminalAgentNotifications", () => {
       "soft",
       60,
     );
+  });
+
+  it("separates browser alerts and history targets after terminal reincarnation", () => {
+    const created = installFakeNotification();
+    const { term, getHandler } = createTerminal();
+    let incarnation = 1;
+    attachTerminalAgentNotifications({
+      term,
+      sessionId: "shared",
+      project: "web",
+      profileId: "profile-a",
+      terminalRef: { profileId: "profile-a", id: "shared" },
+      getTerminalIncarnation: () => incarnation,
+    });
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    incarnation = 2;
+    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
+    expect(created).toHaveLength(2);
+    expect(created[0]?.options.tag).not.toBe(created[1]?.options.tag);
+    expect(
+      useTerminalNotificationsStore
+        .getState()
+        .notifications.map(
+          (entry) => entry.event.terminalInstanceRef?.incarnation,
+        ),
+    ).toEqual([2, 1]);
+    expect(
+      useTerminalNotificationsStore.getState().notifications[0]?.event
+        .sessionId,
+    ).toBe(JSON.stringify(["profile-a", "shared"]));
   });
 
   it("adds the current project and open-terminal order to the body", () => {

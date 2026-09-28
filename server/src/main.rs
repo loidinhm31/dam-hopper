@@ -316,10 +316,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let gc_path = global_config_path();
-    let global_config = read_global_config_at(&gc_path)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let global_config = read_global_config_at(&gc_path)?.unwrap_or_default();
 
     // ── Workspace ─────────────────────────────────────────────────────────────
 

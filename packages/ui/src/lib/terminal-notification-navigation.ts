@@ -1,4 +1,5 @@
 import type { TerminalRef } from "@/api/ownership.js";
+import type { TerminalInstanceRef } from "@/api/ownership.js";
 
 export const TERMINAL_NOTIFICATION_SELECT_EVENT =
   "dam-hopper:terminal-notification-select";
@@ -8,6 +9,7 @@ export class TerminalNotificationSelectEvent extends Event {
     readonly sessionId: string,
     readonly profileId?: string,
     readonly terminalRef?: TerminalRef,
+    readonly terminalInstanceRef?: TerminalInstanceRef,
   ) {
     super(TERMINAL_NOTIFICATION_SELECT_EVENT);
   }
@@ -18,9 +20,15 @@ export function dispatchTerminalNotificationSelection(
   target: EventTarget = window,
   profileId?: string,
   terminalRef?: TerminalRef,
+  terminalInstanceRef?: TerminalInstanceRef,
 ): void {
   target.dispatchEvent(
-    new TerminalNotificationSelectEvent(sessionId, profileId, terminalRef),
+    new TerminalNotificationSelectEvent(
+      sessionId,
+      profileId,
+      terminalRef,
+      terminalInstanceRef,
+    ),
   );
 }
 
@@ -29,13 +37,23 @@ export function subscribeToTerminalNotificationSelection(
     sessionId: string,
     profileId?: string,
     terminalRef?: TerminalRef,
+    terminalInstanceRef?: TerminalInstanceRef,
   ) => void,
   target: EventTarget = window,
 ): () => void {
   const handleSelection = (event: Event) => {
     if (event instanceof TerminalNotificationSelectEvent) {
-      if (event.profileId !== undefined || event.terminalRef !== undefined) {
-        listener(event.sessionId, event.profileId, event.terminalRef);
+      if (
+        event.profileId !== undefined ||
+        event.terminalRef !== undefined ||
+        event.terminalInstanceRef !== undefined
+      ) {
+        listener(
+          event.sessionId,
+          event.profileId,
+          event.terminalRef,
+          event.terminalInstanceRef,
+        );
       } else {
         listener(event.sessionId);
       }

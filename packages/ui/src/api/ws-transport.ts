@@ -540,6 +540,8 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/terminal" };
     case "terminal:listDetailed":
       return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:agentStatusSnapshot":
+      return { method: "GET", url: "/api/agent-status/v1/snapshot" };
     case "terminal:buffer":
       return {
         method: "GET",
@@ -1474,7 +1476,10 @@ export class WsTransport implements Transport {
   private readonly baseUrl: string;
   private readonly profileId?: string;
   public readonly generation: number;
-  private readonly onDrop?: (transport: WsTransport, info?: WsTransportCloseInfo) => void;
+  private readonly onDrop?: (
+    transport: WsTransport,
+    info?: WsTransportCloseInfo,
+  ) => void;
   private readonly activeAbortControllers = new Set<AbortController>();
 
   private wsStatus: WsStatus = "connecting";
@@ -2748,63 +2753,63 @@ export class WsTransport implements Transport {
     onProgress?: (uploaded: number, total: number) => void,
   ): Promise<StageReviewDto> {
     return new Promise<StageReviewDto>((resolve, reject) => {
-    const url = `${this.baseUrl}/api/plugins/admin/stages`;
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
-    const headers = this.buildAuthHeaders();
-    for (const [key, val] of Object.entries(headers)) {
-      xhr.setRequestHeader(key, val);
-    }
-    xhr.setRequestHeader("Content-Type", "application/gzip");
-    xhr.setRequestHeader("X-Expected-SHA256", expectedSha256);
+      const url = `${this.baseUrl}/api/plugins/admin/stages`;
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      const headers = this.buildAuthHeaders();
+      for (const [key, val] of Object.entries(headers)) {
+        xhr.setRequestHeader(key, val);
+      }
+      xhr.setRequestHeader("Content-Type", "application/gzip");
+      xhr.setRequestHeader("X-Expected-SHA256", expectedSha256);
 
-    if (onProgress && xhr.upload) {
-      xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable) {
-          onProgress(ev.loaded, ev.total);
+      if (onProgress && xhr.upload) {
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            onProgress(ev.loaded, ev.total);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const review = JSON.parse(xhr.responseText) as StageReviewDto;
+            resolve(review);
+          } catch (e) {
+            reject(new Error(`Failed to parse stage review: ${e}`));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(
+              new ApiRequestError(
+                err.error ?? xhr.statusText,
+                xhr.status,
+                err.code,
+                err,
+              ),
+            );
+          } catch {
+            reject(
+              new ApiRequestError(
+                xhr.statusText || `HTTP ${xhr.status}`,
+                xhr.status,
+              ),
+            );
+          }
         }
       };
-    }
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const review = JSON.parse(xhr.responseText) as StageReviewDto;
-          resolve(review);
-        } catch (e) {
-          reject(new Error(`Failed to parse stage review: ${e}`));
-        }
-      } else {
-        try {
-          const err = JSON.parse(xhr.responseText);
-          reject(
-            new ApiRequestError(
-              err.error ?? xhr.statusText,
-              xhr.status,
-              err.code,
-              err,
-            ),
-          );
-        } catch {
-          reject(
-            new ApiRequestError(
-              xhr.statusText || `HTTP ${xhr.status}`,
-              xhr.status,
-            ),
-          );
-        }
-      }
-    };
+      xhr.onerror = () => {
+        reject(new Error("Stage upload network error"));
+      };
 
-    xhr.onerror = () => {
-      reject(new Error("Stage upload network error"));
-    };
+      xhr.onabort = () => {
+        reject(new Error("Stage upload aborted"));
+      };
 
-    xhr.onabort = () => {
-      reject(new Error("Stage upload aborted"));
-    };
-
-    xhr.send(file);
+      xhr.send(file);
     });
   }
 

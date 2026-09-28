@@ -29,6 +29,7 @@ import {
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { TerminalNotificationToastViewport } from "@/components/organisms/TerminalNotificationToastViewport.js";
+import { AgentStatusBridge } from "@/components/organisms/AgentStatusBridge.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -348,6 +349,7 @@ export function DamHopperApp() {
             <GlobalShortcuts />
             <GlobalTerminalFontSizeShortcuts />
             <TerminalNotificationToastViewport />
+            <AgentStatusBridge />
             <RouteDiagnostics />
             <PassphrasePrompt />
             <FreshResetBanner />

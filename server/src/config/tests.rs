@@ -10,11 +10,10 @@ use super::{
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
         CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
-        RestartPolicy, TerminalCodexNotificationSoundPattern, UiConfig,
+        RestartPolicy, TerminalAgentNotificationSoundPattern, UiConfig,
         MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES,
     },
 };
-
 
 #[test]
 fn test_global_env_path() {
@@ -326,7 +325,10 @@ fn accept_absolute_project_path() {
     .unwrap();
 
     let cfg = read_config(&config_path).unwrap();
-    assert_eq!(std::path::PathBuf::from(&cfg.projects[0].path), project_path);
+    assert_eq!(
+        std::path::PathBuf::from(&cfg.projects[0].path),
+        project_path
+    );
 }
 
 #[test]
@@ -485,7 +487,12 @@ fn reject_rooted_and_prefix_paths_in_relative_fields() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
 
-    for invalid_path in ["/rooted", "\\rooted", "C:drive_relative", r"\\server\share\file"] {
+    for invalid_path in [
+        "/rooted",
+        "\\rooted",
+        "C:drive_relative",
+        r"\\server\share\file",
+    ] {
         std::fs::write(
             &config_path,
             format!(
@@ -1005,7 +1012,16 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
         workspaces: None,
         ui: Some(UiConfig {
             host_resource_pinned_mount: Some("/data".to_string()),
-            terminal_codex_notifications_enabled: true,
+            terminal_agent_notifications: super::schema::TerminalAgentNotifications {
+                agents: super::schema::TerminalAgentNotificationAgents {
+                    codex: super::schema::TerminalAgentNotificationPolicy {
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..UiConfig::default()
         }),
         server: crate::config::ServerConfig {
@@ -1023,11 +1039,12 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let written = std::fs::read_to_string(&cfg_path).unwrap();
 
-    assert!(written.contains("terminal_codex_notifications_enabled = true"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.codex]"));
+    assert!(written.contains("enabled = true"));
     assert!(written.contains("host_resource_pinned_mount = \"/data\""));
-    assert!(written.contains("terminal_codex_notification_toast_enabled = true"));
-    assert!(written.contains("terminal_codex_browser_notifications_enabled = true"));
-    assert!(written.contains("terminal_codex_notification_sound_pattern = \"default\""));
+    assert!(written.contains("toast = true"));
+    assert!(written.contains("browser = true"));
+    assert!(written.contains("pattern = \"default\""));
     assert!(written.contains("session_db_path = \"/tmp/sessions.db\""));
     assert!(written.contains("session_buffer_ttl_hours = 12"));
     assert!(!written.contains("terminalAgentNotificationsEnabled"));
@@ -1404,14 +1421,15 @@ fn ui_config_defaults() {
     );
     assert_eq!(ui.terminal_font_size_decrease_shortcut, "Ctrl+Alt+Minus");
     assert!(ui.terminal_auto_switch_project_enabled);
-    assert!(!ui.terminal_codex_notifications_enabled);
-    assert!(ui.terminal_codex_notification_toast_enabled);
-    assert!(ui.terminal_codex_browser_notifications_enabled);
-    assert!(ui.terminal_codex_notification_sound_enabled);
-    assert_eq!(ui.terminal_codex_notification_sound_volume, 100);
+    assert!(!ui.terminal_agent_notifications.agents.codex.enabled);
+    assert!(!ui.terminal_agent_notifications.agents.omp.enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.toast);
+    assert!(ui.terminal_agent_notifications.agents.codex.browser);
+    assert!(ui.terminal_agent_notifications.agents.codex.sound);
+    assert_eq!(ui.terminal_agent_notifications.agents.codex.volume, 100);
     assert_eq!(
-        ui.terminal_codex_notification_sound_pattern,
-        TerminalCodexNotificationSoundPattern::Default
+        ui.terminal_agent_notifications.agents.codex.pattern,
+        TerminalAgentNotificationSoundPattern::Default
     );
     assert_eq!(ui.explorer_language_filter, ExplorerLanguageFilter::All);
     assert!(ui.mobile_custom_keyboard_enabled);
@@ -1447,13 +1465,20 @@ fn ui_config_serde_roundtrip() {
             terminal_font_size_decrease_shortcut: "Ctrl+Alt+Minus".to_string(),
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
-            terminal_codex_notifications_enabled: true,
-            terminal_codex_notification_toast_enabled: false,
-            terminal_codex_browser_notifications_enabled: false,
-            terminal_codex_notification_sound_enabled: false,
-            terminal_codex_notification_sound_volume: 45,
-            terminal_codex_notification_sound_pattern:
-                TerminalCodexNotificationSoundPattern::TwoTone,
+            terminal_agent_notifications: super::schema::TerminalAgentNotifications {
+                agents: super::schema::TerminalAgentNotificationAgents {
+                    codex: super::schema::TerminalAgentNotificationPolicy {
+                        enabled: true,
+                        toast: false,
+                        browser: false,
+                        sound: false,
+                        volume: 45,
+                        pattern: TerminalAgentNotificationSoundPattern::TwoTone,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             explorer_show_hidden: false,
             explorer_language_filter: ExplorerLanguageFilter::JavascriptTypescript,
             mobile_custom_keyboard_enabled: false,
@@ -1482,8 +1507,12 @@ fn ui_config_serde_roundtrip() {
 
     let json = serde_json::to_value(cfg.ui.as_ref().unwrap()).unwrap();
     assert_eq!(
-        json["terminalCodexNotificationSoundPattern"],
-        serde_json::json!("two-tone")
+        json["terminalAgentNotifications"]["agents"]["codex"]["pattern"],
+        "two-tone"
+    );
+    assert_eq!(
+        json["terminalAgentNotifications"]["agents"]["omp"]["enabled"],
+        false
     );
     assert_eq!(
         json["hostResourcePinnedMount"],
@@ -1542,15 +1571,15 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
-    assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
     assert!(ui.terminal_auto_switch_project_enabled);
-    assert!(!ui.terminal_codex_notification_toast_enabled);
-    assert!(!ui.terminal_codex_browser_notifications_enabled);
-    assert!(!ui.terminal_codex_notification_sound_enabled);
-    assert_eq!(ui.terminal_codex_notification_sound_volume, 45);
+    assert!(!ui.terminal_agent_notifications.agents.codex.toast);
+    assert!(!ui.terminal_agent_notifications.agents.codex.browser);
+    assert!(!ui.terminal_agent_notifications.agents.codex.sound);
+    assert_eq!(ui.terminal_agent_notifications.agents.codex.volume, 45);
     assert_eq!(
-        ui.terminal_codex_notification_sound_pattern,
-        TerminalCodexNotificationSoundPattern::TwoTone
+        ui.terminal_agent_notifications.agents.codex.pattern,
+        TerminalAgentNotificationSoundPattern::TwoTone
     );
     assert_eq!(
         ui.explorer_language_filter,
@@ -1597,7 +1626,10 @@ mobile_custom_keyboard_padding = 9
 mobile_custom_keyboard_row_gap = 6
 "#;
 
-    let loaded: GlobalConfig = toml::from_str(toml).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, toml).unwrap();
+    let loaded = read_global_config_at(&path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
     assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
@@ -1608,7 +1640,7 @@ mobile_custom_keyboard_row_gap = 6
     assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
     assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
     assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
-    assert!(ui.terminal_codex_notifications_enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 14);
     assert_eq!(ui.mobile_custom_keyboard_padding, 9);
@@ -1666,13 +1698,164 @@ terminal_agent_notifications_enabled = true
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 18);
-    assert!(ui.terminal_codex_notifications_enabled);
-    assert!(ui.terminal_codex_notification_toast_enabled);
-    assert!(ui.terminal_codex_browser_notifications_enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
+    assert!(!ui.terminal_agent_notifications.agents.omp.enabled);
+    assert!(ui.terminal_agent_notifications.agents.codex.toast);
+    assert!(ui.terminal_agent_notifications.agents.codex.browser);
     assert_eq!(
-        ui.terminal_codex_notification_sound_pattern,
-        TerminalCodexNotificationSoundPattern::Default
+        ui.terminal_agent_notifications.agents.codex.pattern,
+        TerminalAgentNotificationSoundPattern::Default
     );
+}
+
+#[test]
+fn global_config_load_migrates_legacy_codex_fields_without_overriding_explicit_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[ui]
+terminal_codex_notifications_enabled = true
+terminal_codex_notification_toast_enabled = false
+terminal_codex_browser_notifications_enabled = false
+terminal_codex_notification_sound_enabled = false
+terminal_codex_notification_sound_volume = 42
+terminal_codex_notification_sound_pattern = "urgent"
+
+[ui.terminal_agent_notifications]
+version = 1
+
+[ui.terminal_agent_notifications.agents.codex]
+enabled = false
+volume = 35
+
+[ui.terminal_agent_notifications.agents.omp]
+enabled = true
+"#,
+    )
+    .unwrap();
+    let loaded = read_global_config_at(&path).unwrap().unwrap();
+    let ui = loaded.ui.as_ref().unwrap();
+    let codex = &ui.terminal_agent_notifications.agents.codex;
+    assert!(!codex.enabled);
+    assert!(codex.toast);
+    assert!(codex.browser);
+    assert!(codex.sound);
+    assert_eq!(codex.volume, 35);
+    assert_eq!(
+        codex.pattern,
+        TerminalAgentNotificationSoundPattern::Default
+    );
+    assert!(ui.terminal_agent_notifications.agents.omp.enabled);
+
+    let roundtrip = loaded.clone();
+    write_global_config_at(&path, &roundtrip).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("terminal_codex_"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.omp]"));
+    assert_eq!(
+        read_global_config_at(&path)
+            .unwrap()
+            .unwrap()
+            .ui
+            .unwrap()
+            .terminal_agent_notifications,
+        roundtrip.ui.unwrap().terminal_agent_notifications
+    );
+}
+
+#[test]
+fn global_config_load_rejects_unsupported_notification_version_with_legacy_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let unsupported = r#"
+[ui]
+terminal_codex_notifications_enabled = true
+terminal_codex_notification_sound_volume = 42
+
+[ui.terminal_agent_notifications]
+version = 2
+
+[ui.terminal_agent_notifications.agents.codex]
+enabled = false
+"#;
+    std::fs::write(&path, unsupported).unwrap();
+
+    let error = read_global_config_at(&path).unwrap_err();
+    assert!(error.to_string().contains("Unsupported terminal agent notifications version"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), unsupported);
+}
+
+#[test]
+fn global_ui_update_rejects_unsupported_notification_version_without_legacy_fallback() {
+    let mut incoming = serde_json::json!({
+        "terminalCodexNotificationsEnabled": true,
+        "terminalAgentNotifications": {
+            "version": 2,
+            "agents": { "codex": { "enabled": false } }
+        }
+    });
+    super::schema::migrate_terminal_agent_notifications(&mut incoming);
+    assert_eq!(incoming["terminalAgentNotifications"]["version"], 2);
+    assert_eq!(
+        incoming["terminalAgentNotifications"]["agents"]["codex"]["enabled"],
+        false
+    );
+    let ui: UiConfig = serde_json::from_value(incoming).unwrap();
+    assert_eq!(
+        ui.validate_terminal_notification_sound_volume().unwrap_err(),
+        "Unsupported terminal agent notifications version"
+    );
+}
+
+#[test]
+fn global_config_write_preserves_stored_preferences_on_unsupported_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = GlobalConfig {
+        ui: Some(UiConfig::default()),
+        ..GlobalConfig::default()
+    };
+    config.ui.as_mut().unwrap().terminal_agent_notifications.agents.codex.enabled = true;
+    write_global_config_at(&path, &config).unwrap();
+    let original = std::fs::read_to_string(&path).unwrap();
+
+    let ui = config.ui.as_mut().unwrap();
+    ui.terminal_agent_notifications.version = 2;
+    ui.terminal_agent_notifications.agents.codex.enabled = false;
+    let error = write_global_config_at(&path, &config).unwrap_err();
+    assert!(error.to_string().contains("Unsupported terminal agent notifications version"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert!(
+        read_global_config_at(&path)
+            .unwrap()
+            .unwrap()
+            .ui
+            .unwrap()
+            .terminal_agent_notifications
+            .agents
+            .codex
+            .enabled
+    );
+}
+
+#[test]
+fn global_config_startup_check_propagates_unsupported_version_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let unsupported = r#"
+[ui.terminal_agent_notifications]
+version = 2
+"#;
+    std::fs::write(&path, unsupported).unwrap();
+
+    // Matches the pattern in main.rs: read_global_config_at(&path)?.unwrap_or_default()
+    let result = read_global_config_at(&path);
+    assert!(result.is_err(), "Unsupported version must return an Err, not Ok(None)");
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("Unsupported terminal agent notifications version"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), unsupported);
 }
 
 #[test]
@@ -1865,10 +2048,8 @@ fn validate_terminal_notification_sound_volume_checks_bounds() {
         .validate_terminal_notification_sound_volume()
         .is_ok());
 
-    let invalid = UiConfig {
-        terminal_codex_notification_sound_volume: 101,
-        ..UiConfig::default()
-    };
+    let mut invalid = UiConfig::default();
+    invalid.terminal_agent_notifications.agents.omp.volume = 101;
     assert!(invalid
         .validate_terminal_notification_sound_volume()
         .is_err());

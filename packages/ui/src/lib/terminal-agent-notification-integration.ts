@@ -1,6 +1,18 @@
-import type { TerminalRef } from "@/api/ownership.js";
+import { isCurrentConnection } from "@/api/connections.js";
+import type {
+  AgentAttentionEvent,
+  TerminalAgentStatusRow,
+} from "@/api/agent-status-types.js";
+import {
+  terminalKey,
+  type ConnectionRef,
+  type TerminalRef,
+} from "@/api/ownership.js";
 import type { Terminal } from "@xterm/xterm";
-import { BrowserNotificationService } from "@/lib/browser-notification-service.js";
+import {
+  BrowserNotificationService,
+  notifyTerminalAgent as notifyBrowserAgent,
+} from "@/lib/browser-notification-service.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import {
   parseOsc9Notification,
@@ -13,6 +25,65 @@ import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.j
 
 type Disposable = { dispose: () => void };
 const CODEX_OSC9_RATE_LIMIT_MS = 1_000;
+export function deliverSemanticAgentAttention(
+  owner: ConnectionRef,
+  row: TerminalAgentStatusRow,
+  attention: AgentAttentionEvent,
+): void {
+  if (
+    !isCurrentConnection(owner) ||
+    row.id !== attention.terminalId ||
+    row.incarnation !== attention.incarnation ||
+    row.agentSessionId !== attention.agentSessionId ||
+    row.attentionRevision !== attention.attentionRevision
+  )
+    return;
+  const policy =
+    useSettingsStore.getState().terminalAgentNotifications.agents.omp;
+  if (!policy.enabled) return;
+  const terminalRef = { profileId: owner.profileId, id: row.id };
+  const terminalInstanceRef = { ...terminalRef, incarnation: row.incarnation };
+  const event: TerminalAgentNotification = {
+    source: "agent-status",
+    sessionId: JSON.stringify([owner.profileId, row.id]),
+    agent: "omp",
+    title:
+      attention.kind === "turn-ended"
+        ? "OMP turn ended"
+        : "OMP needs attention",
+    body:
+      attention.kind === "needs-attention"
+        ? attention.reason === "approval"
+          ? "Approval requested"
+          : attention.reason === "question"
+            ? "Question pending"
+            : "Agent error"
+        : "Turn ended; task success is not verified",
+    status: attention.kind === "turn-ended" ? "finished" : "needs-attention",
+    receivedAt: Date.now(),
+    profileId: owner.profileId,
+    terminalRef,
+    terminalInstanceRef,
+    semanticEventId: attention.id,
+  };
+  useTerminalNotificationsStore
+    .getState()
+    .addNotification(event, { showToast: policy.toast });
+  if (policy.sound)
+    playTerminalNotificationSound(policy.pattern, policy.volume);
+  notifyBrowserAgent(event, {
+    enabled: policy.browser,
+    rateLimitMs: 0,
+    onSelect: () =>
+      dispatchTerminalNotificationSelection(
+        event.sessionId,
+        window,
+        owner.profileId,
+        terminalRef,
+        terminalInstanceRef,
+      ),
+  });
+}
 
 interface TerminalAgentNotificationIntegrationOptions {
   term: Terminal;
@@ -21,6 +92,7 @@ interface TerminalAgentNotificationIntegrationOptions {
   getTerminalOrder?: () => number | undefined;
   profileId?: string;
   terminalRef?: TerminalRef;
+  getTerminalIncarnation?: () => number | undefined;
 }
 
 export interface TerminalAgentNotificationIntegration {
@@ -40,6 +112,7 @@ export function attachTerminalAgentNotifications({
   getTerminalOrder,
   profileId,
   terminalRef,
+  getTerminalIncarnation,
 }: TerminalAgentNotificationIntegrationOptions): TerminalAgentNotificationIntegration {
   let replayActive = false;
   let disposed = false;
@@ -58,40 +131,48 @@ export function attachTerminalAgentNotifications({
     settings: ReturnType<typeof useSettingsStore.getState>,
   ) => {
     useTerminalNotificationsStore.getState().addNotification(event, {
-      showToast: settings.terminalCodexNotificationToastEnabled,
+      showToast: settings.terminalAgentNotifications.agents.codex.toast,
     });
-    if (settings.terminalCodexNotificationSoundEnabled) {
+    if (settings.terminalAgentNotifications.agents.codex.sound) {
       playTerminalNotificationSound(
-        settings.terminalCodexNotificationSoundPattern,
-        settings.terminalCodexNotificationSoundVolume,
+        settings.terminalAgentNotifications.agents.codex.pattern,
+        settings.terminalAgentNotifications.agents.codex.volume,
       );
     }
     notificationService.notifyTerminalAgent(event, {
-      enabled: settings.terminalCodexBrowserNotificationsEnabled,
+      enabled: settings.terminalAgentNotifications.agents.codex.browser,
       rateLimitMs: CODEX_OSC9_RATE_LIMIT_MS,
       terminalOrder: getTerminalOrder?.(),
-      onSelect: ({ sessionId: selectedSessionId }) =>
+      onSelect: (selected) =>
         dispatchTerminalNotificationSelection(
-          selectedSessionId,
+          selected.sessionId,
           window,
-          profileId,
-          terminalRef,
+          selected.profileId,
+          selected.terminalRef,
+          selected.terminalInstanceRef,
         ),
     });
   };
 
-  const parseSignalContext = () => ({
-    sessionId,
-    project,
-    agent: "codex" as const,
-    profileId,
-    terminalRef,
-  });
+  const parseSignalContext = () => {
+    const incarnation = getTerminalIncarnation?.();
+    return {
+      sessionId: terminalRef ? terminalKey(terminalRef) : sessionId,
+      project,
+      agent: "codex" as const,
+      profileId,
+      terminalRef,
+      terminalInstanceRef:
+        terminalRef && incarnation !== undefined
+          ? { ...terminalRef, incarnation }
+          : undefined,
+    };
+  };
   const handleTerminalSignal = (
     parse: () => TerminalAgentNotification | null,
   ): boolean => {
     const settings = useSettingsStore.getState();
-    if (!settings.terminalCodexNotificationsEnabled) return true;
+    if (!settings.terminalAgentNotifications.agents.codex.enabled) return true;
 
     const event = parse();
     if (event && !replayActive) notifyTerminalAgent(event, settings);

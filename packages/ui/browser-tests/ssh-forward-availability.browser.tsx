@@ -1,11 +1,15 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SshForwardHostProvider } from "@/contexts/SshForwardHostContext.js";
 import { TopNavRouteMenu } from "@/components/organisms/TopNavRouteMenu.js";
 import type { SshForwardHost } from "@/lib/ssh-forward-host.js";
 import "@/index.css";
+
+vi.mock("@/plugins/use-plugin-navigation.js", () => ({
+  usePluginNavigation: () => ({ error: null, items: [], loading: false }),
+}));
 
 const host = {} as SshForwardHost;
 let container: HTMLDivElement;

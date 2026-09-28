@@ -25,7 +25,13 @@ function TerminalNotificationToast({
 
   const selectNotification = () => {
     markRead(id);
-    dispatchTerminalNotificationSelection(event.sessionId);
+    dispatchTerminalNotificationSelection(
+      event.sessionId,
+      window,
+      event.profileId,
+      event.terminalRef,
+      event.terminalInstanceRef,
+    );
     dismissToast(id);
   };
 

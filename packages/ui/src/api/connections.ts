@@ -17,19 +17,33 @@ import {
 } from "./ownership.js";
 import * as serverConfig from "./server-config.js";
 const getProfiles = () =>
-  typeof serverConfig.getProfiles === "function" ? serverConfig.getProfiles() : [];
+  typeof serverConfig.getProfiles === "function"
+    ? serverConfig.getProfiles()
+    : [];
 const getAuthToken = (id?: string) =>
-  typeof serverConfig.getAuthToken === "function" ? serverConfig.getAuthToken(id) : null;
+  typeof serverConfig.getAuthToken === "function"
+    ? serverConfig.getAuthToken(id)
+    : null;
 const setAuthToken = (tok: string, id?: string) =>
-  typeof serverConfig.setAuthToken === "function" ? serverConfig.setAuthToken(tok, id) : true;
+  typeof serverConfig.setAuthToken === "function"
+    ? serverConfig.setAuthToken(tok, id)
+    : true;
 const clearAuthToken = (id?: string) =>
-  typeof serverConfig.clearAuthToken === "function" ? serverConfig.clearAuthToken(id) : true;
+  typeof serverConfig.clearAuthToken === "function"
+    ? serverConfig.clearAuthToken(id)
+    : true;
 const isSameOriginProfile = (profile: serverConfig.ServerProfile) =>
-  typeof serverConfig.isSameOriginProfile === "function" ? serverConfig.isSameOriginProfile(profile) : true;
+  typeof serverConfig.isSameOriginProfile === "function"
+    ? serverConfig.isSameOriginProfile(profile)
+    : true;
 const getActiveProfileId = () =>
-  typeof serverConfig.getActiveProfileId === "function" ? serverConfig.getActiveProfileId() : null;
+  typeof serverConfig.getActiveProfileId === "function"
+    ? serverConfig.getActiveProfileId()
+    : null;
 const normalizeServerUrl = (url: string) =>
-  typeof serverConfig.normalizeServerUrl === "function" ? serverConfig.normalizeServerUrl(url) : url;
+  typeof serverConfig.normalizeServerUrl === "function"
+    ? serverConfig.normalizeServerUrl(url)
+    : url;
 import {
   checkAuthStatus,
   requestMfaStepUpChallenge,
@@ -448,8 +462,10 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
         updateSnapshot(profileId, {
           status: "mfa-required",
           error: statusResult.error || "MFA verification required",
-          mfaDueAt: "mfaDueAt" in statusResult ? statusResult.mfaDueAt : undefined,
-          expiresAt: "expiresAt" in statusResult ? statusResult.expiresAt : undefined,
+          mfaDueAt:
+            "mfaDueAt" in statusResult ? statusResult.mfaDueAt : undefined,
+          expiresAt:
+            "expiresAt" in statusResult ? statusResult.expiresAt : undefined,
           authCode: "MFA_REQUIRED",
         });
         return;
@@ -462,7 +478,8 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       }
       updateSnapshot(profileId, {
         status: "login-required",
-        error: statusResult.error || "Authentication failed. Please log in again.",
+        error:
+          statusResult.error || "Authentication failed. Please log in again.",
         authCode: statusResult.code,
       });
       return;
@@ -496,7 +513,8 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
       clearAuthToken(profileId);
       updateSnapshot(profileId, {
         status: "login-required",
-        error: fetchErr.message || "Authentication failed. Please log in again.",
+        error:
+          fetchErr.message || "Authentication failed. Please log in again.",
         authCode: fetchErr.code,
       });
       return;
@@ -862,4 +880,24 @@ if (typeof window !== "undefined") {
   } catch {
     // Server-config mock in test environments may omit subscribeToProfileChanges
   }
+}
+
+export function __setConnectionSnapshotForTests(
+  profileId: ProfileId,
+  snapshot: Partial<ConnectionSnapshot> | null,
+): void {
+  if (snapshot === null) {
+    entries.delete(profileId);
+    notifyListeners();
+    return;
+  }
+  const entry = getOrCreateEntry(profileId, snapshot.serverUrl ?? "");
+  if (snapshot.owner?.generation !== undefined) {
+    entry.generation = snapshot.owner.generation;
+  }
+  if (snapshot.status !== undefined) {
+    entry.status = snapshot.status;
+  }
+  entry.snapshot = freezeSnapshot(entry);
+  notifyListeners();
 }

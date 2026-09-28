@@ -5,7 +5,10 @@ import { Button } from "@/components/atoms/Button.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { TerminalNotificationSoundControls } from "@/components/molecules/TerminalNotificationSoundControls.js";
-import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
+import type {
+  TerminalAgentNotificationPolicy,
+  TerminalAgentNotifications,
+} from "@/api/client.js";
 import {
   getBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
@@ -13,23 +16,92 @@ import {
 } from "@/lib/browser-notification-service.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 
-export type TerminalAgentNotificationSettingsPatch = Partial<{
-  terminalCodexNotificationsEnabled: boolean;
-  terminalCodexNotificationToastEnabled: boolean;
-  terminalCodexBrowserNotificationsEnabled: boolean;
-  terminalCodexNotificationSoundEnabled: boolean;
-  terminalCodexNotificationSoundVolume: number;
-  terminalCodexNotificationSoundPattern: TerminalCodexNotificationSoundPattern;
-}>;
+type AgentKind = keyof TerminalAgentNotifications["agents"];
 
 interface TerminalAgentNotificationSettingsProps {
-  enabled: boolean;
-  toastEnabled: boolean;
-  browserEnabled: boolean;
-  soundEnabled: boolean;
-  soundVolume: number;
-  soundPattern: TerminalCodexNotificationSoundPattern;
-  onSave: (partial: TerminalAgentNotificationSettingsPatch) => void;
+  notifications: TerminalAgentNotifications;
+  onSave: (
+    agent: AgentKind,
+    patch: Partial<TerminalAgentNotificationPolicy>,
+  ) => void;
+}
+
+function AgentChannelSettings({
+  agent,
+  policy,
+  onSave,
+}: {
+  agent: AgentKind;
+  policy: TerminalAgentNotificationPolicy;
+  onSave: TerminalAgentNotificationSettingsProps["onSave"];
+}) {
+  const codex = agent === "codex";
+  const name = codex ? "Codex" : "OMP";
+  const label = (control: string) => (codex ? control : `${name} ${control}`);
+
+  return (
+    <div className="space-y-4 rounded border border-[var(--color-border)] p-4">
+      <div>
+        <h5 className="text-sm font-medium text-[var(--color-text)]">{name}</h5>
+        <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
+          {codex ? (
+            <>
+              DamHopper syncs the home <code>~/.codex/config.toml</code> TUI
+              notification block.
+            </>
+          ) : (
+            "Notifications for OMP running inside DamHopper terminals. Off until you enable them."
+          )}
+        </p>
+      </div>
+      <SettingRow
+        title={`Enable ${name} notifications`}
+        description={
+          codex
+            ? 'Writes `tui.notifications`, `tui.notification_method = "osc9"`, and `tui.notification_condition = "always"` to `~/.codex/config.toml`'
+            : "Turn on semantic OMP alerts for this browser."
+        }
+      >
+        <Switch
+          checked={policy.enabled}
+          ariaLabel={`Enable ${name} notifications`}
+          onCheckedChange={(enabled) => onSave(agent, { enabled })}
+        />
+      </SettingRow>
+      <SettingRow
+        title="In-app toast"
+        description="Show a transient app alert. Turning this off still keeps the bell and notification history."
+      >
+        <Switch
+          checked={policy.toast}
+          ariaLabel={label("Enable in-app toast")}
+          disabled={!policy.enabled}
+          onCheckedChange={(toast) => onSave(agent, { toast })}
+        />
+      </SettingRow>
+      <SettingRow
+        title="Browser popup"
+        description="Show a native browser notification when permission is granted. Browser or OS popup sound is controlled by the browser."
+      >
+        <Switch
+          checked={policy.browser}
+          ariaLabel={label("Enable browser popup")}
+          disabled={!policy.enabled}
+          onCheckedChange={(browser) => onSave(agent, { browser })}
+        />
+      </SettingRow>
+      <TerminalNotificationSoundControls
+        masterEnabled={policy.enabled}
+        soundEnabled={policy.sound}
+        soundPattern={policy.pattern}
+        soundVolume={policy.volume}
+        agentName={name}
+        onSoundEnabledChange={(sound) => onSave(agent, { sound })}
+        onSoundPatternChange={(pattern) => onSave(agent, { pattern })}
+        onSoundVolumeChange={(volume) => onSave(agent, { volume })}
+      />
+    </div>
+  );
 }
 
 const PERMISSION_VARIANT: Record<
@@ -50,12 +122,7 @@ const PERMISSION_LABEL: Record<BrowserNotificationPermissionState, string> = {
 };
 
 export function TerminalAgentNotificationSettings({
-  enabled,
-  toastEnabled,
-  browserEnabled,
-  soundEnabled,
-  soundVolume,
-  soundPattern,
+  notifications,
   onSave,
 }: TerminalAgentNotificationSettingsProps) {
   const [permission, setPermission] =
@@ -93,72 +160,33 @@ export function TerminalAgentNotificationSettings({
         </div>
         <div className="min-w-0">
           <h4 className="text-sm font-medium text-[var(--color-text)]">
-            Codex terminal notifications
+            Agent notifications
           </h4>
           <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-            Delivery controls for Codex running inside DamHopper terminals.
-            DamHopper syncs your home <code>~/.codex/config.toml</code> TUI
-            notification block for you.
+            Choose which terminal agents can alert you. Status badges remain
+            visible even when notifications are off.
           </p>
         </div>
       </div>
-      <SettingRow
-        title="Enable Codex notifications"
-        description='Writes `tui.notifications`, `tui.notification_method = "osc9"`, and `tui.notification_condition = "always"` to `~/.codex/config.toml`'
-      >
-        <Switch
-          checked={enabled}
-          ariaLabel="Enable Codex notifications"
-          onCheckedChange={(checked) =>
-            onSave({ terminalCodexNotificationsEnabled: checked })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="In-app toast"
-        description="Show a transient app alert. Turning this off still keeps the bell and notification history."
-      >
-        <Switch
-          checked={toastEnabled}
-          ariaLabel="Enable in-app toast"
-          disabled={!enabled}
-          onCheckedChange={(checked) =>
-            onSave({ terminalCodexNotificationToastEnabled: checked })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <SettingRow
-        title="Browser popup"
-        description="Show a native browser notification when permission is granted. Browser or OS popup sound is controlled by the browser."
-      >
-        <Switch
-          checked={browserEnabled}
-          ariaLabel="Enable browser popup"
-          disabled={!enabled}
-          onCheckedChange={(checked) =>
-            onSave({ terminalCodexBrowserNotificationsEnabled: checked })
-          }
-        />
-      </SettingRow>
-      <div className="border-t border-[var(--color-border)]" />
-      <TerminalNotificationSoundControls
-        masterEnabled={enabled}
-        soundEnabled={soundEnabled}
-        soundPattern={soundPattern}
-        soundVolume={soundVolume}
-        onSoundEnabledChange={(checked) =>
-          onSave({ terminalCodexNotificationSoundEnabled: checked })
-        }
-        onSoundPatternChange={(pattern) =>
-          onSave({ terminalCodexNotificationSoundPattern: pattern })
-        }
-        onSoundVolumeChange={(volume) =>
-          onSave({ terminalCodexNotificationSoundVolume: volume })
-        }
-      />
-      <div className="border-t border-[var(--color-border)]" />
+      {notifications.version !== 1 ? (
+        <div className="rounded border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">
+          Unsupported notification preferences version ({notifications.version}
+          ). Editing is disabled until migrated.
+        </div>
+      ) : (
+        <>
+          <AgentChannelSettings
+            agent="codex"
+            policy={notifications.agents.codex}
+            onSave={onSave}
+          />
+          <AgentChannelSettings
+            agent="omp"
+            policy={notifications.agents.omp}
+            onSave={onSave}
+          />
+        </>
+      )}
       <SettingRow
         title="Browser permission"
         description="Permission must be requested from an explicit click"
@@ -173,7 +201,11 @@ export function TerminalAgentNotificationSettings({
             type="button"
             size="sm"
             loading={permissionPending}
-            disabled={!enabled || permission === "unsupported"}
+            disabled={
+              (!notifications.agents.codex.enabled &&
+                !notifications.agents.omp.enabled) ||
+              permission === "unsupported"
+            }
             onClick={() => void handleRequestPermission()}
           >
             Request permission

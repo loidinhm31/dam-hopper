@@ -2,11 +2,12 @@ import { useRef, useEffect } from "react";
 import { X, Save } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { AgentStatusBadge } from "@/components/atoms/AgentStatusBadge.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { SessionInfo } from "@/api/client.js";
 import type { WithOpenTerminalTitle } from "@/lib/terminal-title.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
-import type { TerminalRef } from "@/api/ownership.js";
+import { parseTerminalKey, type TerminalRef } from "@/api/ownership.js";
 export interface TabEntry {
   sessionId: string;
   label: string;
@@ -106,6 +107,19 @@ export function TerminalTabBar({
                 alive={tab.session?.alive}
                 profileId={tab.profileId}
                 terminalRef={tab.terminalRef}
+              />
+              <AgentStatusBadge
+                terminalRef={
+                  tab.terminalRef ??
+                  parseTerminalKey(tab.sessionId) ??
+                  (tab.profileId
+                    ? {
+                        profileId: tab.profileId,
+                        id: tab.session?.id ?? tab.sessionId,
+                      }
+                    : undefined)
+                }
+                incarnation={tab.session?.incarnation}
               />
               <span
                 onDoubleClick={() => onRenameSession?.(tab.sessionId)}
