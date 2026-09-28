@@ -1,17 +1,15 @@
 # System Architecture
 
-## Agent status — Phases 01–03 implemented (Phases 04–05 planned)
+## Agent status — Phases 01–05 complete (Qualified on Linux 2026-09-28)
 
 The [agent-status architecture](./architecture/agent-status.md) is normative.
-Phase 01 implements the Rust/TypeScript contract and reducer; Phase 02 adds the
-Linux private loopback reporter, PTY-scoped credentials, protected snapshot, and
-authenticated WebSocket status events; Phase 03 adds the bundled standalone
-OMP extension and explicit installer. Linux bind failure preserves PTY use and
-reports unavailable; other server platforms remain `platform-unqualified`.
-Browser consumption, badges, notifications, and end-to-end qualification
-remain Phases 04–05. Process/output status, workflow completion, and
-idle-suspend remain separate; turn end does not prove task success.
-
+Phases 01–05 are fully implemented and qualified on Linux:
+- Phase 01: Agent-neutral semantic contract, pure reducer, and TypeScript DTO decoders.
+- Phase 02: Server-owned runtime, private loopback WebSocket collector, PTY-scoped credentials, protected snapshot endpoint (`/api/agent-status/v1/snapshot`), and semantic broadcast.
+- Phase 03: OMP adapter embedded in `dam-hopper-server`; manage it on the server host with `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`.
+- Phase 04: Profile-safe UI badges across tabs, split tabs, and Fleet rows; unified preferences (`terminalAgentNotifications`), toast viewport, and notification history center.
+- Phase 05: Linux x86_64 end-to-end qualification passed for C01–C19 against OMP 18.4.1, including fault injection, standalone release installer verification, and documentation ([report](../plans/reports/qualification-260928-1815-agent-status-omp.md)).
+Process/output status, workflow completion, and idle-suspend remain separate; turn end does not prove task success.
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is

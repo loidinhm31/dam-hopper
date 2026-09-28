@@ -1,7 +1,7 @@
 ---
 title: "Agent status and notifications — OMP first"
 description: "Add server-owned agent activity with a bundled OMP lifecycle adapter and profile-safe badges and notifications."
-status: in-progress
+status: completed
 priority: P2
 effort: not-estimated
 branch: main
@@ -26,13 +26,13 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 
 ## Design contract
 
-[Proposed architecture](../../docs/architecture/agent-status.md) is normative; Phases 01–03 implemented, Phases 04–05 pending.
+- [Proposed architecture](../../docs/architecture/agent-status.md) is normative; Phases 01–05 implemented and complete as of 2026-09-28.
 
 - Scope credentials to terminal incarnation; inject only into private spawn environment, never persisted templates or public APIs.
 - Persistent local reporter connection + 5-second state heartbeat / 15-second lease; close/expiry => unknown.
 - Backend rejects stale reporter epochs/sequences; snapshots never imply completion.
 - One app-root watcher per connected profile, owner/generation fences, silent reconnect baseline and bounded notification dedupe.
-- OMP qualification target: observed version 18.3.5; no unverified historical or future-version promise.
+- OMP qualification completed on 18.4.1; no unverified historical or future-version promise.
 
 ## Phases
 
@@ -42,19 +42,21 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 | 2 | [Reporter transport and PTY lifecycle](./phase-02-reporter-transport-and-pty-lifecycle.md) | DONE (2026-09-28) | 100% | 1 |
 | 3 | [Bundled OMP adapter and installer](./phase-03-omp-adapter-and-installer.md) | DONE (2026-09-28) | 100% | 1–2 |
 | 4 | [Profile-safe badges and notifications](./phase-04-profile-safe-ui-and-notifications.md) | DONE (2026-09-28) | 100% | 1–3 |
-| 5 | [End-to-end and release qualification](./phase-05-end-to-end-qualification.md) | Pending | 0% | 1–4 |
+| 5 | [End-to-end and release qualification](./phase-05-end-to-end-qualification.md) | DONE (2026-09-28) | 100% | 1–4 |
 
 ## Completion gates
 
-All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery. Real OMP and browser evidence required, not only synthetic event tests. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. Phases 01, 02, and 03 are complete as of 2026-09-28; phases 04–05 remain pending.
+All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery (C01–C19 qualified in Phase 05). Real OMP and browser evidence recorded. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. All phases 01–05 complete as of 2026-09-28.
 
 ## Evidence and review
 
 - [Brainstorm](../reports/brainstorm-260928-0300-herdr-agent-status-adoption.md)
 - [Report review and source corrections](./reports/report-review.md)
 - [Validation record](./reports/plan-validation.md)
-- [Phase 03 implementation review](../reports/code-review-260928-1233-phase-03-bundled-omp-adapter-and-installer.md): score 9.2/10; no critical issues, with two high-priority findings tracked in the phase risk notes.
-- Planning skill and hard-command template loaded and followed inline; no slash-dispatch API exposed.
+- [Phase 03 implementation review](../reports/code-review-260928-1233-phase-03-bundled-omp-adapter-and-installer.md): score 9.2/10; no critical issues.
+- [Phase 04 implementation review](../reports/code-review-260928-1632-phase-04-profile-safe-ui-and-notifications.md): approved, all remediations complete.
+- [Phase 05 qualification report](../reports/qualification-260928-1815-agent-status-omp.md): all 19 scenarios qualified on Linux.
+- [Phase 05 review report](../reports/code-review-260928-1834-phase-05-end-to-end-qualification.md): score 9.8/10; qualification approved.
 - Active-plan helper ran, but `EVCRATE_SESSION_ID` is absent; automatic session activation was not persisted. Use this path explicitly.
 
 ## Rollout / rollback
@@ -71,8 +73,8 @@ Deploy matched server/UI; install adapter as OMP's OS user; restart existing OMP
 - Unified agent preferences; preserve Codex values by one-way migration.
 
 ### Action Items
-- Phase 01–04 completed and reviewed (2026-09-28); proceed to Phase 05. Overall plan remains in progress pending Phase 05.
+- Phases 01–05 completed and reviewed (2026-09-28); Linux release qualification passed all 19 acceptance scenarios. Overall plan completed.
 
 ## Unresolved questions
 
-No unresolved product decision. Phase 03 review found no critical issues but recorded two high-priority findings: inactive late `agent_end` can emit duplicate `turn-ended` reports, and CRLF line endings can misclassify managed extensions during update; both remain tracked in the phase risk notes. Real OMP event/reload behavior and packaged installer execution remain end-to-end qualification gates. Phases 01–03 completed 2026-09-28; phases 04–05 remain pending and full delivery remains in progress.
+No unresolved product decisions or qualification gates: real OMP behavior, packaged installer execution, and all C01–C19 scenarios qualified on Linux. The Phase 03 review's late duplicate `turn-ended` and CRLF-header findings were resolved and verified in Phases 04/05; see [architecture](../../docs/architecture/agent-status.md) and the Phase 05 qualification/review reports.

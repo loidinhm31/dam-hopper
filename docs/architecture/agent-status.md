@@ -1,26 +1,28 @@
 # Agent status — OMP-first architecture
 
-Status: **Phases 01–03 implemented; Phases 04–05 planned**. Date: 2026-09-28.
+Status: **Phases 01–05 complete (Qualified on Linux 2026-09-28)**. Date: 2026-09-28.
 Plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
-Evidence: [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
+Evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
 Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
 plus matching public TypeScript DTOs and decoders. Phase 02 implements the
 server-owned reporter runtime, private loopback collector, PTY-incarnation
 credentials, protected snapshot, and semantic WebSocket pushes. Phase 03 adds
 the standalone OMP producer embedded in the server binary and an explicit
-profile installer. Browser consumption, badges, and notifications remain
-Phases 04–05.
+profile installer. Phase 04 delivers profile-safe UI badges across tabs, split
+tabs, and Fleet rows, unified preferences (`terminalAgentNotifications`),
+toast viewport, and notification history center. Phase 05 delivers full Linux
+end-to-end qualification across scenarios C01–C19.
 
-## Remaining scope and delivery (Phases 04–05 planned)
+## Delivery Scope and Invariants
 
 - The semantic contract is designed to be agent-neutral; `AgentKind` currently supports only OMP. Codex/others remain future work if needed.
-- Status badges in ordinary tabs, split tabs, and Fleet terminal rows; per-browser history/toasts/sound/notifications remain planned.
+- Status badges in ordinary tabs, split tabs, and Fleet terminal rows; per-browser history/toasts/sound/notifications are fully operational.
 - Rust runtime and loopback listener are part of `dam-hopper-server`, not another daemon. The standalone OMP adapter is embedded with `include_str!` and runs inside OMP after explicit installation.
-- Linux runtime qualification first. Preserve Windows builds; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
+- Linux runtime qualification complete. Windows builds preserved; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
 - No Herdr dependency, VT renderer, screen heuristics, task-success automation, workflow mutation, suspend-policy change, telemetry ingestion, or generic adapter/plugin loader.
 
-## End-to-end data flow (Phases 02–03 server and OMP producer implemented; browser consumer pending)
+## End-to-end data flow (Phases 01–05 implemented)
 
 ```text
 installed managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
@@ -28,18 +30,18 @@ installed managed OMP extension -- private loopback WebSocket --> AgentStatusRun
 PTY spawn injects scoped capability                             +-- protected REST snapshot
                                                                +-- authenticated browser WebSocket
                                                                         |
-                                               future app-root per-profile watcher
+                                               app-root per-profile watcher (Phase 04)
                                                                         |
-                                               future status store + notification service
+                                               status store + notification service (Phase 04)
 
 Phase 02 binds the private collector to Linux loopback TCP and keeps it off the
 public API router and tunnel discovery. A persistent local connection lets a
 reporter disconnect invalidate status while its parent shell remains alive;
 it avoids credentials in terminal output and avoids transcript parsing. The
-Phase 03 bundled OMP reporter uses this channel; the browser consumer remains
-planned.
+Phase 03 bundled OMP reporter uses this channel; the Phase 04 browser consumer
+and notification services connect over authenticated WebSocket and REST snapshot.
 
-## Runtime identity and ownership (Phases 02–03 server/adapter; browser ownership planned)
+## Runtime identity and ownership (Phases 01–05 complete)
 
 - Server runtime: random `serverEpoch` per process start; no persisted semantic status.
 - Terminal: existing `{id, incarnation}`. Browser additionally supplies owning `{profileId, connectionGeneration}` locally, never trusts it from a remote server.
@@ -101,7 +103,10 @@ conflicting duplicates. Reports are validated before they update the row.
 
 The `AgentStatusSnapshotV1` DTO defines `{version, serverEpoch, revision, availability, terminals:[{id, incarnation, agentKind, agentSessionId, reporterEpoch, state, reason?, turnId?, attentionRevision, lastOutcome?}]}`. The protected `GET /api/agent-status/v1/snapshot` route is implemented. Plain shells do not gain an Unknown row; `availability` distinguishes ready, unavailable, and platform-unqualified.
 
-Changed, removed, and invalidated payloads are broadcast through the existing authenticated browser WebSocket as `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`. The 256-event stream sends invalidation after receiver lag; clients reconcile from the snapshot. Browser consumption and resnapshot handling remain Phase 04 work.
+Changed, removed, and invalidated payloads are broadcast through the existing
+authenticated browser WebSocket. The 256-event stream sends invalidation after
+receiver lag; Phase 04's completed browser consumer applies pushes and fetches
+a fresh snapshot after invalidation or a revision gap.
 
 Phase 01 implementation: `server/src/agent_status/{types.rs,reducer.rs,tests.rs}`,
 exported through `mod.rs` and `server/src/lib.rs`; public TypeScript DTOs and
@@ -133,9 +138,10 @@ and [Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-repo
 
 ## Implemented standalone OMP adapter and installation (Phase 03)
 
-The adapter is a standalone TypeScript extension embedded in the existing
-`dam-hopper-server` binary. Its qualification target is installed OMP 18.3.5;
-other OMP versions remain unqualified. The installed file is
+The standalone adapter is embedded in the existing `dam-hopper-server` binary.
+Phase 03 implementation evidence used OMP 18.3.5; Phase 05 full Linux
+end-to-end and release qualification passed with OMP 18.4.1. Other OMP
+versions have not received this full qualification. The installed file is
 `extensions/dam-hopper-agent-status.ts`; it has no runtime package dependency.
 
 - The extension is dormant unless both server-injected
@@ -163,9 +169,10 @@ other OMP versions remain unqualified. The installed file is
   historical events. Shutdown closes the socket and clears timers without
   waiting on the network.
 
-The server-host CLI requires an existing absolute OMP agent directory. Run it
-as the OS user whose OMP sessions run inside DamHopper PTYs; the default is
-`$HOME/.omp/agent`, while named/custom profiles require their own explicit path.
+`--agent-dir` is required and must name an existing absolute OMP agent
+directory. Run the CLI as the OS user whose OMP sessions run in DamHopper
+PTYs. For OMP's default profile, pass `$HOME/.omp/agent`; named/custom
+profiles need their explicit agent-directory path.
 
 ```text
 dam-hopper-server integration omp install --agent-dir <absolute-agent-dir>
@@ -187,10 +194,9 @@ server configuration or a running server.
 - Install/update does not alter OMP global configuration. OMP must load
   extensions, and existing OMP sessions must restart to load a new installation.
 
-- Open Phase 03 review findings: a late inactive `agent_end` may emit duplicate
-  `turn-ended` reports; CRLF headers may misclassify managed extensions during
-  updates. Resolve before end-to-end release qualification; see the
-  [Phase 03 plan](../../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md).
+- Resolved Phase 03 review findings: duplicate `turn-ended` reports on inactive turns
+  are guarded in `omp-agent-status.ts`; CRLF headers are normalized across LF and CRLF
+  in `server/src/agent_status/integration.rs`. Both verified in Phase 04/05 qualification.
 
 Implementation and focused tests: `server/src/agent_status/assets/omp-agent-status.ts`,
 `server/src/agent_status/integration.rs`, `server/src/main.rs`,
@@ -198,8 +204,7 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 `server/tests/agent_status_integration.rs`. See the
 [Phase 03 plan](../../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md).
 
-## Planned frontend, reconnect, and notifications (Phase 04)
-
+## Frontend, reconnect, and notifications (Phase 04)
 - One app-root bridge mounted in `packages/ui/src/embed/dam-hopper-app.tsx`, beside the existing notification viewport, watches connected profiles. Not in TerminalPanel or KeepAliveHost.
 - Subscribe before requesting initial snapshot. Buffer at most 256 incoming semantic messages during baseline; install snapshot revision R, discard messages <= R, then apply newer ones. This suppresses historical attention while preserving events genuinely newer than baseline. Overflow/invalid data/gap => resnapshot without replay alerts.
 - Reconcile every 15 seconds while connected and immediately on invalidation/reconnect. Coalesce fetches; reject results from retired connection generation/server epoch. No endpoint retry loop on 404: mark unsupported for that connection.
@@ -215,9 +220,13 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - No report can write another terminal's state, execute input, alter workflow, or authorize host actions.
 - No false completion from silence, reconnect, stale epoch, root shutdown, unsupported outcomes, missed events or crashes.
 - Privacy: generic notification text only; no credentials, questions, commands, transcripts, session file paths or provider errors in reports/logs.
-- Initial qualification includes real Linux OMP lifecycle, packaged server embedding/installer, browser surfaces, reconnect and multi-profile identity. Unit tests alone are insufficient.
+- Phase 05 qualified the Linux x86_64 release path against OMP 18.4.1 across
+  C01–C19, including live OMP/browser behavior and standalone binary installation.
+  See the [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md).
 - Phase 01 recognizes only OMP as an agent kind. Codex behavior, screen reconstruction and universal agent support are not delivered.
 
 ## Unresolved questions
 
-None requiring a product decision. OMP 18.3.5 live event ordering, extension reload cleanup and packaged install paths remain mandatory implementation qualification evidence, not claims established by this design.
+None for the Linux x86_64 release path against OMP 18.4.1. Windows and other
+non-Linux server runtimes, plus other OMP versions, remain unqualified; Linux
+evidence does not establish those platform/version combinations.
