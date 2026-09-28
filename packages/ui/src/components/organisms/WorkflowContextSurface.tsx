@@ -54,14 +54,17 @@ export function WorkflowContextSurface({
     onOpenChange?.(open);
   };
 
+  const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
+  const overviewOptions = effectiveTarget.profileId
+    ? { profileId: effectiveTarget.profileId }
+    : undefined;
   const {
     data: overview,
     isLoading,
     error,
     refetch,
     isUnavailable,
-  } = useWorkflowOverview();
-  const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
+  } = useWorkflowOverview(overviewOptions);
   const actions = useWorkflowSurfaceActions(effectiveTarget);
   const overviewForSurface = isUnavailable ? undefined : overview;
 
