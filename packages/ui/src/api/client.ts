@@ -17,7 +17,9 @@ import type {
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import {
   decodeAgentStatusSnapshot,
+  decodeExtensionStatusReport,
   type AgentStatusSnapshotV1,
+  type ExtensionStatusReport,
 } from "./agent-status-types.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 export { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
@@ -2474,6 +2476,24 @@ export function createApiClient(
         decodeAgentStatusSnapshot(
           await transport.invoke<unknown>("terminal:agentStatusSnapshot"),
         ),
+      getOmpExtensionStatus: async (agentDir?: string) =>
+        decodeExtensionStatusReport(
+          await transport.invoke<unknown>("agentStatus:getOmpExtensionStatus", {
+            agentDir,
+          }),
+        ),
+      installOmpExtension: async (agentDir?: string) =>
+        decodeExtensionStatusReport(
+          await transport.invoke<unknown>("agentStatus:installOmpExtension", {
+            agentDir,
+          }),
+        ),
+      uninstallOmpExtension: async (agentDir?: string) =>
+        decodeExtensionStatusReport(
+          await transport.invoke<unknown>("agentStatus:uninstallOmpExtension", {
+            agentDir,
+          }),
+        ),
     },
     health: {
       get: () => transport.invoke<HealthResponse>("health:get"),
@@ -3239,6 +3259,9 @@ export interface ApiClient {
     listDetailed: () => Promise<SessionInfo[]>;
     getBuffer: (id: string) => Promise<string>;
     agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
+    getOmpExtensionStatus: (agentDir?: string) => Promise<ExtensionStatusReport>;
+    installOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
+    uninstallOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
   };
   health: {
     get: () => Promise<HealthResponse>;

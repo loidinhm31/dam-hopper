@@ -71,6 +71,9 @@ pub enum AppError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+
+    #[error(transparent)]
+    AgentStatusIntegration(#[from] crate::agent_status::IntegrationError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -111,6 +114,15 @@ impl AppError {
             },
             AppError::Tunnel(e) => tunnel_error_status(e),
             AppError::BrowserDebug(e) => e.status_code(),
+            AppError::AgentStatusIntegration(e) => match e {
+                crate::agent_status::IntegrationError::NonAbsolutePath(_)
+                | crate::agent_status::IntegrationError::InvalidAgentDirectory(_)
+                | crate::agent_status::IntegrationError::SymlinkNotAllowed(_)
+                | crate::agent_status::IntegrationError::NotRegularFile(_) => 400,
+                crate::agent_status::IntegrationError::RefusingOverwriteModified(_)
+                | crate::agent_status::IntegrationError::RefusingDeleteModified(_) => 409,
+                crate::agent_status::IntegrationError::Io(_) => 500,
+            },
             _ => 500,
         }
     }
@@ -130,6 +142,16 @@ impl AppError {
             AppError::BrowserDebug(BrowserDebugError::IncarnationMismatch) => {
                 Some("TERMINAL_INCARNATION_MISMATCH")
             }
+            AppError::AgentStatusIntegration(e) => match e {
+                crate::agent_status::IntegrationError::RefusingOverwriteModified(_)
+                | crate::agent_status::IntegrationError::RefusingDeleteModified(_) => {
+                    Some("EXTENSION_LOCALLY_MODIFIED")
+                }
+                crate::agent_status::IntegrationError::SymlinkNotAllowed(_) => {
+                    Some("SYMLINK_NOT_ALLOWED")
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
