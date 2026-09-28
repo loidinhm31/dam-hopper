@@ -6,6 +6,7 @@ import { getApi, getConnectionSnapshot } from "./connections.js";
 import type { ConnectionRef, ProfileId } from "./ownership.js";
 import {
   profileQueryKey,
+  profileQueryPrefix,
   profileWorkflowOverviewQueryKey,
 } from "./query-client.js";
 import {
@@ -110,9 +111,32 @@ export function invalidateWorkflowQueries(
     typeof ownerOrOptions === "object" && ownerOrOptions !== null && "generation" in ownerOrOptions
       ? (ownerOrOptions as ConnectionRef)
       : resolveWorkflowOwner(ownerOrOptions as { owner?: ConnectionRef; profileId?: ProfileId } | undefined);
-  return queryClient.invalidateQueries({
-    queryKey: owner ? profileQueryKey(owner, "workflow") : workflowQueryKeys.all,
-  });
+  const profileId =
+    owner?.profileId ??
+    (typeof ownerOrOptions === "object" && ownerOrOptions !== null && "profileId" in ownerOrOptions
+      ? ownerOrOptions.profileId
+      : undefined);
+
+  const promises: Promise<void>[] = [
+    queryClient.invalidateQueries({ queryKey: workflowQueryKeys.all }),
+  ];
+
+  if (owner) {
+    promises.push(
+      queryClient.invalidateQueries({
+        queryKey: profileQueryKey(owner, "workflow"),
+      }),
+    );
+  }
+  if (profileId) {
+    promises.push(
+      queryClient.invalidateQueries({
+        queryKey: profileQueryPrefix(profileId),
+      }),
+    );
+  }
+
+  return Promise.all(promises).then(() => undefined);
 }
 // ── Query Hooks ─────────────────────────────────────────────────────────────
 

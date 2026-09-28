@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiRequestError, api } from "@/api/client.js";
+import { ApiRequestError, api, type ApiClient } from "@/api/client.js";
+import * as connections from "@/api/connections.js";
 import type { OverviewDto } from "@/api/workflow-dto-types.js";
 import { WorkflowContextSurface } from "./WorkflowContextSurface.js";
 
@@ -415,5 +416,243 @@ describe("WorkflowContextSurface", () => {
         updatedAt: "2026-09-01T10:00:00.000Z",
       }),
     );
+  });
+
+  it("reactively displays newly created plan without requiring page refresh", async () => {
+    let currentOverview = mockOverview;
+    vi.spyOn(api.workflow, "overview").mockImplementation(async () => currentOverview);
+    vi.spyOn(api.workflow, "createItem").mockImplementation(async (req) => {
+      const newItem = {
+        id: "plan-created-2",
+        target: req.target,
+        kind: req.kind,
+        title: req.title,
+        status: req.status || "backlog",
+        sortOrder: 1,
+        source: "manual" as const,
+        createdAt: "2026-09-01T12:40:00.000Z",
+        updatedAt: "2026-09-01T12:40:00.000Z",
+      };
+      currentOverview = {
+        ...currentOverview,
+        plans: [
+          ...currentOverview.plans,
+          {
+            item: newItem,
+            notes: [],
+            activeSessions: [],
+            children: [],
+          },
+        ],
+      };
+      return {
+        resource: newItem,
+        replayed: false,
+        eventId: "ev-create-new",
+      };
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-test" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Open quick capture via "+ Plan" button in deck
+    const addPlanBtn = Array.from(container.querySelectorAll("#workflow-context-deck button")).find(
+      (b) => b.textContent?.includes("Plan"),
+    ) as HTMLButtonElement;
+    expect(addPlanBtn).not.toBeNull();
+    await act(async () => {
+      addPlanBtn.click();
+    });
+
+    const titleInput = container.querySelector("#wf-cap-title") as HTMLInputElement;
+    expect(titleInput).not.toBeNull();
+    act(() => {
+      const titleSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      titleSetter?.call(titleInput, "New Reactive Plan");
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const submitBtn = container.querySelector('form[aria-label="Create workflow item"] button[type="submit"]') as HTMLButtonElement;
+    expect(submitBtn).not.toBeNull();
+    await act(async () => {
+      submitBtn.click();
+    });
+
+    // The new plan must appear immediately without refreshing the page
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("New Reactive Plan");
+    });
+  });
+
+  it("reactively removes deleted plan from UI without requiring page refresh", async () => {
+    let currentOverview = mockOverview;
+    vi.spyOn(api.workflow, "overview").mockImplementation(async () => currentOverview);
+    vi.spyOn(api.workflow, "deleteItem").mockImplementation(async () => {
+      currentOverview = {
+        ...currentOverview,
+        plans: [],
+      };
+      return {
+        resource: { id: "plan-1", deletedAt: "2026-09-01T12:50:00.000Z" },
+        replayed: false,
+        eventId: "ev-delete-reactive",
+      };
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-test" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Select plan row to show action bar
+    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    await act(async () => {
+      planRow?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Selected: Workflow Context UI");
+    });
+
+    const deleteBtn = container.querySelector('button[title="Delete item"]') as HTMLButtonElement;
+    expect(deleteBtn).not.toBeNull();
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    // The plan must disappear immediately from the UI without refreshing the page
+    await vi.waitFor(() => {
+      expect(container.textContent).not.toContain("Workflow Context UI");
+    });
+  });
+
+  it("reactively updates overview when profile-scoped connection snapshot is active", async () => {
+    let currentOverview = mockOverview;
+    const mockProfileApi = {
+      workflow: {
+        overview: vi.fn(async () => currentOverview),
+        createItem: vi.fn(async (req) => {
+          const newItem = {
+            id: "plan-profile-added",
+            target: req.target,
+            kind: req.kind,
+            title: req.title,
+            status: req.status || "backlog",
+            sortOrder: 2,
+            source: "manual" as const,
+            createdAt: "2026-09-01T13:00:00.000Z",
+            updatedAt: "2026-09-01T13:00:00.000Z",
+          };
+          currentOverview = {
+            ...currentOverview,
+            plans: [
+              ...currentOverview.plans,
+              { item: newItem, notes: [], activeSessions: [], children: [] },
+            ],
+          };
+          return { resource: newItem, replayed: false, eventId: "ev-prof-create" };
+        }),
+      },
+    };
+
+    vi.spyOn(connections, "getConnectionSnapshot").mockImplementation((pId) => {
+      if (pId === "prof-scoped") {
+        return {
+          owner: { profileId: "prof-scoped", generation: 1 },
+          status: "connected",
+          baseUrl: "http://localhost:4801",
+          authType: "none",
+          serverName: "Test Scoped Server",
+          hasMfaActive: false,
+        } as unknown as connections.ConnectionSnapshot;
+      }
+      return null;
+    });
+
+    vi.spyOn(connections, "getApi").mockImplementation((owner) => {
+      if (owner.profileId === "prof-scoped") {
+        return mockProfileApi as unknown as ApiClient;
+      }
+      return api;
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-scoped" }} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Workflow Context UI");
+    });
+    expect(mockProfileApi.workflow.overview).toHaveBeenCalled();
+
+    // Open deck
+    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    await act(async () => {
+      ribbonTrigger?.click();
+    });
+
+    // Open quick capture via "+ Plan" button in deck
+    const addPlanBtn = Array.from(container.querySelectorAll("#workflow-context-deck button")).find(
+      (b) => b.textContent?.includes("Plan"),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      addPlanBtn.click();
+    });
+
+    const titleInput = container.querySelector("#wf-cap-title") as HTMLInputElement;
+    act(() => {
+      const titleSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      titleSetter?.call(titleInput, "Scoped Profile Reactive Plan");
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const submitBtn = container.querySelector('form[aria-label="Create workflow item"] button[type="submit"]') as HTMLButtonElement;
+    await act(async () => {
+      submitBtn.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Scoped Profile Reactive Plan");
+    });
   });
 });
