@@ -16,13 +16,27 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalFontSize).toBe(13);
     expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
-    expect(ui.terminalCodexNotificationsEnabled).toBe(false);
-    expect(ui.terminalAutoSwitchProjectEnabled).toBe(true);
-    expect(ui.terminalCodexNotificationToastEnabled).toBe(true);
-    expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(true);
-    expect(ui.terminalCodexNotificationSoundEnabled).toBe(true);
-    expect(ui.terminalCodexNotificationSoundVolume).toBe(100);
-    expect(ui.terminalCodexNotificationSoundPattern).toBe("default");
+    expect(ui.terminalAgentNotifications).toEqual({
+      version: 1,
+      agents: {
+        codex: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+      },
+    });
     expect(ui.explorerLanguageFilter).toBe("all");
     expect(ui.mobileCustomKeyboardEnabled).toBe(true);
     expect(ui.mobileCustomKeyboardFontSize).toBe(11);
@@ -53,12 +67,27 @@ describe("withUiConfigDefaults", () => {
       fleetTerminalShortcut: "ctrl+shift+m",
       terminalFontSizeIncreaseShortcut: "ctrl+alt+shift+equal",
       terminalFontSizeDecreaseShortcut: "ctrl+alt+minus",
-      terminalCodexNotificationsEnabled: true,
-      terminalCodexNotificationToastEnabled: false,
-      terminalCodexBrowserNotificationsEnabled: false,
-      terminalCodexNotificationSoundEnabled: false,
-      terminalCodexNotificationSoundVolume: 45,
-      terminalCodexNotificationSoundPattern: "urgent",
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: true,
+            toast: false,
+            browser: false,
+            sound: false,
+            volume: 45,
+            pattern: "urgent",
+          },
+          omp: {
+            enabled: true,
+            toast: true,
+            browser: false,
+            sound: true,
+            volume: 60,
+            pattern: "soft",
+          },
+        },
+      },
       explorerLanguageFilter: "java",
       mobileCustomKeyboardEnabled: false,
       mobileCustomKeyboardFontSize: 14,
@@ -83,12 +112,22 @@ describe("withUiConfigDefaults", () => {
     expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
     expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
-    expect(ui.terminalCodexNotificationsEnabled).toBe(true);
-    expect(ui.terminalCodexNotificationToastEnabled).toBe(false);
-    expect(ui.terminalCodexBrowserNotificationsEnabled).toBe(false);
-    expect(ui.terminalCodexNotificationSoundEnabled).toBe(false);
-    expect(ui.terminalCodexNotificationSoundVolume).toBe(45);
-    expect(ui.terminalCodexNotificationSoundPattern).toBe("urgent");
+    expect(ui.terminalAgentNotifications?.agents.codex).toEqual({
+      enabled: true,
+      toast: false,
+      browser: false,
+      sound: false,
+      volume: 45,
+      pattern: "urgent",
+    });
+    expect(ui.terminalAgentNotifications?.agents.omp).toEqual({
+      enabled: true,
+      toast: true,
+      browser: false,
+      sound: true,
+      volume: 60,
+      pattern: "soft",
+    });
     expect(ui.explorerLanguageFilter).toBe("java");
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
@@ -105,12 +144,120 @@ describe("withUiConfigDefaults", () => {
     ).toBeNull();
   });
 
-  it("falls back to the legacy terminal agent toggle for codex notifications", () => {
+  it("migrates legacy Codex fields and alias, then removes them from normalized config", () => {
     const ui = withUiConfigDefaults({
       terminalAgentNotificationsEnabled: true,
-    });
+      terminalCodexNotificationToastEnabled: false,
+      terminalCodexBrowserNotificationsEnabled: false,
+      terminalCodexNotificationSoundEnabled: false,
+      terminalCodexNotificationSoundVolume: 45,
+      terminalCodexNotificationSoundPattern: "urgent",
+    } as never);
 
-    expect(ui.terminalCodexNotificationsEnabled).toBe(true);
+    expect(ui.terminalAgentNotifications?.agents.codex).toEqual({
+      enabled: true,
+      toast: false,
+      browser: false,
+      sound: false,
+      volume: 45,
+      pattern: "urgent",
+    });
+    expect(ui.terminalAgentNotifications?.agents.omp.enabled).toBe(false);
+    expect(
+      Object.keys(ui).filter(
+        (key) =>
+          key.startsWith("terminalCodex") ||
+          key === "terminalAgentNotificationsEnabled",
+      ),
+    ).toEqual([]);
+  });
+
+  it("prefers a present Codex scalar master over the older toggle", () => {
+    const ui = withUiConfigDefaults({
+      terminalCodexNotificationsEnabled: false,
+      terminalAgentNotificationsEnabled: true,
+    } as never);
+    expect(ui.terminalAgentNotifications?.agents.codex.enabled).toBe(false);
+  });
+
+  it("lets explicit canonical values win over stale legacy fields, including partial policies", () => {
+    const ui = withUiConfigDefaults({
+      terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationToastEnabled: false,
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: { enabled: false, toast: true },
+          omp: { enabled: true },
+        },
+      },
+    } as never);
+    expect(ui.terminalAgentNotifications?.agents.codex).toEqual({
+      enabled: false,
+      toast: true,
+      browser: true,
+      sound: true,
+      volume: 100,
+      pattern: "default",
+    });
+    expect(ui.terminalAgentNotifications?.agents.omp).toEqual({
+      enabled: true,
+      toast: true,
+      browser: true,
+      sound: true,
+      volume: 100,
+      pattern: "default",
+    });
+  });
+  it("does not downgrade an unsupported canonical version to legacy preferences", () => {
+    const ui = withUiConfigDefaults({
+      systemFontSize: 19,
+      terminalCodexNotificationsEnabled: true,
+      terminalCodexNotificationSoundVolume: 37,
+      terminalAgentNotifications: {
+        version: 2,
+        agents: {
+          codex: { enabled: true, volume: 37 },
+          omp: { enabled: true },
+        },
+      },
+    } as never);
+
+    expect(ui.systemFontSize).toBe(19);
+    expect(ui.terminalAgentNotifications.version).toBe(2);
+    expect(ui.terminalAgentNotifications.agents.codex.enabled).toBe(true);
+    expect(ui.terminalAgentNotifications.agents.codex.volume).toBe(37);
+    expect(ui.terminalAgentNotifications.agents.omp.enabled).toBe(true);
+    expect("terminalCodexNotificationsEnabled" in ui).toBe(false);
+  });
+
+  it("bounds malformed partial policies without enabling OMP or reviving legacy values", () => {
+    const ui = withUiConfigDefaults({
+      terminalCodexNotificationsEnabled: true,
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: { volume: 150, pattern: "unrecognized", toast: false },
+          omp: { enabled: "true", volume: -8, sound: false },
+        },
+      },
+    } as never);
+    expect(ui.terminalAgentNotifications?.agents.codex).toEqual({
+      enabled: false,
+      toast: false,
+      browser: true,
+      sound: true,
+      volume: 100,
+      pattern: "default",
+    });
+    expect(ui.terminalAgentNotifications?.agents.omp).toEqual({
+      enabled: false,
+      toast: true,
+      browser: true,
+      sound: false,
+      volume: 0,
+      pattern: "default",
+    });
   });
 
   it("normalizes missing and unknown language filters to all", () => {

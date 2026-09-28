@@ -26,10 +26,7 @@ vi.mock("@/lib/terminal-notification-sound.js", () => ({
   playTerminalNotificationSound,
 }));
 
-import {
-  TerminalAgentNotificationSettings,
-  type TerminalAgentNotificationSettingsPatch,
-} from "./TerminalAgentNotificationSettings.js";
+import { TerminalAgentNotificationSettings } from "./TerminalAgentNotificationSettings.js";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -39,19 +36,33 @@ let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
 const defaultProps = {
-  enabled: true,
-  toastEnabled: true,
-  browserEnabled: true,
-  soundEnabled: true,
-  soundPattern: "default" as const,
-  soundVolume: 100,
+  notifications: {
+    version: 1 as const,
+    agents: {
+      codex: {
+        enabled: true,
+        toast: true,
+        browser: true,
+        sound: true,
+        pattern: "default" as const,
+        volume: 100,
+      },
+      omp: {
+        enabled: false,
+        toast: true,
+        browser: true,
+        sound: true,
+        pattern: "default" as const,
+        volume: 100,
+      },
+    },
+  },
 };
 
 async function mount(
   props: Partial<ComponentProps<typeof TerminalAgentNotificationSettings>> = {},
 ): Promise<ReturnType<typeof vi.fn>> {
-  const onSave =
-    vi.fn<(partial: TerminalAgentNotificationSettingsPatch) => void>();
+  const onSave = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -131,17 +142,29 @@ describe("TerminalAgentNotificationSettings", () => {
     }
 
     expect(onSave.mock.calls).toEqual([
-      [{ terminalCodexNotificationToastEnabled: false }],
-      [{ terminalCodexBrowserNotificationsEnabled: false }],
-      [{ terminalCodexNotificationSoundEnabled: false }],
-      [{ terminalCodexNotificationSoundPattern: "urgent" }],
-      [{ terminalCodexNotificationSoundVolume: 45 }],
+      ["codex", { toast: false }],
+      ["codex", { browser: false }],
+      ["codex", { sound: false }],
+      ["codex", { pattern: "urgent" }],
+      ["codex", { volume: 45 }],
     ]);
     expect(requestBrowserNotificationPermission).not.toHaveBeenCalled();
   });
 
   it("previews the current in-app sound without requesting browser permission", async () => {
-    await mount({ soundPattern: "two-tone", soundVolume: 45 });
+    await mount({
+      notifications: {
+        ...defaultProps.notifications,
+        agents: {
+          ...defaultProps.notifications.agents,
+          codex: {
+            ...defaultProps.notifications.agents.codex,
+            pattern: "two-tone",
+            volume: 45,
+          },
+        },
+      },
+    });
     const playButton = [
       ...document.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent === "Play sound");
@@ -156,11 +179,20 @@ describe("TerminalAgentNotificationSettings", () => {
 
   it("disables child controls while preserving their rendered values when master is off", async () => {
     await mount({
-      enabled: false,
-      toastEnabled: false,
-      browserEnabled: false,
-      soundPattern: "urgent",
-      soundVolume: 45,
+      notifications: {
+        ...defaultProps.notifications,
+        agents: {
+          ...defaultProps.notifications.agents,
+          codex: {
+            ...defaultProps.notifications.agents.codex,
+            enabled: false,
+            toast: false,
+            browser: false,
+            pattern: "urgent",
+            volume: 45,
+          },
+        },
+      },
     });
 
     expect(
@@ -197,5 +229,61 @@ describe("TerminalAgentNotificationSettings", () => {
         (button) => button.textContent === "Request permission",
       )?.disabled,
     ).toBe(true);
+  });
+  it("keeps OMP disabled by default and saves OMP controls without changing Codex", async () => {
+    const onSave = await mount();
+    const ompToast = document.querySelector<HTMLButtonElement>(
+      '[aria-label="OMP Enable in-app toast"]',
+    );
+    expect(ompToast?.disabled).toBe(true);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Enable OMP notifications"]',
+        )
+        ?.click(),
+    );
+    expect(onSave).toHaveBeenCalledWith("omp", { enabled: true });
+
+    await act(async () => {
+      root?.render(
+        <TerminalAgentNotificationSettings
+          notifications={{
+            ...defaultProps.notifications,
+            agents: {
+              ...defaultProps.notifications.agents,
+              omp: { ...defaultProps.notifications.agents.omp, enabled: true },
+            },
+          }}
+          onSave={onSave}
+        />,
+      );
+    });
+    await act(async () => ompToast?.click());
+    expect(onSave).toHaveBeenCalledWith("omp", { toast: false });
+    expect(
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Enable in-app toast"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("renders an unsupported version notice and disables editing when version !== 1", async () => {
+    const onSave = await mount({
+      notifications: {
+        version: 2,
+        agents: defaultProps.notifications.agents,
+      },
+    });
+    expect(container?.textContent).toContain(
+      "Unsupported notification preferences version (2)",
+    );
+    expect(
+      container?.querySelector('[aria-label="Enable Codex notifications"]'),
+    ).toBeNull();
+    expect(
+      container?.querySelector('[aria-label="Enable OMP notifications"]'),
+    ).toBeNull();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

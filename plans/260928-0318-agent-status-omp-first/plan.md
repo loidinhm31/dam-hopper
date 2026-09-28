@@ -41,7 +41,7 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 | 1 | [Semantic contract and reducer](./phase-01-semantic-contract-and-reducer.md) | Complete (2026-09-28) | 100% | None |
 | 2 | [Reporter transport and PTY lifecycle](./phase-02-reporter-transport-and-pty-lifecycle.md) | DONE (2026-09-28) | 100% | 1 |
 | 3 | [Bundled OMP adapter and installer](./phase-03-omp-adapter-and-installer.md) | DONE (2026-09-28) | 100% | 1–2 |
-| 4 | [Profile-safe badges and notifications](./phase-04-profile-safe-ui-and-notifications.md) | Pending | 0% | 1–3 |
+| 4 | [Profile-safe badges and notifications](./phase-04-profile-safe-ui-and-notifications.md) | DONE (2026-09-28) | 100% | 1–3 |
 | 5 | [End-to-end and release qualification](./phase-05-end-to-end-qualification.md) | Pending | 0% | 1–4 |
 
 ## Completion gates
@@ -71,7 +71,7 @@ Deploy matched server/UI; install adapter as OMP's OS user; restart existing OMP
 - Unified agent preferences; preserve Codex values by one-way migration.
 
 ### Action Items
-- Phase 01–03 completed and reviewed (2026-09-28); proceed to Phase 04. Overall plan remains in progress pending Phases 04–05.
+- Phase 01–04 completed and reviewed (2026-09-28); proceed to Phase 05. Overall plan remains in progress pending Phase 05.
 
 ## Unresolved questions
 

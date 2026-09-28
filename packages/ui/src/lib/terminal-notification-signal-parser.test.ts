@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseBelNotification,
   parseOsc777Notification,
   parseOsc99Notification,
   parseOsc9Notification,
@@ -15,19 +14,6 @@ const context = {
 };
 
 describe("terminal notification signal parser", () => {
-  it("creates generic BEL notifications", () => {
-    expect(parseBelNotification(context)).toEqual({
-      source: "bel",
-      sessionId: "s1",
-      project: "web",
-      agent: "codex",
-      title: "Terminal needs attention",
-      body: undefined,
-      status: "needs-attention",
-      receivedAt: 123,
-    });
-  });
-
   it("parses OSC 9 title and body payloads", () => {
     expect(
       parseOsc9Notification("9;Build done;Review terminal", context),

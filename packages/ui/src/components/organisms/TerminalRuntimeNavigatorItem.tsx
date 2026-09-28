@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { AgentStatusBadge } from "@/components/atoms/AgentStatusBadge.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
   openTerminalDiagnosticsContextMenu,
@@ -182,6 +183,12 @@ function RuntimeSessionLeaf({
           <TerminalActivityIndicator
             sessionId={session.sessionId}
             alive={session.alive}
+            profileId={session.terminalRef?.profileId}
+            terminalRef={session.terminalRef}
+          />
+          <AgentStatusBadge
+            terminalRef={session.terminalRef}
+            incarnation={session.incarnation}
           />
           <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
           {session.openTitle ? (

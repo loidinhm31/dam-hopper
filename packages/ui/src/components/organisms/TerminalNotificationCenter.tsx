@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Bell, BellOff, CheckCheck, Trash2 } from "lucide-react";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
+import type { TerminalAgentNotification } from "@/lib/terminal-notification-signal-parser.js";
 import {
   selectUnreadTerminalNotificationCount,
   useTerminalNotificationsStore,
@@ -59,9 +60,15 @@ export function TerminalNotificationCenter() {
     };
   }, [open]);
 
-  const selectNotification = (id: string, sessionId: string) => {
+  const selectNotification = (id: string, event: TerminalAgentNotification) => {
     markRead(id);
-    dispatchTerminalNotificationSelection(sessionId);
+    dispatchTerminalNotificationSelection(
+      event.sessionId,
+      window,
+      event.profileId,
+      event.terminalRef,
+      event.terminalInstanceRef,
+    );
     setOpen(false);
   };
 
@@ -145,7 +152,7 @@ export function TerminalNotificationCenter() {
                 No notifications yet
               </p>
               <p className="text-[10px] text-[var(--color-text-muted)]">
-                Codex terminal updates will appear here.
+                Agent terminal updates will appear here.
               </p>
             </div>
           ) : (

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
 use crate::utils::atomic_write;
+use serde::de::Error as _;
 use serde_json::Value;
 
 use super::schema::{GlobalConfig, KnownWorkspace};
@@ -45,7 +46,32 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
         }
     };
 
-    match toml::from_str::<GlobalConfig>(&content) {
+    let parsed = toml::from_str::<toml::Value>(&content);
+    if parsed.as_ref().is_ok_and(|value| {
+        value
+            .get("ui")
+            .and_then(|ui| {
+                ui.get("terminal_agent_notifications")
+                    .or_else(|| ui.get("terminalAgentNotifications"))
+            })
+            .and_then(|canonical| canonical.get("version"))
+            .is_some_and(|version| version.as_integer() != Some(1))
+    }) {
+        return Err(AppError::Config(
+            "Unsupported terminal agent notifications version".to_string(),
+        ));
+    }
+    let parsed = parsed.and_then(|mut value| {
+        if let Some(ui) = value.get_mut("ui") {
+            let mut json =
+                serde_json::to_value(&*ui).map_err(|e| toml::de::Error::custom(e.to_string()))?;
+            super::schema::migrate_terminal_agent_notifications(&mut json);
+            *ui =
+                json_to_toml(&json).ok_or_else(|| toml::de::Error::custom("invalid UI config"))?;
+        }
+        value.try_into()
+    });
+    match parsed {
         Ok(cfg) => Ok(Some(cfg)),
         Err(e) => {
             // Matches Node.js behavior: corrupted global config is warned and ignored.
@@ -56,6 +82,15 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
 }
 
 pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), AppError> {
+    if config
+        .ui
+        .as_ref()
+        .is_some_and(|ui| ui.terminal_agent_notifications.version != 1)
+    {
+        return Err(AppError::Config(
+            "Unsupported terminal agent notifications version".to_string(),
+        ));
+    }
     let toml_value = serialize_global_config_for_toml(config)?;
     let content = toml::to_string_pretty(&toml_value)
         .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
@@ -146,15 +181,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "hostResourcePinnedMount" => "host_resource_pinned_mount",
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
             "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
-            "terminalCodexNotificationsEnabled" => "terminal_codex_notifications_enabled",
-            "terminalAgentNotificationsEnabled" => "terminal_codex_notifications_enabled",
-            "terminalCodexNotificationToastEnabled" => "terminal_codex_notification_toast_enabled",
-            "terminalCodexBrowserNotificationsEnabled" => {
-                "terminal_codex_browser_notifications_enabled"
-            }
-            "terminalCodexNotificationSoundEnabled" => "terminal_codex_notification_sound_enabled",
-            "terminalCodexNotificationSoundVolume" => "terminal_codex_notification_sound_volume",
-            "terminalCodexNotificationSoundPattern" => "terminal_codex_notification_sound_pattern",
+            "terminalAgentNotifications" => "terminal_agent_notifications",
             "explorerShowHidden" => "explorer_show_hidden",
             "explorerLanguageFilter" => "explorer_language_filter",
             "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",

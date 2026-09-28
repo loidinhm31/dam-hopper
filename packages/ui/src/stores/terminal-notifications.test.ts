@@ -42,6 +42,27 @@ describe("useTerminalNotificationsStore", () => {
     expect(selectUnreadTerminalNotificationCount(state)).toBe(2);
   });
 
+  it("deduplicates semantic history and toast per profile without merging servers", () => {
+    const store = useTerminalNotificationsStore.getState();
+    const first = {
+      ...notification(100),
+      source: "agent-status" as const,
+      profileId: "one",
+      semanticEventId: "epoch:terminal:revision",
+    };
+    const id = store.addNotification(first);
+    store.markRead(id);
+    expect(store.addNotification({ ...first, receivedAt: 200 })).toBe(id);
+    const other = store.addNotification({ ...first, profileId: "two" });
+    const state = useTerminalNotificationsStore.getState();
+    expect(other).not.toBe(id);
+    expect(state.notifications).toHaveLength(2);
+    expect(state.notifications.find((entry) => entry.id === id)?.read).toBe(
+      true,
+    );
+    expect(state.toasts).toEqual([other, id]);
+  });
+
   it("keeps history and unread state when toast delivery is disabled", () => {
     const id = useTerminalNotificationsStore
       .getState()

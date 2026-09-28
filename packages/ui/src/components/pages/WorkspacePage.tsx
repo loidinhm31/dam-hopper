@@ -52,7 +52,12 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
-import { projectKey, parseProjectKey, parseTerminalKey, type TerminalInstanceRef } from "@/api/ownership.js";
+import {
+  projectKey,
+  parseProjectKey,
+  parseTerminalKey,
+  type TerminalInstanceRef,
+} from "@/api/ownership.js";
 import { getApi, captureConnection } from "@/api/connections.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
@@ -354,8 +359,12 @@ export function resolveOpenTunnelInBrowserReveal(
 
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { activeProject, activeProjectRevision, setActiveProject, selectedProject } =
-    useWorkspaceStore();
+  const {
+    activeProject,
+    activeProjectRevision,
+    setActiveProject,
+    selectedProject,
+  } = useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
@@ -376,7 +385,11 @@ export default function WorkspacePage() {
   const [terminalDiagnosticsError, setTerminalDiagnosticsError] = useState<
     string | null
   >(null);
-  const exportDiagnostics = useExportDiagnostics(terminalDiagnosticsMenuTarget ? parseTerminalKey(terminalDiagnosticsMenuTarget.sessionId)?.profileId : undefined);
+  const exportDiagnostics = useExportDiagnostics(
+    terminalDiagnosticsMenuTarget
+      ? parseTerminalKey(terminalDiagnosticsMenuTarget.sessionId)?.profileId
+      : undefined,
+  );
   const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
     loadTerminalFilePanelOpen,
   );
@@ -395,8 +408,11 @@ export default function WorkspacePage() {
   const browserDebugHost = useBrowserDebugHost();
   const { allProjects } = useAggregatedProjects();
   const activeProfile = useServerProfile();
-  const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
-  const selectedProjectId = selectedProject ? projectKey(selectedProject) : null;
+  const activeProfileId =
+    selectedProject?.profileId ?? activeProfile?.id ?? null;
+  const selectedProjectId = selectedProject
+    ? projectKey(selectedProject)
+    : null;
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -487,7 +503,12 @@ export default function WorkspacePage() {
 
   // Validate persisted project still exists in the current workspace.
   useEffect(() => {
-    if (isProjectsSuccess && !isProjectsFetching && projects.length > 0 && activeProject) {
+    if (
+      isProjectsSuccess &&
+      !isProjectsFetching &&
+      projects.length > 0 &&
+      activeProject
+    ) {
       if (
         selectedProject?.profileId &&
         activeProfileId &&
@@ -536,6 +557,8 @@ export default function WorkspacePage() {
     selectedId,
     sessionMap,
   } = derived;
+  const notificationSessionMapRef = useRef(sessionMap);
+  notificationSessionMapRef.current = sessionMap;
   const hasTraditionalTerminalProjects = useMemo(
     () =>
       buildTraditionalTerminalProjectGroups(mountedSessions, terminalTabs)
@@ -671,8 +694,12 @@ export default function WorkspacePage() {
         browserDebug.target?.revision !== snapshotRevision ||
         freshTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
       ) {
-        await boundApi.browserDebug.deleteArtifact(artifact.artifactId).catch(() => {});
-        throw new Error("Browser target or terminal candidate changed during artifact creation");
+        await boundApi.browserDebug
+          .deleteArtifact(artifact.artifactId)
+          .catch(() => {});
+        throw new Error(
+          "Browser target or terminal candidate changed during artifact creation",
+        );
       }
 
       try {
@@ -693,7 +720,9 @@ export default function WorkspacePage() {
           browserDebug.target?.revision !== snapshotRevision ||
           latestTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
         ) {
-          throw new Error("Browser target or terminal candidate changed during upload");
+          throw new Error(
+            "Browser target or terminal candidate changed during upload",
+          );
         }
 
         browserDebug.stopCapture();
@@ -714,7 +743,9 @@ export default function WorkspacePage() {
         profileId: activeProfileId ?? "default",
         generation: 0,
       };
-      await getApi(owner).browserDebug.deleteArtifact(artifactId).catch(() => {});
+      await getApi(owner)
+        .browserDebug.deleteArtifact(artifactId)
+        .catch(() => {});
     },
     [activeProfileId, browserDebug.target?.owner],
   );
@@ -729,7 +760,8 @@ export default function WorkspacePage() {
       );
       if (
         !isBrowserTerminalTargetReady(currentTarget, browserDebug.target) ||
-        artifact.artifact.terminalId !== parseTerminalKey(target.sessionId)?.id ||
+        artifact.artifact.terminalId !==
+          parseTerminalKey(target.sessionId)?.id ||
         (currentTarget.incarnation !== undefined &&
           artifact.artifact.terminalIncarnation !== currentTarget.incarnation)
       ) {
@@ -819,7 +851,10 @@ export default function WorkspacePage() {
       if (!terminalRef) throw new Error("Terminal owner unavailable");
       const owner = captureConnection(terminalRef.profileId);
       await getApi(owner).terminal.rename(terminalRef.id, value);
-      await queryClient.invalidateQueries({ queryKey: ["profile", owner.profileId], predicate: (query) => query.queryKey.includes("terminal-sessions") });
+      await queryClient.invalidateQueries({
+        queryKey: ["profile", owner.profileId],
+        predicate: (query) => query.queryKey.includes("terminal-sessions"),
+      });
       setTerminalRenameState(null);
     } catch (error) {
       setTerminalRenameState((state) =>
@@ -1220,7 +1255,8 @@ export default function WorkspacePage() {
       if (!targetProject) return;
       if (options?.closeSearch) closeSearch();
       if (match.project && match.project !== projectName) {
-        if (projectTarget?.target.profileId) setActiveProject(match.project, projectTarget.target.profileId);
+        if (projectTarget?.target.profileId)
+          setActiveProject(match.project, projectTarget.target.profileId);
       }
       const matchTarget = match.project
         ? resolveSearchMatchTarget(
@@ -1269,52 +1305,79 @@ export default function WorkspacePage() {
 
   useEffect(
     () =>
-      subscribeToTerminalNotificationSelection((sessionId) => {
-        navigateToTerminalNotification({
-          sessionId,
-          mountedSessionIds: mountedSessions.map(
-            (session) => session.sessionId,
-          ),
-          alive: sessionMap.get(sessionId)?.alive,
-          registered: registeredTerminalIds.has(sessionId),
-          focusWindow: () => window.focus(),
-          revealTerminal: () => {
-            if (isCompactWorkspace) {
-              setRequestedCompactSurface("terminal");
-              return;
-            }
+      subscribeToTerminalNotificationSelection(
+        (sessionId, profileId, terminalRef, terminalInstanceRef) => {
+          const currentRef = parseTerminalKey(sessionId);
+          if (profileId && currentRef?.profileId !== profileId) return;
+          if (
+            terminalRef &&
+            (currentRef?.profileId !== terminalRef.profileId ||
+              currentRef.id !== terminalRef.id)
+          )
+            return;
+          if (
+            terminalInstanceRef &&
+            (currentRef?.profileId !== terminalInstanceRef.profileId ||
+              currentRef.id !== terminalInstanceRef.id ||
+              notificationSessionMapRef.current.get(sessionId)?.incarnation !==
+                terminalInstanceRef.incarnation)
+          )
+            return;
+          navigateToTerminalNotification({
+            sessionId,
+            mountedSessionIds: mountedSessions.map(
+              (session) => session.sessionId,
+            ),
+            alive: sessionMap.get(sessionId)?.alive,
+            registered: registeredTerminalIds.has(sessionId),
+            focusWindow: () => window.focus(),
+            revealTerminal: () => {
+              if (isCompactWorkspace) {
+                setRequestedCompactSurface("terminal");
+                return;
+              }
 
-            if (workspaceMode === "ide") {
-              terminalNotificationRevealNonceRef.current += 1;
-              setIdeBottomToolRequest({
-                nonce: terminalNotificationRevealNonceRef.current,
-                toolId: "terminal",
-              });
-            }
-          },
-          selectSession: handleSelectTab,
-          focusTerminal: (selectedSessionId) => {
-            const suppressNativeFocus =
-              isAndroidChromeNativeInputSuppressed ||
-              (isCompactWorkspace &&
-                isCoarsePointer &&
-                mobileCustomKeyboardEnabled);
-            terminalNotificationActivationRef.current();
-            terminalNotificationActivationRef.current =
-              activateTerminalAfterNavigation({
-                sessionId: selectedSessionId,
-                hasTerminal: (candidateSessionId) =>
-                  hasTerminal(candidateSessionId),
-                activateTerminal: (candidateSessionId) =>
-                  scheduleTerminalFit(
-                    getTerminal(candidateSessionId),
-                    { focus: !suppressNativeFocus },
-                  ),
-                subscribeToTerminal: subscribeToRegistry,
-              });
-          },
-        });
-      }),
+              if (workspaceMode === "ide") {
+                terminalNotificationRevealNonceRef.current += 1;
+                setIdeBottomToolRequest({
+                  nonce: terminalNotificationRevealNonceRef.current,
+                  toolId: "terminal",
+                });
+              }
+            },
+            selectSession: handleSelectTab,
+            focusTerminal: (selectedSessionId) => {
+              const suppressNativeFocus =
+                isAndroidChromeNativeInputSuppressed ||
+                (isCompactWorkspace &&
+                  isCoarsePointer &&
+                  mobileCustomKeyboardEnabled);
+              terminalNotificationActivationRef.current();
+              terminalNotificationActivationRef.current =
+                activateTerminalAfterNavigation({
+                  sessionId: selectedSessionId,
+                  hasTerminal: (candidateSessionId) =>
+                    (!terminalInstanceRef ||
+                      notificationSessionMapRef.current.get(candidateSessionId)
+                        ?.incarnation === terminalInstanceRef.incarnation) &&
+                    hasTerminal(candidateSessionId),
+                  activateTerminal: (candidateSessionId) => {
+                    if (
+                      terminalInstanceRef &&
+                      notificationSessionMapRef.current.get(candidateSessionId)
+                        ?.incarnation !== terminalInstanceRef.incarnation
+                    )
+                      return;
+                    scheduleTerminalFit(getTerminal(candidateSessionId), {
+                      focus: !suppressNativeFocus,
+                    });
+                  },
+                  subscribeToTerminal: subscribeToRegistry,
+                });
+            },
+          });
+        },
+      ),
     [
       handleSelectTab,
       isCoarsePointer,
@@ -1695,7 +1758,10 @@ export default function WorkspacePage() {
                 onSessionExit={handleSessionExit}
                 onCloseSession={handleCloseTab}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
+                onNewFreeTerminal={(projectId?: string) => {
+                  const target = projectId ?? selectedProjectId;
+                  if (target) handleAddFreeTerminal(target);
+                }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
@@ -1721,7 +1787,10 @@ export default function WorkspacePage() {
                 profileId={activeProfileId ?? undefined}
                 onSessionExit={handleSessionExit}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
+                onNewFreeTerminal={(projectId?: string) => {
+                  const target = projectId ?? selectedProjectId;
+                  if (target) handleAddFreeTerminal(target);
+                }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
@@ -2399,8 +2468,7 @@ export default function WorkspacePage() {
 
   const workflowTarget = useMemo(
     () =>
-      projectTarget?.target ??
-      (projectName ? { project: projectName } : null),
+      projectTarget?.target ?? (projectName ? { project: projectName } : null),
     [projectName, projectTarget?.target],
   );
 
