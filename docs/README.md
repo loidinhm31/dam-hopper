@@ -16,8 +16,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
-- **[Agent status architecture (Phases 01–03)](./architecture/agent-status.md)** — Implemented status contract, reporter transport, and bundled standalone OMP adapter/installer.
-  CLI: `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>` (run as the OMP user on the server host); browser badges and notifications remain Phases 04–05.
+- **[Agent status architecture (Phases 01–05 complete; Linux-qualified)](./architecture/agent-status.md)** — Semantic status contract, server runtime, bundled OMP adapter/installer, profile-safe badges/notifications, and C01–C19 Linux end-to-end qualification
+  CLI: `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>` (run as the OMP user on the server host).
 - **[Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)** — Owner-bound Agent Store, multi-profile ports/tunnels, Browser target trust, and incarnation-safe terminal handoff
 - **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
 - **[Multi-profile Host Resources verification](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md)** — Completed focused unit/component and Chromium gate: 102/102 tests covering navigation, focus, polling tiers, unread isolation, responsive accessibility, and security negatives
