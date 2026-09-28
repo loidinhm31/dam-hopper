@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { LoaderCircle } from "lucide-react";
 import { useParams } from "react-router-dom";
 import {
@@ -14,6 +14,13 @@ import {
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
+import {
+  getActiveProfileId,
+  subscribeToProfileChanges,
+  getProfileChangeVersion,
+} from "@/api/server-config.js";
 import {
   createApiFrameSessionBackend,
   FrameSession,
@@ -50,37 +57,75 @@ type HostModel =
 
 export function PluginHostPage() {
   const { installationId = "" } = useParams<{ installationId: string }>();
-  const project = useWorkspaceStore((state) => state.selectedProject);
-  const projectTarget = useProjectTarget(project);
-  const connection = useConnectionSnapshot(project?.profileId ?? "");
+  const isAdvisor =
+    installationId === "evcrate.advisor" ||
+    installationId.startsWith("evcrate.") ||
+    installationId === "evcrate-advisor";
+
+  const settingsProfileId = useWorkbenchSelectionsStore(
+    (s) => s.settingsProfileId,
+  );
+  useSyncExternalStore(
+    subscribeToProfileChanges,
+    getProfileChangeVersion,
+    () => 0,
+  );
+  const activeProfileId = getActiveProfileId();
+  const settingsTargetProfileId = settingsProfileId || activeProfileId || "";
+
+  const workspaceProject = useWorkspaceStore((state) => state.selectedProject);
+  const { allProjects, isLoading: isAggregatedLoading } = useAggregatedProjects();
+
+  const effectiveProfileId = isAdvisor
+    ? settingsTargetProfileId
+    : (workspaceProject?.profileId || settingsTargetProfileId);
+
+  const effectiveProjectRef = useMemo<ProjectRef | null>(() => {
+    if (!isAdvisor && workspaceProject) {
+      return workspaceProject;
+    }
+    if (workspaceProject?.profileId === effectiveProfileId) {
+      return workspaceProject;
+    }
+    const matching = allProjects.find((p) => p.profileId === effectiveProfileId);
+    return matching ? matching.ref : null;
+  }, [allProjects, effectiveProfileId, isAdvisor, workspaceProject]);
+
+  const effectiveProjectTarget = useProjectTarget(effectiveProjectRef);
+  const connection = useConnectionSnapshot(effectiveProfileId);
   const [lifecycleRevision, setLifecycleRevision] = useState(0);
   const [model, setModel] = useState<HostModel>({
     kind: "loading",
     message: "Resolving plugin access…",
   });
   const targetKey = JSON.stringify([
-    projectTarget?.target.project ?? "",
-    projectTarget?.target.worktreePath ?? null,
+    effectiveProjectTarget?.target.project ?? "",
+    effectiveProjectTarget?.target.worktreePath ?? null,
   ]);
 
   useEffect(() => {
-    if (connection?.status !== "connected") return;
+    if (connection?.status !== "connected" || !connection.owner) return;
     const api = getApi(connection.owner);
     return api.transport.onEvent("plugin:availability.changed", () => {
       setLifecycleRevision((revision) => revision + 1);
     });
-  }, [connection?.owner.generation, connection?.status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection?.owner?.generation, connection?.status]);
 
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
     let session: FrameSession | null = null;
 
-    if (!project || !project.profileId || !projectTarget) {
+    if (isAggregatedLoading) {
+      setModel({ kind: "loading", message: "Resolving plugin access…" });
+      return () => controller.abort();
+    }
+    if (!effectiveProfileId || !effectiveProjectRef || !effectiveProjectTarget) {
       setModel({ kind: "unavailable", reason: "no-project" });
       return () => controller.abort();
     }
-    if (connection?.status !== "connected") {
+    if (connection?.status !== "connected" || !connection.owner) {
       setModel({ kind: "unavailable", reason: "connection" });
       return () => controller.abort();
     }
@@ -91,7 +136,7 @@ export function PluginHostPage() {
 
     const owner = connection.owner;
     const api = getApi(owner);
-    const target = toServerProjectTarget(projectTarget.target);
+    const target = toServerProjectTarget(effectiveProjectTarget.target);
     const stillCurrent = () => active && isCurrentConnection(owner);
 
     const prepare = async () => {
@@ -182,12 +227,14 @@ export function PluginHostPage() {
       controller.abort();
       session?.revoke("Plugin owner or target changed");
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    connection?.owner.generation,
+    connection?.owner?.generation,
     connection?.status,
+    effectiveProfileId,
     installationId,
+    isAggregatedLoading,
     lifecycleRevision,
-    project?.profileId,
     targetKey,
   ]);
 

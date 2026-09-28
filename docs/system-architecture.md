@@ -1,5 +1,14 @@
 # System Architecture
 
+## Planned: agent status, OMP first (2026-09-28)
+
+[Proposed agent-status architecture](./architecture/agent-status.md) defines a
+server-owned semantic status contract, bundled OMP lifecycle adapter, and
+profile-qualified badges/notifications. **Not implemented.** OMP is the first
+adapter; Codex/others are deferred. Existing process/output status, workflow
+completion and idle-suspend behavior remain unchanged. Linux runtime first;
+portable transport does not imply qualified Windows runtime support.
+
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is

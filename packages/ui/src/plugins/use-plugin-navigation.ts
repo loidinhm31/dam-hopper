@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   getApi,
   getConnectionSnapshot,
@@ -10,6 +10,13 @@ import {
   type ProjectRef,
 } from "@/api/client.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
+import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
+import {
+  getActiveProfileId,
+  subscribeToProfileChanges,
+  getProfileChangeVersion,
+} from "@/api/server-config.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -32,6 +39,11 @@ export interface PluginNavigationState {
   items: PluginNavigationItem[];
   error: string | null;
 }
+
+export function isAdvisorMetadata(metadata: PluginMetadataItem): boolean {
+  return metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate";
+}
+
 export function parsePluginMetadata(value: unknown): PluginMetadataItem | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
@@ -75,25 +87,32 @@ export function parsePluginMetadata(value: unknown): PluginMetadataItem | null {
 export function pluginNavigationItem(
   metadata: PluginMetadataItem,
 ): PluginNavigationItem {
-  const availability: PluginNavigationAvailability = !metadata.enabled
-    ? "disabled"
-    : !metadata.hasUi
-      ? "no-ui"
-      : !SHA256_PATTERN.test(metadata.activeDigest)
-        ? "incompatible"
-        : "ready";
+  let availability: PluginNavigationAvailability = "ready";
+  if (!metadata.enabled) {
+    availability = "disabled";
+  } else if (!metadata.hasUi) {
+    availability = "no-ui";
+  } else if (
+    !SHA256_PATTERN.test(metadata.activeDigest) ||
+    !Number.isSafeInteger(metadata.activeGeneration) ||
+    metadata.activeGeneration < 0
+  ) {
+    availability = "incompatible";
+  }
+
   const suffix =
     availability === "disabled"
-      ? " · DISABLED"
+      ? " (Disabled)"
       : availability === "no-ui"
-        ? " · NO UI"
+        ? " (No UI)"
         : availability === "incompatible"
-          ? " · INCOMPATIBLE"
+          ? " (Incompatible)"
           : "";
-  const friendlyName =
-    metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate"
-      ? "EVCrate Advisor"
-      : metadata.id.toUpperCase();
+
+  const friendlyName = isAdvisorMetadata(metadata)
+    ? "EVCrate Advisor"
+    : metadata.id.toUpperCase();
+
   return {
     installationId: metadata.id,
     label: `${friendlyName}${suffix}`,
@@ -106,59 +125,138 @@ export function pluginNavigationItem(
 export function usePluginNavigation(
   project: ProjectRef | null,
 ): PluginNavigationState {
-  const profileId = project?.profileId ?? "";
-  const connection = useSyncExternalStore(
+  const settingsProfileId = useWorkbenchSelectionsStore(
+    (s) => s.settingsProfileId,
+  );
+  useSyncExternalStore(
+    subscribeToProfileChanges,
+    getProfileChangeVersion,
+    () => 0,
+  );
+  const activeProfileId = getActiveProfileId();
+  const settingsTargetProfileId = settingsProfileId || activeProfileId || "";
+
+  const { allProjects } = useAggregatedProjects();
+
+  const settingsProjectRef = useMemo<ProjectRef | null>(() => {
+    if (project?.profileId === settingsTargetProfileId) {
+      return project;
+    }
+    const matching = allProjects.find((p) => p.profileId === settingsTargetProfileId);
+    return matching ? matching.ref : null;
+  }, [allProjects, project, settingsTargetProfileId]);
+
+  const settingsConnection = useSyncExternalStore(
     subscribeConnections,
-    () => (profileId ? getConnectionSnapshot(profileId) : null),
+    () => (settingsTargetProfileId ? getConnectionSnapshot(settingsTargetProfileId) : null),
     () => null,
   );
-  const projectTarget = useProjectTarget(project);
+  const settingsProjectTarget = useProjectTarget(settingsProjectRef);
+
+  const workspaceProfileId = project?.profileId ?? "";
+  const workspaceConnection = useSyncExternalStore(
+    subscribeConnections,
+    () => (workspaceProfileId ? getConnectionSnapshot(workspaceProfileId) : null),
+    () => null,
+  );
+  const workspaceProjectTarget = useProjectTarget(project);
+
   const [state, setState] = useState<PluginNavigationState>({
     loading: false,
     items: [],
     error: null,
   });
-  const targetKey = JSON.stringify([
-    projectTarget?.target.project ?? "",
-    projectTarget?.target.worktreePath ?? null,
+
+  const settingsTargetKey = JSON.stringify([
+    settingsProjectTarget?.target.project ?? "",
+    settingsProjectTarget?.target.worktreePath ?? null,
+  ]);
+  const workspaceTargetKey = JSON.stringify([
+    workspaceProjectTarget?.target.project ?? "",
+    workspaceProjectTarget?.target.worktreePath ?? null,
   ]);
 
+  const canQuerySettings = Boolean(
+    settingsTargetProfileId &&
+      settingsProjectRef &&
+      settingsProjectTarget &&
+      settingsConnection?.status === "connected" &&
+      settingsConnection.owner,
+  );
+
+  const canQueryWorkspace = Boolean(
+    project &&
+      project.profileId &&
+      workspaceProjectTarget &&
+      workspaceConnection?.status === "connected" &&
+      workspaceConnection.owner,
+  );
+
   useEffect(() => {
-    if (
-      !project ||
-      !project.profileId ||
-      !projectTarget ||
-      connection?.status !== "connected" ||
-      !connection.owner
-    ) {
+    let active = true;
+    let requestRevision = 0;
+    const unsubscribes: Array<() => void> = [];
+
+    if (!canQuerySettings && !canQueryWorkspace) {
       setState({ loading: false, items: [], error: null });
       return;
     }
-    const api = getApi(connection.owner);
-    const target = toServerProjectTarget(projectTarget.target);
-    let active = true;
-    let requestRevision = 0;
-
     const load = async () => {
       const revision = ++requestRevision;
       setState((current) => ({ ...current, loading: true, error: null }));
       try {
-        const response = await api.plugins.list(target);
-        if (!active || revision !== requestRevision) return;
-        if (
-          typeof response !== "object" ||
-          response === null ||
-          !Array.isArray(response.plugins)
-        ) {
-          throw new Error("Invalid plugin metadata response");
+        const itemMap = new Map<string, PluginNavigationItem>();
+
+        // Query settings target server for Advisor
+        if (canQuerySettings && settingsConnection?.owner && settingsProjectTarget) {
+          const api = getApi(settingsConnection.owner);
+          const target = toServerProjectTarget(settingsProjectTarget.target);
+          const response = await api.plugins.list(target);
+          if (!active || revision !== requestRevision) return;
+          if (response && Array.isArray(response.plugins)) {
+            const parsed = response.plugins.map(parsePluginMetadata);
+            const isWorkspaceSameServer =
+              canQueryWorkspace && project?.profileId === settingsTargetProfileId;
+            for (const meta of parsed) {
+              if (
+                meta &&
+                (isAdvisorMetadata(meta) ||
+                  !canQueryWorkspace ||
+                  isWorkspaceSameServer)
+              ) {
+                itemMap.set(meta.id, pluginNavigationItem(meta));
+              }
+            }
+          }
         }
-        const parsed = response.plugins.map(parsePluginMetadata);
-        if (parsed.some((item) => item === null)) {
-          throw new Error("Invalid plugin metadata response");
+
+        // Query workspace project server for non-advisor plugins
+        if (canQueryWorkspace && workspaceConnection?.owner && workspaceProjectTarget) {
+          const isSameTarget =
+            canQuerySettings &&
+            project?.profileId === settingsTargetProfileId &&
+            project?.project === settingsProjectRef?.project;
+
+          if (!isSameTarget) {
+            const api = getApi(workspaceConnection.owner);
+            const target = toServerProjectTarget(workspaceProjectTarget.target);
+            const response = await api.plugins.list(target);
+            if (!active || revision !== requestRevision) return;
+            if (response && Array.isArray(response.plugins)) {
+              const workspaceParsed =
+                response.plugins.map(parsePluginMetadata);
+              for (const meta of workspaceParsed) {
+                if (meta && !isAdvisorMetadata(meta)) {
+                  itemMap.set(meta.id, pluginNavigationItem(meta));
+                }
+              }
+            }
+          }
         }
-        const items = (parsed as PluginMetadataItem[])
-          .map(pluginNavigationItem)
-          .sort((left, right) => left.label.localeCompare(right.label));
+
+        const items = [...itemMap.values()].sort((a, b) =>
+          a.label.localeCompare(b.label),
+        );
         setState({ loading: false, items, error: null });
       } catch {
         if (!active || revision !== requestRevision) return;
@@ -170,17 +268,45 @@ export function usePluginNavigation(
       }
     };
 
-    const unsubscribeChanged = api.transport.onEvent(
-      "plugin:availability.changed",
-      () => void load(),
-    );
+    if (canQuerySettings && settingsConnection?.owner) {
+      const api = getApi(settingsConnection.owner);
+      unsubscribes.push(
+        api.transport.onEvent("plugin:availability.changed", () => void load()),
+      );
+    }
+    if (
+      canQueryWorkspace &&
+      workspaceConnection?.owner &&
+      project?.profileId !== settingsTargetProfileId
+    ) {
+      const api = getApi(workspaceConnection.owner);
+      unsubscribes.push(
+        api.transport.onEvent("plugin:availability.changed", () => void load()),
+      );
+    }
+
     void load();
+
     return () => {
       active = false;
       requestRevision += 1;
-      unsubscribeChanged();
+      for (const unsub of unsubscribes) {
+        unsub();
+      }
     };
-  }, [connection?.owner?.generation, connection?.status, profileId, targetKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    canQuerySettings,
+    canQueryWorkspace,
+    settingsConnection?.owner?.generation,
+    settingsConnection?.status,
+    settingsTargetKey,
+    settingsTargetProfileId,
+    workspaceConnection?.owner?.generation,
+    workspaceConnection?.status,
+    workspaceProfileId,
+    workspaceTargetKey,
+  ]);
 
   return state;
 }

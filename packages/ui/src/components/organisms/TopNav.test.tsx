@@ -46,6 +46,7 @@ vi.mock("@/stores/workspace.js", () => ({
 
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => ({ id: "p1", name: "Local" }),
+  getActiveProfileId: () => "p1",
   getProfiles: () => [
     {
       id: "p1",
