@@ -1,13 +1,14 @@
 # System Architecture
 
-## Planned: agent status, OMP first (2026-09-28)
+## Agent status — Phase 01 semantic contract and reducer (Phases 02–05 planned)
 
-[Proposed agent-status architecture](./architecture/agent-status.md) defines a
-server-owned semantic status contract, bundled OMP lifecycle adapter, and
-profile-qualified badges/notifications. **Not implemented.** OMP is the first
-adapter; Codex/others are deferred. Existing process/output status, workflow
-completion and idle-suspend behavior remain unchanged. Linux runtime first;
-portable transport does not imply qualified Windows runtime support.
+The [agent-status architecture](./architecture/agent-status.md) defines the
+contract and implementation boundary. Phase 01 implements Rust v1 DTOs and
+validation, the in-memory reducer/registry, and matching TypeScript DTO decoders.
+No reporter listener, PTY credential injection, public route, OMP adapter,
+browser push consumer, status badge, or notification delivery is wired yet.
+**Phases 02–05 remain planned.** Process/output status, workflow completion,
+and idle-suspend semantics remain separate; turn end does not prove task success.
 
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 

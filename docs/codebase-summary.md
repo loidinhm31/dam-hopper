@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-27 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-28 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -415,11 +415,12 @@ kill, restart, and disposal lifecycle. PTY activity evidence is private and
 content-free; terminal bytes, commands, arguments, and environment are not
 used as idle-suspend identity.
 
-The workflow subsystem persists Plan/Phase/Task hierarchy, scoped sessions,
-resource links, notes, and bounded events in SQLite. The telemetry subsystem is
-separate and opt-in, with private SQLite storage and bounded aggregate queries.
-Media tickets and browser-debug artifacts use authenticated, scoped, expiring
-capabilities rather than project-path access.
+The workflow subsystem persists Plan/Phase/Task hierarchies, sessions, links,
+notes, and bounded SQLite events; telemetry is separately opt-in and
+aggregate-only. Media tickets and browser-debug artifacts use scoped,
+expiring capabilities. Phase 01 adds `server/src/agent_status/` Rust semantic
+contract/reducer code and `packages/ui/src/api/agent-status-types.ts` decoders;
+no reporter runtime, route, OMP adapter, browser consumer, badge, or notification delivery is wired. See [agent-status architecture](./architecture/agent-status.md).
 
 ## Backend path and configuration normalization (Phase 01)
 

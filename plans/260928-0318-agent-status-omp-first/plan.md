@@ -1,7 +1,7 @@
 ---
 title: "Agent status and notifications — OMP first"
 description: "Add server-owned agent activity with a bundled OMP lifecycle adapter and profile-safe badges and notifications."
-status: pending
+status: in-progress
 priority: P2
 effort: not-estimated
 branch: main
@@ -26,7 +26,7 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 
 ## Design contract
 
-[Proposed architecture](../../docs/architecture/agent-status.md) is normative; explicitly not implemented.
+[Proposed architecture](../../docs/architecture/agent-status.md) is normative; Phase 01 implemented, subsequent phases pending.
 
 - Scope credentials to terminal incarnation; inject only into private spawn environment, never persisted templates or public APIs.
 - Persistent local reporter connection + 5-second state heartbeat / 15-second lease; close/expiry => unknown.
@@ -38,7 +38,7 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 
 | # | Phase | Status | Progress | Dependency |
 |---|---|---|---|---|
-| 1 | [Semantic contract and reducer](./phase-01-semantic-contract-and-reducer.md) | Pending | 0% | None |
+| 1 | [Semantic contract and reducer](./phase-01-semantic-contract-and-reducer.md) | Complete (2026-09-28) | 100% | None |
 | 2 | [Reporter transport and PTY lifecycle](./phase-02-reporter-transport-and-pty-lifecycle.md) | Pending | 0% | 1 |
 | 3 | [Bundled OMP adapter and installer](./phase-03-omp-adapter-and-installer.md) | Pending | 0% | 1–2 |
 | 4 | [Profile-safe badges and notifications](./phase-04-profile-safe-ui-and-notifications.md) | Pending | 0% | 1–3 |
@@ -46,14 +46,14 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 
 ## Completion gates
 
-All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery. Real OMP and browser evidence required, not only synthetic event tests. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. No implementation started by this plan.
+All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery. Real OMP and browser evidence required, not only synthetic event tests. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. Phase 01 (semantic contract and reducer) is complete as of 2026-09-28; phases 02–05 remain pending.
 
 ## Evidence and review
 
 - [Brainstorm](../reports/brainstorm-260928-0300-herdr-agent-status-adoption.md)
 - [Report review and source corrections](./reports/report-review.md)
 - [Validation record](./reports/plan-validation.md)
-- Architecture index updated with a **planned/not implemented** link; live behavior not relabeled.
+- Architecture index updated; Phase 01 marked implemented, subsequent phases planned.
 - Planning skill and hard-command template loaded and followed inline; no slash-dispatch API exposed.
 - Active-plan helper ran, but `EVCRATE_SESSION_ID` is absent; automatic session activation was not persisted. Use this path explicitly.
 
@@ -71,8 +71,8 @@ Deploy matched server/UI; install adapter as OMP's OS user; restart existing OMP
 - Unified agent preferences; preserve Codex values by one-way migration.
 
 ### Action Items
-- No plan revision requested. All choices match the architecture and phase contracts; implementation remains pending.
+- Phase 01 completed and reviewed (2026-09-28); proceed to phase 02. Overall plan remains in progress pending phases 02–05.
 
 ## Unresolved questions
 
-No unresolved product decision. Actual OMP event ordering/reload behavior, WebSocket header behavior and packaged installer execution are explicit implementation gates. New evidence that contradicts the pinned contract requires updating the architecture and phases before code continues. Detailed plan remains pending until implementation is separately requested.
+No unresolved product decision. Actual OMP event ordering/reload behavior, WebSocket header behavior and packaged installer execution are explicit implementation gates. New evidence that contradicts the pinned contract requires updating the architecture and phases before code continues. Phase 01 completed 2026-09-28; phases 02–05 remain pending and full delivery remains in progress.

@@ -1598,7 +1598,7 @@ export interface DiscoverResponse {
 }
 
 export type AgentCommandPatternKind = "literal" | "regex";
-export type TerminalAgentType = "codex" | "claude" | "antigravity" | "unknown";
+export type TerminalAgentType = "codex" | "claude" | "antigravity" | "omp" | "unknown";
 export type TerminalAgentNotificationPolicy = "always";
 export type TerminalCodexNotificationSoundPattern =
   | "default"
