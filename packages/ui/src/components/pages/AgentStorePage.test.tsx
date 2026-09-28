@@ -34,6 +34,12 @@ vi.mock("@/components/organisms/DistributionMatrix.js", () => ({
 vi.mock("@/components/organisms/HealthStatus.js", () => ({
   HealthStatus: () => <div data-testid="health-status" />,
 }));
+vi.mock("@/components/organisms/OmpExtensionManager.js", () => ({
+  OmpExtensionManager: () => (
+    <div data-testid="omp-extension-manager">OMP Integration</div>
+  ),
+}));
+
 
 describe("AgentStorePage", () => {
   let container: HTMLDivElement | null = null;
@@ -61,5 +67,24 @@ describe("AgentStorePage", () => {
       root?.render(<AgentStorePage />);
     });
     expect(container?.textContent).toContain("Agent Store");
+    expect(container?.textContent).toContain("Integrations");
+  });
+
+  it("switches to Integrations tab and renders OmpExtensionManager", async () => {
+    act(() => {
+      root?.render(<AgentStorePage />);
+    });
+
+    const buttons = container?.querySelectorAll("button");
+    const integrationsButton = Array.from(buttons ?? []).find(
+      (btn) => btn.textContent === "Integrations",
+    );
+    expect(integrationsButton).toBeDefined();
+
+    await act(async () => {
+      integrationsButton?.click();
+    });
+
+    expect(container?.querySelector("[data-testid='omp-extension-manager']")).toBeDefined();
   });
 });

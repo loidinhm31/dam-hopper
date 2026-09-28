@@ -26,6 +26,11 @@ impl From<crate::workflow::error::WorkflowError> for ApiError {
         Self(crate::error::AppError::Workflow(error))
     }
 }
+impl From<crate::agent_status::IntegrationError> for ApiError {
+    fn from(error: crate::agent_status::IntegrationError) -> Self {
+        Self(crate::error::AppError::AgentStatusIntegration(error))
+    }
+}
 
 #[derive(Serialize)]
 struct ErrorBody {

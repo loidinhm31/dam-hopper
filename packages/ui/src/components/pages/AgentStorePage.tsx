@@ -21,11 +21,16 @@ import {
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { AgentStoreItem } from "@/api/client.js";
-type Tab = "store" | "memory" | "import";
+type Tab = "store" | "memory" | "integrations" | "import";
 
 const MemoryEditor = lazy(() =>
   import("@/components/organisms/MemoryEditor.js").then((m) => ({
     default: m.MemoryEditor,
+  })),
+);
+const OmpExtensionManager = lazy(() =>
+  import("@/components/organisms/OmpExtensionManager.js").then((m) => ({
+    default: m.OmpExtensionManager,
   })),
 );
 const ImportDialog = lazy(() =>
@@ -121,7 +126,7 @@ export function AgentStorePage() {
         {/* Tab bar + profile selector + action */}
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
-            {(["store", "memory", "import"] as Tab[]).map((tab) => (
+            {(["store", "memory", "integrations", "import"] as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -136,7 +141,9 @@ export function AgentStorePage() {
                   ? "Store"
                   : tab === "memory"
                     ? "Memory Files"
-                    : "Import"}
+                    : tab === "integrations"
+                      ? "Integrations"
+                      : "Import"}
               </button>
             ))}
           </div>
@@ -257,6 +264,13 @@ export function AgentStorePage() {
               <MemoryEditor projects={projects} owner={owner} profileId={effectiveProfileId} />
             </Suspense>
           </div>
+        )}
+
+        {/* ── Integrations tab ──────────────────────────────────────────── */}
+        {activeTab === "integrations" && (
+          <Suspense fallback={AGENT_STORE_FALLBACK}>
+            <OmpExtensionManager owner={owner} />
+          </Suspense>
         )}
 
         {/* ── Import tab ───────────────────────────────────────────────── */}

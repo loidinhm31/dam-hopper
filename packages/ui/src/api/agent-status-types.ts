@@ -475,3 +475,51 @@ export function decodeAgentStatusInvalidatedPayload(
     revision: obj.revision,
   };
 }
+
+export type ManagedExtensionStatus =
+  | "absent"
+  | "current"
+  | "outdated"
+  | "modified";
+
+export interface ExtensionStatusReport {
+  status: ManagedExtensionStatus;
+  targetPath: string;
+  version: string | null;
+  bundledVersion: string;
+  contentHash: string | null;
+  bundledHash: string;
+}
+
+export function decodeExtensionStatusReport(
+  input: unknown,
+): ExtensionStatusReport {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("ExtensionStatusReport must be an object");
+  }
+  const obj = input as Record<string, unknown>;
+  const status = obj.status;
+  if (
+    status !== "absent" &&
+    status !== "current" &&
+    status !== "outdated" &&
+    status !== "modified"
+  ) {
+    throw new Error(`Invalid extension status: ${String(status)}`);
+  }
+  return {
+    status,
+    targetPath: String(obj.targetPath ?? obj.target_path ?? ""),
+    version: obj.version != null ? String(obj.version) : null,
+    bundledVersion: String(
+      obj.bundledVersion ?? obj.bundled_version ?? "1.0.0",
+    ),
+    contentHash:
+      obj.contentHash != null
+        ? String(obj.contentHash)
+        : obj.content_hash != null
+          ? String(obj.content_hash)
+          : null,
+    bundledHash: String(obj.bundledHash ?? obj.bundled_hash ?? ""),
+  };
+}
