@@ -2,7 +2,6 @@ import { useState } from "react";
 import { NumberStepper } from "@/components/atoms/NumberStepper.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
-import { TerminalAgentNotificationSettings } from "@/components/molecules/TerminalAgentNotificationSettings.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
@@ -21,7 +20,6 @@ export function SettingsAppearanceSection() {
     terminalFontSize,
     editorZoomWheelEnabled,
     terminalSuggestionsEnabled,
-    terminalAgentNotifications,
     terminalScrollButtonsEnabled,
     terminalCommitStatusEnabled,
     terminalAutoSwitchProjectEnabled,
@@ -32,7 +30,6 @@ export function SettingsAppearanceSection() {
     mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap,
     saveDebounced,
-    saveAgentNotificationPolicy,
   } = useSettingsStore();
 
   return (
@@ -175,13 +172,6 @@ export function SettingsAppearanceSection() {
           Clear history
         </button>
       </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <TerminalAgentNotificationSettings
-        notifications={terminalAgentNotifications}
-        onSave={saveAgentNotificationPolicy}
-      />
 
       <div className="border-t border-[var(--color-border)]" />
 

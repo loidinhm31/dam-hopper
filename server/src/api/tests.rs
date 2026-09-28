@@ -3357,6 +3357,85 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
 }
 
 #[tokio::test]
+async fn update_global_ui_at_path_persists_agent_settings_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "agentSettingsPaths": {
+                "ompAgentDir": "/custom/omp/agent",
+                "codexDir": "/custom/codex"
+            }
+        })),
+        Some(tmp.path()),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("[ui.agent_settings_paths]"));
+    assert!(written.contains("omp_agent_dir = \"/custom/omp/agent\""));
+    assert!(written.contains("codex_dir = \"/custom/codex\""));
+
+    let persisted = crate::config::read_global_config_at(&gc_path)
+        .unwrap()
+        .unwrap();
+    let ui = persisted.ui.unwrap();
+    let paths = ui.agent_settings_paths.expect("agent_settings_paths");
+    assert_eq!(paths.omp_agent_dir.as_deref(), Some("/custom/omp/agent"));
+    assert_eq!(paths.codex_dir.as_deref(), Some("/custom/codex"));
+}
+
+#[tokio::test]
+async fn update_global_ui_rejects_enablement_when_requirements_not_met() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    // 1. Enabling OMP notifications when extension is not installed fails closed
+    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {
+                "version": 1,
+                "agents": {
+                    "omp": { "enabled": true }
+                }
+            },
+            "agentSettingsPaths": {
+                "ompAgentDir": tmp.path().join("non-existent-agent").to_str().unwrap()
+            }
+        })),
+        None,
+    )
+    .await;
+    assert!(err.is_err(), "should reject OMP enablement when extension is missing");
+
+    // 2. Disabling notifications is always allowed even when paths are invalid
+    let ok = crate::api::config::update_global_ui_at_path_with_codex_home(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {
+                "version": 1,
+                "agents": {
+                    "omp": { "enabled": false },
+                    "codex": { "enabled": false }
+                }
+            }
+        })),
+        None,
+    )
+    .await;
+    assert!(ok.is_ok(), "disabling notifications must always succeed");
+}
+
+#[tokio::test]
 async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syncs_codex() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);

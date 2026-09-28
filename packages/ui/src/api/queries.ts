@@ -65,7 +65,10 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
-import type { ExtensionStatusReport } from "./agent-status-types.js";
+import type {
+  AgentPathsVerification,
+  ExtensionStatusReport,
+} from "./agent-status-types.js";
 import {
   getApi,
   getTransport as getBoundTransport,
@@ -2260,6 +2263,11 @@ export function useInstallOmpExtension(options?: { owner?: ConnectionRef }) {
           ? profileQueryKey(owner, "omp-extension-status")
           : ["omp-extension-status"],
       });
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-paths-verification")
+          : ["agent-paths-verification"],
+      });
     },
   });
 }
@@ -2277,6 +2285,34 @@ export function useUninstallOmpExtension(options?: { owner?: ConnectionRef }) {
           ? profileQueryKey(owner, "omp-extension-status")
           : ["omp-extension-status"],
       });
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-paths-verification")
+          : ["agent-paths-verification"],
+      });
     },
+  });
+}
+
+export function useAgentPathsVerification(
+  params?: { agentDir?: string; codexDir?: string },
+  options?: { owner?: ConnectionRef },
+) {
+  const owner = options?.owner;
+  const agentDirKey = params?.agentDir ?? "default";
+  const codexDirKey = params?.codexDir ?? "default";
+  const queryKey = owner
+    ? profileQueryKey(
+        owner,
+        "agent-paths-verification",
+        agentDirKey,
+        codexDirKey,
+      )
+    : (["agent-paths-verification", agentDirKey, codexDirKey] as const);
+
+  return useQuery<AgentPathsVerification>({
+    queryKey,
+    queryFn: () => getApi(owner).terminal.getAgentPathsVerification(params),
+    staleTime: 5_000,
   });
 }

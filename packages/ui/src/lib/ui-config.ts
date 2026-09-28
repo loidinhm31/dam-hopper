@@ -223,6 +223,7 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
       ui?.mobileCustomKeyboardRowGap ??
       DEFAULT_UI_CONFIG.mobileCustomKeyboardRowGap,
     terminalAgentNotifications: normalizeTerminalAgentNotifications(ui),
+    agentSettingsPaths: ui?.agentSettingsPaths,
     terminalFontSize:
       ui?.terminalFontSize ?? DEFAULT_UI_CONFIG.terminalFontSize,
     searchTextShortcut: formatShortcut(

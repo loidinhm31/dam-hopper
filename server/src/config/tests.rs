@@ -1479,6 +1479,7 @@ fn ui_config_serde_roundtrip() {
                 },
                 ..Default::default()
             },
+            agent_settings_paths: None,
             explorer_show_hidden: false,
             explorer_language_filter: ExplorerLanguageFilter::JavascriptTypescript,
             mobile_custom_keyboard_enabled: false,

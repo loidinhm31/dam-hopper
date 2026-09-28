@@ -7,6 +7,7 @@
 import { create } from "zustand";
 import { api, type ApiClient } from "@/api/client.js";
 import type {
+  AgentSettingsPaths,
   TerminalAgentNotifications,
   TerminalAgentNotificationPolicy,
 } from "@/api/client.js";
@@ -100,6 +101,7 @@ interface PersistedSettingsState {
   mobileCustomKeyboardFontSize: number;
   mobileCustomKeyboardPadding: number;
   mobileCustomKeyboardRowGap: number;
+  agentSettingsPaths?: AgentSettingsPaths;
 }
 
 interface SettingsState extends PersistedSettingsState {
@@ -117,6 +119,7 @@ interface SettingsState extends PersistedSettingsState {
     patch: Partial<TerminalAgentNotificationPolicy>,
   ) => void;
   switchPreferenceSource: (profileId: ProfileId | null) => Promise<void>;
+  saveAgentSettingsPaths: (paths: Partial<AgentSettingsPaths>) => void;
 }
 
 interface PreferenceSourceTransaction {
@@ -242,6 +245,8 @@ function applySnapshotToStore(
     clamped.mobileCustomKeyboardRowGap = clampKeyboardRowGap(
       snapshot.mobileCustomKeyboardRowGap,
     );
+  if (snapshot.agentSettingsPaths !== undefined)
+    clamped.agentSettingsPaths = snapshot.agentSettingsPaths;
   set(clamped);
 }
 function pickPersistedSettings(
@@ -275,6 +280,7 @@ function pickPersistedSettings(
     mobileCustomKeyboardFontSize: state.mobileCustomKeyboardFontSize,
     mobileCustomKeyboardPadding: state.mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap: state.mobileCustomKeyboardRowGap,
+    agentSettingsPaths: state.agentSettingsPaths,
   };
 }
 
@@ -323,6 +329,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   mobileCustomKeyboardFontSize: 11,
   mobileCustomKeyboardPadding: 6,
   mobileCustomKeyboardRowGap: 4,
+  agentSettingsPaths: undefined,
   hydrated: false,
   sourceUnset: true,
 
@@ -414,6 +421,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         mobileCustomKeyboardFontSize: ui.mobileCustomKeyboardFontSize ?? 11,
         mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
         mobileCustomKeyboardRowGap: ui.mobileCustomKeyboardRowGap ?? 4,
+        agentSettingsPaths: ui.agentSettingsPaths,
         hydrated: true,
         sourceUnset: false,
       });
@@ -516,6 +524,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.mobileCustomKeyboardRowGap = clampKeyboardRowGap(
         partial.mobileCustomKeyboardRowGap,
       );
+    if (partial.agentSettingsPaths !== undefined)
+      clamped.agentSettingsPaths = partial.agentSettingsPaths;
     set(clamped);
   },
 
@@ -531,6 +541,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           ...current.agents,
           [agent]: { ...current.agents[agent], ...patch },
         },
+      },
+    });
+  },
+  saveAgentSettingsPaths: (paths) => {
+    get().saveDebounced({
+      agentSettingsPaths: {
+        ...get().agentSettingsPaths,
+        ...paths,
       },
     });
   },

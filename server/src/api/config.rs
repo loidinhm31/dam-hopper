@@ -333,16 +333,97 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
     }
-
     let next_codex_notifications_enabled = gc
         .ui
         .as_ref()
         .is_some_and(|ui| ui.terminal_agent_notifications.agents.codex.enabled);
 
-    if next_codex_notifications_enabled != previous_codex_notifications_enabled {
-        sync_codex_tui_config(codex_home_override, next_codex_notifications_enabled)?;
+    // Validate notification enablement policies before persisting
+    if let Some(ui) = gc.ui.as_ref() {
+        if ui.terminal_agent_notifications.agents.codex.enabled {
+            let configured_codex_dir = ui
+                .agent_settings_paths
+                .as_ref()
+                .and_then(|p| p.codex_dir.as_deref());
+            let home = crate::api::agent_status::resolve_effective_home()
+                .unwrap_or_else(|| std::path::PathBuf::from("/"));
+            let codex_notification_dir = std::env::var("CODEX_HOME")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(".codex"));
+            let codex_dir = if let Some(override_dir) = codex_home_override {
+                override_dir.join(".codex")
+            } else if let Some(configured) = configured_codex_dir {
+                crate::api::agent_status::expand_and_validate_path(configured, Some(&home))
+                    .map_err(|e| AppError::Config(format!("Invalid Codex path: {e}")))?
+            } else {
+                codex_notification_dir.clone()
+            };
+            if codex_home_override.is_none() && codex_dir != codex_notification_dir {
+                return Err(AppError::Config(format!(
+                    "Cannot enable Codex notifications: configured path ({}) does not match notification runtime path ({})",
+                    codex_dir.display(),
+                    codex_notification_dir.display()
+                )));
+            }
+            let config_path = codex_dir.join("config.toml");
+            if codex_home_override.is_none() && !config_path.is_file() {
+                return Err(AppError::Config(format!(
+                    "Cannot enable Codex notifications: config.toml does not exist at {}",
+                    config_path.display()
+                )));
+            }
+        }
+
+        if ui.terminal_agent_notifications.agents.omp.enabled {
+            let configured_omp_dir = ui
+                .agent_settings_paths
+                .as_ref()
+                .and_then(|p| p.omp_agent_dir.as_deref());
+            let home = crate::api::agent_status::resolve_effective_home()
+                .unwrap_or_else(|| std::path::PathBuf::from("/"));
+            let omp_notification_dir = std::env::var("PI_CODING_AGENT_DIR")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(".omp").join("agent"));
+
+            let omp_install_dir = match configured_omp_dir.filter(|s| !s.trim().is_empty()) {
+                Some(explicit) => crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
+                    .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?,
+                None => omp_notification_dir.clone(),
+            };
+
+            if omp_install_dir != omp_notification_dir {
+                return Err(AppError::Config(format!(
+                    "Cannot enable OMP notifications: configured install path ({}) does not match notification runtime path ({})",
+                    omp_install_dir.display(),
+                    omp_notification_dir.display()
+                )));
+            }
+
+            let status = crate::agent_status::check_extension_status(&omp_install_dir)
+                .map(|r| r.status)
+                .unwrap_or(crate::agent_status::ManagedExtensionStatus::Absent);
+            if status != crate::agent_status::ManagedExtensionStatus::Current {
+                return Err(AppError::Config(format!(
+                    "Cannot enable OMP notifications: extension is not installed at {} (status: {})",
+                    omp_install_dir.display(),
+                    status
+                )));
+            }
+        }
     }
 
+    if next_codex_notifications_enabled != previous_codex_notifications_enabled {
+        let configured_codex_dir = gc
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.agent_settings_paths.as_ref())
+            .and_then(|p| p.codex_dir.as_deref());
+        sync_codex_tui_config(codex_home_override, configured_codex_dir, next_codex_notifications_enabled)?;
+    }
     write_global_config_at(gc_path, &gc)?;
     *state.global_config.write().await = gc;
     Ok(())
@@ -350,13 +431,21 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
 
 fn sync_codex_tui_config(
     codex_home_override: Option<&FsPath>,
+    configured_codex_dir: Option<&str>,
     enabled: bool,
 ) -> Result<(), AppError> {
-    let home_dir = codex_home_override
-        .map(FsPath::to_path_buf)
-        .or_else(dirs::home_dir)
-        .ok_or_else(|| AppError::Config("Unable to resolve home directory".to_string()))?;
-    let codex_dir = home_dir.join(".codex");
+    let codex_dir = if let Some(override_dir) = codex_home_override {
+        override_dir.join(".codex")
+    } else if let Some(configured) = configured_codex_dir {
+        let home = crate::api::agent_status::resolve_effective_home();
+        crate::api::agent_status::expand_and_validate_path(configured, home.as_deref())
+            .map_err(|e| AppError::Config(format!("Invalid Codex path: {e}")))?
+    } else {
+        let home_dir = crate::api::agent_status::resolve_effective_home()
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| AppError::Config("Unable to resolve home directory".to_string()))?;
+        home_dir.join(".codex")
+    };
     let config_path = codex_dir.join("config.toml");
 
     if !enabled && !config_path.exists() {

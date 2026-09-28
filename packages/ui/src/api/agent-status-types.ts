@@ -523,3 +523,59 @@ export function decodeExtensionStatusReport(
     bundledHash: String(obj.bundledHash ?? obj.bundled_hash ?? ""),
   };
 }
+
+export interface AgentPathsVerification {
+  effectiveHome: string;
+  ompInstallDir: string;
+  ompNotificationDir: string;
+  ompStatus: ManagedExtensionStatus;
+  ompCanEnable: boolean;
+  ompReason?: string;
+  codexConfigDir: string;
+  codexNotificationDir: string;
+  codexConfigExists: boolean;
+  codexCanEnable: boolean;
+  codexReason?: string;
+}
+
+export function decodeAgentPathsVerification(input: unknown): AgentPathsVerification {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("AgentPathsVerification must be an object");
+  }
+  const obj = input as Record<string, unknown>;
+  const rawOmpStatus = String(obj.ompStatus ?? obj.omp_status ?? "absent");
+  const ompStatus: ManagedExtensionStatus =
+    rawOmpStatus === "current" ||
+    rawOmpStatus === "outdated" ||
+    rawOmpStatus === "modified"
+      ? rawOmpStatus
+      : "absent";
+
+  return {
+    effectiveHome: String(obj.effectiveHome ?? obj.effective_home ?? ""),
+    ompInstallDir: String(obj.ompInstallDir ?? obj.omp_install_dir ?? ""),
+    ompNotificationDir: String(
+      obj.ompNotificationDir ?? obj.omp_notification_dir ?? "",
+    ),
+    ompStatus,
+    ompCanEnable: Boolean(obj.ompCanEnable ?? obj.omp_can_enable),
+    ompReason:
+      obj.ompReason != null
+        ? String(obj.ompReason)
+        : obj.omp_reason != null
+          ? String(obj.omp_reason)
+          : undefined,
+    codexConfigDir: String(obj.codexConfigDir ?? obj.codex_config_dir ?? ""),
+    codexNotificationDir: String(
+      obj.codexNotificationDir ?? obj.codex_notification_dir ?? "",
+    ),
+    codexConfigExists: Boolean(obj.codexConfigExists ?? obj.codex_config_exists),
+    codexCanEnable: Boolean(obj.codexCanEnable ?? obj.codex_can_enable),
+    codexReason:
+      obj.codexReason != null
+        ? String(obj.codexReason)
+        : obj.codex_reason != null
+          ? String(obj.codex_reason)
+          : undefined,
+  };
+}
