@@ -1,45 +1,45 @@
 # Agent status — OMP-first architecture
 
-Status: **Phase 01 semantic contract and reducer implemented; Phase 02 reporter transport and PTY lifecycle completed; Phases 03–05 planned**. Date: 2026-09-28.
+Status: **Phases 01–03 implemented; Phases 04–05 planned**. Date: 2026-09-28.
 Plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
 Evidence: [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
 Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
 plus matching public TypeScript DTOs and decoders. Phase 02 implements the
 server-owned reporter runtime, private loopback collector, PTY-incarnation
-credentials, protected snapshot, and semantic WebSocket pushes. The existing
-`TerminalAgentType` union in `packages/ui/src/api/client.ts` includes `omp`,
-but no OMP adapter, browser consumer, badges, or notifications yet; those
-remain Phases 03–05.
+credentials, protected snapshot, and semantic WebSocket pushes. Phase 03 adds
+the standalone OMP producer embedded in the server binary and an explicit
+profile installer. Browser consumption, badges, and notifications remain
+Phases 04–05.
 
-## Remaining scope and delivery (Phases 03–05 planned)
+## Remaining scope and delivery (Phases 04–05 planned)
 
 - The semantic contract is designed to be agent-neutral; `AgentKind` currently supports only OMP. Codex/others remain future work if needed.
-- Status badges in ordinary tabs, split tabs, and Fleet terminal rows. Existing history/toasts/sound/browser notification service; per browser-client delivery.
-- Rust runtime and loopback listener are part of `dam-hopper-server`, not another daemon. Bundle standalone OMP TypeScript adapter with `include_str!`; it executes inside OMP after explicit installation.
+- Status badges in ordinary tabs, split tabs, and Fleet terminal rows; per-browser history/toasts/sound/notifications remain planned.
+- Rust runtime and loopback listener are part of `dam-hopper-server`, not another daemon. The standalone OMP adapter is embedded with `include_str!` and runs inside OMP after explicit installation.
 - Linux runtime qualification first. Preserve Windows builds; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
 - No Herdr dependency, VT renderer, screen heuristics, task-success automation, workflow mutation, suspend-policy change, telemetry ingestion, or generic adapter/plugin loader.
 
-## End-to-end data flow (Phase 02 server path implemented; producer/UI pending)
+## End-to-end data flow (Phases 02–03 server and OMP producer implemented; browser consumer pending)
 
 ```text
-future managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
-          ^                                              |
-PTY spawn injects scoped capability                       +-- protected REST snapshot
-                                                         +-- authenticated browser WebSocket
-                                                                  |
-                                         future app-root per-profile watcher
-                                                                  |
-                                         future status store + notification service
-```
+installed managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
+          ^                                                    |
+PTY spawn injects scoped capability                             +-- protected REST snapshot
+                                                               +-- authenticated browser WebSocket
+                                                                        |
+                                               future app-root per-profile watcher
+                                                                        |
+                                               future status store + notification service
 
 Phase 02 binds the private collector to Linux loopback TCP and keeps it off the
 public API router and tunnel discovery. A persistent local connection lets a
 reporter disconnect invalidate status while its parent shell remains alive;
 it avoids credentials in terminal output and avoids transcript parsing. The
-bundled reporter and browser consumer are future phases.
+Phase 03 bundled OMP reporter uses this channel; the browser consumer remains
+planned.
 
-## Runtime identity and ownership (Phase 02 server; browser ownership planned)
+## Runtime identity and ownership (Phases 02–03 server/adapter; browser ownership planned)
 
 - Server runtime: random `serverEpoch` per process start; no persisted semantic status.
 - Terminal: existing `{id, incarnation}`. Browser additionally supplies owning `{profileId, connectionGeneration}` locally, never trusts it from a remote server.
@@ -48,7 +48,7 @@ bundled reporter and browser consumer are future phases.
 - Logical turn: adapter-generated `turnId`; continuations/retries keep the current logical turn until actual settle.
 - One active reporter per terminal incarnation. Same reporter reconnect may atomically replace its old connection; a different reporter is rejected while the old one is live. Expiry, close, release or PTY retirement permits a new claimant.
 - Every callback/close/timeout is fenced by captured terminal incarnation and reporter epoch. An old socket cannot clear or overwrite its replacement.
-- This is scoped local reporting, not a sandbox against malicious code running as the same OS account. The Phase 03 adapter must use nested-session guards to avoid accidental parent overwrites; capabilities do not prove model truth.
+- This is scoped local reporting, not a sandbox against malicious code running as the same OS account. The adapter ignores `OMPCODE=1` nested sessions and non-main agent contexts to avoid accidental parent overwrites; capabilities do not prove model truth.
 
 ## Implemented semantic contract v1
 
@@ -131,34 +131,72 @@ and [Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-repo
 - No output-byte parsing, process-tree polling, or transcript copying. Runtime state tracks managed terminal records, with one socket per claimed terminal.
 - Private frames/messages cap at 4 KiB; hello deadline 3 s; pre-auth concurrency 32; report rate 20/s (burst 40); semantic broadcast capacity 256. Invalid reports are rejected; transport failure affects only that reporter and status becomes unknown.
 
-## Planned OMP adapter and installation (Phase 03)
+## Implemented standalone OMP adapter and installation (Phase 03)
 
-Qualification target: installed OMP 18.3.5. No claim of historical minimum or automatic compatibility with future versions. Protocol/adapter version is independent of OMP version.
+The adapter is a standalone TypeScript extension embedded in the existing
+`dam-hopper-server` binary. Its qualification target is installed OMP 18.3.5;
+other OMP versions remain unqualified. The installed file is
+`extensions/dam-hopper-agent-status.ts`; it has no runtime package dependency.
 
-- Standalone TS default extension factory; type-only OMP imports, no runtime third-party dependencies. Use OMP's Bun WebSocket support with Authorization header.
-- Activate only when valid injected endpoint/token exist, `ctx.hasUI === true`, and `OMPCODE !== "1"`. No network side effect outside managed root interactive sessions; print/RPC/subagents excluded from initial scope.
-- `session_start`: snapshot from `ctx.isIdle()`, not a synthetic start/end. `session_switch`: clear pending settle, blockers and logical turn, then snapshot.
-- `agent_start`: mark working and establish/reuse logical turn. `agent_end.willContinue === true`: remain working; never report settlement.
-- Approval blockers keyed by `{agentSessionId, "approval", toolCallId}`. Ask blockers keyed by `{agentSessionId, "ask", toolCallId}`; only tool name `ask`. Resolution/deletion is idempotent, including denial and cancellation.
-- Use `auto_retry_start/end` and `auto_compaction_start/end` where they represent active work. Retry success ends retry hold, not the user turn. Final failure remains needs-attention; cancellation must not become a successful finish.
-- Non-continuing `agent_end`: inspect last assistant `stopReason`. `stop` maps to ended; `aborted` to interrupted; `error` to error; `length`, `toolUse`, absent/unsupported outcome to unknown unless current documented semantics prove a safe mapping. Never transmit message content.
-- Settle debounce 250 ms, cancelled by a newer start/continuation/session switch. Do not copy Herdr's retryable-error regex or assume a fixed 2.5-second provider retry window. True OMP retry state can last longer.
-- Shutdown closes connection and clears timers without waiting for network. Rebinding/reloading releases the previous reporter; duplicate installations must be detected/documented rather than repeatedly stealing authority.
+- The extension is dormant unless both server-injected
+  `DAM_HOPPER_AGENT_STATUS_URL` and `DAM_HOPPER_AGENT_STATUS_TOKEN` are valid.
+  It accepts only a loopback WebSocket URL at `/v1/agent-status`, without URL
+  credentials or query parameters, and a nonempty printable-ASCII token of at
+  most 128 characters.
+- It connects only for interactive UI sessions (`ctx.hasUI === true`), skips
+  `OMPCODE=1`, and ignores a known non-`main` agent context. OMP outside a
+  managed DamHopper PTY has no injected capability and does not report.
+- `session_start` snapshots `ctx.isIdle()`; `session_switch` clears blockers and
+  the prior logical turn before a new snapshot. `agent_start` begins or
+  continues a logical turn. `agent_end.willContinue` never settles it.
+- Approval blockers use tool-call IDs; question blockers use tool-call IDs for
+  the `ask` tool. Resolution is idempotent. OMP retry and compaction keep
+  activity working; retry completion alone is not turn completion.
+- A non-continuing `agent_end` settles after 250 ms, cancelled by a newer start
+  or session switch. The adapter inspects only the last assistant
+  `stopReason`: `stop` → `ended`, `aborted` → `interrupted`, `error` → `error`;
+  missing or unsupported reasons → `unknown`. It sends no message or prompt
+  text. Turn end does not prove task success.
+- One reporter connection sends a current-state heartbeat every 5 seconds.
+- Connection failures retry after 250 ms, 500 ms, 1 s, 2 s, then 5 s intervals;
+  server rejection stops retries. Reconnect sends a current snapshot, not missed
+  historical events. Shutdown closes the socket and clears timers without
+  waiting on the network.
 
-Planned server CLI:
+The server-host CLI requires an existing absolute OMP agent directory. Run it
+as the OS user whose OMP sessions run inside DamHopper PTYs; the default is
+`$HOME/.omp/agent`, while named/custom profiles require their own explicit path.
 
 ```text
-dam-hopper-server integration omp install --agent-dir /absolute/omp/profile/agent
-dam-hopper-server integration omp status --agent-dir /absolute/omp/profile/agent
-dam-hopper-server integration omp uninstall --agent-dir /absolute/omp/profile/agent
+dam-hopper-server integration omp install --agent-dir <absolute-agent-dir>
+dam-hopper-server integration omp status --agent-dir <absolute-agent-dir>
+dam-hopper-server integration omp uninstall --agent-dir <absolute-agent-dir>
 ```
 
-Explicit target avoids guessing named profile/custom homes. Default target example: `$HOME/.omp/agent`; named profile example: `$HOME/.omp/profiles/work/agent`; `PI_CODING_AGENT_DIR` users supply that directory explicitly. Run as the same OS user whose OMP runs in server PTYs, on the server host, not merely the browser machine.
+`--json` is optional for each action. These local integration commands dispatch
+before server token, database, and listener startup; they do not require normal
+server configuration or a running server.
 
-- CLI branch exits before server token generation, workspace/database initialization or listeners. Do not change privileged Linux release-manager CLI.
-- Install exactly `extensions/dam-hopper-agent-status.ts`, embedded in the server binary. No global config mutation, shell wrapper, package-manager install, additional daemon or separate deploy asset.
-- Atomic same-directory write; refuse symlink/nonregular target and refuse overwriting locally modified/unmanaged contents. Include managed version/content-hash marker; status reports absent/current/outdated/modified, without secrets. Update by rerunning install; uninstall only verified managed file. Never remove Herdr or other extensions.
-- New/restarted OMP sessions load it; already-running pre-integration sessions remain unknown/untracked until restarted. `--no-extensions` disables auto-discovery; explicit `-e` remains an opt-in escape hatch.
+- `install` writes or upgrades only the managed extension using a same-directory
+  atomic write; current content is a no-op. It refuses modified or unmanaged
+  contents, symlinks, and nonregular targets.
+- `status` reports `absent`, `current`, `outdated`, or `modified`, plus version,
+  path, and content-hash metadata; it does not expose credentials.
+- `uninstall` removes only a hash-verified managed extension, refuses modified
+  or unmanaged contents, and never removes Herdr or other extensions.
+- Install/update does not alter OMP global configuration. OMP must load
+  extensions, and existing OMP sessions must restart to load a new installation.
+
+- Open Phase 03 review findings: a late inactive `agent_end` may emit duplicate
+  `turn-ended` reports; CRLF headers may misclassify managed extensions during
+  updates. Resolve before end-to-end release qualification; see the
+  [Phase 03 plan](../../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md).
+
+Implementation and focused tests: `server/src/agent_status/assets/omp-agent-status.ts`,
+`server/src/agent_status/integration.rs`, `server/src/main.rs`,
+`server/tests/omp-agent-status.test.ts`, and
+`server/tests/agent_status_integration.rs`. See the
+[Phase 03 plan](../../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md).
 
 ## Planned frontend, reconnect, and notifications (Phase 04)
 
