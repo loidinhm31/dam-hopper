@@ -9,9 +9,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use dam_hopper_server::agent_status::{
     AgentKind, AgentState, AgentStatusAvailability, AgentStatusBroadcastEvent,
-    AgentStatusCollector, AgentStatusError, AgentStatusRuntime, ReporterEventKind, ReporterHello,
-    ReporterRejected, ReporterReport, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION,
-    MAX_PRIVATE_FRAME_BYTES,
+    AgentStatusCollector, AgentStatusRuntime, ReporterEventKind, ReporterHello,
+    ReporterReport, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION, MAX_PRIVATE_FRAME_BYTES,
 };
 
 fn sample_hello(reporter_id: &str, session_id: &str) -> ReporterHello {
@@ -442,4 +441,86 @@ async fn test_browser_websocket_agent_status_push_events() {
     );
     let json_invalidated = serde_json::to_string(&invalidated_ev).unwrap();
     assert!(json_invalidated.contains("\"kind\":\"terminal:agentStatusInvalidated\""));
+}
+
+#[tokio::test]
+async fn test_collector_lease_expiration_transitions_to_unknown() {
+    let runtime = AgentStatusRuntime::new(AgentStatusAvailability::Ready, None);
+    let collector = AgentStatusCollector::bind(
+        runtime.clone(),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+    )
+    .await
+    .expect("bind collector");
+
+    let ws_url = collector.ws_url().to_string();
+
+    let reservation = runtime.reserve_credential("term-lease", 1).unwrap();
+    let token = reservation.token().to_string();
+    reservation.activate();
+
+    let req = build_ws_request(&ws_url, Some(&token), None);
+    let (mut ws_stream, _) = connect_async(req).await.unwrap();
+
+    let hello = sample_hello("rep-lease", "sess-1");
+    ws_stream
+        .send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
+        .await
+        .unwrap();
+    let _ = ws_stream.next().await.unwrap().unwrap(); // accepted
+
+    // Send TurnStarted report
+    let start_rep = sample_report(
+        1,
+        ReporterEventKind::TurnStarted,
+        AgentState::Working,
+        "sess-1",
+        Some("turn-1"),
+        None,
+    );
+    ws_stream
+        .send(Message::Text(serde_json::to_string(&start_rep).unwrap().into()))
+        .await
+        .unwrap();
+    let _ = ws_stream.next().await.unwrap().unwrap(); // ack 1
+
+    assert_eq!(runtime.snapshot().terminals[0].state, AgentState::Working);
+
+    // Subscribe to broadcast events
+    let mut rx = runtime.subscribe();
+
+    // Trigger lease expiration check:
+    // Simulate now_ms being 20_000ms after last report time (lease is 15_000ms)
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 20_000;
+    let expired_count = runtime.check_leases_with_time(now_ms, 15_000).unwrap();
+    assert_eq!(expired_count, 1);
+
+    // Verify snapshot immediately marks terminal as Unknown
+    let snap = runtime.snapshot();
+    assert_eq!(snap.terminals[0].state, AgentState::Unknown);
+
+    // Verify broadcast event was sent
+    let ev = rx.recv().await.unwrap();
+    match ev {
+        AgentStatusBroadcastEvent::Changed(p) => {
+            assert_eq!(p.row.id, "term-lease");
+            assert_eq!(p.row.state, AgentState::Unknown);
+            // Lease expiration NEVER emits attention or completion alert
+            assert!(p.attention.is_none());
+        }
+        _ => panic!("expected changed event"),
+    }
+
+    // Verify reporter connection received close signal from server
+    let close_msg = ws_stream.next().await;
+    assert!(
+        matches!(close_msg, Some(Ok(Message::Close(_))) | None),
+        "expired reporter connection received close"
+    );
+
+    collector.shutdown();
 }

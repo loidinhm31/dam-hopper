@@ -474,17 +474,27 @@ impl AgentStatusRuntime {
         let _ = self.0.event_tx.send(event);
     }
 
-    /// Check lease expirations and broadcast changes for expired terminals.
+    /// Check lease expirations and broadcast changes for expired terminals using defaults.
     pub fn check_leases(&self) -> Result<usize, AgentStatusError> {
         let now_ms = crate::pty::session::now_ms();
-        let outputs = {
+        self.check_leases_with_time(now_ms, DEFAULT_LEASE_MS)
+    }
+
+    /// Check lease expirations with explicit time and lease parameters.
+    pub fn check_leases_with_time(
+        &self,
+        now_ms: u64,
+        lease_ms: u64,
+    ) -> Result<usize, AgentStatusError> {
+        let (outputs, revision) = {
             let mut reg = self.0.registry.write();
-            reg.check_leases(now_ms, DEFAULT_LEASE_MS)?
+            let outputs = reg.check_leases(now_ms, lease_ms)?;
+            let revision = reg.revision;
+            (outputs, revision)
         };
 
         let mut changed_count = 0;
         let server_epoch = self.server_epoch();
-        let revision = self.0.registry.read().revision;
 
         for output in outputs {
             if output.state_changed {

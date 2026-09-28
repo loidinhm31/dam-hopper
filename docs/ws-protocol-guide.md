@@ -424,6 +424,100 @@ target-unavailable event is emitted for a create or respawn failure only after
 fresh target validation confirms that the registered target was lost; ordinary
 PTY or cwd failures remain ordinary request/recovery errors.
 
+
+### Agent Status Push Events (Phases 01–05 complete; Linux-qualified)
+
+Server-owned semantic agent status updates are broadcast to authenticated clients on `/ws`.
+
+#### `terminal:agentStatusChanged`
+
+Emitted when a terminal's agent-status row changes, including first reporter
+admission and subsequent status/session updates. Optional `attention` appears
+only when the transition warrants user attention:
+
+```json
+{
+  "kind": "terminal:agentStatusChanged",
+  "serverEpoch": 4305114706658182,
+  "revision": 2,
+  "row": {
+    "id": "term-1",
+    "incarnation": 1833568411063296,
+    "agentKind": "omp",
+    "agentSessionId": "sess-1",
+    "reporterEpoch": 1,
+    "state": "working",
+    "turnId": "turn-100",
+    "attentionRevision": 0
+  }
+}
+```
+
+When a blocker arises (e.g. tool approval requested) or turn ends with attention:
+
+```json
+{
+  "kind": "terminal:agentStatusChanged",
+  "serverEpoch": 4305114706658182,
+  "revision": 3,
+  "row": {
+    "id": "term-1",
+    "incarnation": 1833568411063296,
+    "agentKind": "omp",
+    "agentSessionId": "sess-1",
+    "reporterEpoch": 1,
+    "state": "blocked",
+    "reason": "approval",
+    "turnId": "turn-100",
+    "attentionRevision": 1
+  },
+  "attention": {
+    "id": "4305114706658182:term-1:1833568411063296:1",
+    "kind": "needs-attention",
+    "terminalId": "term-1",
+    "incarnation": 1833568411063296,
+    "agentKind": "omp",
+    "agentSessionId": "sess-1",
+    "turnId": "turn-100",
+    "reason": "approval",
+    "attentionRevision": 1,
+    "timestampMs": 1790594288000
+  }
+}
+```
+
+#### `terminal:agentStatusRemoved`
+
+Emitted when a terminal session is killed, disposed, or retired:
+
+```json
+{
+  "kind": "terminal:agentStatusRemoved",
+  "serverEpoch": 4305114706658182,
+  "revision": 4,
+  "terminalId": "term-1",
+  "incarnation": 1833568411063296
+}
+```
+
+#### `terminal:agentStatusInvalidated`
+
+Emitted when the bounded server-side status broadcast drops events for this
+client; the client must re-synchronize from a fresh snapshot.
+
+```json
+{
+  "kind": "terminal:agentStatusInvalidated",
+  "serverEpoch": 4305114706658182,
+  "revision": 0
+}
+```
+
+The lag marker uses `revision: 0`; clients reconcile from the snapshot revision
+rather than treating it as a resume cursor.
+
+Clients fetch a fresh snapshot via `GET /api/agent-status/v1/snapshot` upon receiving this event; see the [Agent Status API](./api-reference.md).
+
 ### File System — Tree Events
 
 ```json

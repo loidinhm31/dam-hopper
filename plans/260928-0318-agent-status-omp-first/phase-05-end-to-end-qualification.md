@@ -7,8 +7,8 @@
 
 ## Overview
 
-Date: 2026-09-28. Priority: P2. Implementation: pending. Review: pending release-evidence review.
-Prove real Linux OMP behavior, actual browser surfaces and packaged server installation. Tests alone do not establish feature completion.
+Date: 2026-09-28. Priority: P2. Implementation: complete. Review: qualified (2026-09-28).
+Proved real Linux OMP behavior, actual browser surfaces, and packaged server installation. Complete C01–C19 acceptance criteria qualified with verifiable evidence.
 
 ## Key Insights
 
@@ -56,13 +56,12 @@ Update after runtime proof:
 
 ## Todo list
 
-- [ ] Focused transition/security/reconnect/migration suites pass.
-- [ ] Real Linux OMP runtime scenario evidence recorded.
-- [ ] Actual browser surfaces and notification selection verified.
-- [ ] Packaged server installer and privacy boundary proven.
-- [ ] Existing behavior regressions checked; Windows compilation retained.
-- [ ] Delivered architecture/docs/changelog and rollback instructions accurate.
-
+- [X] Focused transition/security/reconnect/migration suites pass.
+- [X] Real Linux OMP runtime scenario evidence recorded.
+- [X] Actual browser surfaces and notification selection verified.
+- [X] Packaged server installer and privacy boundary proven.
+- [X] Existing behavior regressions checked; Windows compilation retained.
+- [X] Delivered architecture/docs/changelog and rollback instructions accurate.
 ## Success Criteria
 
 C01–C19 evidence complete; no unqualified success claims. A user can deploy the server, install adapter once, launch ordinary OMP, observe semantic status while terminal inactive, receive opted-in notification and navigate to the correct profile/incarnation. OMP error/exit cannot falsely mark a task successful. No future Codex implementation required for acceptance.
@@ -77,4 +76,4 @@ Run safe local prompts and test-only credentials. Inspect public snapshots, diag
 
 ## Next steps
 
-Once all gates pass, implementation can be reviewed for release. Additional agent rollout is a separate request using the same contract; screen engine, closed-browser notifications and Windows runtime qualification are not implied by this phase.
+Phase 05 end-to-end qualification and release evidence review approved (2026-09-28; review report: `plans/reports/code-review-260928-1834-phase-05-end-to-end-qualification.md`). All C01–C19 acceptance gates qualified on Linux. Next step is production release deployment following the rollout procedure documented in `docs/architecture/agent-status.md` and `docs/CHANGELOG.md`. Additional agent rollouts (e.g. Codex) remain future requests utilizing this shared contract.

@@ -932,6 +932,44 @@ still-unobserved Windows CI result, canary-host profiling, staged
 monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
 work; none of those checks is passed evidence.
 
+## Agent Status API (Phases 01–05)
+
+Server-owned semantic agent activity reporting. Phases 01–05 are complete; Phase 05 qualified Linux x86_64 with OMP 18.4.1 across C01–C19. See the [agent-status architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+The snapshot route uses normal `/api/*` Bearer auth middleware.
+
+### GET /api/agent-status/v1/snapshot
+
+Returns the current active agent status snapshot across all live managed terminals.
+
+**Response:**
+
+```json
+{
+  "version": 1,
+  "serverEpoch": 4305114706658182,
+  "revision": 1,
+  "availability": "ready",
+  "terminals": [
+    {
+      "id": "term-1",
+      "incarnation": 1833568411063296,
+      "agentKind": "omp",
+      "agentSessionId": "sess-1",
+      "reporterEpoch": 1,
+      "state": "working",
+      "turnId": "turn-100",
+      "attentionRevision": 0
+    }
+  ]
+}
+```
+
+- `version`: Protocol version (`1`).
+- `serverEpoch`: Random epoch generated per server process start.
+- `revision`: Monotonically increasing state sequence.
+- `availability`: `"ready" | "unavailable" | "platform-unqualified"`.
+- `terminals`: Array of active agent status rows.
+
 ## Codex Usage Analytics
 
 Protected, aggregate-only analytics for the local Codex telemetry store. All routes require

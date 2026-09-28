@@ -415,13 +415,12 @@ kill, restart, and disposal lifecycle. PTY activity evidence is private and
 content-free; terminal bytes, commands, arguments, and environment are not
 used as idle-suspend identity.
 
-The workflow subsystem persists Plan/Phase/Task hierarchies, sessions, links,
-notes, and bounded SQLite events; telemetry is separately opt-in and
-aggregate-only. Media tickets and browser-debug artifacts use scoped,
-expiring capabilities. Phase 01 defines `server/src/agent_status/` Rust semantic contract/reducer and `packages/ui/src/api/agent-status-types.ts` decoders;
-Phase 02 adds the shared runtime, private Linux loopback collector, PTY-incarnation credentials, protected snapshot, and authenticated WebSocket status pushes.
-Phase 03 adds the standalone OMP producer embedded in `dam-hopper-server` plus `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`; browser consumption, badges, and notifications remain planned. See [agent-status architecture](./architecture/agent-status.md).
-
+The workflow persists Plan/Phase/Task, sessions, links, notes, and bounded SQLite events; telemetry is opt-in and aggregate-only. Media tickets and browser-debug artifacts use scoped, expiring capabilities.
+Agent status is complete through Phase 05; Linux qualification passed C01–C19.
+Phase 01 defines Rust `server/src/agent_status/` and TypeScript `packages/ui/src/api/agent-status-types.ts`; Phase 02 adds private loopback reporting with PTY-scoped credentials.
+The protected snapshot is `GET /api/agent-status/v1/snapshot`; authenticated pushes are `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`.
+Phase 03 embeds OMP and provides `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`; Phase 04 delivers profile-safe badges and notifications (`terminalAgentNotifications`).
+Phase 05 qualified Linux x86_64 with OMP 18.4.1; see [architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
 ## Backend path and configuration normalization (Phase 01)
 
 The path/config boundary is implemented by
