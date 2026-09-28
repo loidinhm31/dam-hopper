@@ -569,3 +569,99 @@ async fn test_omp_extension_api_lifecycle() {
     .0;
     assert_eq!(uninstalled_rep.status, dam_hopper_server::agent_status::ManagedExtensionStatus::Absent);
 }
+
+#[tokio::test]
+async fn test_agent_paths_verification_api() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let agent_dir = tmp.path().join("omp-agent");
+    let codex_dir = tmp.path().join("codex");
+    std::fs::create_dir_all(&agent_dir).expect("create agent_dir");
+    std::fs::create_dir_all(&codex_dir).expect("create codex_dir");
+
+    let agent_dir_str = agent_dir.to_str().unwrap().to_string();
+    let codex_dir_str = codex_dir.to_str().unwrap().to_string();
+
+    // 1. Initial verification with explicit paths (extension absent, codex config absent)
+    let query = dam_hopper_server::api::agent_status::PathsVerificationQuery {
+        agent_dir: Some(agent_dir_str.clone()),
+        codex_dir: Some(codex_dir_str.clone()),
+    };
+    let res = dam_hopper_server::api::agent_status::get_agent_paths_verification(
+        axum::extract::Query(query),
+    )
+    .await
+    .expect("verify paths")
+    .0;
+
+    assert_eq!(res.omp_install_dir, agent_dir_str);
+    assert_eq!(res.codex_config_dir, codex_dir_str);
+    // Extension is absent -> cannot enable
+    assert!(!res.omp_can_enable);
+    assert!(res.omp_reason.is_some());
+    // Codex config is absent -> cannot enable
+    assert!(!res.codex_config_exists);
+    assert!(!res.codex_can_enable);
+    assert!(res.codex_reason.is_some());
+
+    // 2. Install extension into agent_dir
+    let install_body = dam_hopper_server::api::agent_status::ExtensionInstallBody {
+        agent_dir: Some(agent_dir_str.clone()),
+    };
+    let installed = dam_hopper_server::api::agent_status::install_omp_extension(
+        axum::Json(install_body),
+    )
+    .await
+    .expect("install extension")
+    .0;
+    assert_eq!(installed.status, dam_hopper_server::agent_status::ManagedExtensionStatus::Current);
+
+    // 3. Create codex config.toml
+    std::fs::write(codex_dir.join("config.toml"), "[tui]\n").expect("write codex config");
+
+    // 4. Verify again with paths matching runtime paths (simulate runtime env vars)
+    // Temporarily set env vars so runtime notification paths match our temp paths
+    unsafe {
+        std::env::set_var("PI_CODING_AGENT_DIR", &agent_dir_str);
+        std::env::set_var("CODEX_HOME", &codex_dir_str);
+    }
+
+    let query2 = dam_hopper_server::api::agent_status::PathsVerificationQuery {
+        agent_dir: Some(agent_dir_str.clone()),
+        codex_dir: Some(codex_dir_str.clone()),
+    };
+    let res2 = dam_hopper_server::api::agent_status::get_agent_paths_verification(
+        axum::extract::Query(query2),
+    )
+    .await
+    .expect("verify paths with matching runtime")
+    .0;
+
+    assert_eq!(res2.omp_status, dam_hopper_server::agent_status::ManagedExtensionStatus::Current);
+    assert!(res2.omp_can_enable);
+    assert!(res2.omp_reason.is_none());
+    assert!(res2.codex_config_exists);
+    assert!(res2.codex_can_enable);
+    assert!(res2.codex_reason.is_none());
+
+    // 5. Test path mismatch: point agent_dir to another directory
+    let other_dir = tmp.path().join("other-agent");
+    std::fs::create_dir_all(&other_dir).expect("create other_dir");
+    let query3 = dam_hopper_server::api::agent_status::PathsVerificationQuery {
+        agent_dir: Some(other_dir.to_str().unwrap().to_string()),
+        codex_dir: Some(codex_dir_str.clone()),
+    };
+    let res3 = dam_hopper_server::api::agent_status::get_agent_paths_verification(
+        axum::extract::Query(query3),
+    )
+    .await
+    .expect("verify mismatched paths")
+    .0;
+
+    assert!(!res3.omp_can_enable);
+    assert!(res3.omp_reason.as_ref().unwrap().contains("does not match notification runtime path"));
+
+    unsafe {
+        std::env::remove_var("PI_CODING_AGENT_DIR");
+        std::env::remove_var("CODEX_HOME");
+    }
+}

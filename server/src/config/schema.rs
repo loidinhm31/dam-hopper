@@ -871,6 +871,15 @@ pub struct TerminalAgentNotificationAgents {
     pub omp: TerminalAgentNotificationPolicy,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSettingsPaths {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "omp_agent_dir")]
+    pub omp_agent_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "codex_dir")]
+    pub codex_dir: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TerminalAgentNotifications {
@@ -1063,6 +1072,8 @@ pub struct UiConfig {
     pub terminal_auto_switch_project_enabled: bool,
     #[serde(default, alias = "terminal_agent_notifications")]
     pub terminal_agent_notifications: TerminalAgentNotifications,
+    #[serde(default, alias = "agent_settings_paths", alias = "agentSettingsPaths")]
+    pub agent_settings_paths: Option<AgentSettingsPaths>,
     #[serde(default, alias = "explorer_show_hidden", alias = "explorerShowHidden")]
     pub explorer_show_hidden: bool,
     #[serde(
@@ -1157,6 +1168,7 @@ impl Default for UiConfig {
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
             terminal_agent_notifications: TerminalAgentNotifications::default(),
+            agent_settings_paths: None,
             explorer_show_hidden: false,
             explorer_language_filter: ExplorerLanguageFilter::default(),
             mobile_custom_keyboard_enabled: true,

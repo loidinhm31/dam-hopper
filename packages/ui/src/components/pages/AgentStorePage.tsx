@@ -21,16 +21,16 @@ import {
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { AgentStoreItem } from "@/api/client.js";
-type Tab = "store" | "memory" | "integrations" | "import";
+type Tab = "store" | "memory" | "settings" | "import";
 
 const MemoryEditor = lazy(() =>
   import("@/components/organisms/MemoryEditor.js").then((m) => ({
     default: m.MemoryEditor,
   })),
 );
-const OmpExtensionManager = lazy(() =>
-  import("@/components/organisms/OmpExtensionManager.js").then((m) => ({
-    default: m.OmpExtensionManager,
+const AgentSettings = lazy(() =>
+  import("@/components/organisms/AgentSettings.js").then((m) => ({
+    default: m.AgentSettings,
   })),
 );
 const ImportDialog = lazy(() =>
@@ -126,7 +126,7 @@ export function AgentStorePage() {
         {/* Tab bar + profile selector + action */}
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
-            {(["store", "memory", "integrations", "import"] as Tab[]).map((tab) => (
+            {(["store", "memory", "settings", "import"] as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -141,8 +141,8 @@ export function AgentStorePage() {
                   ? "Store"
                   : tab === "memory"
                     ? "Memory Files"
-                    : tab === "integrations"
-                      ? "Integrations"
+                    : tab === "settings"
+                      ? "Agent Settings"
                       : "Import"}
               </button>
             ))}
@@ -266,10 +266,10 @@ export function AgentStorePage() {
           </div>
         )}
 
-        {/* ── Integrations tab ──────────────────────────────────────────── */}
-        {activeTab === "integrations" && (
+        {/* ── Agent Settings tab ────────────────────────────────────────── */}
+        {activeTab === "settings" && (
           <Suspense fallback={AGENT_STORE_FALLBACK}>
-            <OmpExtensionManager owner={owner} />
+            <AgentSettings owner={owner} profileId={effectiveProfileId} />
           </Suspense>
         )}
 

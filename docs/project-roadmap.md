@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Agent Store install paths and settings refactor (2026-09-28)
+
+- **Plan status: COMPLETED (4/4 phases; 100%; updated 2026-09-28 23:57:01 +07:00).** Close-out follows explicit project approval. Agent Store now has a unified Agent Settings surface and server-profile-specific OMP/Codex path configuration.
+- **Implemented gate:** The server save path rejects OMP notification enablement when the selected install path differs from the runtime path or its managed extension is not current; Codex enablement requires an existing config file. The focused gate test passed.
+- **Validation and references:** Focused backend status/runtime/install/config tests and the UI test suite passed; see the [test report](../plans/reports/test-report-260928-2315-agent-store-settings-install-path.md), [final status report](../plans/reports/project-manager-260928-2335-agent-store-settings-final.md), [documentation close-out](../plans/reports/docs-manager-260928-2357-agent-store-settings-final.md), [plan](../plans/260928-2225-agent-store-settings-install-path/plan.md), and [changelog entry](./CHANGELOG.md#2026-09-28).
+- **Residual scope:** The final report records review findings not demonstrated as resolved by the scoped test runs, including dispatch-time eligibility revalidation, stricter Codex config validation, install-path directory creation, and profile/draft path handling. The completed status is an approved close-out, not evidence that these additional conditions passed.
+
 ### Agent status and notifications (2026-09-28)
 
 - **Plan status: COMPLETED (5/5 phases; 100%; updated 2026-09-28).** Phases 01–05 are complete; Phase 04 and Phase 05 both DONE (2026-09-28; 100%).

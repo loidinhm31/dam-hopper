@@ -18,6 +18,8 @@ import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import {
   decodeAgentStatusSnapshot,
   decodeExtensionStatusReport,
+  decodeAgentPathsVerification,
+  type AgentPathsVerification,
   type AgentStatusSnapshotV1,
   type ExtensionStatusReport,
 } from "./agent-status-types.js";
@@ -1641,6 +1643,11 @@ export interface AgentCommandPattern {
   agent: TerminalAgentType;
   enabled: boolean;
 }
+export interface AgentSettingsPaths {
+  ompAgentDir?: string;
+  codexDir?: string;
+}
+
 
 export interface UiConfig {
   hostResourcePinnedMount?: string | null;
@@ -1676,6 +1683,7 @@ export interface UiConfig {
   projectCommandOrder?: Record<string, string[]>;
   runtimeGroupOrder?: string[];
   runtimeItemOrder?: Record<string, string[]>;
+  agentSettingsPaths?: AgentSettingsPaths;
 }
 
 export interface GlobalConfig {
@@ -2494,6 +2502,16 @@ export function createApiClient(
             agentDir,
           }),
         ),
+      getAgentPathsVerification: async (params?: {
+        agentDir?: string;
+        codexDir?: string;
+      }) =>
+        decodeAgentPathsVerification(
+          await transport.invoke<unknown>(
+            "agentStatus:getAgentPathsVerification",
+            params,
+          ),
+        ),
     },
     health: {
       get: () => transport.invoke<HealthResponse>("health:get"),
@@ -3262,6 +3280,10 @@ export interface ApiClient {
     getOmpExtensionStatus: (agentDir?: string) => Promise<ExtensionStatusReport>;
     installOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
     uninstallOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
+    getAgentPathsVerification: (params?: {
+      agentDir?: string;
+      codexDir?: string;
+    }) => Promise<AgentPathsVerification>;
   };
   health: {
     get: () => Promise<HealthResponse>;

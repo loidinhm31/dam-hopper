@@ -161,7 +161,7 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
     };
 
     let entries = std::mem::take(ui);
-    for (key, value) in entries {
+    for (key, mut value) in entries {
         let toml_key = match key.as_str() {
             "systemFontSize" => "system_font_size",
             "editorFontSize" => "editor_font_size",
@@ -182,6 +182,21 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
             "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
             "terminalAgentNotifications" => "terminal_agent_notifications",
+            "agentSettingsPaths" | "agent_settings_paths" => {
+                if let Value::Object(inner) = &mut value {
+                    let inner_entries: Vec<(String, Value)> = inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    inner.clear();
+                    for (ik, iv) in inner_entries {
+                        let toml_ik = match ik.as_str() {
+                            "ompAgentDir" | "omp_agent_dir" => "omp_agent_dir",
+                            "codexDir" | "codex_dir" => "codex_dir",
+                            other => other,
+                        };
+                        inner.insert(toml_ik.to_string(), iv);
+                    }
+                }
+                "agent_settings_paths"
+            }
             "explorerShowHidden" => "explorer_show_hidden",
             "explorerLanguageFilter" => "explorer_language_filter",
             "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",

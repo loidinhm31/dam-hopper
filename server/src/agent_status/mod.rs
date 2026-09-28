@@ -14,7 +14,7 @@ pub use runtime::{
 };
 pub use collector::AgentStatusCollector;
 pub use integration::{
-    check_extension_status, install_extension, uninstall_extension, ExtensionStatusReport,
-    IntegrationError, ManagedExtensionStatus, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION,
-    OMP_AGENT_STATUS_ASSET,
+    check_extension_status, install_extension, uninstall_extension, AgentPathsVerification,
+    ExtensionStatusReport, IntegrationError, ManagedExtensionStatus, EXTENSION_SUBPATH,
+    MANAGED_ADAPTER_VERSION, OMP_AGENT_STATUS_ASSET,
 };

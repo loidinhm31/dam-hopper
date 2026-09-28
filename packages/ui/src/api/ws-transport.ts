@@ -560,6 +560,14 @@ function channelToEndpoint(
       const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
       return { method: "DELETE", url: `/api/agent-status/omp/extension${q}` };
     }
+    case "agentStatus:getAgentPathsVerification": {
+      const d = data as { agentDir?: string; codexDir?: string } | undefined;
+      const params = new URLSearchParams();
+      if (d?.agentDir) params.set("agentDir", d.agentDir);
+      if (d?.codexDir) params.set("codexDir", d.codexDir);
+      const q = params.toString() ? `?${params.toString()}` : "";
+      return { method: "GET", url: `/api/agent-status/paths${q}` };
+    }
     case "terminal:buffer":
       return {
         method: "GET",
