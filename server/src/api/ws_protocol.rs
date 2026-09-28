@@ -282,6 +282,32 @@ pub enum ServerMsg {
         incarnation: Option<u64>,
     },
 
+    // Terminal agent status events
+    #[serde(rename = "terminal:agentStatusChanged")]
+    AgentStatusChanged {
+        #[serde(rename = "serverEpoch")]
+        server_epoch: u64,
+        revision: u64,
+        row: crate::agent_status::TerminalAgentStatusRow,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attention: Option<crate::agent_status::AgentAttentionEvent>,
+    },
+    #[serde(rename = "terminal:agentStatusRemoved")]
+    AgentStatusRemoved {
+        #[serde(rename = "serverEpoch")]
+        server_epoch: u64,
+        revision: u64,
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        incarnation: u64,
+    },
+    #[serde(rename = "terminal:agentStatusInvalidated")]
+    AgentStatusInvalidated {
+        #[serde(rename = "serverEpoch")]
+        server_epoch: u64,
+        revision: u64,
+    },
+
     // Process restarted successfully
     #[serde(rename = "process:restarted")]
     ProcessRestarted {

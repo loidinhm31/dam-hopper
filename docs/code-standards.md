@@ -51,7 +51,7 @@ server/src/
 └── commands/         # Command registry
 ```
 
-### Agent status semantic contract and reducer (Phase 01)
+### Agent status contract, reducer, and reporter transport (Phases 01–02)
 
 `server/src/agent_status/{types,reducer}.rs` owns the canonical v1 state,
 protocol DTOs, validation, and pure in-memory reducer/registry. Keep this model
@@ -59,7 +59,7 @@ separate from PTY process/output status and do not infer task success from
 silence or a turn end. Rust private reporter DTOs reject unknown fields; bound
 identifiers and counters before state mutation. `packages/ui/src/api/agent-status-types.ts`
 mirrors public types and validates public DTOs; unsupported versions or values
-must fail closed. Transport, OMP adapter, and browser UI remain planned. See the
+must fail closed. Phase 02 implements the private reporter transport; the OMP adapter and browser UI remain planned. See the
 [agent-status architecture](./architecture/agent-status.md).
 
 ### Trusted plugin contract candidate (Phase D00)

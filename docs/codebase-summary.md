@@ -418,9 +418,9 @@ used as idle-suspend identity.
 The workflow subsystem persists Plan/Phase/Task hierarchies, sessions, links,
 notes, and bounded SQLite events; telemetry is separately opt-in and
 aggregate-only. Media tickets and browser-debug artifacts use scoped,
-expiring capabilities. Phase 01 adds `server/src/agent_status/` Rust semantic
-contract/reducer code and `packages/ui/src/api/agent-status-types.ts` decoders;
-no reporter runtime, route, OMP adapter, browser consumer, badge, or notification delivery is wired. See [agent-status architecture](./architecture/agent-status.md).
+expiring capabilities. Phase 01 defines `server/src/agent_status/` Rust semantic contract/reducer and `packages/ui/src/api/agent-status-types.ts` decoders;
+Phase 02 adds the shared runtime, private Linux loopback collector, PTY-incarnation credentials, protected snapshot, and authenticated WebSocket status pushes.
+Collector failure preserves terminal use; other server platforms remain unqualified. OMP adapter, browser consumer, badges, and notifications remain planned. See [agent-status architecture](./architecture/agent-status.md).
 
 ## Backend path and configuration normalization (Phase 01)
 

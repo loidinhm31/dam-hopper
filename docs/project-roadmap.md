@@ -4,9 +4,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Agent status and notifications (2026-09-28)
 
-- **Plan status: IN PROGRESS (1/5 phases; 20%).** Phase 01 — semantic contract and reducer — is complete. It delivers the Rust v1 DTOs, validation, in-memory reducer/registry, and matching TypeScript public decoders.
-- **Phases 02–05 remain planned:** reporter transport and PTY lifecycle; bundled OMP adapter and installer; profile-safe badges and notifications; end-to-end and release qualification.
-- **Next:** Phase 02 reporter transport and PTY lifecycle. See the [plan](../plans/260928-0318-agent-status-omp-first/plan.md) and [architecture](./architecture/agent-status.md).
+- **Plan status: IN PROGRESS (2/5 phases; 40%; updated 2026-09-28).** Phase 01 — semantic contract and reducer — is complete. Phase 02 — reporter transport and PTY lifecycle — is DONE (2026-09-28; 100%).
+- **Phase 02 delivery:** private loopback collector, shared `AgentStatusRuntime`, PTY-scoped credentials across lifecycle paths, protected snapshot endpoint, and semantic WebSocket push/invalidation. Review recommendations for lease-expiry cleanup, token-map eviction, and bounded pre-auth admission are applied in current source.
+- **Validation recorded:** 5/5 Phase 02-specific suites passed; the review recorded 1,563/1,563 Cargo tests and 1,923/1,923 UI tests passed, TypeScript build clean, and no warnings in new code. See the [Phase 02 plan](../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md) and [review](../plans/reports/code-review-260928-1045-phase-02-reporter-transport-pty-lifecycle.md).
+- **Phases 03–05 remain planned:** bundled OMP adapter and installer; profile-safe badges and notifications; end-to-end and release qualification.
+- **Next:** Phase 03 — bundled OMP adapter and installer. See the [plan](../plans/260928-0318-agent-status-omp-first/plan.md), [architecture](./architecture/agent-status.md), and [changelog](./CHANGELOG.md#2026-09-28).
 
 ### Plugin admin profile binding and Linux installer identity conflict (2026-09-27)
 

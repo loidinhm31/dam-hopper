@@ -3239,3 +3239,127 @@ mod pty_activity_tests {
         let _ = manager.kill(id);
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+mod agent_status_lifecycle_tests {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::agent_status::{
+        AgentStatusAvailability, AgentStatusRuntime,
+        ENV_AGENT_STATUS_TOKEN, ENV_AGENT_STATUS_URL,
+    };
+    use crate::pty::event_sink::NoopEventSink;
+    use crate::pty::manager::{
+        build_child_env_from_parent_snapshot, is_reserved_agent_status_env_var, PtyCreateOpts,
+        PtySessionManager,
+    };
+
+    #[test]
+    fn test_reserved_env_vars_stripped_from_parent_and_user_input() {
+        assert!(is_reserved_agent_status_env_var(ENV_AGENT_STATUS_URL));
+        assert!(is_reserved_agent_status_env_var(ENV_AGENT_STATUS_TOKEN));
+        assert!(is_reserved_agent_status_env_var("dam_hopper_agent_status_url"));
+        assert!(is_reserved_agent_status_env_var("Dam_Hopper_Agent_Status_Token"));
+        assert!(!is_reserved_agent_status_env_var("PATH"));
+
+        let mut parent_env = HashMap::new();
+        parent_env.insert(
+            ENV_AGENT_STATUS_URL.to_string(),
+            OsString::from("ws://malicious.local/v1/agent-status"),
+        );
+        parent_env.insert(
+            ENV_AGENT_STATUS_TOKEN.to_string(),
+            OsString::from("stale-token-12345"),
+        );
+        parent_env.insert("PATH".to_string(), OsString::from("/bin:/usr/bin"));
+
+        let mut user_env = HashMap::new();
+        user_env.insert(
+            ENV_AGENT_STATUS_URL.to_string(),
+            "ws://user-injected.local/v1/agent-status".to_string(),
+        );
+        user_env.insert(
+            ENV_AGENT_STATUS_TOKEN.to_string(),
+            "forged-token-54321".to_string(),
+        );
+        user_env.insert("USER_VAR".to_string(), "hello".to_string());
+
+        let result = build_child_env_from_parent_snapshot(&parent_env, &user_env);
+        let env_keys: Vec<_> = result.iter().map(|(k, _)| k.as_str()).collect();
+
+        assert!(!env_keys.contains(&ENV_AGENT_STATUS_URL));
+        assert!(!env_keys.contains(&ENV_AGENT_STATUS_TOKEN));
+        assert!(env_keys.contains(&"USER_VAR"));
+    }
+
+    #[tokio::test]
+    async fn test_pty_creation_fail_open_without_agent_status() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        assert!(manager.agent_status_runtime().is_none());
+
+        let mut env = HashMap::new();
+        env.insert("TERM".into(), "xterm-256color".into());
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-failopen".to_string(),
+                command: "echo hello".to_string(),
+                cwd: "/tmp".to_string(),
+                env,
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: crate::config::schema::RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("pty create must succeed when status unavailable");
+
+        assert_eq!(meta.id, "term-failopen");
+        assert!(meta.alive);
+        let _ = manager.kill("term-failopen");
+    }
+
+    #[tokio::test]
+    async fn test_pty_creation_activates_credential_and_cleans_up_on_kill() {
+        let runtime = AgentStatusRuntime::with_epoch(
+            9999,
+            AgentStatusAvailability::Ready,
+            Some("ws://127.0.0.1:4801/v1/agent-status".to_string()),
+        );
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        manager.set_agent_status_runtime(runtime.clone());
+
+        let mut env = HashMap::new();
+        env.insert("TERM".into(), "xterm-256color".into());
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-status-live".to_string(),
+                command: "sleep 10".to_string(),
+                cwd: "/tmp".to_string(),
+                env,
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: crate::config::schema::RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("create with status");
+
+        // Ensure credentials were NOT stored in session meta or env options
+        assert!(!meta.command.contains(ENV_AGENT_STATUS_TOKEN));
+
+        // Kill terminal => removes terminal from runtime and revokes token
+        manager.kill("term-status-live").expect("kill");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let snap = runtime.snapshot();
+        assert!(snap.terminals.is_empty(), "terminal removed from status runtime on kill");
+    }
+}

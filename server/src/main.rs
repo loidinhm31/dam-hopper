@@ -312,6 +312,47 @@ async fn main() -> anyhow::Result<()> {
         *cell = Some(std::sync::Arc::clone(&port_forward_manager));
     }
 
+    // ── Agent status runtime & loopback collector ─────────────────────────────
+    #[cfg(target_os = "linux")]
+    let (agent_status_runtime, agent_status_collector) = {
+        let runtime = dam_hopper_server::agent_status::AgentStatusRuntime::new(
+            dam_hopper_server::agent_status::AgentStatusAvailability::Ready,
+            None,
+        );
+        match dam_hopper_server::agent_status::AgentStatusCollector::bind(
+            runtime.clone(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        )
+        .await
+        {
+            Ok(collector) => {
+                tracing::info!(
+                    ws_url = %collector.ws_url(),
+                    "Bound agent status private loopback collector"
+                );
+                (runtime, Some(collector))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to bind agent status collector; terminal operation continues without agent status"
+                );
+                let unavailable =
+                    dam_hopper_server::agent_status::AgentStatusRuntime::unavailable();
+                (unavailable, None)
+            }
+        }
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let (agent_status_runtime, agent_status_collector) = (
+        dam_hopper_server::agent_status::AgentStatusRuntime::platform_unqualified(),
+        None::<dam_hopper_server::agent_status::AgentStatusCollector>,
+    );
+
+    agent_status_runtime.start_lease_task(std::time::Duration::from_secs(1));
+    pty_manager.set_agent_status_runtime(agent_status_runtime.clone());
+
     let store_rel_path = config
         .agent_store
         .as_ref()
@@ -385,7 +426,8 @@ async fn main() -> anyhow::Result<()> {
         diagnostics,
         telemetry_runtime.clone(),
     )?
-    .with_workflow_store(workflow_store.clone());
+    .with_workflow_store(workflow_store.clone())
+    .with_agent_status(agent_status_runtime.clone());
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
             dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(
@@ -553,6 +595,10 @@ async fn main() -> anyhow::Result<()> {
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
     telemetry_shutdown.shutdown().await;
+    if let Some(collector) = agent_status_collector {
+        collector.shutdown();
+    }
+    agent_status_runtime.shutdown();
 
     // Graceful shutdown: snapshot live PTY buffers, stop reader producers, wait
     // for their final persistence commands, then close the worker. Sending

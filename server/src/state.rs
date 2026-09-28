@@ -131,6 +131,8 @@ pub struct AppState {
     pub plugin_service: Arc<crate::plugins::PluginApiService>,
     /// Authentication and session policy service.
     pub auth_service: Arc<crate::auth::AuthService>,
+    /// Agent status runtime coordinating credentials, admission, and semantic events.
+    pub agent_status: crate::agent_status::AgentStatusRuntime,
 }
 
 impl AppState {
@@ -432,11 +434,20 @@ impl AppState {
                 ))
             },
             auth_service,
+            agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
         })
     }
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
         self.auth_service = auth_service;
+        self
+    }
+    /// Attach the live agent status runtime.
+    pub fn with_agent_status(
+        mut self,
+        agent_status: crate::agent_status::AgentStatusRuntime,
+    ) -> Self {
+        self.agent_status = agent_status;
         self
     }
     /// Attach the optional workflow repository using the existing session DB connection.
