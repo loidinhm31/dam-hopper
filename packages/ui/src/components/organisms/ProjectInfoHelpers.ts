@@ -42,10 +42,13 @@ export function buildProjectInfoPushTargetWithMode(
   force: boolean,
   target?: ProjectTargetRef,
 ) {
-  const targetFields =
-    target?.worktreePath == null
-      ? { project }
-      : { project, worktreePath: target.worktreePath };
+  const targetFields = {
+    project,
+    ...(target?.profileId ? { profileId: target.profileId } : {}),
+    ...(target?.worktreePath != null
+      ? { worktreePath: target.worktreePath }
+      : {}),
+  };
   const pushTarget =
     rootId === DEFAULT_GIT_ROOT_ID
       ? targetFields

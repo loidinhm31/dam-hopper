@@ -274,6 +274,16 @@ the target through unified navigation or add the profile-qualified fields.
 - A rejected remote profile remains editable and visible. It receives no
   auto-login or connection traffic until its origin/platform is supported.
 
+## Page endpoint resolution
+
+In a multi-profile environment, different pages resolve API and WebSocket endpoints according to their functional ownership:
+
+- **Workspace (`/workspace`)**: Project-scoped. Terminals, editor tabs, file arbor, search, and diagnostics route to the server owning the selected workspace project (`selectedProject.profileId`).
+- **Git (`/git`)**: Aggregated multi-profile repository list. The page displays repositories from all connected profiles with profile badges for disambiguation. Selecting a project routes all Git operations (log, branch, status, roots, local changes, diffs, push) to that project's profile, and synchronizes selection to the workspace store. Bulk fetch and pull operations are partitioned per profile and executed sequentially to ensure clean SSH credential retry handling without cross-server leakage.
+- **Settings (`/settings`)**: Server administration (workspace config, global defaults, usage insights, cache/workspace maintenance, and plugin management) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
+- **Plugins (`/plugins/:installationId`)**: The **EVCrate Advisor** plugin (`evcrate.advisor`) is an administrative extension bound specifically to the **Settings Target Server** (`settingsProfileId ?? getActiveProfileId()`). Ordinary plugins remain scoped to the selected workspace project. Top navigation queries EVCrate Advisor from the Settings Target Server and project plugins from the workspace profile.
+- **Agent Store (`/agent-store`) & Usage (`/usage`)**: Dedicated on-page server switchers allow managing catalog inventory and token analytics for any connected profile independently of workspace project selection.
+
 ## Troubleshooting
 
 ### The profile list is empty

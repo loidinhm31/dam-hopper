@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useMemo, useEffect, useRef } from "react";
 import { GitCommit, GitBranch, History, Upload } from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
@@ -8,7 +8,6 @@ import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExpor
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
 import {
-  useProjects,
   useGitFetch,
   useGitPull,
   useGitPush,
@@ -16,10 +15,23 @@ import {
   useGitRoots,
   useProjectStatus,
 } from "@/api/queries.js";
-import type { GitOpResult, GitLogEntry, DiffFileEntry } from "@/api/client.js";
+import type {
+  GitOpResult,
+  GitLogEntry,
+  DiffFileEntry,
+  ProjectTargetInput,
+} from "@/api/client.js";
+import { normalizeProjectTarget } from "@/api/client.js";
+import {
+  projectKey,
+  parseProjectKey,
+  type ProjectRef,
+} from "@/api/ownership.js";
 import { Badge } from "@/components/atoms/Badge.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
+import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
+import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {
@@ -96,26 +108,30 @@ function ResultsSummary({ results }: SectionResults) {
   );
 }
 
-function BulkGitOperations({
-  selectedList,
-  projectNames,
-  selectedProjectName,
-  setFetchResults,
-  setPullResults,
-  setPushResults,
-}: {
-  selectedList: string[] | undefined;
-  projectNames: string[];
-  selectedProjectName: string | null;
+interface BulkGitOperationsProps {
+  selectedRefs: ProjectRef[] | undefined;
+  allProjectRefs: ProjectRef[];
+  selectedRef: ProjectRef | null;
   setFetchResults: (results: GitOpResult[] | null) => void;
   setPullResults: (results: GitOpResult[] | null) => void;
   setPushResults: (results: GitOpResult[] | null) => void;
-}) {
-  const selectedTarget = useProjectTarget(selectedProjectName);
-  const targetRef = selectedTarget?.target ?? selectedProjectName ?? "";
+}
+
+function BulkGitOperations({
+  selectedRefs,
+  allProjectRefs,
+  selectedRef,
+  setFetchResults,
+  setPullResults,
+  setPushResults,
+}: BulkGitOperationsProps) {
+  const selectedTarget = useProjectTarget(selectedRef);
+  const targetRef = selectedTarget?.target ?? selectedRef ?? "";
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
+  const [isFetching, setIsFetching] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const { data: roots = [] } = useGitRoots(targetRef);
   const rootOptions = projectInfoRootOptions(roots);
   const [selectedRootId, setSelectedRootId] = useState(".");
@@ -133,30 +149,104 @@ function BulkGitOperations({
     : "Project root";
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
-  const operationTargets = (selectedList ?? projectNames).map((projectName) =>
-    projectName === selectedProjectName ? targetRef : projectName,
+
+  const targetProjects = selectedRefs ?? allProjectRefs;
+  const operationTargets: ProjectTargetInput[] = targetProjects.map((ref) =>
+    selectedRef &&
+    ref.profileId === selectedRef.profileId &&
+    ref.project === selectedRef.project
+      ? targetRef
+      : ref,
   );
-  const pushDisabledReason = selectedProjectName
+  const pushDisabledReason = selectedRef
     ? null
     : "Select exactly one project to push. Bulk push is deferred in this phase.";
+
+  async function handleBulkFetch() {
+    setFetchResults(null);
+    setIsFetching(true);
+    const byProfile = new Map<string, ProjectTargetInput[]>();
+    for (const target of operationTargets) {
+      const norm = normalizeProjectTarget(target);
+      const pId = norm.profileId || "";
+      const group = byProfile.get(pId) ?? [];
+      group.push(target);
+      byProfile.set(pId, group);
+    }
+
+    const allResults: GitOpResult[] = [];
+    try {
+      for (const [, profileTargets] of byProfile) {
+        try {
+          const res = await executeWithRetry({ operation: "fetch" }, () =>
+            gitFetch.mutateAsync(profileTargets),
+          );
+          if (Array.isArray(res)) {
+            allResults.push(...res);
+          } else if (res) {
+            allResults.push(res);
+          }
+        } catch {
+          // preserve already collected results for other profiles
+        }
+      }
+    } finally {
+      setFetchResults(allResults.length > 0 ? allResults : null);
+      setIsFetching(false);
+    }
+  }
+
+  async function handleBulkPull() {
+    setPullResults(null);
+    setIsPulling(true);
+    const byProfile = new Map<string, ProjectTargetInput[]>();
+    for (const target of operationTargets) {
+      const norm = normalizeProjectTarget(target);
+      const pId = norm.profileId || "";
+      const group = byProfile.get(pId) ?? [];
+      group.push(target);
+      byProfile.set(pId, group);
+    }
+
+    const allResults: GitOpResult[] = [];
+    try {
+      for (const [, profileTargets] of byProfile) {
+        try {
+          const res = await executeWithRetry({ operation: "pull" }, () =>
+            gitPull.mutateAsync(profileTargets),
+          );
+          if (Array.isArray(res)) {
+            allResults.push(...res);
+          } else if (res) {
+            allResults.push(res);
+          }
+        } catch {
+          // preserve already collected results for other profiles
+        }
+      }
+    } finally {
+      setPullResults(allResults.length > 0 ? allResults : null);
+      setIsPulling(false);
+    }
+  }
 
   return (
     <>
       <PassphraseDialog {...passphraseDialogProps} />
       <GitForcePushDialog
         open={forcePushOpen}
-        project={selectedProjectName ?? ""}
+        project={selectedRef?.project ?? ""}
         rootLabel={selectedRootLabel}
         loading={gitPush.isPending}
         onClose={() => setForcePushOpen(false)}
         onConfirm={() => {
-          if (!selectedProjectName) return;
+          if (!selectedRef) return;
           setForcePushOpen(false);
           setPushResults(null);
           void executeWithRetry({ operation: "push" }, () =>
             gitPush.mutateAsync(
               buildProjectInfoPushTargetWithMode(
-                selectedProjectName,
+                selectedRef.project,
                 resolvedRootId,
                 true,
                 selectedTarget?.target,
@@ -176,22 +266,16 @@ function BulkGitOperations({
             <Button
               variant="primary"
               size="sm"
-              loading={gitFetch.isPending}
-              onClick={() => {
-                setFetchResults(null);
-                void executeWithRetry({ operation: "fetch" }, () =>
-                  gitFetch.mutateAsync(operationTargets),
-                )
-                  .then((r) => setFetchResults(r))
-                  .catch(() => {});
-              }}
+              loading={isFetching || gitFetch.isPending}
+              disabled={isFetching || isPulling || targetProjects.length === 0}
+              onClick={() => void handleBulkFetch()}
             >
               Start Fetch
             </Button>
           </div>
           <ProgressList
             initialProjects={
-              gitFetch.isPending ? (selectedList ?? projectNames) : []
+              isFetching ? targetProjects.map((p) => p.project) : []
             }
           />
         </section>
@@ -204,22 +288,16 @@ function BulkGitOperations({
             <Button
               variant="primary"
               size="sm"
-              loading={gitPull.isPending}
-              onClick={() => {
-                setPullResults(null);
-                void executeWithRetry({ operation: "pull" }, () =>
-                  gitPull.mutateAsync(operationTargets),
-                )
-                  .then((r) => setPullResults(r))
-                  .catch(() => {});
-              }}
+              loading={isPulling || gitPull.isPending}
+              disabled={isFetching || isPulling || targetProjects.length === 0}
+              onClick={() => void handleBulkPull()}
             >
               Start Pull
             </Button>
           </div>
           <ProgressList
             initialProjects={
-              gitPull.isPending ? (selectedList ?? projectNames) : []
+              isPulling ? targetProjects.map((p) => p.project) : []
             }
           />
         </section>
@@ -241,12 +319,12 @@ function BulkGitOperations({
               loading={gitPush.isPending}
               disabled={!!pushDisabledReason}
               onClick={() => {
-                if (!selectedProjectName) return;
+                if (!selectedRef) return;
                 setPushResults(null);
                 void executeWithRetry({ operation: "push" }, () =>
                   gitPush.mutateAsync(
                     buildProjectInfoPushTarget(
-                      selectedProjectName,
+                      selectedRef.project,
                       resolvedRootId,
                       selectedTarget?.target,
                     ),
@@ -265,7 +343,7 @@ function BulkGitOperations({
               loading={gitPush.isPending}
               disabled={!!pushDisabledReason}
               onClick={() => {
-                if (!selectedProjectName) return;
+                if (!selectedRef) return;
                 setForcePushOpen(true);
               }}
             >
@@ -274,7 +352,7 @@ function BulkGitOperations({
             </Button>
           </div>
 
-          {selectedProjectName && rootOptions.length > 1 && (
+          {selectedRef && rootOptions.length > 1 && (
             <div className="space-y-1">
               <label className="text-xs font-medium text-[var(--color-text-muted)]">
                 VCS Root
@@ -294,10 +372,10 @@ function BulkGitOperations({
             </div>
           )}
 
-          {selectedProjectName && (
+          {selectedRef && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm text-[var(--color-text-muted)]">
               <div className="font-medium text-[var(--color-text)]">
-                {selectedProjectName}
+                {selectedRef.project}
               </div>
               <div className="mt-1 text-xs">
                 Target root:{" "}
@@ -320,7 +398,11 @@ function BulkGitOperations({
 }
 
 export function GitPage() {
-  const { data: projects = [] } = useProjects();
+  const { allProjects } = useAggregatedProjects();
+  const workspaceProject = useWorkspaceStore((state) => state.selectedProject);
+  const setSelectedProject = useWorkspaceStore(
+    (state) => state.setSelectedProject,
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
     null,
@@ -330,12 +412,61 @@ export function GitPage() {
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
   const [pushResults, setPushResults] = useState<GitOpResult[] | null>(null);
 
-  const allSelected = selected.size === 0; // empty = all
-  const selectedList = allSelected ? undefined : [...selected];
-  const projectNames = projects.map((p) => p.name);
-  const selectedProjectName = selected.size === 1 ? [...selected][0] : null;
-  const selectedTarget = useProjectTarget(selectedProjectName);
-  const targetRef = selectedTarget?.target ?? selectedProjectName ?? "";
+  const availableProjectMap = useMemo(() => {
+    const map = new Map<string, ProjectRef>();
+    for (const item of allProjects) {
+      map.set(projectKey(item.ref), item.ref);
+    }
+    return map;
+  }, [allProjects]);
+
+  // Seed initial selection from workspaceStore on mount or hydration
+  const hasInitializedRef = useRef(false);
+  useEffect(() => {
+    if (hasInitializedRef.current || allProjects.length === 0) return;
+    hasInitializedRef.current = true;
+    if (workspaceProject) {
+      const key = projectKey(workspaceProject);
+      if (availableProjectMap.has(key)) {
+        setSelected(new Set([key]));
+      }
+    }
+  }, [allProjects.length, availableProjectMap, workspaceProject]);
+
+  const allProjectRefs = useMemo(
+    () => allProjects.map((item) => item.ref),
+    [allProjects],
+  );
+
+  const selectedRefs = useMemo(() => {
+    if (selected.size === 0) return undefined;
+    const list: ProjectRef[] = [];
+    for (const key of selected) {
+      const ref = availableProjectMap.get(key) ?? parseProjectKey(key);
+      if (ref) list.push(ref);
+    }
+    return list;
+  }, [availableProjectMap, selected]);
+
+  const selectedRef = useMemo<ProjectRef | null>(() => {
+    if (selected.size !== 1) return null;
+    const singleKey = [...selected][0];
+    return availableProjectMap.get(singleKey) ?? parseProjectKey(singleKey);
+  }, [availableProjectMap, selected]);
+
+  const selectedProjectName = selectedRef?.project ?? null;
+  const selectedProfileName = useMemo(() => {
+    if (!selectedRef) return null;
+    const item = allProjects.find(
+      (p) =>
+        p.ref.profileId === selectedRef.profileId &&
+        p.ref.project === selectedRef.project,
+    );
+    return item?.profileName ?? null;
+  }, [allProjects, selectedRef]);
+
+  const selectedTarget = useProjectTarget(selectedRef);
+  const targetRef = selectedTarget?.target ?? selectedRef ?? "";
 
   const { data: logs = [], isLoading: isGitLogLoading } = useGitLog(
     targetRef,
@@ -351,20 +482,33 @@ export function GitPage() {
     historyActions.resetScope();
   }
 
-  function toggleProject(name: string) {
+  function toggleProject(ref: ProjectRef) {
     resetHistoryView();
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+    setFetchResults(null);
+    setPullResults(null);
+    setPushResults(null);
+    const key = projectKey(ref);
+    const next = new Set(selected);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    setSelected(next);
+    if (next.size === 1) {
+      const singleKey = [...next][0];
+      const nextRef =
+        availableProjectMap.get(singleKey) ?? parseProjectKey(singleKey);
+      if (nextRef) setSelectedProject(nextRef);
+    } else {
+      setSelectedProject(null);
+    }
   }
 
   function handleFileDoubleClick(file: DiffFileEntry) {
-    if (selectedProjectName && selectedCommit) {
+    if (selectedRef && selectedCommit) {
       openDiff(
-        selectedProjectName,
+        selectedTarget?.target ?? selectedRef,
         file.path,
         file.status,
         file.additions,
@@ -398,6 +542,12 @@ export function GitPage() {
     );
   }
 
+  const hasMultipleProfiles = useMemo(() => {
+    if (allProjects.length <= 1) return false;
+    const first = allProjects[0].profileId;
+    return allProjects.some((p) => p.profileId !== first);
+  }, [allProjects]);
+
   return (
     <AppLayout
       title="Git Operations"
@@ -421,19 +571,29 @@ export function GitPage() {
           Select projects (empty = all)
         </p>
         <div className="flex flex-wrap gap-2">
-          {projectNames.map((name) => (
-            <label
-              key={name}
-              className="flex items-center gap-1.5 text-sm cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(name)}
-                onChange={() => toggleProject(name)}
-              />
-              {name}
-            </label>
-          ))}
+          {allProjects.map((item) => {
+            const key = projectKey(item.ref);
+            return (
+              <label
+                key={key}
+                className="flex items-center gap-1.5 text-sm cursor-pointer px-2 py-1 rounded bg-[var(--color-surface-2)]/60 hover:bg-[var(--color-surface-2)]"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(key)}
+                  onChange={() => toggleProject(item.ref)}
+                />
+                <span className="font-medium text-[var(--color-text)]">
+                  {item.project.name}
+                </span>
+                {hasMultipleProfiles && item.profileName && (
+                  <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-[var(--color-surface)] text-[var(--color-text-muted)]">
+                    {item.profileName}
+                  </span>
+                )}
+              </label>
+            );
+          })}
         </div>
         {selected.size > 0 && (
           <div className="mt-2 flex items-center gap-2">
@@ -443,6 +603,7 @@ export function GitPage() {
               onClick={() => {
                 resetHistoryView();
                 setSelected(new Set());
+                setSelectedProject(null);
               }}
             >
               Clear
@@ -452,10 +613,10 @@ export function GitPage() {
       </div>
 
       <BulkGitOperations
-        key={selectedProjectName ?? "__all__"}
-        selectedList={selectedList}
-        projectNames={projectNames}
-        selectedProjectName={selectedProjectName}
+        key={selectedRef ? projectKey(selectedRef) : "__all__"}
+        selectedRefs={selectedRefs}
+        allProjectRefs={allProjectRefs}
+        selectedRef={selectedRef}
         setFetchResults={setFetchResults}
         setPullResults={setPullResults}
         setPushResults={setPushResults}
@@ -469,6 +630,11 @@ export function GitPage() {
         <div className="mt-8 space-y-4">
           <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
             Git Repository: {selectedProjectName}
+            {selectedProfileName && (
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text-muted)]">
+                {selectedProfileName}
+              </span>
+            )}
             {projectStatus?.branch && (
               <Badge
                 variant="primary"
