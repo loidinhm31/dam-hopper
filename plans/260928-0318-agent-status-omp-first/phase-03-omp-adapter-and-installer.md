@@ -2,13 +2,13 @@
 
 ## Context links
 
-- [Plan](./plan.md), [phase 02](./phase-02-reporter-transport-and-pty-lifecycle.md), [architecture](../../docs/architecture/agent-status.md).
+- [Plan](./plan.md), [phase 02](./phase-02-reporter-transport-and-pty-lifecycle.md), [architecture](../../docs/architecture/agent-status.md); [Phase 03 implementation review](../../reports/code-review-260928-1233-phase-03-bundled-omp-adapter-and-installer.md).
 - Evidence: installed OMP 18.3.5 `src/extensibility/shared-events.ts:194-204,244-269`, `extensions/types.ts:852-877,978-994`; OMP `extension-loading.md`.
 - Dependencies: v1 contract, live private collector and PTY credentials. No Herdr code/runtime dependency.
 
 ## Overview
 
-Date: 2026-09-28. Priority: P2. Implementation: pending. Review: pending OMP compatibility/security review.
+Date: 2026-09-28. Priority: P2. Status: DONE (2026-09-28; 100%). Implementation: completed. Review: completed (Score: 9.2/10).
 Ship a complete first adapter plus explicit safe install/update/status/uninstall, embedded in existing Rust server delivery.
 
 ## Key Insights
@@ -63,11 +63,11 @@ Intentionally unchanged: release archive composition (asset is embedded), privil
 
 ## Todo list
 
-- [ ] Implement complete OMP event adapter and privacy-safe outcome mapping.
-- [ ] Implement ordered, bounded reporter connection and shutdown/reload handling.
-- [ ] Embed asset and add safe explicit profile installer commands.
-- [ ] Validate outside-host/nested/headless no-op, session switch and retry semantics.
-- [ ] Validate packaged install/update/uninstall without unrelated file changes.
+- [x] Implement complete OMP event adapter and privacy-safe outcome mapping.
+- [x] Implement ordered, bounded reporter connection and shutdown/reload handling.
+- [x] Embed asset and add safe explicit profile installer commands.
+- [x] Validate outside-host/nested/headless no-op, session switch and retry semantics.
+- [x] Validate packaged install/update/uninstall without unrelated file changes.
 
 ## Success Criteria
 
@@ -75,7 +75,7 @@ C01–C08, C13–C15 and C18 pass. Plain `omp` in configured managed terminal re
 
 ## Risk Assessment
 
-Runtime event ordering and extension reload behavior require real OMP evidence; synthetic handlers alone cannot qualify release. Explicit target avoids erroneous installation into a browser user's or service-manager's profile. Installation must refuse destructive overwrite, not hide it behind a force default.
+Runtime event ordering and extension reload behavior require real OMP evidence; synthetic handlers alone cannot qualify release. The 2026-09-28 implementation review recorded two high-priority findings: inactive late `agent_end` can emit duplicate `turn-ended` reports, and CRLF line endings can misclassify a managed extension as modified during update. These remain open and must be dispositioned before full end-to-end qualification. Explicit target avoids erroneous installation into a browser user's or service-manager's profile. Installation must refuse destructive overwrite, not hide it behind a force default.
 
 ## Security Considerations
 

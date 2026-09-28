@@ -4,11 +4,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Agent status and notifications (2026-09-28)
 
-- **Plan status: IN PROGRESS (2/5 phases; 40%; updated 2026-09-28).** Phase 01 — semantic contract and reducer — is complete. Phase 02 — reporter transport and PTY lifecycle — is DONE (2026-09-28; 100%).
+- **Plan status: IN PROGRESS (3/5 phases; 60%; updated 2026-09-28).** Phase 01 — semantic contract and reducer — is complete. Phase 02 — reporter transport and PTY lifecycle — is DONE (2026-09-28; 100%). Phase 03 — bundled OMP adapter and installer — is DONE (2026-09-28; 100%).
 - **Phase 02 delivery:** private loopback collector, shared `AgentStatusRuntime`, PTY-scoped credentials across lifecycle paths, protected snapshot endpoint, and semantic WebSocket push/invalidation. Review recommendations for lease-expiry cleanup, token-map eviction, and bounded pre-auth admission are applied in current source.
-- **Validation recorded:** 5/5 Phase 02-specific suites passed; the review recorded 1,563/1,563 Cargo tests and 1,923/1,923 UI tests passed, TypeScript build clean, and no warnings in new code. See the [Phase 02 plan](../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md) and [review](../plans/reports/code-review-260928-1045-phase-02-reporter-transport-pty-lifecycle.md).
-- **Phases 03–05 remain planned:** bundled OMP adapter and installer; profile-safe badges and notifications; end-to-end and release qualification.
-- **Next:** Phase 03 — bundled OMP adapter and installer. See the [plan](../plans/260928-0318-agent-status-omp-first/plan.md), [architecture](./architecture/agent-status.md), and [changelog](./CHANGELOG.md#2026-09-28).
+- **Validation recorded:** Phase 02-specific suites passed 5/5; the review recorded 1,563/1,563 Cargo tests and 1,923/1,923 UI tests passed, TypeScript build clean, and no warnings in new code. See the [Phase 02 plan](../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md) and [review](../plans/reports/code-review-260928-1045-phase-02-reporter-transport-pty-lifecycle.md).
+- **Phase 03 delivery and review:** Bundled standalone OMP lifecycle adapter with explicit profile install/status/uninstall CLI and early local dispatch. Review scored 9.2/10; it records 17/17 Bun tests and 7/7 Rust/CLI tests passing, no critical issues, and two high-priority findings still open: inactive late `agent_end` can emit duplicate `turn-ended` reports, and CRLF headers can misclassify managed extensions during update. See the [Phase 03 plan](../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md) and [review](../plans/reports/code-review-260928-1233-phase-03-bundled-omp-adapter-and-installer.md).
+- **Phases 04–05 remain planned:** profile-safe badges and notifications; end-to-end and release qualification.
+- **Next:** Phase 04 — profile-safe badges and notifications. See the [plan](../plans/260928-0318-agent-status-omp-first/plan.md), [architecture](./architecture/agent-status.md), and [changelog](./CHANGELOG.md#2026-09-28).
 
 ### Plugin admin profile binding and Linux installer identity conflict (2026-09-27)
 

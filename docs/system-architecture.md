@@ -1,9 +1,16 @@
 # System Architecture
 
-## Agent status — Phases 01–02 complete (Phases 03–05 planned)
+## Agent status — Phases 01–03 implemented (Phases 04–05 planned)
 
-The [agent-status architecture](./architecture/agent-status.md) is normative. Phase 01 implements the Rust/TypeScript contract and reducer; Phase 02 adds the Linux private loopback reporter, PTY-scoped credentials, protected snapshot, and authenticated WebSocket status events.
-Linux bind failure preserves PTY use and reports unavailable; other server platforms remain platform-unqualified. The OMP producer, browser consumer, badges, notifications, and qualification remain planned for Phases 03–05. Process/output status, workflow completion, and idle-suspend remain separate; turn end does not prove task success.
+The [agent-status architecture](./architecture/agent-status.md) is normative.
+Phase 01 implements the Rust/TypeScript contract and reducer; Phase 02 adds the
+Linux private loopback reporter, PTY-scoped credentials, protected snapshot, and
+authenticated WebSocket status events; Phase 03 adds the bundled standalone
+OMP extension and explicit installer. Linux bind failure preserves PTY use and
+reports unavailable; other server platforms remain `platform-unqualified`.
+Browser consumption, badges, notifications, and end-to-end qualification
+remain Phases 04–05. Process/output status, workflow completion, and
+idle-suspend remain separate; turn end does not prove task success.
 
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 

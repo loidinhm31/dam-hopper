@@ -25,6 +25,9 @@ use dam_hopper_server::{
 #[derive(Debug, Parser)]
 #[command(name = "dam-hopper-server", version, about = "DamHopper Rust server")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Path to a specific dam-hopper.toml registry file
     #[arg(long, env = "DAM_HOPPER_CONFIG")]
     config: Option<PathBuf>,
@@ -56,6 +59,95 @@ struct Cli {
     /// Optional static web directory for combined API + UI serving (e.g. Docker)
     #[arg(long, env = "DAM_HOPPER_WEB_DIR")]
     web_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Commands {
+    /// Local extension integration commands
+    Integration(IntegrationArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct IntegrationArgs {
+    #[command(subcommand)]
+    target: IntegrationTarget,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum IntegrationTarget {
+    /// Oh My Pi (OMP) agent integration
+    Omp(OmpIntegrationArgs),
+}
+#[derive(Debug, clap::Args)]
+struct OmpIntegrationArgs {
+    #[command(subcommand)]
+    action: OmpIntegrationAction,
+}
+
+#[derive(Debug, clap::Args)]
+struct OmpActionArgs {
+    /// Absolute path to the OMP agent directory (e.g. ~/.omp/agent or profile directory)
+    #[arg(long)]
+    agent_dir: PathBuf,
+
+    /// Emit status or outcome as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum OmpIntegrationAction {
+    /// Install or upgrade the managed OMP extension
+    Install(OmpActionArgs),
+    /// Inspect the status of the managed OMP extension
+    Status(OmpActionArgs),
+    /// Safely uninstall the managed OMP extension
+    Uninstall(OmpActionArgs),
+}
+
+fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()> {
+    match integration.target {
+        IntegrationTarget::Omp(omp_args) => match omp_args.action {
+            OmpIntegrationAction::Install(args) => {
+                let report = dam_hopper_server::agent_status::install_extension(&args.agent_dir)?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Installed OMP agent status extension at {}",
+                        report.target_path.display()
+                    );
+                }
+            }
+            OmpIntegrationAction::Status(args) => {
+                let report = dam_hopper_server::agent_status::check_extension_status(&args.agent_dir)?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Status: {} (path: {})",
+                        report.status,
+                        report.target_path.display()
+                    );
+                    if let Some(ver) = &report.version {
+                        println!("Installed version: {ver}");
+                    }
+                }
+            }
+            OmpIntegrationAction::Uninstall(args) => {
+                let report = dam_hopper_server::agent_status::uninstall_extension(&args.agent_dir)?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Uninstalled OMP agent status extension from {}",
+                        report.target_path.display()
+                    );
+                }
+            }
+        },
+    }
+    Ok(())
 }
 
 const TOKEN_CAPACITY: usize = 512;
@@ -136,6 +228,47 @@ mod tests {
             Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml"))
         );
     }
+
+    #[test]
+    fn integration_subcommands_are_parsed_correctly() {
+        use clap::Parser;
+        use super::{Cli, Commands, IntegrationTarget, OmpIntegrationAction};
+
+        let args = ["dam-hopper-server", "integration", "omp", "install", "--agent-dir", "/tmp/agent"];
+        let parsed = Cli::try_parse_from(args).expect("valid install args");
+        match parsed.command {
+            Some(Commands::Integration(i)) => match i.target {
+                IntegrationTarget::Omp(omp) => match omp.action {
+                    OmpIntegrationAction::Install(args) => {
+                        assert_eq!(args.agent_dir, PathBuf::from("/tmp/agent"));
+                        assert!(!args.json);
+                    }
+                    _ => panic!("expected install action"),
+                },
+            },
+            None => panic!("expected integration command"),
+        }
+
+        let args2 = ["dam-hopper-server", "integration", "omp", "status", "--agent-dir", "/tmp/agent", "--json"];
+        let parsed2 = Cli::try_parse_from(args2).expect("valid status args");
+        match parsed2.command {
+            Some(Commands::Integration(i)) => match i.target {
+                IntegrationTarget::Omp(omp) => match omp.action {
+                    OmpIntegrationAction::Status(args) => {
+                        assert_eq!(args.agent_dir, PathBuf::from("/tmp/agent"));
+                        assert!(args.json);
+                    }
+                    _ => panic!("expected status action"),
+                },
+            },
+            None => panic!("expected integration command"),
+        }
+
+        let args3 = ["dam-hopper-server", "--port", "4900"];
+        let parsed3 = Cli::try_parse_from(args3).expect("valid normal args");
+        assert!(parsed3.command.is_none());
+        assert_eq!(parsed3.port, 4900);
+    }
 }
 
 #[tokio::main]
@@ -155,6 +288,9 @@ async fn main() -> anyhow::Result<()> {
     // Load config-adjacent environment variables before Clap reads env-backed options.
     load_explicit_config_env();
     let cli = Cli::parse();
+    if let Some(Commands::Integration(integration)) = cli.command {
+        return dispatch_integration(integration);
+    }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.
     unsafe {
