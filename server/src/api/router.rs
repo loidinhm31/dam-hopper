@@ -273,6 +273,15 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/agent-status/v1/snapshot",
             get(agent_status::get_snapshot),
         )
+        .route(
+            "/api/agent-status/omp/extension",
+            get(agent_status::get_omp_extension_status)
+                .delete(agent_status::uninstall_omp_extension),
+        )
+        .route(
+            "/api/agent-status/omp/extension/install",
+            post(agent_status::install_omp_extension),
+        )
         // Browser debug artifacts — no read/list endpoint by design.
         .route(
             "/api/browser-debug/artifacts",

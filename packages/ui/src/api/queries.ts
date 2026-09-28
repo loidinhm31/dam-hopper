@@ -65,6 +65,7 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 
+import type { ExtensionStatusReport } from "./agent-status-types.js";
 import {
   getApi,
   getTransport as getBoundTransport,
@@ -2225,6 +2226,56 @@ export function useImportConfirm(options?: {
     onSuccess: () => {
       void qc.invalidateQueries({
         queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+      });
+    },
+  });
+}
+
+export function useOmpExtensionStatus(
+  agentDir?: string,
+  options?: { owner?: ConnectionRef },
+) {
+  const owner = options?.owner;
+  const queryKey = owner
+    ? profileQueryKey(owner, "omp-extension-status", agentDir ?? "default")
+    : (["omp-extension-status", agentDir ?? "default"] as const);
+
+  return useQuery<ExtensionStatusReport>({
+    queryKey,
+    queryFn: () => getApi(owner).terminal.getOmpExtensionStatus(agentDir),
+    staleTime: 5_000,
+  });
+}
+
+export function useInstallOmpExtension(options?: { owner?: ConnectionRef }) {
+  const queryClient = useQueryClient();
+  const owner = options?.owner;
+
+  return useMutation<ExtensionStatusReport, Error, string | undefined>({
+    mutationFn: (agentDir) =>
+      getApi(owner).terminal.installOmpExtension(agentDir),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "omp-extension-status")
+          : ["omp-extension-status"],
+      });
+    },
+  });
+}
+
+export function useUninstallOmpExtension(options?: { owner?: ConnectionRef }) {
+  const queryClient = useQueryClient();
+  const owner = options?.owner;
+
+  return useMutation<ExtensionStatusReport, Error, string | undefined>({
+    mutationFn: (agentDir) =>
+      getApi(owner).terminal.uninstallOmpExtension(agentDir),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "omp-extension-status")
+          : ["omp-extension-status"],
       });
     },
   });

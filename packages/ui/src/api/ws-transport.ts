@@ -542,6 +542,24 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/terminal/detailed" };
     case "terminal:agentStatusSnapshot":
       return { method: "GET", url: "/api/agent-status/v1/snapshot" };
+    case "agentStatus:getOmpExtensionStatus": {
+      const d = data as { agentDir?: string } | undefined;
+      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      return { method: "GET", url: `/api/agent-status/omp/extension${q}` };
+    }
+    case "agentStatus:installOmpExtension": {
+      const d = data as { agentDir?: string } | undefined;
+      return {
+        method: "POST",
+        url: "/api/agent-status/omp/extension/install",
+        body: { agentDir: d?.agentDir },
+      };
+    }
+    case "agentStatus:uninstallOmpExtension": {
+      const d = data as { agentDir?: string } | undefined;
+      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      return { method: "DELETE", url: `/api/agent-status/omp/extension${q}` };
+    }
     case "terminal:buffer":
       return {
         method: "GET",

@@ -524,3 +524,48 @@ async fn test_collector_lease_expiration_transitions_to_unknown() {
 
     collector.shutdown();
 }
+
+#[tokio::test]
+async fn test_omp_extension_api_lifecycle() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+    let agent_dir_str = agent_dir.to_str().unwrap();
+
+    let query = dam_hopper_server::api::agent_status::ExtensionQuery {
+        agent_dir: Some(agent_dir_str.to_string()),
+    };
+
+    // 1. Initial status is absent
+    let status_rep = dam_hopper_server::api::agent_status::get_omp_extension_status(
+        axum::extract::Query(query),
+    )
+    .await
+    .expect("get status")
+    .0;
+    assert_eq!(status_rep.status, dam_hopper_server::agent_status::ManagedExtensionStatus::Absent);
+
+    // 2. Install extension via API handler
+    let install_body = dam_hopper_server::api::agent_status::ExtensionInstallBody {
+        agent_dir: Some(agent_dir_str.to_string()),
+    };
+    let installed_rep = dam_hopper_server::api::agent_status::install_omp_extension(
+        axum::Json(install_body),
+    )
+    .await
+    .expect("install")
+    .0;
+    assert_eq!(installed_rep.status, dam_hopper_server::agent_status::ManagedExtensionStatus::Current);
+    assert_eq!(installed_rep.version.as_deref(), Some("1.0.0"));
+
+    // 3. Uninstall extension via API handler
+    let query_del = dam_hopper_server::api::agent_status::ExtensionQuery {
+        agent_dir: Some(agent_dir_str.to_string()),
+    };
+    let uninstalled_rep = dam_hopper_server::api::agent_status::uninstall_omp_extension(
+        axum::extract::Query(query_del),
+    )
+    .await
+    .expect("uninstall")
+    .0;
+    assert_eq!(uninstalled_rep.status, dam_hopper_server::agent_status::ManagedExtensionStatus::Absent);
+}
