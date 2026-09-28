@@ -8,7 +8,7 @@
 
 ## Overview
 
-Date: 2026-09-28. Priority: P2. Implementation: pending. Review: pending implementation review.
+Date: 2026-09-28. Priority: P2. Status: Complete. Completed: 2026-09-28. Implementation: complete. Review: reviewed (8.5/10).
 Define one bounded state reducer and versioned wire contract, not a generic plugin platform. No screen detection or process-output inference.
 
 ## Key Insights
@@ -66,10 +66,10 @@ Delete: none. Do not refactor unrelated `agent_store`, telemetry or suspend mode
 
 ## Todo list
 
-- [ ] Freeze v1 private/public payloads and state semantics.
-- [ ] Implement pure reducer with stale identity/sequence fences.
-- [ ] Implement strict public decoder and OMP agent identity.
-- [ ] Cover valid transitions, duplicates, continuation, interruption and unknown outcomes.
+- [x] Freeze v1 private/public payloads and state semantics.
+- [x] Implement pure reducer with stale identity/sequence fences.
+- [x] Implement strict public decoder and OMP agent identity.
+- [x] Cover valid transitions, duplicates, continuation, interruption and unknown outcomes.
 
 ## Success Criteria
 
@@ -88,4 +88,4 @@ Strict bounded fields and closed reason codes. Unknown agent/protocol payloads f
 
 ## Next steps
 
-Phase 02 owns runtime/PTY integration; phase 03 owns OMP event translation. Freeze their shared contract before either writes transport-specific code.
+Phase 02 owns runtime/PTY integration; phase 03 owns OMP event translation. Use this completed, frozen contract before either writes transport-specific code.

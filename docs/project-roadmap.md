@@ -2,6 +2,12 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Agent status and notifications (2026-09-28)
+
+- **Plan status: IN PROGRESS (1/5 phases; 20%).** Phase 01 — semantic contract and reducer — is complete. It delivers the Rust v1 DTOs, validation, in-memory reducer/registry, and matching TypeScript public decoders.
+- **Phases 02–05 remain planned:** reporter transport and PTY lifecycle; bundled OMP adapter and installer; profile-safe badges and notifications; end-to-end and release qualification.
+- **Next:** Phase 02 reporter transport and PTY lifecycle. See the [plan](../plans/260928-0318-agent-status-omp-first/plan.md) and [architecture](./architecture/agent-status.md).
+
 ### Plugin admin profile binding and Linux installer identity conflict (2026-09-27)
 
 - **Plan status: COMPLETED (3/3 phases; 100%; updated 2026-09-27 22:09:06 +07:00).** Settings now resolves the default plugin-admin target through the active profile and classifies typed auth failures; the Linux manager keeps enforcing distinct API and plugin-runner UIDs, with an early installer warning and updated Scenario A/activation guidance.

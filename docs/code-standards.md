@@ -45,10 +45,22 @@ server/src/
 │   ├── helper_server.rs # Peer, dedupe, audit, and side-effect ordering
 │   └── audit.rs      # Bounded mode-0600 helper JSONL audit
 ├── git/              # Git operations
+├── agent_status/     # v1 semantic DTOs, validation, reducer, and registry
 ├── agent_store/      # Item distribution
 ├── plugins/          # D00 contracts, D01 registry, D02 runner, D03 API/auth
 └── commands/         # Command registry
 ```
+
+### Agent status semantic contract and reducer (Phase 01)
+
+`server/src/agent_status/{types,reducer}.rs` owns the canonical v1 state,
+protocol DTOs, validation, and pure in-memory reducer/registry. Keep this model
+separate from PTY process/output status and do not infer task success from
+silence or a turn end. Rust private reporter DTOs reject unknown fields; bound
+identifiers and counters before state mutation. `packages/ui/src/api/agent-status-types.ts`
+mirrors public types and validates public DTOs; unsupported versions or values
+must fail closed. Transport, OMP adapter, and browser UI remain planned. See the
+[agent-status architecture](./architecture/agent-status.md).
 
 ### Trusted plugin contract candidate (Phase D00)
 
