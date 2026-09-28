@@ -1,4 +1,5 @@
 pub mod agent_import;
+pub mod agent_status;
 pub mod agent_memory;
 pub mod agent_store;
 pub mod auth;

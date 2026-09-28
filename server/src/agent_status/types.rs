@@ -18,6 +18,32 @@ pub const MAX_PRIVATE_FRAME_BYTES: usize = 4_096;
 /// Maximum length for opaque string identifiers.
 pub const MAX_IDENTIFIER_LEN: usize = 128;
 
+/// Default loopback host for private agent status reporting.
+pub const DEFAULT_LOOPBACK_HOST: &str = "127.0.0.1";
+
+/// Canonical private WebSocket path for agent status reporting.
+pub const AGENT_STATUS_WS_PATH: &str = "/v1/agent-status";
+
+/// Environment variable carrying the private agent status collector URL.
+pub const ENV_AGENT_STATUS_URL: &str = "DAM_HOPPER_AGENT_STATUS_URL";
+
+/// Environment variable carrying the scoped agent status token.
+pub const ENV_AGENT_STATUS_TOKEN: &str = "DAM_HOPPER_AGENT_STATUS_TOKEN";
+
+/// Handshake deadline waiting for initial `ReporterHello` (3 seconds).
+pub const HELLO_TIMEOUT_SECS: u64 = 3;
+
+/// Maximum concurrent pre-authentication connections allowed.
+pub const MAX_PRE_AUTH_CONCURRENCY: usize = 32;
+
+/// Maximum sustained reports per second per reporter.
+pub const MAX_REPORTS_PER_SEC: u32 = 20;
+
+/// Maximum burst reports allowed for rate limiting.
+pub const BURST_REPORTS: u32 = 40;
+
+/// Capacity of the bounded broadcast channel for semantic status updates.
+pub const BROADCAST_CAPACITY: usize = 256;
 /// Validate that a numeric value is within the safe integer bounds.
 pub fn validate_safe_integer(field: &'static str, value: u64) -> Result<(), AgentStatusError> {
     if value > MAX_SAFE_INTEGER {
@@ -295,6 +321,18 @@ pub struct AgentStatusInvalidatedPayload {
     pub revision: u64,
 }
 
+/// Broadcast events emitted across the server for agent status changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AgentStatusBroadcastEvent {
+    #[serde(rename = "terminal:agentStatusChanged")]
+    Changed(AgentStatusChangedPayload),
+    #[serde(rename = "terminal:agentStatusRemoved")]
+    Removed(AgentStatusRemovedPayload),
+    #[serde(rename = "terminal:agentStatusInvalidated")]
+    Invalidated(AgentStatusInvalidatedPayload),
+}
+
 // ── Errors ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -352,4 +390,28 @@ pub enum AgentStatusError {
 
     #[error("authority lost: {0}")]
     AuthorityLost(String),
+
+    #[error("invalid capability token")]
+    InvalidCapabilityToken,
+
+    #[error("capability is pending publication")]
+    CapabilityPending,
+
+    #[error("capability has been revoked")]
+    CapabilityRevoked,
+
+    #[error("agent status collector unavailable")]
+    CollectorUnavailable,
+
+    #[error("rate limit exceeded: max {max} reports/sec")]
+    RateLimitExceeded { max: u32 },
+
+    #[error("frame size {size} exceeds maximum {max}")]
+    FrameTooLarge { size: usize, max: usize },
+
+    #[error("handshake timed out")]
+    HandshakeTimeout,
+
+    #[error("invalid handshake: {0}")]
+    InvalidHandshake(String),
 }

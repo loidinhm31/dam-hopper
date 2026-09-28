@@ -360,6 +360,13 @@ async fn handle_socket(
     let idle_suspend_rx = state.event_sink.subscribe_idle_suspend();
     let idle_suspend_pump =
         tokio::spawn(pump_idle_suspend_hints(idle_suspend_rx, alert_tx.clone()));
+    let agent_status_rx = state.agent_status.subscribe();
+    let agent_status_server_epoch = state.agent_status.server_epoch();
+    let agent_status_pump = tokio::spawn(pump_agent_status(
+        agent_status_rx,
+        alert_tx.clone(),
+        agent_status_server_epoch,
+    ));
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     let auth_watcher = if !state.no_auth && actor.session_id.is_some() {
@@ -1938,6 +1945,7 @@ async fn handle_socket(
     pty_pump.abort();
     host_alert_pump.abort();
     idle_suspend_pump.abort();
+    agent_status_pump.abort();
     // Allow writer up to 500ms to flush pending close frames before aborting
     let _ = tokio::time::timeout(std::time::Duration::from_millis(500), writer).await;
     if epoch_id != 0 {
@@ -2839,6 +2847,42 @@ async fn pump_idle_suspend_hints(
                     dropped = n,
                     "idle suspend broadcast lagged; client reconciles via REST status"
                 );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+async fn pump_agent_status(
+    mut rx: tokio::sync::broadcast::Receiver<crate::agent_status::AgentStatusBroadcastEvent>,
+    alert_tx: mpsc::Sender<WireMsg>,
+    server_epoch: u64,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    if alert_tx.send(WireMsg::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                warn!(
+                    dropped = n,
+                    "agent status broadcast lagged; sending invalidated event"
+                );
+                let event = crate::agent_status::AgentStatusBroadcastEvent::Invalidated(
+                    crate::agent_status::AgentStatusInvalidatedPayload {
+                        server_epoch,
+                        revision: 0,
+                    },
+                );
+                if let Ok(json) = serde_json::to_string(&event) {
+                    if alert_tx.send(WireMsg::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

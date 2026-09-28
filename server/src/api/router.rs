@@ -26,6 +26,7 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
+    agent_status,
     agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
     diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
     media_session, plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
@@ -266,6 +267,11 @@ pub fn build_router_with_web_dir_and_origins(
         .route(
             "/api/terminal/{id}/remove",
             delete(terminal::remove_session),
+        )
+        // Agent status
+        .route(
+            "/api/agent-status/v1/snapshot",
+            get(agent_status::get_snapshot),
         )
         // Browser debug artifacts — no read/list endpoint by design.
         .route(
