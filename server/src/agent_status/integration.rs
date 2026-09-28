@@ -72,6 +72,25 @@ pub struct ExtensionStatusReport {
     pub bundled_hash: String,
 }
 
+/// Verification result for OMP and Codex path eligibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPathsVerification {
+    pub effective_home: String,
+    pub omp_install_dir: String,
+    pub omp_notification_dir: String,
+    pub omp_status: ManagedExtensionStatus,
+    pub omp_can_enable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub omp_reason: Option<String>,
+    pub codex_config_dir: String,
+    pub codex_notification_dir: String,
+    pub codex_config_exists: bool,
+    pub codex_can_enable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_reason: Option<String>,
+}
+
 /// Calculate SHA-256 hex digest of string content.
 pub fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();

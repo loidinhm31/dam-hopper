@@ -34,9 +34,9 @@ vi.mock("@/components/organisms/DistributionMatrix.js", () => ({
 vi.mock("@/components/organisms/HealthStatus.js", () => ({
   HealthStatus: () => <div data-testid="health-status" />,
 }));
-vi.mock("@/components/organisms/OmpExtensionManager.js", () => ({
-  OmpExtensionManager: () => (
-    <div data-testid="omp-extension-manager">OMP Integration</div>
+vi.mock("@/components/organisms/AgentSettings.js", () => ({
+  AgentSettings: () => (
+    <div data-testid="agent-settings">Agent Settings Panel</div>
   ),
 }));
 
@@ -67,24 +67,24 @@ describe("AgentStorePage", () => {
       root?.render(<AgentStorePage />);
     });
     expect(container?.textContent).toContain("Agent Store");
-    expect(container?.textContent).toContain("Integrations");
+    expect(container?.textContent).toContain("Agent Settings");
   });
 
-  it("switches to Integrations tab and renders OmpExtensionManager", async () => {
+  it("switches to Agent Settings tab and renders AgentSettings", async () => {
     act(() => {
       root?.render(<AgentStorePage />);
     });
 
     const buttons = container?.querySelectorAll("button");
-    const integrationsButton = Array.from(buttons ?? []).find(
-      (btn) => btn.textContent === "Integrations",
+    const settingsButton = Array.from(buttons ?? []).find(
+      (btn) => btn.textContent === "Agent Settings",
     );
-    expect(integrationsButton).toBeDefined();
+    expect(settingsButton).toBeDefined();
 
     await act(async () => {
-      integrationsButton?.click();
+      settingsButton?.click();
     });
 
-    expect(container?.querySelector("[data-testid='omp-extension-manager']")).toBeDefined();
+    expect(container?.querySelector("[data-testid='agent-settings']")).toBeDefined();
   });
 });

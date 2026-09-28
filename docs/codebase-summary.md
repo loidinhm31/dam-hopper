@@ -236,7 +236,7 @@ active profile.
 
 | Boundary             | Source modules                                                           | Contract                                                                                                                                 |
 | -------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent Store owner    | `components/pages/AgentStorePage.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified catalog, project, matrix, health, memory, and import operations.                   |
+| Agent Store owner    | `components/pages/AgentStorePage.tsx`, `components/organisms/AgentSettings.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified store operations plus per-profile path verification, OMP extension actions, and notification controls. |
 | Memory draft         | `components/organisms/MemoryEditor.tsx`                                  | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target.              |
 | Import lifecycle     | `components/organisms/ImportDialog.tsx`                                  | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs.                |
 | Port aggregation     | `hooks/use-ports.ts`, `hooks/use-tunnels.ts`                             | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct.  |
@@ -419,8 +419,8 @@ The workflow persists Plan/Phase/Task, sessions, links, notes, and bounded SQLit
 Agent status is complete through Phase 05; Linux qualification passed C01–C19.
 Phase 01 defines Rust `server/src/agent_status/` and TypeScript `packages/ui/src/api/agent-status-types.ts`; Phase 02 adds private loopback reporting with PTY-scoped credentials.
 The protected snapshot is `GET /api/agent-status/v1/snapshot`; authenticated pushes are `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`.
-Phase 03 embeds OMP and provides `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`; Phase 04 delivers profile-safe badges and notifications (`terminalAgentNotifications`).
-Phase 05 qualified Linux x86_64 with OMP 18.4.1; see [architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+Phase 03 embeds OMP and provides `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`; Phase 04 delivers profile-safe badges and notifications (`terminalAgentNotifications`); Phase 05 qualified Linux x86_64 with OMP 18.4.1. See [architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+Agent Store's **Agent Settings** replaces the Integrations tab and Appearance notification panel. `GET /api/agent-status/paths` supplies per-profile path eligibility; UI enablement requires exact configured/runtime path equality plus a current OMP extension or an existing Codex config file. Runtime dispatch still uses the saved `enabled` flag without path revalidation.
 ## Backend path and configuration normalization (Phase 01)
 
 The path/config boundary is implemented by

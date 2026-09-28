@@ -616,7 +616,7 @@ server share a filesystem; remote/container agents need a future resource API.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, Codex terminal notification settings, terminal project switching, and the host-resource storage presentation preference.
+The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, versioned Codex/OMP notification policies, server-profile Agent Store paths, terminal project switching, and the host-resource storage presentation preference.
 
 | Field                                        | Type           | Default               | Notes                                                                                      |
 | -------------------------------------------- | -------------- | --------------------- | ------------------------------------------------------------------------------------------ |
@@ -628,12 +628,8 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | terminal_suggestions_enabled                 | bool           | `true`                | Kill switch for automatic suggestions and lifecycle-driven history writes                  |
 | terminal_scroll_buttons_enabled              | bool           | `false`               | Show the expandable floating terminal scroll control                                       |
 | terminal_auto_switch_project_enabled         | bool           | `true`                | Switch the active project when selecting a project-assigned terminal                       |
-| terminal_codex_notifications_enabled         | bool           | `false`               | Master switch for Codex OSC 9 notifications and Codex TUI synchronization                  |
-| terminal_codex_notification_toast_enabled    | bool           | `true`                | Persisted preference for transient in-app toasts; notification history remains independent |
-| terminal_codex_browser_notifications_enabled | bool           | `true`                | Persisted preference for native browser popups; browser permission remains runtime-only    |
-| terminal_codex_notification_sound_enabled    | bool           | `true`                | Persisted preference for the in-app chime                                                  |
-| terminal_codex_notification_sound_volume     | u8             | `100`                 | In-app chime volume, from `0` to `100`                                                     |
-| terminal_codex_notification_sound_pattern    | string         | `"default"`           | One of `"default"`, `"soft"`, `"two-tone"`, or `"urgent"`                                  |
+| terminal_agent_notifications | table | version 1; both master switches `false` | Per-agent `codex` and `omp` policies; channel preferences default to enabled, volume `100`, pattern `default` |
+| agent_settings_paths | table or omitted | omitted | Optional server-profile paths: `omp_agent_dir` and `codex_dir`; set in Agent Settings |
 | host_resource_pinned_mount                   | string or null | `null`                | Optional exact mount point for the host-resource storage row; UTF-8 length 1–4096 bytes    |
 
 Example:
@@ -648,13 +644,30 @@ fleet_terminal_shortcut = "Mod+Shift+KeyM"
 terminal_suggestions_enabled = true
 terminal_scroll_buttons_enabled = false
 terminal_auto_switch_project_enabled = true
-terminal_codex_notifications_enabled = false
-terminal_codex_notification_toast_enabled = true
-terminal_codex_browser_notifications_enabled = true
-terminal_codex_notification_sound_enabled = true
-terminal_codex_notification_sound_volume = 100
-terminal_codex_notification_sound_pattern = "default"
 host_resource_pinned_mount = "/"
+
+[ui.terminal_agent_notifications]
+version = 1
+
+[ui.terminal_agent_notifications.agents.codex]
+enabled = false
+toast = true
+browser = true
+sound = true
+volume = 100
+pattern = "default"
+
+[ui.terminal_agent_notifications.agents.omp]
+enabled = false
+toast = true
+browser = true
+sound = true
+volume = 100
+pattern = "default"
+
+[ui.agent_settings_paths]
+omp_agent_dir = "~/.omp/agent"
+codex_dir = "~/.codex"
 ```
 
 When enabled, the terminal shows a compact floating control in the lower-right
@@ -663,11 +676,11 @@ step up/down (using the configured terminal scroll step), and jump-to-bottom.
 The menu closes on outside click or `Escape`; the preference is UI-only and does
 not affect retained server scrollback.
 
-The API exposes these UI fields in `camelCase` (for example, `terminalCodexNotificationToastEnabled`, `terminalAutoSwitchProjectEnabled`, and `hostResourcePinnedMount`) and persists them as the snake_case TOML keys shown above. `hostResourcePinnedMount` accepts `null` to clear the pin; a non-null value must be UTF-8 encoded and 1–4096 bytes long. If the saved mount is absent from the current host-metrics disk list, the UI shows it as missing and does not silently select another mount. This preference is presentation-only and has no telemetry coupling. Older `terminal_agent_notifications_enabled` and `terminalAgentNotificationsEnabled` values remain read-compatible aliases for the master switch. Missing child preferences default to enabled, volume `100`, and pattern `"default"`.
+The API represents these fields in `camelCase` (`terminalAgentNotifications`, `agentSettingsPaths`); the config file uses `snake_case` (`terminal_agent_notifications`, `agent_settings_paths`). Notification policies use the version-1 per-agent shape shown above. Existing Codex notification fields migrate to that canonical shape when loaded. Path settings are optional and belong to the selected server profile. In the UI, both policies and their paths are managed under Agent Store > Agent Settings, which replaces the former Integrations extension card and Appearance notification panel.
 
 `terminalAutoSwitchProjectEnabled` is a global preference and defaults to `true` so terminal selection follows the requested project context immediately. In Settings > Appearance, the **Switch project on terminal selection** switch uses the copy: “Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.” When enabled, selecting a project-assigned terminal or an already-open project terminal tab changes the active project before the tab or panel renders; when disabled, selection opens the terminal without changing the active project. Free terminals, unowned terminals with blank project metadata, and unknown sessions (including unrecognized session-ID prefixes) never switch the active project; free terminals remain excluded even if incidental metadata contains a project. The top-bar project switcher and project-scoped panels (Explorer, Search, Git, Commit, Project Info, and editor) all consume the resulting active project. This uses the existing global UI-config persistence path and requires no new endpoint or migration.
 
-Only updates to `terminalCodexNotificationsEnabled` synchronize `~/.codex/config.toml`. Toast, browser-popup, sound, volume, and pattern updates persist only to DamHopper's global UI config. Browser notification permission is browser-managed and runtime-only: only the explicit **Request permission** action can request it; toggling or saving a browser-popup preference never requests, revokes, or persists it. **Play sound** previews the selected synthesized in-app pattern and volume only; it does not create a browser popup or request permission.
+Agent Settings verifies selected paths through `GET /api/agent-status/paths` before enabling a policy. OMP requires the selected install directory to match the reported runtime directory and the managed extension to be `current`; Codex requires a matching reported config directory with an existing `config.toml`. The API also enforces save-time checks: OMP path/current-extension checks and Codex config-file existence, then synchronizes Codex TUI notification settings at the configured path. Disabling remains possible when a target disappears. Runtime dispatch currently follows saved policy state rather than rechecking paths at delivery time, so an external path or artifact change does not itself guarantee delivery is suppressed. Browser permission is runtime-only and is requested only by the explicit **Request permission** action; changing channel preferences does not request or revoke it. Sound preview is in-app only.
 
 Shortcuts are normalized by the client config layer and can be captured/reset from Settings > Appearance > Keyboard Shortcuts. Git, Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other target panels. The Project shortcut defaults to `Mod+Shift+KeyZ`.
 

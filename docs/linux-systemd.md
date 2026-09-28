@@ -60,6 +60,27 @@ coordinated by a root-only recovery unit:
 > and exactly one `ExecStart`; strict policy rejects legacy `/etc` paths,
 > alternate config operands, duplicates, and extra arguments.
 
+### Agent Store OMP/Codex file access
+
+Agent Store path settings are paths on the server, not on the browser, and do
+not grant filesystem permissions or change the API/PTY identity. The default API
+unit runs as the unprivileged `dam-hopper:dam-hopper` account. A configured
+`~/.omp/agent` or `~/.codex` resolves against the server's effective PTY home;
+verify that this is the same home and path used by the target agent process.
+`PI_CODING_AGENT_DIR`, `CODEX_HOME`, and per-session PTY environment overrides
+can affect runtime paths.
+
+The API can read or update only files allowed by the service account's existing
+Unix permissions. Use a deployment where the API and target agent share the
+required OS identity, or have an administrator provision narrowly scoped
+traverse/read/write access to only the required target directories and config
+file. Do not make a user's whole home writable by `dam-hopper`, and do not use
+`sudo` or broad ownership changes as an Agent Store workaround. If the service
+cannot access the selected target safely, leave notification settings disabled
+and provision the required access before attempting config changes. See the
+[agent-status architecture](./architecture/agent-status.md#agent-store-path-verification)
+for current verification behavior and its limits.
+
 ### Deployment Roles
 
 - `server`: Deploys helper, `dam-hopper-plugin-runner.service`, and
