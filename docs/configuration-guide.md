@@ -1432,3 +1432,30 @@ dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml --port 4800
 ```
 
 All four projects now accessible via `/api/projects` and `/api/fs/list?project=frontend&path=src`, etc.
+
+## OMP Agent Status Integration
+
+`dam-hopper-server` embeds a standalone OMP extension. Install it on the server
+host as the OS user running OMP inside DamHopper PTYs. `--agent-dir` is required
+and must name an existing absolute agent directory: `$HOME/.omp/agent` for the
+default profile; pass the exact directory for a named or custom profile.
+
+```bash
+dam-hopper-server integration omp install --agent-dir "$HOME/.omp/agent"
+dam-hopper-server integration omp status --agent-dir "$HOME/.omp/agent"
+dam-hopper-server integration omp uninstall --agent-dir "$HOME/.omp/agent"
+```
+
+Add `--json` to any command for JSON output. These local commands do not start
+the API server or require its workspace registry, database, or server token.
+
+- `install` atomically installs or updates only
+  `extensions/dam-hopper-agent-status.ts`; current content is a no-op. Modified
+  or unmanaged contents are refused.
+- `status` reports `absent`, `current`, `outdated`, or `modified`.
+- `uninstall` removes only verified managed content. The CLI rejects symlink or
+  nonregular extension files; unrelated extensions remain untouched.
+- OMP must load extensions. Restart existing OMP sessions after install/update.
+  The adapter reports only from managed interactive root sessions; see the
+  [agent-status architecture](./architecture/agent-status.md) for protocol,
+  state/outcome mapping, privacy, reconnect, and compatibility details.

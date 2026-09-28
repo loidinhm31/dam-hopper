@@ -26,7 +26,7 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 
 ## Design contract
 
-[Proposed architecture](../../docs/architecture/agent-status.md) is normative; Phases 01–02 implemented, Phases 03–05 pending.
+[Proposed architecture](../../docs/architecture/agent-status.md) is normative; Phases 01–03 implemented, Phases 04–05 pending.
 
 - Scope credentials to terminal incarnation; inject only into private spawn environment, never persisted templates or public APIs.
 - Persistent local reporter connection + 5-second state heartbeat / 15-second lease; close/expiry => unknown.
@@ -40,20 +40,20 @@ Deliver `unknown | idle | working | blocked` agent status and explicit turn-ende
 |---|---|---|---|---|
 | 1 | [Semantic contract and reducer](./phase-01-semantic-contract-and-reducer.md) | Complete (2026-09-28) | 100% | None |
 | 2 | [Reporter transport and PTY lifecycle](./phase-02-reporter-transport-and-pty-lifecycle.md) | DONE (2026-09-28) | 100% | 1 |
-| 3 | [Bundled OMP adapter and installer](./phase-03-omp-adapter-and-installer.md) | Pending | 0% | 1–2 |
+| 3 | [Bundled OMP adapter and installer](./phase-03-omp-adapter-and-installer.md) | DONE (2026-09-28) | 100% | 1–2 |
 | 4 | [Profile-safe badges and notifications](./phase-04-profile-safe-ui-and-notifications.md) | Pending | 0% | 1–3 |
 | 5 | [End-to-end and release qualification](./phase-05-end-to-end-qualification.md) | Pending | 0% | 1–4 |
 
 ## Completion gates
 
-All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery. Real OMP and browser evidence required, not only synthetic event tests. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. Phases 01 and 02 are complete as of 2026-09-28; phases 03–05 remain pending.
+All [acceptance scenarios](./acceptance-scenarios.md) pass for qualified Linux delivery. Real OMP and browser evidence required, not only synthetic event tests. Existing Codex OSC9, shell suggestions, output/process status, workflow and suspend semantics remain intact. Server build/package embeds adapter without requiring OMP/Bun at Rust compile time. Phases 01, 02, and 03 are complete as of 2026-09-28; phases 04–05 remain pending.
 
 ## Evidence and review
 
 - [Brainstorm](../reports/brainstorm-260928-0300-herdr-agent-status-adoption.md)
 - [Report review and source corrections](./reports/report-review.md)
 - [Validation record](./reports/plan-validation.md)
-- Architecture index records Phases 01–02 implemented; Phases 03–05 remain planned.
+- [Phase 03 implementation review](../reports/code-review-260928-1233-phase-03-bundled-omp-adapter-and-installer.md): score 9.2/10; no critical issues, with two high-priority findings tracked in the phase risk notes.
 - Planning skill and hard-command template loaded and followed inline; no slash-dispatch API exposed.
 - Active-plan helper ran, but `EVCRATE_SESSION_ID` is absent; automatic session activation was not persisted. Use this path explicitly.
 
@@ -71,8 +71,8 @@ Deploy matched server/UI; install adapter as OMP's OS user; restart existing OMP
 - Unified agent preferences; preserve Codex values by one-way migration.
 
 ### Action Items
-- Phase 01–02 completed and reviewed (2026-09-28); proceed to Phase 03. Overall plan remains in progress pending Phases 03–05.
+- Phase 01–03 completed and reviewed (2026-09-28); proceed to Phase 04. Overall plan remains in progress pending Phases 04–05.
 
 ## Unresolved questions
 
-No unresolved product decision. Actual OMP event ordering/reload behavior, WebSocket header behavior and packaged installer execution remain implementation gates. New evidence that contradicts the pinned contract requires updating the architecture and phases before code continues. Phases 01–02 completed 2026-09-28; Phases 03–05 remain pending and full delivery remains in progress.
+No unresolved product decision. Phase 03 review found no critical issues but recorded two high-priority findings: inactive late `agent_end` can emit duplicate `turn-ended` reports, and CRLF line endings can misclassify managed extensions during update; both remain tracked in the phase risk notes. Real OMP event/reload behavior and packaged installer execution remain end-to-end qualification gates. Phases 01–03 completed 2026-09-28; phases 04–05 remain pending and full delivery remains in progress.
