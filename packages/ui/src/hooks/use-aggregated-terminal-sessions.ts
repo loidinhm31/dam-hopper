@@ -31,15 +31,23 @@ export function useAggregatedTerminalSessions(): {
   );
 
   const profiles = useMemo(() => getProfiles(), [profileVersion]);
-  const { data: ambientSessions = [], isSuccess: ambientSuccess, isLoading: ambientLoading } =
-    useTerminalSessions(profiles.length === 0 ? undefined : { profileId: "__disabled__" });
+  const {
+    data: ambientSessions = [],
+    isSuccess: ambientSuccess,
+    isLoading: ambientLoading,
+  } = useTerminalSessions(
+    profiles.length === 0 ? undefined : { profileId: "__disabled__" },
+  );
 
   const connectionVersion = useSyncExternalStore(
     subscribeConnections,
-    () => JSON.stringify(profiles.map((profile) => {
-      const snapshot = getConnectionSnapshot(profile.id);
-      return [profile.id, snapshot?.status, snapshot?.owner.generation];
-    })),
+    () =>
+      JSON.stringify(
+        profiles.map((profile) => {
+          const snapshot = getConnectionSnapshot(profile.id);
+          return [profile.id, snapshot?.status, snapshot?.owner.generation];
+        }),
+      ),
     () => "",
   );
 
@@ -59,7 +67,10 @@ export function useAggregatedTerminalSessions(): {
             "terminal:listDetailed",
           );
           if (!isCurrentConnection(owner)) {
-            throw new ConnectionOwnerError("Terminal session owner is stale", "stale");
+            throw new ConnectionOwnerError(
+              "Terminal session owner is stale",
+              "stale",
+            );
           }
           rememberTerminalSessionIncarnations(sessions, owner.profileId);
           return sessions.map((s) => ({
@@ -75,7 +86,6 @@ export function useAggregatedTerminalSessions(): {
 
   const queryResults = useQueries({ queries: querySpecs });
 
-  const ambientSessionResults = profiles.length === 0 ? ambientSessions : queryResults;
   const { sessions, isSuccess, isLoading } = useMemo(() => {
     if (profiles.length === 0) {
       return {
@@ -99,9 +109,10 @@ export function useAggregatedTerminalSessions(): {
 
     return {
       sessions: list,
-      isSuccess: queryResults.length > 0 && queryResults.some((r) => r.isSuccess),
+      isSuccess:
+        queryResults.length > 0 && queryResults.some((r) => r.isSuccess),
       isLoading: anyLoading,
     };
-  }, [profiles, ambientSessionResults, ambientSuccess, ambientLoading]);
+  }, [profiles, ambientSessions, queryResults, ambientSuccess, ambientLoading]);
   return { sessions, isSuccess, isLoading };
 }

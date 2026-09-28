@@ -15,6 +15,10 @@ import type {
   FsPutResult,
 } from "./ws-transport.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
+import {
+  decodeAgentStatusSnapshot,
+  type AgentStatusSnapshotV1,
+} from "./agent-status-types.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 export { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 import {
@@ -1598,13 +1602,34 @@ export interface DiscoverResponse {
 }
 
 export type AgentCommandPatternKind = "literal" | "regex";
-export type TerminalAgentType = "codex" | "claude" | "antigravity" | "omp" | "unknown";
-export type TerminalAgentNotificationPolicy = "always";
+export type TerminalAgentType =
+  | "codex"
+  | "claude"
+  | "antigravity"
+  | "omp"
+  | "unknown";
 export type TerminalCodexNotificationSoundPattern =
   | "default"
   | "soft"
   | "two-tone"
   | "urgent";
+export interface TerminalAgentNotificationPolicy {
+  enabled: boolean;
+  toast: boolean;
+  browser: boolean;
+  sound: boolean;
+  volume: number;
+  pattern: TerminalCodexNotificationSoundPattern;
+}
+
+export interface TerminalAgentNotifications {
+  version: number;
+  agents: {
+    codex: TerminalAgentNotificationPolicy;
+    omp: TerminalAgentNotificationPolicy;
+    [agent: string]: TerminalAgentNotificationPolicy | undefined;
+  };
+}
 
 export interface AgentCommandPattern {
   id: string;
@@ -1634,12 +1659,7 @@ export interface UiConfig {
   terminalFontSizeDecreaseShortcut?: string;
   terminalSuggestionsEnabled?: boolean;
   terminalAutoSwitchProjectEnabled?: boolean;
-  terminalCodexNotificationsEnabled?: boolean;
-  terminalCodexNotificationToastEnabled?: boolean;
-  terminalCodexBrowserNotificationsEnabled?: boolean;
-  terminalCodexNotificationSoundEnabled?: boolean;
-  terminalCodexNotificationSoundVolume?: number;
-  terminalCodexNotificationSoundPattern?: TerminalCodexNotificationSoundPattern;
+  terminalAgentNotifications?: TerminalAgentNotifications;
   terminalScrollButtonsEnabled?: boolean;
   terminalCommitStatusEnabled?: boolean;
   terminalScrollStep?: number;
@@ -2450,6 +2470,10 @@ export function createApiClient(
         transport.invoke<SessionInfo[]>("terminal:listDetailed"),
       getBuffer: (id: string) =>
         transport.invoke<string>("terminal:buffer", id),
+      agentStatusSnapshot: async () =>
+        decodeAgentStatusSnapshot(
+          await transport.invoke<unknown>("terminal:agentStatusSnapshot"),
+        ),
     },
     health: {
       get: () => transport.invoke<HealthResponse>("health:get"),
@@ -2739,13 +2763,10 @@ export function createApiClient(
           ...req,
         }),
       createSession: (req: CreateSessionRequest) =>
-        transport.invoke<MutationDto<SessionDto>>(
-          "workflow:createSession",
-          {
-            ...req,
-            target: toWireTarget(req.target),
-          },
-        ),
+        transport.invoke<MutationDto<SessionDto>>("workflow:createSession", {
+          ...req,
+          target: toWireTarget(req.target),
+        }),
       endSession: (id: string, req: EndSessionRequest) =>
         transport.invoke<MutationDto<SessionDto>>("workflow:endSession", {
           id,
@@ -2881,11 +2902,17 @@ export function createApiClient(
           id,
           body: req,
         }),
-      adminReplaceOwnerHistorySource: (id: string, req: ReplaceOwnerHistorySourceRequest) =>
-        transport.invoke<AdminInstallationDto>("plugins:adminReplaceOwnerHistorySource", {
-          id,
-          body: req,
-        }),
+      adminReplaceOwnerHistorySource: (
+        id: string,
+        req: ReplaceOwnerHistorySourceRequest,
+      ) =>
+        transport.invoke<AdminInstallationDto>(
+          "plugins:adminReplaceOwnerHistorySource",
+          {
+            id,
+            body: req,
+          },
+        ),
       onLifecycleRevision: (
         listener: (event: PluginLifecycleRevisionEvent) => void,
       ) =>
@@ -3211,6 +3238,7 @@ export interface ApiClient {
     list: () => Promise<SessionInfo[]>;
     listDetailed: () => Promise<SessionInfo[]>;
     getBuffer: (id: string) => Promise<string>;
+    agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
   };
   health: {
     get: () => Promise<HealthResponse>;

@@ -31,8 +31,10 @@ async function flushMicrotasks() {
 }
 
 function resetSettingsStore() {
-  __resetSettingsStoreTestState();
-  useWorkbenchSelectionsStore.getState().setPreferencesProfileId("test-profile");
+  useWorkbenchSelectionsStore
+    .getState()
+    .setPreferencesProfileId("test-profile");
+  useWorkbenchSelectionsStore.getState().updatePreferencesSnapshot(null);
   useSettingsStore.setState({
     systemFontSize: 14,
     editorFontSize: 14,
@@ -51,12 +53,27 @@ function resetSettingsStore() {
     terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
     terminalSuggestionsEnabled: true,
     terminalAutoSwitchProjectEnabled: true,
-    terminalCodexNotificationsEnabled: false,
-    terminalCodexNotificationToastEnabled: true,
-    terminalCodexBrowserNotificationsEnabled: true,
-    terminalCodexNotificationSoundEnabled: true,
-    terminalCodexNotificationSoundVolume: 100,
-    terminalCodexNotificationSoundPattern: "default",
+    terminalAgentNotifications: {
+      version: 1,
+      agents: {
+        codex: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+      },
+    },
     terminalScrollButtonsEnabled: false,
     terminalCommitStatusEnabled: false,
     terminalScrollStep: 3,
@@ -68,6 +85,7 @@ function resetSettingsStore() {
     mobileCustomKeyboardRowGap: 4,
     hydrated: false,
   });
+  __resetSettingsStoreTestState();
 }
 
 describe("settings store terminal agent notification fields", () => {
@@ -104,12 +122,27 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.projectPanelShortcut).toBe("Mod+Shift+KeyZ");
     expect(state.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(state.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
-    expect(state.terminalCodexNotificationsEnabled).toBe(false);
-    expect(state.terminalCodexNotificationToastEnabled).toBe(true);
-    expect(state.terminalCodexBrowserNotificationsEnabled).toBe(true);
-    expect(state.terminalCodexNotificationSoundEnabled).toBe(true);
-    expect(state.terminalCodexNotificationSoundVolume).toBe(100);
-    expect(state.terminalCodexNotificationSoundPattern).toBe("default");
+    expect(state.terminalAgentNotifications).toEqual({
+      version: 1,
+      agents: {
+        codex: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+      },
+    });
     expect(state.terminalCommitStatusEnabled).toBe(false);
     expect(state.terminalAutoSwitchProjectEnabled).toBe(true);
     expect(state.explorerLanguageFilter).toBe("all");
@@ -143,20 +176,37 @@ describe("settings store terminal agent notification fields", () => {
     );
   });
 
-  it("persists codex notification changes", async () => {
+  it("persists a complete canonical object when Codex master is changed", async () => {
     updateUi.mockResolvedValue({ updated: true });
 
-    useSettingsStore.getState().saveDebounced({
-      terminalCodexNotificationsEnabled: true,
-    });
-
+    useSettingsStore
+      .getState()
+      .saveAgentNotificationPolicy("codex", { enabled: true });
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(updateUi).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalCodexNotificationsEnabled: true,
-      }),
-    );
+    expect(updateUi).toHaveBeenCalledWith({
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: true,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          omp: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+        },
+      },
+    });
   });
 
   it("persists the terminal commit-status preference", async () => {
@@ -227,39 +277,95 @@ describe("settings store terminal agent notification fields", () => {
     expect(useSettingsStore.getState().explorerLanguageFilter).toBe("all");
   });
 
-  it("clamps and persists notification sound settings", async () => {
+  it("coalesces Codex and OMP edits without losing either policy and clamps volume", async () => {
     updateUi.mockResolvedValue({ updated: true });
-
-    useSettingsStore.getState().saveDebounced({
-      terminalCodexNotificationSoundEnabled: false,
-      terminalCodexNotificationSoundVolume: 140,
+    useSettingsStore
+      .getState()
+      .saveAgentNotificationPolicy("codex", { sound: false, volume: 140 });
+    useSettingsStore.getState().saveAgentNotificationPolicy("omp", {
+      enabled: true,
+      toast: false,
+      pattern: "two-tone",
     });
-
-    await vi.advanceTimersByTimeAsync(500);
-
-    expect(updateUi).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalCodexNotificationSoundEnabled: false,
-        terminalCodexNotificationSoundVolume: 100,
-      }),
-    );
-  });
-
-  it("persists delivery and sound pattern settings", async () => {
-    updateUi.mockResolvedValue({ updated: true });
-
-    useSettingsStore.getState().saveDebounced({
-      terminalCodexNotificationToastEnabled: false,
-      terminalCodexBrowserNotificationsEnabled: false,
-      terminalCodexNotificationSoundPattern: "two-tone",
-    });
-
     await vi.advanceTimersByTimeAsync(500);
 
     expect(updateUi).toHaveBeenCalledWith({
-      terminalCodexNotificationToastEnabled: false,
-      terminalCodexBrowserNotificationsEnabled: false,
-      terminalCodexNotificationSoundPattern: "two-tone",
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: false,
+            volume: 100,
+            pattern: "default",
+          },
+          omp: {
+            enabled: true,
+            toast: false,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "two-tone",
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves unsupported notification version on hydrate and refuses to overwrite on save", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: {
+        terminalAgentNotifications: {
+          version: 2,
+          agents: {
+            codex: {
+              enabled: true,
+              toast: false,
+              browser: true,
+              sound: false,
+              volume: 50,
+              pattern: "soft",
+            },
+            omp: {
+              enabled: true,
+              toast: true,
+              browser: false,
+              sound: true,
+              volume: 80,
+              pattern: "urgent",
+            },
+          },
+        },
+      },
+    });
+    updateUi.mockResolvedValue({ updated: true });
+
+    await useSettingsStore.getState().hydrate();
+    const state = useSettingsStore.getState();
+    expect(state.terminalAgentNotifications.version).toBe(2);
+    expect(state.terminalAgentNotifications.agents.codex.enabled).toBe(true);
+    expect(state.terminalAgentNotifications.agents.omp.enabled).toBe(true);
+
+    // Attempt to save agent notification policy on unsupported version
+    useSettingsStore
+      .getState()
+      .saveAgentNotificationPolicy("codex", { enabled: false });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(updateUi).not.toHaveBeenCalled();
+
+    // Attempt to saveDebounced with unsupported version
+    useSettingsStore.getState().saveDebounced({
+      systemFontSize: 16,
+      terminalAgentNotifications: {
+        version: 2,
+        agents: state.terminalAgentNotifications.agents,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(updateUi).toHaveBeenCalledWith({
+      systemFontSize: 16,
     });
   });
 
@@ -270,7 +376,7 @@ describe("settings store terminal agent notification fields", () => {
 
     const state = useSettingsStore.getState();
     expect(state.hydrated).toBe(true);
-    expect(state.terminalCodexNotificationsEnabled).toBe(false);
+    expect(state.terminalAgentNotifications.agents.codex.enabled).toBe(false);
     expect(state.terminalAutoSwitchProjectEnabled).toBe(true);
   });
 
@@ -308,28 +414,80 @@ describe("settings store terminal agent notification fields", () => {
 
     await useSettingsStore.getState().hydrate();
 
-    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
-      true,
+    expect(
+      useSettingsStore.getState().terminalAgentNotifications.agents.codex
+        .enabled,
+    ).toBe(true);
+    expect(
+      useSettingsStore.getState().terminalAgentNotifications.agents.omp.enabled,
+    ).toBe(false);
+  });
+
+  it("roundtrips migrated values via canonical server config without reviving legacy fields", async () => {
+    getGlobalConfig.mockResolvedValueOnce({
+      ui: {
+        terminalCodexNotificationsEnabled: true,
+        terminalCodexNotificationSoundVolume: 45,
+        terminalCodexNotificationSoundPattern: "urgent",
+      },
+    });
+    updateUi.mockResolvedValue({ updated: true });
+
+    await useSettingsStore.getState().hydrate();
+    useSettingsStore
+      .getState()
+      .saveAgentNotificationPolicy("omp", { enabled: true, browser: false });
+    await vi.advanceTimersByTimeAsync(500);
+    const payload = updateUi.mock.calls[0]?.[0];
+    expect(payload).toEqual({
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: true,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 45,
+            pattern: "urgent",
+          },
+          omp: {
+            enabled: true,
+            toast: true,
+            browser: false,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+        },
+      },
+    });
+    getGlobalConfig.mockResolvedValueOnce({ ui: payload });
+    await useSettingsStore.getState().hydrate();
+    expect(useSettingsStore.getState().terminalAgentNotifications).toEqual(
+      payload.terminalAgentNotifications,
     );
   });
 
   it("rolls back optimistic settings when updateUi rejects", async () => {
     updateUi.mockRejectedValue(new Error("invalid regex"));
 
-    useSettingsStore.getState().saveDebounced({
-      terminalCodexNotificationsEnabled: true,
-    });
+    useSettingsStore
+      .getState()
+      .saveAgentNotificationPolicy("codex", { enabled: true });
 
-    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
-      true,
-    );
+    expect(
+      useSettingsStore.getState().terminalAgentNotifications.agents.codex
+        .enabled,
+    ).toBe(true);
 
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
 
-    expect(useSettingsStore.getState().terminalCodexNotificationsEnabled).toBe(
-      false,
-    );
+    expect(
+      useSettingsStore.getState().terminalAgentNotifications.agents.codex
+        .enabled,
+    ).toBe(false);
     expect(recordClientDiagnostic).toHaveBeenCalledWith(
       "custom",
       "settings-store",
@@ -455,7 +613,8 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).not.toHaveBeenCalled();
     expect(useSettingsStore.getState().systemFontSize).toBe(18);
     expect(
-      useWorkbenchSelectionsStore.getState().preferencesSnapshot?.systemFontSize,
+      useWorkbenchSelectionsStore.getState().preferencesSnapshot
+        ?.systemFontSize,
     ).toBe(18);
   });
 

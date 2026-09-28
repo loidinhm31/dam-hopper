@@ -206,19 +206,24 @@ export function TerminalPanel({
   const effectiveTerminalRef = useMemo<TerminalRef | undefined>(
     () =>
       terminalRef ??
-      (ownerProfileId ? { profileId: ownerProfileId, id: safeSessionId } : undefined),
+      (ownerProfileId
+        ? { profileId: ownerProfileId, id: safeSessionId }
+        : undefined),
     [ownerProfileId, safeSessionId, terminalRef],
   );
   const terminalRegistrationKey = effectiveTerminalRef
     ? terminalKey(effectiveTerminalRef)
     : safeSessionId;
 
-  const writePanelInput = useCallback((data: string) => {
-    const binding = boundTransportRef.current;
-    if (binding?.isCurrent()) {
-      binding.transport.terminalWrite(safeSessionId, data);
-    }
-  }, [safeSessionId]);
+  const writePanelInput = useCallback(
+    (data: string) => {
+      const binding = boundTransportRef.current;
+      if (binding?.isCurrent()) {
+        binding.transport.terminalWrite(safeSessionId, data);
+      }
+    },
+    [safeSessionId],
+  );
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
   const termRef = useRef<Terminal | null>(null);
   const rendererRef = useRef<TerminalRendererHandle | null>(null);
@@ -250,11 +255,13 @@ export function TerminalPanel({
   // Keep a stable ref so closures inside the main useEffect always access the latest methods
   const suggestionsRef = useRef(suggestions);
   suggestionsRef.current = suggestions;
-  const historyResults = !ownerProfileId ? [] : historyQuery
-    ? searchHistory(historyQuery, 50, ownerProfileId)
-    : getHistory(ownerProfileId)
-        .slice(0, 50)
-        .map((entry) => ({ entry, score: 0 }));
+  const historyResults = !ownerProfileId
+    ? []
+    : historyQuery
+      ? searchHistory(historyQuery, 50, ownerProfileId)
+      : getHistory(ownerProfileId)
+          .slice(0, 50)
+          .map((entry) => ({ entry, score: 0 }));
   const ghostSuffix = getTerminalSuggestionSuffix(suggestions.snapshot, "full");
 
   const useHistoryCommand = useCallback(
@@ -352,14 +359,11 @@ export function TerminalPanel({
       terminalBoundary,
       effectiveTerminalRef,
     );
-    geometryAdapter = new TerminalCursorGeometryAdapter(
-      term,
-      (geometry) => {
-        setCursorGeometry((current) =>
-          geometryEquals(current, geometry) ? current : geometry,
-        );
-      },
-    );
+    geometryAdapter = new TerminalCursorGeometryAdapter(term, (geometry) => {
+      setCursorGeometry((current) =>
+        geometryEquals(current, geometry) ? current : geometry,
+      );
+    });
     cursorGeometryAdapterRef.current = geometryAdapter;
     terminalEntry.invalidateSuggestionGeometry = () =>
       geometryAdapter?.invalidate();
@@ -367,8 +371,11 @@ export function TerminalPanel({
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null, term);
     let boundServerUrl: string | undefined;
     const bindConnection = (): (() => void) => {
-      if (terminalRef && (terminalRef.id !== sessionId ||
-          (profileId !== undefined && terminalRef.profileId !== profileId))) {
+      if (
+        terminalRef &&
+        (terminalRef.id !== sessionId ||
+          (profileId !== undefined && terminalRef.profileId !== profileId))
+      ) {
         return () => {};
       }
       let transport: Transport;
@@ -376,7 +383,10 @@ export function TerminalPanel({
       if (ownerProfileId && getConnectionSnapshot(ownerProfileId)) {
         const snapshot = getConnectionSnapshot(ownerProfileId)!;
         if (snapshot.status !== "connected") return () => {};
-        if (boundServerUrl !== undefined && snapshot.serverUrl !== boundServerUrl) {
+        if (
+          boundServerUrl !== undefined &&
+          snapshot.serverUrl !== boundServerUrl
+        ) {
           return () => {};
         }
         boundServerUrl = snapshot.serverUrl;
@@ -394,497 +404,514 @@ export function TerminalPanel({
       const binding = { transport, isCurrent };
       boundTransportRef.current = binding;
       term.options.disableStdin = false;
-    // Separate receipt from xterm's asynchronous replay completion. Live output
-    // remains fail-closed before a buffer arrives, then queues until replay parsing
-    // is complete so historical OSC 9 events cannot be delivered as live alerts.
-    const streamReplayGate = createTerminalStreamReplayGate();
-    const outputActivity = registerTerminalOutputActivity(terminalRegistrationKey);
-    const resetActivityForUnavailableStream = () => {
-      resetTerminalStreamReplayGateForAttach(streamReplayGate);
-      outputActivity.setStreamReady(false);
-    };
-    let disposed = false;
-    let restartRecoveryPending = false;
-    let restartProbeGeneration = 0;
-    let recordedSuppressedOutput = false;
-    let lastServerOffset = 0;
-
-    // Track all cleanups so the effect return can always run them
-    let unsubData: (() => void) | null = null;
-    let unsubExit: (() => void) | null = null;
-    let unsubExitEnhanced: (() => void) | null = null;
-    let unsubRestart: (() => void) | null = null;
-    let unsubTerminalChanged: (() => void) | null = null;
-    let unsubBuffer: (() => void) | null = null;
-    let unsubLifecycle: (() => void) | null = null;
-    let unsubStatus: (() => void) | null = null;
-    let inputDisposable: { dispose: () => void } | null = null;
-    let releaseCompositionGuards = () => {};
-    let agentNotifications: TerminalAgentNotificationIntegration | null = null;
-    let observer: ResizeObserver | null = null;
-    let recoveryController: TerminalAttachRecoveryController | null = null;
-    const retryUnavailableAfterReplayRef = { current: false };
-
-    const reopenLiveStreamAfterRestart = () => {
-      if (!isCurrent()) return;
-      restartRecoveryPending = false;
-      restartProbeGeneration += 1;
-      markTerminalStreamReadyAfterRestart(streamReplayGate);
-      outputActivity.setStreamReady(true);
-      agentNotifications?.setReplayActive(false);
-    };
-
-    const probeRestartReadiness = () => {
-      if (!isCurrent() || !restartRecoveryPending) return;
-      const probeGeneration = ++restartProbeGeneration;
-      void transport
-        .invoke<SessionInfo[]>("terminal:listDetailed")
-        .then((sessions) => {
-          if (
-            !isCurrent() ||
-            !restartRecoveryPending ||
-            probeGeneration !== restartProbeGeneration
-          )
-            return;
-          if (
-            sessions.some(
-              (session) => session.id === safeSessionId && session.alive,
-            )
-          ) {
-            reopenLiveStreamAfterRestart();
-          }
-        })
-        .catch(() => {});
-    };
-
-    agentNotifications = attachTerminalAgentNotifications({
-      term,
-      sessionId: safeSessionId,
-      project,
-      profileId: ownerProfileId,
-      terminalRef: effectiveTerminalRef,
-      getTerminalOrder: () => terminalOrderRef.current,
-    });
-
-    const writeLiveData = (data: string) => {
-      term.write(data);
-      if (data.length > 0) outputActivity.markOutput();
-      lastServerOffset += utf8ByteLength(data);
-      suggestionsRef.current.handleOutput(data);
-      agentNotifications?.onOutput();
-    };
-
-    // ── Register all listeners immediately to avoid race conditions ──────────
-    // 1. Stream PTY output → xterm + invalidate the suggestion controller.
-    // Output alone never establishes a shell prompt or command boundary.
-    unsubData = transport.onTerminalData(safeSessionId, (data) => {
-      if (!isCurrent()) return;
-      // Output before the first attach buffer is not safely orderable. Output that
-      // arrives while xterm parses a received replay is held until its completion.
-      if (
-        streamReplayGate.hasAttachBufferBeenReceived &&
-        streamReplayGate.isLiveStreamReady
-      ) {
-        writeLiveData(data);
-      } else if (
-        streamReplayGate.hasAttachBufferBeenReceived &&
-        streamReplayGate.isReplayWriting
-      ) {
-        streamReplayGate.queuedLiveData.push(data);
-      } else if (!recordedSuppressedOutput) {
-        recordedSuppressedOutput = true;
-        recordClientDiagnostic(
-          "transport",
-          "terminal-panel",
-          "stream_suppressed_before_buffer",
-          {
-            sessionId: safeSessionId,
-            bytes: utf8ByteLength(data),
-            attachState: attachStateRef.current,
-          },
-        );
-      }
-    });
-
-    // 1a. Only the server's nonce-validated lifecycle may establish an
-    // editable command boundary. PTY output and outgoing input stay passive.
-    unsubLifecycle =
-      transport.onTerminalLifecycle?.(safeSessionId, (event) => {
-        if (!isCurrent()) return;
-        suggestionsRef.current.handleLifecycle(event);
-      }) ?? null;
-
-    // 2. Handle PTY buffer (response to terminal:attach)
-    if (transport.onTerminalBuffer) {
-      unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
-        if (!isCurrent()) return;
-        // A delayed response from an attach that predates a confirmed restart,
-        // or any response during its restart gap, must not replace the new
-        // live stream with stale scrollback.
-        if (restartRecoveryPending || streamReplayGate.isLiveStreamReady)
-          return;
-        recoveryController?.onBuffer();
-        suggestionsRef.current.handleReplay();
-        streamReplayGate.hasAttachBufferBeenReceived = true;
-        streamReplayGate.isReplayWriting = true;
-        streamReplayGate.isLiveStreamReady = false;
+      // Separate receipt from xterm's asynchronous replay completion. Live output
+      // remains fail-closed before a buffer arrives, then queues until replay parsing
+      // is complete so historical OSC 9 events cannot be delivered as live alerts.
+      const streamReplayGate = createTerminalStreamReplayGate();
+      const outputActivity = registerTerminalOutputActivity(
+        terminalRegistrationKey,
+      );
+      const resetActivityForUnavailableStream = () => {
+        resetTerminalStreamReplayGateForAttach(streamReplayGate);
         outputActivity.setStreamReady(false);
-        const currentReplayGeneration = ++streamReplayGate.replayGeneration;
-        agentNotifications?.setReplayActive(true);
-        lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
-          if (
-            !isCurrent() ||
-            currentReplayGeneration !== streamReplayGate.replayGeneration
-          )
-            return;
+      };
+      let disposed = false;
+      let restartRecoveryPending = false;
+      let restartProbeGeneration = 0;
+      let recordedSuppressedOutput = false;
+      let lastServerOffset = 0;
 
-          streamReplayGate.isReplayWriting = false;
-          streamReplayGate.isLiveStreamReady = true;
-          outputActivity.setStreamReady(true);
-          agentNotifications?.setReplayActive(false);
-          const queuedLiveDataSnapshot =
-            streamReplayGate.queuedLiveData.splice(0);
-          for (const data of queuedLiveDataSnapshot) {
-            writeLiveData(data);
-          }
+      // Track all cleanups so the effect return can always run them
+      let unsubData: (() => void) | null = null;
+      let unsubExit: (() => void) | null = null;
+      let unsubExitEnhanced: (() => void) | null = null;
+      let unsubRestart: (() => void) | null = null;
+      let unsubTerminalChanged: (() => void) | null = null;
+      let unsubBuffer: (() => void) | null = null;
+      let unsubLifecycle: (() => void) | null = null;
+      let unsubStatus: (() => void) | null = null;
+      let inputDisposable: { dispose: () => void } | null = null;
+      let releaseCompositionGuards = () => {};
+      let agentNotifications: TerminalAgentNotificationIntegration | null =
+        null;
+      let observer: ResizeObserver | null = null;
+      let recoveryController: TerminalAttachRecoveryController | null = null;
+      const retryUnavailableAfterReplayRef = { current: false };
+
+      const reopenLiveStreamAfterRestart = () => {
+        if (!isCurrent()) return;
+        restartRecoveryPending = false;
+        restartProbeGeneration += 1;
+        markTerminalStreamReadyAfterRestart(streamReplayGate);
+        outputActivity.setStreamReady(true);
+        agentNotifications?.setReplayActive(false);
+      };
+
+      const probeRestartReadiness = () => {
+        if (!isCurrent() || !restartRecoveryPending) return;
+        const probeGeneration = ++restartProbeGeneration;
+        void transport
+          .invoke<SessionInfo[]>("terminal:listDetailed")
+          .then((sessions) => {
+            if (
+              !isCurrent() ||
+              !restartRecoveryPending ||
+              probeGeneration !== restartProbeGeneration
+            )
+              return;
+            if (
+              sessions.some(
+                (session) => session.id === safeSessionId && session.alive,
+              )
+            ) {
+              reopenLiveStreamAfterRestart();
+            }
+          })
+          .catch(() => {});
+      };
+
+      agentNotifications = attachTerminalAgentNotifications({
+        term,
+        sessionId: safeSessionId,
+        project,
+        profileId: ownerProfileId,
+        terminalRef: effectiveTerminalRef,
+        getTerminalIncarnation: () =>
+          latestTerminalSessionIncarnation(terminalRegistrationKey),
+        getTerminalOrder: () => terminalOrderRef.current,
+      });
+
+      const writeLiveData = (data: string) => {
+        term.write(data);
+        if (data.length > 0) outputActivity.markOutput();
+        lastServerOffset += utf8ByteLength(data);
+        suggestionsRef.current.handleOutput(data);
+        agentNotifications?.onOutput();
+      };
+
+      // ── Register all listeners immediately to avoid race conditions ──────────
+      // 1. Stream PTY output → xterm + invalidate the suggestion controller.
+      // Output alone never establishes a shell prompt or command boundary.
+      unsubData = transport.onTerminalData(safeSessionId, (data) => {
+        if (!isCurrent()) return;
+        // Output before the first attach buffer is not safely orderable. Output that
+        // arrives while xterm parses a received replay is held until its completion.
+        if (
+          streamReplayGate.hasAttachBufferBeenReceived &&
+          streamReplayGate.isLiveStreamReady
+        ) {
+          writeLiveData(data);
+        } else if (
+          streamReplayGate.hasAttachBufferBeenReceived &&
+          streamReplayGate.isReplayWriting
+        ) {
+          streamReplayGate.queuedLiveData.push(data);
+        } else if (!recordedSuppressedOutput) {
+          recordedSuppressedOutput = true;
           recordClientDiagnostic(
             "transport",
             "terminal-panel",
-            "buffer_replay_complete",
+            "stream_suppressed_before_buffer",
             {
               sessionId: safeSessionId,
-              queuedChunkCount: queuedLiveDataSnapshot.length,
+              bytes: utf8ByteLength(data),
+              attachState: attachStateRef.current,
             },
           );
-          recoveryController?.onReplayComplete();
-        });
-        recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
-          sessionId: safeSessionId,
-          offset: replay.offset,
-          reset: replay.reset,
-          truncated: replay.truncated,
-          hadSuppressedOutput: recordedSuppressedOutput,
-        });
-        setAttachState("attached");
-      });
-    }
-
-    unsubExitEnhanced =
-      transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
-        if (!isCurrent()) return;
-        const currentIncarnation =
-          latestTerminalSessionIncarnation(terminalRegistrationKey);
-        if (
-          exitEvent.incarnation === undefined
-            ? currentIncarnation !== undefined
-            : currentIncarnation !== undefined &&
-              exitEvent.incarnation !== currentIncarnation
-        ) {
-          return;
         }
+      });
 
-        if (exitEvent.incarnation !== undefined) {
-          rememberTerminalSessionIncarnation(
+      // 1a. Only the server's nonce-validated lifecycle may establish an
+      // editable command boundary. PTY output and outgoing input stay passive.
+      unsubLifecycle =
+        transport.onTerminalLifecycle?.(safeSessionId, (event) => {
+          if (!isCurrent()) return;
+          suggestionsRef.current.handleLifecycle(event);
+        }) ?? null;
+
+      // 2. Handle PTY buffer (response to terminal:attach)
+      if (transport.onTerminalBuffer) {
+        unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+          if (!isCurrent()) return;
+          // A delayed response from an attach that predates a confirmed restart,
+          // or any response during its restart gap, must not replace the new
+          // live stream with stale scrollback.
+          if (restartRecoveryPending || streamReplayGate.isLiveStreamReady)
+            return;
+          recoveryController?.onBuffer();
+          suggestionsRef.current.handleReplay();
+          streamReplayGate.hasAttachBufferBeenReceived = true;
+          streamReplayGate.isReplayWriting = true;
+          streamReplayGate.isLiveStreamReady = false;
+          outputActivity.setStreamReady(false);
+          const currentReplayGeneration = ++streamReplayGate.replayGeneration;
+          agentNotifications?.setReplayActive(true);
+          lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
+            if (
+              !isCurrent() ||
+              currentReplayGeneration !== streamReplayGate.replayGeneration
+            )
+              return;
+
+            streamReplayGate.isReplayWriting = false;
+            streamReplayGate.isLiveStreamReady = true;
+            outputActivity.setStreamReady(true);
+            agentNotifications?.setReplayActive(false);
+            const queuedLiveDataSnapshot =
+              streamReplayGate.queuedLiveData.splice(0);
+            for (const data of queuedLiveDataSnapshot) {
+              writeLiveData(data);
+            }
+            recordClientDiagnostic(
+              "transport",
+              "terminal-panel",
+              "buffer_replay_complete",
+              {
+                sessionId: safeSessionId,
+                queuedChunkCount: queuedLiveDataSnapshot.length,
+              },
+            );
+            recoveryController?.onReplayComplete();
+          });
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "buffer_replay",
+            {
+              sessionId: safeSessionId,
+              offset: replay.offset,
+              reset: replay.reset,
+              truncated: replay.truncated,
+              hadSuppressedOutput: recordedSuppressedOutput,
+            },
+          );
+          setAttachState("attached");
+        });
+      }
+
+      unsubExitEnhanced =
+        transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
+          if (!isCurrent()) return;
+          const currentIncarnation = latestTerminalSessionIncarnation(
             terminalRegistrationKey,
-            exitEvent.incarnation,
+          );
+          if (
+            exitEvent.incarnation === undefined
+              ? currentIncarnation !== undefined
+              : currentIncarnation !== undefined &&
+                exitEvent.incarnation !== currentIncarnation
+          ) {
+            return;
+          }
+
+          if (exitEvent.incarnation !== undefined) {
+            rememberTerminalSessionIncarnation(
+              terminalRegistrationKey,
+              exitEvent.incarnation,
+            );
+          }
+
+          const { exitCode, willRestart, restartIn } = exitEvent;
+          restartRecoveryPending = willRestart;
+          restartProbeGeneration += 1;
+          resetActivityForUnavailableStream();
+          const color = willRestart
+            ? "\x1b[33m"
+            : exitCode === 0
+              ? "\x1b[32m"
+              : "\x1b[31m";
+          const text = willRestart
+            ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
+            : `[Process exited with code ${exitCode ?? "?"}]`;
+          term.write(`\r\n${color}${text}\x1b[0m\r\n`);
+          agentNotifications?.onTerminalExit({ willRestart });
+          onExitRef.current?.(exitCode);
+        }) ?? null;
+      if (!unsubExitEnhanced) {
+        unsubExit = transport.onTerminalExit(safeSessionId, () => {
+          if (!isCurrent()) return;
+          resetActivityForUnavailableStream();
+        });
+      }
+
+      // 4. Handle process restart event. Respawns reuse the session ID and do not
+      // replay the retained buffer, so the confirmed replacement can reopen the
+      // live gate without counting the synthetic restart banner as output.
+      unsubRestart =
+        transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
+          if (!isCurrent()) return;
+          reopenLiveStreamAfterRestart();
+          suggestionsRef.current.handleReplay();
+          const { restartCount } = restartEvent;
+          term.write(
+            `\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`,
+          );
+        }) ?? null;
+
+      // Older servers emit terminal:changed after a respawn without the dedicated
+      // process:restarted event. Probe liveness only while this panel expects one.
+      unsubTerminalChanged = transport.onEvent("terminal:changed", () => {
+        probeRestartReadiness();
+      });
+
+      // 5. Forward user input → PTY stdin, with suggestion interception
+      inputDisposable = term.onData((data) => {
+        if (!isCurrent()) return;
+        agentNotifications?.onUserInput();
+        const result = suggestionsRef.current.handleInput(data);
+        if (result.forward) {
+          transport.terminalWrite(safeSessionId, result.data);
+        }
+      });
+      const textarea = term.textarea;
+      const suppressComposition = () =>
+        suggestionsRef.current.handleComposition();
+      textarea?.addEventListener("compositionstart", suppressComposition);
+      textarea?.addEventListener("paste", suppressComposition);
+      releaseCompositionGuards = () => {
+        textarea?.removeEventListener("compositionstart", suppressComposition);
+        textarea?.removeEventListener("paste", suppressComposition);
+      };
+
+      const titleDisposable = term.onTitleChange((title) => {
+        agentNotifications?.onTitleChange(title);
+      });
+
+      // 6. PTY resize: fired by fitAddon.fit()
+      const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
+        if (!isCurrent()) return;
+        transport.terminalResize(safeSessionId, c, r);
+      });
+
+      // 7. One composed keyboard handler: an acceptance only wins after the
+      // controller invalidates its current ghost and yields a suffix.
+      const baseKeyEventHandler = (e: KeyboardEvent) => {
+        if (
+          e.type === "keydown" &&
+          e.key === "Backspace" &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.metaKey &&
+          !e.isComposing
+        ) {
+          suggestionsRef.current.prepareBackspace();
+        }
+        if (
+          !handleTerminalSuggestionKeyEvent(e, {
+            accept: (kind) => {
+              const suffix = suggestionsRef.current.accept(kind);
+              if (suffix && isCurrent())
+                transport.terminalWrite(safeSessionId, suffix);
+              return suffix;
+            },
+            openHistory: () => suggestionsRef.current.openExplicitList(),
+          })
+        ) {
+          return false;
+        }
+        const isCopyShortcut =
+          e.type === "keydown" &&
+          (e.ctrlKey || e.metaKey) &&
+          !e.shiftKey &&
+          !e.altKey &&
+          (e.code === "KeyC" || e.key === "c" || e.key === "C") &&
+          term.hasSelection();
+        if (isCopyShortcut) {
+          const selection = term.getSelection();
+          if (selection) void copyToClipboard(selection);
+          return false;
+        }
+        const settings = useSettingsStore.getState();
+        return handleSharedTerminalKeyEvent(e, {
+          workspaceShortcut: settings.terminalWorkspaceShortcut,
+          revealActiveFileShortcut: settings.revealActiveFileShortcut,
+          panelShortcuts: [
+            settings.gitPanelShortcut,
+            settings.portsPanelShortcut,
+            settings.fleetTerminalShortcut,
+          ],
+          terminalFontSizeIncreaseShortcut:
+            settings.terminalFontSizeIncreaseShortcut,
+          terminalFontSizeDecreaseShortcut:
+            settings.terminalFontSizeDecreaseShortcut,
+          onCopySelection: () => {
+            const selection = term.getSelection();
+            if (selection) void copyToClipboard(selection);
+          },
+          onFind: () => findController.open(),
+          onNewTerminal,
+          onIncreaseTerminalFontSize: () => {
+            if (settings.terminalFontSize < 32) {
+              settings.saveDebounced({
+                terminalFontSize: settings.terminalFontSize + 1,
+              });
+            }
+          },
+          onDecreaseTerminalFontSize: () => {
+            if (settings.terminalFontSize > 10) {
+              settings.saveDebounced({
+                terminalFontSize: settings.terminalFontSize - 1,
+              });
+            }
+          },
+        });
+      };
+      terminalEntry.baseKeyEventHandler = baseKeyEventHandler;
+      term.attachCustomKeyEventHandler(baseKeyEventHandler);
+
+      // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
+      // Now safe because resize listener is already registered above.
+      scheduleTerminalFit(terminalEntry, {
+        focus: !shouldSuppressTerminalFocus,
+      });
+
+      // Session creation belongs to the manager's explicit launch action.
+      // Reattaching a kept-alive panel must never recreate a missing PTY.
+
+      const sendAttach = (fromOffset?: number, retryAttempt = 0) => {
+        if (!isCurrent()) return false;
+        suggestionsRef.current.handleReplay();
+        // Every attach starts a new replay ownership window. In particular, a
+        // reconnect must close the prior live-ready gate before sending attach so
+        // old-stream output cannot render ahead of the replacement replay.
+        resetActivityForUnavailableStream();
+        setAttachState("attaching");
+        if (retryAttempt === 0) {
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "terminal.attach",
+            {
+              sessionId: safeSessionId,
+              fromOffset,
+            },
           );
         }
 
-        const { exitCode, willRestart, restartIn } = exitEvent;
-        restartRecoveryPending = willRestart;
-        restartProbeGeneration += 1;
-        resetActivityForUnavailableStream();
-        const color = willRestart
-          ? "\x1b[33m"
-          : exitCode === 0
-            ? "\x1b[32m"
-            : "\x1b[31m";
-        const text = willRestart
-          ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
-          : `[Process exited with code ${exitCode ?? "?"}]`;
-        term.write(`\r\n${color}${text}\x1b[0m\r\n`);
-        agentNotifications?.onTerminalExit({ willRestart });
-        onExitRef.current?.(exitCode);
-      }) ?? null;
-    if (!unsubExitEnhanced) {
-      unsubExit = transport.onTerminalExit(safeSessionId, () => {
-        if (!isCurrent()) return;
-        resetActivityForUnavailableStream();
-      });
-    }
+        return transport.terminalAttach
+          ? transport.terminalAttach(safeSessionId, fromOffset) !== false
+          : false;
+      };
 
-    // 4. Handle process restart event. Respawns reuse the session ID and do not
-    // replay the retained buffer, so the confirmed replacement can reopen the
-    // live gate without counting the synthetic restart banner as output.
-    unsubRestart =
-      transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
-        if (!isCurrent()) return;
-        reopenLiveStreamAfterRestart();
-        suggestionsRef.current.handleReplay();
-        const { restartCount } = restartEvent;
-        term.write(`\x1b[33m[Process restarted (#${restartCount})]\x1b[0m\r\n`);
-      }) ?? null;
-
-    // Older servers emit terminal:changed after a respawn without the dedicated
-    // process:restarted event. Probe liveness only while this panel expects one.
-    unsubTerminalChanged = transport.onEvent("terminal:changed", () => {
-      probeRestartReadiness();
-    });
-
-    // 5. Forward user input → PTY stdin, with suggestion interception
-    inputDisposable = term.onData((data) => {
-      if (!isCurrent()) return;
-      agentNotifications?.onUserInput();
-      const result = suggestionsRef.current.handleInput(data);
-      if (result.forward) {
-        transport.terminalWrite(safeSessionId, result.data);
-      }
-    });
-    const textarea = term.textarea;
-    const suppressComposition = () =>
-      suggestionsRef.current.handleComposition();
-    textarea?.addEventListener("compositionstart", suppressComposition);
-    textarea?.addEventListener("paste", suppressComposition);
-    releaseCompositionGuards = () => {
-      textarea?.removeEventListener("compositionstart", suppressComposition);
-      textarea?.removeEventListener("paste", suppressComposition);
-    };
-
-    const titleDisposable = term.onTitleChange((title) => {
-      agentNotifications?.onTitleChange(title);
-    });
-
-    // 6. PTY resize: fired by fitAddon.fit()
-    const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
-      if (!isCurrent()) return;
-      transport.terminalResize(safeSessionId, c, r);
-    });
-
-    // 7. One composed keyboard handler: an acceptance only wins after the
-    // controller invalidates its current ghost and yields a suffix.
-    const baseKeyEventHandler = (e: KeyboardEvent) => {
-      if (
-        e.type === "keydown" &&
-        e.key === "Backspace" &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !e.metaKey &&
-        !e.isComposing
-      ) {
-        suggestionsRef.current.prepareBackspace();
-      }
-      if (
-        !handleTerminalSuggestionKeyEvent(e, {
-          accept: (kind) => {
-            const suffix = suggestionsRef.current.accept(kind);
-            if (suffix && isCurrent()) transport.terminalWrite(safeSessionId, suffix);
-            return suffix;
-          },
-          openHistory: () => suggestionsRef.current.openExplicitList(),
-        })
-      ) {
-        return false;
-      }
-      const isCopyShortcut =
-        e.type === "keydown" &&
-        (e.ctrlKey || e.metaKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        (e.code === "KeyC" || e.key === "c" || e.key === "C") &&
-        term.hasSelection();
-      if (isCopyShortcut) {
-        const selection = term.getSelection();
-        if (selection) void copyToClipboard(selection);
-        return false;
-      }
-      const settings = useSettingsStore.getState();
-      return handleSharedTerminalKeyEvent(e, {
-        workspaceShortcut: settings.terminalWorkspaceShortcut,
-        revealActiveFileShortcut: settings.revealActiveFileShortcut,
-        panelShortcuts: [
-          settings.gitPanelShortcut,
-          settings.portsPanelShortcut,
-          settings.fleetTerminalShortcut,
-        ],
-        terminalFontSizeIncreaseShortcut:
-          settings.terminalFontSizeIncreaseShortcut,
-        terminalFontSizeDecreaseShortcut:
-          settings.terminalFontSizeDecreaseShortcut,
-        onCopySelection: () => {
-          const selection = term.getSelection();
-          if (selection) void copyToClipboard(selection);
-        },
-        onFind: () => findController.open(),
-        onNewTerminal,
-        onIncreaseTerminalFontSize: () => {
-          if (settings.terminalFontSize < 32) {
-            settings.saveDebounced({
-              terminalFontSize: settings.terminalFontSize + 1,
-            });
-          }
-        },
-        onDecreaseTerminalFontSize: () => {
-          if (settings.terminalFontSize > 10) {
-            settings.saveDebounced({
-              terminalFontSize: settings.terminalFontSize - 1,
-            });
-          }
-        },
-      });
-    };
-    terminalEntry.baseKeyEventHandler = baseKeyEventHandler;
-    term.attachCustomKeyEventHandler(baseKeyEventHandler);
-
-    // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
-    // Now safe because resize listener is already registered above.
-    scheduleTerminalFit(terminalEntry, { focus: !shouldSuppressTerminalFocus });
-
-    // Session creation belongs to the manager's explicit launch action.
-    // Reattaching a kept-alive panel must never recreate a missing PTY.
-
-    const sendAttach = (fromOffset?: number, retryAttempt = 0) => {
-      if (!isCurrent()) return false;
-      suggestionsRef.current.handleReplay();
-      // Every attach starts a new replay ownership window. In particular, a
-      // reconnect must close the prior live-ready gate before sending attach so
-      // old-stream output cannot render ahead of the replacement replay.
-      resetActivityForUnavailableStream();
-      setAttachState("attaching");
-      if (retryAttempt === 0) {
-        recordClientDiagnostic(
-          "transport",
-          "terminal-panel",
-          "terminal.attach",
-          {
-            sessionId: safeSessionId,
-            fromOffset,
-          },
-        );
-      }
-
-      return transport.terminalAttach
-        ? transport.terminalAttach(safeSessionId, fromOffset) !== false
-        : false;
-    };
-
-    recoveryController = new TerminalAttachRecoveryController({
-      sendAttach,
-      checkAlive: () =>
-        transport
-          .invoke<SessionInfo[]>("terminal:listDetailed")
-          .then((sessions) =>
-            sessions.some(
-              (session) => session.id === safeSessionId && session.alive,
+      recoveryController = new TerminalAttachRecoveryController({
+        sendAttach,
+        checkAlive: () =>
+          transport
+            .invoke<SessionInfo[]>("terminal:listDetailed")
+            .then((sessions) =>
+              sessions.some(
+                (session) => session.id === safeSessionId && session.alive,
+              ),
             ),
-          ),
-      create: () => Promise.reject(new Error("Terminal session is unavailable")),
-      shouldRetryAfterReplay: () => retryUnavailableAfterReplayRef.current,
-      onTimeout: () => {
-        logger.warn(
-          "TerminalPanel",
-          "terminal attach timed out; retrying with backoff",
-          {
-            sessionId: safeSessionId,
-          },
-        );
-        recordClientDiagnostic(
-          "transport",
-          "terminal-panel",
-          "terminal.attach_timeout_retrying",
-          { sessionId: safeSessionId },
-        );
-      },
-      onCreateFailed: (err: unknown) => {
-        recordClientDiagnostic(
-          "transport",
-          "terminal-panel",
-          "terminal.create_failed",
-          {
-            sessionId: safeSessionId,
-            error: err instanceof Error ? err.message : String(err),
-          },
-        );
-      },
-      onAttachUnavailable: () => {
-        recordClientDiagnostic(
-          "transport",
-          "terminal-panel",
-          "terminal.attach_deferred",
-          { sessionId: safeSessionId },
-        );
-      },
-    });
-
-    if (transport.onStatusChange) {
-      unsubStatus = transport.onStatusChange((status) => {
-        if (status !== "connected") {
-          restartRecoveryPending = false;
-          restartProbeGeneration += 1;
-          resetActivityForUnavailableStream();
-        }
-        recoveryController?.onConnectionStatus(
-          status as TerminalConnectionStatus,
-          lastServerOffset,
-        );
+        create: () =>
+          Promise.reject(new Error("Terminal session is unavailable")),
+        shouldRetryAfterReplay: () => retryUnavailableAfterReplayRef.current,
+        onTimeout: () => {
+          logger.warn(
+            "TerminalPanel",
+            "terminal attach timed out; retrying with backoff",
+            {
+              sessionId: safeSessionId,
+            },
+          );
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "terminal.attach_timeout_retrying",
+            { sessionId: safeSessionId },
+          );
+        },
+        onCreateFailed: (err: unknown) => {
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "terminal.create_failed",
+            {
+              sessionId: safeSessionId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          );
+        },
+        onAttachUnavailable: () => {
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "terminal.attach_deferred",
+            { sessionId: safeSessionId },
+          );
+        },
       });
-    }
 
-    // Start initialization flow without ambient workspace.status()
-    transport
-      .invoke<SessionInfo[]>("terminal:listDetailed")
-      .then((sessions) => {
-        if (!isCurrent()) return;
-        const existingSession = sessions.find((s) => s.id === safeSessionId);
-        retryUnavailableAfterReplayRef.current =
-          existingSession?.targetUnavailable === true;
-        if (existingSession) {
-          recoveryController?.start();
-        } else {
-          setAttachState("idle");
-        }
-      })
-      .then(() => {
-        if (!isCurrent()) return;
-        // Hidden terminals still fit when their presentation host changes.
-        observer = new ResizeObserver(() => {
-          if (isCurrent()) scheduleTerminalFit(terminalEntry);
+      if (transport.onStatusChange) {
+        unsubStatus = transport.onStatusChange((status) => {
+          if (status !== "connected") {
+            restartRecoveryPending = false;
+            restartProbeGeneration += 1;
+            resetActivityForUnavailableStream();
+          }
+          recoveryController?.onConnectionStatus(
+            status as TerminalConnectionStatus,
+            lastServerOffset,
+          );
         });
-        observer.observe(container);
-      })
-      .catch((err: unknown) => {
-        if (!isCurrent()) return;
-        term.write(
-          `\r\n\x1b[31mFailed to start: ${err instanceof Error ? err.message : String(err)}\x1b[0m\r\n`,
-        );
-      });
-
-    return () => {
-      disposed = true;
-      suggestionsRef.current.handleReplay();
-      if (boundTransportRef.current === binding) {
-        boundTransportRef.current = null;
       }
-      term.options.disableStdin = true;
-      setAttachState("idle");
-      streamReplayGate.replayGeneration += 1;
-      streamReplayGate.queuedLiveData.length = 0;
-      unsubData?.();
-      unsubExit?.();
-      unsubExitEnhanced?.();
-      unsubRestart?.();
-      unsubTerminalChanged?.();
-      unsubBuffer?.();
-      unsubLifecycle?.();
-      unsubStatus?.();
-      outputActivity.dispose();
-      recoveryController?.dispose();
-      inputDisposable?.dispose();
-      resizeDisposable.dispose();
-      releaseCompositionGuards();
-      titleDisposable.dispose();
-      agentNotifications?.dispose();
-      observer?.disconnect();
-    };
+
+      // Start initialization flow without ambient workspace.status()
+      transport
+        .invoke<SessionInfo[]>("terminal:listDetailed")
+        .then((sessions) => {
+          if (!isCurrent()) return;
+          const existingSession = sessions.find((s) => s.id === safeSessionId);
+          retryUnavailableAfterReplayRef.current =
+            existingSession?.targetUnavailable === true;
+          if (existingSession) {
+            recoveryController?.start();
+          } else {
+            setAttachState("idle");
+          }
+        })
+        .then(() => {
+          if (!isCurrent()) return;
+          // Hidden terminals still fit when their presentation host changes.
+          observer = new ResizeObserver(() => {
+            if (isCurrent()) scheduleTerminalFit(terminalEntry);
+          });
+          observer.observe(container);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          term.write(
+            `\r\n\x1b[31mFailed to start: ${err instanceof Error ? err.message : String(err)}\x1b[0m\r\n`,
+          );
+        });
+
+      return () => {
+        disposed = true;
+        suggestionsRef.current.handleReplay();
+        if (boundTransportRef.current === binding) {
+          boundTransportRef.current = null;
+        }
+        term.options.disableStdin = true;
+        setAttachState("idle");
+        streamReplayGate.replayGeneration += 1;
+        streamReplayGate.queuedLiveData.length = 0;
+        unsubData?.();
+        unsubExit?.();
+        unsubExitEnhanced?.();
+        unsubRestart?.();
+        unsubTerminalChanged?.();
+        unsubBuffer?.();
+        unsubLifecycle?.();
+        unsubStatus?.();
+        outputActivity.dispose();
+        recoveryController?.dispose();
+        inputDisposable?.dispose();
+        resizeDisposable.dispose();
+        releaseCompositionGuards();
+        titleDisposable.dispose();
+        agentNotifications?.dispose();
+        observer?.disconnect();
+      };
     };
 
     let releaseConnection = () => {};
@@ -893,9 +920,10 @@ export function TerminalPanel({
       let nextOwner: string | null = null;
       if (ownerProfileId && getConnectionSnapshot(ownerProfileId)) {
         const snapshot = getConnectionSnapshot(ownerProfileId)!;
-        nextOwner = snapshot.status === "connected"
-          ? JSON.stringify(snapshot.owner)
-          : null;
+        nextOwner =
+          snapshot.status === "connected"
+            ? JSON.stringify(snapshot.owner)
+            : null;
       } else {
         nextOwner = `ambient:${transportGeneration}`;
       }
@@ -934,7 +962,11 @@ export function TerminalPanel({
       terminalBoundary.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerProfileId, terminalRegistrationKey, ownerProfileId ? null : transportGeneration]);
+  }, [
+    ownerProfileId,
+    terminalRegistrationKey,
+    ownerProfileId ? null : transportGeneration,
+  ]);
 
   useClientLayoutEffect(() => {
     const term = termRef.current;

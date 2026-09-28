@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
+import { AgentStatusBadge } from "@/components/atoms/AgentStatusBadge.js";
+import { parseTerminalKey } from "@/api/ownership.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
 import {
@@ -103,6 +105,19 @@ export function DraggableTab({
           alive={tab.session?.alive}
           profileId={tab.profileId}
           terminalRef={tab.terminalRef}
+        />
+        <AgentStatusBadge
+          terminalRef={
+            tab.terminalRef ??
+            parseTerminalKey(tab.sessionId) ??
+            (tab.profileId
+              ? {
+                  profileId: tab.profileId,
+                  id: tab.session?.id ?? tab.sessionId,
+                }
+              : undefined)
+          }
+          incarnation={tab.session?.incarnation}
         />
         <TerminalTitleText
           title={tab.title}

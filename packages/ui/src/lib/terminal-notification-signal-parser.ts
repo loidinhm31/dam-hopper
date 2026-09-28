@@ -1,4 +1,5 @@
 import type { TerminalRef } from "@/api/ownership.js";
+import type { TerminalInstanceRef } from "@/api/ownership.js";
 import type { TerminalAgentType } from "@/api/client.js";
 
 export type TerminalAgentNotificationSource =
@@ -8,7 +9,8 @@ export type TerminalAgentNotificationSource =
   | "osc99"
   | "quiet"
   | "tui-ready"
-  | "terminal-exit";
+  | "terminal-exit"
+  | "agent-status";
 
 export type TerminalAgentNotificationStatus =
   | "needs-attention"
@@ -26,6 +28,8 @@ export interface TerminalAgentNotification {
   receivedAt: number;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalInstanceRef?: TerminalInstanceRef;
+  semanticEventId?: string;
 }
 
 export interface TerminalNotificationParseContext {
@@ -35,6 +39,7 @@ export interface TerminalNotificationParseContext {
   now?: () => number;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalInstanceRef?: TerminalInstanceRef;
 }
 
 const DEFAULT_TITLE = "Terminal needs attention";
@@ -123,6 +128,7 @@ export function createTerminalAgentNotification(
     receivedAt: context.now?.() ?? Date.now(),
     profileId: context.profileId,
     terminalRef: context.terminalRef,
+    terminalInstanceRef: context.terminalInstanceRef,
   };
 }
 

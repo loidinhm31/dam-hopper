@@ -1,4 +1,11 @@
 import {
+  terminalInstanceKey,
+  terminalKey,
+  toTerminalRef,
+  type TerminalInstanceRef,
+  type TerminalRef,
+} from "@/api/ownership.js";
+import {
   sanitizeTerminalNotificationText,
   type TerminalAgentNotification,
 } from "./terminal-notification-signal-parser.js";
@@ -81,10 +88,16 @@ export class BrowserNotificationService {
     if (permission === "default")
       return this.skip("permission-default", event, permission);
 
-    const key = `${event.sessionId}:${event.source}`;
+    const ownerKey = event.terminalInstanceRef
+      ? terminalInstanceKey(event.terminalInstanceRef)
+      : terminalKey(
+          event.terminalRef ?? toTerminalRef(event.sessionId, event.profileId),
+        );
+    const key = JSON.stringify([ownerKey, event.source]);
     const currentTime = this.now();
-    const lastTime = this.lastNotificationAt.get(key);
     const rateLimitMs = options.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
+    const lastTime =
+      rateLimitMs > 0 ? this.lastNotificationAt.get(key) : undefined;
     if (lastTime !== undefined && currentTime - lastTime < rateLimitMs) {
       return this.skip("rate-limited", event, permission);
     }
@@ -93,7 +106,7 @@ export class BrowserNotificationService {
       const notificationOptions: BrowserTerminalNotificationOptions = {
         body: buildNotificationBody(event, options.terminalOrder),
         renotify: true,
-        tag: `dam-hopper-agent-${event.sessionId}-${event.source}`,
+        tag: `dam-hopper-agent-${JSON.stringify([ownerKey, event.source, event.semanticEventId ?? null])}`,
         timestamp: event.receivedAt,
       };
 
@@ -102,7 +115,7 @@ export class BrowserNotificationService {
         notificationOptions,
       );
       bindNotificationSelection(notification, event, options.onSelect);
-      this.lastNotificationAt.set(key, currentTime);
+      if (rateLimitMs > 0) this.lastNotificationAt.set(key, currentTime);
       return { delivered: true };
     } catch {
       return this.skip("factory-error", event, permission);
@@ -110,16 +123,19 @@ export class BrowserNotificationService {
   }
 
   resetTerminalAgentRateLimit(
-    sessionId: string,
+    terminal: TerminalRef | TerminalInstanceRef,
     source?: TerminalAgentNotification["source"],
   ): void {
+    const ownerKey =
+      "incarnation" in terminal
+        ? terminalInstanceKey(terminal)
+        : terminalKey(terminal);
     if (source) {
-      this.lastNotificationAt.delete(`${sessionId}:${source}`);
+      this.lastNotificationAt.delete(JSON.stringify([ownerKey, source]));
       return;
     }
-
     for (const key of this.lastNotificationAt.keys()) {
-      if (key.startsWith(`${sessionId}:`)) {
+      if (key.startsWith(`[${JSON.stringify(ownerKey)},`)) {
         this.lastNotificationAt.delete(key);
       }
     }

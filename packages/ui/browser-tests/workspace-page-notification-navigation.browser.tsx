@@ -15,7 +15,27 @@ const mocks = vi.hoisted(() => {
   };
   const settingsStore = {
     mobileCustomKeyboardEnabled: false,
-    terminalCodexNotificationsEnabled: true,
+    terminalAgentNotifications: {
+      version: 1,
+      agents: {
+        codex: {
+          enabled: true,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+      },
+    },
     searchTextShortcut: "mod+shift+f",
     searchFilenameShortcut: "mod+p",
     terminalWorkspaceShortcut: "mod+`",
@@ -89,6 +109,11 @@ vi.mock("@/api/queries.js", () => ({
     data: [{ name: "web" }],
     isLoading: false,
   }),
+  markTargetUnavailableIfNeeded: vi.fn(),
+}));
+
+vi.mock("@/components/organisms/ChangedFilesList.js", () => ({
+  ChangedFilesList: () => null,
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
@@ -166,13 +191,17 @@ vi.mock("@/stores/editor.js", () => ({
   ),
 }));
 
-vi.mock("@/stores/search-ui.js", () => ({
-  useSearchUiStore: () => ({
+vi.mock("@/stores/search-ui.js", () => {
+  const searchUiState = {
     open: false,
     close: vi.fn(),
     openWith: vi.fn(),
-  }),
-}));
+  };
+  return {
+    useSearchUiStore: (selector?: (state: typeof searchUiState) => unknown) =>
+      selector ? selector(searchUiState) : searchUiState,
+  };
+});
 
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: Object.assign(
@@ -275,7 +304,10 @@ vi.mock("@/api/client.js", () => ({
   projectKey: (target: unknown) =>
     typeof target === "string"
       ? target
-      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+      : target &&
+          typeof target === "object" &&
+          "project" in target &&
+          typeof target.project === "string"
         ? target.project
         : "web",
 }));
@@ -324,7 +356,7 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     mocks.compactWorkspace = false;
     mocks.coarsePointer = false;
     mocks.settingsStore.mobileCustomKeyboardEnabled = false;
-    mocks.settingsStore.terminalCodexNotificationsEnabled = true;
+    mocks.settingsStore.terminalAgentNotifications.agents.codex.enabled = true;
     mocks.sessionAlive = true;
     FakeNotification.latest = null;
     vi.stubGlobal("Notification", FakeNotification);

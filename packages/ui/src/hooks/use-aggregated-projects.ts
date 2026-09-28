@@ -52,16 +52,20 @@ export function useAggregatedProjects(): {
   );
 
   const profiles = useMemo(() => getProfiles(), [profileVersion]);
-  const { data: ambientProjects = [], isLoading: ambientLoading } =
-    useProjects(profiles.length === 0 ? undefined : { profileId: "__disabled__" });
+  const { data: ambientProjects = [], isLoading: ambientLoading } = useProjects(
+    profiles.length === 0 ? undefined : { profileId: "__disabled__" },
+  );
 
   // Subscribe to connection snapshots
   const connectionVersion = useSyncExternalStore(
     subscribeConnections,
-    () => profiles.map((p) => {
-      const snapshot = getConnectionSnapshot(p.id);
-      return `${p.id}:${snapshot?.owner.generation}:${snapshot?.status}`;
-    }).join("|"),
+    () =>
+      profiles
+        .map((p) => {
+          const snapshot = getConnectionSnapshot(p.id);
+          return `${p.id}:${snapshot?.owner.generation}:${snapshot?.status}`;
+        })
+        .join("|"),
     () => "",
   );
 
@@ -88,7 +92,6 @@ export function useAggregatedProjects(): {
 
   const queryResults = useQueries({ queries: querySpecs });
 
-  const ambientQueryResults = profiles.length === 0 ? ambientProjects : queryResults;
   const { groups, allProjects, isLoading } = useMemo(() => {
     if (profiles.length === 0) {
       const flatList: AggregatedProjectItem[] = ambientProjects.map((p) => ({
@@ -122,7 +125,8 @@ export function useAggregatedProjects(): {
       const snapshot = getConnectionSnapshot(profile.id);
       const status = snapshot?.status ?? "disconnected";
       const result = queryResults[index];
-      const projectList = (result?.data as ProjectWithStatus[] | undefined) ?? [];
+      const projectList =
+        (result?.data as ProjectWithStatus[] | undefined) ?? [];
 
       if (result?.isLoading && status === "connected") {
         loading = true;
@@ -154,7 +158,7 @@ export function useAggregatedProjects(): {
       allProjects: flatList,
       isLoading: loading,
     };
-  }, [profiles, ambientQueryResults, ambientLoading]);
+  }, [profiles, ambientProjects, queryResults, ambientLoading]);
 
   return { groups, allProjects, isLoading };
 }

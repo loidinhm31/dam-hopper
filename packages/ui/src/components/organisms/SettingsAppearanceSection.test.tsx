@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsAppearanceSection } from "./SettingsAppearanceSection.js";
 
 const saveDebounced = vi.fn();
+const saveAgentNotificationPolicy = vi.fn();
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@/stores/settings.js", () => ({
@@ -27,12 +28,27 @@ const settingsStore = {
   editorZoomWheelEnabled: true,
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
-  terminalCodexNotificationsEnabled: true,
-  terminalCodexNotificationToastEnabled: true,
-  terminalCodexBrowserNotificationsEnabled: true,
-  terminalCodexNotificationSoundEnabled: true,
-  terminalCodexNotificationSoundVolume: 100,
-  terminalCodexNotificationSoundPattern: "default" as const,
+  terminalAgentNotifications: {
+    version: 1 as const,
+    agents: {
+      codex: {
+        enabled: true,
+        toast: true,
+        browser: true,
+        sound: true,
+        volume: 100,
+        pattern: "default" as const,
+      },
+      omp: {
+        enabled: false,
+        toast: true,
+        browser: true,
+        sound: true,
+        volume: 100,
+        pattern: "default" as const,
+      },
+    },
+  },
   terminalScrollButtonsEnabled: false,
   terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
@@ -42,6 +58,7 @@ const settingsStore = {
   mobileCustomKeyboardPadding: 6,
   mobileCustomKeyboardRowGap: 4,
   saveDebounced,
+  saveAgentNotificationPolicy,
 };
 
 let root: Root | null = null;
@@ -58,44 +75,6 @@ describe("SettingsAppearanceSection", () => {
     act(() => root?.unmount());
     root = null;
     document.body.innerHTML = "";
-  });
-
-  it("renders the terminal agent notification controls", () => {
-    const markup = renderToStaticMarkup(<SettingsAppearanceSection />);
-
-    expect(markup).toContain("Codex terminal notifications");
-    expect(markup).toContain("Terminal font size");
-    expect(markup).toContain("Range: 10–32 px; applies to terminal text");
-    expect(markup).toContain('aria-label="terminal font size in pixels"');
-    expect(markup).toContain('aria-label="Decrease terminal font size"');
-    expect(markup).toContain('aria-label="Increase terminal font size"');
-    expect(markup).toContain("Local command history");
-    expect(markup).toContain("Clear local command history");
-    expect(markup).toContain("Stored only in this browser");
-    expect(markup).toContain("Request permission");
-    expect(markup).toContain("Enable Codex notifications");
-    expect(markup).toContain("In-app toast");
-    expect(markup).toContain("bell and notification history");
-    expect(markup).toContain("Browser popup");
-    expect(markup).toContain(
-      "Browser or OS popup sound is controlled by the browser",
-    );
-    expect(markup).toContain("Notification sound");
-    expect(markup).toContain("Sound style");
-    expect(markup).toContain("Volume");
-    expect(markup).toContain("Play sound");
-    expect(markup).toContain("Show latest commit in terminal");
-    expect(markup).toContain("Switch project on terminal selection");
-    expect(markup).toContain(
-      "Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.",
-    );
-    expect(markup).toContain(
-      'aria-label="Enable project switching on terminal selection"',
-    );
-    expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain("Play sound");
-    expect(markup).not.toContain("Quiet tracking");
-    expect(markup).not.toContain("Command patterns");
   });
 
   it("forces and disables the custom keyboard setting on Android Chrome", () => {

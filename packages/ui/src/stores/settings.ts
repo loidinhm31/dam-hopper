@@ -6,7 +6,10 @@
  */
 import { create } from "zustand";
 import { api, type ApiClient } from "@/api/client.js";
-import type { TerminalCodexNotificationSoundPattern } from "@/api/client.js";
+import type {
+  TerminalAgentNotifications,
+  TerminalAgentNotificationPolicy,
+} from "@/api/client.js";
 import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import type { ConnectionRef, ProfileId } from "@/api/ownership.js";
 import {
@@ -19,6 +22,7 @@ import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import {
   isExplorerLanguageFilter,
   withUiConfigDefaults,
+  normalizeTerminalAgentNotifications,
 } from "@/lib/ui-config.js";
 import {
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
@@ -42,8 +46,6 @@ const KEYBOARD_PADDING_MIN = 2;
 const KEYBOARD_PADDING_MAX = 14;
 const KEYBOARD_ROW_GAP_MIN = 2;
 const KEYBOARD_ROW_GAP_MAX = 12;
-const TERMINAL_NOTIFICATION_SOUND_VOLUME_MIN = 0;
-const TERMINAL_NOTIFICATION_SOUND_VOLUME_MAX = 100;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
@@ -70,13 +72,6 @@ function clampKeyboardRowGap(size: number): number {
   );
 }
 
-export function clampTerminalNotificationSoundVolume(volume: number): number {
-  return Math.min(
-    TERMINAL_NOTIFICATION_SOUND_VOLUME_MAX,
-    Math.max(TERMINAL_NOTIFICATION_SOUND_VOLUME_MIN, Math.round(volume)),
-  );
-}
-
 interface PersistedSettingsState {
   systemFontSize: number;
   editorFontSize: number;
@@ -95,12 +90,7 @@ interface PersistedSettingsState {
   terminalFontSizeDecreaseShortcut: string;
   terminalSuggestionsEnabled: boolean;
   terminalAutoSwitchProjectEnabled: boolean;
-  terminalCodexNotificationsEnabled: boolean;
-  terminalCodexNotificationToastEnabled: boolean;
-  terminalCodexBrowserNotificationsEnabled: boolean;
-  terminalCodexNotificationSoundEnabled: boolean;
-  terminalCodexNotificationSoundVolume: number;
-  terminalCodexNotificationSoundPattern: TerminalCodexNotificationSoundPattern;
+  terminalAgentNotifications: TerminalAgentNotifications;
   terminalScrollButtonsEnabled: boolean;
   terminalCommitStatusEnabled: boolean;
   terminalScrollStep: number;
@@ -116,9 +106,16 @@ interface SettingsState extends PersistedSettingsState {
   hydrated: boolean;
   sourceUnset: boolean;
 
-  hydrate: (options?: { owner?: ConnectionRef; profileId?: ProfileId }) => Promise<void>;
+  hydrate: (options?: {
+    owner?: ConnectionRef;
+    profileId?: ProfileId;
+  }) => Promise<void>;
   set: (partial: Partial<PersistedSettingsState>) => void;
   saveDebounced: (partial: Partial<PersistedSettingsState>) => void;
+  saveAgentNotificationPolicy: (
+    agent: keyof TerminalAgentNotifications["agents"],
+    patch: Partial<TerminalAgentNotificationPolicy>,
+  ) => void;
   switchPreferenceSource: (profileId: ProfileId | null) => Promise<void>;
 }
 
@@ -203,33 +200,20 @@ function applySnapshotToStore(
   if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
     clamped.terminalAutoSwitchProjectEnabled =
       snapshot.terminalAutoSwitchProjectEnabled;
-  if (typeof snapshot.terminalCodexNotificationsEnabled === "boolean")
-    clamped.terminalCodexNotificationsEnabled =
-      snapshot.terminalCodexNotificationsEnabled;
-  if (typeof snapshot.terminalCodexNotificationToastEnabled === "boolean")
-    clamped.terminalCodexNotificationToastEnabled =
-      snapshot.terminalCodexNotificationToastEnabled;
-  if (typeof snapshot.terminalCodexBrowserNotificationsEnabled === "boolean")
-    clamped.terminalCodexBrowserNotificationsEnabled =
-      snapshot.terminalCodexBrowserNotificationsEnabled;
-  if (typeof snapshot.terminalCodexNotificationSoundEnabled === "boolean")
-    clamped.terminalCodexNotificationSoundEnabled =
-      snapshot.terminalCodexNotificationSoundEnabled;
-  if (typeof snapshot.terminalCodexNotificationSoundVolume === "number")
-    clamped.terminalCodexNotificationSoundVolume =
-      clampTerminalNotificationSoundVolume(
-        snapshot.terminalCodexNotificationSoundVolume,
-      );
   if (
-    snapshot.terminalCodexNotificationSoundPattern === "default" ||
-    snapshot.terminalCodexNotificationSoundPattern === "soft" ||
-    snapshot.terminalCodexNotificationSoundPattern === "two-tone" ||
-    snapshot.terminalCodexNotificationSoundPattern === "urgent"
-  )
-    clamped.terminalCodexNotificationSoundPattern =
-      snapshot.terminalCodexNotificationSoundPattern;
+    Object.keys(snapshot).some(
+      (key) =>
+        key === "terminalAgentNotifications" ||
+        key === "terminalAgentNotificationsEnabled" ||
+        key.startsWith("terminalCodex"),
+    )
+  ) {
+    clamped.terminalAgentNotifications =
+      normalizeTerminalAgentNotifications(snapshot);
+  }
   if (typeof snapshot.terminalScrollButtonsEnabled === "boolean")
-    clamped.terminalScrollButtonsEnabled = snapshot.terminalScrollButtonsEnabled;
+    clamped.terminalScrollButtonsEnabled =
+      snapshot.terminalScrollButtonsEnabled;
   if (typeof snapshot.terminalCommitStatusEnabled === "boolean")
     clamped.terminalCommitStatusEnabled = snapshot.terminalCommitStatusEnabled;
   if (typeof snapshot.terminalScrollStep === "number")
@@ -281,17 +265,7 @@ function pickPersistedSettings(
     terminalFontSizeDecreaseShortcut: state.terminalFontSizeDecreaseShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
     terminalAutoSwitchProjectEnabled: state.terminalAutoSwitchProjectEnabled,
-    terminalCodexNotificationsEnabled: state.terminalCodexNotificationsEnabled,
-    terminalCodexNotificationToastEnabled:
-      state.terminalCodexNotificationToastEnabled,
-    terminalCodexBrowserNotificationsEnabled:
-      state.terminalCodexBrowserNotificationsEnabled,
-    terminalCodexNotificationSoundEnabled:
-      state.terminalCodexNotificationSoundEnabled,
-    terminalCodexNotificationSoundVolume:
-      state.terminalCodexNotificationSoundVolume,
-    terminalCodexNotificationSoundPattern:
-      state.terminalCodexNotificationSoundPattern,
+    terminalAgentNotifications: state.terminalAgentNotifications,
     terminalScrollButtonsEnabled: state.terminalScrollButtonsEnabled,
     terminalCommitStatusEnabled: state.terminalCommitStatusEnabled,
     terminalScrollStep: state.terminalScrollStep,
@@ -339,12 +313,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
-  terminalCodexNotificationsEnabled: false,
-  terminalCodexNotificationToastEnabled: true,
-  terminalCodexBrowserNotificationsEnabled: true,
-  terminalCodexNotificationSoundEnabled: true,
-  terminalCodexNotificationSoundVolume: 100,
-  terminalCodexNotificationSoundPattern: "default",
+  terminalAgentNotifications: normalizeTerminalAgentNotifications(null),
   terminalScrollButtonsEnabled: false,
   terminalCommitStatusEnabled: false,
   terminalScrollStep: 3,
@@ -357,14 +326,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hydrated: false,
   sourceUnset: true,
 
-  hydrate: async (options?: { owner?: ConnectionRef; profileId?: ProfileId }) => {
+  hydrate: async (options?: {
+    owner?: ConnectionRef;
+    profileId?: ProfileId;
+  }) => {
     const targetProfileId =
       options?.profileId ??
       options?.owner?.profileId ??
       useWorkbenchSelectionsStore.getState().preferencesProfileId;
 
     if (!targetProfileId) {
-      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      const offline =
+        useWorkbenchSelectionsStore.getState().preferencesSnapshot;
       if (offline) {
         applySnapshotToStore(offline, set);
       }
@@ -388,11 +361,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
     } else {
       boundClient = api.globalConfig;
-      capturedOwner = capturedOwner ?? { profileId: targetProfileId, generation: 1 };
+      capturedOwner = capturedOwner ?? {
+        profileId: targetProfileId,
+        generation: 1,
+      };
     }
 
     if (!boundClient) {
-      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      const offline =
+        useWorkbenchSelectionsStore.getState().preferencesSnapshot;
       if (offline) {
         applySnapshotToStore(offline, set);
       }
@@ -427,23 +404,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalAutoSwitchProjectEnabled:
           ui.terminalAutoSwitchProjectEnabled ?? true,
-        terminalCodexNotificationsEnabled:
-          ui.terminalCodexNotificationsEnabled ??
-          (ui as { terminalAgentNotificationsEnabled?: boolean } | undefined)
-            ?.terminalAgentNotificationsEnabled ??
-          false,
-        terminalCodexNotificationToastEnabled:
-          ui.terminalCodexNotificationToastEnabled ?? true,
-        terminalCodexBrowserNotificationsEnabled:
-          ui.terminalCodexBrowserNotificationsEnabled ?? true,
-        terminalCodexNotificationSoundEnabled:
-          ui.terminalCodexNotificationSoundEnabled ?? true,
-        terminalCodexNotificationSoundVolume:
-          clampTerminalNotificationSoundVolume(
-            ui.terminalCodexNotificationSoundVolume ?? 100,
-          ),
-        terminalCodexNotificationSoundPattern:
-          ui.terminalCodexNotificationSoundPattern ?? "default",
+        terminalAgentNotifications: ui.terminalAgentNotifications!,
         terminalScrollButtonsEnabled: ui.terminalScrollButtonsEnabled ?? false,
         terminalCommitStatusEnabled: ui.terminalCommitStatusEnabled ?? false,
         terminalScrollStep: ui.terminalScrollStep ?? 3,
@@ -461,7 +422,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         .getState()
         .updatePreferencesSnapshot(lastSavedSettings);
     } catch {
-      const offline = useWorkbenchSelectionsStore.getState().preferencesSnapshot;
+      const offline =
+        useWorkbenchSelectionsStore.getState().preferencesSnapshot;
       if (offline) {
         applySnapshotToStore(offline, set);
       }
@@ -519,26 +481,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (partial.terminalAutoSwitchProjectEnabled !== undefined)
       clamped.terminalAutoSwitchProjectEnabled =
         partial.terminalAutoSwitchProjectEnabled;
-    if (partial.terminalCodexNotificationsEnabled !== undefined)
-      clamped.terminalCodexNotificationsEnabled =
-        partial.terminalCodexNotificationsEnabled;
-    if (partial.terminalCodexNotificationToastEnabled !== undefined)
-      clamped.terminalCodexNotificationToastEnabled =
-        partial.terminalCodexNotificationToastEnabled;
-    if (partial.terminalCodexBrowserNotificationsEnabled !== undefined)
-      clamped.terminalCodexBrowserNotificationsEnabled =
-        partial.terminalCodexBrowserNotificationsEnabled;
-    if (partial.terminalCodexNotificationSoundEnabled !== undefined)
-      clamped.terminalCodexNotificationSoundEnabled =
-        partial.terminalCodexNotificationSoundEnabled;
-    if (partial.terminalCodexNotificationSoundVolume !== undefined)
-      clamped.terminalCodexNotificationSoundVolume =
-        clampTerminalNotificationSoundVolume(
-          partial.terminalCodexNotificationSoundVolume,
-        );
-    if (partial.terminalCodexNotificationSoundPattern !== undefined)
-      clamped.terminalCodexNotificationSoundPattern =
-        partial.terminalCodexNotificationSoundPattern;
+    if (partial.terminalAgentNotifications !== undefined)
+      clamped.terminalAgentNotifications = normalizeTerminalAgentNotifications({
+        terminalAgentNotifications: partial.terminalAgentNotifications,
+      });
     if (partial.terminalScrollButtonsEnabled !== undefined)
       clamped.terminalScrollButtonsEnabled =
         partial.terminalScrollButtonsEnabled;
@@ -573,9 +519,31 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set(clamped);
   },
 
+  saveAgentNotificationPolicy: (agent, patch) => {
+    const current = get().terminalAgentNotifications;
+    if (current.version !== 1) {
+      return;
+    }
+    get().saveDebounced({
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          ...current.agents,
+          [agent]: { ...current.agents[agent], ...patch },
+        },
+      },
+    });
+  },
+
   saveDebounced: (partial) => {
     get().set(partial);
     const persistedPatch = pickPersistedSettingsPatch(partial, get());
+    if (
+      persistedPatch.terminalAgentNotifications &&
+      persistedPatch.terminalAgentNotifications.version !== 1
+    ) {
+      delete persistedPatch.terminalAgentNotifications;
+    }
     if (Object.keys(persistedPatch).length === 0) return;
 
     useWorkbenchSelectionsStore

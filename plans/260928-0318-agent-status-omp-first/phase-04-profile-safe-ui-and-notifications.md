@@ -8,8 +8,7 @@
 
 ## Overview
 
-Date: 2026-09-28. Priority: P2. Implementation: pending. Review: pending UI/ownership review.
-One app-root status watcher per connected profile; separate semantic badges and reuse existing notifications/settings surface.
+Date: 2026-09-28. Priority: P2. Implementation: complete. Review: approved (advisor ADVICE_READY).
 
 ## Key Insights
 
@@ -66,12 +65,12 @@ Delete: obsolete `terminalCodex*` live-state/write fields and callers after one-
 
 ## Todo list
 
-- [ ] Add owner-safe snapshot/event bridge and semantic store.
-- [ ] Add three badge surfaces without changing output/process meanings.
-- [ ] Deduplicate notifications before all channel side effects.
-- [ ] Qualify tags/navigation by profile and incarnation.
-- [ ] Complete one-way preference migration and all caller cutover.
-- [ ] Verify real browser interaction and existing Codex behavior.
+- [x] Add owner-safe snapshot/event bridge and semantic store.
+- [x] Add three badge surfaces without changing output/process meanings.
+- [x] Deduplicate notifications before all channel side effects.
+- [x] Qualify tags/navigation by profile and incarnation.
+- [x] Complete one-way preference migration and all caller cutover.
+- [x] Verify real browser interaction and existing Codex behavior.
 
 ## Success Criteria
 

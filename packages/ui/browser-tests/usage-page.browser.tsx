@@ -44,6 +44,10 @@ vi.mock("@/api/queries.js", () => ({
   },
 }));
 
+vi.mock("@/plugins/use-plugin-navigation.js", () => ({
+  usePluginNavigation: () => ({ error: null, items: [], loading: false }),
+}));
+
 vi.mock("@/components/templates/AppLayout.js", () => ({
   AppLayout: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }));

@@ -87,8 +87,13 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
   );
 }
 
-function isBoundedString(value: unknown, maxLen = MAX_IDENTIFIER_LEN): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= maxLen;
+function isBoundedString(
+  value: unknown,
+  maxLen = MAX_IDENTIFIER_LEN,
+): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= maxLen
+  );
 }
 
 function isAgentKind(value: unknown): value is AgentKind {
@@ -133,14 +138,18 @@ function isAgentStatusAvailability(
 
 // ── Decoders ─────────────────────────────────────────────────────────────────
 
-export function decodeTerminalAgentStatusRow(input: unknown): TerminalAgentStatusRow {
+export function decodeTerminalAgentStatusRow(
+  input: unknown,
+): TerminalAgentStatusRow {
   if (typeof input !== "object" || input === null) {
     throw new Error("Invalid terminal agent status row: expected object");
   }
   const obj = input as Record<string, unknown>;
 
   if (!isBoundedString(obj.id)) {
-    throw new Error("Invalid terminal agent status row: missing or invalid 'id'");
+    throw new Error(
+      "Invalid terminal agent status row: missing or invalid 'id'",
+    );
   }
   if (!isSafeNonNegativeInteger(obj.incarnation)) {
     throw new Error(
@@ -176,9 +185,7 @@ export function decodeTerminalAgentStatusRow(input: unknown): TerminalAgentStatu
   let reason: BlockedReason | undefined;
   if (obj.reason !== undefined && obj.reason !== null) {
     if (!isBlockedReason(obj.reason)) {
-      throw new Error(
-        "Invalid terminal agent status row: invalid 'reason'",
-      );
+      throw new Error("Invalid terminal agent status row: invalid 'reason'");
     }
     reason = obj.reason;
   }
@@ -196,9 +203,7 @@ export function decodeTerminalAgentStatusRow(input: unknown): TerminalAgentStatu
   let turnId: string | undefined;
   if (obj.turnId !== undefined && obj.turnId !== null) {
     if (!isBoundedString(obj.turnId)) {
-      throw new Error(
-        "Invalid terminal agent status row: invalid 'turnId'",
-      );
+      throw new Error("Invalid terminal agent status row: invalid 'turnId'");
     }
     turnId = obj.turnId;
   }
@@ -309,7 +314,9 @@ export function decodeAgentAttentionEvent(input: unknown): AgentAttentionEvent {
   };
 }
 
-export function decodeAgentStatusSnapshot(input: unknown): AgentStatusSnapshotV1 {
+export function decodeAgentStatusSnapshot(
+  input: unknown,
+): AgentStatusSnapshotV1 {
   if (typeof input !== "object" || input === null) {
     throw new Error("Invalid agent status snapshot: expected object");
   }
@@ -378,6 +385,23 @@ export function decodeAgentStatusChangedPayload(
   let attention: AgentAttentionEvent | undefined;
   if (obj.attention !== undefined && obj.attention !== null) {
     attention = decodeAgentAttentionEvent(obj.attention);
+    if (
+      attention.terminalId !== row.id ||
+      attention.incarnation !== row.incarnation ||
+      attention.agentKind !== row.agentKind ||
+      attention.agentSessionId !== row.agentSessionId ||
+      attention.attentionRevision !== row.attentionRevision ||
+      attention.id !==
+        `${obj.serverEpoch}:${row.id}:${row.incarnation}:${attention.attentionRevision}` ||
+      (attention.kind === "turn-ended" &&
+        (attention.outcome !== "ended" || row.state !== "idle")) ||
+      (attention.kind === "needs-attention" &&
+        (attention.reason === undefined || row.state !== "blocked"))
+    ) {
+      throw new Error(
+        "Invalid agent status changed payload: inconsistent attention",
+      );
+    }
   }
 
   return {
@@ -429,7 +453,9 @@ export function decodeAgentStatusInvalidatedPayload(
   input: unknown,
 ): AgentStatusInvalidatedPayload {
   if (typeof input !== "object" || input === null) {
-    throw new Error("Invalid agent status invalidated payload: expected object");
+    throw new Error(
+      "Invalid agent status invalidated payload: expected object",
+    );
   }
   const obj = input as Record<string, unknown>;
 

@@ -7,6 +7,12 @@ import {
   markTerminalOutput,
   setTerminalStreamReady,
 } from "@/lib/terminal-output-activity.js";
+import {
+  beginAgentStatusConnection,
+  disconnectAgentStatusConnection,
+  installAgentStatusSnapshot,
+  useAgentStatusStore,
+} from "@/stores/agent-status.js";
 import type {
   RuntimeSessionItem,
   RuntimeTreeItem,
@@ -104,6 +110,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  useAgentStatusStore.setState({ profiles: new Map() });
   container.remove();
 });
 
@@ -157,6 +164,104 @@ describe("TerminalRuntimeNavigatorItem", () => {
       expectStatus(getStatus(), label, title, classFragment);
     },
   );
+
+  it("keeps semantic agent state owner- and incarnation-bound without replacing output activity", () => {
+    const firstOwner = { profileId: "fleet-a", generation: 1 };
+    const secondOwner = { profileId: "fleet-b", generation: 1 };
+    const statusRow = {
+      id: "shared",
+      incarnation: 3,
+      agentKind: "omp" as const,
+      agentSessionId: "omp-session",
+      reporterEpoch: 1,
+      attentionRevision: 0,
+    };
+    act(() => {
+      beginAgentStatusConnection(firstOwner);
+      beginAgentStatusConnection(secondOwner);
+      installAgentStatusSnapshot(firstOwner, {
+        version: 1,
+        serverEpoch: 1,
+        revision: 1,
+        availability: "ready",
+        terminals: [{ ...statusRow, state: "working" }],
+      });
+      installAgentStatusSnapshot(secondOwner, {
+        version: 1,
+        serverEpoch: 2,
+        revision: 1,
+        availability: "ready",
+        terminals: [{ ...statusRow, state: "blocked", reason: "question" }],
+      });
+    });
+    const first = {
+      ...createSession("first"),
+      terminalRef: { profileId: "fleet-a", id: "shared" },
+      incarnation: 3,
+    };
+    const second = {
+      ...createSession("second"),
+      terminalRef: { profileId: "fleet-b", id: "shared" },
+      incarnation: 3,
+    };
+    renderItem({
+      kind: "service-group",
+      id: "services:fleet",
+      groupId: "fleet",
+      label: "Running ports",
+      startedAt: 1,
+      sessions: [first, second, createSession("plain-shell")],
+    });
+    const firstButton = container.querySelector('button[title="first:bash"]')!;
+    const secondButton = container.querySelector(
+      'button[title="second:bash"]',
+    )!;
+    expect(
+      firstButton.querySelector('[aria-label="OMP agent: Running"]'),
+    ).not.toBeNull();
+    expect(
+      secondButton.querySelector('[aria-label="OMP agent: Needs attention"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        'button[title="plain-shell:bash"] [aria-label^="OMP agent"]',
+      ),
+    ).toBeNull();
+    const outputTitle = firstButton.querySelector<HTMLElement>(
+      'span[title="Output stream unavailable"]',
+    );
+    expect(outputTitle).not.toBeNull();
+
+    act(() => disconnectAgentStatusConnection(firstOwner));
+    expect(
+      firstButton.querySelector('[aria-label="OMP agent: Unavailable"]'),
+    ).not.toBeNull();
+    expect(
+      firstButton.querySelector('span[title="Output stream unavailable"]'),
+    ).toBe(outputTitle);
+    expect(
+      secondButton.querySelector('[aria-label="OMP agent: Needs attention"]'),
+    ).not.toBeNull();
+
+    renderItem({
+      kind: "service-group",
+      id: "services:fleet",
+      groupId: "fleet",
+      label: "Running ports",
+      startedAt: 1,
+      sessions: [{ ...first, incarnation: 4 }, second],
+    });
+    expect(
+      container.querySelector(
+        'button[title="first:bash"] [aria-label^="OMP agent"]',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        'button[title="second:bash"] [aria-label="OMP agent: Needs attention"]',
+      ),
+    ).not.toBeNull();
+  });
 
   it("applies stopped before recent output", () => {
     setTerminalStreamReady("precedence", true);
