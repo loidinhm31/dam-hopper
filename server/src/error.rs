@@ -120,7 +120,11 @@ impl AppError {
                 | crate::agent_status::IntegrationError::SymlinkNotAllowed(_)
                 | crate::agent_status::IntegrationError::NotRegularFile(_) => 400,
                 crate::agent_status::IntegrationError::RefusingOverwriteModified(_)
-                | crate::agent_status::IntegrationError::RefusingDeleteModified(_) => 409,
+                | crate::agent_status::IntegrationError::RefusingDeleteModified(_)
+                | crate::agent_status::IntegrationError::Conflict(_) => 409,
+                crate::agent_status::IntegrationError::RestartRequired(_) => 428,
+                crate::agent_status::IntegrationError::ConfigurationError(_)
+                | crate::agent_status::IntegrationError::ManifestCorrupted(_, _) => 400,
                 crate::agent_status::IntegrationError::Io(_) => 500,
             },
             _ => 500,

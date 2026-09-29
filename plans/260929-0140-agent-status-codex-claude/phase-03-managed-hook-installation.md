@@ -4,7 +4,7 @@
 [Plan](./plan.md) · [Contract §6](./design-contract.md) · [Phase 02](./phase-02-private-hook-ingress.md)
 
 ## Overview
-Date: 2026-09-29. Priority P1. Estimate 8h. Implementation Pending / 0%; review Pending.
+Date: 2026-09-29 (Asia/Saigon). Priority P1. Estimate 8h. **Status: DONE (2026-09-29 Asia/Saigon; 100%).** Cycle 2 review approved 9.5/10; 87 focused tests passed.
 Deliver real server-side install/status/update/uninstall without clobbering native configuration or leaving active dangling hooks.
 
 ## Key Insights
@@ -38,9 +38,9 @@ Delete: obsolete native owned assets only during successful managed uninstall; n
 8. Smoke CLI/API install twice, update, modified conflict, partial failure and full uninstall under isolated native homes with preexisting hooks; prove unrelated configuration unchanged semantically and user formatting/comments preserved where supported.
 
 ## Todo list
-- [ ] Safe native config merges and exact managed ownership.
-- [ ] Trust/policy/readiness and restart-aware removal.
-- [ ] CLI/API filesystem lifecycle smoke and regression coverage.
+- [x] Safe native config merges and exact managed ownership.
+- [x] Trust/policy/readiness and restart-aware removal.
+- [x] CLI/API filesystem lifecycle smoke and regression coverage.
 
 ## Success Criteria
 Agent Store and CLI target the same explicit path. No unmanaged hook removed. After completed uninstall plus restart, no DamHopper registration, launcher/manifest or invocation remains. Empty dirs/files removed only when owned. Repeated uninstall is idempotent.
@@ -52,4 +52,5 @@ Stale in-memory hook configuration can invoke deleted launchers. Cross-file fail
 Protect manifest permissions; never store full native configs or secrets. Respect service euid and targeted provisioning; never grant broad home access. Codex trust hashes cannot be synthesized/approved by installer.
 
 ## Next steps
-Phase 05 consumes the concrete management/readiness APIs. Phase 06 proves installed agent behavior and post-uninstall absence, not only filesystem hashes.
+Cycle 2 review approved 9.5/10 with no critical issues; all Cycle 1 recommendations verified implemented and passing. [Review report](../reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
+Proceed to Phase 04 native event adapters and Phase 05 concrete management/readiness API consumption in UI/settings. Phase 06 proves live installed agent behavior and post-uninstall absence.

@@ -1,14 +1,17 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path as AxumPath, Query, State},
     response::Json,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::agent_status::{
-    check_extension_status, install_extension, uninstall_extension,
-    AgentPathsVerification, AgentStatusSnapshotV1, ExtensionStatusReport,
-    IntegrationError, ManagedExtensionStatus,
+    check_extension_status, check_native_integration_status, install_extension,
+    install_native_integration, uninstall_extension, uninstall_native_integration,
+    AgentKind, AgentPathsVerification, AgentStatusSnapshotV1, ExtensionStatusReport,
+    IntegrationError, ManagedExtensionStatus, ManagedInstallationStatus,
+    ManagedReadinessStatus, NativeIntegrationStatusReport, MANAGED_ADAPTER_VERSION,
+    MANAGED_LAUNCHER_SUBPATH, MANAGED_MANIFEST_SUBPATH,
 };
 use crate::api::error::ApiError;
 use crate::state::AppState;
@@ -33,6 +36,7 @@ pub struct ExtensionInstallBody {
 pub struct PathsVerificationQuery {
     pub agent_dir: Option<String>,
     pub codex_dir: Option<String>,
+    pub claude_dir: Option<String>,
 }
 
 #[cfg(unix)]
@@ -140,6 +144,55 @@ pub(crate) fn resolve_target_agent_dir(explicit: Option<&str>) -> Result<PathBuf
         })
 }
 
+pub(crate) fn resolve_native_target_dir(
+    agent_kind: AgentKind,
+    explicit: Option<&str>,
+) -> Result<PathBuf, IntegrationError> {
+    let effective_home = resolve_effective_home();
+    if let Some(raw) = explicit {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return expand_and_validate_path(trimmed, effective_home.as_deref());
+        }
+    }
+
+    match agent_kind {
+        AgentKind::Codex => {
+            if let Ok(dir) = std::env::var("CODEX_HOME") {
+                let p = PathBuf::from(dir);
+                if p.is_absolute() {
+                    return Ok(p);
+                }
+            }
+            effective_home
+                .map(|h| h.join(".codex"))
+                .ok_or_else(|| IntegrationError::InvalidAgentDirectory(PathBuf::from("~/.codex")))
+        }
+        AgentKind::Claude => {
+            if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+                let p = PathBuf::from(dir);
+                if p.is_absolute() {
+                    return Ok(p);
+                }
+            }
+            effective_home
+                .map(|h| h.join(".claude"))
+                .ok_or_else(|| IntegrationError::InvalidAgentDirectory(PathBuf::from("~/.claude")))
+        }
+        AgentKind::Omp => resolve_target_agent_dir(explicit),
+    }
+}
+
+pub(crate) fn parse_native_agent_kind(agent: &str) -> Result<AgentKind, ApiError> {
+    match agent.to_ascii_lowercase().as_str() {
+        "codex" => Ok(AgentKind::Codex),
+        "claude" => Ok(AgentKind::Claude),
+        other => Err(ApiError::from_app(crate::error::AppError::InvalidInput(format!(
+            "Unknown or unsupported native agent integration: '{other}'"
+        )))),
+    }
+}
+
 /// Verify OMP and Codex paths for notification eligibility.
 pub async fn get_agent_paths_verification(
     Query(q): Query<PathsVerificationQuery>,
@@ -215,7 +268,8 @@ pub async fn get_agent_paths_verification(
         (false, false, Some(err))
     } else {
         let config_file = codex_config_dir_buf.join("config.toml");
-        let exists = config_file.is_file();
+        let hooks_file = codex_config_dir_buf.join("hooks.json");
+        let exists = config_file.is_file() || hooks_file.is_file();
         let paths_match = codex_config_dir_buf == codex_notification_dir_buf;
         if !paths_match {
             (
@@ -231,8 +285,54 @@ pub async fn get_agent_paths_verification(
                 false,
                 false,
                 Some(format!(
-                    "Codex config file not found at {}",
-                    config_file.display()
+                    "Codex config file not found (neither config.toml nor hooks.json exists at {})",
+                    codex_config_dir
+                )),
+            )
+        } else {
+            (true, true, None)
+        }
+    };
+
+    // 3. Claude paths
+    let claude_notification_dir_buf = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".claude"));
+    let claude_notification_dir = claude_notification_dir_buf.to_string_lossy().into_owned();
+
+    let (claude_config_dir_buf, claude_resolve_err) = match q.claude_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(explicit) => match expand_and_validate_path(explicit, Some(&home)) {
+            Ok(p) => (p, None),
+            Err(e) => (claude_notification_dir_buf.clone(), Some(e.to_string())),
+        },
+        None => (claude_notification_dir_buf.clone(), None),
+    };
+    let claude_config_dir = claude_config_dir_buf.to_string_lossy().into_owned();
+
+    let (claude_config_exists, claude_can_enable, claude_reason) = if let Some(err) = claude_resolve_err {
+        (false, false, Some(err))
+    } else {
+        let settings_file = claude_config_dir_buf.join("settings.json");
+        let exists = settings_file.is_file();
+        let paths_match = claude_config_dir_buf == claude_notification_dir_buf;
+        if !paths_match {
+            (
+                exists,
+                false,
+                Some(format!(
+                    "Configured Claude path ({}) does not match notification runtime path ({})",
+                    claude_config_dir, claude_notification_dir
+                )),
+            )
+        } else if !exists {
+            (
+                false,
+                false,
+                Some(format!(
+                    "Claude settings file not found at {}",
+                    settings_file.display()
                 )),
             )
         } else {
@@ -252,6 +352,11 @@ pub async fn get_agent_paths_verification(
         codex_config_exists,
         codex_can_enable,
         codex_reason,
+        claude_config_dir: Some(claude_config_dir),
+        claude_notification_dir: Some(claude_notification_dir),
+        claude_config_exists: Some(claude_config_exists),
+        claude_can_enable: Some(claude_can_enable),
+        claude_reason,
     }))
 }
 
@@ -293,5 +398,90 @@ pub async fn uninstall_omp_extension(
     let agent_dir = resolve_target_agent_dir(q.agent_dir.as_deref())
         .map_err(ApiError::from)?;
     let report = uninstall_extension(&agent_dir).map_err(ApiError::from)?;
+    Ok(Json(report))
+}
+
+/// Check status of a native agent integration (Codex, Claude).
+pub async fn get_native_integration_status(
+    AxumPath(agent): AxumPath<String>,
+    Query(q): Query<ExtensionQuery>,
+) -> Result<Json<NativeIntegrationStatusReport>, ApiError> {
+    let agent_kind = parse_native_agent_kind(&agent)?;
+    let target_dir = resolve_native_target_dir(agent_kind, q.agent_dir.as_deref())
+        .map_err(ApiError::from)?;
+
+    if !target_dir.is_dir() {
+        let launcher_path = target_dir.join(MANAGED_LAUNCHER_SUBPATH);
+        let manifest_path = target_dir.join(MANAGED_MANIFEST_SUBPATH);
+        return Ok(Json(NativeIntegrationStatusReport {
+            agent_kind,
+            status: ManagedInstallationStatus::Absent,
+            readiness: ManagedReadinessStatus::Unverified,
+            target_path: launcher_path.clone(),
+            launcher_path,
+            manifest_path,
+            config_path: None,
+            version: None,
+            bundled_version: MANAGED_ADAPTER_VERSION.to_string(),
+            content_hash: None,
+            bundled_hash: String::new(),
+            details: Some("Agent directory does not exist".to_string()),
+        }));
+    }
+
+    let report = check_native_integration_status(agent_kind, &target_dir)
+        .map_err(ApiError::from)?;
+    Ok(Json(report))
+}
+
+/// Install or upgrade a native agent integration (Codex, Claude).
+pub async fn install_native_integration_handler(
+    AxumPath(agent): AxumPath<String>,
+    Json(body): Json<ExtensionInstallBody>,
+) -> Result<Json<NativeIntegrationStatusReport>, ApiError> {
+    let agent_kind = parse_native_agent_kind(&agent)?;
+    let target_dir = resolve_native_target_dir(agent_kind, body.agent_dir.as_deref())
+        .map_err(ApiError::from)?;
+
+    if !target_dir.exists() {
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| ApiError::from_app(IntegrationError::Io(e).into()))?;
+    }
+
+    let report = install_native_integration(agent_kind, &target_dir)
+        .map_err(ApiError::from)?;
+    Ok(Json(report))
+}
+
+/// Uninstall a native agent integration (Codex, Claude).
+pub async fn uninstall_native_integration_handler(
+    AxumPath(agent): AxumPath<String>,
+    Query(q): Query<ExtensionQuery>,
+) -> Result<Json<NativeIntegrationStatusReport>, ApiError> {
+    let agent_kind = parse_native_agent_kind(&agent)?;
+    let target_dir = resolve_native_target_dir(agent_kind, q.agent_dir.as_deref())
+        .map_err(ApiError::from)?;
+
+    if !target_dir.is_dir() {
+        let launcher_path = target_dir.join(MANAGED_LAUNCHER_SUBPATH);
+        let manifest_path = target_dir.join(MANAGED_MANIFEST_SUBPATH);
+        return Ok(Json(NativeIntegrationStatusReport {
+            agent_kind,
+            status: ManagedInstallationStatus::Absent,
+            readiness: ManagedReadinessStatus::Unverified,
+            target_path: launcher_path.clone(),
+            launcher_path,
+            manifest_path,
+            config_path: None,
+            version: None,
+            bundled_version: MANAGED_ADAPTER_VERSION.to_string(),
+            content_hash: None,
+            bundled_hash: String::new(),
+            details: None,
+        }));
+    }
+
+    let report = uninstall_native_integration(agent_kind, &target_dir)
+        .map_err(ApiError::from)?;
     Ok(Json(report))
 }

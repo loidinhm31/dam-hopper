@@ -588,6 +588,7 @@ async fn test_agent_paths_verification_api() {
     let query = dam_hopper_server::api::agent_status::PathsVerificationQuery {
         agent_dir: Some(agent_dir_str.clone()),
         codex_dir: Some(codex_dir_str.clone()),
+        claude_dir: None,
     };
     let res = dam_hopper_server::api::agent_status::get_agent_paths_verification(
         axum::extract::Query(query),
@@ -631,6 +632,7 @@ async fn test_agent_paths_verification_api() {
     let query2 = dam_hopper_server::api::agent_status::PathsVerificationQuery {
         agent_dir: Some(agent_dir_str.clone()),
         codex_dir: Some(codex_dir_str.clone()),
+        claude_dir: None,
     };
     let res2 = dam_hopper_server::api::agent_status::get_agent_paths_verification(
         axum::extract::Query(query2),
@@ -652,6 +654,7 @@ async fn test_agent_paths_verification_api() {
     let query3 = dam_hopper_server::api::agent_status::PathsVerificationQuery {
         agent_dir: Some(other_dir.to_str().unwrap().to_string()),
         codex_dir: Some(codex_dir_str.clone()),
+        claude_dir: None,
     };
     let res3 = dam_hopper_server::api::agent_status::get_agent_paths_verification(
         axum::extract::Query(query3),

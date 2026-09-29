@@ -286,6 +286,12 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/agent-status/paths",
             get(agent_status::get_agent_paths_verification),
         )
+        .route(
+            "/api/agent-status/integrations/{agent}",
+            get(agent_status::get_native_integration_status)
+                .post(agent_status::install_native_integration_handler)
+                .delete(agent_status::uninstall_native_integration_handler),
+        )
         // Browser debug artifacts — no read/list endpoint by design.
         .route(
             "/api/browser-debug/artifacts",
