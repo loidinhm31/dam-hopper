@@ -253,6 +253,7 @@ pub async fn cherry_pick_commit_files(
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) => Ok(GitActionResult {
             ok: false,
@@ -269,6 +270,7 @@ pub async fn cherry_pick_commit_files(
                 .flatten(),
             blocked_reason: None,
             recommendation: Some("resolve conflicts before continuing".to_string()),
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }
@@ -340,6 +342,7 @@ pub async fn drop_commit_files(
                 recommendation: Some(
                     "abort the in-progress operation, then retry selected-file drop".to_string(),
                 ),
+                ..Default::default()
             }),
             other => Err(other),
         };
@@ -382,6 +385,7 @@ pub async fn drop_commit_files(
                     recommendation: Some(
                         "resolve rebase conflicts, then continue or abort".to_string(),
                     ),
+                    ..Default::default()
                 });
             }
             Err(err) => return Err(err),
@@ -400,6 +404,7 @@ pub async fn drop_commit_files(
         recovery: None,
         blocked_reason: None,
         recommendation: None,
+        ..Default::default()
     })
 }
 
@@ -455,6 +460,7 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) => Ok(GitActionResult {
             ok: false,
@@ -471,118 +477,7 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
                 .flatten(),
             blocked_reason: None,
             recommendation: Some("resolve rebase conflicts, then continue or abort".to_string()),
-        }),
-        Err(err) => Err(err),
-    }
-}
-
-pub fn get_commit_message(project_path: &Path, hash: &str) -> Result<String, AppError> {
-    let repo =
-        git2::Repository::open(project_path).map_err(|e| AppError::Git(e.message().to_string()))?;
-    let commit = validate_commit(&repo, hash)?;
-    Ok(String::from_utf8_lossy(commit.message_bytes()).into_owned())
-}
-
-pub async fn edit_commit_message(
-    project_path: &Path,
-    hash: &str,
-    message: &str,
-) -> Result<GitActionResult, AppError> {
-    if message.trim().is_empty() {
-        return Err(AppError::InvalidInput(
-            "commit message cannot be empty".to_string(),
-        ));
-    }
-    {
-        let repo = git2::Repository::open(project_path)
-            .map_err(|e| AppError::Git(e.message().to_string()))?;
-        validate_commit(&repo, hash)?;
-    }
-    if let Some(mut blocked) = preflight_history_rewrite(project_path, hash, "", true).await? {
-        blocked.hash = Some(hash.to_string());
-        return Ok(blocked);
-    }
-
-    let branch = cli_fallback::current_branch(project_path).await?;
-    let head = cli_fallback::head_hash(project_path).await?;
-
-    if head == hash {
-        cli_fallback::run_git(&["commit", "--amend", "-m", message], project_path).await?;
-        let new_hash = cli_fallback::head_hash(project_path).await?;
-        return Ok(GitActionResult {
-            ok: true,
-            message: Some(format!("Edited commit message for {}", &hash[..7])),
-            branch: Some(branch),
-            hash: Some(new_hash),
-            stashed: None,
-            conflict: Some(false),
-            dirty: Some(false),
-            destructive: Some(true),
-            recovery: None,
-            blocked_reason: None,
-            recommendation: None,
-        });
-    }
-
-    cli_fallback::run_git(&["checkout", "--detach", hash], project_path).await?;
-    if let Err(err) =
-        cli_fallback::run_git(&["commit", "--amend", "-m", message], project_path).await
-    {
-        let _ = cli_fallback::run_git(&["checkout", &branch], project_path).await;
-        return Err(err);
-    }
-    let new_hash = match cli_fallback::head_hash(project_path).await {
-        Ok(new_hash) => new_hash,
-        Err(err) => {
-            let _ = cli_fallback::run_git(&["checkout", &branch], project_path).await;
-            return Err(err);
-        }
-    };
-    if let Err(err) = cli_fallback::run_git(&["checkout", &branch], project_path).await {
-        return Err(err);
-    }
-
-    match cli_fallback::run_git(
-        &[
-            "rebase",
-            "--rebase-merges",
-            "--onto",
-            &new_hash,
-            hash,
-            &branch,
-        ],
-        project_path,
-    )
-    .await
-    {
-        Ok(_) => Ok(GitActionResult {
-            ok: true,
-            message: Some(format!("Edited commit message for {}", &hash[..7])),
-            branch: Some(branch),
-            hash: Some(new_hash),
-            stashed: None,
-            conflict: Some(false),
-            dirty: Some(false),
-            destructive: Some(true),
-            recovery: None,
-            blocked_reason: None,
-            recommendation: None,
-        }),
-        Err(AppError::Git(stderr)) => Ok(GitActionResult {
-            ok: false,
-            message: Some(stderr),
-            branch: Some(branch),
-            hash: Some(new_hash),
-            stashed: None,
-            conflict: Some(true),
-            dirty: Some(true),
-            destructive: Some(true),
-            recovery: cli_fallback::active_git_operation(project_path)
-                .await
-                .ok()
-                .flatten(),
-            blocked_reason: None,
-            recommendation: Some("resolve rebase conflicts, then continue or abort".to_string()),
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }
@@ -621,6 +516,7 @@ pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionR
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) => Ok(GitActionResult {
             ok: false,
@@ -637,6 +533,7 @@ pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionR
                 .flatten(),
             blocked_reason: None,
             recommendation: Some("resolve revert conflicts, then continue or abort".to_string()),
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }
@@ -672,6 +569,7 @@ pub async fn revert_commit_files(
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) => Ok(GitActionResult {
             ok: false,
@@ -688,6 +586,7 @@ pub async fn revert_commit_files(
                 .flatten(),
             blocked_reason: None,
             recommendation: Some("resolve conflicts before continuing".to_string()),
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }

@@ -1431,24 +1431,69 @@ a merge, rebase, or cherry-pick is already in progress and returns `recovery`
 metadata for the active operation.
 
 **GET /api/git/{project}/commit/{hash}/message**
-Return the complete commit message, including its body. Use the optional
-`root` query parameter to target a nested VCS root.
+Read the complete UTF-8 message for a commit reachable from the selected
+worktree's current branch. Optional query fields `worktreePath` and `root`
+select the registered worktree and VCS root. The response also returns the
+full symbolic branch and exact tip OID; keep both values together as the
+snapshot for a subsequent edit.
 
 ```json
-{ "message": "Subject\n\nDetailed body" }
+{
+  "message": "Subject\n\nDetailed body\n",
+  "branch": "refs/heads/main",
+  "headOid": "full-branch-tip-oid"
+}
 ```
+
+Targets with invalid UTF-8 message bytes or a non-UTF-8 `encoding` header are
+rejected rather than returned with lossy replacement characters.
 
 **POST /api/git/{project}/commit/{hash}/message**
-Edit the message of any unpushed commit reachable from the checked-out branch.
-The JSON body accepts `message` and optional `root`. Empty messages, dirty
-worktrees, detached HEAD, active Git operations, unreachable commits, and
-pushed commits are rejected. Editing `HEAD` amends it in place; editing an
-older commit, including a root commit, rewrites that commit and replays its
-descendants with merge topology preserved.
+Rewrite the target's message on the selected local branch. `hash` is the
+original target commit OID. The body requires `message`, `expectedBranch`, and
+`expectedHeadOid` copied from the same GET snapshot; optional `root` and
+`worktreePath` select the target. `allowSignatureRemoval` defaults to `false`.
 
 ```json
-{ "message": "New subject\n\nNew body", "root": "modules/child" }
+{
+  "message": "New subject\n\nNew body",
+  "expectedBranch": "refs/heads/main",
+  "expectedHeadOid": "full-branch-tip-oid",
+  "allowSignatureRemoval": false,
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
 ```
+
+The message must not be whitespace-only. The server appends one LF only when
+the submitted UTF-8 message lacks a terminal LF. A changed branch or tip
+snapshot returns `ok: false` with `blockedReason: "stale-ref"` before target
+lookup. The target must be reachable from the captured tip, but may be `HEAD`,
+a root, an older commit, a merge-side ancestor, or a commit already present on
+a remote. Staged, unstaged, and untracked changes do not block this operation.
+Detached or unborn `HEAD`, an active Git operation, the same branch checked
+out in another worktree, or incomplete/unsupported ancestry also blocks the
+edit.
+
+The rewrite uses raw commit objects: it preserves trees, ordered parent
+topology, author/committer metadata, unrelated headers, and unchanged descendant
+messages while rebuilding the target and affected descendants. It changes no
+worktree files or index entries and does not push or update a remote ref. A
+later push is a separate operation.
+
+If rewriting would invalidate commit signatures or a merge tag, the request is
+blocked with `signature-consent-required` unless
+`allowSignatureRemoval: true` explicitly consents to removing the invalidated
+headers. Unsupported history or malformed commit metadata fails closed. Exact
+message no-ops create no replacement objects and do not update the branch.
+
+On success, the `GitActionResult` includes `hash` (the new target OID),
+`branch` (the full ref), `oldTargetOid`, `newTargetOid`, `oldHeadOid`,
+`newHeadOid`, `rewrittenCount`, `noOp`, and `signaturesRemoved`. For a no-op,
+the old/new OID pairs match, `rewrittenCount` is zero, and `signaturesRemoved`
+is false.
+These edit-only fields are omitted from results for unrelated Git actions.
+Successful edits do not set `dirty`, `conflict`, or rebase-recovery fields.
 
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
@@ -1472,8 +1517,8 @@ commit.
 { "paths": ["src/main.rs"] }
 ```
 
-Branch create, branch checkout, cherry-pick, reset, drop, and revert return
-`GitActionResult`:
+Branch create, branch checkout, cherry-pick, reset, drop, revert, and
+commit-message edit return `GitActionResult`:
 
 ```json
 {
@@ -1495,17 +1540,24 @@ Result flags:
 
 | Field            | Meaning                                                                                                                                               |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`             | `true` when the Git action completed; `false` when Git reported a recoverable state.                                                                  |
+| `ok`             | `true` when the Git action completed; `false` for a blocked or recoverable outcome.                                                                      |
 | `message`        | Human-readable operation summary or recovery hint.                                                                                                    |
-| `branch`         | Branch affected by branch create or checkout actions.                                                                                                 |
-| `hash`           | Commit hash affected by cherry-pick or reset actions.                                                                                                 |
+| `branch`         | Branch affected by branch create/checkout; full local ref on message-edit results.                                                             |
+| `hash`           | Commit affected by cherry-pick/reset; rewritten target OID on successful message edits.                                                         |
 | `stashed`        | Checkout used `strategy: "stash"` and created a stash before switching branches.                                                                      |
 | `conflict`       | Cherry-pick or reset reached a Git conflict state.                                                                                                    |
 | `dirty`          | The operation was blocked by local working tree changes.                                                                                              |
 | `destructive`    | The selected mode can discard local state, such as force checkout or hard reset.                                                                      |
 | `recovery`       | Active operation metadata when recovery commands are available.                                                                                       |
-| `blockedReason`  | Machine-readable block reason such as `active-operation`, `dirty-worktree`, `detached-head`, `pushed-commit`, `unreachable-commit`, or `root-commit`. |
+| `blockedReason`  | Machine-readable reason; includes operation-specific guards and message-edit reasons such as `stale-ref`, `unsupported-history`, `invalid-commit-metadata`, `signature-consent-required`, and `publication-uncertain`. |
 | `recommendation` | User-facing next action for blocked or recoverable operations.                                                                                        |
+| `oldTargetOid`    | Original target commit OID for a message edit.                                                                                                        |
+| `newTargetOid`    | Rewritten target commit OID; also returned as `hash` for a successful edit.                                                                            |
+| `oldHeadOid`      | Captured branch-tip OID before a message edit.                                                                                                         |
+| `newHeadOid`      | Branch-tip OID after a successful rewrite; unchanged for a no-op.                                                                                     |
+| `rewrittenCount`  | Number of rewritten commits; zero for a no-op.                                                                                                         |
+| `noOp`            | Whether the normalized message matched the raw target message and no object/ref update was made.                                                       |
+| `signaturesRemoved` | Whether invalidated signature or merge-tag headers were removed after explicit consent.                                                                 |
 
 Recoverable dirty checkout example:
 
@@ -1574,14 +1626,13 @@ Checked-out branch update guard example:
 }
 ```
 
-Invalid branch names, relative paths, and commit hashes are rejected before Git
-execution. Rewrite operations preflight active merge/rebase/cherry-pick state,
-dirty worktree state, commit reachability, root commits, and pushed/shared
-history. Safe operations such as revert remain available for shared history,
-while blocked or conflicted operations return structured result flags so clients
-can show recovery choices instead of treating every non-clean operation as an
-unclassified error. Validation failures use the standard API error shape with a
-400 status for invalid input:
+Invalid branch names, relative paths, and malformed commit hashes are rejected
+before Git execution. Rewrite policy is operation-specific: destructive
+history-removal actions keep their dirty-worktree, reachability, and
+pushed/shared-history guards; commit-message edits use the snapshot,
+reachability, active-operation, and supported-history checks described above.
+Blocked Git actions return `GitActionResult`; request validation failures use
+the standard API error shape with a 400 status:
 
 ```json
 { "error": "Invalid input: invalid branch name" }
@@ -1589,15 +1640,11 @@ unclassified error. Validation failures use the standard API error shape with a
 
 ### Git History Safety Contract
 
-DamHopper follows IntelliJ-style Git semantics: safe operations preserve shared
-history, while rewrite operations are restricted to local commits that have not
-been pushed upstream. Recovery states are surfaced explicitly so the UI can
-offer continue/abort guidance instead of hiding active Git porcelain state.
-DamHopper does not expose a published-history rewrite override through `drop`,
-`drop-files`, `message`, or `undo-last-commit`. The dedicated push flow only
-publishes an already-rewritten branch intentionally: `POST /api/git/push` with
-`force: true` updates the configured upstream branch, but it does not relax the
-pushed/shared history guards on those local rewrite endpoints.
+Git actions apply operation-specific history rules. `drop`, `drop-files`, and
+`undo-last-commit` retain their existing pushed/shared-history protections.
+Commit-message edits can target a commit already pushed elsewhere, but update
+only the selected local branch; they never publish automatically. A later
+push is separate and may be rejected by remote policy.
 
 | Operation          | History effect       | Shared-history behavior                                  |
 | ------------------ | -------------------- | -------------------------------------------------------- |
@@ -1605,7 +1652,7 @@ pushed/shared history guards on those local rewrite endpoints.
 | `revert-files`     | Worktree inverse     | Allowed; selected changes stay uncommitted for review    |
 | `drop`             | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
 | `drop-files`       | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
-| `message`          | Rewrites commit      | Blocked for pushed/shared commits                        |
+| `message`          | Rewrites local branch | Allowed for reachable commits; remote ref is not changed |
 | `undo-last-commit` | Rewrites local HEAD  | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state | Allowed only after explicit request and preflight checks |
 

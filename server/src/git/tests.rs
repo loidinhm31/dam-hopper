@@ -1656,20 +1656,40 @@ async fn edit_commit_message_amends_head_and_preserves_tree_and_author() {
     let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
     let old_author = git_output(&["log", "-1", "--format=%an <%ae>"], path);
 
-    let result = edit_commit_message(path, &old_hash, "new subject\n\nnew body")
-        .await
-        .unwrap();
-    let new_hash = result.hash.as_deref().unwrap();
+    let snap = get_commit_message(path, &old_hash).unwrap();
+    assert_eq!(snap.branch, "refs/heads/main");
+    assert_eq!(snap.head_oid, old_hash);
+
+    let result = edit_commit_message(
+        path,
+        &old_hash,
+        "new subject\n\nnew body",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
 
     assert!(result.ok);
+    assert_eq!(result.no_op, Some(false));
+    assert_eq!(result.rewritten_count, Some(1));
+    assert_eq!(result.signatures_removed, Some(false));
+    assert_eq!(result.old_target_oid.as_deref(), Some(old_hash.as_str()));
+    assert_eq!(result.old_head_oid.as_deref(), Some(old_hash.as_str()));
+
+    let new_hash = result.hash.as_deref().unwrap();
+    assert_eq!(result.new_target_oid.as_deref(), Some(new_hash));
+    assert_eq!(result.new_head_oid.as_deref(), Some(new_hash));
     assert_ne!(new_hash, old_hash);
+
     assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), old_tree);
     assert_eq!(
         git_output(&["log", "-1", "--format=%an <%ae>"], path),
         old_author
     );
     assert_eq!(
-        get_commit_message(path, new_hash).unwrap(),
+        get_commit_message(path, new_hash).unwrap().message,
         "new subject\n\nnew body\n"
     );
 }
@@ -1685,11 +1705,24 @@ async fn edit_commit_message_rewrites_older_commit_and_descendants() {
     let old_head = git_output(&["rev-parse", "HEAD"], path);
     let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
 
-    let result = edit_commit_message(path, &root_hash, "edited root")
-        .await
-        .unwrap();
+    let snap = get_commit_message(path, &root_hash).unwrap();
+    assert_eq!(snap.branch, "refs/heads/main");
+    assert_eq!(snap.head_oid, old_head);
+
+    let result = edit_commit_message(
+        path,
+        &root_hash,
+        "edited root",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
 
     assert!(result.ok);
+    assert_eq!(result.no_op, Some(false));
+    assert_eq!(result.rewritten_count, Some(2));
     assert_ne!(git_output(&["rev-parse", "HEAD"], path), old_head);
     assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), old_tree);
     assert_eq!(
@@ -1700,44 +1733,103 @@ async fn edit_commit_message_rewrites_older_commit_and_descendants() {
 }
 
 #[tokio::test]
-async fn edit_commit_message_rejects_empty_dirty_pushed_and_active_operation() {
+async fn edit_commit_message_allows_dirty_worktree_and_pushed_commit() {
     let repo = make_temp_repo();
     let path = repo.path();
     let hash = git_output(&["rev-parse", "HEAD"], path);
-    assert!(edit_commit_message(path, &hash, " \n").await.is_err());
 
-    std::fs::write(path.join("dirty.txt"), "dirty\n").unwrap();
-    let dirty = edit_commit_message(path, &hash, "new").await.unwrap();
+    // Staged change
+    std::fs::write(path.join("staged.txt"), "staged content\n").unwrap();
+    git(&["add", "staged.txt"], path);
+
+    // Unstaged change
+    std::fs::write(path.join("README.md"), "modified content\n").unwrap();
+
+    // Untracked file
+    std::fs::write(path.join("untracked.txt"), "untracked content\n").unwrap();
+
+    let snap = get_commit_message(path, &hash).unwrap();
+    let result = edit_commit_message(
+        path,
+        &hash,
+        "new subject for dirty test",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.dirty, None);
+
     assert_eq!(
-        dirty.blocked_reason,
-        Some(crate::git::GitBlockReason::DirtyWorktree)
+        std::fs::read_to_string(path.join("staged.txt")).unwrap(),
+        "staged content\n"
     );
-    std::fs::remove_file(path.join("dirty.txt")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "modified content\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("untracked.txt")).unwrap(),
+        "untracked content\n"
+    );
+    assert_eq!(
+        git_output(&["diff", "--cached", "--name-only"], path),
+        "staged.txt"
+    );
+    assert_eq!(git_output(&["diff", "--name-only"], path), "README.md");
 
+    // Test pushed commit
     let (_remote, seed, _clone) = make_remote_clone_repo();
     let pushed_hash = git_output(&["rev-parse", "HEAD"], seed.path());
-    let pushed = edit_commit_message(seed.path(), &pushed_hash, "new")
-        .await
-        .unwrap();
-    assert_eq!(
-        pushed.blocked_reason,
-        Some(crate::git::GitBlockReason::PushedCommit)
+    let remote_head_before = git_output(&["rev-parse", "HEAD"], _remote.path());
+    let pushed_snap = get_commit_message(seed.path(), &pushed_hash).unwrap();
+
+    let pushed_res = edit_commit_message(
+        seed.path(),
+        &pushed_hash,
+        "edited pushed commit message",
+        &pushed_snap.branch,
+        &pushed_snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(pushed_res.ok);
+    assert_ne!(git_output(&["rev-parse", "HEAD"], seed.path()), pushed_hash);
+    let remote_head_after = git_output(&["rev-parse", "HEAD"], _remote.path());
+    assert_eq!(remote_head_before, remote_head_after);
+}
+
+#[tokio::test]
+async fn edit_commit_message_rejects_empty_active_op_detached_and_unreachable() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let hash = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &hash).unwrap();
+
+    // Empty message
+    assert!(
+        edit_commit_message(path, &hash, "   \n\t", &snap.branch, &snap.head_oid, false)
+            .await
+            .is_err()
     );
 
+    // Active rebase
     std::fs::create_dir(path.join(".git/rebase-merge")).unwrap();
-    let active = edit_commit_message(path, &hash, "new").await.unwrap();
+    let active = edit_commit_message(path, &hash, "new", &snap.branch, &snap.head_oid, false)
+        .await
+        .unwrap();
     assert_eq!(
         active.blocked_reason,
         Some(crate::git::GitBlockReason::ActiveOperation)
     );
-}
+    std::fs::remove_dir(path.join(".git/rebase-merge")).unwrap();
 
-#[tokio::test]
-async fn edit_commit_message_rejects_detached_and_unreachable_commits() {
-    let repo = make_temp_repo();
-    let path = repo.path();
-    let main_hash = git_output(&["rev-parse", "HEAD"], path);
-
+    // Unreachable commit on other branch
     git(&["checkout", "-b", "other"], path);
     std::fs::write(path.join("other.txt"), "other\n").unwrap();
     git(&["add", "other.txt"], path);
@@ -1745,14 +1837,26 @@ async fn edit_commit_message_rejects_detached_and_unreachable_commits() {
     let other_hash = git_output(&["rev-parse", "HEAD"], path);
     git(&["checkout", "main"], path);
 
-    let unreachable = edit_commit_message(path, &other_hash, "new").await.unwrap();
+    let unreachable = edit_commit_message(
+        path,
+        &other_hash,
+        "new",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         unreachable.blocked_reason,
         Some(crate::git::GitBlockReason::UnreachableCommit)
     );
 
-    git(&["checkout", "--detach", &main_hash], path);
-    let detached = edit_commit_message(path, &main_hash, "new").await.unwrap();
+    // Detached HEAD
+    git(&["checkout", "--detach", &hash], path);
+    let detached = edit_commit_message(path, &hash, "new", &snap.branch, &snap.head_oid, false)
+        .await
+        .unwrap();
     assert_eq!(
         detached.blocked_reason,
         Some(crate::git::GitBlockReason::DetachedHead)
@@ -1760,7 +1864,7 @@ async fn edit_commit_message_rejects_detached_and_unreachable_commits() {
 }
 
 #[tokio::test]
-async fn edit_commit_message_conflict_returns_recoverable_rebase_state() {
+async fn edit_commit_message_preserves_merge_commit_tree_and_ordered_parents() {
     let repo = make_temp_repo();
     let path = repo.path();
     let root_hash = git_output(&["rev-parse", "HEAD"], path);
@@ -1769,11 +1873,13 @@ async fn edit_commit_message_conflict_returns_recoverable_rebase_state() {
     std::fs::write(path.join("README.md"), "side\n").unwrap();
     git(&["add", "README.md"], path);
     git(&["commit", "-m", "side change"], path);
+    let side_head = git_output(&["rev-parse", "HEAD"], path);
 
     git(&["checkout", "main"], path);
     std::fs::write(path.join("README.md"), "main\n").unwrap();
     git(&["add", "README.md"], path);
     git(&["commit", "-m", "main change"], path);
+
     let merge = Command::new("git")
         .args(["merge", "side"])
         .current_dir(path)
@@ -1784,15 +1890,562 @@ async fn edit_commit_message_conflict_returns_recoverable_rebase_state() {
     git(&["add", "README.md"], path);
     git(&["commit", "-m", "resolved merge"], path);
 
-    let result = edit_commit_message(path, &root_hash, "edited root")
-        .await
-        .unwrap();
+    let merge_hash = git_output(&["rev-parse", "HEAD"], path);
+    let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+    let merge_parents_before = git_output(&["rev-parse", "HEAD^1", "HEAD^2"], path);
+
+    let snap = get_commit_message(path, &root_hash).unwrap();
+    let result = edit_commit_message(
+        path,
+        &root_hash,
+        "edited root with merge preservation",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.conflict, None);
+    assert!(result.recovery.is_none());
+
+    let new_merge_hash = git_output(&["rev-parse", "HEAD"], path);
+    assert_ne!(new_merge_hash, merge_hash);
+    assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), merge_tree);
+
+    let p1 = git_output(&["rev-parse", "HEAD^1"], path);
+    let p2 = git_output(&["rev-parse", "HEAD^2"], path);
+    assert_ne!(p1, merge_parents_before.lines().next().unwrap());
+    assert_ne!(p2, side_head);
+
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/side"], path),
+        side_head
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_exact_no_op() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let hash = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &hash).unwrap();
+
+    let reflog_before = git_output(&["reflog", "show", "main"], path);
+
+    let result = edit_commit_message(
+        path,
+        &hash,
+        &snap.message,
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.no_op, Some(true));
+    assert_eq!(result.rewritten_count, Some(0));
+    assert_eq!(result.hash.as_deref(), Some(hash.as_str()));
+    assert_eq!(result.old_target_oid.as_deref(), Some(hash.as_str()));
+    assert_eq!(result.new_target_oid.as_deref(), Some(hash.as_str()));
+
+    let reflog_after = git_output(&["reflog", "show", "main"], path);
+    assert_eq!(reflog_before, reflog_after);
+}
+
+#[tokio::test]
+async fn edit_commit_message_stale_ref_detected_before_target_lookup() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let hash = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &hash).unwrap();
+
+    let stale_oid = "0000000000000000000000000000000000000000";
+    let fake_target = "1111111111111111111111111111111111111111";
+
+    let result = edit_commit_message(
+        path,
+        fake_target,
+        "new message",
+        &snap.branch,
+        stale_oid,
+        false,
+    )
+    .await
+    .unwrap();
 
     assert!(!result.ok);
-    assert_eq!(result.conflict, Some(true));
     assert_eq!(
-        result.recovery.as_ref().map(|state| &state.operation),
-        Some(&crate::git::GitRecoveryOperation::Rebase)
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::StaleRef)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_signatures_and_mergetag_consent() {
+    let repo_dir = make_temp_repo();
+    let path = repo_dir.path();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+
+    let repo = git2::Repository::open(path).unwrap();
+    let odb = repo.odb().unwrap();
+    let head_commit = repo
+        .find_commit(git2::Oid::from_str(&head).unwrap())
+        .unwrap();
+    let tree_id = head_commit.tree_id();
+
+    let raw_signed_commit = format!(
+        "tree {tree_id}\nauthor Test <test@test.com> 1700000000 +0000\ncommitter Test <test@test.com> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n Version: GnuPG v2\n \n iQEcBAABCAAGBQJ...\n -----END PGP SIGNATURE-----\n\nsigned commit\n"
+    );
+
+    let signed_oid = odb
+        .write(git2::ObjectType::Commit, raw_signed_commit.as_bytes())
+        .unwrap();
+    git(
+        &["update-ref", "refs/heads/main", &signed_oid.to_string()],
+        path,
+    );
+
+    let snap = get_commit_message(path, &signed_oid.to_string()).unwrap();
+
+    let blocked = edit_commit_message(
+        path,
+        &signed_oid.to_string(),
+        "edited message without consent",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!blocked.ok);
+    assert_eq!(
+        blocked.blocked_reason,
+        Some(crate::git::GitBlockReason::SignatureConsentRequired)
+    );
+
+    let allowed = edit_commit_message(
+        path,
+        &signed_oid.to_string(),
+        "edited message with consent",
+        &snap.branch,
+        &snap.head_oid,
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert!(allowed.ok);
+    assert_eq!(allowed.signatures_removed, Some(true));
+    let new_head = allowed.new_head_oid.unwrap();
+    let new_raw = odb.read(git2::Oid::from_str(&new_head).unwrap()).unwrap();
+    let new_raw_str = String::from_utf8_lossy(new_raw.data());
+    assert!(!new_raw_str.contains("gpgsig"));
+    assert!(new_raw_str.contains("edited message with consent"));
+}
+
+#[tokio::test]
+async fn edit_commit_message_non_utf8_encoding_rejected() {
+    let repo_dir = make_temp_repo();
+    let path = repo_dir.path();
+    let repo = git2::Repository::open(path).unwrap();
+    let odb = repo.odb().unwrap();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let head_commit = repo
+        .find_commit(git2::Oid::from_str(&head).unwrap())
+        .unwrap();
+    let tree_id = head_commit.tree_id();
+
+    let raw_iso = format!(
+        "tree {tree_id}\nauthor Test <test@test.com> 1700000000 +0000\ncommitter Test <test@test.com> 1700000000 +0000\nencoding ISO-8859-1\n\nmessage\n"
+    );
+    let iso_oid = odb
+        .write(git2::ObjectType::Commit, raw_iso.as_bytes())
+        .unwrap();
+    git(
+        &["update-ref", "refs/heads/main", &iso_oid.to_string()],
+        path,
+    );
+
+    let snap_res = get_commit_message(path, &iso_oid.to_string());
+    assert!(snap_res.is_err());
+
+    let edit_res = edit_commit_message(
+        path,
+        &iso_oid.to_string(),
+        "new message",
+        "refs/heads/main",
+        &iso_oid.to_string(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!edit_res.ok);
+    assert_eq!(
+        edit_res.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_linked_worktree_detection() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt_path = wt_dir.path();
+
+    git(
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            wt_path.to_str().unwrap(),
+        ],
+        path,
+    );
+    git(&["checkout", "--ignore-other-worktrees", "main"], wt_path);
+
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &head).unwrap();
+
+    let result = edit_commit_message(
+        path,
+        &head,
+        "new message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::CheckedOutBranch)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_inside_linked_worktree_succeeds() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt_path = wt_dir.path();
+
+    git(
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            wt_path.to_str().unwrap(),
+        ],
+        path,
+    );
+
+    let wt_head = git_output(&["rev-parse", "HEAD"], wt_path);
+    let snap = get_commit_message(wt_path, &wt_head).unwrap();
+    assert_eq!(snap.branch, "refs/heads/feature");
+    assert_eq!(snap.head_oid, wt_head);
+
+    let result = edit_commit_message(
+        wt_path,
+        &wt_head,
+        "edited message in linked worktree",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.branch.as_deref(), Some("refs/heads/feature"));
+    assert_eq!(
+        get_commit_message(wt_path, result.hash.as_deref().unwrap())
+            .unwrap()
+            .message,
+        "edited message in linked worktree\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_octopus_merge_preservation() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let _root = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "-b", "branch_b"], path);
+    std::fs::write(path.join("b.txt"), "b\n").unwrap();
+    git(&["add", "b.txt"], path);
+    git(&["commit", "-m", "b change"], path);
+    let b_head = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    git(&["checkout", "-b", "branch_c"], path);
+    std::fs::write(path.join("c.txt"), "c\n").unwrap();
+    git(&["add", "c.txt"], path);
+    git(&["commit", "-m", "c change"], path);
+    let c_head = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"], path);
+    git(&["commit", "-m", "a change"], path);
+    let a_head = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["merge", "branch_b", "branch_c"], path);
+    let oct_head = git_output(&["rev-parse", "HEAD"], path);
+    let oct_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+    let parents_before = git_output(&["rev-parse", "HEAD^1", "HEAD^2", "HEAD^3"], path);
+    let parents_vec: Vec<&str> = parents_before.lines().collect();
+    assert_eq!(parents_vec.len(), 3);
+    assert_eq!(parents_vec[0], a_head);
+    assert_eq!(parents_vec[1], b_head);
+    assert_eq!(parents_vec[2], c_head);
+
+    let snap = get_commit_message(path, &b_head).unwrap();
+    let result = edit_commit_message(
+        path,
+        &b_head,
+        "edited b commit",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.rewritten_count, Some(2)); // b_head and octopus merge
+    let new_oct_head = git_output(&["rev-parse", "HEAD"], path);
+    assert_ne!(new_oct_head, oct_head);
+    assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), oct_tree);
+
+    let parents_after = git_output(&["rev-parse", "HEAD^1", "HEAD^2", "HEAD^3"], path);
+    let after_vec: Vec<&str> = parents_after.lines().collect();
+    assert_eq!(after_vec.len(), 3);
+    assert_eq!(after_vec[0], a_head); // unchanged parent
+    assert_ne!(after_vec[1], b_head); // rewritten parent
+    assert_eq!(after_vec[2], c_head); // unchanged parent
+}
+
+#[tokio::test]
+async fn edit_commit_message_gpgsig_sha256_and_mergetag_retention() {
+    let repo_dir = make_temp_repo();
+    let path = repo_dir.path();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let repo = git2::Repository::open(path).unwrap();
+    let odb = repo.odb().unwrap();
+    let head_commit = repo
+        .find_commit(git2::Oid::from_str(&head).unwrap())
+        .unwrap();
+    let tree_id = head_commit.tree_id();
+
+    // 1. Commit with gpgsig-sha256
+    let raw_sha256_commit = format!(
+        "tree {tree_id}\nauthor Test <test@test.com> 1700000000 +0000\ncommitter Test <test@test.com> 1700000000 +0000\ngpgsig-sha256 -----BEGIN PGP SIGNATURE-----\n Version: GnuPG v2\n \n iQEcBAABCAAGBQJ...\n -----END PGP SIGNATURE-----\n\nsha256 signed commit\n"
+    );
+    let sha256_oid = odb
+        .write(git2::ObjectType::Commit, raw_sha256_commit.as_bytes())
+        .unwrap();
+    git(
+        &["update-ref", "refs/heads/main", &sha256_oid.to_string()],
+        path,
+    );
+
+    let snap = get_commit_message(path, &sha256_oid.to_string()).unwrap();
+    let blocked = edit_commit_message(
+        path,
+        &sha256_oid.to_string(),
+        "new message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        blocked.blocked_reason,
+        Some(crate::git::GitBlockReason::SignatureConsentRequired)
+    );
+
+    // 2. Mergetag retention when referenced parent is unchanged
+    // Create branch2
+    git(&["checkout", "-b", "branch2"], path);
+    std::fs::write(path.join("file2.txt"), "2\n").unwrap();
+    git(&["add", "file2.txt"], path);
+    git(&["commit", "-m", "parent 2"], path);
+    let p2_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("file1.txt"), "1\n").unwrap();
+    git(&["add", "file1.txt"], path);
+    git(&["commit", "-m", "parent 1"], path);
+    let p1_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    // Craft merge commit with mergetag referencing p2_oid
+    let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+    let raw_mergetag_commit = format!(
+        "tree {merge_tree}\nparent {p1_oid}\nparent {p2_oid}\nauthor Test <test@test.com> 1700000000 +0000\ncommitter Test <test@test.com> 1700000000 +0000\nmergetag object {p2_oid}\n type commit\n tag test-tag\n tagger Test <test@test.com> 1700000000 +0000\n \n tag msg\n -----BEGIN PGP SIGNATURE-----\n ...\n -----END PGP SIGNATURE-----\n\nmerge with tag\n"
+    );
+    let merge_oid = odb
+        .write(git2::ObjectType::Commit, raw_mergetag_commit.as_bytes())
+        .unwrap();
+    git(
+        &["update-ref", "refs/heads/main", &merge_oid.to_string()],
+        path,
+    );
+
+    // Now edit p1_oid (p2_oid is NOT affected)
+    let snap_p1 = get_commit_message(path, &p1_oid).unwrap();
+    let res = edit_commit_message(
+        path,
+        &p1_oid,
+        "edited p1 only",
+        &snap_p1.branch,
+        &snap_p1.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(res.ok);
+    assert_eq!(res.signatures_removed, Some(false));
+    let new_merge_oid = res.new_head_oid.unwrap();
+    let new_merge_raw = odb
+        .read(git2::Oid::from_str(&new_merge_oid).unwrap())
+        .unwrap();
+    let new_merge_str = String::from_utf8_lossy(new_merge_raw.data());
+    // Mergetag must be retained verbatim!
+    assert!(new_merge_str.contains("mergetag object"));
+    assert!(new_merge_str.contains(&p2_oid));
+}
+
+#[tokio::test]
+async fn edit_commit_message_grafts_and_replace_refs_blocked() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &head).unwrap();
+
+    // 1. Grafts file
+    let grafts_file = path.join(".git/info/grafts");
+    std::fs::create_dir_all(path.join(".git/info")).unwrap();
+    std::fs::write(
+        &grafts_file,
+        format!("{head} 0000000000000000000000000000000000000000\n"),
+    )
+    .unwrap();
+
+    let blocked_graft = edit_commit_message(
+        path,
+        &head,
+        "new message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        blocked_graft.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+    std::fs::remove_file(&grafts_file).unwrap();
+
+    // 2. Replace refs
+    git(
+        &["update-ref", &format!("refs/replace/{head}"), &head],
+        path,
+    );
+    let blocked_replace = edit_commit_message(
+        path,
+        &head,
+        "new message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        blocked_replace.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_malformed_header_rejected() {
+    let repo_dir = make_temp_repo();
+    let path = repo_dir.path();
+    let repo = git2::Repository::open(path).unwrap();
+    let odb = repo.odb().unwrap();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let head_commit = repo
+        .find_commit(git2::Oid::from_str(&head).unwrap())
+        .unwrap();
+    let tree_id = head_commit.tree_id();
+
+    // Malformed commit missing author and committer
+    let bad_raw = format!("tree {tree_id}\n\nbad commit\n");
+    let bad_oid = odb
+        .write(git2::ObjectType::Commit, bad_raw.as_bytes())
+        .unwrap();
+    git(
+        &["update-ref", "refs/heads/main", &bad_oid.to_string()],
+        path,
+    );
+
+    let res = edit_commit_message(
+        path,
+        &bad_oid.to_string(),
+        "new message",
+        "refs/heads/main",
+        &bad_oid.to_string(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!res.ok);
+    assert_eq!(
+        res.blocked_reason,
+        Some(crate::git::GitBlockReason::InvalidCommitMetadata)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_unborn_branch_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path();
+    git(&["init", "-b", "main"], path);
+    configure_test_repo(path);
+
+    let res = edit_commit_message(
+        path,
+        "0000000000000000000000000000000000000000",
+        "new message",
+        "refs/heads/main",
+        "0000000000000000000000000000000000000000",
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!res.ok);
+    assert_eq!(
+        res.blocked_reason,
+        Some(crate::git::GitBlockReason::DetachedHead)
     );
 }
 

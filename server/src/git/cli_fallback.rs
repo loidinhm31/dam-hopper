@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::process::Command;
 
 use crate::error::AppError;
-use crate::git::progress::{ProgressSender, emit_completed, emit_failed, emit_started};
+use crate::git::progress::{emit_completed, emit_failed, emit_started, ProgressSender};
 use crate::git::types::{
     GitOperation, GitOperationResult, GitRecoveryOperation, GitRecoveryState, Worktree,
     WorktreeAddOptions,
