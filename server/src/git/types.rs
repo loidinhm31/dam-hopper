@@ -464,3 +464,87 @@ pub enum GitProgressPhase {
     Completed,
     Failed,
 }
+
+// ---------------------------------------------------------------------------
+// Leased Push types (Phase 02)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishSnapshot {
+    pub branch: String,
+    pub source_oid: String,
+    pub remote_name: String,
+    pub destination_ref: String,
+    pub expected_remote_oid: String,
+    pub remote_identity: String,
+    pub repository_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublishBlockReason {
+    DetachedHead,
+    MissingUpstream,
+    AmbiguousDestination,
+    MissingDestination,
+    RemoteUnavailable,
+    AuthRequired,
+    StalePreview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum PublishPreview {
+    Ready {
+        snapshot: PublishSnapshot,
+        already_current: bool,
+    },
+    Blocked {
+        reason: PublishBlockReason,
+        message: String,
+    },
+}
+
+impl PublishPreview {
+    pub fn ready(snapshot: PublishSnapshot, already_current: bool) -> Self {
+        Self::Ready {
+            snapshot,
+            already_current,
+        }
+    }
+
+    pub fn blocked(reason: PublishBlockReason, message: impl Into<String>) -> Self {
+        Self::Blocked {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublishResultStatus {
+    Published,
+    AlreadyCurrent,
+    StaleRemote,
+    StaleLocal,
+    StaleConfig,
+    Rejected,
+    AuthRequired,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishResult {
+    pub status: PublishResultStatus,
+    pub branch: String,
+    pub remote_name: String,
+    pub destination_ref: String,
+    pub source_oid: String,
+    pub expected_remote_oid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_remote_oid: Option<String>,
+    pub message: String,
+}

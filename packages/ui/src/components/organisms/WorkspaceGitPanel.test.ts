@@ -49,6 +49,9 @@ vi.mock("@/api/queries.js", () => ({
   }),
   useGitLog: () => ({ data: [], isLoading: false }),
   useGitPush: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  resolveTargetOwner: vi.fn(() => undefined),
+  useGitPrepareLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
+  useGitPublishLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
 }));
 
 vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({

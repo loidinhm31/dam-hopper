@@ -36,11 +36,11 @@ import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
 import {
   buildProjectInfoPushTarget,
-  buildProjectInfoPushTargetWithMode,
   describeProjectInfoRoot,
   formatProjectInfoRootLabel,
   projectInfoRootOptions,
 } from "@/components/organisms/ProjectInfoPanel.js";
+import { useLeasedGitPush } from "@/hooks/use-leased-git-push.js";
 import {
   GitDropCommitDialog,
   GitEditCommitMessageDialog,
@@ -135,7 +135,6 @@ function BulkGitOperations({
   const { data: roots = [] } = useGitRoots(targetRef);
   const rootOptions = projectInfoRootOptions(roots);
   const [selectedRootId, setSelectedRootId] = useState(".");
-  const [forcePushOpen, setForcePushOpen] = useState(false);
   const resolvedRootId = rootOptions.some(
     (root) => root.rootId === selectedRootId,
   )
@@ -149,6 +148,18 @@ function BulkGitOperations({
     : "Project root";
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
+
+  const leasedPushTarget = useMemo(
+    () => ({
+      ...(selectedTarget?.target ?? targetRef),
+      project: selectedRef?.project ?? "",
+    }),
+    [selectedRef?.project, selectedTarget?.target, targetRef],
+  );
+  const leasedPush = useLeasedGitPush(
+    leasedPushTarget,
+    resolvedRootId === "." ? undefined : resolvedRootId,
+  );
 
   const targetProjects = selectedRefs ?? allProjectRefs;
   const operationTargets: ProjectTargetInput[] = targetProjects.map((ref) =>
@@ -233,29 +244,18 @@ function BulkGitOperations({
   return (
     <>
       <PassphraseDialog {...passphraseDialogProps} />
+      <PassphraseDialog {...leasedPush.passphraseDialogProps} />
       <GitForcePushDialog
-        open={forcePushOpen}
+        open={leasedPush.state !== "closed"}
         project={selectedRef?.project ?? ""}
         rootLabel={selectedRootLabel}
-        loading={gitPush.isPending}
-        onClose={() => setForcePushOpen(false)}
-        onConfirm={() => {
-          if (!selectedRef) return;
-          setForcePushOpen(false);
-          setPushResults(null);
-          void executeWithRetry({ operation: "push" }, () =>
-            gitPush.mutateAsync(
-              buildProjectInfoPushTargetWithMode(
-                selectedRef.project,
-                resolvedRootId,
-                true,
-                selectedTarget?.target,
-              ),
-            ),
-          )
-            .then((result) => setPushResults(result))
-            .catch(() => {});
-        }}
+        state={leasedPush.state}
+        preview={leasedPush.preview}
+        result={leasedPush.result}
+        error={leasedPush.error}
+        onPrepare={() => void leasedPush.prepare()}
+        onPublish={() => void leasedPush.publish()}
+        onClose={leasedPush.close}
       />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="space-y-3">
@@ -340,11 +340,14 @@ function BulkGitOperations({
             <Button
               variant="danger"
               size="sm"
-              loading={gitPush.isPending}
-              disabled={!!pushDisabledReason}
+              loading={
+                leasedPush.state === "preparing" ||
+                leasedPush.state === "publishing"
+              }
+              disabled={!!pushDisabledReason || !selectedRef}
               onClick={() => {
                 if (!selectedRef) return;
-                setForcePushOpen(true);
+                void leasedPush.prepare();
               }}
             >
               <Upload className="h-3 w-3" />
@@ -390,7 +393,7 @@ function BulkGitOperations({
             </div>
           )}
 
-          <SshRetryStatusMessage message={statusMessage} />
+          <SshRetryStatusMessage message={statusMessage || leasedPush.sshStatus} />
         </section>
       </div>
     </>
@@ -526,8 +529,14 @@ export function GitPage() {
     );
   }
 
-  async function handleEditCommitMessageConfirm(message: string) {
-    const editedHash = await historyActions.handleEditCommitMessage(message);
+  async function handleEditCommitMessageConfirm(
+    message: string,
+    allowSignatureRemoval?: boolean,
+  ) {
+    const editedHash = await historyActions.handleEditCommitMessage(
+      message,
+      allowSignatureRemoval,
+    );
     if (!editedHash) return;
     setSelectedCommit((current) =>
       current?.hash === editedHash ? null : current,
@@ -750,8 +759,11 @@ export function GitPage() {
         loading={historyActions.editCommitMessageLoading}
         saving={historyActions.isEditCommitMessagePending}
         error={historyActions.editCommitMessageError}
+        signatureConsentRequired={historyActions.signatureConsentRequired}
         onClose={() => historyActions.setEditCommit(null)}
-        onConfirm={(message) => void handleEditCommitMessageConfirm(message)}
+        onConfirm={(message, allowSignatureRemoval) =>
+          void handleEditCommitMessageConfirm(message, allowSignatureRemoval)
+        }
       />
       <GitRevertCommitDialog
         commit={historyActions.revertCommit}

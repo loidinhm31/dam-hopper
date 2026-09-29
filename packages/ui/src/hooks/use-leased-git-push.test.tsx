@@ -1,0 +1,326 @@
+// @vitest-environment jsdom
+
+import * as React from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PublishPreview, PublishResult, PublishSnapshot } from "@/api/client.js";
+
+const mocks = vi.hoisted(() => ({
+  prepareMutateAsync: vi.fn(),
+  publishMutateAsync: vi.fn(),
+  executeLeasedWithRetry: vi.fn(),
+}));
+
+vi.mock("@/api/queries.js", () => ({
+  resolveTargetOwner: vi.fn(() => undefined),
+  useGitPrepareLeasedPush: vi.fn(() => ({
+    mutateAsync: mocks.prepareMutateAsync,
+    isPending: false,
+  })),
+  useGitPublishLeasedPush: vi.fn(() => ({
+    mutateAsync: mocks.publishMutateAsync,
+    isPending: false,
+  })),
+}));
+
+vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
+  useGitWithSshRetry: vi.fn(() => ({
+    passphraseDialogProps: {
+      open: false,
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+      loading: false,
+      error: undefined,
+      availableKeys: [],
+    },
+    statusMessage: undefined,
+    executeLeasedWithRetry: mocks.executeLeasedWithRetry,
+  })),
+}));
+
+import { useLeasedGitPush, type UseLeasedGitPushResult } from "./use-leased-git-push.js";
+
+const mockSnapshot: PublishSnapshot = {
+  branch: "refs/heads/feature",
+  sourceOid: "1111111111111111111111111111111111111111",
+  remoteName: "origin",
+  destinationRef: "refs/heads/feature",
+  expectedRemoteOid: "2222222222222222222222222222222222222222",
+  remoteIdentity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  repositoryIdentity: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+};
+
+let root: Root | null = null;
+let currentHook: UseLeasedGitPushResult | null = null;
+
+function Harness({
+  project,
+  rootPath,
+}: {
+  project: string;
+  rootPath?: string;
+}) {
+  const hook = useLeasedGitPush({ project }, rootPath);
+  React.useEffect(() => {
+    currentHook = hook;
+  }, [hook]);
+  return null;
+}
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  currentHook = null;
+  mocks.executeLeasedWithRetry.mockImplementation(
+    async (_owner: unknown, fn: () => Promise<unknown>) => fn(),
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  if (root) {
+    act(() => root?.unmount());
+  }
+  document.body.innerHTML = "";
+});
+
+describe("useLeasedGitPush", () => {
+  it("initializes in closed state with no preview or result", async () => {
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    expect(currentHook?.state).toBe("closed");
+    expect(currentHook?.preview).toBeNull();
+    expect(currentHook?.result).toBeNull();
+    expect(currentHook?.error).toBeNull();
+  });
+
+  it("transitions prepare -> confirming when remote needs push", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("confirming");
+    expect(currentHook?.preview).toEqual(readyPreview);
+    expect(currentHook?.result).toBeNull();
+  });
+
+  it("transitions prepare -> already-current when local matches remote", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: true,
+    };
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("already-current");
+    expect(currentHook?.preview).toEqual(readyPreview);
+  });
+
+  it("transitions prepare -> blocked when prepare is blocked", async () => {
+    const blockedPreview: PublishPreview = {
+      status: "blocked",
+      reason: "detached-head",
+      message: "HEAD is detached",
+    };
+    mocks.prepareMutateAsync.mockResolvedValueOnce(blockedPreview);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("blocked");
+    expect(currentHook?.preview).toEqual(blockedPreview);
+  });
+
+  it("publishes frozen lease and transitions confirming -> published", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const publishedResult: PublishResult = {
+      status: "published",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      actualRemoteOid: mockSnapshot.sourceOid,
+      message: "Published successfully",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(publishedResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(mocks.publishMutateAsync).toHaveBeenCalledWith(mockSnapshot);
+    expect(currentHook?.state).toBe("published");
+    expect(currentHook?.result).toEqual(publishedResult);
+  });
+
+  it("transitions publishing -> stale when remote moved", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const staleResult: PublishResult = {
+      status: "stale-remote",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      actualRemoteOid: "3333333333333333333333333333333333333333",
+      message: "Remote ref has moved",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(staleResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("stale");
+    expect(currentHook?.result).toEqual(staleResult);
+  });
+
+  it("resets to closed and invalidates in-flight actions when scope/target changes", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" rootPath="." />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("confirming");
+
+    // Change target project / root
+    await act(async () => {
+      root?.render(<Harness project="demo" rootPath="modules/child" />);
+    });
+
+    expect(currentHook?.state).toBe("closed");
+    expect(currentHook?.preview).toBeNull();
+    expect(currentHook?.result).toBeNull();
+  });
+
+  it("re-invokes publish with the identical frozen snapshot after SSH retry", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const publishedResult: PublishResult = {
+      status: "published",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Published after SSH key load",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+
+    // First attempt returns auth-required, retry callback succeeds
+    let callCount = 0;
+    mocks.executeLeasedWithRetry.mockImplementation(
+      async (_owner: unknown, fn: () => Promise<unknown>) => {
+        callCount++;
+        if (callCount === 1) {
+          // Prepare call
+          return fn();
+        }
+        // Publish call: simulate executeLeasedWithRetry prompting and retrying fn()
+        const firstAttempt = await fn();
+        expect(firstAttempt).toEqual({ status: "auth-required" });
+        // Retry invocation of the exact same fn() without refreshing snapshot
+        mocks.publishMutateAsync.mockResolvedValueOnce(publishedResult);
+        return fn();
+      },
+    );
+
+    mocks.publishMutateAsync.mockResolvedValueOnce({ status: "auth-required" });
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    // Both calls must have received the identical frozen snapshot (sourceOid and expectedRemoteOid unchanged)
+    expect(mocks.publishMutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.publishMutateAsync).toHaveBeenNthCalledWith(1, mockSnapshot);
+    expect(mocks.publishMutateAsync).toHaveBeenNthCalledWith(2, mockSnapshot);
+    expect(currentHook?.state).toBe("published");
+    expect(currentHook?.result).toEqual(publishedResult);
+  });
+});

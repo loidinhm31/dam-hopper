@@ -45,6 +45,11 @@ import type {
   HostResourceAlertIncident,
   HostResourceSnapshotV1,
   GitOpResult,
+  CommitMessageResponse,
+  EditCommitMessageInput,
+  PublishPreview,
+  PublishResult,
+  PublishSnapshot,
   SshCredentialStatus,
   SshForgetCredentialResult,
   SshLoadKeyResult,
@@ -1020,12 +1025,12 @@ export function useGitCommitMessage(
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
-  return useQuery<string>({
+  return useQuery<CommitMessageResponse>({
     queryKey: gitQueryKey("git-commit-message", normalized, rootKey, hash),
-    queryFn: async () =>
-      (await getBoundApiClient(owner).git.commitMessage(normalized, hash, root)).message,
+    queryFn: () =>
+      getBoundApiClient(owner).git.commitMessage(normalized, hash, root),
     enabled: !!normalized.project && !!hash,
-    staleTime: Infinity,
+    staleTime: 0,
   });
 }
 export function useGitCommitFileDiff(
@@ -1314,8 +1319,14 @@ export function useGitEditCommitMessage(
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ hash, message }: { hash: string; message: string }) =>
-      getBoundApiClient(owner).git.editCommitMessage(normalized, hash, message, root),
+    mutationFn: ({
+      hash,
+      input,
+    }: {
+      hash: string;
+      input: EditCommitMessageInput;
+    }) =>
+      getBoundApiClient(owner).git.editCommitMessage(normalized, hash, input, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1458,14 +1469,13 @@ export function resolveGitPushTarget(
         project: string;
         worktreePath?: string;
         root?: string;
-        force?: boolean;
       },
 ) {
   if (typeof target === "string") {
-    return [target, undefined, undefined] as const;
+    return [target, undefined] as const;
   }
 
-  return [target.project, target.root, target.force] as const;
+  return [target.project, target.root] as const;
 }
 
 export function useGitPush() {
@@ -1479,17 +1489,16 @@ export function useGitPush() {
             profileId?: string;
             worktreePath?: string;
             root?: string;
-            force?: boolean;
           },
     ) => {
-      const [project, root, force] = resolveGitPushTarget(target);
+      const [project, root] = resolveGitPushTarget(target);
       const profileId = typeof target === "object" ? target.profileId : undefined;
       const owner = resolveTargetOwner(profileId);
       const targetRef =
         typeof target === "string" || target.worktreePath == null
           ? (profileId ? { profileId, project } : project)
           : (profileId ? { profileId, project, worktreePath: target.worktreePath } : { project, worktreePath: target.worktreePath });
-      return getBoundApiClient(owner).git.push(targetRef, root, force);
+      return getBoundApiClient(owner).git.push(targetRef, root);
     },
     onSuccess: (_result, target) => {
       const targetRef = typeof target === "string" ? target : target;
@@ -1505,6 +1514,42 @@ export function useGitPush() {
       const targetRef = typeof target === "string" ? target : target;
       markTargetUnavailableIfNeeded(targetRef, error);
     },
+  });
+}
+
+export function useGitPrepareLeasedPush(
+  target: ProjectTargetInput,
+  root?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  return useMutation({
+    mutationFn: () =>
+      getBoundApiClient(owner).git.prepareLeasedPush(normalized, root),
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
+  });
+}
+
+export function useGitPublishLeasedPush(
+  target: ProjectTargetInput,
+  root?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (snapshot: PublishSnapshot) =>
+      getBoundApiClient(owner).git.publishLeasedPush(normalized, snapshot, root),
+    onSuccess: (result) => {
+      markTargetUnavailableIfNeeded(normalized, result);
+      invalidateGitProjectQueries(qc, normalized, {
+        includeBranches: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+      });
+    },
+    onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }
 

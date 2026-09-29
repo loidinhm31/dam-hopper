@@ -32,6 +32,7 @@ import {
   normalizeProjectTarget,
   type BrowserDebugArtifactResponse,
   type ProjectTargetInput,
+  type PublishSnapshot,
   type TerminalLifecycle,
   type TerminalLifecycleEvent,
 } from "./client.js";
@@ -344,7 +345,6 @@ function channelToEndpoint(
               project: string;
               worktreePath?: string;
               root?: string;
-              force?: boolean;
             });
       return {
         method: "POST",
@@ -353,7 +353,38 @@ function channelToEndpoint(
           project: d.project,
           worktreePath: d.worktreePath,
           root: d.root,
-          force: d.force,
+        },
+      };
+    }
+    case "git:prepareLeasedPush": {
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/push/prepare`,
+        body: {
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
+      };
+    }
+    case "git:publishLeasedPush": {
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+        snapshot: PublishSnapshot;
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/push/publish`,
+        body: {
+          worktreePath: d.worktreePath,
+          root: d.root,
+          snapshot: d.snapshot,
         },
       };
     }
@@ -1051,6 +1082,9 @@ function channelToEndpoint(
         project: string;
         hash: string;
         message: string;
+        expectedBranch: string;
+        expectedHeadOid: string;
+        allowSignatureRemoval?: boolean;
         worktreePath?: string;
         root?: string;
       };
@@ -1059,6 +1093,9 @@ function channelToEndpoint(
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/message`,
         body: {
           message: d.message,
+          expectedBranch: d.expectedBranch,
+          expectedHeadOid: d.expectedHeadOid,
+          allowSignatureRemoval: d.allowSignatureRemoval,
           worktreePath: d.worktreePath,
           root: d.root,
         },

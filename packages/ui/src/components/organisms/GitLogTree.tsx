@@ -49,13 +49,11 @@ export function getDropCommitMenuState(entry: Pick<GitLogEntry, "isPushed">) {
 }
 
 export function getEditCommitMessageMenuState(
-  entry: Pick<GitLogEntry, "isPushed">,
+  _entry?: Pick<GitLogEntry, "isPushed">,
 ) {
   return {
-    disabled: entry.isPushed,
-    title: entry.isPushed
-      ? "Edit Commit Message is only available for commits not pushed upstream"
-      : undefined,
+    disabled: false,
+    title: undefined,
   };
 }
 
