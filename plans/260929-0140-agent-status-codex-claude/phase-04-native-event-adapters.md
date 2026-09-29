@@ -4,7 +4,7 @@
 [Plan](./plan.md) · [Event matrix](./design-contract.md) · [Phase 01](./phase-01-capabilities-and-observation-contract.md) · [Phase 02](./phase-02-private-hook-ingress.md)
 
 ## Overview
-Date: 2026-09-29. Priority P1. Estimate 8h. Implementation Pending / 0%; review Pending.
+Date: 2026-09-29. Priority P1. Estimate 8h. Status DONE / 100% (2026-09-29 Asia/Saigon); Cycle 1 review Approved (9.5/10).
 Implement the approved limited native mappings, not OMP parity through guessed transitions.
 
 ## Key Insights
@@ -36,9 +36,9 @@ Delete: no OMP extension behavior; Phase 05 owns obsolete OSC9 removal.
 8. Exercise actual installed native callbacks through the reporter/collector under isolated homes; record bounded event names/IDs and visible state, never transcript text. Keep deterministic regressions for continuation, Escape expiry, stale turn and child contamination.
 
 ## Todo list
-- [ ] Codex qualified mapping and conservative gaps.
-- [ ] Claude qualified mapping and conservative gaps.
-- [ ] Root/turn/parallel blocker regression timelines plus real-hook smoke.
+- [x] Codex qualified mapping and conservative gaps.
+- [x] Claude qualified mapping and conservative gaps.
+- [x] Root/turn/parallel blocker regression timelines plus real-hook smoke.
 
 ## Success Criteria
 Agent status reflects only qualified event evidence and returns Unknown after 15s without renewal. Other hooks can continue/approve/deny without DamHopper influencing them. No native Stop creates normal semantic completion; Codex supplies status only, with no OSC9 fallback.

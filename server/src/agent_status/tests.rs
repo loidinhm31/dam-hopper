@@ -1780,3 +1780,386 @@ fn omp_admission_rejects_a_superseded_terminal_incarnation() {
     assert_eq!(snapshot.terminals.len(), 1);
     assert_eq!(snapshot.terminals[0].incarnation, 2);
 }
+
+#[test]
+fn test_claude_parallel_tool_blocker_resolution_and_fencing() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    // Turn 1 starts
+    let start = sample_hook_envelope(
+        "ev-start",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &start, 1000).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Working);
+
+    // Tool 1 triggers permission prompt
+    let mut notice1 = sample_hook_envelope(
+        "ev-notice-1",
+        "Notification",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    notice1.notification_type = Some("permission_prompt".to_string());
+    notice1.tool_call_id = Some("call-1".to_string());
+    let out = registry.apply_hook("term-1", 1, &notice1, 1050).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Blocked);
+    assert_eq!(out.attention.as_ref().unwrap().kind, AttentionKind::NeedsAttention);
+    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Approval));
+
+    // Parallel Tool 2 begins execution (unrelated to call-1)
+    let mut tool2_pre = sample_hook_envelope(
+        "ev-tool2-pre",
+        "PreToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    tool2_pre.tool_call_id = Some("call-2".to_string());
+    let out = registry.apply_hook("term-1", 1, &tool2_pre, 1100).unwrap();
+    assert_eq!(
+        out.row.unwrap().state,
+        AgentState::Blocked,
+        "unrelated parallel tool cannot clear blocker"
+    );
+    assert!(out.attention.is_none());
+
+    // Parallel Tool 2 finishes execution (unrelated to call-1)
+    let mut tool2_post = sample_hook_envelope(
+        "ev-tool2-post",
+        "PostToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    tool2_post.tool_call_id = Some("call-2".to_string());
+    let out = registry.apply_hook("term-1", 1, &tool2_post, 1150).unwrap();
+    assert_eq!(
+        out.row.unwrap().state,
+        AgentState::Blocked,
+        "unrelated parallel tool completion cannot clear blocker"
+    );
+
+    // Tool 1 finishes execution (matching call-1)
+    let mut tool1_post = sample_hook_envelope(
+        "ev-tool1-post",
+        "PostToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    tool1_post.tool_call_id = Some("call-1".to_string());
+    let out = registry.apply_hook("term-1", 1, &tool1_post, 1200).unwrap();
+    assert_eq!(
+        out.row.unwrap().state,
+        AgentState::Working,
+        "matching tool completion clears blocker"
+    );
+
+    // Another blocker entered
+    let mut notice2 = sample_hook_envelope(
+        "ev-notice-2",
+        "Notification",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    notice2.notification_type = Some("permission_prompt".to_string());
+    notice2.tool_call_id = Some("call-3".to_string());
+    let out = registry.apply_hook("term-1", 1, &notice2, 1250).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Blocked);
+
+    // Uncorrelated tool event (missing tool_call_id) cannot prove resolution -> Unknown
+    let mut uncorrelated = sample_hook_envelope(
+        "ev-uncorrelated",
+        "PostToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    uncorrelated.tool_call_id = None;
+    let out = registry.apply_hook("term-1", 1, &uncorrelated, 1300).unwrap();
+    assert_eq!(
+        out.row.unwrap().state,
+        AgentState::Unknown,
+        "uncorrelated tool event while blocked falls back to Unknown"
+    );
+}
+
+#[test]
+fn test_claude_continuation_and_stop_handling() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    // Turn 1 starts
+    let start = sample_hook_envelope(
+        "ev-start",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    registry.apply_hook("term-1", 1, &start, 1000).unwrap();
+
+    // Stop arrives: invalidates certainty to Unknown, no completion attention
+    let stop = sample_hook_envelope(
+        "ev-stop",
+        "Stop",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &stop, 1050).unwrap();
+    assert_eq!(out.row.as_ref().unwrap().state, AgentState::Unknown);
+    assert!(out.attention.is_none());
+
+    // Continuation arrives on same turn-1: refreshes work to Working
+    let continuation_tool = sample_hook_envelope(
+        "ev-continuation",
+        "PreToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &continuation_tool, 1100).unwrap();
+    assert_eq!(
+        out.row.as_ref().unwrap().state,
+        AgentState::Working,
+        "continuation starts/refreshes observed work"
+    );
+    assert_eq!(out.row.as_ref().unwrap().turn_id.as_deref(), Some("turn-1"));
+
+    // Stop arrives again
+    let stop2 = sample_hook_envelope(
+        "ev-stop-2",
+        "Stop",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &stop2, 1150).unwrap();
+    assert_eq!(out.row.as_ref().unwrap().state, AgentState::Unknown);
+
+    // Turn 2 begins: cleanly establishes new turn
+    let start2 = sample_hook_envelope(
+        "ev-start-2",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-2"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &start2, 1200).unwrap();
+    assert_eq!(out.row.as_ref().unwrap().state, AgentState::Working);
+    assert_eq!(out.row.as_ref().unwrap().turn_id.as_deref(), Some("turn-2"));
+
+    // Late Stop from turn-1 arrives: ignored, cannot affect turn-2
+    let late_stop = sample_hook_envelope(
+        "ev-late-stop",
+        "Stop",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &late_stop, 1250).unwrap();
+    assert!(!out.state_changed);
+    assert_eq!(out.row.as_ref().unwrap().state, AgentState::Working);
+    assert_eq!(out.row.as_ref().unwrap().turn_id.as_deref(), Some("turn-2"));
+}
+
+#[test]
+fn test_claude_ask_user_question_and_agent_needs_input() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    let start = sample_hook_envelope(
+        "ev-start",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    registry.apply_hook("term-1", 1, &start, 1000).unwrap();
+
+    // PreToolUse with question candidate: candidate only -> Unknown, NO attention
+    let mut question_candidate = sample_hook_envelope(
+        "ev-question-cand",
+        "PreToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    question_candidate.notification_type = Some("question_candidate".to_string());
+    let out = registry.apply_hook("term-1", 1, &question_candidate, 1050).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Unknown);
+    assert!(out.attention.is_none());
+
+    // Normal PreToolUse: resumes Working
+    let normal_tool = sample_hook_envelope(
+        "ev-normal-tool",
+        "PreToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &normal_tool, 1100).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Working);
+
+    // Notification(agent_needs_input): Blocked(Question) with NeedsAttention
+    let mut notice = sample_hook_envelope(
+        "ev-notice-needs-input",
+        "Notification",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    notice.notification_type = Some("agent_needs_input".to_string());
+    let out = registry.apply_hook("term-1", 1, &notice, 1150).unwrap();
+    let row = out.row.unwrap();
+    assert_eq!(row.state, AgentState::Blocked);
+    assert_eq!(row.reason, Some(BlockedReason::Question));
+    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Question));
+
+    // Duplicate Notification(agent_needs_input): no duplicate attention
+    let mut dupe = notice.clone();
+    dupe.event_id = "ev-notice-dupe".to_string();
+    let out = registry.apply_hook("term-1", 1, &dupe, 1160).unwrap();
+    assert!(out.attention.is_none(), "duplicate notification must not duplicate attention");
+}
+
+#[test]
+fn test_claude_stop_failure_and_post_tool_failure() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    let start = sample_hook_envelope(
+        "ev-start",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    registry.apply_hook("term-1", 1, &start, 1000).unwrap();
+
+    // PostToolUseFailure: ordinary tool failure is NOT terminal failure; remains Working
+    let tool_fail = sample_hook_envelope(
+        "ev-tool-fail",
+        "PostToolUseFailure",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &tool_fail, 1050).unwrap();
+    assert_eq!(out.row.unwrap().state, AgentState::Working);
+    assert!(out.attention.is_none());
+
+    // StopFailure: root API failure -> Blocked(Error) with NeedsAttention
+    let stop_fail = sample_hook_envelope(
+        "ev-stop-fail",
+        "StopFailure",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = registry.apply_hook("term-1", 1, &stop_fail, 1100).unwrap();
+    let row = out.row.unwrap();
+    assert_eq!(row.state, AgentState::Blocked);
+    assert_eq!(row.reason, Some(BlockedReason::Error));
+    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Error));
+}
+
+#[test]
+fn test_codex_interrupt_and_stop_behavior() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    let start = sample_hook_envelope(
+        "ev-start",
+        "UserPromptSubmit",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    registry.apply_hook("term-1", 1, &start, 1000).unwrap();
+
+    // Interrupt: sets Idle with TurnOutcome::Interrupted, NO completion attention
+    let interrupt = sample_hook_envelope(
+        "ev-interrupt",
+        "Interrupt",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    let out = registry.apply_hook("term-1", 1, &interrupt, 1050).unwrap();
+    let row = out.row.unwrap();
+    assert_eq!(row.state, AgentState::Idle);
+    assert_eq!(row.last_outcome, Some(TurnOutcome::Interrupted));
+    assert!(out.attention.is_none(), "Interrupt must never emit completion attention");
+
+    // Turn-1 was retired by interrupt; late tool event is ignored
+    let late_tool = sample_hook_envelope(
+        "ev-late-tool",
+        "PreToolUse",
+        "session-1",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    let out = registry.apply_hook("term-1", 1, &late_tool, 1100).unwrap();
+    assert!(!out.state_changed);
+}
+
+#[test]
+fn test_cross_agent_disallowed_events_rejected() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+
+    let codex_start = sample_hook_envelope(
+        "ev-codex-start",
+        "UserPromptSubmit",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    registry.apply_hook("term-codex", 1, &codex_start, 1000).unwrap();
+
+    // Codex cannot receive Notification
+    let codex_notice = sample_hook_envelope(
+        "ev-codex-notice",
+        "Notification",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    let out = registry.apply_hook("term-codex", 1, &codex_notice, 1050).unwrap();
+    assert!(!out.state_changed);
+
+    // Codex cannot receive StopFailure
+    let codex_stop_fail = sample_hook_envelope(
+        "ev-codex-stop-fail",
+        "StopFailure",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    let out = registry.apply_hook("term-codex", 1, &codex_stop_fail, 1060).unwrap();
+    assert!(!out.state_changed);
+
+    let mut claude_registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let claude_start = sample_hook_envelope(
+        "ev-claude-start",
+        "UserPromptSubmit",
+        "sess-claude",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    claude_registry.apply_hook("term-claude", 1, &claude_start, 1000).unwrap();
+
+    // Claude cannot receive Interrupt
+    let claude_interrupt = sample_hook_envelope(
+        "ev-claude-interrupt",
+        "Interrupt",
+        "sess-claude",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
+    let out = claude_registry.apply_hook("term-claude", 1, &claude_interrupt, 1050).unwrap();
+    assert!(!out.state_changed);
+}

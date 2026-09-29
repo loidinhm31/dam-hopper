@@ -1,4 +1,6 @@
+pub mod claude_hooks;
 pub mod claude_integration;
+pub mod codex_hooks;
 pub mod codex_integration;
 pub mod collector;
 pub mod hook_ingress;

@@ -11,20 +11,7 @@ use crate::agent_status::integration::{
 use crate::agent_status::types::AgentKind;
 
 /// Canonical events managed by DamHopper for Claude Code.
-pub const CLAUDE_MANAGED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PreCompact",
-    "PostCompact",
-    "Notification",
-    "Stop",
-    "StopFailure",
-    "SessionEnd",
-];
+pub const CLAUDE_MANAGED_EVENTS: &[&str] = crate::agent_status::claude_hooks::CLAUDE_QUALIFIED_EVENTS;
 
 /// Check the status of the managed Claude Code integration.
 pub fn check_claude_status(agent_dir: &Path) -> Result<NativeIntegrationStatusReport, IntegrationError> {

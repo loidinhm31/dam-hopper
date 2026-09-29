@@ -40,7 +40,8 @@ pub struct NativeOwner {
 
 /// Minimum duration (ms) between bounded freshness updates for same-state native lease renewal.
 pub const MIN_FRESHNESS_UPDATE_INTERVAL_MS: u64 = 1_000;
-/// Reducer managing agent status transitions for a specific terminal incarnation.
+/// Maximum number of distinct blocked tool call identifiers retained per turn.
+pub const MAX_BLOCKED_TOOL_CALL_IDS: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalAgentReducer {
     // Identity
@@ -65,8 +66,8 @@ pub struct TerminalAgentReducer {
     pub agent_session_id: String,
     pub current_turn_id: Option<String>,
     pub blocked_reason: Option<BlockedReason>,
+    pub blocked_tool_call_ids: VecDeque<String>,
     pub last_outcome: Option<TurnOutcome>,
-
     // Attention
     pub attention_revision: u64,
     pub latest_attention: Option<AgentAttentionEvent>,
@@ -122,6 +123,7 @@ impl TerminalAgentReducer {
             agent_session_id: hello.agent_session_id.clone(),
             current_turn_id: None,
             blocked_reason: None,
+            blocked_tool_call_ids: VecDeque::new(),
             last_outcome: None,
             attention_revision: 0,
             latest_attention: None,
@@ -167,6 +169,7 @@ impl TerminalAgentReducer {
             agent_session_id: envelope.agent_session_id.clone(),
             current_turn_id: None,
             blocked_reason: None,
+            blocked_tool_call_ids: VecDeque::new(),
             last_outcome: None,
             attention_revision: 0,
             latest_attention: None,
@@ -176,6 +179,38 @@ impl TerminalAgentReducer {
             retired_native_roots: VecDeque::new(),
             last_published_freshness_ms: now_ms,
         })
+    }
+
+    /// Helper resolving tool blockers in PreToolUse and PostToolUse transitions.
+    fn resolve_tool_blocker(&mut self, tool_call_id: Option<&str>) {
+        if self.state == AgentState::Blocked {
+            if !self.blocked_tool_call_ids.is_empty() {
+                if let Some(tool_id) = tool_call_id {
+                    if self.blocked_tool_call_ids.iter().any(|id| id == tool_id) {
+                        self.blocked_tool_call_ids.retain(|id| id != tool_id);
+                        if self.blocked_tool_call_ids.is_empty() {
+                            self.state = AgentState::Working;
+                            self.blocked_reason = None;
+                        }
+                    }
+                    // Otherwise unrelated parallel tool: blocker remains active
+                } else {
+                    // Without correlation, prefer Unknown
+                    self.state = AgentState::Unknown;
+                    self.blocked_reason = None;
+                    self.blocked_tool_call_ids.clear();
+                }
+            } else if tool_call_id.is_some() {
+                self.state = AgentState::Working;
+                self.blocked_reason = None;
+            } else {
+                self.state = AgentState::Unknown;
+                self.blocked_reason = None;
+            }
+        } else {
+            self.state = AgentState::Working;
+            self.blocked_reason = None;
+        }
     }
 
     /// Process a native command hook event payload.
@@ -276,6 +311,7 @@ impl TerminalAgentReducer {
                     self.current_turn_id = None;
                     self.state = AgentState::Unknown;
                     self.blocked_reason = None;
+                    self.blocked_tool_call_ids.clear();
                     self.last_outcome = None;
                 } else {
                     return Err(AgentStatusError::AuthorityLost(
@@ -294,6 +330,7 @@ impl TerminalAgentReducer {
                     self.current_turn_id = None;
                     self.state = AgentState::Unknown;
                     self.blocked_reason = None;
+                    self.blocked_tool_call_ids.clear();
                     self.last_outcome = None;
                 } else {
                     return Ok(ReducerOutput {
@@ -332,6 +369,7 @@ impl TerminalAgentReducer {
             self.agent_session_id = envelope.agent_session_id.clone();
             self.current_turn_id = None;
             self.blocked_reason = None;
+            self.blocked_tool_call_ids.clear();
             self.last_outcome = None;
             self.latest_attention = None;
             self.state = AgentState::Unknown;
@@ -353,7 +391,33 @@ impl TerminalAgentReducer {
 
         let mut attention = None;
 
-        // 4. Conservative event qualification
+        // 4. Conservative event qualification against provider inventory
+        match self.agent_kind {
+            AgentKind::Codex => {
+                if super::codex_hooks::normalize_codex_event(&envelope.event).is_none() {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+            }
+            AgentKind::Claude => {
+                if super::claude_hooks::normalize_claude_event(&envelope.event).is_none() {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+            }
+            AgentKind::Omp => {
+                return Err(AgentStatusError::AuthorityLost(
+                    "unsupported agent kind for hook ingress".to_string(),
+                ));
+            }
+        }
+
         match envelope.event.as_str() {
             "SessionStart" => {
                 // A delayed startup callback cannot reset an already observed turn.
@@ -366,6 +430,7 @@ impl TerminalAgentReducer {
                 }
                 self.state = AgentState::Unknown;
                 self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
                 self.last_outcome = None;
             }
 
@@ -395,32 +460,77 @@ impl TerminalAgentReducer {
                         });
                     }
                     if cur_turn != turn_id {
-                        // Native IDs are opaque. Receipt order cannot prove whether this
-                        // prompt is newer or a delayed callback from an unseen old turn.
-                        self.retired_turn_ids.push_back(cur_turn.clone());
-                        self.retired_turn_ids.push_back(turn_id.clone());
-                        while self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
-                            self.retired_turn_ids.pop_front();
+                        if self.state == AgentState::Working || self.state == AgentState::Blocked {
+                            // Native IDs are opaque. Receipt order cannot prove whether this
+                            // prompt is newer or a delayed callback from an unseen old turn.
+                            self.retired_turn_ids.push_back(cur_turn.clone());
+                            self.retired_turn_ids.push_back(turn_id.clone());
+                            while self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                                self.retired_turn_ids.pop_front();
+                            }
+                            self.current_turn_id = None;
+                            self.state = AgentState::Unknown;
+                            self.blocked_reason = None;
+                            self.blocked_tool_call_ids.clear();
+                            self.observed_at_ms = None;
+                            self.latest_attention = None;
+                            return Ok(ReducerOutput {
+                                state_changed: true,
+                                row: Some(self.to_row()),
+                                attention: None,
+                            });
+                        } else {
+                            // Previous turn was already settled/stopped to Unknown:
+                            // retire it cleanly and establish the new turn.
+                            self.retired_turn_ids.push_back(cur_turn.clone());
+                            while self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                                self.retired_turn_ids.pop_front();
+                            }
                         }
-                        self.current_turn_id = None;
-                        self.state = AgentState::Unknown;
-                        self.blocked_reason = None;
-                        self.observed_at_ms = None;
-                        self.latest_attention = None;
-                        return Ok(ReducerOutput {
-                            state_changed: true,
-                            row: Some(self.to_row()),
-                            attention: None,
-                        });
                     }
                 }
                 self.current_turn_id = Some(turn_id.clone());
                 self.state = AgentState::Working;
                 self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
                 self.last_outcome = None;
             }
 
-            "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            "PreToolUse" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                // Check if this PreToolUse is a question candidate (Claude AskUserQuestion)
+                if self.agent_kind == AgentKind::Claude
+                    && envelope.notification_type.as_deref() == Some("question_candidate")
+                {
+                    self.state = AgentState::Unknown;
+                    self.blocked_reason = None;
+                    self.blocked_tool_call_ids.clear();
+                } else {
+                    self.resolve_tool_blocker(envelope.tool_call_id.as_deref());
+                }
+            }
+
+            "PostToolUse" | "PostToolUseFailure" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                self.resolve_tool_blocker(envelope.tool_call_id.as_deref());
+            }
+            "PreCompact" | "PostCompact" => {
                 if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
                     || self.current_turn_id.is_none()
                 {
@@ -433,6 +543,7 @@ impl TerminalAgentReducer {
                 self.state = AgentState::Working;
                 self.blocked_reason = None;
             }
+
             "PermissionRequest" => {
                 if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
                     || self.current_turn_id.is_none()
@@ -445,9 +556,11 @@ impl TerminalAgentReducer {
                 }
                 self.state = AgentState::Unknown;
                 self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
             }
+
             "Notification" => {
-                if envelope.notification_type.as_deref() != Some("permission_prompt")
+                if self.agent_kind != AgentKind::Claude
                     || envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
                     || self.current_turn_id.is_none()
                 {
@@ -457,34 +570,87 @@ impl TerminalAgentReducer {
                         attention: None,
                     });
                 }
-                let was_blocked = self.state == AgentState::Blocked
-                    && self.blocked_reason == Some(BlockedReason::Approval);
-                self.state = AgentState::Blocked;
-                self.blocked_reason = Some(BlockedReason::Approval);
-                if !was_blocked {
-                    self.attention_revision = self.attention_revision.saturating_add(1);
-                    attention = Some(AgentAttentionEvent {
-                        id: AgentAttentionEvent::format_id(
-                            self.server_epoch,
-                            &self.terminal_id,
-                            self.incarnation,
-                            self.attention_revision,
-                        ),
-                        kind: AttentionKind::NeedsAttention,
-                        terminal_id: self.terminal_id.clone(),
-                        incarnation: self.incarnation,
-                        agent_kind: self.agent_kind,
-                        agent_session_id: self.agent_session_id.clone(),
-                        turn_id: self.current_turn_id.clone(),
-                        reason: Some(BlockedReason::Approval),
-                        outcome: None,
-                        attention_revision: self.attention_revision,
-                        timestamp_ms: now_ms,
-                    });
+                match envelope.notification_type.as_deref() {
+                    Some("permission_prompt") => {
+                        let was_blocked = self.state == AgentState::Blocked
+                            && self.blocked_reason == Some(BlockedReason::Approval);
+                        self.state = AgentState::Blocked;
+                        self.blocked_reason = Some(BlockedReason::Approval);
+                        if let Some(tool_id) = &envelope.tool_call_id {
+                            if !self.blocked_tool_call_ids.iter().any(|id| id == tool_id) {
+                                self.blocked_tool_call_ids.push_back(tool_id.clone());
+                                while self.blocked_tool_call_ids.len() > MAX_BLOCKED_TOOL_CALL_IDS {
+                                    self.blocked_tool_call_ids.pop_front();
+                                }
+                            }
+                        }
+                        if !was_blocked {
+                            self.attention_revision = self.attention_revision.saturating_add(1);
+                            attention = Some(AgentAttentionEvent {
+                                id: AgentAttentionEvent::format_id(
+                                    self.server_epoch,
+                                    &self.terminal_id,
+                                    self.incarnation,
+                                    self.attention_revision,
+                                ),
+                                kind: AttentionKind::NeedsAttention,
+                                terminal_id: self.terminal_id.clone(),
+                                incarnation: self.incarnation,
+                                agent_kind: self.agent_kind,
+                                agent_session_id: self.agent_session_id.clone(),
+                                turn_id: self.current_turn_id.clone(),
+                                reason: Some(BlockedReason::Approval),
+                                outcome: None,
+                                attention_revision: self.attention_revision,
+                                timestamp_ms: now_ms,
+                            });
+                        }
+                    }
+                    Some("agent_needs_input") => {
+                        let was_blocked = self.state == AgentState::Blocked
+                            && self.blocked_reason == Some(BlockedReason::Question);
+                        self.state = AgentState::Blocked;
+                        self.blocked_reason = Some(BlockedReason::Question);
+                        if let Some(tool_id) = &envelope.tool_call_id {
+                            if !self.blocked_tool_call_ids.iter().any(|id| id == tool_id) {
+                                self.blocked_tool_call_ids.push_back(tool_id.clone());
+                            }
+                        }
+                        if !was_blocked {
+                            self.attention_revision = self.attention_revision.saturating_add(1);
+                            attention = Some(AgentAttentionEvent {
+                                id: AgentAttentionEvent::format_id(
+                                    self.server_epoch,
+                                    &self.terminal_id,
+                                    self.incarnation,
+                                    self.attention_revision,
+                                ),
+                                kind: AttentionKind::NeedsAttention,
+                                terminal_id: self.terminal_id.clone(),
+                                incarnation: self.incarnation,
+                                agent_kind: self.agent_kind,
+                                agent_session_id: self.agent_session_id.clone(),
+                                turn_id: self.current_turn_id.clone(),
+                                reason: Some(BlockedReason::Question),
+                                outcome: None,
+                                attention_revision: self.attention_revision,
+                                timestamp_ms: now_ms,
+                            });
+                        }
+                    }
+                    _ => {
+                        return Ok(ReducerOutput {
+                            state_changed: false,
+                            row: Some(self.to_row()),
+                            attention: None,
+                        });
+                    }
                 }
             }
+
             "StopFailure" => {
-                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                if self.agent_kind != AgentKind::Claude
+                    || envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
                     || self.current_turn_id.is_none()
                 {
                     return Ok(ReducerOutput {
@@ -497,6 +663,7 @@ impl TerminalAgentReducer {
                     && self.blocked_reason == Some(BlockedReason::Error);
                 self.state = AgentState::Blocked;
                 self.blocked_reason = Some(BlockedReason::Error);
+                self.blocked_tool_call_ids.clear();
                 if !was_error {
                     self.attention_revision = self.attention_revision.saturating_add(1);
                     attention = Some(AgentAttentionEvent {
@@ -519,8 +686,10 @@ impl TerminalAgentReducer {
                     });
                 }
             }
-            "Stop" | "Interrupt" => {
-                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+
+            "Interrupt" => {
+                if self.agent_kind != AgentKind::Codex
+                    || envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
                     || self.current_turn_id.is_none()
                 {
                     return Ok(ReducerOutput {
@@ -534,13 +703,27 @@ impl TerminalAgentReducer {
                 if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
                     self.retired_turn_ids.pop_front();
                 }
-                if envelope.event == "Stop" {
-                    self.state = AgentState::Unknown;
-                } else {
-                    self.state = AgentState::Idle;
-                    self.last_outcome = Some(TurnOutcome::Interrupted);
-                }
+                self.state = AgentState::Idle;
+                self.last_outcome = Some(TurnOutcome::Interrupted);
                 self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
+            }
+
+            "Stop" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                // Stop invalidates turn certainty to Unknown, but preserves current_turn_id
+                // so that a continuation can resume/refresh observed work.
+                self.state = AgentState::Unknown;
+                self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
             }
 
             "SessionEnd" => {
@@ -563,6 +746,7 @@ impl TerminalAgentReducer {
                 }
                 self.state = AgentState::Unknown;
                 self.blocked_reason = None;
+                self.blocked_tool_call_ids.clear();
                 self.last_outcome = None;
                 self.latest_attention = None;
                 self.observed_at_ms = None;
@@ -1055,6 +1239,7 @@ impl TerminalAgentReducer {
         }
         self.state = AgentState::Unknown;
         self.blocked_reason = None;
+        self.blocked_tool_call_ids.clear();
         self.last_outcome = None;
         self.latest_attention = None;
         self.observed_at_ms = None;
