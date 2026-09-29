@@ -7,7 +7,8 @@ export const AGENT_STATUS_PROTOCOL_VERSION = 1;
 export const MAX_SAFE_INTEGER = 9_007_199_254_740_991; // 2^53 - 1
 export const MAX_IDENTIFIER_LEN = 128;
 
-export type AgentKind = "omp";
+export type AgentKind = "omp" | "codex" | "claude";
+export type AgentObservationSource = "lifecycle" | "hook";
 
 export type AgentState = "unknown" | "idle" | "working" | "blocked";
 
@@ -29,6 +30,9 @@ export interface TerminalAgentStatusRow {
   readonly agentSessionId: string;
   readonly reporterEpoch: number;
   readonly state: AgentState;
+  readonly source: AgentObservationSource;
+  readonly observedAtMs?: number;
+  readonly expiresAtMs?: number;
   readonly reason?: BlockedReason;
   readonly turnId?: string;
   readonly attentionRevision: number;
@@ -97,7 +101,7 @@ function isBoundedString(
 }
 
 function isAgentKind(value: unknown): value is AgentKind {
-  return value === "omp";
+  return value === "omp" || value === "codex" || value === "claude";
 }
 
 function isAgentState(value: unknown): value is AgentState {
@@ -181,6 +185,45 @@ export function decodeTerminalAgentStatusRow(
       "Invalid terminal agent status row: missing or invalid 'attentionRevision'",
     );
   }
+  const source =
+    obj.source === undefined && obj.agentKind === "omp"
+      ? "lifecycle"
+      : obj.source;
+  if (source !== "lifecycle" && source !== "hook") {
+    throw new Error("Invalid terminal agent status row: invalid 'source'");
+  }
+  if ((obj.agentKind === "omp") !== (source === "lifecycle")) {
+    throw new Error(
+      "Invalid terminal agent status row: source does not match agent",
+    );
+  }
+  const observedAtMs = obj.observedAtMs;
+  const expiresAtMs = obj.expiresAtMs;
+  if (observedAtMs !== undefined && !isSafeNonNegativeInteger(observedAtMs)) {
+    throw new Error(
+      "Invalid terminal agent status row: invalid 'observedAtMs'",
+    );
+  }
+  if (expiresAtMs !== undefined && !isSafeNonNegativeInteger(expiresAtMs)) {
+    throw new Error("Invalid terminal agent status row: invalid 'expiresAtMs'");
+  }
+  if (
+    source === "hook" &&
+    ((obj.state !== "unknown" &&
+      (observedAtMs === undefined || expiresAtMs === undefined)) ||
+      (obj.state === "unknown" && expiresAtMs !== undefined) ||
+      (expiresAtMs !== undefined &&
+        (observedAtMs === undefined || expiresAtMs <= observedAtMs)))
+  ) {
+    throw new Error(
+      "Invalid terminal agent status row: invalid hook freshness",
+    );
+  }
+  if (source === "lifecycle" && expiresAtMs !== undefined) {
+    throw new Error(
+      "Invalid terminal agent status row: lifecycle cannot expire",
+    );
+  }
 
   let reason: BlockedReason | undefined;
   if (obj.reason !== undefined && obj.reason !== null) {
@@ -225,6 +268,9 @@ export function decodeTerminalAgentStatusRow(
     agentSessionId: obj.agentSessionId,
     reporterEpoch: obj.reporterEpoch,
     state: obj.state,
+    source,
+    observedAtMs,
+    expiresAtMs,
     reason,
     turnId,
     attentionRevision: obj.attentionRevision,
@@ -257,6 +303,11 @@ export function decodeAgentAttentionEvent(input: unknown): AgentAttentionEvent {
   if (!isAgentKind(obj.agentKind)) {
     throw new Error(
       "Invalid agent attention event: missing or invalid 'agentKind'",
+    );
+  }
+  if (obj.kind === "turn-ended" && obj.agentKind !== "omp") {
+    throw new Error(
+      "Invalid agent attention event: native Stop is not completion",
     );
   }
   if (!isBoundedString(obj.agentSessionId)) {
@@ -538,7 +589,9 @@ export interface AgentPathsVerification {
   codexReason?: string;
 }
 
-export function decodeAgentPathsVerification(input: unknown): AgentPathsVerification {
+export function decodeAgentPathsVerification(
+  input: unknown,
+): AgentPathsVerification {
   if (typeof input !== "object" || input === null) {
     throw new Error("AgentPathsVerification must be an object");
   }
@@ -569,7 +622,9 @@ export function decodeAgentPathsVerification(input: unknown): AgentPathsVerifica
     codexNotificationDir: String(
       obj.codexNotificationDir ?? obj.codex_notification_dir ?? "",
     ),
-    codexConfigExists: Boolean(obj.codexConfigExists ?? obj.codex_config_exists),
+    codexConfigExists: Boolean(
+      obj.codexConfigExists ?? obj.codex_config_exists,
+    ),
     codexCanEnable: Boolean(obj.codexCanEnable ?? obj.codex_can_enable),
     codexReason:
       obj.codexReason != null

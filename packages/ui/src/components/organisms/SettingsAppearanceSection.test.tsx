@@ -29,7 +29,7 @@ const settingsStore = {
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
   terminalAgentNotifications: {
-    version: 1 as const,
+    version: 2 as const,
     agents: {
       codex: {
         enabled: true,
@@ -40,6 +40,14 @@ const settingsStore = {
         pattern: "default" as const,
       },
       omp: {
+        enabled: false,
+        toast: true,
+        browser: true,
+        sound: true,
+        volume: 100,
+        pattern: "default" as const,
+      },
+      claude: {
         enabled: false,
         toast: true,
         browser: true,

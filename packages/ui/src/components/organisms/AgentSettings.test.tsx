@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSettings } from "./AgentSettings.js";
-import type { AgentPathsVerification, ExtensionStatusReport } from "@/api/agent-status-types.js";
+import type {
+  AgentPathsVerification,
+  ExtensionStatusReport,
+} from "@/api/agent-status-types.js";
 
 const mockVerification: AgentPathsVerification = {
   effectiveHome: "/home/testuser",
@@ -32,7 +35,9 @@ let currentVerification = { ...mockVerification };
 let currentOmpReport = { ...mockOmpReport };
 
 const mutateInstall = vi.fn().mockResolvedValue(mockOmpReport);
-const mutateUninstall = vi.fn().mockResolvedValue({ ...mockOmpReport, status: "absent" });
+const mutateUninstall = vi
+  .fn()
+  .mockResolvedValue({ ...mockOmpReport, status: "absent" });
 const saveAgentNotificationPolicy = vi.fn();
 const saveAgentSettingsPaths = vi.fn();
 
@@ -60,10 +65,32 @@ vi.mock("@/api/queries.js", () => ({
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: () => ({
     terminalAgentNotifications: {
-      version: 1,
+      version: 2,
       agents: {
-        omp: { enabled: true, toast: true, browser: false, sound: false, volume: 100, pattern: "default" },
-        codex: { enabled: false, toast: true, browser: false, sound: false, volume: 100, pattern: "default" },
+        omp: {
+          enabled: true,
+          toast: true,
+          browser: false,
+          sound: false,
+          volume: 100,
+          pattern: "default",
+        },
+        codex: {
+          enabled: false,
+          toast: true,
+          browser: false,
+          sound: false,
+          volume: 100,
+          pattern: "default",
+        },
+        claude: {
+          enabled: false,
+          toast: true,
+          browser: false,
+          sound: false,
+          volume: 100,
+          pattern: "default",
+        },
       },
     },
     saveAgentNotificationPolicy,
@@ -109,8 +136,12 @@ describe("AgentSettings", () => {
       root?.render(<AgentSettings />);
     });
 
-    expect(container?.textContent).toContain("Oh My Pi (OMP) Integration & Notifications");
-    expect(container?.textContent).toContain("Codex Configuration & Notifications");
+    expect(container?.textContent).toContain(
+      "Oh My Pi (OMP) Integration & Notifications",
+    );
+    expect(container?.textContent).toContain(
+      "Codex Configuration & Notifications",
+    );
     expect(container?.textContent).toContain("Installed (v1.0.0)");
     expect(container?.textContent).toContain("Config Verified");
   });
@@ -119,17 +150,24 @@ describe("AgentSettings", () => {
     currentVerification = {
       ...mockVerification,
       ompCanEnable: false,
-      ompReason: "Configured install path does not match notification runtime path",
+      ompReason:
+        "Configured install path does not match notification runtime path",
     };
 
     await act(async () => {
       root?.render(<AgentSettings />);
     });
 
-    expect(container?.textContent).toContain("Notifications Unavailable for OMP");
-    expect(container?.textContent).toContain("Configured install path does not match notification runtime path");
+    expect(container?.textContent).toContain(
+      "Notifications Unavailable for OMP",
+    );
+    expect(container?.textContent).toContain(
+      "Configured install path does not match notification runtime path",
+    );
 
-    const ompSwitch = container?.querySelector('button[aria-label="Enable OMP notifications"]');
+    const ompSwitch = container?.querySelector(
+      'button[aria-label="Enable OMP notifications"]',
+    );
     expect(ompSwitch?.hasAttribute("disabled")).toBe(true);
   });
 
@@ -145,10 +183,14 @@ describe("AgentSettings", () => {
       root?.render(<AgentSettings />);
     });
 
-    expect(container?.textContent).toContain("Notifications Unavailable for Codex");
+    expect(container?.textContent).toContain(
+      "Notifications Unavailable for Codex",
+    );
     expect(container?.textContent).toContain("Codex config file not found");
 
-    const codexSwitch = container?.querySelector('button[aria-label="Enable Codex notifications"]');
+    const codexSwitch = container?.querySelector(
+      'button[aria-label="Enable Codex notifications"]',
+    );
     expect(codexSwitch?.hasAttribute("disabled")).toBe(true);
   });
 
@@ -157,7 +199,9 @@ describe("AgentSettings", () => {
       root?.render(<AgentSettings />);
     });
 
-    const ompInput = container?.querySelector<HTMLInputElement>("#omp-agent-dir-input");
+    const ompInput = container?.querySelector<HTMLInputElement>(
+      "#omp-agent-dir-input",
+    );
     expect(ompInput).toBeDefined();
 
     act(() => {
@@ -186,9 +230,9 @@ describe("AgentSettings", () => {
       root?.render(<AgentSettings />);
     });
 
-    const removeBtn = Array.from(container?.querySelectorAll("button") ?? []).find(
-      (btn) => btn.textContent === "Remove Extension",
-    );
+    const removeBtn = Array.from(
+      container?.querySelectorAll("button") ?? [],
+    ).find((btn) => btn.textContent === "Remove Extension");
     expect(removeBtn).toBeDefined();
 
     await act(async () => {

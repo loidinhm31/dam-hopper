@@ -195,7 +195,7 @@ describe("terminal notification UI in Chromium", () => {
     await render(
       <TerminalAgentNotificationSettings
         notifications={{
-          version: 1,
+          version: 2,
           agents: {
             codex: {
               enabled: true,
@@ -206,6 +206,14 @@ describe("terminal notification UI in Chromium", () => {
               volume: 100,
             },
             omp: {
+              enabled: false,
+              toast: true,
+              browser: true,
+              sound: true,
+              pattern: "default",
+              volume: 100,
+            },
+            claude: {
               enabled: false,
               toast: true,
               browser: true,

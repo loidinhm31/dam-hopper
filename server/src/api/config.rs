@@ -390,8 +390,12 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
                 .unwrap_or_else(|| home.join(".omp").join("agent"));
 
             let omp_install_dir = match configured_omp_dir.filter(|s| !s.trim().is_empty()) {
-                Some(explicit) => crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
-                    .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?,
+                Some(explicit) => {
+                    crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
+                        .map_err(|e| {
+                            AppError::Config(format!("Invalid OMP agent directory: {e}"))
+                        })?
+                }
                 None => omp_notification_dir.clone(),
             };
 
@@ -414,6 +418,13 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
                 )));
             }
         }
+
+        if ui.terminal_agent_notifications.agents.claude.enabled {
+            return Err(AppError::Config(
+                "Cannot enable Claude notifications: native hook installation is not ready"
+                    .to_string(),
+            ));
+        }
     }
 
     if next_codex_notifications_enabled != previous_codex_notifications_enabled {
@@ -422,7 +433,11 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
             .as_ref()
             .and_then(|ui| ui.agent_settings_paths.as_ref())
             .and_then(|p| p.codex_dir.as_deref());
-        sync_codex_tui_config(codex_home_override, configured_codex_dir, next_codex_notifications_enabled)?;
+        sync_codex_tui_config(
+            codex_home_override,
+            configured_codex_dir,
+            next_codex_notifications_enabled,
+        )?;
     }
     write_global_config_at(gc_path, &gc)?;
     *state.global_config.write().await = gc;

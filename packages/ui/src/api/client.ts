@@ -1631,7 +1631,7 @@ export interface TerminalAgentNotifications {
   agents: {
     codex: TerminalAgentNotificationPolicy;
     omp: TerminalAgentNotificationPolicy;
-    [agent: string]: TerminalAgentNotificationPolicy | undefined;
+    claude: TerminalAgentNotificationPolicy;
   };
 }
 
@@ -1646,8 +1646,8 @@ export interface AgentCommandPattern {
 export interface AgentSettingsPaths {
   ompAgentDir?: string;
   codexDir?: string;
+  claudeDir?: string;
 }
-
 
 export interface UiConfig {
   hostResourcePinnedMount?: string | null;
@@ -3277,9 +3277,13 @@ export interface ApiClient {
     listDetailed: () => Promise<SessionInfo[]>;
     getBuffer: (id: string) => Promise<string>;
     agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
-    getOmpExtensionStatus: (agentDir?: string) => Promise<ExtensionStatusReport>;
+    getOmpExtensionStatus: (
+      agentDir?: string,
+    ) => Promise<ExtensionStatusReport>;
     installOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
-    uninstallOmpExtension: (agentDir?: string) => Promise<ExtensionStatusReport>;
+    uninstallOmpExtension: (
+      agentDir?: string,
+    ) => Promise<ExtensionStatusReport>;
     getAgentPathsVerification: (params?: {
       agentDir?: string;
       codexDir?: string;

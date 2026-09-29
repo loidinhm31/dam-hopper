@@ -92,7 +92,7 @@ describe("attachTerminalAgentNotifications", () => {
     playTerminalNotificationSound.mockReset();
     useSettingsStore.setState({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           codex: {
             enabled: true,
@@ -110,6 +110,14 @@ describe("attachTerminalAgentNotifications", () => {
             volume: 100,
             pattern: "default",
           },
+          claude: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
         },
       },
     });
@@ -119,7 +127,7 @@ describe("attachTerminalAgentNotifications", () => {
   afterEach(() => {
     useSettingsStore.setState({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           codex: {
             enabled: false,
@@ -130,6 +138,14 @@ describe("attachTerminalAgentNotifications", () => {
             pattern: "default",
           },
           omp: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          claude: {
             enabled: false,
             toast: true,
             browser: true,

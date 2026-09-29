@@ -87,18 +87,20 @@ export function normalizeTerminalAgentNotifications(
 ): TerminalAgentNotifications {
   const input = asRecord(value);
   const raw = asRecord(input.terminalAgentNotifications);
-  if (Object.hasOwn(input, "terminalAgentNotifications") && raw.version !== 1) {
-    const rawAgents = asRecord(raw.agents);
+  const hasCanonical = Object.hasOwn(input, "terminalAgentNotifications");
+  if (hasCanonical && raw.version !== 1 && raw.version !== 2) {
+    // Preserve the unsupported version so saves are refused, but never render
+    // untrusted policy values as enabled channels.
     return {
       version: typeof raw.version === "number" ? raw.version : 0,
       agents: {
-        codex: policyFrom(asRecord(rawAgents.codex), DEFAULT_AGENT_POLICY),
-        omp: policyFrom(asRecord(rawAgents.omp), DEFAULT_AGENT_POLICY),
-        ...rawAgents,
-      } as TerminalAgentNotifications["agents"],
+        codex: { ...DEFAULT_AGENT_POLICY },
+        omp: { ...DEFAULT_AGENT_POLICY },
+        claude: { ...DEFAULT_AGENT_POLICY },
+      },
     };
   }
-  const agents = raw.version === 1 ? asRecord(raw.agents) : {};
+  const agents = hasCanonical ? asRecord(raw.agents) : {};
   const legacyCodex = {
     enabled:
       typeof input.terminalCodexNotificationsEnabled === "boolean"
@@ -111,15 +113,16 @@ export function normalizeTerminalAgentNotifications(
     pattern: input.terminalCodexNotificationSoundPattern,
   };
   return {
-    version: 1,
+    version: 2,
     agents: {
       codex: policyFrom(
         asRecord(agents.codex),
-        raw.version === 1
+        hasCanonical
           ? DEFAULT_AGENT_POLICY
           : policyFrom(legacyCodex, DEFAULT_AGENT_POLICY),
       ),
       omp: policyFrom(asRecord(agents.omp), DEFAULT_AGENT_POLICY),
+      claude: policyFrom(asRecord(agents.claude), DEFAULT_AGENT_POLICY),
     },
   };
 }
@@ -133,10 +136,11 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   terminalSuggestionsEnabled: true,
   terminalAutoSwitchProjectEnabled: true,
   terminalAgentNotifications: {
-    version: 1,
+    version: 2,
     agents: {
       codex: { ...DEFAULT_AGENT_POLICY },
       omp: { ...DEFAULT_AGENT_POLICY },
+      claude: { ...DEFAULT_AGENT_POLICY },
     },
   },
   terminalScrollButtonsEnabled: false,

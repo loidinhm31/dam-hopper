@@ -79,6 +79,17 @@ pub fn validate_opaque_id(field_name: &str, s: &str) -> Result<(), AgentStatusEr
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Omp,
+    Codex,
+    Claude,
+}
+
+/// Origin of the current status observation. Native hooks are expiring evidence,
+/// not a persistent lifecycle connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentObservationSource {
+    Lifecycle,
+    Hook,
 }
 
 /// Agent execution state.
@@ -240,6 +251,11 @@ pub struct TerminalAgentStatusRow {
     pub agent_session_id: String,
     pub reporter_epoch: u64,
     pub state: AgentState,
+    pub source: AgentObservationSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<BlockedReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

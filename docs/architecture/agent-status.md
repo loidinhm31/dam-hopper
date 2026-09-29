@@ -1,10 +1,11 @@
 # Agent status — OMP-first architecture
 
-Status: **Phases 01–05 complete (Qualified on Linux 2026-09-28)**. Date: 2026-09-28.
-Plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
-Evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
+Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). Codex/Claude Phase 01 is contract-only; Phase 02 private ingress/lease is in progress. Native hooks are not installed or qualified.** Updated: 2026-09-29.
+OMP-first plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
+Codex/Claude: [approved Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md); [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md). No hooks were installed and no native model turns were run.
+OMP baseline evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
-Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
+OMP-first Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
 plus matching public TypeScript DTOs and decoders. Phase 02 implements the
 server-owned reporter runtime, private loopback collector, PTY-incarnation
 credentials, protected snapshot, and semantic WebSocket pushes. Phase 03 adds
@@ -14,10 +15,11 @@ tabs, and Fleet rows, unified preferences (`terminalAgentNotifications`),
 toast viewport, and notification history center. Phase 05 delivers full Linux
 end-to-end qualification across scenarios C01–C19.
 
+The separate Codex/Claude Phase 01 is contract-only: public DTOs and v2 preferences changed, but the collector remains OMP-only. Phase 02 private ingress/lease work is in progress; Phases 03–06 remain pending, including installer/trust, event adapters, OSC 9 removal and native UI freshness, and live qualification.
+
 ## Delivery Scope and Invariants
 
-- The semantic contract is designed to be agent-neutral; `AgentKind` currently supports only OMP. Codex/others remain future work if needed.
-- Status badges in ordinary tabs, split tabs, and Fleet terminal rows; per-browser history/toasts/sound/notifications are fully operational.
+- OMP status badges in ordinary tabs, split tabs, and Fleet rows, plus per-browser history/toasts/sound/notifications, are operational. Codex notifications still use legacy OSC 9; this is neither native readiness nor verified turn completion. No native UI badge freshness is presented.
 - Rust runtime and loopback listener are part of `dam-hopper-server`, not another daemon. The standalone OMP adapter is embedded with `include_str!` and runs inside OMP after explicit installation.
 - Linux runtime qualification complete. Windows builds preserved; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
 - No Herdr dependency, VT renderer, screen heuristics, task-success automation, workflow mutation, suspend-policy change, telemetry ingestion, or generic adapter/plugin loader.
@@ -59,8 +61,9 @@ unknown fields; server identifiers are non-empty, ASCII graphic, and at most
 128 bytes. Sequence, epoch, incarnation, and revision counters are capped at
 JavaScript's safe-integer maximum (`9,007,199,254,740,991`). The UI public
 decoders validate bounded non-empty strings, closed enums, protocol version,
-and nonnegative safe integers; they do not reject unknown object fields. `omp`
-is the only current agent kind.
+and nonnegative safe integers; they do not reject unknown object fields. Public
+`AgentKind` includes `omp`, `codex`, and `claude`; the private collector remains
+OMP-only.
 
 ### State
 
@@ -101,18 +104,25 @@ conflicting duplicates. Reports are validated before they update the row.
 - Record a terminal-local `attentionRevision` with each accepted attention event. Attention ID includes server epoch, terminal ID, incarnation and attention revision. Keep at most the latest attention summary in the status snapshot, not an event archive.
 - Snapshot revision advances for row membership, availability, or semantic status changes; identical heartbeats do not advance it. PTY removal removes its row. Credentials and raw reports never enter public state.
 
-The `AgentStatusSnapshotV1` DTO defines `{version, serverEpoch, revision, availability, terminals:[{id, incarnation, agentKind, agentSessionId, reporterEpoch, state, reason?, turnId?, attentionRevision, lastOutcome?}]}`. The protected `GET /api/agent-status/v1/snapshot` route is implemented. Plain shells do not gain an Unknown row; `availability` distinguishes ready, unavailable, and platform-unqualified.
+The `AgentStatusSnapshotV1` DTO defines `{version, serverEpoch, revision, availability, terminals:[{id, incarnation, agentKind, agentSessionId, reporterEpoch, state, source, observedAtMs?, expiresAtMs?, reason?, turnId?, attentionRevision, lastOutcome?}]}`. `source` is `lifecycle | hook`; `observedAtMs` and `expiresAtMs` are optional freshness metadata. The protected `GET /api/agent-status/v1/snapshot` route is implemented. Plain shells do not gain an Unknown row; `availability` distinguishes ready, unavailable, and platform-unqualified.
 
 Changed, removed, and invalidated payloads are broadcast through the existing
 authenticated browser WebSocket. The 256-event stream sends invalidation after
 receiver lag; Phase 04's completed browser consumer applies pushes and fetches
 a fresh snapshot after invalidation or a revision gap.
 
-Phase 01 implementation: `server/src/agent_status/{types.rs,reducer.rs,tests.rs}`,
+OMP-first Phase 01 implementation: `server/src/agent_status/{types.rs,reducer.rs,tests.rs}`,
 exported through `mod.rs` and `server/src/lib.rs`; public TypeScript DTOs and
 decoders are in `packages/ui/src/api/agent-status-types.ts`, with focused
-decoder tests in `agent-status-types.test.ts`. `client.ts` adds OMP to the
-existing terminal-agent type union; it does not wire status transport.
+decoder tests in `agent-status-types.test.ts`.
+
+The public Rust and TypeScript status DTOs now include `omp`, `codex`, and `claude`,
+plus `source`, `observedAtMs`, and `expiresAtMs`. The UI decoder treats a missing
+`source` on a legacy OMP row as `lifecycle`; native `hook` rows require safe
+observation/expiry timestamps for non-Unknown state, with expiry later than
+observation. Unknown hook rows have no expiry; lifecycle rows cannot expire.
+This is DTO/decoder support only: the private collector rejects non-OMP hello
+kinds. The client status API and decoder do not imply native event admission.
 Reducer test cases exercise normal turns, blockers, continuation/cancellation,
 outcomes, session switches, sequence/epoch fences, reconnect, leases, and
 retirement. Phase 02 server integration lives in
@@ -123,6 +133,7 @@ retirement. Phase 02 server integration lives in
 verification passed with 100% test success. See the
 [Phase 01 plan](../../plans/260928-0318-agent-status-omp-first/phase-01-semantic-contract-and-reducer.md)
 and [Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md).
+The separate Codex/Claude [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md) and [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md) document the approved contract-only extension; they do not qualify native runtime behavior.
 
 ## Implemented PTY/runtime lifecycle (Phase 02)
 
@@ -211,13 +222,13 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Key status by existing profile + terminal incarnation identity. On profile disconnect show unavailable for previously known agents and stop notification delivery. Clear on profile removal/server epoch replacement. Local status is not durable truth.
 - Dedupe attention IDs before history, toast, sound and browser service. Reconnect snapshots establish a silent baseline, even if lastOutcome says ended. Keep only bounded per-terminal cursors; remove with terminal/profile lifecycle.
 - Per-client notifications only. Two devices may each notify; closed browser receives no push and no catch-up toast. Existing enabled-channel policy stays “always,” including focused terminals; no new focus suppression/view acknowledgement or server-side seen state in this delivery.
-- Preserve current output dot and process icon. Add separate compact semantic badge, accessible text/tooltip and non-color cue, at TerminalTabBar, split TabBar and TerminalRuntimeNavigatorItem. No project aggregation or new dashboard.
+- Preserve the current output dot and process icon; the OMP semantic badge is separate at TerminalTabBar, split TabBar and TerminalRuntimeNavigatorItem. Native source/freshness presentation is not implemented.
 - Reuse notification store, toast viewport, sound and browser service. Qualify shared browser rate-limit keys/tags and selection targets by profile and incarnation. This does not claim exactly-once OS delivery.
-- Consolidate preferences under `terminalAgentNotifications: {version:1, agents:{codex:policy, omp:policy}}`; policy contains enabled/toast/browser/sound/volume/pattern. OMP master defaults off; badges independent of notification preference. Preserve Codex channel values by migrating existing `terminalCodex*` fields and the older Codex alias once at hydration/normalization. Explicit new shape wins. Write/export only the new shape; remove obsolete in-memory fields/callers, no dual-write shim. Other agents' policies are added only with real adapters.
+- Consolidate preferences under `terminalAgentNotifications: {version:2, agents:{codex:policy, omp:policy, claude:policy}}`; each policy contains `enabled`, `toast`, `browser`, `sound`, `volume`, and `pattern`. Version-1 migration preserves Codex and OMP channel values and adds Claude disabled; older Codex aliases still normalize once. OMP defaults off when no policy exists; badges remain independent of notification preferences. Write/export only the new shape, remove obsolete in-memory fields/callers, and avoid a dual-write shim. Add policies for other agents only with real adapters.
 
 ## Agent Store path verification
 
-- The Agent Store's **Agent Settings** tab replaces the former Integrations tab for agent setup and the former Appearance agent-notification panel. It holds one OMP install path and one Codex config path for the selected server profile; `agentSettingsPaths` and `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.
+- The Agent Store's **Agent Settings** tab replaces the former Integrations tab for agent setup and the former Appearance agent-notification panel. It uses one OMP install path and one Codex config path for the selected server profile. Global `agentSettingsPaths` also persists optional `claudeDir`, but the current Agent Settings UI and path-verification endpoint do not configure or verify Claude readiness. `agentSettingsPaths` and `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.
 - The UI asks the selected server for `GET /api/agent-status/paths?agentDir=...&codexDir=...`. The response contains configured and runtime paths, OMP managed-extension status, Codex `config.toml` file-presence state, and per-agent `canEnable`/reason fields. `~/` is expanded against the home of `service_user` or `plugin_owner_user` from `/etc/dam-hopper/host.toml` when resolvable, otherwise against the API process's home (`/` is the endpoint fallback if no home can be resolved). Relative paths and `..` components are rejected.
 - Runtime directories come from absolute `PI_CODING_AGENT_DIR` and `CODEX_HOME` values in the server process environment when set; otherwise they are `<effective-home>/.omp/agent` and `<effective-home>/.codex`. This endpoint does not inspect per-PTY `HOME` or other per-terminal environment.
 - **Enable-toggle eligibility requires strict path matching:** each configured directory must compare equal to its distinct runtime directory after `~/` expansion; paths are not filesystem-canonicalized. OMP also requires the managed extension status `current`. Codex also requires `config.toml` to pass `is_file`; the path endpoint does not establish readability or TOML validity, while Codex sync reads/parses the file when the master policy changes.
@@ -233,7 +244,59 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Phase 05 qualified the Linux x86_64 release path against OMP 18.4.1 across
   C01–C19, including live OMP/browser behavior and standalone binary installation.
   See the [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md).
-- Phase 01 recognizes only OMP as an agent kind. Codex behavior, screen reconstruction and universal agent support are not delivered.
+- The private collector still admits only OMP through its persistent reporter protocol. Codex and Claude native-hook behavior, screen reconstruction and universal agent support are not delivered.
+
+## Proposed Codex and Claude native-hook rollout — not implemented
+
+Design date: 2026-09-29. [Rollout plan](../../plans/260929-0140-agent-status-codex-claude/plan.md).
+The user selected ordinary CLI native hooks with explicit Unknown for gaps,
+not Herdr-style screen detection or a controlled app-server launch mode. The
+approved [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md)
+and [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md)
+cover contract work only. Phase 02 private ingress/lease work is in progress,
+but no native hooks are installed, no native events were qualified, and no live
+model turns ran. OMP reporter/lifecycle semantics remain unchanged.
+
+- Codex and Claude command hooks invoke a packaged reporting subcommand through
+  managed launchers in their server-side native configuration directories.
+  Codex uses `CODEX_HOME`/`hooks.json`; Claude uses
+  `CLAUDE_CONFIG_DIR`/`settings.json`. Defaults are `.codex` and `.claude` under
+  the effective terminal user's home. Preserve unrelated hooks and configuration.
+- Reporting is passive: no model calls, prompt/agent hooks, stdout/context
+  injection, approval decisions, continuation decisions, or transcript access.
+  The launcher is dormant without the existing PTY-scoped private credentials.
+- Add bounded one-shot ingress on the existing private loopback collector,
+  separate from OMP's persistent WebSocket admission. Strip native payloads to
+  allowlisted event/identity metadata before transport. Reuse registry ownership,
+  public status pushes, silent baselines, and terminal-incarnation revocation.
+- Native observations carry source/freshness metadata. Initially use a
+  15-second evidence lease renewed only by accepted native events, not by a
+  timer replaying cached state. Expiry becomes Unknown without completion.
+  Long silent reasoning and permission waits can therefore show Unknown.
+  This lease bounds staleness; it does not prove continuous semantic liveness.
+- Root process/session/turn attribution, delayed callbacks, and subagent exclusion
+  require exact-version qualification. Ambiguous, stale, or uncorrelated events
+  cannot overwrite a current root turn. Process identity is private metadata,
+  not public state or proof of model truth.
+- `Stop` is a continuation opportunity, not final-settle proof. Hook-only adapters
+  do not emit normal turn-ended attention from Stop or a quiet/debounce timeout.
+  DamHopper's Codex OSC 9 parser/alerts and automatic TUI-config writes remain
+  legacy behavior, not native readiness or verified completion; Phase 05 removal
+  is pending. Codex native integration is initially status-only; Claude may emit
+  qualified explicit attention/error signals. Unsupported transitions become
+  Unknown, not success.
+- Managed installation status and live reporting readiness are separate. Codex
+  native hook trust, Claude disabled/managed-only policies, per-PTY config paths,
+  permissions, and connection generation gate readiness. No trust bypass or sudo.
+- Uninstall removes owned registrations before owned launchers, preserves user
+  changes, invalidates delivery eligibility, and requires agent reload/restart
+  before claiming no cached hook can execute. Report conflicts/partial failures.
+- The v2 schema already includes a disabled Claude policy; rollout must close the remaining profile/path/delivery-gate gaps before exposing Claude controls or enabling native reporting. Matched server/UI releases and explicit config migration remain required; older strict decoders are not forward-compatible by assumption.
+- Static capability evidence inspected Codex CLI 0.158.0 and Claude Code 2.1.250; neither has native lifecycle qualification. Version probes and static schemas are not qualification evidence.
+
+Sources: [Codex hooks](https://developers.openai.com/codex/hooks/),
+[Claude hooks](https://code.claude.com/docs/en/hooks),
+[Herdr's differing screen-authority model](https://herdr.dev/docs/agents/).
 
 ## Unresolved questions
 

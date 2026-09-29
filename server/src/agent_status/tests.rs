@@ -37,6 +37,33 @@ fn sample_report(
 }
 
 #[test]
+fn native_kind_cannot_enter_persistent_omp_report_protocol() {
+    for kind in [AgentKind::Codex, AgentKind::Claude] {
+        let mut hello = sample_hello("native-1", "session-1");
+        hello.agent_kind = kind;
+        let mut reducer =
+            TerminalAgentReducer::new(42, "terminal-1".into(), 1, 1, &hello, 1000).unwrap();
+        let row = reducer.to_row();
+        assert_eq!(row.state, AgentState::Unknown);
+        assert_eq!(row.source, super::types::AgentObservationSource::Hook);
+        assert_eq!(row.expires_at_ms, None);
+
+        let attempted_end = sample_report(
+            1,
+            ReporterEventKind::TurnEnded,
+            AgentState::Idle,
+            "session-1",
+            Some("turn-1"),
+            Some(TurnOutcome::Ended),
+            None,
+        );
+        assert!(reducer.apply_report(1, attempted_end, 1100).is_err());
+        assert_eq!(reducer.state, AgentState::Unknown);
+        assert_eq!(reducer.attention_revision, 0);
+    }
+}
+
+#[test]
 fn test_c01_normal_turn_lifecycle() {
     let mut reducer = TerminalAgentReducer::new(
         100,
@@ -75,6 +102,8 @@ fn test_c01_normal_turn_lifecycle() {
     );
     let out = reducer.apply_report(1, start_rep, 1100).unwrap();
     assert!(out.state_changed);
+    assert_eq!(reducer.to_row().observed_at_ms, Some(1100));
+    assert_eq!(reducer.to_row().expires_at_ms, None);
     assert_eq!(reducer.state, AgentState::Working);
     assert_eq!(reducer.current_turn_id.as_deref(), Some("turn-1"));
     assert!(out.attention.is_none());
@@ -92,6 +121,7 @@ fn test_c01_normal_turn_lifecycle() {
     let out = reducer.apply_report(1, hb_rep, 2000).unwrap();
     assert!(!out.state_changed);
     assert!(out.attention.is_none());
+    assert_eq!(reducer.to_row().observed_at_ms, Some(1100));
 
     // Explicit ended: idle + exactly one TurnEnded attention event
     let end_rep = sample_report(

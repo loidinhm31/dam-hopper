@@ -11,6 +11,51 @@ import {
 } from "./agent-status-types.js";
 
 describe("agent-status-types", () => {
+  it("treats old OMP rows as lifecycle but requires bounded native evidence", () => {
+    const base = {
+      id: "term-1",
+      incarnation: 1,
+      agentSessionId: "session-1",
+      reporterEpoch: 1,
+      state: "working",
+      attentionRevision: 0,
+    };
+    expect(
+      decodeTerminalAgentStatusRow({ ...base, agentKind: "omp" }).source,
+    ).toBe("lifecycle");
+    const native = {
+      ...base,
+      agentKind: "codex",
+      source: "hook",
+      observedAtMs: 1000,
+      expiresAtMs: 16000,
+    };
+    expect(decodeTerminalAgentStatusRow(native).expiresAtMs).toBe(16000);
+    expect(() =>
+      decodeTerminalAgentStatusRow({ ...native, expiresAtMs: undefined }),
+    ).toThrow();
+    expect(() =>
+      decodeTerminalAgentStatusRow({ ...native, observedAtMs: 17000 }),
+    ).toThrow();
+    expect(() =>
+      decodeTerminalAgentStatusRow({ ...native, source: "lifecycle" }),
+    ).toThrow();
+    expect(() =>
+      decodeTerminalAgentStatusRow({
+        ...base,
+        agentKind: "future",
+        source: "hook",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeTerminalAgentStatusRow({
+        ...native,
+        state: "unknown",
+        expiresAtMs: undefined,
+      }),
+    ).not.toThrow();
+  });
+
   it("decodes a valid terminal agent status row", () => {
     const raw = {
       id: "term-1",

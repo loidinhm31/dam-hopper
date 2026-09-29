@@ -38,8 +38,9 @@ export function deliverSemanticAgentAttention(
     row.attentionRevision !== attention.attentionRevision
   )
     return;
-  const policy =
-    useSettingsStore.getState().terminalAgentNotifications.agents.omp;
+  const notifications = useSettingsStore.getState().terminalAgentNotifications;
+  if (notifications.version !== 2 || row.agentKind !== "omp") return;
+  const policy = notifications.agents.omp;
   if (!policy.enabled) return;
   const terminalRef = { profileId: owner.profileId, id: row.id };
   const terminalInstanceRef = { ...terminalRef, incarnation: row.incarnation };
@@ -172,7 +173,11 @@ export function attachTerminalAgentNotifications({
     parse: () => TerminalAgentNotification | null,
   ): boolean => {
     const settings = useSettingsStore.getState();
-    if (!settings.terminalAgentNotifications.agents.codex.enabled) return true;
+    if (
+      settings.terminalAgentNotifications.version !== 2 ||
+      !settings.terminalAgentNotifications.agents.codex.enabled
+    )
+      return true;
 
     const event = parse();
     if (event && !replayActive) notifyTerminalAgent(event, settings);
