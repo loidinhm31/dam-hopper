@@ -51,16 +51,20 @@ server/src/
 └── commands/         # Command registry
 ```
 
-### Agent status contract, reducer, reporter, and OMP adapter (Phases 01–03)
+### Agent status contract, integrations, and notification ownership (Phases 01–05)
 
 `server/src/agent_status/{types,reducer}.rs` owns the canonical v1 state,
 protocol DTOs, validation, and pure in-memory reducer/registry. Keep this model
 separate from PTY process/output status and do not infer task success from
 silence or a turn end. Rust private reporter DTOs reject unknown fields; bound
-identifiers and counters before state mutation. `packages/ui/src/api/agent-status-types.ts`
-mirrors public types and validates public DTOs; unsupported versions or values
-fail closed. Phase 02 implements the private reporter transport; Phase 03 adds the bundled standalone OMP adapter and explicit profile installer. Browser consumption, badges, and notifications remain Phases 04–05. See the
-[agent-status architecture](./architecture/agent-status.md).
+identifiers and counters before state mutation. Phase 02 implements the private
+reporter transport; Phase 03 adds the bundled OMP adapter and explicit
+installer. Phases 04–05 add native Codex/Claude hooks, Agent Settings, separate
+installation/readiness badges, and profile-safe semantic notifications. OMP
+supports turn-ended and needs-attention alerts; Claude supports qualified
+needs-attention only; Codex is status-only with no OSC 9 handling or automatic
+TUI notification-setting writes. Phase 06 live native-provider qualification
+remains pending. See the [agent-status architecture](./architecture/agent-status.md).
 
 ### Trusted plugin contract candidate (Phase D00)
 
@@ -2001,7 +2005,7 @@ patches.
 
 `packages/shared` owns dependency-free runtime utilities used across packages. Current rule: keep logger config, level resolution, and metadata redaction centralized in `src/logger.ts`, and prefer it over ad hoc `console` calls in transport, auth, terminal, dashboard, error boundary, and filesystem code.
 
-Frontend diagnostics that need feature-specific breadcrumbs should go through `recordClientDiagnostic()` from `packages/ui/src/lib/diagnostics-client.ts`. For terminal agent notifications, only record safe metadata such as `sessionId`, `source`, `permission`, `reason`, and `agent`; never attach raw terminal output, raw OSC payloads, or full command arguments.
+Frontend diagnostics that need feature-specific breadcrumbs should go through `recordClientDiagnostic()` from `packages/ui/src/lib/diagnostics-client.ts`. For terminal agent notifications, only record safe metadata such as `sessionId`, `source`, `permission`, `reason`, and `agent`; never attach raw terminal bytes or full command arguments.
 
 ### Client Types
 
@@ -2330,7 +2334,7 @@ The Phase 01 auth-bypass design is historical; the source plan is no longer pres
 - `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token. The normal login flow returns a session token only after TOTP; see [Authentication API](./authentication-api.md).
 - Auth protocol 2 JWTs bind the user and session ID to `authVersion` and `credentialVersion`: sessions expire after 30 days, MFA freshness is ten days per session, and step-up retains absolute expiry while invalidating the old credential.
 - The `damhopper-auth` cookie is `HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`.
-- `--no-auth` is development-only; never use its direct-token response for normal login. Live WebSockets revalidate user/session versions every five seconds with a two-second database timeout (≤7-second bound); operator recovery must use immutable `_id` plus expected-`authVersion` CAS. See the [MongoDB recovery runbook](./configuration-guide.md#mfa-encryption-key-and-operator-recovery-runbook).
+- `--no-auth` is development-only; never use its direct-token response for normal login. Live WebSockets revalidate user/session versions every five seconds with a two-second database timeout (≤7-second bound); operator recovery must use immutable `_id` plus expected-`authVersion` CAS. See the [MongoDB recovery runbook](./configuration/server-configuration.md#mfa-encryption-key-and-operator-recovery-runbook).
 
 ## Project Registry (dam-hopper.toml)
 

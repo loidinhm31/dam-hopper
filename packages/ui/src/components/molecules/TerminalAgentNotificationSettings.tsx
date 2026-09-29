@@ -36,7 +36,8 @@ function AgentChannelSettings({
   onSave: TerminalAgentNotificationSettingsProps["onSave"];
 }) {
   const codex = agent === "codex";
-  const name = codex ? "Codex" : "OMP";
+  const claude = agent === "claude";
+  const name = codex ? "Codex" : claude ? "Claude" : "OMP";
   const label = (control: string) => (codex ? control : `${name} ${control}`);
 
   return (
@@ -45,10 +46,9 @@ function AgentChannelSettings({
         <h5 className="text-sm font-medium text-[var(--color-text)]">{name}</h5>
         <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
           {codex ? (
-            <>
-              DamHopper syncs the home <code>~/.codex/config.toml</code> TUI
-              notification block.
-            </>
+            "Codex native hooks track status only; terminal alert notifications are not supported in this rollout."
+          ) : claude ? (
+            "Qualified attention alerts for Claude Code (approvals, questions, errors). Off until enabled."
           ) : (
             "Notifications for OMP running inside DamHopper terminals. Off until you enable them."
           )}
@@ -58,13 +58,16 @@ function AgentChannelSettings({
         title={`Enable ${name} notifications`}
         description={
           codex
-            ? 'Writes `tui.notifications`, `tui.notification_method = "osc9"`, and `tui.notification_condition = "always"` to `~/.codex/config.toml`'
-            : "Turn on semantic OMP alerts for this browser."
+            ? "Disabled: Codex provides status only in this rollout; alert notifications are unsupported."
+            : claude
+              ? "Turn on qualified attention alerts for Claude Code."
+              : "Turn on semantic OMP alerts for this browser."
         }
       >
         <Switch
-          checked={policy.enabled}
+          checked={codex ? false : policy.enabled}
           ariaLabel={`Enable ${name} notifications`}
+          disabled={codex}
           onCheckedChange={(enabled) => onSave(agent, { enabled })}
         />
       </SettingRow>
@@ -185,6 +188,11 @@ export function TerminalAgentNotificationSettings({
             policy={notifications.agents.omp}
             onSave={onSave}
           />
+          <AgentChannelSettings
+            agent="claude"
+            policy={notifications.agents.claude}
+            onSave={onSave}
+          />
         </>
       )}
       <SettingRow
@@ -202,8 +210,8 @@ export function TerminalAgentNotificationSettings({
             size="sm"
             loading={permissionPending}
             disabled={
-              (!notifications.agents.codex.enabled &&
-                !notifications.agents.omp.enabled) ||
+              (!notifications.agents.omp.enabled &&
+                !notifications.agents.claude.enabled) ||
               permission === "unsupported"
             }
             onClick={() => void handleRequestPermission()}

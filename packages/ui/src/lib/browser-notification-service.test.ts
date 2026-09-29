@@ -233,7 +233,7 @@ describe("BrowserNotificationService", () => {
     expect(
       service.notifyTerminalAgent({
         ...event,
-        source: "osc9",
+        source: "agent-status",
         receivedAt: 100,
       }),
     ).toEqual({ delivered: true });
@@ -241,7 +241,7 @@ describe("BrowserNotificationService", () => {
     expect(
       service.notifyTerminalAgent({
         ...event,
-        source: "osc9",
+        source: "agent-status",
         receivedAt: 31_100,
       }),
     ).toEqual({ delivered: true });
@@ -252,7 +252,7 @@ describe("BrowserNotificationService", () => {
       "Codex may need attention",
       expect.objectContaining({
         renotify: true,
-        tag: 'dam-hopper-agent-["[\\"\\",\\"s1\\"]","osc9",null]',
+        tag: 'dam-hopper-agent-["[\\"\\",\\"s1\\"]","agent-status",null]',
         timestamp: 100,
       }),
     );
@@ -261,7 +261,7 @@ describe("BrowserNotificationService", () => {
       "Codex may need attention",
       expect.objectContaining({
         renotify: true,
-        tag: 'dam-hopper-agent-["[\\"\\",\\"s1\\"]","osc9",null]',
+        tag: 'dam-hopper-agent-["[\\"\\",\\"s1\\"]","agent-status",null]',
         timestamp: 31_100,
       }),
     );
@@ -353,7 +353,7 @@ describe("BrowserNotificationService", () => {
     expect(
       service.notifyTerminalAgent({
         ...event,
-        source: "osc9",
+        source: "agent-status",
         sessionId: "s2",
       }),
     ).toEqual({ delivered: true });
@@ -362,7 +362,7 @@ describe("BrowserNotificationService", () => {
     expect(
       service.notifyTerminalAgent({
         ...event,
-        source: "osc9",
+        source: "agent-status",
         sessionId: "s2",
       }),
     ).toEqual({

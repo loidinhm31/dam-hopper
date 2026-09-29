@@ -68,6 +68,7 @@ import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-
 import type {
   AgentPathsVerification,
   ExtensionStatusReport,
+  NativeIntegrationStatusReport,
 } from "./agent-status-types.js";
 import {
   getApi,
@@ -2294,21 +2295,105 @@ export function useUninstallOmpExtension(options?: { owner?: ConnectionRef }) {
   });
 }
 
+export function useNativeIntegrationStatus(
+  agent: "codex" | "claude",
+  agentDir?: string,
+  options?: { owner?: ConnectionRef },
+) {
+  const owner = options?.owner;
+  const queryKey = owner
+    ? profileQueryKey(
+        owner,
+        "native-integration-status",
+        agent,
+        agentDir ?? "default",
+      )
+    : (["native-integration-status", agent, agentDir ?? "default"] as const);
+
+  return useQuery<NativeIntegrationStatusReport>({
+    queryKey,
+    queryFn: () =>
+      (owner ? getApi(owner) : api).terminal.getNativeIntegrationStatus(
+        agent,
+        agentDir,
+      ),
+    staleTime: 5_000,
+  });
+}
+
+export function useInstallNativeIntegration(
+  agent: "codex" | "claude",
+  options?: { owner?: ConnectionRef },
+) {
+  const queryClient = useQueryClient();
+  const owner = options?.owner;
+
+  return useMutation<NativeIntegrationStatusReport, Error, string | undefined>({
+    mutationFn: (agentDir) =>
+      (owner ? getApi(owner) : api).terminal.installNativeIntegration(
+        agent,
+        agentDir,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "native-integration-status", agent)
+          : ["native-integration-status", agent],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-paths-verification")
+          : ["agent-paths-verification"],
+      });
+    },
+  });
+}
+
+export function useUninstallNativeIntegration(
+  agent: "codex" | "claude",
+  options?: { owner?: ConnectionRef },
+) {
+  const queryClient = useQueryClient();
+  const owner = options?.owner;
+
+  return useMutation<NativeIntegrationStatusReport, Error, string | undefined>({
+    mutationFn: (agentDir) =>
+      (owner ? getApi(owner) : api).terminal.uninstallNativeIntegration(
+        agent,
+        agentDir,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "native-integration-status", agent)
+          : ["native-integration-status", agent],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-paths-verification")
+          : ["agent-paths-verification"],
+      });
+    },
+  });
+}
+
 export function useAgentPathsVerification(
-  params?: { agentDir?: string; codexDir?: string },
+  params?: { agentDir?: string; codexDir?: string; claudeDir?: string },
   options?: { owner?: ConnectionRef },
 ) {
   const owner = options?.owner;
   const agentDirKey = params?.agentDir ?? "default";
   const codexDirKey = params?.codexDir ?? "default";
+  const claudeDirKey = params?.claudeDir ?? "default";
   const queryKey = owner
     ? profileQueryKey(
         owner,
         "agent-paths-verification",
         agentDirKey,
         codexDirKey,
+        claudeDirKey,
       )
-    : (["agent-paths-verification", agentDirKey, codexDirKey] as const);
+    : (["agent-paths-verification", agentDirKey, codexDirKey, claudeDirKey] as const);
 
   return useQuery<AgentPathsVerification>({
     queryKey,

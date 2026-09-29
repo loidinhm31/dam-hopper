@@ -9,7 +9,7 @@ interface TerminalNotificationSoundControlsProps {
   soundEnabled: boolean;
   soundPattern: TerminalCodexNotificationSoundPattern;
   soundVolume: number;
-  agentName?: "Codex" | "OMP";
+  agentName?: "Codex" | "OMP" | "Claude";
   onSoundEnabledChange: (enabled: boolean) => void;
   onSoundPatternChange: (
     pattern: TerminalCodexNotificationSoundPattern,

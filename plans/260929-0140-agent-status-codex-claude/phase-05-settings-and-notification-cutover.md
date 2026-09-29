@@ -4,7 +4,10 @@
 [Plan](./plan.md) · [Contract §5](./design-contract.md) · [Repository gaps](./reports/repository-findings.md) · Phases [02](./phase-02-private-hook-ingress.md), [03](./phase-03-managed-hook-installation.md), [04](./phase-04-native-event-adapters.md)
 
 ## Overview
-Date: 2026-09-29. Priority P1. Estimate 8h. Implementation Pending / 0%; review Pending.
+Date: 2026-09-29. Priority P1. Estimate 8h. **Phase 05 status: DONE / 100%** (2026-09-29 Asia/Saigon; Review 9.2/10, [review report](../reports/code-review-260929-1250-phase-05-settings-notification-cutover.md)).
+
+**Validation:** 2,383 tests passed (139 config, 80 agent_status, 1,944 UI unit, 220 browser); advisor completion recorded. Live Linux/provider qualification remains Phase 06.
+
 Expose three concrete integrations and close path/profile/delivery gaps required by this rollout.
 
 ## Key Insights
@@ -43,9 +46,9 @@ Update associated existing behavioral tests; migrate any actual callers of `Term
 9. Run live browser smoke across two profiles, unsaved/saved custom paths, trust-required, restart-required uninstall, Unknown expiry and notification selection. Exercise actual backend responses, not mocked copies.
 
 ## Todo list
-- [ ] v2 policy migration and server/PTY path eligibility.
-- [ ] Owner-bound Agent Settings native management and readiness.
-- [ ] Agent-specific dispatch, complete OSC9/TUI-sync cutover, real browser proof.
+- [x] v2 policy migration and server/PTY path eligibility.
+- [x] Owner-bound Agent Settings native management and readiness.
+- [x] Agent-specific dispatch, complete OSC9/TUI-sync cutover, real browser proof.
 
 ## Success Criteria
 Selected profile alone receives mutations and notifications. Stale or malformed verification cannot enable/deliver. Invalid/absent native hooks do not hide OMP badges. Codex channels survive migration; Claude starts off. Profile/path/disconnect changes silence stale events.

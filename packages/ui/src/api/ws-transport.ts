@@ -560,11 +560,38 @@ function channelToEndpoint(
       const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
       return { method: "DELETE", url: `/api/agent-status/omp/extension${q}` };
     }
+    case "agentStatus:getNativeIntegrationStatus": {
+      const d = data as { agent: string; agentDir?: string } | undefined;
+      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      return {
+        method: "GET",
+        url: `/api/agent-status/integrations/${encodeURIComponent(d?.agent ?? "")}${q}`,
+      };
+    }
+    case "agentStatus:installNativeIntegration": {
+      const d = data as { agent: string; agentDir?: string } | undefined;
+      return {
+        method: "POST",
+        url: `/api/agent-status/integrations/${encodeURIComponent(d?.agent ?? "")}`,
+        body: { agentDir: d?.agentDir },
+      };
+    }
+    case "agentStatus:uninstallNativeIntegration": {
+      const d = data as { agent: string; agentDir?: string } | undefined;
+      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      return {
+        method: "DELETE",
+        url: `/api/agent-status/integrations/${encodeURIComponent(d?.agent ?? "")}${q}`,
+      };
+    }
     case "agentStatus:getAgentPathsVerification": {
-      const d = data as { agentDir?: string; codexDir?: string } | undefined;
+      const d = data as
+        | { agentDir?: string; codexDir?: string; claudeDir?: string }
+        | undefined;
       const params = new URLSearchParams();
       if (d?.agentDir) params.set("agentDir", d.agentDir);
       if (d?.codexDir) params.set("codexDir", d.codexDir);
+      if (d?.claudeDir) params.set("claudeDir", d.claudeDir);
       const q = params.toString() ? `?${params.toString()}` : "";
       return { method: "GET", url: `/api/agent-status/paths${q}` };
     }

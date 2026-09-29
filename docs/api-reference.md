@@ -932,9 +932,14 @@ still-unobserved Windows CI result, canary-host profiling, staged
 monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
 work; none of those checks is passed evidence.
 
-## Agent Status API (Phases 01–05)
+## Agent Status API (OMP-first Phases 01–05)
 
-Server-owned semantic agent activity reporting. Phases 01–05 are complete; Phase 05 qualified Linux x86_64 with OMP 18.4.1 across C01–C19. See the [agent-status architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+The OMP-first semantic status track is complete through Linux x86_64 Phase 05
+qualification with OMP 18.4.1 across C01–C19. The separate Codex/Claude native
+rollout also completed Phases 01–05, including Agent Settings and notification
+ownership; live native-provider qualification remains Phase 06. See the
+[agent-status architecture](./architecture/agent-status.md) and
+[OMP qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
 The snapshot route uses normal `/api/*` Bearer auth middleware.
 
 ### GET /api/agent-status/v1/snapshot
@@ -1854,7 +1859,7 @@ Platform behavior for free terminals differs only where the request omits `cwd`:
 - `cmd.exe` output uses CRLF (`\r\n`); normalize captured terminal output in test assertions. Input is submitted to the PTY as raw bytes, so callers choose the line terminator.
 - Windows does not provide Unix shell lifecycle integration (e.g. zsh/fish precmd/preexec hooks, prompt tracking, or sysfs/procfs monitoring); terminal sessions on Windows operate in unmonitored raw mode without Unix-specific shell lifecycle events.
 - Unix shell selection, bash fallback, and POSIX process management remain completely unchanged on Linux/macOS.
-For the isolated Windows loopback startup and cleanup procedure, see the [Configuration Guide](./configuration-guide.md#windows-server-loopback-smoke-checklist).
+For the isolated Windows loopback startup and cleanup procedure, see the [Server Configuration](./configuration/server-configuration.md#windows-server-loopback-smoke-checklist).
 
 Response: the created `SessionInfo`, including `worktreePath` when the session
 is target-scoped.

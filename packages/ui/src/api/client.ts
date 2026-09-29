@@ -18,10 +18,12 @@ import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import {
   decodeAgentStatusSnapshot,
   decodeExtensionStatusReport,
+  decodeNativeIntegrationStatusReport,
   decodeAgentPathsVerification,
   type AgentPathsVerification,
   type AgentStatusSnapshotV1,
   type ExtensionStatusReport,
+  type NativeIntegrationStatusReport,
 } from "./agent-status-types.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 export { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
@@ -2502,9 +2504,40 @@ export function createApiClient(
             agentDir,
           }),
         ),
+      getNativeIntegrationStatus: async (
+        agent: "codex" | "claude",
+        agentDir?: string,
+      ) =>
+        decodeNativeIntegrationStatusReport(
+          await transport.invoke<unknown>(
+            "agentStatus:getNativeIntegrationStatus",
+            { agent, agentDir },
+          ),
+        ),
+      installNativeIntegration: async (
+        agent: "codex" | "claude",
+        agentDir?: string,
+      ) =>
+        decodeNativeIntegrationStatusReport(
+          await transport.invoke<unknown>(
+            "agentStatus:installNativeIntegration",
+            { agent, agentDir },
+          ),
+        ),
+      uninstallNativeIntegration: async (
+        agent: "codex" | "claude",
+        agentDir?: string,
+      ) =>
+        decodeNativeIntegrationStatusReport(
+          await transport.invoke<unknown>(
+            "agentStatus:uninstallNativeIntegration",
+            { agent, agentDir },
+          ),
+        ),
       getAgentPathsVerification: async (params?: {
         agentDir?: string;
         codexDir?: string;
+        claudeDir?: string;
       }) =>
         decodeAgentPathsVerification(
           await transport.invoke<unknown>(
@@ -3284,9 +3317,22 @@ export interface ApiClient {
     uninstallOmpExtension: (
       agentDir?: string,
     ) => Promise<ExtensionStatusReport>;
+    getNativeIntegrationStatus: (
+      agent: "codex" | "claude",
+      agentDir?: string,
+    ) => Promise<NativeIntegrationStatusReport>;
+    installNativeIntegration: (
+      agent: "codex" | "claude",
+      agentDir?: string,
+    ) => Promise<NativeIntegrationStatusReport>;
+    uninstallNativeIntegration: (
+      agent: "codex" | "claude",
+      agentDir?: string,
+    ) => Promise<NativeIntegrationStatusReport>;
     getAgentPathsVerification: (params?: {
       agentDir?: string;
       codexDir?: string;
+      claudeDir?: string;
     }) => Promise<AgentPathsVerification>;
   };
   health: {

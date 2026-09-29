@@ -315,65 +315,38 @@ pub(crate) async fn update_global_ui_at_path(
     gc_path: &FsPath,
     incoming_ui: Option<&Value>,
 ) -> Result<(), AppError> {
-    update_global_ui_at_path_with_codex_home(state, gc_path, incoming_ui, None).await
-}
-
-pub(crate) async fn update_global_ui_at_path_with_codex_home(
-    state: &AppState,
-    gc_path: &FsPath,
-    incoming_ui: Option<&Value>,
-    codex_home_override: Option<&FsPath>,
-) -> Result<(), AppError> {
     let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
-    let previous_codex_notifications_enabled = gc
-        .ui
-        .as_ref()
-        .is_some_and(|ui| ui.terminal_agent_notifications.agents.codex.enabled);
 
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
     }
-    let next_codex_notifications_enabled = gc
-        .ui
-        .as_ref()
-        .is_some_and(|ui| ui.terminal_agent_notifications.agents.codex.enabled);
 
-    // Validate notification enablement policies before persisting
+    // Validate path configurations and notification enablement policies before persisting
     if let Some(ui) = gc.ui.as_ref() {
+        let home = crate::api::agent_status::resolve_effective_home()
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+
+        // Validate agentSettingsPaths if provided
+        if let Some(paths) = ui.agent_settings_paths.as_ref() {
+            if let Some(omp_dir) = paths.omp_agent_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+                crate::api::agent_status::expand_and_validate_path(omp_dir, Some(&home))
+                    .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?;
+            }
+            if let Some(codex_dir) = paths.codex_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+                crate::api::agent_status::expand_and_validate_path(codex_dir, Some(&home))
+                    .map_err(|e| AppError::Config(format!("Invalid Codex directory: {e}")))?;
+            }
+            if let Some(claude_dir) = paths.claude_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+                crate::api::agent_status::expand_and_validate_path(claude_dir, Some(&home))
+                    .map_err(|e| AppError::Config(format!("Invalid Claude directory: {e}")))?;
+            }
+        }
+
         if ui.terminal_agent_notifications.agents.codex.enabled {
-            let configured_codex_dir = ui
-                .agent_settings_paths
-                .as_ref()
-                .and_then(|p| p.codex_dir.as_deref());
-            let home = crate::api::agent_status::resolve_effective_home()
-                .unwrap_or_else(|| std::path::PathBuf::from("/"));
-            let codex_notification_dir = std::env::var("CODEX_HOME")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .filter(|p| p.is_absolute())
-                .unwrap_or_else(|| home.join(".codex"));
-            let codex_dir = if let Some(override_dir) = codex_home_override {
-                override_dir.join(".codex")
-            } else if let Some(configured) = configured_codex_dir {
-                crate::api::agent_status::expand_and_validate_path(configured, Some(&home))
-                    .map_err(|e| AppError::Config(format!("Invalid Codex path: {e}")))?
-            } else {
-                codex_notification_dir.clone()
-            };
-            if codex_home_override.is_none() && codex_dir != codex_notification_dir {
-                return Err(AppError::Config(format!(
-                    "Cannot enable Codex notifications: configured path ({}) does not match notification runtime path ({})",
-                    codex_dir.display(),
-                    codex_notification_dir.display()
-                )));
-            }
-            let config_path = codex_dir.join("config.toml");
-            if codex_home_override.is_none() && !config_path.is_file() {
-                return Err(AppError::Config(format!(
-                    "Cannot enable Codex notifications: config.toml does not exist at {}",
-                    config_path.display()
-                )));
-            }
+            return Err(AppError::Config(
+                "Cannot enable Codex notifications: Codex provides status only in this rollout"
+                    .to_string(),
+            ));
         }
 
         if ui.terminal_agent_notifications.agents.omp.enabled {
@@ -381,8 +354,6 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
                 .agent_settings_paths
                 .as_ref()
                 .and_then(|p| p.omp_agent_dir.as_deref());
-            let home = crate::api::agent_status::resolve_effective_home()
-                .unwrap_or_else(|| std::path::PathBuf::from("/"));
             let omp_notification_dir = std::env::var("PI_CODING_AGENT_DIR")
                 .ok()
                 .map(std::path::PathBuf::from)
@@ -420,99 +391,51 @@ pub(crate) async fn update_global_ui_at_path_with_codex_home(
         }
 
         if ui.terminal_agent_notifications.agents.claude.enabled {
-            return Err(AppError::Config(
-                "Cannot enable Claude notifications: native hook installation is not ready"
-                    .to_string(),
-            ));
+            let configured_claude_dir = ui
+                .agent_settings_paths
+                .as_ref()
+                .and_then(|p| p.claude_dir.as_deref());
+            let claude_notification_dir = std::env::var("CLAUDE_CONFIG_DIR")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(".claude"));
+
+            let claude_dir = match configured_claude_dir.filter(|s| !s.trim().is_empty()) {
+                Some(explicit) => {
+                    crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
+                        .map_err(|e| {
+                            AppError::Config(format!("Invalid Claude directory: {e}"))
+                        })?
+                }
+                None => claude_notification_dir.clone(),
+            };
+
+            if claude_dir != claude_notification_dir {
+                return Err(AppError::Config(format!(
+                    "Cannot enable Claude notifications: configured path ({}) does not match notification runtime path ({})",
+                    claude_dir.display(),
+                    claude_notification_dir.display()
+                )));
+            }
+
+            let report = crate::agent_status::check_native_integration_status(
+                crate::agent_status::AgentKind::Claude,
+                &claude_dir,
+            )
+            .map_err(|e| AppError::Config(format!("Failed to verify Claude integration: {e}")))?;
+
+            if report.readiness != crate::agent_status::ManagedReadinessStatus::Ready {
+                return Err(AppError::Config(format!(
+                    "Cannot enable Claude notifications: native hook installation is not ready ({})",
+                    report.readiness
+                )));
+            }
         }
     }
 
-    if next_codex_notifications_enabled != previous_codex_notifications_enabled {
-        let configured_codex_dir = gc
-            .ui
-            .as_ref()
-            .and_then(|ui| ui.agent_settings_paths.as_ref())
-            .and_then(|p| p.codex_dir.as_deref());
-        sync_codex_tui_config(
-            codex_home_override,
-            configured_codex_dir,
-            next_codex_notifications_enabled,
-        )?;
-    }
     write_global_config_at(gc_path, &gc)?;
     *state.global_config.write().await = gc;
-    Ok(())
-}
-
-fn sync_codex_tui_config(
-    codex_home_override: Option<&FsPath>,
-    configured_codex_dir: Option<&str>,
-    enabled: bool,
-) -> Result<(), AppError> {
-    let codex_dir = if let Some(override_dir) = codex_home_override {
-        override_dir.join(".codex")
-    } else if let Some(configured) = configured_codex_dir {
-        let home = crate::api::agent_status::resolve_effective_home();
-        crate::api::agent_status::expand_and_validate_path(configured, home.as_deref())
-            .map_err(|e| AppError::Config(format!("Invalid Codex path: {e}")))?
-    } else {
-        let home_dir = crate::api::agent_status::resolve_effective_home()
-            .or_else(dirs::home_dir)
-            .ok_or_else(|| AppError::Config("Unable to resolve home directory".to_string()))?;
-        home_dir.join(".codex")
-    };
-    let config_path = codex_dir.join("config.toml");
-
-    if !enabled && !config_path.exists() {
-        return Ok(());
-    }
-
-    let mut doc = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path).map_err(|e| {
-            AppError::Config(format!("Failed to read {}: {e}", config_path.display()))
-        })?;
-        if raw.trim().is_empty() {
-            toml::Value::Table(toml::map::Map::new())
-        } else {
-            toml::from_str::<toml::Value>(&raw).map_err(|e| {
-                AppError::InvalidInput(format!("Invalid TOML in {}: {e}", config_path.display()))
-            })?
-        }
-    } else {
-        std::fs::create_dir_all(&codex_dir).map_err(|e| {
-            AppError::Config(format!("Failed to create {}: {e}", codex_dir.display()))
-        })?;
-        toml::Value::Table(toml::map::Map::new())
-    };
-
-    let root = doc.as_table_mut().ok_or_else(|| {
-        AppError::InvalidInput(format!(
-            "{} root must be a TOML table",
-            config_path.display()
-        ))
-    })?;
-    let tui_value = root
-        .entry("tui".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-    let tui = tui_value.as_table_mut().ok_or_else(|| {
-        AppError::InvalidInput(format!(
-            "{} [tui] section must be a TOML table",
-            config_path.display()
-        ))
-    })?;
-
-    tui.insert("notifications".to_string(), toml::Value::Boolean(enabled));
-    tui.insert(
-        "notification_method".to_string(),
-        toml::Value::String("osc9".to_string()),
-    );
-    tui.insert(
-        "notification_condition".to_string(),
-        toml::Value::String("always".to_string()),
-    );
-
-    let serialized = toml::to_string_pretty(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
-    atomic_write(&config_path, &serialized)?;
     Ok(())
 }
 

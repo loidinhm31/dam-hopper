@@ -14,7 +14,7 @@ function event(
   title = "Codex is ready",
 ): TerminalAgentNotification {
   return {
-    source: "osc9",
+    source: "agent-status",
     sessionId: `terminal-${receivedAt}`,
     project: "web",
     agent: "codex",

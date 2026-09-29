@@ -13,7 +13,7 @@ execution, not a malicious-code sandbox.
 - [D03 authorized plugin API](./plugin-platform-d03.md)
 - [D05 implementation plan](../../plans/260920-1603-plugin-platform/phase-05-management-and-lifecycle.md)
 - [API Reference](../api-reference.md#trusted-plugin-management-api-phase-d05)
-- [Configuration Guide](../configuration-guide.md#plugin-management-administrator-allowlist)
+- [Server Configuration](../configuration/server-configuration.md#plugin-management-administrator-allowlist)
 - [D05 verification](../../plans/reports/tester-260922-2049-phase-d05-plugin-suite-verification.md)
 - [D05 review](../../plans/reports/code-review-260922-2050-phase-d05-cycle3-management-lifecycle.md)
 

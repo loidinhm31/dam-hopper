@@ -1,6 +1,6 @@
 # Agent status — OMP-first architecture
 
-Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). The separate Codex/Claude native-hook rollout has Phases 01–04 delivered; Phases 05–06 remain pending. Native lifecycle behavior is not yet live-qualified.** Updated: 2026-09-29.
+Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). The separate Codex/Claude native-hook rollout has Phases 01–05 delivered; Phase 06 live Linux qualification remains pending. Native provider lifecycle behavior is not yet live-qualified.** Updated: 2026-09-29.
 OMP-first plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
 The Phase 01 contract and static capability review installed no hooks or ran native model turns. Phase 04 Codex/Claude adapters now implement the statically qualified mappings; no live Codex/Claude provider behavior has been qualified.
 OMP baseline evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
@@ -15,11 +15,11 @@ tabs, and Fleet rows, unified preferences (`terminalAgentNotifications`),
 toast viewport, and notification history center. Phase 05 delivers full Linux
 end-to-end qualification across scenarios C01–C19.
 
-The separate Codex/Claude rollout has delivered Phases 01–04: contract, private one-shot ingress and evidence lease, managed installation, and statically qualified native event adapters. Phase 05 Settings/notification cutover and Phase 06 live Linux qualification remain pending; no live native provider turns have been qualified.
+The separate Codex/Claude rollout has delivered Phases 01–05: contract, private one-shot ingress and evidence lease, managed installation, statically qualified native event adapters, and Agent Settings/notification ownership cutover. Phase 06 live Linux qualification remains pending; no live native provider turns have been qualified.
 
 ## Delivery Scope and Invariants
 
-- OMP status badges in ordinary tabs, split tabs, and Fleet rows, plus per-browser history/toasts/sound/notifications, are operational. Codex notifications still use legacy OSC 9; this is neither native readiness nor verified turn completion. No native UI badge freshness is presented.
+- OMP status badges in ordinary tabs, split tabs, and Fleet rows, plus per-browser history/toasts/sound/notifications, are operational. Codex native hooks provide status only and never generate notifications; Claude alerts are limited to qualified needs-attention events (approval, question, error), not normal turn-ended events. DamHopper's Codex OSC 9 integration and automatic Codex TUI notification-setting writes are removed; there is no OSC 9 fallback. Badges identify the agent and state, show explicit Unknown, and distinguish lifecycle from hook observations with limited-coverage context in the tooltip.
 - Rust runtime and loopback listener are part of `dam-hopper-server`, not another daemon. The standalone OMP adapter is embedded with `include_str!` and runs inside OMP after explicit installation.
 - Linux runtime qualification complete. Windows builds preserved; other server platforms report `platform-unqualified` until live qualification. Browser clients on other operating systems can observe a qualified Linux server.
 - No Herdr dependency, VT renderer, screen heuristics, task-success automation, workflow mutation, suspend-policy change, telemetry ingestion, or generic adapter/plugin loader.
@@ -73,7 +73,7 @@ and nonnegative safe integers; they do not reject unknown object fields. Public
 - `working`: active turn, continuation, retry, or active context maintenance.
 - `blocked`: awaiting approval/question, or terminal agent error requiring attention.
 
-Process alive/exited/crashed and terminal receiving/quiet remain separate. No semantic `done` or `success` state. Planned UI labels: Unknown, Idle, Running, Needs attention. A turn-ended notification is not task-success verification.
+Process alive/exited/crashed and terminal receiving/quiet remain separate. No semantic `done` or `success` state. Status badges use the labels Unknown, Idle, Running, and Needs attention; they identify the agent and distinguish lifecycle from hook observations, with limited-coverage context for hooks. A turn-ended notification is not task-success verification.
 
 ### Implemented private reporter connection (Phase 02)
 
@@ -226,19 +226,19 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Key status by existing profile + terminal incarnation identity. On profile disconnect show unavailable for previously known agents and stop notification delivery. Clear on profile removal/server epoch replacement. Local status is not durable truth.
 - Dedupe attention IDs before history, toast, sound and browser service. Reconnect snapshots establish a silent baseline, even if lastOutcome says ended. Keep only bounded per-terminal cursors; remove with terminal/profile lifecycle.
 - Per-client notifications only. Two devices may each notify; closed browser receives no push and no catch-up toast. Existing enabled-channel policy stays “always,” including focused terminals; no new focus suppression/view acknowledgement or server-side seen state in this delivery.
-- Preserve the current output dot and process icon; the OMP semantic badge is separate at TerminalTabBar, split TabBar and TerminalRuntimeNavigatorItem. Native source/freshness presentation is not implemented.
+- Preserve the current output dot and process icon; the semantic agent badge is separate at TerminalTabBar, split TabBar, and TerminalRuntimeNavigatorItem. Badges use human-readable agent/state labels, show Unknown explicitly, and identify hook source and limited coverage in the tooltip.
 - Reuse notification store, toast viewport, sound and browser service. Qualify shared browser rate-limit keys/tags and selection targets by profile and incarnation. This does not claim exactly-once OS delivery.
 - Consolidate preferences under `terminalAgentNotifications: {version:2, agents:{codex:policy, omp:policy, claude:policy}}`; each policy contains `enabled`, `toast`, `browser`, `sound`, `volume`, and `pattern`. Version-1 migration preserves Codex and OMP channel values and adds Claude disabled; older Codex aliases still normalize once. OMP defaults off when no policy exists; badges remain independent of notification preferences. Write/export only the new shape, remove obsolete in-memory fields/callers, and avoid a dual-write shim. Add policies for other agents only with real adapters.
 
 ## Agent Store path verification
 
-- The Agent Store's **Agent Settings** tab replaces the former Integrations tab for agent setup and the former Appearance agent-notification panel. It uses one OMP install path and one Codex config path for the selected server profile. Global `agentSettingsPaths` also persists optional `claudeDir`, but the current Agent Settings UI and path-verification endpoint do not configure or verify Claude readiness. `agentSettingsPaths` and `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.
-- The UI asks the selected server for `GET /api/agent-status/paths?agentDir=...&codexDir=...`. The response contains configured and runtime paths, OMP managed-extension status, Codex `config.toml` or `hooks.json` file-presence state, and per-agent `canEnable`/reason fields. `~/` is expanded against the home of `service_user` or `plugin_owner_user` from `/etc/dam-hopper/host.toml` when resolvable, otherwise against the API process's home (`/` is the endpoint fallback if no home can be resolved). Relative paths and `..` components are rejected.
-- Runtime directories come from absolute `PI_CODING_AGENT_DIR` and `CODEX_HOME` values in the server process environment when set; otherwise they are `<effective-home>/.omp/agent` and `<effective-home>/.codex`. This endpoint does not inspect per-PTY `HOME` or other per-terminal environment.
-- **Enable-toggle eligibility requires strict path matching:** each configured directory must compare equal to its distinct runtime directory after `~/` expansion; paths are not filesystem-canonicalized. OMP also requires the managed extension status `current`. Codex path eligibility accepts either `config.toml` or `hooks.json` passing `is_file`; this presence check does not establish read access or syntax validity.
-- The global-config update path separately rechecks OMP path equality and current-extension status before persisting an enabled OMP policy. Codex persistence requires the configured `config.toml` to exist, then sync reads and parses it on a master-policy transition; the config update path does not independently compare the Codex directory with `CODEX_HOME`.
-- **Existing enabled policies are not revalidated at notification dispatch.** Agent Settings gates the enable control using the latest path verification, but runtime dispatch reads the saved `enabled` flag. A path/config/installation change can therefore make the UI control appear unchecked/disabled while leaving the saved policy enabled and delivery active; this is not fail-closed dispatch-time revalidation.
-- Filesystem reads/writes run with API-service OS permissions. Linux production defaults to `dam-hopper`; it receives no automatic access to a separate PTY user's home or Codex directory. `~` only selects the server-side home resolution above; it does not switch identity or grant permissions.
+- The Agent Store's **Agent Settings** tab replaces the former Integrations tab and Appearance notification panel. It configures OMP, Codex, and Claude paths for the selected server profile; installation state and runtime readiness are shown separately. `agentSettingsPaths` and v2 `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.
+- The UI requests `GET /api/agent-status/paths?agentDir=...&codexDir=...&claudeDir=...`. The response reports configured/runtime paths, OMP managed-extension status, Codex configuration/hook presence, Claude settings-file presence, and per-agent `canEnable`/reason fields. `~/` expands against `service_user` or `plugin_owner_user` from `/etc/dam-hopper/host.toml` when resolvable, otherwise the API process home (`/` is the fallback); relative paths and `..` components are rejected.
+- Runtime directories come from absolute `PI_CODING_AGENT_DIR`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` values in the server process environment when set; otherwise they are `<effective-home>/.omp/agent`, `<effective-home>/.codex`, and `<effective-home>/.claude`. The endpoint does not inspect per-PTY `HOME` or other per-terminal environment.
+- Enable-toggle eligibility requires exact configured/runtime path equality after `~/` expansion; paths are not filesystem-canonicalized. OMP also requires the managed extension to be `current`. Codex configuration presence is informational: Codex notification enablement is unsupported because Codex is status-only. Claude requires a matching path and native hook readiness `ready`.
+- Global-config updates recheck OMP path/current-extension status and Claude path/hook readiness before accepting enabled policies, and reject enabled Codex notifications. They do not synchronize Codex TUI notification settings.
+- **Saved notification policies are not revalidated against filesystem paths at dispatch.** Agent Settings gates enablement using current verification and the server validates eligible saves, but browser dispatch checks the current connection, matching status/attention identity, agent policy, and saved `enabled` flag. An external path or hook change does not itself revoke a saved policy.
+- Filesystem reads/writes run with API-service OS permissions. Linux production defaults to `dam-hopper`; it receives no automatic access to a separate PTY user's home or agent directory. `~` only selects the server-side home resolution above; it does not switch identity or grant permissions.
 
 ## Cross-phase invariants and release gates
 
@@ -248,18 +248,21 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Phase 05 qualified the Linux x86_64 release path against OMP 18.4.1 across
   C01–C19, including live OMP/browser behavior and standalone binary installation.
   See the [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md).
-- The persistent private WebSocket collector admits only OMP. Codex and Claude use separate Phase 02 one-shot hook ingress and Phase 03 managed installation; Phase 04 native event adapters are implemented, while Settings/notification cutover and live qualification remain pending.
+- The persistent private WebSocket collector admits only OMP. Codex and Claude use separate Phase 02 one-shot hook ingress and Phase 03 managed installation; Phase 04 delivered native event adapters, and Phase 05 completed Agent Settings, notification ownership, and removal of Codex OSC 9/TUI notification integration. Phase 06 live qualification remains pending.
 
-## Codex and Claude native-hook rollout — Phases 01–04 delivered; Phases 05–06 pending
+## Codex and Claude native-hook rollout — Phases 01–05 delivered; Phase 06 pending
 
 Design date: 2026-09-29. [Rollout plan](../../plans/260929-0140-agent-status-codex-claude/plan.md).
 The user selected ordinary CLI native hooks with explicit Unknown for gaps,
 not Herdr-style screen detection or a controlled app-server launch mode. Phase 01
 froze the contract; Phase 02 delivered private one-shot ingress and 15-second
 evidence expiry; Phase 03 delivered managed installation; Phase 04 delivered
-statically qualified Codex/Claude event adapters and conservative normalization.
-OMP reporter/lifecycle semantics remain unchanged. No live native model turns or
-provider lifecycle behavior have been qualified.
+statically qualified Codex/Claude event adapters and conservative normalization;
+Phase 05 delivered Agent Settings, installation/readiness presentation,
+notification ownership, version-2 policy migration, and complete Codex OSC 9 and
+automatic TUI notification-setting removal. OMP reporter/lifecycle semantics
+remain unchanged. No live native model turns or provider lifecycle behavior have
+been qualified.
 
 ### Managed installation and removal (Phase 03 delivered)
 
@@ -314,7 +317,7 @@ recorded 87 passing agent-status test executions.
   cached invocations are impossible. OMP installation and event semantics are
   unchanged.
 
-### Native event adapters and ingress (Phase 04 delivered; live qualification pending)
+### Native event adapters and ingress (Phase 04 delivered; Phase 06 live qualification pending)
 
 The adapters implement the Phase 01 static event inventories for Codex CLI
 0.158.0 and Claude Code 2.1.250. Those versions are research targets, not live
@@ -361,6 +364,8 @@ turn. Native hook status uses the existing 15-second evidence lease.
   maps to `Blocked/approval`, `Notification(agent_needs_input)` to
   `Blocked/question`, and `StopFailure` to `Blocked/error`. Repeated
   notifications for the same blocked reason do not emit repeated attention.
+  Claude notifications are attention-only: qualified approval, question, and
+  error events can alert; normal turn-ended alerts are not supported.
   `PermissionRequest` and `PreToolUse(AskUserQuestion)` are candidates only and
   become `Unknown`, not a guessed wait. A tool failure alone is not a terminal
   agent error. Claude has no native `Interrupt` on Escape/Ctrl+C; without
@@ -386,13 +391,6 @@ focused coverage is in `server/src/agent_status/tests.rs` and
 
 ### Remaining native rollout gates
 
-- Phase 05 remains pending: Agent Settings, profile/path/delivery readiness
-  gates, and notification ownership are not cut over. It removes DamHopper's
-  legacy Codex OSC 9 parser/alerts and automatic TUI-config writes; there is no
-  fallback handler. Matched server/UI releases and explicit v1-to-v2 preference
-  migration remain required; the v2 schema already includes Claude disabled by
-  default. See the
-  [Phase 05 plan](../../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md).
 - Phase 06 remains pending and performs live Linux qualification. Exercise real
   interactive provider sequences and hook coexistence before claiming native
   lifecycle behavior. Codex CLI 0.158.0 and Claude Code 2.1.250 are research

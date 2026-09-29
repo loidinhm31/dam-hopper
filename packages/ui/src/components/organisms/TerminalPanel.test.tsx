@@ -93,9 +93,6 @@ vi.mock("@/lib/terminal-buffer-replay.js", () => ({
   applyTerminalBufferReplay: (_term: unknown, _replay: unknown, done: () => void) => { done(); return 0; },
   utf8ByteLength: (value: string) => value.length,
 }));
-vi.mock("@/lib/terminal-agent-notification-integration.js", () => ({ attachTerminalAgentNotifications: () => ({
-  setReplayActive() {}, onOutput() {}, onUserInput() {}, onTitleChange() {}, dispose() {},
-}) }));
 vi.mock("@/hooks/use-terminal-suggestions.js", () => ({ useTerminalSuggestions: () => ({
   snapshot: { state: "unverified", rawInput: "" }, handleInput: (data: string) => ({ forward: true, data }),
   handleOutput() {}, handleReplay() {}, closeExplicitList() {},

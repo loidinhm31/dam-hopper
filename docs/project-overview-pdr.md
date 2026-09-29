@@ -882,6 +882,50 @@ the server emission path for the UI's optional `plugin:lifecycle_revision`
 event also needs a qualification decision. Deployment ownership/rotation for
 the host allowlist remains a D06/operator input.
 
+### PR-026: Native Agent Status and Notification Ownership (Phase 05)
+
+**Status:** Phase 05 completed on 2026-09-29. The current record reports 2,383
+passing tests and a 9.2/10 review. Phase 06 live native-provider qualification
+remains pending; Phase 05 does not claim live provider lifecycle qualification.
+
+**Functional Requirements:**
+
+- Manage OMP, Codex, and Claude paths and native hooks from the selected
+  server profile's Agent Settings, and present hook installation separately
+  from runtime readiness.
+- Keep status display independent of notification enablement. Notification
+  policy version 2 defaults all agent masters off and migrates legacy/version-1
+  preferences while preserving Codex/OMP channel values and adding Claude
+  disabled.
+- Allow OMP turn-ended and needs-attention notifications; keep Codex
+  status-only with alerts disabled; allow Claude notifications only for
+  qualified needs-attention states, not normal turn completion.
+- Remove DamHopper's Codex OSC 9 notification integration and automatic writes
+  to Codex TUI notification settings.
+
+**Acceptance Criteria:**
+
+- ✓ Codex notification enablement is rejected and cannot produce an alert.
+- ✓ Claude turn-ended events do not notify; qualified approval, question, and
+  error attention states can notify when the saved Claude policy is enabled.
+- ✓ OMP turn-ended and needs-attention policies remain available.
+- ✓ Installation badges and readiness badges communicate distinct states.
+- ✓ Notification selection requires current profile/terminal ownership and
+  status/attention identity; stale or mismatched targets are ignored.
+- ✓ Native-provider live lifecycle behavior remains explicitly unqualified
+  until the Phase 06 gate is complete.
+
+**Technical Constraints:**
+
+- Paths and notification policy are persisted under the selected server
+  profile's global UI configuration; `profileId` remains client-local.
+- Save-time eligibility checks require current OMP extension status or ready
+  Claude hooks and reject enabled Codex alerts. Dispatch uses the saved enabled
+  policy and does not revalidate filesystem paths.
+- See the [agent-status architecture](./architecture/agent-status.md), the
+  [Configuration Guide](./configuration-guide.md#ui-configuration), and the
+  [Phase 05 cutover plan](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md).
+
 ### PR-011: Workflow Tracking Domain & Relational Persistence (Phase 01)
 
 **Status:** Domain and SQLite repository foundation implemented on 2026-09-02.

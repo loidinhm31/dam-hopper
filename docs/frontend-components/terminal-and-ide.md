@@ -301,9 +301,9 @@ scope or active project.
 
 **Location:** `packages/ui/src/components/organisms/TerminalPanel.tsx`
 
-**Purpose:** Renders a single terminal session using xterm.js. Handles lifecycle events (output, exit, restart, reconnect), session attachment, and in-app/native agent notification integration. Phase 1 adds the session-local find controller; TerminalPanel lifecycle wiring follows in Phase 2.
+**Purpose:** Renders a single terminal session using xterm.js and handles output, exit, restart, reconnect, and buffer attachment. Semantic agent status and notification ownership are handled by the app-root agent-status bridge, not by terminal output parsing.
 
-**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Wires xterm BEL and OSC 9/777/99 handlers into the shared agent-activity path so submitted command, output, user input, and exit signals can drive in-app and native browser notifications without any backend protocol change. During retained buffer replay, it keeps the OSC 9 delivery gate active through xterm's asynchronous write callback, then FIFO-flushes queued live data so historical alerts stay silent and subsequent live alerts are preserved. Attach recovery permits only one in-flight attach per panel, retries an alive session with capped exponential backoff, and creates a replacement only after a `terminal:listDetailed` check confirms the session is missing or dead. The terminal session cleanup path disposes signal handlers and timers; search controller cleanup is added with the Phase 2 lifecycle wiring.
+**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Attach/reconnect uses a session-local replay gate: live chunks queue until xterm completes retained-buffer rendering. `TerminalPanel` does not attach Codex OSC 9 notification callbacks or derive semantic agent state from terminal bytes. Attach recovery permits only one in-flight attach per panel, retries an alive session with capped exponential backoff, and creates a replacement only after a `terminal:listDetailed` check confirms the session is missing or dead. Search and terminal cleanup dispose their owned resources on unmount/reconnect/session replacement.
 
 ### Terminal touch scrolling and page-gesture containment
 
@@ -380,14 +380,12 @@ command-search consumers: exact raw prefixes outrank Unicode token-prefix matche
 and use count breaking the latter. Browser storage errors and the local-history disabled
 preference prevent persistence.
 
-Codex OSC 9 notifications include `Project · Bash #N`, where `N` is the
-terminal's current 1-based position in the open list. Selecting the native
-notification focuses Dam Hopper, preserves the current IDE/Terminal mode,
-reveals the IDE Terminal tool or compact Terminal surface when needed, selects
-the originating live session by stable session ID, and focuses its xterm. Notifications for
-sessions closed before selection are ignored safely. On compact coarse-pointer
-devices with the mobile custom keyboard enabled, selection reveals and refits
-the xterm without forcing focus or opening the native keyboard.
+Semantic agent attention notifications carry their owning profile and terminal
+incarnation; in-app selection routes to that exact live session and ignores
+stale or closed targets. OMP supports turn-ended and needs-attention alerts.
+Claude supports only qualified needs-attention alerts; Codex provides status
+only and has no notification delivery. DamHopper does not use Codex OSC 9
+notifications or write Codex TUI notification settings.
 
 **Props:**
 

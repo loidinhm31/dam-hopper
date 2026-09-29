@@ -2161,35 +2161,43 @@ Dependency-free runtime helpers shared by browser packages.
 - Sensitive metadata is redacted recursively before sink delivery by default
 - Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
 
-### xterm agent notifications (Phase 2)
+### Semantic agent status and notifications (Phase 05)
 
-Pure frontend notification pipeline in `packages/ui/src/lib/`:
+The semantic agent-status and attention path is separate from xterm output:
 
-- `agent-command-recognizer.ts` identifies tracked agent commands from terminal input
-- `agent-activity-tracker.ts` turns submitted command, output, user input, and enhanced exit events into activity state changes
-- `terminal-notification-signal-parser.ts` converts BEL and OSC 9/777/99 terminal signals into normalized notification events
-- `terminal-notifications.ts` keeps a bounded, memory-only notification history and transient toast IDs in Zustand
-- `terminal-notification-sound.ts` reuses one Web Audio context to synthesize the built-in `default`, `soft`, `two-tone`, and `urgent` in-app chimes at the persisted volume. `default` preserves the existing single-chime behavior for compatible configurations; sound has no effect on native browser popups and requires no audio assets or dependencies. Unavailable or blocked audio is a silent no-op.
-- `browser-notification-service.ts` applies permission, rate-limit, and delivery guards before creating `Notification` objects. Web builds use the browser API; native Tauri v2 builds use the compatible shim supplied by `tauri-plugin-notification`
-- `TerminalNotificationCenter` and `TerminalNotificationToastViewport` render the shared in-app bell/feed and top-right live alerts
+- `AgentStatusBridge` calls `useAgentStatusConnections` to keep per-profile snapshots and authenticated WebSocket subscriptions active across routes.
+- `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated` carry server-owned status; snapshots establish a silent baseline and reconnect never replays old attention.
+- `AgentStatusBadge` shows the agent and human-readable state, distinguishes Unknown, and identifies lifecycle versus hook observations with limited-coverage context for hooks.
+- `terminal-agent-notification-integration.ts` checks the current profile connection and matching terminal incarnation, agent/session identity, and attention revision before delivery. Version-2 preferences route OMP turn-ended/needs-attention, Claude qualified needs-attention only, and no Codex alerts.
+- The notification store, `TerminalNotificationCenter`, toast viewport, sound service, and browser notification service provide bounded history and per-client channels. Status badges remain independent of notification switches.
+- Agent Settings manages OMP, Codex, and Claude paths, native hook installation, and readiness. Codex is status-only; Claude notifications are attention-only for qualified approvals, questions, and errors, not normal turn completion.
+- DamHopper's Codex OSC 9 parsing, notification handlers, and terminal attach callbacks are removed. Codex TUI notification settings are not automatically synchronized. No OSC 9 event creates DamHopper notification history, toast, sound, or browser popup.
 
-On terminal attach or reconnect, notification delivery is marked replay-active before
-the retained buffer is written and remains suppressed until xterm invokes that write's
-completion callback. Live chunks queue during that interval, so historical OSC 9
-signals cannot alert while an identical signal received after replay completion can.
+Notification policy is stored in the server-backed global UI config under
+`terminalAgentNotifications` version 2. Codex, OMP, and Claude policies default
+off; version-1 and legacy settings migrate while preserving existing
+Codex/OMP channel values and adding Claude disabled. Browser permission remains
+client-runtime state and is requested only by an explicit user action.
 
-Runtime delivery is UI-driven, while its preferences use the server-backed global UI-config persistence path. The shared service uses the standard `Notification` contract: web builds use browser notifications, while native Tauri v2 registers `tauri-plugin-notification`, whose injected shim routes permission and delivery through the native plugin. The native default capability grants only permission-state, permission-request, and notify commands. Native OS popups do not expose the browser event object used by the shared click binding, so in-app toast/history remain the interactive paths. On Windows, native popup delivery requires an installed/bundled app identity and is not a reliable end-to-end check in `tauri dev`. The API uses camelCase and global TOML uses snake_case: the master `terminalCodexNotificationsEnabled` / `terminal_codex_notifications_enabled` defaults to off, while toast, browser-popup, and sound preferences default to on, volume defaults to `100`, and the sound pattern defaults to `"default"`. Valid patterns are `"default"`, `"soft"`, `"two-tone"`, and `"urgent"`; invalid values are rejected during config deserialization. The master is the OSC 9 capture gate and the only setting that synchronizes Codex TUI configuration. While it is on, history is always recorded; toast, browser-popup, and chime delivery have independent child gates. Child delivery and sound preference updates do not modify `~/.codex/config.toml`. It is covered by unit tests around parsing, recognition, tracking, notification gating, callback-gated replay suppression, restart suppression, and cleanup behavior, plus a Chromium regression test that verifies queued live chunks resume only after retained replay completes.
+For exact reporter, reducer, path, installation, and readiness contracts, see
+the [agent-status architecture](./architecture/agent-status.md). Native hook
+installation/readiness does not qualify live provider lifecycle behavior;
+Phase 06 live Linux qualification remains a separate gate.
 
-Phase 03 adds the delivery controls to the shared UI package:
+Runtime browser notifications use the standard `Notification` contract: web
+builds use browser notifications, while native Tauri v2 registers
+`tauri-plugin-notification`, whose injected shim routes permission and delivery
+through the native plugin. The native default capability grants only
+permission-state, permission-request, and notify commands. Native OS popups do
+not expose the browser event object used by the shared click binding, so
+in-app toast/history remain the interactive paths. On Windows, native popup
+delivery requires an installed/bundled app identity and is not a reliable
+end-to-end check in `tauri dev`.
 
-- `TerminalAgentNotificationSettings` exposes the master, **In-app toast**, and **Browser popup** switches; `TerminalNotificationSoundControls` exposes the Sound switch, fixed Sound style selector, Volume slider, and user-activated **Play sound** button
-- `AgentCommandPatternEditor` lets users add literal aliases such as `CODEXNSB` or custom regex matches without editing config files by hand
-- browser permission state is read from the runtime `Notification` API and is never persisted into server config; only the explicit request button can request it, while preview plays Web Audio only. In native Tauri v2, that runtime API is provided by the notification plugin shim
-- diagnostics for unsupported/default/denied/rate-limited/factory-error paths are emitted as frontend `custom` events under scope `terminal-agent-notifications`
-- the Codex notification setting gates event capture and child controls, but does not reset saved child choices; toast off still retains bell/feed history, and the Sound switch/style/volume gate only the best-effort chime. Browser popup delivery additionally requires runtime native permission, so browser permission denial or lack of support does not affect the in-app bell/feed
-- in-app history is session-memory only, capped at 50 records; at most three toast alerts are shown and each expires after six seconds
-
-Notification scope remains xterm-only. DamHopper does not watch external terminals, OS process tables, or implement a separate native notification daemon for this feature.
+In-app history is session-memory only, capped at 50 records; at most three
+toast alerts are shown and each expires after six seconds. Notification scope
+is limited to DamHopper-managed terminals; DamHopper does not monitor external
+terminal processes or provide a separate notification daemon.
 
 ### inline terminal suggestions
 

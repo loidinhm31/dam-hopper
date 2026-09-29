@@ -7,7 +7,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 **New to DamHopper?** Start here:
 
 1. **[Project Overview & PDR](./project-overview-pdr.md)** — Vision, requirements, architecture decisions
-2. **[Configuration Guide](./configuration-guide.md)** — Set up the global `dam-hopper.toml` project registry
+2. **[Configuration references](./configuration/index.md)** — Project registry, UI, server, and deployment settings
 3. **[System Architecture](./system-architecture.md)** — How the system works, including workflow persistence
 
 ## Feature Guides
@@ -16,7 +16,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
-- **[Agent status architecture (OMP Phases 01–05 complete; Codex/Claude Phase 04 adapters delivered)](./architecture/agent-status.md)** — OMP contract/runtime/adapter, native Codex/Claude hook normalization and conservative lifecycle mapping, profile-safe badges/notifications, and OMP C01–C19 Linux qualification; native Settings cutover and live qualification remain pending
+- **[Agent status architecture (Phases 01–05 delivered; Phase 06 live qualification pending)](./architecture/agent-status.md)** — OMP runtime and qualification, native Codex/Claude hooks, Agent Settings and notification ownership; Codex status-only, Claude attention-only
   CLI: `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>` (run as the OMP user on the server host).
 - **[Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)** — Owner-bound Agent Store, multi-profile ports/tunnels, Browser target trust, and incarnation-safe terminal handoff
 - **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
@@ -56,7 +56,8 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 ## Deployment
 
-- **[Configuration Guide](./configuration-guide.md)** — TOML, environment variables, CORS, and extension origins
+- **[Project and UI Configuration](./configuration-guide.md)** — TOML registry, terminal environment, UI preferences, and Agent Settings
+- **[Server Configuration](./configuration/server-configuration.md)** — Server runtime, environment variables, deployment, and troubleshooting
 - **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI, required Linux runner packaging invariant, v0.5.1 operator checklist, and Linux bootstrap ownership
 - **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801

@@ -527,11 +527,99 @@ export function decodeAgentStatusInvalidatedPayload(
   };
 }
 
-export type ManagedExtensionStatus =
+export type ManagedInstallationStatus =
   | "absent"
   | "current"
   | "outdated"
   | "modified";
+
+export type ManagedExtensionStatus = ManagedInstallationStatus;
+
+export type ManagedReadinessStatus =
+  | "ready"
+  | "restart-required"
+  | "trust-required"
+  | "policy-disabled"
+  | "path-mismatch"
+  | "permission-denied"
+  | "unsupported-version"
+  | "unverified";
+
+export interface NativeIntegrationStatusReport {
+  agentKind: AgentKind;
+  status: ManagedInstallationStatus;
+  readiness: ManagedReadinessStatus;
+  targetPath: string;
+  launcherPath: string;
+  manifestPath: string;
+  configPath?: string | null;
+  version?: string | null;
+  bundledVersion: string;
+  contentHash?: string | null;
+  bundledHash: string;
+  details?: string | null;
+}
+
+export function decodeNativeIntegrationStatusReport(
+  input: unknown,
+): NativeIntegrationStatusReport {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("NativeIntegrationStatusReport must be an object");
+  }
+  const obj = input as Record<string, unknown>;
+  const rawStatus = String(obj.status ?? "absent");
+  const status: ManagedInstallationStatus =
+    rawStatus === "current" ||
+    rawStatus === "outdated" ||
+    rawStatus === "modified"
+      ? rawStatus
+      : "absent";
+
+  const rawReadiness = String(obj.readiness ?? "unverified");
+  const readiness: ManagedReadinessStatus =
+    rawReadiness === "ready" ||
+    rawReadiness === "restart-required" ||
+    rawReadiness === "trust-required" ||
+    rawReadiness === "policy-disabled" ||
+    rawReadiness === "path-mismatch" ||
+    rawReadiness === "permission-denied" ||
+    rawReadiness === "unsupported-version"
+      ? rawReadiness
+      : "unverified";
+
+  const rawKind = String(obj.agentKind ?? obj.agent_kind ?? "codex");
+  const agentKind: AgentKind = isAgentKind(rawKind) ? rawKind : "codex";
+
+  return {
+    agentKind,
+    status,
+    readiness,
+    targetPath: String(obj.targetPath ?? obj.target_path ?? ""),
+    launcherPath: String(obj.launcherPath ?? obj.launcher_path ?? ""),
+    manifestPath: String(obj.manifestPath ?? obj.manifest_path ?? ""),
+    configPath:
+      obj.configPath != null
+        ? String(obj.configPath)
+        : obj.config_path != null
+          ? String(obj.config_path)
+          : null,
+    version: obj.version != null ? String(obj.version) : null,
+    bundledVersion: String(
+      obj.bundledVersion ?? obj.bundled_version ?? "1.0.0",
+    ),
+    contentHash:
+      obj.contentHash != null
+        ? String(obj.contentHash)
+        : obj.content_hash != null
+          ? String(obj.content_hash)
+          : null,
+    bundledHash: String(obj.bundledHash ?? obj.bundled_hash ?? ""),
+    details:
+      obj.details != null
+        ? String(obj.details)
+        : null,
+  };
+}
 
 export interface ExtensionStatusReport {
   status: ManagedExtensionStatus;
@@ -587,6 +675,11 @@ export interface AgentPathsVerification {
   codexConfigExists: boolean;
   codexCanEnable: boolean;
   codexReason?: string;
+  claudeConfigDir?: string;
+  claudeNotificationDir?: string;
+  claudeConfigExists?: boolean;
+  claudeCanEnable?: boolean;
+  claudeReason?: string;
 }
 
 export function decodeAgentPathsVerification(
@@ -631,6 +724,36 @@ export function decodeAgentPathsVerification(
         ? String(obj.codexReason)
         : obj.codex_reason != null
           ? String(obj.codex_reason)
+          : undefined,
+    claudeConfigDir:
+      obj.claudeConfigDir != null
+        ? String(obj.claudeConfigDir)
+        : obj.claude_config_dir != null
+          ? String(obj.claude_config_dir)
+          : undefined,
+    claudeNotificationDir:
+      obj.claudeNotificationDir != null
+        ? String(obj.claudeNotificationDir)
+        : obj.claude_notification_dir != null
+          ? String(obj.claude_notification_dir)
+          : undefined,
+    claudeConfigExists:
+      obj.claudeConfigExists != null
+        ? Boolean(obj.claudeConfigExists)
+        : obj.claude_config_exists != null
+          ? Boolean(obj.claude_config_exists)
+          : undefined,
+    claudeCanEnable:
+      obj.claudeCanEnable != null
+        ? Boolean(obj.claudeCanEnable)
+        : obj.claude_can_enable != null
+          ? Boolean(obj.claude_can_enable)
+          : undefined,
+    claudeReason:
+      obj.claudeReason != null
+        ? String(obj.claudeReason)
+        : obj.claude_reason != null
+          ? String(obj.claude_reason)
           : undefined,
   };
 }
