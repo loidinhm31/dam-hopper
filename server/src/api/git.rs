@@ -687,14 +687,21 @@ pub async fn drop_commit_route(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitMessageResponse {
     pub message: String,
+    pub branch: String,
+    pub head_oid: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditCommitMessageBody {
     pub message: String,
+    pub expected_branch: String,
+    pub expected_head_oid: String,
+    #[serde(default)]
+    pub allow_signature_removal: bool,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
@@ -707,8 +714,12 @@ pub async fn get_commit_message_route(
     let path = resolve_target_path(&state, &project, query.worktree_path).await?;
     let root =
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
-    let message = get_commit_message(&root.root_path, &hash).map_err(ApiError::from_app)?;
-    Ok(Json(CommitMessageResponse { message }))
+    let snapshot = get_commit_message(&root.root_path, &hash).map_err(ApiError::from_app)?;
+    Ok(Json(CommitMessageResponse {
+        message: snapshot.message,
+        branch: snapshot.branch,
+        head_oid: snapshot.head_oid,
+    }))
 }
 
 pub async fn edit_commit_message_route(
@@ -718,9 +729,16 @@ pub async fn edit_commit_message_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_target_path(&state, &project, body.worktree_path).await?;
     let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
-    let result = edit_commit_message(&root.root_path, &hash, &body.message)
-        .await
-        .map_err(ApiError::from_app)?;
+    let result = edit_commit_message(
+        &root.root_path,
+        &hash,
+        &body.message,
+        &body.expected_branch,
+        &body.expected_head_oid,
+        body.allow_signature_removal,
+    )
+    .await
+    .map_err(ApiError::from_app)?;
     Ok(Json(result))
 }
 

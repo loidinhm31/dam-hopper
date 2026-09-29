@@ -12,7 +12,7 @@ use git2::{DiffOptions, Repository};
 use crate::error::AppError;
 use crate::git::types::{
     ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, GitLineChange, HunkInfo,
-    SubmoduleGitlinkInfo, UNTRACKED_PAGE_SIZE, VcsRootKind,
+    SubmoduleGitlinkInfo, VcsRootKind, UNTRACKED_PAGE_SIZE,
 };
 use crate::git::vcs_roots::discover_vcs_roots;
 
@@ -963,10 +963,9 @@ pub fn commit_files(project_path: &Path, message: &str, amend: bool) -> Result<S
         return Ok(oid.to_string());
     }
     let parents: Vec<git2::Commit> = match repo.head() {
-        Ok(head) => vec![
-            head.peel_to_commit()
-                .map_err(|e| AppError::Git(e.message().to_string()))?,
-        ],
+        Ok(head) => vec![head
+            .peel_to_commit()
+            .map_err(|e| AppError::Git(e.message().to_string()))?],
         Err(_) => vec![],
     };
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();

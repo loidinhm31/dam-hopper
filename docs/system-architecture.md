@@ -4286,6 +4286,25 @@ Editor/diff isolation is complete, and terminal command/profile identity now
 uses stable opaque target discriminators while session metadata retains the
 canonical target path.
 
+**commit_message_rewrite.rs** — local commit-message editing with raw Git
+objects:
+
+- GET reads the full UTF-8 message for a reachable target and returns a
+  consistent symbolic branch/tip snapshot for the selected worktree.
+- POST requires that exact `expectedBranch`/`expectedHeadOid` pair. Its target
+  may be pushed, and staged, unstaged, or untracked work is not an eligibility
+  gate.
+- The engine walks the captured commit DAG, including merge parents, and
+  rebuilds the target plus affected descendants. Trees, parent order,
+  author/committer metadata, unchanged messages, and unrelated raw headers are
+  preserved. Only the local branch ref moves; the worktree and index do not.
+- Invalidated signature or merge-tag headers require explicit
+  `allowSignatureRemoval` consent. Unsupported history and malformed commit
+  metadata fail closed.
+- Publication locks `HEAD` and the full branch ref, rechecks both, and updates
+  only that branch ref. A stale snapshot is rejected; remote refs are not
+  touched and no push is performed.
+
 **commit_file_ops.rs** — IntelliJ-compatible history actions:
 
 - `drop_commit()` — local unpushed commit removal; uses hard reset for `HEAD`
@@ -4296,12 +4315,12 @@ canonical target path.
 - `revert_commit_files()` — applies inverse selected-file changes to the
   worktree without rewriting history.
 
-History rewrite preflights check dirty worktree state, root commits,
-reachability, upstream pushed/shared status, detached HEAD, and active
-merge/rebase/cherry-pick operations. Safe operations like revert stay available
-for shared history, while blocked or conflicted rewrite operations return
-`GitActionResult` with `blockedReason`, `recovery`, and `recommendation` so the
-web UI can show recoverable state instead of generic errors.
+`drop_commit`, `drop_commit_files`, and the other history actions keep their
+operation-specific guards. Message editing has separate eligibility: a
+checked-out local branch, a reachable target, no active Git operation or
+unsupported history, and no other worktree checking out that branch. It
+deliberately permits dirty working state and commits already pushed elsewhere;
+those edits still change only the selected local branch.
 
 **types.rs** — Shared data types:
 
@@ -4375,6 +4394,8 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/commit/:hash/drop-files` — drop selected changes from an unpushed commit by default; pushed/shared commits are blocked
 - `POST /api/git/:project/commit/:hash/revert` — revert a commit with an inverse commit
 - `POST /api/git/:project/commit/:hash/revert-files` — apply inverse selected-file changes to the worktree
+- `GET /api/git/:project/commit/:hash/message` — read the UTF-8 message and its full branch/tip snapshot; accepts optional `worktreePath` and `root`
+- `POST /api/git/:project/commit/:hash/message` — rewrite a local message using required `expectedBranch` and `expectedHeadOid`; optional `allowSignatureRemoval`, `worktreePath`, and `root`; does not publish remotely
 - `POST /api/git/push` — root-aware single-repo push; body carries `{ project, root?, force? }`
 
 **port_forward.rs** (Phase 03) — Port detection handler:
@@ -4550,6 +4571,21 @@ old-server compatibility rather than interpreted as recovery. REST projections
 remain authoritative after reconnect, missed events, or profile changes. Deep
 Linux reads degrade per signal, while `GET /api/system/metrics` remains the
 compatibility fallback and rollback seam.
+
+### Proposed host-resource SSE delivery (not implemented)
+
+The [host-resource SSE architecture](./architecture/host-resource-sse.md)
+specifies a future bounded, authenticated, per-profile Fetch stream for the
+**cached** snapshot and compatibility metrics together. It does not change
+the currently implemented REST/WS behavior described here. The proposed
+cutover admits one stream per connected visible owner, shares one serialized
+frame across bounded subscribers, and keeps the shared collector's cadence
+and all host-action semantics unchanged. Only validated full frames become
+authoritative for both owner-qualified resource queries; until then and on
+unsupported/failed streams, REST remains authoritative. WS host-alert
+notification and history handling continue; while SSE is live, WS events
+must not overwrite the stream's resource snapshot. Performance targets in
+that design remain unqualified.
 
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing

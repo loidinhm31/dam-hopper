@@ -1,6 +1,7 @@
 pub mod bulk;
 pub mod cli_fallback;
 pub mod commit_file_ops;
+pub mod commit_message_rewrite;
 pub mod diff;
 pub mod progress;
 pub mod repository;
@@ -13,9 +14,9 @@ mod tests;
 
 pub use bulk::BulkGitService;
 pub use commit_file_ops::{
-    cherry_pick_commit_files, drop_commit, drop_commit_files, edit_commit_message,
-    get_commit_message, revert_commit, revert_commit_files,
+    cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };
+pub use commit_message_rewrite::{edit_commit_message, get_commit_message, CommitMessageSnapshot};
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
     get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,

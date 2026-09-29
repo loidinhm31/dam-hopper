@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-29 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-30 from the repository compaction `repomix-output.xml`.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -153,7 +153,7 @@ captured connection owner. Root and registered worktree targets remain distinct.
 | Bounded previews   | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                      |
 | Federated search   | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`     | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
 | Search replace     | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`      | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.           |
-| Git retry          | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts`                    | Authentication retry retains successful results and retries only failed targets after owner validation.    |
+| Git edits and retry | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/api/git.rs` | Retries preserve successful target results; local message edits bind to a branch/tip snapshot, rewrite the raw commit DAG, and preserve trees and dirty worktree/index state without publishing. |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
 Clean editor tabs reload after external/Git mutations; dirty tabs preserve local

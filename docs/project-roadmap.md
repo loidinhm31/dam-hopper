@@ -2,6 +2,12 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Object-only commit-message rewrite (2026-09-30)
+
+- **Plan status: IN PROGRESS (1/3 phases; ~33%; updated 2026-09-30 00:44:16 +07:00).** Phase 01 — Local object-only commit-message rewrite — **DONE (2026-09-30 00:44:16 +07:00; 100%)**. Phases 02–03 remain pending.
+- Delivered the focused raw-commit DAG/ODB rewrite, checked branch publication, edit-specific request/result fields, paired GET snapshot (`message`, `branch`, `headOid`), and POST stale-snapshot contract. Local edits preserve dirty index/worktree state and do not publish remotely; Phase 02 owns panel integration and explicit leased publication.
+- **Validation:** Targeted backend/API tests passed **17/17** (16 engine scenarios and one in-process API integration test); `cargo check` and focused rustfmt passed. Cycle 2 review approved **9.8/10**. The tester report does not claim complete acceptance coverage: started-server registered-project/worktree/root smoke, browser/authenticated remote flows, and detailed raw-object/signature/CAS failures remain Phase 03 qualification gates. See the [Phase 01 plan](../plans/260929-2204-object-plumbing-commit-message/phase-01-object-rewrite.md), [parent plan](../plans/260929-2204-object-plumbing-commit-message/plan.md), [tester report](../plans/reports/tester-260930-0030-phase-01-object-rewrite-revalidation.md), and [Cycle 2 review](../plans/reports/code-review-260930-0034-phase-01-object-rewrite-cycle-2.md).
+
 ### Codex and Claude native-hook status (2026-09-29)
 
 - **Plan status: IN PROGRESS (5/6 phases; ~83%; Phase 05 updated 2026-09-29 Asia/Saigon).** Phases 01–05 are DONE; Phase 06 remains pending.

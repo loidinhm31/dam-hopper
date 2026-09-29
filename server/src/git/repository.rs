@@ -12,7 +12,7 @@ use git2::{BranchType, PackBuilderStage, PushOptions, Repository, StatusOptions}
 use crate::error::AppError;
 use crate::git::cli_fallback;
 use crate::git::progress::{
-    ProgressSender, emit_completed, emit_failed, emit_progress, emit_started,
+    emit_completed, emit_failed, emit_progress, emit_started, ProgressSender,
 };
 use crate::git::types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, GitActionResult, GitBlockReason,
@@ -1201,6 +1201,7 @@ pub async fn checkout_branch(
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         });
     }
 
@@ -1261,6 +1262,7 @@ pub async fn checkout_branch(
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) if is_dirty_checkout_error(&stderr) => Ok(GitActionResult {
             ok: false,
@@ -1274,6 +1276,7 @@ pub async fn checkout_branch(
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }
@@ -1298,6 +1301,7 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            ..Default::default()
         }),
         Err(AppError::Git(stderr)) if is_conflict_error(&stderr) => Ok(GitActionResult {
             ok: false,
@@ -1316,6 +1320,7 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
             recommendation: Some(
                 "Resolve conflicts, then continue or abort the cherry-pick".to_string(),
             ),
+            ..Default::default()
         }),
         Err(err) => Err(err),
     }
@@ -1351,6 +1356,7 @@ pub async fn reset_to_commit(
         recovery: None,
         blocked_reason: None,
         recommendation: None,
+        ..Default::default()
     })
 }
 
@@ -1412,6 +1418,7 @@ pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, Ap
         recovery: None,
         blocked_reason: None,
         recommendation: Some("changes from the undone commit are now unstaged".to_string()),
+        ..Default::default()
     })
 }
 

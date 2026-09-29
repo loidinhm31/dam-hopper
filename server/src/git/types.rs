@@ -213,9 +213,14 @@ pub enum GitBlockReason {
     UnreachableCommit,
     RootCommit,
     MixedVcsRoots,
+    StaleRef,
+    UnsupportedHistory,
+    InvalidCommitMetadata,
+    SignatureConsentRequired,
+    PublicationUncertain,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GitActionResult {
     pub ok: bool,
@@ -239,6 +244,20 @@ pub struct GitActionResult {
     pub blocked_reason: Option<GitBlockReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommendation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_target_oid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_target_oid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_head_oid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_head_oid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewritten_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_op: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signatures_removed: Option<bool>,
 }
 
 impl GitActionResult {
@@ -255,6 +274,13 @@ impl GitActionResult {
             recovery: None,
             blocked_reason: None,
             recommendation: None,
+            old_target_oid: None,
+            new_target_oid: None,
+            old_head_oid: None,
+            new_head_oid: None,
+            rewritten_count: None,
+            no_op: None,
+            signatures_removed: None,
         }
     }
 
@@ -275,6 +301,13 @@ impl GitActionResult {
             recovery: None,
             blocked_reason: Some(reason),
             recommendation: Some(recommendation.into()),
+            old_target_oid: None,
+            new_target_oid: None,
+            old_head_oid: None,
+            new_head_oid: None,
+            rewritten_count: None,
+            no_op: None,
+            signatures_removed: None,
         }
     }
 }
