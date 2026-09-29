@@ -693,6 +693,95 @@ async fn leased_push_rejects_stale_local_when_local_tip_changes_after_preview() 
 
     assert_eq!(pub_res.status, PublishResultStatus::StaleLocal);
 }
+#[test]
+fn leased_push_update_reference_records_rejection() {
+    let remote_rejection = std::sync::Arc::new(parking_lot::Mutex::new(None));
+    let err = crate::git::repository::handle_push_update_reference(
+        &remote_rejection,
+        "refs/heads/main",
+        Some("pre-receive hook declined"),
+    )
+    .expect_err("remote rejection should be error");
+
+    assert_eq!(
+        remote_rejection.lock().as_deref(),
+        Some("Remote rejected refs/heads/main: pre-receive hook declined")
+    );
+    assert_eq!(
+        err.message(),
+        "Remote rejected refs/heads/main: pre-receive hook declined"
+    );
+}
+
+#[tokio::test]
+async fn leased_push_negotiation_detects_mismatched_remote_oid() {
+    let (remote, seed, _clone) = make_remote_clone_repo();
+
+    std::fs::write(seed.path().join("file.txt"), "content\n").unwrap();
+    git(&["add", "file.txt"], seed.path());
+    git(&["commit", "-m", "commit"], seed.path());
+
+    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+        .await
+        .expect("prepare should succeed");
+
+    let mut snapshot = match preview {
+        PublishPreview::Ready { snapshot, .. } => snapshot,
+        other => panic!("expected Ready preview, got {other:?}"),
+    };
+
+    // Mutate snapshot expected_remote_oid to a bogus OID
+    snapshot.expected_remote_oid = "0123456789abcdef0123456789abcdef01234567".to_string();
+
+    let remote_head_before = git_output(&["rev-parse", "HEAD"], remote.path());
+
+    let pub_res = publish_leased_push(
+        seed.path(),
+        seed.path(),
+        "seed",
+        &snapshot,
+        &None,
+        None,
+    )
+    .await
+    .expect("publish should return result");
+
+    assert_eq!(pub_res.status, PublishResultStatus::StaleRemote);
+    let remote_head_after = git_output(&["rev-parse", "HEAD"], remote.path());
+    assert_eq!(remote_head_before, remote_head_after);
+}
+
+#[test]
+fn test_is_auth_error_matches_ssh_and_credential_patterns() {
+    use crate::git::leased_push::is_auth_error;
+
+    let auth_messages = [
+        "Permission denied (publickey)",
+        "Authentication failed for 'https://example.com/repo.git'",
+        "Agent admitted failure to sign using the key",
+        "Sign_and_send_pubkey: signing failed",
+        "Could not open a connection to your authentication agent",
+        "Credential helper unavailable",
+        "no suitable credentials found",
+    ];
+
+    for msg in auth_messages {
+        let err = git2::Error::from_str(msg);
+        assert!(is_auth_error(&err), "message should match auth error: {msg}");
+    }
+
+    let non_auth_messages = [
+        "Repository not found",
+        "Could not resolve host: github.com",
+        "failed to lock ref",
+        "cannot open file",
+    ];
+
+    for msg in non_auth_messages {
+        let err = git2::Error::from_str(msg);
+        assert!(!is_auth_error(&err), "message should not match auth error: {msg}");
+    }
+}
 
 #[test]
 fn list_branches_single_main() {
@@ -2623,6 +2712,200 @@ async fn edit_commit_message_unborn_branch_rejected() {
         res.blocked_reason,
         Some(crate::git::GitBlockReason::DetachedHead)
     );
+}
+#[tokio::test]
+async fn edit_commit_message_shallow_boundary_blocked() {
+    let source = make_temp_repo();
+    std::fs::write(source.path().join("c1.txt"), "c1\n").unwrap();
+    git(&["add", "c1.txt"], source.path());
+    git(&["commit", "-m", "commit 1"], source.path());
+    std::fs::write(source.path().join("c2.txt"), "c2\n").unwrap();
+    git(&["add", "c2.txt"], source.path());
+    git(&["commit", "-m", "commit 2"], source.path());
+
+    let shallow_clone = tempfile::tempdir().unwrap();
+    let shallow_path = shallow_clone.path();
+    let source_url = format!("file://{}", source.path().display());
+    git(&["clone", "--depth", "1", &source_url, "."], shallow_path);
+    configure_test_repo(shallow_path);
+
+    let head = git_output(&["rev-parse", "HEAD"], shallow_path);
+    let snap = get_commit_message(shallow_path, &head).unwrap();
+
+    let res = edit_commit_message(
+        shallow_path,
+        &head,
+        "shallow edit attempt",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!res.ok);
+    assert_eq!(
+        res.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_missing_parent_object_rejected() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    std::fs::write(path.join("c1.txt"), "c1\n").unwrap();
+    git(&["add", "c1.txt"], path);
+    git(&["commit", "-m", "commit 1"], path);
+    let c1_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("c2.txt"), "c2\n").unwrap();
+    git(&["add", "c2.txt"], path);
+    git(&["commit", "-m", "commit 2"], path);
+    let c2_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    let snap = get_commit_message(path, &c2_oid).unwrap();
+
+    // Remove the loose object for c1 to simulate missing/corrupt ancestry
+    let (prefix, suffix) = c1_oid.split_at(2);
+    let obj_path = path.join(".git/objects").join(prefix).join(suffix);
+    if obj_path.exists() {
+        std::fs::remove_file(obj_path).unwrap();
+    }
+
+    let res = edit_commit_message(
+        path,
+        &c2_oid,
+        "edited message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!res.ok);
+    assert_eq!(
+        res.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+}
+
+#[tokio::test]
+async fn edit_commit_message_same_oid_different_branch_rejected() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+
+    // Create a new branch pointing to the exact same commit
+    git(&["branch", "feature", &head], path);
+    let snap = get_commit_message(path, &head).unwrap();
+    assert_eq!(snap.branch, "refs/heads/main");
+
+    // Switch HEAD to feature: tip OID is identical, but branch is different
+    git(&["checkout", "feature"], path);
+
+    let res = edit_commit_message(
+        path,
+        &head,
+        "new message",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(!res.ok);
+    assert_eq!(
+        res.blocked_reason,
+        Some(crate::git::GitBlockReason::StaleRef)
+    );
+    assert_eq!(res.branch, Some("refs/heads/feature".to_string()));
+}
+
+#[tokio::test]
+async fn edit_commit_message_side_parent_of_merge_rewritten() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let _root = git_output(&["rev-parse", "HEAD"], path);
+
+    // Create side branch feature with commit B
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("b.txt"), "b\n").unwrap();
+    git(&["add", "b.txt"], path);
+    git(&["commit", "-m", "feature commit B"], path);
+    let b_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    // Back to main, create commit A
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"], path);
+    git(&["commit", "-m", "main commit A"], path);
+    let a_oid = git_output(&["rev-parse", "HEAD"], path);
+
+    // Merge feature into main with no fast forward
+    git(&["merge", "--no-ff", "-m", "merge feature into main", "feature"], path);
+    let merge_oid = git_output(&["rev-parse", "HEAD"], path);
+    let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+    let snap = get_commit_message(path, &b_oid).unwrap();
+
+    // Edit commit B (the side parent)
+    let res = edit_commit_message(
+        path,
+        &b_oid,
+        "rewritten commit B",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(res.ok, "edit should succeed: {res:?}");
+    let new_b_oid = res.new_target_oid.unwrap();
+    let new_merge_oid = res.new_head_oid.unwrap();
+    assert_ne!(new_b_oid, b_oid);
+    assert_ne!(new_merge_oid, merge_oid);
+
+    // The merge commit's parents must be [A, new_B] in exact same order
+    let parents_raw = git_output(&["log", "-1", "--format=%P", &new_merge_oid], path);
+    let parents: Vec<&str> = parents_raw.split_whitespace().collect();
+    assert_eq!(parents, vec![a_oid.as_str(), new_b_oid.as_str()]);
+
+    // The merge commit's tree must be completely identical
+    let new_merge_tree = git_output(&["rev-parse", &format!("{new_merge_oid}^{{tree}}")], path);
+    assert_eq!(new_merge_tree, merge_tree);
+
+    // A must remain unchanged
+    let a_log = git_output(&["log", "-1", "--format=%H %s", &a_oid], path);
+    assert!(a_log.contains("main commit A"));
+}
+
+#[tokio::test]
+async fn edit_commit_message_whitespace_only_rejected() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let head = git_output(&["rev-parse", "HEAD"], path);
+    let snap = get_commit_message(path, &head).unwrap();
+
+    let err = edit_commit_message(
+        path,
+        &head,
+        "   \n\t  \n  ",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap_err();
+
+    match err {
+        crate::error::AppError::InvalidInput(msg) => {
+            assert!(msg.contains("cannot be empty"));
+        }
+        other => panic!("expected InvalidInput error, got: {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 ---
 title: "Object-only commit message editing and leased publication"
 description: "Replace Git panel rebase-based message editing with a tree-preserving DAG rewrite for unpushed and pushed commits."
-status: in-progress
+status: completed
 priority: P2
 effort: unestimated
 branch: main
@@ -23,9 +23,9 @@ Replace the current message-edit implementation fully. Keep local editing and pu
 | --- | --- | --- | --- |
 | [1. Object rewrite](./phase-01-object-rewrite.md) | Local request/result contract; raw commit DAG engine; locked ref publication; real-filesystem regression coverage | DONE (2026-09-30 00:44:16 +07:00) | 100% |
 | [2. Panel and publication](./phase-02-panel-and-publication.md) | Backend preview/leased push; typed transports/hooks; all Git panel/dialog callers; ownership and outcome handling | DONE (2026-09-30 02:38:37 +07:00) | 100% |
-| [3. Qualification and docs](./phase-03-qualification-and-docs.md) | Integrated API/browser/remote scenarios; full gates; architecture/API/user docs and changelog cutover | Pending | 0% |
+| [3. Qualification and docs](./phase-03-qualification-and-docs.md) | Integrated API/browser/remote scenarios; full gates; architecture/API/user docs and changelog cutover | DONE (2026-09-30 03:28:00 +07:00) | 100% |
 
-**Plan status: IN PROGRESS (2/3 phases; ~67%; updated 2026-09-30 02:38:37 +07:00).** Phases 01 and 02 are complete; Phase 03 remains Pending.
+**Plan status: DONE (3/3 phases; 100%; updated 2026-09-30 03:28:00 +07:00).** All phases 01, 02, and 03 are complete.
 
 Use documented file ownership and dependencies for remaining phases. Never give two agents the same file concurrently. Lower-rank agents must follow exact algorithms, DTOs, fixtures and stop gates in the phase files; do not invent fallback behavior.
 
@@ -50,7 +50,8 @@ Use documented file ownership and dependencies for remaining phases. Never give 
 
 - Feasibility evidence remains in [the disposable Git/git2 smoke](./reports/plumbing-smoke.md): it covered local object/ref mechanics and a local bare-remote lease, not product authenticated transport.
 - **Phase 01 implementation and scoped validation (2026-09-30):** Added the local object-only rewrite engine and paired GET/POST contract. Targeted validation passed **17/17** (16 engine scenarios and one in-process API integration test); `cargo check` and focused rustfmt passed. Cycle 2 review approved **9.8/10**. See the [tester report](../reports/tester-260930-0030-phase-01-object-rewrite-revalidation.md) and [Cycle 2 review](../reports/code-review-260930-0034-phase-01-object-rewrite-cycle-2.md).
-- **Evidence boundary:** This is implementation/scoped-test completion, not full qualification. The started-server smoke with registered project and selected `worktreePath`/`root`, browser and authenticated remote scenarios, and several detailed raw-object/signature/CAS failure cases remain unverified; Phase 03 owns integrated qualification. Do not claim the full acceptance matrix passed from the 17 targeted tests.
+- **Evidence boundary:** Phase 03 scoped qualification passed 121 targeted unit, router-integration, and UI tests and confirmed exact-OID behavior against disposable bare remotes. It did not exercise a launched browser or authenticated SSH/HTTPS transport; do not infer those results or receive-pack race safety. Keep browser/authenticated transport qualification as deployment/release gates, and stop release if a supported transport cannot guarantee the exact expected remote OID.
+- **Phase 03 qualification and documentation cutover (2026-09-30):** Delivered real HTTP router integration tests (`git_commit_message_api.rs` and `git_leased_publish_api.rs`), expanded unit tests in `server/src/git/tests.rs`, expanded UI hook tests in `use-leased-git-push.test.tsx`, and completed documentation cutover in `docs/api-reference.md`, `docs/system-architecture.md`, and `docs/CHANGELOG.md`. All 121 targeted tests passed; TypeScript and Cargo compilation clean.
 
 ## Execution constraints
 
@@ -74,4 +75,4 @@ None: all four choices match the detailed phase contracts; no phase revision nee
 
 ## Unresolved questions
 
-No unresolved product questions. Phase 01 is implemented and has passed its targeted engine/API gate. Actual-server selected-project/worktree/root smoke, browser and authenticated leased-publish scenarios, and remaining raw-object/signature/CAS failure qualification are still required in Phases 02–03; this status is not a full release-qualification claim.
+No product questions remain. Phase 03 scoped tests pass 121/121, and documentation cutover is recorded. Separate live-browser and authenticated SSH/HTTPS lease/receive-pack-race qualification was not demonstrated by the scoped test commands; keep it as a deployment/release gate, with release blocked if a supported transport cannot guarantee the exact expected remote OID.

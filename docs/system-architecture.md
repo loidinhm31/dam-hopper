@@ -4265,14 +4265,42 @@ Successful pushes invalidate the broader Git cache set so branches, git log,
 project status, diffs, conflicts, file tree, and project list refresh together
 after the retry completes.
 
-**Git push and SSH retry follow-up (Phase 03)** — The web Git page now uses the
-same root-aware push path for single-project views, the SSH passphrase retry
-dialog can optionally save credentials for later, and retry status text is
-shared across the frontend instead of being duplicated per caller. The retry
-dialog loads credentials into the shared backend callback stack; it does not
-depend on CLI `ssh_askpass` helpers or TTY prompt shims. The explicit
-force-push action only changes the push refspec mode; it does not relax the
-drop/undo protections for pushed or shared history.
+**Git push and SSH retry follow-up (Phase 03)** — The web Git page uses the
+root-aware push path for single-project views. The SSH passphrase retry dialog
+can optionally save credentials for later, and retry status text is shared
+across callers. The dialog loads credentials into the shared backend callback
+stack; it does not depend on CLI `ssh_askpass` helpers or TTY prompt shims.
+The Force Push UI action uses the prepared, explicitly confirmed leased
+publication flow below; it never selects an unleased force refspec.
+
+
+**Object-only commit message editing and leased publication (2026-09-30)** —
+Replaced rebase-based commit message editing with a tree-preserving raw ODB DAG
+rewrite, and replaced unconditional force push with an exact-remote-OID leased
+publication protocol:
+
+- **Raw DAG rewrite engine (`commit_message_rewrite.rs`)**: Rebuilds the target
+  commit and all affected reachable descendants directly in the Git object database
+  without checking out files, altering the index, or invoking `git rebase` / `git amend`.
+  Preserves tree OIDs, parent ordering, author and committer metadata, timezone,
+  unrelated commit headers, and unchanged descendant messages. Staged, unstaged,
+  and untracked worktree modifications do not block editing and remain byte-identical.
+- **Paired GET/POST CAS fencing**: `GET /api/git/{project}/commit/{hash}/message`
+  captures the exact branch ref and tip OID. `POST` requires `expectedBranch` and
+  `expectedHeadOid`; if the branch or tip moved since preview, the operation is
+  immediately rejected with `stale-ref` before target lookup.
+- **Cryptographic signature consent**: Rewriting an ancestor invalidates GPG/SSH
+  signatures. Consent is required via `allowSignatureRemoval: true` to strip invalidated
+  signature headers; mergetags with unchanged parents are retained verbatim.
+- **Leased publication (`leased_push.rs`)**: Local edits succeed offline; publication
+  is an explicit secondary step. `POST /api/git/{project}/push/prepare` captures a
+  `PublishSnapshot` bound to the branch, source OID, expected remote OID, remote URL
+  hash, and repository root identity. `POST /api/git/{project}/push/publish` enforces
+  exact-OID single-ref negotiation (`u.src() == expectedRemoteOid && u.dst() == sourceOid`).
+  If the remote moved, publish rejects with `stale-remote`; if local tip moved, with
+  `stale-local`; if push URL or branch configuration changed, with `stale-config`.
+  Remote hook rejections are surfaced as `rejected`. Ordinary push remains fast-forward
+  only, and legacy `force: true` on `/api/git/push` is rejected with `deny_unknown_fields`.
 
 **Worktree-aware Git addressing (Phase 04 complete)** — Git addressing is
 `(project, selected target, nested root)`, with the server validating the
@@ -4396,7 +4424,9 @@ HTTP request handlers + WebSocket upgrade.
 - `POST /api/git/:project/commit/:hash/revert-files` — apply inverse selected-file changes to the worktree
 - `GET /api/git/:project/commit/:hash/message` — read the UTF-8 message and its full branch/tip snapshot; accepts optional `worktreePath` and `root`
 - `POST /api/git/:project/commit/:hash/message` — rewrite a local message using required `expectedBranch` and `expectedHeadOid`; optional `allowSignatureRemoval`, `worktreePath`, and `root`; does not publish remotely
-- `POST /api/git/push` — root-aware single-repo push; body carries `{ project, root?, force? }`
+- `POST /api/git/push` — ordinary fast-forward-only push of the checked-out branch to its configured upstream; body carries `{ project, worktreePath?, root? }`, and legacy `force` is rejected
+- `POST /api/git/:project/push/prepare` — prepare the exact-OID leased publication snapshot for the selected worktree and root
+- `POST /api/git/:project/push/publish` — publish the user-confirmed snapshot only when the captured remote OID and local source OID still match
 
 **port_forward.rs** (Phase 03) — Port detection handler:
 
