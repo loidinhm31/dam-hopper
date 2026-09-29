@@ -4,7 +4,11 @@ import {
   FrameSession,
   type ExactRequestFrameSessionBackend,
 } from "./bridge-host.js";
-import { UI_BRIDGE_VERSION } from "./bridge-validators.js";
+import {
+  ADVISOR_WORKSPACE_EXTENSION_V1,
+  UI_BRIDGE_VERSION,
+  type AdvisorWorkspaceContext,
+} from "./bridge-validators.js";
 
 class FakePort {
   onmessage: ((event: { data: unknown }) => void) | null = null;
@@ -260,5 +264,193 @@ describe("FrameSession", () => {
     await Promise.resolve();
     expect(port.posted).toHaveLength(countAtRevoke);
     expect(backend.closeContext).toHaveBeenCalledTimes(1);
+  });
+  it("advertises extension in bootstrap and posts host.contextReady on context open", async () => {
+    const opened: ContextOpenResult = {
+      contextId: "ctx-1",
+      bindingRevision: 1,
+      grantRevision: 1,
+      activationGeneration: 7,
+      scopeKind: "history-root",
+      expiresAt: Date.now() + 60_000,
+    };
+    const backend: ExactRequestFrameSessionBackend = {
+      requestCorrelation: "exact",
+      getEpoch: vi.fn().mockResolvedValue(42),
+      openContext: vi.fn().mockResolvedValue(opened),
+      closeContext: vi.fn().mockResolvedValue(undefined),
+      invoke: vi.fn().mockResolvedValue({ result: { ok: true } }),
+      cancel: vi.fn().mockResolvedValue({ outcome: "accepted" }),
+      onContextRevoked: () => () => {},
+      onOwnerInvalidated: () => () => {},
+    };
+    const workspaceContext: AdvisorWorkspaceContext = {
+      revision: 1,
+      authorityKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      project: {
+        projectId: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        label: "Test Project",
+      },
+      historyScope: "history-root",
+      contextScope: "history-root",
+      allowedOperations: ["history.summary"],
+    };
+    const onUiIntent = vi.fn();
+    const session = new FrameSession({
+      installationId: "evcrate.advisor",
+      activationGeneration: 7,
+      target: { project: "demo" },
+      allowedOperations: ["history.summary"],
+      backend,
+      extension: ADVISOR_WORKSPACE_EXTENSION_V1,
+      workspaceContext,
+      expectedContextScope: "history-root",
+      onUiIntent,
+    });
+    const frame = { postMessage: vi.fn() } as unknown as Window;
+    session.bindFrame(frame);
+    session.handleWindowMessage(readyEvent(session, frame));
+
+    const port = FakeMessageChannel.latest!.port1;
+    expect(port.posted).toHaveLength(1);
+    const bootstrap = port.posted[0] as Record<string, unknown>;
+    expect(bootstrap.type).toBe("host.bootstrap");
+    expect(bootstrap.extensions).toEqual([ADVISOR_WORKSPACE_EXTENSION_V1]);
+    expect(bootstrap.workspaceContext).toEqual(workspaceContext);
+
+    port.emit(ack(session));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.state).toBe("Ready");
+    expect(port.posted).toHaveLength(2); // bootstrap + host.contextReady
+    const contextReady = port.posted[1] as Record<string, unknown>;
+    expect(contextReady.type).toBe("host.contextReady");
+    expect(contextReady.workspaceContext).toEqual(workspaceContext);
+
+    // Update workspace context with same authorityKey and incremented revision
+    const nextContext: AdvisorWorkspaceContext = {
+      ...workspaceContext,
+      revision: 2,
+      project: {
+        projectId: "1111111111111111111111111111111111111111111111111111111111111111",
+        label: "Second Project",
+      },
+    };
+    const updated = session.updateWorkspaceContext(nextContext);
+    expect(updated).toBe(true);
+    expect(port.posted).toHaveLength(3);
+    const workspaceChanged = port.posted[2] as Record<string, unknown>;
+    expect(workspaceChanged.type).toBe("host.workspaceChanged");
+    expect(workspaceChanged.workspaceContext).toEqual(nextContext);
+
+    // Stale revision or mismatched authority rejected
+    expect(session.updateWorkspaceContext({ ...nextContext, revision: 2 })).toBe(false);
+    expect(session.updateWorkspaceContext({ ...nextContext, authorityKey: "bad-key-000000000000000000000000000000000000000000000000000000000000" })).toBe(false);
+
+    // Frame UI intent
+    port.emit({
+      type: "frame.uiIntent",
+      bridgeVersion: UI_BRIDGE_VERSION,
+      frameSession: session.frameSession,
+      activationGeneration: 7,
+      intent: "activate",
+    });
+    expect(onUiIntent).toHaveBeenCalledWith("activate");
+
+    // Invisible frame rejects uiIntent
+    session.setVisible(false);
+    port.emit({
+      type: "frame.uiIntent",
+      bridgeVersion: UI_BRIDGE_VERSION,
+      frameSession: session.frameSession,
+      activationGeneration: 7,
+      intent: "dismiss",
+    });
+    expect(session.state).toBe("Revoked");
+  });
+
+  it("revokes when context scope mismatches expectedContextScope", async () => {
+    const opened: ContextOpenResult = {
+      contextId: "ctx-1",
+      bindingRevision: 1,
+      grantRevision: 1,
+      activationGeneration: 7,
+      scopeKind: "project", // Mismatch: expected history-root
+      expiresAt: Date.now() + 60_000,
+    };
+    const backend: ExactRequestFrameSessionBackend = {
+      requestCorrelation: "exact",
+      getEpoch: vi.fn().mockResolvedValue(42),
+      openContext: vi.fn().mockResolvedValue(opened),
+      closeContext: vi.fn().mockResolvedValue(undefined),
+      invoke: vi.fn().mockResolvedValue({ result: { ok: true } }),
+      cancel: vi.fn().mockResolvedValue({ outcome: "accepted" }),
+      onContextRevoked: () => () => {},
+      onOwnerInvalidated: () => () => {},
+    };
+    const session = new FrameSession({
+      installationId: "evcrate.advisor",
+      activationGeneration: 7,
+      target: { project: "demo" },
+      allowedOperations: ["history.summary"],
+      backend,
+      expectedContextScope: "history-root",
+    });
+    const frame = { postMessage: vi.fn() } as unknown as Window;
+    session.bindFrame(frame);
+    session.handleWindowMessage(readyEvent(session, frame));
+    FakeMessageChannel.latest!.port1.emit(ack(session));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(session.state).toBe("Revoked");
+    expect(backend.closeContext).toHaveBeenCalledWith({
+      epoch: 42,
+      contextId: "ctx-1",
+    });
+  });
+  it("revokes when context scope is missing (undefined) while expectedContextScope is set", async () => {
+    const opened: ContextOpenResult = {
+      contextId: "ctx-1",
+      bindingRevision: 1,
+      grantRevision: 1,
+      activationGeneration: 7,
+      // scopeKind omitted / undefined
+      expiresAt: Date.now() + 60_000,
+    };
+    const backend: ExactRequestFrameSessionBackend = {
+      requestCorrelation: "exact",
+      getEpoch: vi.fn().mockResolvedValue(42),
+      openContext: vi.fn().mockResolvedValue(opened),
+      closeContext: vi.fn().mockResolvedValue(undefined),
+      invoke: vi.fn().mockResolvedValue({ result: { ok: true } }),
+      cancel: vi.fn().mockResolvedValue({ outcome: "accepted" }),
+      onContextRevoked: () => () => {},
+      onOwnerInvalidated: () => () => {},
+    };
+    const session = new FrameSession({
+      installationId: "evcrate.advisor",
+      activationGeneration: 7,
+      target: { project: "demo" },
+      allowedOperations: ["history.summary"],
+      backend,
+      expectedContextScope: "history-root",
+    });
+    const frame = { postMessage: vi.fn() } as unknown as Window;
+    session.bindFrame(frame);
+    session.handleWindowMessage(readyEvent(session, frame));
+    FakeMessageChannel.latest!.port1.emit(ack(session));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.state).toBe("Revoked");
+    expect(backend.closeContext).toHaveBeenCalledWith({
+      epoch: 42,
+      contextId: "ctx-1",
+    });
   });
 });
