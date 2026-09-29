@@ -252,4 +252,34 @@ describe("resolveTerminalPanelShortcut", () => {
       nextBottomMaximized: true,
     });
   });
+
+  it("toggles Advisor in the right tool without disturbing the bottom panel", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "advisor",
+        activeLeftBottomId: "ports",
+        activeRightTopId: null,
+        bottomMaximized: true,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: "advisor",
+      nextBottomMaximized: true,
+    });
+  });
+
+  it("closes an already-active Advisor tool without disturbing the bottom panel", () => {
+    expect(
+      resolveTerminalPanelShortcut({
+        targetId: "advisor",
+        activeLeftBottomId: "ports",
+        activeRightTopId: "advisor",
+        bottomMaximized: true,
+      }),
+    ).toEqual({
+      nextActiveLeftBottomId: "ports",
+      nextActiveRightTopId: null,
+      nextBottomMaximized: true,
+    });
+  });
 });

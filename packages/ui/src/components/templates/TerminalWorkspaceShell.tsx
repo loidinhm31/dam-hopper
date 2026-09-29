@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { TerminalFloatingToolPanel } from "@/components/organisms/TerminalFloatingToolPanel.js";
+import { AdvisorPanelSlot } from "@/components/organisms/AdvisorPanelSlot.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
   resolveTerminalFloatingPanelZIndex,
@@ -24,6 +25,7 @@ export function TerminalWorkspaceShell({
   gitContent,
   projectContent,
   portsContent,
+  advisorContent,
   activatePanelRequest,
   workspaceMode,
   onWorkspaceModeChange,
@@ -37,6 +39,9 @@ export function TerminalWorkspaceShell({
   gitContent: ReactNode;
   projectContent: ReactNode;
   portsContent?: ReactNode;
+  advisorContent?:
+    | ReactNode
+    | ((controls: TerminalWorkspacePanelControls) => ReactNode);
   activatePanelRequest?: TerminalWorkspacePanelRequest | null;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
@@ -94,7 +99,30 @@ export function TerminalWorkspaceShell({
         ? { label: "Project", content: projectContent }
         : activePanelId === "ports"
           ? { label: "Ports", content: portsContent }
-          : { label: "Fleet Terminal", content: fleetContent };
+          : activePanelId === "advisor"
+            ? {
+                label: "Advisor",
+                content:
+                  typeof advisorContent === "function"
+                    ? advisorContent({
+                        zIndex: resolveTerminalFloatingPanelZIndex(
+                          frontPanelId,
+                          "tool",
+                        ),
+                        onActivate: () => activateFloatingPanel("tool"),
+                      })
+                    : (advisorContent ?? (
+                        <AdvisorPanelSlot
+                          mode="terminal"
+                          zIndex={resolveTerminalFloatingPanelZIndex(
+                            frontPanelId,
+                            "tool",
+                          )}
+                          onActivate={() => activateFloatingPanel("tool")}
+                        />
+                      )),
+              }
+            : { label: "Fleet Terminal", content: fleetContent };
 
   return (
     <div className="app-screen-height flex flex-col overflow-clip gradient-bg">

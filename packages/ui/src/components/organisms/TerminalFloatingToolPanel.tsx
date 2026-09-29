@@ -99,7 +99,12 @@ export function TerminalFloatingToolPanel({
   const updateLayout = (
     nextLayout: TerminalFloatingFilePanelLayout,
     bounds: { width: number; height: number },
-  ) => setLayout(clampTerminalFloatingToolPanelLayout(nextLayout, bounds));
+  ) => {
+    setLayout(clampTerminalFloatingToolPanelLayout(nextLayout, bounds));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("workspace:layout-change"));
+    }
+  };
 
   const handleDragStart = (event: ReactMouseEvent) => {
     if (event.button !== 0) return;
@@ -129,6 +134,9 @@ export function TerminalFloatingToolPanel({
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("workspace:layout-change"));
+      }
     };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
@@ -212,7 +220,7 @@ export function TerminalFloatingToolPanel({
         <button
           type="button"
           onMouseDown={handleResizeStart}
-          className="absolute bottom-2 right-2 rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+          className="absolute bottom-2 right-2 z-10 rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
           title={`Resize ${title} panel`}
           aria-label={`Resize ${title} panel`}
         >

@@ -19,6 +19,8 @@ import {
   LayoutGrid,
   Folder,
   Globe2,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,6 +29,10 @@ import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShel
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
+import { WorkspaceAdvisorHost } from "@/components/organisms/WorkspaceAdvisorHost.js";
+import { AdvisorPanelSlot } from "@/components/organisms/AdvisorPanelSlot.js";
+import { WorkspaceAdvisorPlacementProvider } from "@/contexts/WorkspaceAdvisorContext.js";
+import type { UiIntent } from "@/plugins/bridge-validators.js";
 import {
   BrowserDebugKeepAliveHost,
   type BrowserDebugKeepAliveHandle,
@@ -52,13 +58,8 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
-import {
-  projectKey,
-  parseProjectKey,
-  parseTerminalKey,
-  type TerminalInstanceRef,
-} from "@/api/ownership.js";
-import { getApi, captureConnection } from "@/api/connections.js";
+import { projectKey, parseProjectKey, parseTerminalKey, type TerminalInstanceRef } from "@/api/ownership.js";
+import { getApi, captureConnection, useConnectionSnapshot } from "@/api/connections.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -257,6 +258,7 @@ const IDE_COMPACT_SURFACE_IDS = [
   "browser",
   "git",
   "project",
+  "advisor",
 ] as const;
 const TERMINAL_COMPACT_SURFACE_IDS = [
   "terminal",
@@ -265,6 +267,7 @@ const TERMINAL_COMPACT_SURFACE_IDS = [
   "browser",
   "git",
   "project",
+  "advisor",
 ] as const;
 const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
 const TERMINAL_USAGE_OPTIONS: TerminalUsageMode[] = ["traditional", "runtime"];
@@ -359,12 +362,8 @@ export function resolveOpenTunnelInBrowserReveal(
 
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const {
-    activeProject,
-    activeProjectRevision,
-    setActiveProject,
-    selectedProject,
-  } = useWorkspaceStore();
+  const { activeProject, activeProjectRevision, setActiveProject, selectedProject } =
+    useWorkspaceStore();
   const [workspaceMode, setWorkspaceModeState] =
     useState<WorkspaceMode>(loadWorkspaceMode);
   const [terminalUsageMode, setTerminalUsageModeState] =
@@ -385,11 +384,7 @@ export default function WorkspacePage() {
   const [terminalDiagnosticsError, setTerminalDiagnosticsError] = useState<
     string | null
   >(null);
-  const exportDiagnostics = useExportDiagnostics(
-    terminalDiagnosticsMenuTarget
-      ? parseTerminalKey(terminalDiagnosticsMenuTarget.sessionId)?.profileId
-      : undefined,
-  );
+  const exportDiagnostics = useExportDiagnostics(terminalDiagnosticsMenuTarget ? parseTerminalKey(terminalDiagnosticsMenuTarget.sessionId)?.profileId : undefined);
   const [terminalFilePanelOpen, setTerminalFilePanelOpenState] = useState(
     loadTerminalFilePanelOpen,
   );
@@ -408,11 +403,11 @@ export default function WorkspacePage() {
   const browserDebugHost = useBrowserDebugHost();
   const { allProjects } = useAggregatedProjects();
   const activeProfile = useServerProfile();
-  const activeProfileId =
-    selectedProject?.profileId ?? activeProfile?.id ?? null;
-  const selectedProjectId = selectedProject
-    ? projectKey(selectedProject)
-    : null;
+  const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
+  const selectedProjectId = selectedProject ? projectKey(selectedProject) : null;
+  const selectedProjectConnection = useConnectionSnapshot(
+    selectedProject?.profileId ?? "",
+  );
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -471,6 +466,13 @@ export default function WorkspacePage() {
     availableCompactSurfaceIds,
     defaultCompactSurfaceId,
   );
+  const priorCompactSurfaceRef = useRef<string | null>(null);
+  const advisorLauncherRef = useRef<HTMLElement | null>(null);
+  const handleCloseCompactAdvisor = useCallback(() => {
+    setRequestedCompactSurface(
+      priorCompactSurfaceRef.current ?? defaultCompactSurfaceId,
+    );
+  }, [defaultCompactSurfaceId]);
   const isBrowserViewportVisible =
     !isCompactWorkspace || activeCompactSurface === "browser";
   const compactTerminalLayoutRevision =
@@ -503,12 +505,7 @@ export default function WorkspacePage() {
 
   // Validate persisted project still exists in the current workspace.
   useEffect(() => {
-    if (
-      isProjectsSuccess &&
-      !isProjectsFetching &&
-      projects.length > 0 &&
-      activeProject
-    ) {
+    if (isProjectsSuccess && !isProjectsFetching && projects.length > 0 && activeProject) {
       if (
         selectedProject?.profileId &&
         activeProfileId &&
@@ -557,8 +554,6 @@ export default function WorkspacePage() {
     selectedId,
     sessionMap,
   } = derived;
-  const notificationSessionMapRef = useRef(sessionMap);
-  notificationSessionMapRef.current = sessionMap;
   const hasTraditionalTerminalProjects = useMemo(
     () =>
       buildTraditionalTerminalProjectGroups(mountedSessions, terminalTabs)
@@ -694,12 +689,8 @@ export default function WorkspacePage() {
         browserDebug.target?.revision !== snapshotRevision ||
         freshTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
       ) {
-        await boundApi.browserDebug
-          .deleteArtifact(artifact.artifactId)
-          .catch(() => {});
-        throw new Error(
-          "Browser target or terminal candidate changed during artifact creation",
-        );
+        await boundApi.browserDebug.deleteArtifact(artifact.artifactId).catch(() => {});
+        throw new Error("Browser target or terminal candidate changed during artifact creation");
       }
 
       try {
@@ -720,9 +711,7 @@ export default function WorkspacePage() {
           browserDebug.target?.revision !== snapshotRevision ||
           latestTarget?.incarnation !== snapshotTerminalInstanceRef.incarnation
         ) {
-          throw new Error(
-            "Browser target or terminal candidate changed during upload",
-          );
+          throw new Error("Browser target or terminal candidate changed during upload");
         }
 
         browserDebug.stopCapture();
@@ -743,9 +732,7 @@ export default function WorkspacePage() {
         profileId: activeProfileId ?? "default",
         generation: 0,
       };
-      await getApi(owner)
-        .browserDebug.deleteArtifact(artifactId)
-        .catch(() => {});
+      await getApi(owner).browserDebug.deleteArtifact(artifactId).catch(() => {});
     },
     [activeProfileId, browserDebug.target?.owner],
   );
@@ -760,8 +747,7 @@ export default function WorkspacePage() {
       );
       if (
         !isBrowserTerminalTargetReady(currentTarget, browserDebug.target) ||
-        artifact.artifact.terminalId !==
-          parseTerminalKey(target.sessionId)?.id ||
+        artifact.artifact.terminalId !== parseTerminalKey(target.sessionId)?.id ||
         (currentTarget.incarnation !== undefined &&
           artifact.artifact.terminalIncarnation !== currentTarget.incarnation)
       ) {
@@ -851,10 +837,7 @@ export default function WorkspacePage() {
       if (!terminalRef) throw new Error("Terminal owner unavailable");
       const owner = captureConnection(terminalRef.profileId);
       await getApi(owner).terminal.rename(terminalRef.id, value);
-      await queryClient.invalidateQueries({
-        queryKey: ["profile", owner.profileId],
-        predicate: (query) => query.queryKey.includes("terminal-sessions"),
-      });
+      await queryClient.invalidateQueries({ queryKey: ["profile", owner.profileId], predicate: (query) => query.queryKey.includes("terminal-sessions") });
       setTerminalRenameState(null);
     } catch (error) {
       setTerminalRenameState((state) =>
@@ -1012,7 +995,11 @@ export default function WorkspacePage() {
         toolId: targetId === "project" ? "project-info" : targetId,
         exclusiveTarget: targetId,
       };
-      if (targetId === "terminals" || targetId === "project") {
+      if (
+        targetId === "terminals" ||
+        targetId === "project" ||
+        targetId === "advisor"
+      ) {
         setIdeRightTopToolRequest(request);
       } else {
         setIdeBottomToolRequest(request);
@@ -1255,8 +1242,7 @@ export default function WorkspacePage() {
       if (!targetProject) return;
       if (options?.closeSearch) closeSearch();
       if (match.project && match.project !== projectName) {
-        if (projectTarget?.target.profileId)
-          setActiveProject(match.project, projectTarget.target.profileId);
+        if (projectTarget?.target.profileId) setActiveProject(match.project, projectTarget.target.profileId);
       }
       const matchTarget = match.project
         ? resolveSearchMatchTarget(
@@ -1305,79 +1291,52 @@ export default function WorkspacePage() {
 
   useEffect(
     () =>
-      subscribeToTerminalNotificationSelection(
-        (sessionId, profileId, terminalRef, terminalInstanceRef) => {
-          const currentRef = parseTerminalKey(sessionId);
-          if (profileId && currentRef?.profileId !== profileId) return;
-          if (
-            terminalRef &&
-            (currentRef?.profileId !== terminalRef.profileId ||
-              currentRef.id !== terminalRef.id)
-          )
-            return;
-          if (
-            terminalInstanceRef &&
-            (currentRef?.profileId !== terminalInstanceRef.profileId ||
-              currentRef.id !== terminalInstanceRef.id ||
-              notificationSessionMapRef.current.get(sessionId)?.incarnation !==
-                terminalInstanceRef.incarnation)
-          )
-            return;
-          navigateToTerminalNotification({
-            sessionId,
-            mountedSessionIds: mountedSessions.map(
-              (session) => session.sessionId,
-            ),
-            alive: sessionMap.get(sessionId)?.alive,
-            registered: registeredTerminalIds.has(sessionId),
-            focusWindow: () => window.focus(),
-            revealTerminal: () => {
-              if (isCompactWorkspace) {
-                setRequestedCompactSurface("terminal");
-                return;
-              }
+      subscribeToTerminalNotificationSelection((sessionId) => {
+        navigateToTerminalNotification({
+          sessionId,
+          mountedSessionIds: mountedSessions.map(
+            (session) => session.sessionId,
+          ),
+          alive: sessionMap.get(sessionId)?.alive,
+          registered: registeredTerminalIds.has(sessionId),
+          focusWindow: () => window.focus(),
+          revealTerminal: () => {
+            if (isCompactWorkspace) {
+              setRequestedCompactSurface("terminal");
+              return;
+            }
 
-              if (workspaceMode === "ide") {
-                terminalNotificationRevealNonceRef.current += 1;
-                setIdeBottomToolRequest({
-                  nonce: terminalNotificationRevealNonceRef.current,
-                  toolId: "terminal",
-                });
-              }
-            },
-            selectSession: handleSelectTab,
-            focusTerminal: (selectedSessionId) => {
-              const suppressNativeFocus =
-                isAndroidChromeNativeInputSuppressed ||
-                (isCompactWorkspace &&
-                  isCoarsePointer &&
-                  mobileCustomKeyboardEnabled);
-              terminalNotificationActivationRef.current();
-              terminalNotificationActivationRef.current =
-                activateTerminalAfterNavigation({
-                  sessionId: selectedSessionId,
-                  hasTerminal: (candidateSessionId) =>
-                    (!terminalInstanceRef ||
-                      notificationSessionMapRef.current.get(candidateSessionId)
-                        ?.incarnation === terminalInstanceRef.incarnation) &&
-                    hasTerminal(candidateSessionId),
-                  activateTerminal: (candidateSessionId) => {
-                    if (
-                      terminalInstanceRef &&
-                      notificationSessionMapRef.current.get(candidateSessionId)
-                        ?.incarnation !== terminalInstanceRef.incarnation
-                    )
-                      return;
-                    scheduleTerminalFit(getTerminal(candidateSessionId), {
-                      focus: !suppressNativeFocus,
-                    });
-                  },
-                  subscribeToTerminal: subscribeToRegistry,
-                });
-            },
-          });
-        },
-      ),
+            if (workspaceMode === "ide") {
+              terminalNotificationRevealNonceRef.current += 1;
+              setIdeBottomToolRequest({
+                nonce: terminalNotificationRevealNonceRef.current,
+                toolId: "terminal",
+              });
+            }
+          },
+          selectSession: handleSelectTab,
+          focusTerminal: (selectedSessionId) => {
+            const suppressNativeFocus =
+              isAndroidChromeNativeInputSuppressed ||
+              (isCompactWorkspace &&
+                isCoarsePointer &&
+                mobileCustomKeyboardEnabled);
+            terminalNotificationActivationRef.current();
+            terminalNotificationActivationRef.current =
+              activateTerminalAfterNavigation({
+                sessionId: selectedSessionId,
+                hasTerminal: (candidateSessionId) =>
+                  hasTerminal(candidateSessionId),
+                activateTerminal: (candidateSessionId) =>
+                  scheduleTerminalFit(
+                    getTerminal(candidateSessionId),
+                    { focus: !suppressNativeFocus },
+                  ),
+                subscribeToTerminal: subscribeToRegistry,
+              });
+          },
+        });
+      }),
     [
       handleSelectTab,
       isCoarsePointer,
@@ -1552,13 +1511,17 @@ export default function WorkspacePage() {
                   { id: "ports", label: "Ports" },
                   { id: "project", label: "Project" },
                   { id: "terminals", label: "Fleet" },
+                  { id: "advisor", label: "Advisor" },
                 ].map(({ id, label }) => (
                   <button
                     key={id}
                     type="button"
-                    onClick={() =>
-                      activateTerminalPanelShortcut(id as TerminalPanelToolId)
-                    }
+                    onClick={(e) => {
+                      if (id === "advisor") {
+                        advisorLauncherRef.current = e.currentTarget;
+                      }
+                      activateTerminalPanelShortcut(id as TerminalPanelToolId);
+                    }}
                     className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   >
                     {label}
@@ -1758,10 +1721,7 @@ export default function WorkspacePage() {
                 onSessionExit={handleSessionExit}
                 onCloseSession={handleCloseTab}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={(projectId?: string) => {
-                  const target = projectId ?? selectedProjectId;
-                  if (target) handleAddFreeTerminal(target);
-                }}
+                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onOpenDiagnosticsMenu={openTerminalDiagnosticsMenu}
@@ -1787,10 +1747,7 @@ export default function WorkspacePage() {
                 profileId={activeProfileId ?? undefined}
                 onSessionExit={handleSessionExit}
                 onNewProjectTerminal={handleLaunchShell}
-                onNewFreeTerminal={(projectId?: string) => {
-                  const target = projectId ?? selectedProjectId;
-                  if (target) handleAddFreeTerminal(target);
-                }}
+                onNewFreeTerminal={(projectId?: string) => { const target = projectId ?? selectedProjectId; if (target) handleAddFreeTerminal(target); }}
                 onSelectTab={handleSelectTab}
                 onToggleTabPin={handleToggleTabPin}
                 onCloseTab={handleCloseTab}
@@ -2181,6 +2138,12 @@ export default function WorkspacePage() {
         icon: LayoutGrid,
         content: fleetContent,
       },
+      {
+        id: "advisor",
+        label: "Advisor",
+        icon: Sparkles,
+        content: <AdvisorPanelSlot mode="ide" />,
+      },
     ],
     [fleetContent, projectContent],
   );
@@ -2226,6 +2189,34 @@ export default function WorkspacePage() {
       ),
     }),
     [handleLaunchTerminal, projectName, projectTarget, selectedProjectId],
+  );
+
+  const compactAdvisorSurface = useMemo<MobileWorkspaceSurface>(
+    () => ({
+      id: "advisor",
+      label: "Advisor",
+      icon: Sparkles,
+      content: (
+        <div className="flex h-full min-h-0 flex-1 flex-col">
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
+            <span className="text-xs font-semibold text-[var(--color-text)]">
+              EVCrate Advisor
+            </span>
+            <button
+              type="button"
+              onClick={handleCloseCompactAdvisor}
+              className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+              aria-label="Back to previous surface"
+              title="Back"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <AdvisorPanelSlot mode="compact" />
+        </div>
+      ),
+    }),
+    [handleCloseCompactAdvisor],
   );
 
   const compactIdeSurfaces = useMemo<MobileWorkspaceSurface[]>(
@@ -2312,6 +2303,7 @@ export default function WorkspacePage() {
       },
       compactGitSurface,
       compactProjectSurface,
+      compactAdvisorSurface,
     ],
     [
       compactGitSurface,
@@ -2325,6 +2317,7 @@ export default function WorkspacePage() {
       terminalContent,
       browserContent,
       projectTarget,
+      compactAdvisorSurface,
     ],
   );
 
@@ -2356,6 +2349,7 @@ export default function WorkspacePage() {
       },
       compactGitSurface,
       compactProjectSurface,
+      compactAdvisorSurface,
     ],
     [
       compactGitSurface,
@@ -2364,6 +2358,7 @@ export default function WorkspacePage() {
       portsContent,
       terminalContent,
       browserContent,
+      compactAdvisorSurface,
     ],
   );
 
@@ -2372,9 +2367,37 @@ export default function WorkspacePage() {
 
   const handleCompactSurfaceChange = useCallback(
     (surfaceId: string) => {
+      if (surfaceId === "advisor" && activeCompactSurface !== "advisor") {
+        priorCompactSurfaceRef.current = activeCompactSurface;
+      }
       setRequestedCompactSurface(surfaceId);
     },
-    [setRequestedCompactSurface],
+    [activeCompactSurface],
+  );
+
+  const handleCloseAdvisor = useCallback(() => {
+    if (isCompactWorkspace) {
+      handleCloseCompactAdvisor();
+    } else if (workspaceMode === "terminal") {
+      setTerminalWorkspacePanelRequest({
+        nonce: ++panelShortcutNonceRef.current,
+        targetId: "advisor",
+      });
+    } else {
+      setIdeRightTopToolRequest({
+        nonce: ++panelShortcutNonceRef.current,
+        toolId: "advisor",
+      });
+    }
+  }, [handleCloseCompactAdvisor, isCompactWorkspace, workspaceMode]);
+
+  const handleAdvisorUiIntent = useCallback(
+    (intent: UiIntent) => {
+      if (intent === "dismiss") {
+        handleCloseAdvisor();
+      }
+    },
+    [handleCloseAdvisor],
   );
 
   const terminalFilePanelContent = useMemo(
@@ -2468,7 +2491,8 @@ export default function WorkspacePage() {
 
   const workflowTarget = useMemo(
     () =>
-      projectTarget?.target ?? (projectName ? { project: projectName } : null),
+      projectTarget?.target ??
+      (projectName ? { project: projectName } : null),
     [projectName, projectTarget?.target],
   );
 
@@ -2539,7 +2563,11 @@ export default function WorkspacePage() {
     ],
   );
   return (
-    <>
+    <WorkspaceAdvisorPlacementProvider
+      onUiIntent={handleAdvisorUiIntent}
+      onClose={handleCloseAdvisor}
+      launcherRef={advisorLauncherRef}
+    >
       <BrowserDebugKeepAliveHost
         ref={browserKeepAliveRef}
         browser={browserDebug}
@@ -2548,6 +2576,11 @@ export default function WorkspacePage() {
         viewportStageRef={browserViewportStageRef}
         viewportVersion={browserViewportVersion}
         isViewportVisible={isBrowserViewportVisible}
+      />
+      <WorkspaceAdvisorHost
+        project={selectedProject ?? null}
+        projectTarget={selectedProject ? projectTarget : null}
+        connection={selectedProject ? selectedProjectConnection : null}
       />
       {isCompactWorkspace ? (
         <MobileWorkspaceShell
@@ -2657,6 +2690,6 @@ export default function WorkspacePage() {
           </div>
         </div>
       )}
-    </>
+    </WorkspaceAdvisorPlacementProvider>
   );
 }

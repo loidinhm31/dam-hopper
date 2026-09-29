@@ -125,6 +125,15 @@ const localStorageMock = {
 
 vi.mock("react-router-dom", () => ({
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  Link: ({
+    children,
+    to,
+    ...props
+  }: { children?: ReactNode; to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
