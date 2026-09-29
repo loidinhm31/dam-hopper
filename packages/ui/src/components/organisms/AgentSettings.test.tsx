@@ -6,6 +6,7 @@ import { AgentSettings } from "./AgentSettings.js";
 import type {
   AgentPathsVerification,
   ExtensionStatusReport,
+  NativeIntegrationStatusReport,
 } from "@/api/agent-status-types.js";
 
 const mockVerification: AgentPathsVerification = {
@@ -18,8 +19,13 @@ const mockVerification: AgentPathsVerification = {
   codexConfigDir: "/home/testuser/.codex",
   codexNotificationDir: "/home/testuser/.codex",
   codexConfigExists: true,
-  codexCanEnable: true,
-  codexReason: undefined,
+  codexCanEnable: false,
+  codexReason: "Codex native hooks track status only; terminal alert notifications are not supported in this rollout",
+  claudeConfigDir: "/home/testuser/.claude",
+  claudeNotificationDir: "/home/testuser/.claude",
+  claudeConfigExists: true,
+  claudeCanEnable: true,
+  claudeReason: undefined,
 };
 
 const mockOmpReport: ExtensionStatusReport = {
@@ -31,13 +37,56 @@ const mockOmpReport: ExtensionStatusReport = {
   bundledHash: "hash123",
 };
 
+const mockCodexReport: NativeIntegrationStatusReport = {
+  agentKind: "codex",
+  status: "current",
+  readiness: "ready",
+  targetPath: "/home/testuser/.codex/hooks/dam-hopper-agent-status",
+  launcherPath: "/home/testuser/.codex/hooks/dam-hopper-agent-status",
+  manifestPath: "/home/testuser/.codex/hooks/dam-hopper-agent-status.manifest.json",
+  configPath: "/home/testuser/.codex/hooks.json",
+  version: "1.0.0",
+  bundledVersion: "1.0.0",
+  contentHash: "hash456",
+  bundledHash: "hash456",
+  details: undefined,
+};
+
+const mockClaudeReport: NativeIntegrationStatusReport = {
+  agentKind: "claude",
+  status: "current",
+  readiness: "ready",
+  targetPath: "/home/testuser/.claude/hooks/dam-hopper-agent-status",
+  launcherPath: "/home/testuser/.claude/hooks/dam-hopper-agent-status",
+  manifestPath: "/home/testuser/.claude/hooks/dam-hopper-agent-status.manifest.json",
+  configPath: "/home/testuser/.claude/settings.json",
+  version: "1.0.0",
+  bundledVersion: "1.0.0",
+  contentHash: "hash789",
+  bundledHash: "hash789",
+  details: undefined,
+};
+
 let currentVerification = { ...mockVerification };
 let currentOmpReport = { ...mockOmpReport };
+let currentCodexReport = { ...mockCodexReport };
+let currentClaudeReport = { ...mockClaudeReport };
 
-const mutateInstall = vi.fn().mockResolvedValue(mockOmpReport);
-const mutateUninstall = vi
+const mutateInstallOmp = vi.fn().mockResolvedValue(mockOmpReport);
+const mutateUninstallOmp = vi
   .fn()
   .mockResolvedValue({ ...mockOmpReport, status: "absent" });
+
+const mutateInstallCodex = vi.fn().mockResolvedValue(mockCodexReport);
+const mutateUninstallCodex = vi
+  .fn()
+  .mockResolvedValue({ ...mockCodexReport, status: "absent" });
+
+const mutateInstallClaude = vi.fn().mockResolvedValue(mockClaudeReport);
+const mutateUninstallClaude = vi
+  .fn()
+  .mockResolvedValue({ ...mockClaudeReport, status: "absent" });
+
 const saveAgentNotificationPolicy = vi.fn();
 const saveAgentSettingsPaths = vi.fn();
 
@@ -53,11 +102,24 @@ vi.mock("@/api/queries.js", () => ({
     refetch: vi.fn(),
   }),
   useInstallOmpExtension: () => ({
-    mutateAsync: mutateInstall,
+    mutateAsync: mutateInstallOmp,
     isPending: false,
   }),
   useUninstallOmpExtension: () => ({
-    mutateAsync: mutateUninstall,
+    mutateAsync: mutateUninstallOmp,
+    isPending: false,
+  }),
+  useNativeIntegrationStatus: (agent: string) => ({
+    data: agent === "codex" ? currentCodexReport : currentClaudeReport,
+    isLoading: false,
+    refetch: vi.fn(),
+  }),
+  useInstallNativeIntegration: (agent: string) => ({
+    mutateAsync: agent === "codex" ? mutateInstallCodex : mutateInstallClaude,
+    isPending: false,
+  }),
+  useUninstallNativeIntegration: (agent: string) => ({
+    mutateAsync: agent === "codex" ? mutateUninstallCodex : mutateUninstallClaude,
     isPending: false,
   }),
 }));
@@ -97,6 +159,7 @@ vi.mock("@/stores/settings.js", () => ({
     agentSettingsPaths: {
       ompAgentDir: "~/.omp/agent",
       codexDir: "~/.codex",
+      claudeDir: "~/.claude",
     },
     saveAgentSettingsPaths,
   }),
@@ -117,6 +180,8 @@ describe("AgentSettings", () => {
     root = createRoot(container);
     currentVerification = { ...mockVerification };
     currentOmpReport = { ...mockOmpReport };
+    currentCodexReport = { ...mockCodexReport };
+    currentClaudeReport = { ...mockClaudeReport };
     vi.clearAllMocks();
   });
 
@@ -131,7 +196,7 @@ describe("AgentSettings", () => {
     root = null;
   });
 
-  it("renders OMP and Codex sections with verified status", async () => {
+  it("renders OMP, Codex, and Claude sections with verified status", async () => {
     await act(async () => {
       root?.render(<AgentSettings />);
     });
@@ -140,10 +205,14 @@ describe("AgentSettings", () => {
       "Oh My Pi (OMP) Integration & Notifications",
     );
     expect(container?.textContent).toContain(
-      "Codex Configuration & Notifications",
+      "Codex Configuration & Status Hooks",
+    );
+    expect(container?.textContent).toContain(
+      "Claude Code Integration & Notifications",
     );
     expect(container?.textContent).toContain("Installed (v1.0.0)");
-    expect(container?.textContent).toContain("Config Verified");
+    expect(container?.textContent).toContain("Status-Only Observation");
+    expect(container?.textContent).toContain("Qualified Attention Only");
   });
 
   it("disables OMP notification toggle when path verification fails", async () => {
@@ -171,12 +240,38 @@ describe("AgentSettings", () => {
     expect(ompSwitch?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("disables Codex notification toggle when codex config is missing", async () => {
+  it("disables Codex notification toggle and explains status-only rollout limitation", async () => {
+    await act(async () => {
+      root?.render(<AgentSettings />);
+    });
+
+    expect(container?.textContent).toContain(
+      "Codex provides status only in this rollout; alert notifications are unsupported",
+    );
+
+    const codexSwitch = container?.querySelector(
+      'button[aria-label="Enable Codex notifications"]',
+    );
+    expect(codexSwitch?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("enables Claude notification toggle when verification succeeds", async () => {
+    await act(async () => {
+      root?.render(<AgentSettings />);
+    });
+
+    const claudeSwitch = container?.querySelector(
+      'button[aria-label="Enable Claude notifications"]',
+    );
+    expect(claudeSwitch).toBeDefined();
+    expect(claudeSwitch?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("disables Claude notification toggle when claudeCanEnable is false", async () => {
     currentVerification = {
       ...mockVerification,
-      codexConfigExists: false,
-      codexCanEnable: false,
-      codexReason: "Codex config file not found",
+      claudeCanEnable: false,
+      claudeReason: "Claude native integration is not ready (trust-required)",
     };
 
     await act(async () => {
@@ -184,14 +279,16 @@ describe("AgentSettings", () => {
     });
 
     expect(container?.textContent).toContain(
-      "Notifications Unavailable for Codex",
+      "Notifications Unavailable for Claude",
     );
-    expect(container?.textContent).toContain("Codex config file not found");
+    expect(container?.textContent).toContain(
+      "Claude native integration is not ready (trust-required)",
+    );
 
-    const codexSwitch = container?.querySelector(
-      'button[aria-label="Enable Codex notifications"]',
+    const claudeSwitch = container?.querySelector(
+      'button[aria-label="Enable Claude notifications"]',
     );
-    expect(codexSwitch?.hasAttribute("disabled")).toBe(true);
+    expect(claudeSwitch?.hasAttribute("disabled")).toBe(true);
   });
 
   it("saves OMP path when clicking Save Path", async () => {
@@ -239,6 +336,28 @@ describe("AgentSettings", () => {
       removeBtn?.click();
     });
 
-    expect(mutateUninstall).toHaveBeenCalled();
+    expect(mutateUninstallOmp).toHaveBeenCalled();
+  });
+
+  it("calls install and uninstall for Codex native hook", async () => {
+    currentCodexReport = {
+      ...mockCodexReport,
+      status: "absent",
+    };
+
+    await act(async () => {
+      root?.render(<AgentSettings />);
+    });
+
+    const installBtn = Array.from(
+      container?.querySelectorAll("button") ?? [],
+    ).find((btn) => btn.textContent === "Install Hook");
+    expect(installBtn).toBeDefined();
+
+    await act(async () => {
+      installBtn?.click();
+    });
+
+    expect(mutateInstallCodex).toHaveBeenCalledWith("~/.codex");
   });
 });

@@ -12,7 +12,7 @@ function notification(
   title = `Notification ${receivedAt}`,
 ): TerminalAgentNotification {
   return {
-    source: "osc9",
+    source: "agent-status",
     sessionId: `terminal-${receivedAt}`,
     project: "web",
     agent: "codex",

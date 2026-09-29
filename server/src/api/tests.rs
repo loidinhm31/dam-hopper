@@ -3337,23 +3337,26 @@ async fn update_global_ui_at_path_persists_partial_merge_and_updates_state() {
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
-            "terminalCodexNotificationsEnabled": true,
+            "terminalAgentNotifications": {
+                "agents": {
+                    "codex": { "volume": 65 }
+                }
+            }
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
 
     let written = std::fs::read_to_string(&gc_path).unwrap();
     assert!(written.contains("[ui.terminal_agent_notifications.agents.codex]"));
-    assert!(!written.contains("terminal_codex_notifications_enabled"));
+    assert!(written.contains("volume = 65"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
+    assert_eq!(ui.terminal_agent_notifications.agents.codex.volume, 65);
 }
 
 #[tokio::test]
@@ -3362,16 +3365,16 @@ async fn update_global_ui_at_path_persists_agent_settings_paths() {
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "agentSettingsPaths": {
                 "ompAgentDir": "/custom/omp/agent",
-                "codexDir": "/custom/codex"
+                "codexDir": "/custom/codex",
+                "claudeDir": "/custom/claude"
             }
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3380,6 +3383,7 @@ async fn update_global_ui_at_path_persists_agent_settings_paths() {
     assert!(written.contains("[ui.agent_settings_paths]"));
     assert!(written.contains("omp_agent_dir = \"/custom/omp/agent\""));
     assert!(written.contains("codex_dir = \"/custom/codex\""));
+    assert!(written.contains("claude_dir = \"/custom/claude\""));
 
     let persisted = crate::config::read_global_config_at(&gc_path)
         .unwrap()
@@ -3388,6 +3392,7 @@ async fn update_global_ui_at_path_persists_agent_settings_paths() {
     let paths = ui.agent_settings_paths.expect("agent_settings_paths");
     assert_eq!(paths.omp_agent_dir.as_deref(), Some("/custom/omp/agent"));
     assert_eq!(paths.codex_dir.as_deref(), Some("/custom/codex"));
+    assert_eq!(paths.claude_dir.as_deref(), Some("/custom/claude"));
 }
 
 #[tokio::test]
@@ -3397,7 +3402,7 @@ async fn update_global_ui_rejects_enablement_when_requirements_not_met() {
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
     // 1. Enabling OMP notifications when extension is not installed fails closed
-    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+    let err = crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
@@ -3411,13 +3416,44 @@ async fn update_global_ui_rejects_enablement_when_requirements_not_met() {
                 "ompAgentDir": tmp.path().join("non-existent-agent").to_str().unwrap()
             }
         })),
-        None,
     )
     .await;
     assert!(err.is_err(), "should reject OMP enablement when extension is missing");
 
-    // 2. Disabling notifications is always allowed even when paths are invalid
-    let ok = crate::api::config::update_global_ui_at_path_with_codex_home(
+    // 2. Enabling Codex notifications fails closed because Codex is status-only
+    let codex_err = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {
+                "version": 2,
+                "agents": {
+                    "codex": { "enabled": true }
+                }
+            }
+        })),
+    )
+    .await;
+    assert!(codex_err.is_err(), "should reject Codex notification enablement");
+
+    // 3. Enabling Claude notifications when native integration is not ready fails closed
+    let claude_err = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "terminalAgentNotifications": {
+                "version": 2,
+                "agents": {
+                    "claude": { "enabled": true }
+                }
+            }
+        })),
+    )
+    .await;
+    assert!(claude_err.is_err(), "should reject Claude notification enablement when not ready");
+
+    // 4. Disabling notifications is always allowed even when paths are invalid
+    let ok = crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
@@ -3425,39 +3461,37 @@ async fn update_global_ui_rejects_enablement_when_requirements_not_met() {
                 "version": 1,
                 "agents": {
                     "omp": { "enabled": false },
-                    "codex": { "enabled": false }
+                    "codex": { "enabled": false },
+                    "claude": { "enabled": false }
                 }
             }
         })),
-        None,
     )
     .await;
     assert!(ok.is_ok(), "disabling notifications must always succeed");
 }
 
 #[tokio::test]
-async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syncs_codex() {
+async fn canonical_agent_notification_patch_preserves_per_agent_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     let path = tmp.path().join("dam-hopper").join("config.toml");
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state, &path,
         Some(&serde_json::json!({"terminalAgentNotifications": {
             "version": 1,
             "agents": {
-                "codex": {"enabled": true, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"},
-                "omp": {"enabled": true, "toast": true, "browser": false, "sound": true, "volume": 35, "pattern": "soft"}
+                "codex": {"enabled": false, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"},
+                "omp": {"enabled": false, "toast": true, "browser": false, "sound": true, "volume": 35, "pattern": "soft"}
             }
         }})),
-        Some(tmp.path()),
     ).await.unwrap();
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &path,
         Some(
             &serde_json::json!({"terminalAgentNotifications": {"agents": {"omp": {"volume": 20}}}}),
         ),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3469,7 +3503,7 @@ async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syn
     assert_eq!(
         json["terminalAgentNotifications"]["agents"]["codex"],
         serde_json::json!({
-            "enabled": true, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"
+            "enabled": false, "toast": false, "browser": true, "sound": false, "volume": 45, "pattern": "two-tone"
         })
     );
     assert_eq!(
@@ -3478,7 +3512,7 @@ async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syn
     );
     assert_eq!(
         json["terminalAgentNotifications"]["agents"]["omp"]["enabled"],
-        true
+        false
     );
     assert_eq!(
         json,
@@ -3488,73 +3522,6 @@ async fn canonical_agent_notification_patch_preserves_per_agent_settings_and_syn
     let disk = std::fs::read_to_string(&path).unwrap();
     assert!(disk.contains("[ui.terminal_agent_notifications.agents.omp]"));
     assert!(!disk.contains("terminal_codex_notification"));
-    let codex = std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap();
-    assert!(codex.contains("notifications = true"));
-    assert!(codex.contains("notification_method = \"osc9\""));
-}
-
-#[tokio::test]
-async fn omp_only_canonical_patch_persists_without_touching_malformed_codex_config() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
-    let codex_config_path = tmp.path().join(".codex").join("config.toml");
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalAgentNotifications": {"version": 1, "agents": {"codex": {"enabled": true}}}
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-    let malformed_codex_config = "[tui\nnotifications = true\n";
-    std::fs::write(&codex_config_path, malformed_codex_config).unwrap();
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalAgentNotifications": {
-                "version": 1,
-                "agents": {"codex": {"enabled": true}, "omp": {"volume": 20}}
-            }
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&codex_config_path).unwrap(),
-        malformed_codex_config
-    );
-    let persisted = crate::config::read_global_config_at(&gc_path)
-        .unwrap()
-        .unwrap();
-    let ui = persisted.ui.unwrap();
-    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
-    assert_eq!(ui.terminal_agent_notifications.agents.omp.volume, 20);
-    let current_ui = state.global_config.read().await.ui.clone().unwrap();
-    assert_eq!(current_ui.terminal_agent_notifications.agents.omp.volume, 20);
-
-    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalAgentNotifications": {"agents": {"codex": {"enabled": false}}}
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
-    assert_eq!(
-        std::fs::read_to_string(&codex_config_path).unwrap(),
-        malformed_codex_config
-    );
 }
 
 #[test]
@@ -3582,13 +3549,12 @@ async fn update_global_ui_at_path_persists_project_panel_shortcut_in_snake_case(
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "projectPanelShortcut": "Mod+Shift+KeyZ",
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3607,13 +3573,12 @@ async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "hostResourcePinnedMount": "/data",
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3622,13 +3587,12 @@ async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount
     assert!(written.contains("host_resource_pinned_mount = \"/data\""));
     assert!(!written.contains("hostResourcePinnedMount"));
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "hostResourcePinnedMount": null,
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3654,25 +3618,23 @@ async fn update_global_ui_at_path_rejects_invalid_host_resource_pinned_mount_wit
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "hostResourcePinnedMount": "/data",
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
     let before = std::fs::read_to_string(&gc_path).unwrap();
 
-    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+    let err = crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "hostResourcePinnedMount": "x".repeat(MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES + 1),
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap_err();
@@ -3687,14 +3649,13 @@ async fn update_global_ui_at_path_persists_terminal_notification_sound_settings(
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "terminalCodexNotificationSoundEnabled": false,
             "terminalCodexNotificationSoundVolume": 45,
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3715,24 +3676,22 @@ async fn update_global_ui_at_path_persists_notification_delivery_and_pattern_set
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "terminalCodexNotificationToastEnabled": false,
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "terminalCodexBrowserNotificationsEnabled": false,
             "terminalCodexNotificationSoundPattern": "soft",
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
@@ -3758,162 +3717,29 @@ async fn update_global_ui_at_path_rejects_invalid_pattern_without_mutating_confi
     let state = make_state(&tmp);
     let gc_path = tmp.path().join("dam-hopper").join("config.toml");
 
-    crate::api::config::update_global_ui_at_path_with_codex_home(
+    crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "terminalCodexNotificationToastEnabled": false,
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap();
     let before = std::fs::read_to_string(&gc_path).unwrap();
 
-    let err = crate::api::config::update_global_ui_at_path_with_codex_home(
+    let err = crate::api::config::update_global_ui_at_path(
         &state,
         &gc_path,
         Some(&serde_json::json!({
             "terminalCodexNotificationSoundPattern": "bell",
         })),
-        Some(tmp.path()),
     )
     .await
     .unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
     assert_eq!(std::fs::read_to_string(&gc_path).unwrap(), before);
-}
-
-#[tokio::test]
-async fn update_global_ui_at_path_does_not_sync_codex_tui_for_child_settings() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
-    let codex_dir = tmp.path().join(".codex");
-    std::fs::create_dir_all(&codex_dir).unwrap();
-    let codex_config_path = codex_dir.join("config.toml");
-    let original_codex_config = "[tui]\nnotifications = false\n";
-    std::fs::write(&codex_config_path, original_codex_config).unwrap();
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalCodexNotificationToastEnabled": false,
-            "terminalCodexBrowserNotificationsEnabled": false,
-            "terminalCodexNotificationSoundPattern": "urgent",
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(codex_config_path).unwrap(),
-        original_codex_config
-    );
-}
-
-#[tokio::test]
-async fn update_global_ui_at_path_creates_codex_tui_config_when_enabled() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalCodexNotificationsEnabled": true,
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    let written = std::fs::read_to_string(tmp.path().join(".codex").join("config.toml")).unwrap();
-    assert!(written.contains("[tui]"));
-    assert!(written.contains("notifications = true"));
-    assert!(written.contains("notification_method = \"osc9\""));
-    assert!(written.contains("notification_condition = \"always\""));
-
-    let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert!(ui.terminal_agent_notifications.agents.codex.enabled);
-}
-
-#[tokio::test]
-async fn update_global_ui_at_path_merges_existing_codex_tui_config() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
-    let codex_dir = tmp.path().join(".codex");
-    std::fs::create_dir_all(&codex_dir).unwrap();
-    std::fs::write(
-        codex_dir.join("config.toml"),
-        "[model]\nname = \"gpt-5\"\n\n[tui]\nnotifications = false\n",
-    )
-    .unwrap();
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalCodexNotificationsEnabled": true,
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    let written = std::fs::read_to_string(codex_dir.join("config.toml")).unwrap();
-    assert!(written.contains("[model]"));
-    assert!(written.contains("name = \"gpt-5\""));
-    assert!(written.contains("[tui]"));
-    assert!(written.contains("notifications = true"));
-    assert!(written.contains("notification_method = \"osc9\""));
-    assert!(written.contains("notification_condition = \"always\""));
-}
-
-#[tokio::test]
-async fn update_global_ui_at_path_disables_existing_codex_tui_notifications() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
-    let codex_dir = tmp.path().join(".codex");
-    std::fs::create_dir_all(&codex_dir).unwrap();
-    std::fs::write(
-        codex_dir.join("config.toml"),
-        "[tui]\nnotifications = true\nnotification_method = \"osc9\"\nnotification_condition = \"always\"\n",
-    )
-    .unwrap();
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalCodexNotificationsEnabled": true,
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    crate::api::config::update_global_ui_at_path_with_codex_home(
-        &state,
-        &gc_path,
-        Some(&serde_json::json!({
-            "terminalCodexNotificationsEnabled": false,
-        })),
-        Some(tmp.path()),
-    )
-    .await
-    .unwrap();
-
-    let written = std::fs::read_to_string(codex_dir.join("config.toml")).unwrap();
-    assert!(written.contains("notifications = false"));
-    assert!(written.contains("notification_method = \"osc9\""));
-    assert!(written.contains("notification_condition = \"always\""));
 }
 
 fn test_project_config(workspace_dir: &std::path::Path) -> ProjectConfig {

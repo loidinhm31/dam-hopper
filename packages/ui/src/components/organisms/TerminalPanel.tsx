@@ -66,10 +66,6 @@ import {
   type TerminalConnectionStatus,
 } from "@/lib/terminal-attach-recovery-controller.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
-import {
-  attachTerminalAgentNotifications,
-  type TerminalAgentNotificationIntegration,
-} from "@/lib/terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
@@ -432,8 +428,6 @@ export function TerminalPanel({
       let unsubStatus: (() => void) | null = null;
       let inputDisposable: { dispose: () => void } | null = null;
       let releaseCompositionGuards = () => {};
-      let agentNotifications: TerminalAgentNotificationIntegration | null =
-        null;
       let observer: ResizeObserver | null = null;
       let recoveryController: TerminalAttachRecoveryController | null = null;
       const retryUnavailableAfterReplayRef = { current: false };
@@ -444,7 +438,6 @@ export function TerminalPanel({
         restartProbeGeneration += 1;
         markTerminalStreamReadyAfterRestart(streamReplayGate);
         outputActivity.setStreamReady(true);
-        agentNotifications?.setReplayActive(false);
       };
 
       const probeRestartReadiness = () => {
@@ -470,23 +463,12 @@ export function TerminalPanel({
           .catch(() => {});
       };
 
-      agentNotifications = attachTerminalAgentNotifications({
-        term,
-        sessionId: safeSessionId,
-        project,
-        profileId: ownerProfileId,
-        terminalRef: effectiveTerminalRef,
-        getTerminalIncarnation: () =>
-          latestTerminalSessionIncarnation(terminalRegistrationKey),
-        getTerminalOrder: () => terminalOrderRef.current,
-      });
 
       const writeLiveData = (data: string) => {
         term.write(data);
         if (data.length > 0) outputActivity.markOutput();
         lastServerOffset += utf8ByteLength(data);
         suggestionsRef.current.handleOutput(data);
-        agentNotifications?.onOutput();
       };
 
       // ── Register all listeners immediately to avoid race conditions ──────────
@@ -545,7 +527,6 @@ export function TerminalPanel({
           streamReplayGate.isLiveStreamReady = false;
           outputActivity.setStreamReady(false);
           const currentReplayGeneration = ++streamReplayGate.replayGeneration;
-          agentNotifications?.setReplayActive(true);
           lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
             if (
               !isCurrent() ||
@@ -556,7 +537,6 @@ export function TerminalPanel({
             streamReplayGate.isReplayWriting = false;
             streamReplayGate.isLiveStreamReady = true;
             outputActivity.setStreamReady(true);
-            agentNotifications?.setReplayActive(false);
             const queuedLiveDataSnapshot =
               streamReplayGate.queuedLiveData.splice(0);
             for (const data of queuedLiveDataSnapshot) {
@@ -624,7 +604,6 @@ export function TerminalPanel({
             ? `[Process exited (code ${exitCode ?? "?"}), restarting in ${Math.round((restartIn ?? 0) / 1000)}s…]`
             : `[Process exited with code ${exitCode ?? "?"}]`;
           term.write(`\r\n${color}${text}\x1b[0m\r\n`);
-          agentNotifications?.onTerminalExit({ willRestart });
           onExitRef.current?.(exitCode);
         }) ?? null;
       if (!unsubExitEnhanced) {
@@ -657,7 +636,6 @@ export function TerminalPanel({
       // 5. Forward user input → PTY stdin, with suggestion interception
       inputDisposable = term.onData((data) => {
         if (!isCurrent()) return;
-        agentNotifications?.onUserInput();
         const result = suggestionsRef.current.handleInput(data);
         if (result.forward) {
           transport.terminalWrite(safeSessionId, result.data);
@@ -673,9 +651,6 @@ export function TerminalPanel({
         textarea?.removeEventListener("paste", suppressComposition);
       };
 
-      const titleDisposable = term.onTitleChange((title) => {
-        agentNotifications?.onTitleChange(title);
-      });
 
       // 6. PTY resize: fired by fitAddon.fit()
       const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
@@ -908,8 +883,6 @@ export function TerminalPanel({
         inputDisposable?.dispose();
         resizeDisposable.dispose();
         releaseCompositionGuards();
-        titleDisposable.dispose();
-        agentNotifications?.dispose();
         observer?.disconnect();
       };
     };

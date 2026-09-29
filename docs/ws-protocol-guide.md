@@ -162,10 +162,8 @@ Request buffer replay from a session (for reconnection or delta sync):
 
 **TerminalPanel xterm integration:**
 
-- xterm BEL and OSC 9/777/99 handlers stay frontend-only and feed `AgentActivityTracker`.
-- Tracker input includes submitted commands, output, user input, and enhanced exit state.
-- `willRestart` suppresses the finished notification so restart flows do not emit a false terminal-exit alert.
-- Cleanup removes signal handlers and timers on unmount, reconnect, or session swap.
+- Terminal output/activity observation remains frontend-only and does not define semantic agent state. DamHopper's Codex OSC 9 parser, notification handler, and terminal attach callbacks are removed.
+- Agent status and attention arrive separately through the protected snapshot and authenticated `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated` events; see the [agent-status architecture](./architecture/agent-status.md).
 
 **UI States:**
 

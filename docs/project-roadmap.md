@@ -4,12 +4,14 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Codex and Claude native-hook status (2026-09-29)
 
-- **Plan status: IN PROGRESS (4/6 phases; ~67%; Phase 04 updated 2026-09-29 Asia/Saigon).** Phases 01–04 are DONE; Phases 05–06 remain pending.
+- **Plan status: IN PROGRESS (5/6 phases; ~83%; Phase 05 updated 2026-09-29 Asia/Saigon).** Phases 01–05 are DONE; Phase 06 remains pending.
 - **Phase 03 — Managed installation and complete removal — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered managed Codex/Claude install, status, update, and complete removal through explicit native paths; config-preserving registration changes, exact ownership manifests, readiness/trust/policy distinctions, and restart-aware cleanup.
 - **Phase 04 — Codex and Claude native event adapters — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered conservative Codex/Claude event normalization with root/turn/session fencing, correlated blocker resolution, and no false completion alerts.
 - **Validation:** All **3,606 tests passed** overall; Phase 04 focused validation covered **74 unit + 7 integration tests**. Cycle 1 review approved **9.5/10**. See the [Phase 04 plan](../plans/260929-0140-agent-status-codex-claude/phase-04-native-event-adapters.md) and [review](../plans/reports/code-review-260929-1103-phase-04-codex-claude-native-event-adapters.md).
 - **Validation:** Cycle 2 review approved **9.5/10** with no critical issues; focused status tests passed **87/87** (15 integration, 59 library, 8 runtime, 5 hooks). Review follow-up notes remain non-blocking. See the [Phase 03 plan](../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md), [parent plan](../plans/260929-0140-agent-status-codex-claude/plan.md), and [Cycle 2 review](../plans/reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
-- **Next:** Phase 05 Agent Settings/notification cutover; Phase 06 Linux end-to-end qualification. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
+- **Phase 05 — Agent Settings and notification ownership — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered profile-owned native settings, distinct installation/readiness badges, honest Codex status-only and Claude attention-only gating, semantic notification dispatch, and complete Codex OSC9/TUI-sync removal.
+- **Phase 05 validation:** 2,383 tests passed (139 config, 80 agent_status, 1,944 UI unit, 220 browser); review approved 9.2/10 and advisor completion recorded. See the [Phase 05 plan](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md) and [review](../plans/reports/code-review-260929-1250-phase-05-settings-notification-cutover.md).
+- **Next:** Phase 06 Linux end-to-end qualification remains pending. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
 
 ### Agent Store install paths and settings refactor (2026-09-28)
 
@@ -17,6 +19,7 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Implemented gate:** The server save path rejects OMP notification enablement when the selected install path differs from the runtime path or its managed extension is not current; Codex enablement requires an existing config file. The focused gate test passed.
 - **Validation and references:** Focused backend status/runtime/install/config tests and the UI test suite passed; see the [test report](../plans/reports/test-report-260928-2315-agent-store-settings-install-path.md), [final status report](../plans/reports/project-manager-260928-2335-agent-store-settings-final.md), [documentation close-out](../plans/reports/docs-manager-260928-2357-agent-store-settings-final.md), [plan](../plans/260928-2225-agent-store-settings-install-path/plan.md), and [changelog entry](./CHANGELOG.md#2026-09-28).
 - **Residual scope:** The final report records review findings not demonstrated as resolved by the scoped test runs, including dispatch-time eligibility revalidation, stricter Codex config validation, install-path directory creation, and profile/draft path handling. The completed status is an approved close-out, not evidence that these additional conditions passed.
+- **Current Codex policy (2026-09-29):** The Codex config-file gate described above is historical, not the native-hook notification policy: Phase 05 makes Codex status-only and keeps alert enablement disabled. See the [Phase 05 plan](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md) and [review](../plans/reports/code-review-260929-1250-phase-05-settings-notification-cutover.md).
 
 ### Agent status and notifications (2026-09-28)
 

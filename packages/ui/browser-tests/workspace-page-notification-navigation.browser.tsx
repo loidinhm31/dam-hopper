@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspacePage from "@/components/pages/WorkspacePage.js";
-import { attachTerminalAgentNotifications } from "@/lib/terminal-agent-notification-integration.js";
+import { notifyTerminalAgent as notifyBrowserAgent } from "@/lib/browser-notification-service.js";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
 import { registerTerminal, terminalRegistry } from "@/lib/terminal-registry.js";
 
@@ -387,41 +387,40 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     vi.unstubAllGlobals();
   });
 
-  it("handles Codex OSC9 through popup selection and focuses its xterm", async () => {
+  it("handles agent notification popup selection and focuses its xterm", async () => {
+    mocks.settingsStore.terminalAgentNotifications.agents.omp.enabled = true;
     await renderWorkspace();
     const windowFocus = vi.spyOn(window, "focus").mockImplementation(() => {});
-    let oscHandler: ((payload: string) => boolean) | undefined;
-    const integration = attachTerminalAgentNotifications({
-      term: {
-        parser: {
-          registerOscHandler: vi.fn(
-            (_code: number, handler: (payload: string) => boolean) => {
-              oscHandler = handler;
-              return { dispose: vi.fn() };
-            },
-          ),
-        },
-      } as unknown as Terminal,
-      sessionId: SESSION_ID,
-      project: "web",
-      getTerminalOrder: () => 1,
-    });
 
     expect(container.querySelector('[data-shell="ide"]')).not.toBeNull();
-    expect(
-      oscHandler?.("notify;Codex is ready;Review the completed task."),
-    ).toBe(true);
-    const nativeNotification = FakeNotification.latest;
-    expect(nativeNotification?.title).toBe("Codex is ready");
-    expect(nativeNotification?.options.body).toBe(
-      "web · Bash #1\nReview the completed task.",
+    notifyBrowserAgent(
+      {
+        source: "agent-status",
+        sessionId: SESSION_ID,
+        agent: "omp",
+        title: "OMP needs attention",
+        body: "web · Bash #1\nApproval requested.",
+        status: "needs-attention",
+        receivedAt: Date.now(),
+      },
+      {
+        enabled: true,
+        rateLimitMs: 0,
+        terminalOrder: 1,
+        onSelect: () =>
+          dispatchTerminalNotificationSelection(
+            SESSION_ID,
+            window,
+          ),
+      },
     );
+
+    const nativeNotification = FakeNotification.latest;
+    expect(nativeNotification?.title).toBe("OMP needs attention");
 
     await act(async () => {
       nativeNotification?.dispatchEvent(new Event("click"));
     });
-    integration.dispose();
-
     expect(nativeNotification?.close).toHaveBeenCalledOnce();
     expect(windowFocus).toHaveBeenCalledOnce();
     expect(mocks.saveWorkspaceMode).not.toHaveBeenCalled();

@@ -1,4 +1,3 @@
-import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { playTerminalNotificationSound, recordClientDiagnostic } = vi.hoisted(
@@ -16,12 +15,18 @@ vi.mock("@/lib/terminal-notification-sound.js", () => ({
   playTerminalNotificationSound,
 }));
 
-import { attachTerminalAgentNotifications } from "./terminal-agent-notification-integration.js";
-import { applyTerminalBufferReplay } from "./terminal-buffer-replay.js";
+vi.mock("@/api/connections.js", () => ({
+  isCurrentConnection: vi.fn((owner) => owner?.generation !== 999),
+}));
+
+import { deliverSemanticAgentAttention } from "./terminal-agent-notification-integration.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
-
-type OscHandler = (payload: string) => boolean;
+import type { ConnectionRef } from "@/api/ownership.js";
+import type {
+  AgentAttentionEvent,
+  TerminalAgentStatusRow,
+} from "@/api/agent-status-types.js";
 
 const originalNotification = globalThis.Notification;
 
@@ -57,45 +62,51 @@ function installFakeNotification() {
   return created;
 }
 
-function createTerminal() {
-  let handler: OscHandler | null = null;
-  let writeComplete: (() => void) | undefined;
-  const dispose = vi.fn();
-  const term = {
-    clear: vi.fn(),
-    write: vi.fn((data: string, callback?: () => void) => {
-      const osc9Signals = data.matchAll(/\u001b]9;([^\u0007]*)\u0007/g);
-      for (const signal of osc9Signals) handler?.(signal[1] ?? "");
-      writeComplete = callback;
-    }),
-    parser: {
-      registerOscHandler: vi.fn((code: number, next: OscHandler) => {
-        handler = next;
-        return { dispose };
-      }),
-    },
-  } as unknown as Terminal;
+const currentOwner: ConnectionRef = {
+  profileId: "profile-1",
+  url: "http://localhost:4801",
+  generation: 1,
+};
 
-  return {
-    dispose,
-    completeWrite: () => writeComplete?.(),
-    getHandler: () => handler,
-    term,
-  };
-}
+const baseOmpRow: TerminalAgentStatusRow = {
+  id: "term-1",
+  incarnation: 1,
+  agentKind: "omp",
+  state: "idle",
+  source: "lifecycle",
+  observedAtMs: 1_000,
+  expiresAtMs: null,
+  agentSessionId: "sess-1",
+  attentionRevision: 1,
+};
 
-describe("attachTerminalAgentNotifications", () => {
+const baseOmpAttention: AgentAttentionEvent = {
+  id: "att-1",
+  terminalId: "term-1",
+  incarnation: 1,
+  agentKind: "omp",
+  kind: "turn-ended",
+  outcome: "ended",
+  agentSessionId: "sess-1",
+  attentionRevision: 1,
+};
+
+describe("deliverSemanticAgentAttention", () => {
+  let createdNotifications: Array<{ title: string; options: NotificationOptions }>;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     recordClientDiagnostic.mockReset();
     playTerminalNotificationSound.mockReset();
+    createdNotifications = installFakeNotification();
+
     useSettingsStore.setState({
       terminalAgentNotifications: {
         version: 2,
         agents: {
           codex: {
-            enabled: true,
+            enabled: false,
             toast: true,
             browser: true,
             sound: true,
@@ -103,20 +114,20 @@ describe("attachTerminalAgentNotifications", () => {
             pattern: "default",
           },
           omp: {
-            enabled: false,
+            enabled: true,
             toast: true,
             browser: true,
             sound: true,
-            volume: 100,
-            pattern: "default",
+            volume: 80,
+            pattern: "soft",
           },
           claude: {
-            enabled: false,
+            enabled: true,
             toast: true,
             browser: true,
             sound: true,
-            volume: 100,
-            pattern: "default",
+            volume: 90,
+            pattern: "urgent",
           },
         },
       },
@@ -125,366 +136,203 @@ describe("attachTerminalAgentNotifications", () => {
   });
 
   afterEach(() => {
-    useSettingsStore.setState({
-      terminalAgentNotifications: {
-        version: 2,
-        agents: {
-          codex: {
-            enabled: false,
-            toast: true,
-            browser: true,
-            sound: true,
-            volume: 100,
-            pattern: "default",
-          },
-          omp: {
-            enabled: false,
-            toast: true,
-            browser: true,
-            sound: true,
-            volume: 100,
-            pattern: "default",
-          },
-          claude: {
-            enabled: false,
-            toast: true,
-            browser: true,
-            sound: true,
-            volume: 100,
-            pattern: "default",
-          },
-        },
-      },
-    });
     useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
     restoreNotificationGlobal();
     vi.useRealTimers();
   });
 
-  it("re-alerts repeated Codex OSC 9 notifications with stable tags", () => {
-    const created = installFakeNotification();
-    const { term, getHandler, dispose } = createTerminal();
-    const integration = attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-1",
-      project: "web",
+  it("delivers OMP turn-ended attention when enabled", () => {
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, baseOmpAttention);
+
+    const store = useTerminalNotificationsStore.getState();
+    expect(store.notifications).toHaveLength(1);
+    expect(store.notifications[0].event).toMatchObject({
+      agent: "omp",
+      title: "OMP turn ended",
+      body: "Turn ended; task success is not verified",
+      status: "finished",
     });
 
-    expect(term.parser.registerOscHandler).toHaveBeenCalledWith(
-      9,
-      expect.any(Function),
-    );
-
-    const handler = getHandler();
-    expect(handler).toBeTypeOf("function");
-    expect(handler?.("notify;Codex done;Review the answer")).toBe(true);
-
-    vi.advanceTimersByTime(1_001);
-    expect(handler?.("notify;Codex done;Review the answer again")).toBe(true);
-
-    expect(created).toHaveLength(2);
-    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
-      2,
-    );
-    expect(playTerminalNotificationSound).toHaveBeenNthCalledWith(
-      1,
-      "default",
-      100,
-    );
-    expect(playTerminalNotificationSound).toHaveBeenNthCalledWith(
-      2,
-      "default",
-      100,
-    );
-    expect(created[0]).toEqual({
-      title: "Codex done",
-      options: {
-        body: "Review the answer",
-        renotify: true,
-        tag: 'dam-hopper-agent-["[\\"\\",\\"term-1\\"]","osc9",null]',
-        timestamp: 1_000,
-      },
-    });
-    expect(created[1]).toEqual({
-      title: "Codex done",
-      options: {
-        body: "Review the answer again",
-        renotify: true,
-        tag: 'dam-hopper-agent-["[\\"\\",\\"term-1\\"]","osc9",null]',
-        timestamp: 2_001,
-      },
-    });
-
-    integration.dispose();
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(playTerminalNotificationSound).toHaveBeenCalledWith("soft", 80);
+    expect(createdNotifications).toHaveLength(1);
+    expect(createdNotifications[0].title).toBe("OMP turn ended");
   });
 
-  it("does not deliver OSC 9 notifications when the Codex setting is disabled", () => {
-    const created = installFakeNotification();
-    useSettingsStore.setState((state) => ({
-      terminalAgentNotifications: {
-        ...state.terminalAgentNotifications,
-        agents: {
-          ...state.terminalAgentNotifications.agents,
-          codex: {
-            ...state.terminalAgentNotifications.agents.codex,
-            enabled: false,
-          },
-        },
-      },
-    }));
-    const { getHandler, term } = createTerminal();
-
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-2",
-      project: "web",
-    });
-
-    const handler = getHandler();
-    expect(handler).toBeTypeOf("function");
-    expect(handler?.("notify;Codex done;Review the answer")).toBe(true);
-    expect(created).toHaveLength(0);
-    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
-      0,
+  it("delivers OMP needs-attention with approval, question, and error bodies", () => {
+    const approvalAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      id: "att-approval",
+      kind: "needs-attention",
+      reason: "approval",
+    };
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, approvalAttention);
+    expect(useTerminalNotificationsStore.getState().notifications[0]?.event.body).toBe(
+      "Approval requested",
     );
-    expect(useTerminalNotificationsStore.getState().toasts).toEqual([]);
+
+    useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
+    const questionAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      id: "att-question",
+      kind: "needs-attention",
+      reason: "question",
+    };
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, questionAttention);
+    expect(useTerminalNotificationsStore.getState().notifications[0]?.event.body).toBe(
+      "Question pending",
+    );
+
+    useTerminalNotificationsStore.setState({ notifications: [], toasts: [] });
+    const errorAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      id: "att-error",
+      kind: "needs-attention",
+      reason: "error",
+    };
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, errorAttention);
+    expect(useTerminalNotificationsStore.getState().notifications[0]?.event.body).toBe(
+      "Agent error",
+    );
+  });
+
+  it("delivers Claude needs-attention when enabled", () => {
+    const claudeRow: TerminalAgentStatusRow = {
+      ...baseOmpRow,
+      agentKind: "claude",
+      source: "hook",
+    };
+    const claudeAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      agentKind: "claude",
+      kind: "needs-attention",
+      reason: "approval",
+    };
+
+    deliverSemanticAgentAttention(currentOwner, claudeRow, claudeAttention);
+
+    const store = useTerminalNotificationsStore.getState();
+    expect(store.notifications).toHaveLength(1);
+    expect(store.notifications[0].event).toMatchObject({
+      agent: "claude",
+      title: "Claude needs attention",
+      body: "Approval requested",
+      status: "needs-attention",
+    });
+    expect(createdNotifications).toHaveLength(1);
+    expect(createdNotifications[0].title).toBe("Claude needs attention");
+  });
+
+  it("ignores Claude normal turn-ended attention (Claude only supports qualified needs-attention)", () => {
+    const claudeRow: TerminalAgentStatusRow = {
+      ...baseOmpRow,
+      agentKind: "claude",
+      source: "hook",
+    };
+    const claudeTurnEnded: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      agentKind: "claude",
+      kind: "turn-ended",
+    };
+
+    deliverSemanticAgentAttention(currentOwner, claudeRow, claudeTurnEnded);
+
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+    expect(createdNotifications).toHaveLength(0);
+  });
+
+  it("ignores Codex attention because Codex provides status only in this rollout", () => {
+    const codexRow: TerminalAgentStatusRow = {
+      ...baseOmpRow,
+      agentKind: "codex",
+      source: "hook",
+    };
+    const codexAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      agentKind: "codex",
+      kind: "needs-attention",
+      reason: "approval",
+    };
+
+    deliverSemanticAgentAttention(currentOwner, codexRow, codexAttention);
+
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+    expect(createdNotifications).toHaveLength(0);
+  });
+
+  it("rejects mismatch between row.agentKind and attention.agentKind", () => {
+    const mismatchedAttention: AgentAttentionEvent = {
+      ...baseOmpAttention,
+      agentKind: "claude",
+    };
+
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, mismatchedAttention);
+
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
     expect(playTerminalNotificationSound).not.toHaveBeenCalled();
   });
 
-  it("keeps replayed OSC 9 silent, then delivers an identical live signal", () => {
-    const created = installFakeNotification();
-    const { completeWrite, getHandler, term } = createTerminal();
-    const integration = attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-replay",
-      project: "web",
-    });
-    const handler = getHandler();
-    const payload = "notify;Codex done;Review the answer";
+  it("rejects attention when terminalId, incarnation, agentSessionId, or attentionRevision mismatch", () => {
+    deliverSemanticAgentAttention(
+      currentOwner,
+      baseOmpRow,
+      { ...baseOmpAttention, terminalId: "term-different" },
+    );
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
 
-    integration.setReplayActive(true);
-    applyTerminalBufferReplay(
-      term,
-      {
-        data: `\u001b]10;rgb:aa/bb/cc\u0007\u001b]9;${payload}\u0007`,
-        offset: 42,
-        reset: true,
-        truncated: false,
-      },
-      () => integration.setReplayActive(false),
+    deliverSemanticAgentAttention(
+      currentOwner,
+      baseOmpRow,
+      { ...baseOmpAttention, incarnation: 99 },
     );
-    expect(term.parser.registerOscHandler).toHaveBeenCalledTimes(1);
-    expect(term.parser.registerOscHandler).toHaveBeenCalledWith(
-      9,
-      expect.any(Function),
-    );
-    expect(created).toHaveLength(0);
-    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
-      0,
-    );
-    expect(useTerminalNotificationsStore.getState().toasts).toEqual([]);
-    expect(playTerminalNotificationSound).not.toHaveBeenCalled();
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
 
-    completeWrite();
-    expect(handler?.(payload)).toBe(true);
-    expect(created).toHaveLength(1);
-    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
-      1,
+    deliverSemanticAgentAttention(
+      currentOwner,
+      baseOmpRow,
+      { ...baseOmpAttention, agentSessionId: "different-session" },
     );
-    expect(useTerminalNotificationsStore.getState().toasts).toHaveLength(1);
-    expect(playTerminalNotificationSound).toHaveBeenCalledOnce();
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
+
+    deliverSemanticAgentAttention(
+      currentOwner,
+      baseOmpRow,
+      { ...baseOmpAttention, attentionRevision: 99 },
+    );
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
   });
 
-  it("delivers in-app when native browser notifications are denied", () => {
-    installFakeNotification();
-    useSettingsStore.setState((state) => ({
-      terminalAgentNotifications: {
-        ...state.terminalAgentNotifications,
-        agents: {
-          ...state.terminalAgentNotifications.agents,
-          codex: {
-            ...state.terminalAgentNotifications.agents.codex,
-            volume: 45,
-          },
-        },
-      },
-    }));
-    Object.defineProperty(globalThis.Notification, "permission", {
-      configurable: true,
-      value: "denied",
-    });
-    const { term, getHandler } = createTerminal();
+  it("rejects attention when connection is stale or not current", () => {
+    const staleOwner: ConnectionRef = {
+      ...currentOwner,
+      generation: 999, // mocked to return false from isCurrentConnection
+    };
 
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-denied",
-      project: "web",
-    });
+    deliverSemanticAgentAttention(staleOwner, baseOmpRow, baseOmpAttention);
 
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    const state = useTerminalNotificationsStore.getState();
-    expect(state.notifications).toHaveLength(1);
-    expect(state.notifications[0]?.event).toMatchObject({
-      sessionId: "term-denied",
-      title: "Codex done",
-      body: "Review the answer",
-    });
-    expect(state.toasts).toEqual([state.notifications[0]?.id]);
-    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
-      "default",
-      45,
-    );
-  });
-
-  it("delivers notifications without sound when the sound setting is disabled", () => {
-    const created = installFakeNotification();
-    useSettingsStore.setState((state) => ({
-      terminalAgentNotifications: {
-        ...state.terminalAgentNotifications,
-        agents: {
-          ...state.terminalAgentNotifications.agents,
-          codex: {
-            ...state.terminalAgentNotifications.agents.codex,
-            sound: false,
-          },
-        },
-      },
-    }));
-    const { term, getHandler } = createTerminal();
-
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-muted",
-      project: "web",
-    });
-
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    expect(created).toHaveLength(1);
-    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(
-      1,
-    );
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
     expect(playTerminalNotificationSound).not.toHaveBeenCalled();
   });
 
-  it("keeps bell history while suppressing only in-app toasts", () => {
-    const created = installFakeNotification();
-    useSettingsStore.setState((state) => ({
+  it("respects channel toggles for toast, sound, and browser", () => {
+    useSettingsStore.setState({
       terminalAgentNotifications: {
-        ...state.terminalAgentNotifications,
+        version: 2,
         agents: {
-          ...state.terminalAgentNotifications.agents,
-          codex: {
-            ...state.terminalAgentNotifications.agents.codex,
-            toast: false,
-            pattern: "urgent",
-            volume: 45,
-          },
+          codex: { enabled: false, toast: true, browser: true, sound: true, volume: 100, pattern: "default" },
+          omp: { enabled: true, toast: false, browser: false, sound: false, volume: 50, pattern: "default" },
+          claude: { enabled: false, toast: true, browser: true, sound: true, volume: 100, pattern: "default" },
         },
       },
-    }));
-    const { term, getHandler } = createTerminal();
-
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-no-toast",
-      project: "web",
     });
 
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    const state = useTerminalNotificationsStore.getState();
-    expect(state.notifications).toHaveLength(1);
-    expect(state.toasts).toEqual([]);
-    expect(created).toHaveLength(1);
-    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
-      "urgent",
-      45,
-    );
-  });
+    deliverSemanticAgentAttention(currentOwner, baseOmpRow, baseOmpAttention);
 
-  it("suppresses only browser popups when browser delivery is disabled", () => {
-    const created = installFakeNotification();
-    useSettingsStore.setState((state) => ({
-      terminalAgentNotifications: {
-        ...state.terminalAgentNotifications,
-        agents: {
-          ...state.terminalAgentNotifications.agents,
-          codex: {
-            ...state.terminalAgentNotifications.agents.codex,
-            browser: false,
-            pattern: "soft",
-            volume: 60,
-          },
-        },
-      },
-    }));
-    const { term, getHandler } = createTerminal();
-
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-no-browser",
-      project: "web",
-    });
-
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    const state = useTerminalNotificationsStore.getState();
-    expect(state.notifications).toHaveLength(1);
-    expect(state.toasts).toEqual([state.notifications[0]?.id]);
-    expect(created).toEqual([]);
-    expect(playTerminalNotificationSound).toHaveBeenCalledExactlyOnceWith(
-      "soft",
-      60,
-    );
-  });
-
-  it("separates browser alerts and history targets after terminal reincarnation", () => {
-    const created = installFakeNotification();
-    const { term, getHandler } = createTerminal();
-    let incarnation = 1;
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "shared",
-      project: "web",
-      profileId: "profile-a",
-      terminalRef: { profileId: "profile-a", id: "shared" },
-      getTerminalIncarnation: () => incarnation,
-    });
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    incarnation = 2;
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    expect(created).toHaveLength(2);
-    expect(created[0]?.options.tag).not.toBe(created[1]?.options.tag);
-    expect(
-      useTerminalNotificationsStore
-        .getState()
-        .notifications.map(
-          (entry) => entry.event.terminalInstanceRef?.incarnation,
-        ),
-    ).toEqual([2, 1]);
-    expect(
-      useTerminalNotificationsStore.getState().notifications[0]?.event
-        .sessionId,
-    ).toBe(JSON.stringify(["profile-a", "shared"]));
-  });
-
-  it("adds the current project and open-terminal order to the body", () => {
-    const created = installFakeNotification();
-    const { term, getHandler } = createTerminal();
-    let terminalOrder = 2;
-
-    attachTerminalAgentNotifications({
-      term,
-      sessionId: "term-3",
-      project: "api",
-      getTerminalOrder: () => terminalOrder,
-    });
-
-    expect(getHandler()?.("notify;Codex done;Review the answer")).toBe(true);
-    expect(created[0]?.options.body).toBe("api · Bash #2\nReview the answer");
-
-    vi.advanceTimersByTime(1_001);
-    terminalOrder = 4;
-    expect(getHandler()?.("notify;Codex done;Review again")).toBe(true);
-    expect(created[1]?.options.body).toBe("api · Bash #4\nReview again");
+    const store = useTerminalNotificationsStore.getState();
+    expect(store.notifications).toHaveLength(1);
+    expect(store.toasts).toHaveLength(0); // toast disabled
+    expect(playTerminalNotificationSound).not.toHaveBeenCalled(); // sound disabled
+    expect(createdNotifications).toHaveLength(0); // browser disabled
   });
 });

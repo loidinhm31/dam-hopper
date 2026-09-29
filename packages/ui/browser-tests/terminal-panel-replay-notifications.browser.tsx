@@ -82,8 +82,6 @@ const mocks = vi.hoisted(() => {
       mocks.transportGeneration += 1;
       mocks.transportChangeListeners.forEach((listener) => listener());
     },
-    setReplayActive: vi.fn(),
-    onOutput: vi.fn(),
     handleOutput: vi.fn(),
     handleReplay: vi.fn(),
     scheduleTerminalFit: vi.fn(),
@@ -313,17 +311,6 @@ vi.mock("@/lib/terminal-cursor-geometry-adapter.js", () => ({
 vi.mock("@/lib/terminal-touch-scroll.js", () => ({
   bindTerminalTouchScroll: () => () => {},
 }));
-vi.mock("@/lib/terminal-agent-notification-integration.js", () => ({
-  attachTerminalAgentNotifications: () => ({
-    setReplayActive: mocks.setReplayActive,
-    onOutput: mocks.onOutput,
-    onUserInput: vi.fn(),
-    onSubmittedCommand: vi.fn(),
-    onTitleChange: vi.fn(),
-    onTerminalExit: vi.fn(),
-    dispose: vi.fn(),
-  }),
-}));
 vi.mock("@/lib/diagnostics-client.js", () => ({
   recordClientDiagnostic: vi.fn(),
 }));
@@ -443,7 +430,6 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
       mocks.onData?.("live-second");
     });
 
-    expect(mocks.setReplayActive).toHaveBeenLastCalledWith(true);
     expect(mocks.terminal?.writes.map(({ data }) => data)).toEqual([
       "retained",
     ]);
@@ -451,14 +437,12 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
 
     await act(async () => mocks.terminal?.writes[0]?.callback?.());
 
-    expect(mocks.setReplayActive).toHaveBeenLastCalledWith(false);
     expect(mocks.terminal?.writes.map(({ data }) => data)).toEqual([
       "retained",
       "live-first",
       "live-second",
     ]);
     expect(mocks.handleOutput).toHaveBeenCalledTimes(2);
-    expect(mocks.onOutput).toHaveBeenCalledTimes(2);
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: true,
       streamReady: true,
@@ -727,7 +711,6 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
       recentOutput: false,
       streamReady: true,
     });
-    expect(mocks.setReplayActive).toHaveBeenLastCalledWith(false);
 
     const writesAfterRestart = mocks.terminal?.writes.length ?? 0;
     await act(async () =>

@@ -553,45 +553,42 @@ Provides file detection, presentation persistence, editor host routing, context 
 
 ## Terminal Agent Notifications
 
-**Locations:**
+**Primary locations:**
 
-- `packages/ui/src/lib/agent-command-recognizer.ts`
-- `packages/ui/src/lib/terminal-notification-signal-parser.ts`
-- `packages/ui/src/lib/terminal-notification-sound.ts`
-- `packages/ui/src/lib/browser-notification-service.ts`
-- `packages/ui/src/lib/agent-activity-tracker.ts`
-- `packages/ui/src/lib/terminal-notification-navigation.ts`
+- `packages/ui/src/components/organisms/AgentStatusBridge.tsx`
+- `packages/ui/src/hooks/use-agent-status-connections.ts`
+- `packages/ui/src/stores/agent-status.ts`
+- `packages/ui/src/lib/terminal-agent-notification-integration.ts`
+- `packages/ui/src/components/organisms/AgentSettings.tsx`
+- `packages/ui/src/components/atoms/AgentStatusBadge.tsx`
 - `packages/ui/src/stores/terminal-notifications.ts`
 - `packages/ui/src/components/organisms/TerminalNotificationCenter.tsx`
-- `packages/ui/src/components/organisms/TerminalNotificationFeedItem.tsx`
 - `packages/ui/src/components/organisms/TerminalNotificationToastViewport.tsx`
+- `packages/ui/src/lib/terminal-notification-sound.ts`
+- `packages/ui/src/lib/browser-notification-service.ts`
+- `packages/ui/src/lib/terminal-notification-navigation.ts`
 
-**Purpose:** Pure frontend pipeline for xterm-driven agent notifications. It stays UI-side, has no server dependency, and is unit-test friendly.
+**Purpose:** Shared notification UI for server-reported semantic agent attention. The app-root status bridge owns profile subscriptions; terminal output is not parsed as Codex status, and DamHopper's Codex OSC 9 notification integration has been removed.
 
 **Flow:**
 
-1. `recognizeAgentCommand()` extracts the executable token from a submitted terminal command and matches it against enabled literal or regex agent patterns.
-2. `AgentActivityTracker` watches submitted commands, output, user input, and enhanced terminal exit state to decide when to emit activity events.
-3. `terminal-notification-signal-parser.ts` normalizes BEL and OSC 9/777/99 terminal signals into a shared `TerminalAgentNotification` shape.
-4. `terminal-agent-notification-integration.ts` reads the master and child delivery preferences once for each accepted event. It always records history while the master is on, independently adds a toast, plays the selected synthesized chime at its saved volume, and creates a browser popup only when each corresponding child preference permits it.
-5. `TerminalNotificationCenter` renders the TopNav bell, unread count, bounded history, mark-read/all, and clear actions. Selecting an item dispatches a typed event keyed by stable `sessionId`.
-6. `TerminalNotificationToastViewport` renders up to three live top-right alerts with a six-second timeout. Toast and feed selection both route through the existing `WorkspacePage` terminal navigation path.
-7. `BrowserNotificationService` independently gates native delivery by permission, rate limit, and support checks, then dispatches native `Notification` objects whose body starts with `Project · Bash #N`; the original sanitized body retains its independent payload allowance below that context line.
+1. `AgentStatusBridge` keeps per-profile snapshots and authenticated WebSocket subscriptions active outside `TerminalPanel`.
+2. The agent status store fences rows and attention by profile connection generation, server epoch, terminal incarnation, and attention revision; baseline snapshots do not replay historical alerts.
+3. `terminal-agent-notification-integration.ts` accepts only matching current owner/status/attention identities, then selects the policy by agent.
+4. When an enabled policy accepts attention, history is recorded; `toast`, `sound`, and `browser` independently control transient, audio, and browser delivery.
+5. Version-2 policies route OMP turn-ended and needs-attention events, Claude qualified needs-attention only, and no Codex alerts.
+6. `TerminalNotificationCenter` renders the bell, unread count, bounded history, mark-read/all, and clear actions. In-app selection uses the event's profile and terminal identity.
+7. `TerminalNotificationToastViewport` renders up to three live top-right alerts with a six-second timeout. `BrowserNotificationService` gates popup delivery by permission, rate limit, and support.
 
 **Behavior notes:**
 
-- Parsing is defensive: control sequences are stripped, titles/bodies are capped, and invalid regex patterns fail closed.
-- Notifications are deduped per `sessionId` + `source` with a default 30s rate limit.
-- Quiet tracking is optional; when enabled it emits a "may need attention" notification after configurable inactivity.
-- Terminal exit notifications are suppressed when the session is expected to restart, so `willRestart` does not produce a finished notification.
-- Retained `terminal:buffer` replay is rendered unchanged but never delivers OSC 9 alerts: a session-local gate opens before xterm writes replay data and closes only from that write's completion callback. Live PTY chunks received while xterm is parsing replay queue in arrival order and flush after the gate closes; data received before any attach buffer keeps the existing fail-closed path.
-- Cleanup disposes xterm handlers, timers, and tracker state when the panel unmounts or the session is replaced.
-- In-app history is memory-only and capped at 50 records; toast IDs are capped at three. The master Codex setting is the OSC 9 capture gate and the only setting that synchronizes the Codex TUI. While it is enabled, disabling **In-app toast** still records the bell/history entry; **Browser popup** and **Notification sound** are independent delivery gates. Child choices remain saved but are disabled in the UI while the master is off.
-- `terminal-notification-sound.ts` reuses one Web Audio context to synthesize four fixed built-in in-app chimes: `default`, `soft`, `two-tone`, and `urgent`. `default` preserves the existing single-chime behavior for compatible saved configurations. Sound does not affect native browser popups and needs no audio assets or dependencies. Unsupported, SSR, autoplay-blocked, and audio-failure paths are silent no-ops; the persisted Sound switch, Sound style selector, and Volume slider control only this best-effort channel. **Play sound** previews the current style and volume from an explicit click; it neither creates a browser popup nor requests browser permission.
-- Terminal notification context keeps `terminalOrder` as the global current 1-based `openTabs` position; this is separate from the per-project title ordinals documented below. Both are display context only. Navigation never relies on a project name or ordinal. A target must be mounted and either explicitly alive or, only while liveness is unknown, already registered with xterm; explicitly dead, unmounted, and stale targets are safe no-ops.
-- In compact coarse-pointer layouts with the mobile custom keyboard enabled, selection still reveals and refits the exact terminal but deliberately avoids forcing native xterm focus so the browser keyboard is not opened unexpectedly.
-- Settings live under `SettingsAppearanceSection` via the extracted `TerminalAgentNotificationSettings`, `TerminalNotificationSoundControls`, and `AgentCommandPatternEditor` UI. Browser permission is requested only by the explicit **Request permission** click; changing the Browser popup toggle or saving another preference never requests, revokes, or persists that browser-managed permission. The app surfaces `unsupported`, `not requested`, `granted`, and `denied` states.
-- Client diagnostics for this feature are recorded under scope `terminal-agent-notifications` and must not include raw terminal output, replay data, OSC payloads, or command arguments beyond the executable token; replay state may use metadata-only counts.
+- Codex hooks provide status only: no turn-ended alert or needs-attention notification. Claude alerts are attention-only for qualified approval, question, or error states; normal turn-ended alerts are suppressed. OMP retains both turn-ended and needs-attention alerts.
+- All policy masters default off. Version-1 and legacy Codex settings normalize into version 2 while preserving Codex/OMP channel preferences; Claude defaults off. Status badges do not depend on notification policy.
+- Agent Settings is under Agent Store. OMP enablement requires matching install/runtime paths and a current managed extension; Claude requires matching paths and ready hooks; Codex notification activation is disabled.
+- Agent status badges show the agent and human-readable state, distinguish Unknown, and identify lifecycle versus hook observations with limited-coverage context in the tooltip.
+- There is no Codex OSC 9 parser, notification handler, or terminal attach callback, and settings no longer write Codex TUI notification configuration. Status and attention use the server agent-status protocol.
+- History is memory-only and capped at 50 records; toast IDs are capped at three. Sound uses the existing synthesized in-app chimes and does not control native browser popup sound.
+- Semantic notification selection retains profile and terminal incarnation identity; stale or closed targets are ignored. Browser permission is runtime-only and requested only by the explicit **Request permission** action.
 
 ## Terminal Title Ordinals
 

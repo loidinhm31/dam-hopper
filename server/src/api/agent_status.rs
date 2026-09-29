@@ -269,7 +269,8 @@ pub async fn get_agent_paths_verification(
     } else {
         let config_file = codex_config_dir_buf.join("config.toml");
         let hooks_file = codex_config_dir_buf.join("hooks.json");
-        let exists = config_file.is_file() || hooks_file.is_file();
+        let hooks_dir = codex_config_dir_buf.join("hooks");
+        let exists = config_file.is_file() || hooks_file.is_file() || hooks_dir.is_dir();
         let paths_match = codex_config_dir_buf == codex_notification_dir_buf;
         if !paths_match {
             (
@@ -290,7 +291,11 @@ pub async fn get_agent_paths_verification(
                 )),
             )
         } else {
-            (true, true, None)
+            (
+                true,
+                false,
+                Some("Codex native hooks track status only; terminal alert notifications are not supported in this rollout".to_string()),
+            )
         }
     };
 
@@ -326,17 +331,28 @@ pub async fn get_agent_paths_verification(
                     claude_config_dir, claude_notification_dir
                 )),
             )
-        } else if !exists {
-            (
-                false,
-                false,
-                Some(format!(
-                    "Claude settings file not found at {}",
-                    settings_file.display()
-                )),
-            )
         } else {
-            (true, true, None)
+            match check_native_integration_status(AgentKind::Claude, &claude_config_dir_buf) {
+                Ok(report) => {
+                    if report.readiness == ManagedReadinessStatus::Ready {
+                        (exists, true, None)
+                    } else {
+                        (
+                            exists,
+                            false,
+                            Some(format!(
+                                "Claude native integration is not ready ({})",
+                                report.readiness
+                            )),
+                        )
+                    }
+                }
+                Err(e) => (
+                    exists,
+                    false,
+                    Some(format!("Failed to verify Claude integration: {e}")),
+                ),
+            }
         }
     };
 

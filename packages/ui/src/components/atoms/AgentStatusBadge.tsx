@@ -12,7 +12,7 @@ const STATE_PRESENTATION: Record<
   unknown: {
     label: "Unknown",
     shortLabel: "?",
-    className: "text-[var(--color-text-muted)]",
+    className: "text-[var(--color-text-muted)] border-dashed opacity-80",
   },
   idle: {
     label: "Idle",
@@ -65,15 +65,27 @@ export function AgentStatusBadge({ terminalRef, incarnation }: Props) {
               className: "text-[var(--color-text-muted)]",
             }
           : STATE_PRESENTATION[row.state];
-  const agent = row.agentKind.toUpperCase();
-  const description = `${agent} agent: ${presentation.label}`;
+  const agent =
+    row.agentKind === "omp"
+      ? "OMP"
+      : row.agentKind === "codex"
+        ? "Codex"
+        : "Claude";
+  const ariaLabel = `${agent} agent: ${presentation.label}`;
+  let tooltip = ariaLabel;
+  if (row.source === "hook") {
+    tooltip +=
+      " · Hook observation (limited coverage; quiet reasoning and long waits become Unknown)";
+  } else if (row.source === "lifecycle") {
+    tooltip += " · Lifecycle observation";
+  }
 
   return (
     <span
       className={`inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-sm border border-[var(--color-border)] px-1 py-0.5 font-mono text-[10px] leading-none ${presentation.className}`}
       role="img"
-      title={description}
-      aria-label={description}
+      title={tooltip}
+      aria-label={ariaLabel}
     >
       <span aria-hidden="true">{agent}</span>
       <span aria-hidden="true">· {presentation.shortLabel}</span>

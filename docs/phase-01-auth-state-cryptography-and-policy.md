@@ -75,6 +75,6 @@ The MFA key is encryption material, not the JWT signing secret. Do not put it in
 
 - [Authentication API](./authentication-api.md) — Phase 02 route contract and JSON examples
 - [API Reference](./api-reference.md#authentication) — server-wide route index
-- [Configuration Guide](./configuration-guide.md#environment-variables) — environment-variable index
+- [Server Configuration](./configuration/server-configuration.md#environment-variables) — environment-variable index
 - [System Architecture](./system-architecture.md) — server-wide subsystem architecture
 - [Phase 01 plan](../plans/260926-2157-token-rotation-mfa/phase-01-auth-state-and-policy.md) and [parent auth plan](../plans/260926-2157-token-rotation-mfa/plan.md) — implementation record and next-phase sequencing

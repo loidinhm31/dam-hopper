@@ -4,14 +4,12 @@ import type { TerminalAgentType } from "@/api/client.js";
 
 export type TerminalAgentNotificationSource =
   | "bel"
-  | "osc9"
   | "osc777"
   | "osc99"
   | "quiet"
   | "tui-ready"
   | "terminal-exit"
   | "agent-status";
-
 export type TerminalAgentNotificationStatus =
   | "needs-attention"
   | "finished"
@@ -53,17 +51,6 @@ export function parseBelNotification(
     title: DEFAULT_TITLE,
     status: "needs-attention",
   });
-}
-
-export function parseOsc9Notification(
-  payload: string,
-  context: TerminalNotificationParseContext,
-): TerminalAgentNotification | null {
-  const parts = splitPayload(stripOscPrefix(payload, "9"));
-  if (parts.length === 0) return null;
-
-  const offset = parts[0] === "notify" ? 1 : 0;
-  return createFromParts("osc9", parts.slice(offset), context);
 }
 
 export function parseOsc777Notification(
@@ -133,7 +120,7 @@ export function createTerminalAgentNotification(
 }
 
 function createFromParts(
-  source: Extract<TerminalAgentNotificationSource, "osc9" | "osc777" | "osc99">,
+  source: Extract<TerminalAgentNotificationSource, "osc777" | "osc99">,
   parts: string[],
   context: TerminalNotificationParseContext,
 ): TerminalAgentNotification {
