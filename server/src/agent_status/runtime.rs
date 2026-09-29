@@ -5,14 +5,15 @@ use parking_lot::{Mutex, RwLock};
 use rand::{Rng, RngCore};
 use subtle::ConstantTimeEq;
 
+use super::hook_ingress::TokenRateLimiter;
 use super::reducer::AgentStatusRegistry;
 use super::types::{
-    validate_safe_integer, AgentStatusAvailability, AgentStatusBroadcastEvent,
+    AgentObservationSource, AgentStatusAvailability, AgentStatusBroadcastEvent,
     AgentStatusChangedPayload, AgentStatusError, AgentStatusRemovedPayload, AgentStatusSnapshotV1,
-    ReporterAccepted, ReporterAck, ReporterHello, ReporterReport, BROADCAST_CAPACITY,
-    DEFAULT_HEARTBEAT_MS, DEFAULT_LEASE_MS,
+    PrivateHookEnvelope, ReporterAccepted, ReporterAck, ReporterHello, ReporterReport,
+    TerminalAgentStatusRow, BROADCAST_CAPACITY, DEFAULT_HEARTBEAT_MS, DEFAULT_LEASE_MS,
 };
-
+use crate::pty::activity::ProcessIdentity;
 /// Lifecycle state for terminal-scoped capabilities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialState {
@@ -51,6 +52,7 @@ pub enum TokenAuthResult {
 struct LiveReporterHandle {
     reporter_id: String,
     reporter_epoch: u64,
+    credential_token: String,
     close_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -58,7 +60,20 @@ struct LiveReporterHandle {
 struct CredentialStore {
     by_token: HashMap<String, ScopedCredential>,
     by_terminal: HashMap<(String, u64), String>,
-    next_reporter_epoch: u64,
+    current_incarnations: HashMap<String, u64>,
+}
+
+impl CredentialStore {
+    fn is_active(&self, key: &(String, u64), expected_token: Option<&str>) -> bool {
+        if self.current_incarnations.get(&key.0) != Some(&key.1) {
+            return false;
+        }
+        self.by_terminal
+            .get(key)
+            .filter(|token| expected_token.is_none_or(|expected| token.as_str() == expected))
+            .and_then(|token| self.by_token.get(token))
+            .is_some_and(|credential| credential.state == CredentialState::Active)
+    }
 }
 
 /// Guard holding a pending credential reservation.
@@ -96,13 +111,15 @@ impl CredentialReservation {
 
     /// Activate credential upon successful PTY publication.
     pub fn activate(mut self) {
-        self.runtime.activate_credential(&self.terminal_id, self.incarnation);
+        self.runtime
+            .activate_credential(&self.terminal_id, self.incarnation);
         self.activated = true;
     }
 
     /// Explicitly revoke credential without waiting for drop.
     pub fn revoke(mut self) {
-        self.runtime.revoke_credential(&self.terminal_id, self.incarnation);
+        self.runtime
+            .revoke_credential(&self.terminal_id, self.incarnation);
         self.activated = true; // prevent double-revocation in drop
     }
 }
@@ -110,7 +127,8 @@ impl CredentialReservation {
 impl Drop for CredentialReservation {
     fn drop(&mut self) {
         if !self.activated {
-            self.runtime.revoke_credential(&self.terminal_id, self.incarnation);
+            self.runtime
+                .revoke_credential(&self.terminal_id, self.incarnation);
         }
     }
 }
@@ -119,16 +137,32 @@ struct Inner {
     server_epoch: u64,
     availability: RwLock<AgentStatusAvailability>,
     listener_url: RwLock<Option<String>>,
+    hook_socket_path: RwLock<Option<std::path::PathBuf>>,
     registry: Arc<RwLock<AgentStatusRegistry>>,
     credentials: Mutex<CredentialStore>,
     reporters: Mutex<HashMap<(String, u64), LiveReporterHandle>>,
     event_tx: tokio::sync::broadcast::Sender<AgentStatusBroadcastEvent>,
     lease_abort_handle: Mutex<Option<tokio::task::AbortHandle>>,
+    registered_roots: Mutex<HashMap<(String, u64), ProcessIdentity>>,
+    hook_rate_limiters: Mutex<HashMap<(String, u64), TokenRateLimiter>>,
 }
 
 /// Shared runtime managing agent status credentials, loopback admission, and semantic broadcast.
 #[derive(Clone)]
 pub struct AgentStatusRuntime(Arc<Inner>);
+
+#[cfg(target_os = "linux")]
+fn check_process_exited(root: ProcessIdentity) -> bool {
+    match crate::pty::activity::read_process_stat(std::path::Path::new("/proc"), root.pid) {
+        Ok(stat) => stat.start_ticks != root.start_ticks,
+        Err(_) => true,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn check_process_exited(_root: ProcessIdentity) -> bool {
+    false
+}
 
 impl AgentStatusRuntime {
     /// Create a new runtime with a random server epoch and specified availability and listener URL.
@@ -154,11 +188,14 @@ impl AgentStatusRuntime {
             server_epoch,
             availability: RwLock::new(availability),
             listener_url: RwLock::new(listener_url),
+            hook_socket_path: RwLock::new(None),
             registry,
             credentials: Mutex::new(CredentialStore::default()),
             reporters: Mutex::new(HashMap::new()),
             event_tx,
             lease_abort_handle: Mutex::new(None),
+            registered_roots: Mutex::new(HashMap::new()),
+            hook_rate_limiters: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -200,6 +237,15 @@ impl AgentStatusRuntime {
         let _ = self.0.registry.write().set_availability(availability);
     }
 
+    /// Update the Unix domain socket path for native hook ingress.
+    pub fn set_hook_socket_path(&self, path: Option<std::path::PathBuf>) {
+        *self.0.hook_socket_path.write() = path;
+    }
+
+    /// Retrieve the Unix domain socket path for native hook ingress if bound.
+    pub fn hook_socket_path(&self) -> Option<std::path::PathBuf> {
+        self.0.hook_socket_path.read().clone()
+    }
     /// Reserve a scoped credential for a pending terminal incarnation.
     ///
     /// Returns `None` if the runtime is unavailable or platform-unqualified.
@@ -227,8 +273,23 @@ impl AgentStatusRuntime {
 
         {
             let mut creds = self.0.credentials.lock();
+            if creds
+                .current_incarnations
+                .get(terminal_id)
+                .is_some_and(|current| {
+                    *current > incarnation
+                        || (*current == incarnation && !creds.by_terminal.contains_key(&key))
+                })
+            {
+                return None;
+            }
+            creds
+                .current_incarnations
+                .insert(terminal_id.to_string(), incarnation);
+            if let Some(old_token) = creds.by_terminal.insert(key, token.clone()) {
+                creds.by_token.remove(&old_token);
+            }
             creds.by_token.insert(token.clone(), cred);
-            creds.by_terminal.insert(key, token.clone());
         }
 
         Some(CredentialReservation {
@@ -259,17 +320,41 @@ impl AgentStatusRuntime {
     /// Revoke credential for a terminal incarnation.
     pub fn revoke_credential(&self, terminal_id: &str, incarnation: u64) {
         let key = (terminal_id.to_string(), incarnation);
-        {
-            let mut creds = self.0.credentials.lock();
-            if let Some(token) = creds.by_terminal.remove(&key) {
-                creds.by_token.remove(&token);
-            }
-        }
-        // Disconnect any active reporter connection
+        // All capability revocations serialize with admission and report commits.
         let mut reporters = self.0.reporters.lock();
+        let mut creds = self.0.credentials.lock();
+        if let Some(token) = creds.by_terminal.remove(&key) {
+            creds.by_token.remove(&token);
+        }
         if let Some(mut handle) = reporters.remove(&key) {
             if let Some(tx) = handle.close_tx.take() {
                 let _ = tx.send(());
+            }
+        }
+        self.clear_terminal_root(terminal_id, incarnation);
+        self.0.hook_rate_limiters.lock().remove(&key);
+        let changed = {
+            let mut reg = self.0.registry.write();
+            reg.get_row(terminal_id, incarnation).and_then(|row| {
+                reg.mark_unknown(terminal_id, incarnation, row.reporter_epoch)
+                    .ok()
+                    .map(|output| (output, reg.revision))
+            })
+        };
+        drop(creds);
+        drop(reporters);
+        if let Some((output, revision)) = changed {
+            if output.state_changed {
+                if let Some(row) = output.row {
+                    let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
+                        AgentStatusChangedPayload {
+                            server_epoch: self.server_epoch(),
+                            revision,
+                            row,
+                            attention: None,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -286,9 +371,144 @@ impl AgentStatusRuntime {
             reg.remove_terminal(terminal_id, incarnation)?
         };
         if let Some(p) = &payload {
-            let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Removed(p.clone()));
+            let _ = self
+                .0
+                .event_tx
+                .send(AgentStatusBroadcastEvent::Removed(p.clone()));
         }
         Ok(payload)
+    }
+    /// Register the child process identity rooted at a PTY spawn for a terminal incarnation.
+    pub fn register_terminal_root(
+        &self,
+        terminal_id: &str,
+        incarnation: u64,
+        root: ProcessIdentity,
+    ) {
+        let mut roots = self.0.registered_roots.lock();
+        roots.insert((terminal_id.to_string(), incarnation), root);
+    }
+
+    /// Retrieve the registered root process identity for a terminal incarnation.
+    pub fn get_terminal_root(
+        &self,
+        terminal_id: &str,
+        incarnation: u64,
+    ) -> Option<ProcessIdentity> {
+        let roots = self.0.registered_roots.lock();
+        roots.get(&(terminal_id.to_string(), incarnation)).copied()
+    }
+
+    /// Clear the registered root process identity for a terminal incarnation.
+    pub fn clear_terminal_root(&self, terminal_id: &str, incarnation: u64) {
+        let mut roots = self.0.registered_roots.lock();
+        roots.remove(&(terminal_id.to_string(), incarnation));
+    }
+
+    /// Check and consume rate limit for native command hook requests on a terminal incarnation.
+    pub fn check_hook_rate_limit(&self, terminal_id: &str, incarnation: u64) -> bool {
+        let mut limiters = self.0.hook_rate_limiters.lock();
+        let limiter = limiters
+            .entry((terminal_id.to_string(), incarnation))
+            .or_default();
+        limiter.check_and_consume()
+    }
+
+    /// Check if a live, persistent OMP reporter is currently connected to a terminal.
+    pub fn has_live_omp_reporter(&self, terminal_id: &str, incarnation: u64) -> bool {
+        let reporters = self.0.reporters.lock();
+        reporters.contains_key(&(terminal_id.to_string(), incarnation))
+    }
+
+    /// Apply an authenticated native hook event to the status runtime.
+    ///
+    /// Native hooks are expiring observations and cannot evict a live OMP reporter.
+    pub fn apply_hook_event(
+        &self,
+        terminal_id: &str,
+        incarnation: u64,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+    ) -> Result<Option<TerminalAgentStatusRow>, AgentStatusError> {
+        // Capture process identity and generation together. Off-lock exit proof
+        // must never authorize replacement of a different owner at commit.
+        let prior_owner = self
+            .0
+            .registry
+            .read()
+            .get_native_owner(terminal_id, incarnation);
+        let exited_owner = if let Some(prior) = prior_owner {
+            if prior.root != envelope.root_process {
+                if !check_process_exited(prior.root) {
+                    return Err(AgentStatusError::AuthorityLost(
+                        "prior native root is still running".to_string(),
+                    ));
+                }
+                Some(prior)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 2. Consistent commit lock order: reporters -> credentials -> registered_roots -> registry
+        let key = (terminal_id.to_string(), incarnation);
+        let reporters = self.0.reporters.lock();
+        if reporters.contains_key(&key) {
+            return Err(AgentStatusError::AuthorityLost(
+                "terminal is occupied by live OMP reporter".to_string(),
+            ));
+        }
+        let credentials = self.0.credentials.lock();
+        if !credentials.is_active(&key, None) {
+            return Err(AgentStatusError::CapabilityRevoked);
+        }
+
+        // Revalidate registered PTY root at commit
+        let roots = self.0.registered_roots.lock();
+        let Some(registered_root) = roots.get(&key).copied() else {
+            return Err(AgentStatusError::CapabilityRevoked);
+        };
+        if !envelope
+            .process_ancestry
+            .iter()
+            .any(|p| *p == registered_root)
+        {
+            return Err(AgentStatusError::UnverifiableProcessAncestry(
+                "registered PTY root mismatch at commit".to_string(),
+            ));
+        }
+
+        let (output, revision) = {
+            let mut reg = self.0.registry.write();
+            let output = reg.apply_hook_with_prior_exited(
+                terminal_id,
+                incarnation,
+                envelope,
+                now_ms,
+                exited_owner,
+            )?;
+            (output, reg.revision)
+        };
+        drop(roots);
+        drop(credentials);
+        drop(reporters);
+
+        if let Some(row) = &output.row {
+            if output.state_changed || output.attention.is_some() {
+                let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
+                    AgentStatusChangedPayload {
+                        server_epoch: self.server_epoch(),
+                        revision,
+                        row: row.clone(),
+                        attention: output.attention,
+                    },
+                ));
+            }
+        }
+
+        Ok(output.row)
     }
 
     /// Authenticate a bearer token presented on WebSocket handshake.
@@ -296,7 +516,14 @@ impl AgentStatusRuntime {
         let creds = self.0.credentials.lock();
         if let Some(cred) = creds.by_token.get(token) {
             let is_match: bool = token.as_bytes().ct_eq(cred.token.as_bytes()).into();
-            if is_match {
+            let key = (cred.terminal_id.clone(), cred.incarnation);
+            if is_match
+                && creds
+                    .by_terminal
+                    .get(&key)
+                    .is_some_and(|current| current == token)
+                && creds.current_incarnations.get(&cred.terminal_id) == Some(&cred.incarnation)
+            {
                 match cred.state {
                     CredentialState::Active => TokenAuthResult::Active {
                         terminal_id: cred.terminal_id.clone(),
@@ -318,56 +545,49 @@ impl AgentStatusRuntime {
         &self,
         terminal_id: &str,
         incarnation: u64,
+        expected_token: &str,
         hello: &ReporterHello,
         close_tx: tokio::sync::oneshot::Sender<()>,
     ) -> Result<ReporterAccepted, AgentStatusError> {
         let now_ms = crate::pty::session::now_ms();
-        let (reporter_epoch, row) = {
+        let (reporter_epoch, row, revision) = {
             let mut reporters = self.0.reporters.lock();
             let key = (terminal_id.to_string(), incarnation);
-
-            if let Some(existing) = reporters.get_mut(&key) {
-                if existing.reporter_id == hello.reporter_id {
-                    // Same reporter reconnect: close old socket cleanly
-                    if let Some(tx) = existing.close_tx.take() {
-                        let _ = tx.send(());
-                    }
-                } else {
-                    // Different reporter: reject while old is live
+            let creds = self.0.credentials.lock();
+            if !creds.is_active(&key, Some(expected_token)) {
+                return Err(AgentStatusError::CapabilityRevoked);
+            }
+            if let Some(existing) = reporters.get(&key) {
+                if existing.reporter_id != hello.reporter_id {
                     return Err(AgentStatusError::ReporterOccupied {
                         active: existing.reporter_id.clone(),
                     });
                 }
             }
 
-            let mut creds = self.0.credentials.lock();
-            creds.next_reporter_epoch = creds.next_reporter_epoch.saturating_add(1);
-            let reporter_epoch = creds.next_reporter_epoch;
-            validate_safe_integer("reporter_epoch", reporter_epoch)?;
-
             let mut reg = self.0.registry.write();
-            let row = reg.admit_reporter(
-                terminal_id.to_string(),
-                incarnation,
-                reporter_epoch,
-                hello,
-                now_ms,
-            )?;
+            let row = reg.admit_reporter(terminal_id.to_string(), incarnation, hello, now_ms)?;
+            let reporter_epoch = row.reporter_epoch;
+            if let Some(existing) = reporters.get_mut(&key) {
+                if let Some(tx) = existing.close_tx.take() {
+                    let _ = tx.send(());
+                }
+            }
 
             reporters.insert(
                 key,
                 LiveReporterHandle {
                     reporter_id: hello.reporter_id.clone(),
                     reporter_epoch,
+                    credential_token: expected_token.to_string(),
                     close_tx: Some(close_tx),
                 },
             );
 
-            (reporter_epoch, row)
+            (reporter_epoch, row, reg.revision)
         };
 
         let server_epoch = self.server_epoch();
-        let revision = self.0.registry.read().revision;
         let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
             AgentStatusChangedPayload {
                 server_epoch,
@@ -396,15 +616,35 @@ impl AgentStatusRuntime {
     ) -> Result<ReporterAck, AgentStatusError> {
         let seq = report.seq;
         let now_ms = crate::pty::session::now_ms();
-        let output = {
+        let (output, revision) = {
+            // Lease expiry, disconnect, revocation and report application share
+            // this lock order. A queued frame cannot outlive its socket lease.
+            let reporters = self.0.reporters.lock();
+            let key = (terminal_id.to_string(), incarnation);
+            let Some(handle) = reporters.get(&key) else {
+                return Err(AgentStatusError::AuthorityLost(
+                    "reporter connection is no longer active".to_string(),
+                ));
+            };
+            if handle.reporter_epoch != reporter_epoch {
+                return Err(AgentStatusError::StaleReporterEpoch {
+                    current: handle.reporter_epoch,
+                    got: reporter_epoch,
+                });
+            }
+            let credentials = self.0.credentials.lock();
+            if !credentials.is_active(&key, Some(&handle.credential_token)) {
+                return Err(AgentStatusError::CapabilityRevoked);
+            }
             let mut reg = self.0.registry.write();
-            reg.apply_report(terminal_id, incarnation, reporter_epoch, report, now_ms)?
+            let output =
+                reg.apply_report(terminal_id, incarnation, reporter_epoch, report, now_ms)?;
+            (output, reg.revision)
         };
 
         if output.state_changed {
             if let Some(row) = output.row {
                 let server_epoch = self.server_epoch();
-                let revision = self.0.registry.read().revision;
                 let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
                     AgentStatusChangedPayload {
                         server_epoch,
@@ -427,25 +667,22 @@ impl AgentStatusRuntime {
         reporter_epoch: u64,
     ) {
         let key = (terminal_id.to_string(), incarnation);
-        {
+        let (res, revision) = {
             let mut reporters = self.0.reporters.lock();
             if let Some(handle) = reporters.get(&key) {
                 if handle.reporter_epoch == reporter_epoch {
                     reporters.remove(&key);
                 }
             }
-        }
-
-        let res = {
             let mut reg = self.0.registry.write();
-            reg.mark_unknown(terminal_id, incarnation, reporter_epoch)
+            let res = reg.mark_unknown(terminal_id, incarnation, reporter_epoch);
+            (res, reg.revision)
         };
 
         if let Ok(output) = res {
             if output.state_changed {
                 if let Some(row) = output.row {
                     let server_epoch = self.server_epoch();
-                    let revision = self.0.registry.read().revision;
                     let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
                         AgentStatusChangedPayload {
                             server_epoch,
@@ -486,6 +723,8 @@ impl AgentStatusRuntime {
         now_ms: u64,
         lease_ms: u64,
     ) -> Result<usize, AgentStatusError> {
+        // Consistent lock order: reporters before registry
+        let mut reporters = self.0.reporters.lock();
         let (outputs, revision) = {
             let mut reg = self.0.registry.write();
             let outputs = reg.check_leases(now_ms, lease_ms)?;
@@ -495,31 +734,44 @@ impl AgentStatusRuntime {
 
         let mut changed_count = 0;
         let server_epoch = self.server_epoch();
+        let mut events_to_send = Vec::new();
 
         for output in outputs {
             if output.state_changed {
                 changed_count += 1;
                 if let Some(row) = output.row {
-                    // Prune hung reporter connection and signal close on lease expiration
-                    {
-                        let mut reporters = self.0.reporters.lock();
+                    // Reporter epoch and source fence: prune hung reporter connection
+                    // ONLY if row origin is Lifecycle and epoch matches active handle.
+                    // Hook observations have no live reporter handle and cannot prune OMP.
+                    if row.source == AgentObservationSource::Lifecycle {
                         let key = (row.id.clone(), row.incarnation);
-                        if let Some(mut handle) = reporters.remove(&key) {
-                            if let Some(tx) = handle.close_tx.take() {
-                                let _ = tx.send(());
+                        if let Some(handle) = reporters.get(&key) {
+                            if handle.reporter_epoch == row.reporter_epoch {
+                                if let Some(mut handle) = reporters.remove(&key) {
+                                    if let Some(tx) = handle.close_tx.take() {
+                                        let _ = tx.send(());
+                                    }
+                                }
                             }
                         }
                     }
-                    let _ = self.0.event_tx.send(AgentStatusBroadcastEvent::Changed(
-                        AgentStatusChangedPayload {
-                            server_epoch,
-                            revision,
-                            row,
-                            attention: output.attention,
-                        },
-                    ));
+                    events_to_send.push(AgentStatusChangedPayload {
+                        server_epoch,
+                        revision,
+                        row,
+                        attention: output.attention,
+                    });
                 }
             }
+        }
+
+        drop(reporters);
+
+        for payload in events_to_send {
+            let _ = self
+                .0
+                .event_tx
+                .send(AgentStatusBroadcastEvent::Changed(payload));
         }
 
         Ok(changed_count)
@@ -555,7 +807,12 @@ impl AgentStatusRuntime {
             }
         }
 
+        *self.0.hook_socket_path.write() = None;
         *self.0.availability.write() = AgentStatusAvailability::Unavailable;
-        let _ = self.0.registry.write().set_availability(AgentStatusAvailability::Unavailable);
+        let _ = self
+            .0
+            .registry
+            .write()
+            .set_availability(AgentStatusAvailability::Unavailable);
     }
 }

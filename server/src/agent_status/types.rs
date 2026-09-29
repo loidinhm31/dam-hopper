@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pty::activity::ProcessIdentity;
+
 /// Canonical v1 protocol version for agent status reporting.
 pub const AGENT_STATUS_PROTOCOL_VERSION: u32 = 1;
 
@@ -24,11 +26,19 @@ pub const DEFAULT_LOOPBACK_HOST: &str = "127.0.0.1";
 /// Canonical private WebSocket path for agent status reporting.
 pub const AGENT_STATUS_WS_PATH: &str = "/v1/agent-status";
 
+/// Canonical private HTTP POST path for native agent hook reporting.
+pub const AGENT_HOOKS_PATH: &str = "/v1/agent-hooks";
+
+/// Maximum ancestry traversal depth permitted for process identity verification.
+pub const MAX_ANCESTRY_DEPTH: usize = 64;
 /// Environment variable carrying the private agent status collector URL.
 pub const ENV_AGENT_STATUS_URL: &str = "DAM_HOPPER_AGENT_STATUS_URL";
 
 /// Environment variable carrying the scoped agent status token.
 pub const ENV_AGENT_STATUS_TOKEN: &str = "DAM_HOPPER_AGENT_STATUS_TOKEN";
+
+/// Environment variable carrying the private agent hooks Unix domain socket path.
+pub const ENV_AGENT_HOOKS_SOCKET: &str = "DAM_HOPPER_AGENT_HOOKS_SOCKET";
 
 /// Handshake deadline waiting for initial `ReporterHello` (3 seconds).
 pub const HELLO_TIMEOUT_SECS: u64 = 3;
@@ -202,6 +212,27 @@ pub struct ReporterReport {
     pub outcome: Option<TurnOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<BlockedReason>,
+}
+/// Closed private envelope for one-shot native agent command hook reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrivateHookEnvelope {
+    pub version: u32,
+    pub agent_kind: AgentKind,
+    pub adapter_version: String,
+    pub event_id: String,
+    pub event: String,
+    pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BlockedReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_type: Option<String>,
+    pub root_process: ProcessIdentity,
+    pub process_ancestry: Vec<ProcessIdentity>,
 }
 
 /// Server acknowledgement for an accepted report sequence.
@@ -430,4 +461,28 @@ pub enum AgentStatusError {
 
     #[error("invalid handshake: {0}")]
     InvalidHandshake(String),
+
+    #[error("process ancestry verification failed: {0}")]
+    UnverifiableProcessAncestry(String),
+
+    #[error("non-Linux platform unqualified for ancestry verification")]
+    NonLinuxPlatformUnqualified,
+
+    #[error("Unix peer credentials mismatch: {0}")]
+    PeerCredentialsMismatch(String),
+
+    #[error("stale or uncorrelatable turn")]
+    StaleTurnCorrelation,
+
+    #[error("unsupported hook event {0}")]
+    UnsupportedHookEvent(String),
+
+    #[error("duplicate event id {0}")]
+    DuplicateEventId(String),
+
+    #[error("no registered root process for terminal {0}:{1}")]
+    MissingTerminalRoot(String, u64),
+
+    #[error("hook payload size exceeds maximum limit of {max} bytes")]
+    HookPayloadTooLarge { max: usize },
 }
