@@ -57,10 +57,48 @@ pub fn validate_hook_envelope(envelope: &PrivateHookEnvelope) -> Result<(), Agen
     }
 
     // Only Codex and Claude native hook ingress is permitted
-    if envelope.agent_kind != AgentKind::Codex && envelope.agent_kind != AgentKind::Claude {
-        return Err(AgentStatusError::AuthorityLost(
-            "unsupported agent kind for hook ingress".to_string(),
-        ));
+    match envelope.agent_kind {
+        AgentKind::Codex => {
+            if super::codex_hooks::normalize_codex_event(&envelope.event).is_none() {
+                return Err(AgentStatusError::AuthorityLost(format!(
+                    "unqualified Codex event: {}",
+                    envelope.event
+                )));
+            }
+            if envelope.reason.is_some() {
+                return Err(AgentStatusError::AuthorityLost(
+                    "Codex hook events cannot carry blocked reasons".to_string(),
+                ));
+            }
+            if envelope.notification_type.is_some() {
+                return Err(AgentStatusError::AuthorityLost(
+                    "Codex hook events cannot carry notification types".to_string(),
+                ));
+            }
+        }
+        AgentKind::Claude => {
+            if super::claude_hooks::normalize_claude_event(&envelope.event).is_none() {
+                return Err(AgentStatusError::AuthorityLost(format!(
+                    "unqualified Claude event: {}",
+                    envelope.event
+                )));
+            }
+            if envelope.event == "Notification" && envelope.notification_type.is_none() {
+                return Err(AgentStatusError::AuthorityLost(
+                    "Claude Notification event requires notification_type".to_string(),
+                ));
+            }
+            if envelope.reason.is_some() && envelope.event != "Notification" && envelope.event != "StopFailure" {
+                return Err(AgentStatusError::AuthorityLost(
+                    "Claude hook events cannot carry blocked reasons outside Notification and StopFailure".to_string(),
+                ));
+            }
+        }
+        AgentKind::Omp => {
+            return Err(AgentStatusError::AuthorityLost(
+                "unsupported agent kind for hook ingress".to_string(),
+            ));
+        }
     }
 
     validate_opaque_id("agent_session_id", &envelope.agent_session_id)?;

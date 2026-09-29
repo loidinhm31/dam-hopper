@@ -17,12 +17,13 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(test)]
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::agent_status::integration::MANAGED_ADAPTER_VERSION;
 use crate::agent_status::types::{
-    AgentKind, BlockedReason, PrivateHookEnvelope, AGENT_HOOKS_PATH, AGENT_STATUS_WS_PATH,
+    AgentKind, PrivateHookEnvelope, AGENT_HOOKS_PATH, AGENT_STATUS_WS_PATH,
     ENV_AGENT_HOOKS_SOCKET, ENV_AGENT_STATUS_TOKEN, ENV_AGENT_STATUS_URL, MAX_ANCESTRY_DEPTH,
 };
 use crate::pty::activity::{read_process_stat, ProcessIdentity};
@@ -40,14 +41,15 @@ pub const REPORT_HOOK_DEADLINE: Duration = Duration::from_millis(250);
 ///
 /// All sensitive fields (e.g. `prompt`, `tool_input`, `tool_name`, `last_assistant_message`,
 /// `error_details`, `transcript_path`, `cwd`, `reason`) are deliberately omitted and ignored by Serde.
+#[cfg(test)]
 fn present_marker<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
     Ok(true)
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct NativeHookInput {
-    /// Opaque native session identifier.
     session_id: Option<String>,
 
     /// Event name from hook execution (`hook_event_name` or `event`).
@@ -59,9 +61,9 @@ struct NativeHookInput {
     turn_id: Option<String>,
 
     /// Optional tool invocation identifier.
+    #[allow(dead_code)]
     #[serde(alias = "tool_use_id")]
     tool_call_id: Option<String>,
-
     /// Presence alone identifies a child; ignore marker content, including null.
     #[serde(default, deserialize_with = "present_marker")]
     agent_id: bool,
@@ -69,6 +71,7 @@ struct NativeHookInput {
     agent_type: bool,
 
     /// Notification type (e.g. "permission_prompt", "idle_prompt", "agent_needs_input").
+    #[allow(dead_code)]
     notification_type: Option<String>,
 }
 
@@ -230,67 +233,40 @@ async fn execute_report_hook_with_target(
 
     let PrivateHookTarget { socket_path, token } = target;
 
-    // Parse allowlisted metadata JSON; silently discard text/prompts.
-    let input: NativeHookInput = serde_json::from_slice(buffer).map_err(|_| ())?;
-
-    // Child markers check: any presence of agent_id or agent_type rejects (even if empty/null).
-    if input.agent_id || input.agent_type {
-        return Err(());
-    }
-
-    // Session ID must be non-empty.
-    let agent_session_id = input.session_id.ok_or(())?.trim().to_string();
-    if agent_session_id.is_empty() {
-        return Err(());
-    }
-
-    // Event name check and validation against provider allowlist.
-    let raw_event = input.hook_event_name.ok_or(())?.trim().to_string();
-    if raw_event.is_empty() {
-        return Err(());
-    }
-    let canonical_event = normalize_and_allowlist_event(agent_kind, &raw_event).ok_or(())?;
-
-    // 7. Map optional fields and closed reason codes.
-    let reason = match canonical_event {
-        "PermissionRequest" => Some(BlockedReason::Approval),
-        "StopFailure" => Some(BlockedReason::Error),
-        "Notification" => {
-            if input.notification_type.as_deref() == Some("permission_prompt") {
-                Some(BlockedReason::Approval)
-            } else if input.notification_type.as_deref() == Some("agent_needs_input") {
-                Some(BlockedReason::Question)
-            } else {
-                None
+    // Parse and normalize according to agent-specific qualified hook schemas.
+    let (canonical_event, agent_session_id, turn_id, tool_call_id, reason, notification_type) =
+        match agent_kind {
+            AgentKind::Codex => {
+                let norm = super::codex_hooks::parse_and_normalize_codex_hook(buffer)
+                    .map_err(|_| ())?;
+                (
+                    norm.canonical_event,
+                    norm.session_id,
+                    norm.turn_id,
+                    norm.tool_call_id,
+                    None,
+                    None,
+                )
             }
-        }
-        _ => None,
-    };
-
-    let turn_id = input.turn_id.and_then(|s| {
-        let t = s.trim();
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.to_string())
-        }
-    });
-    let tool_call_id = input.tool_call_id.and_then(|s| {
-        let t = s.trim();
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.to_string())
-        }
-    });
-    let notification_type = input.notification_type.and_then(|s| {
-        let t = s.trim();
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.to_string())
-        }
-    });
+            AgentKind::Claude => {
+                let norm = super::claude_hooks::parse_and_normalize_claude_hook(buffer)
+                    .map_err(|_| ())?;
+                let notification_type = if norm.is_question_candidate {
+                    Some("question_candidate".to_string())
+                } else {
+                    norm.notification_type
+                };
+                (
+                    norm.canonical_event,
+                    norm.session_id,
+                    norm.turn_id,
+                    norm.tool_call_id,
+                    norm.reason,
+                    notification_type,
+                )
+            }
+            AgentKind::Omp => return Err(()),
+        };
 
     // 8. Derive process identity and ancestry from actual /proc hierarchy.
     // Selects actual native agent CLI root, failing closed if ambiguous.
@@ -435,38 +411,9 @@ pub fn validate_and_derive_post_endpoint(raw_url: &str) -> Option<(SocketAddr, S
 
 /// Canonicalize and check if the given event name is allowlisted for the specified agent kind.
 pub fn normalize_and_allowlist_event(agent_kind: AgentKind, raw: &str) -> Option<&'static str> {
-    let canonical = match raw {
-        "SessionStart" | "session_start" | "session-start" => "SessionStart",
-        "UserPromptSubmit" | "user_prompt_submit" | "user-prompt-submit" => "UserPromptSubmit",
-        "PreToolUse" | "pre_tool_use" | "pre-tool-use" => "PreToolUse",
-        "PermissionRequest" | "permission_request" | "permission-request" => "PermissionRequest",
-        "PostToolUse" | "post_tool_use" | "post-tool-use" => "PostToolUse",
-        "PostToolUseFailure" | "post_tool_use_failure" | "post-tool-use-failure" => {
-            "PostToolUseFailure"
-        }
-        "PreCompact" | "pre_compact" | "pre-compact" => "PreCompact",
-        "PostCompact" | "post_compact" | "post-compact" => "PostCompact",
-        "Notification" | "notification" => "Notification",
-        "Stop" | "stop" => "Stop",
-        "Interrupt" | "interrupt" => "Interrupt",
-        "StopFailure" | "stop_failure" | "stop-failure" => "StopFailure",
-        "SessionEnd" | "session_end" | "session-end" => "SessionEnd",
-        _ => return None,
-    };
-
     match agent_kind {
-        AgentKind::Codex => match canonical {
-            "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PermissionRequest"
-            | "PostToolUse" | "PostToolUseFailure" | "PreCompact" | "PostCompact" | "Stop"
-            | "Interrupt" | "SessionEnd" => Some(canonical),
-            _ => None,
-        },
-        AgentKind::Claude => match canonical {
-            "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PermissionRequest"
-            | "PostToolUse" | "PostToolUseFailure" | "PreCompact" | "PostCompact"
-            | "Notification" | "Stop" | "StopFailure" | "SessionEnd" => Some(canonical),
-            _ => None,
-        },
+        AgentKind::Codex => super::codex_hooks::normalize_codex_event(raw),
+        AgentKind::Claude => super::claude_hooks::normalize_claude_event(raw),
         AgentKind::Omp => None,
     }
 }

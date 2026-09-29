@@ -293,3 +293,156 @@ async fn native_hook_reporter_updates_only_live_capability_and_expires_without_a
     assert_eq!(runtime.snapshot().terminals[0].state, AgentState::Unknown);
     collector.shutdown();
 }
+
+#[tokio::test]
+async fn test_codex_smoke_lifecycle_and_interrupt_via_real_subcommand() {
+    let runtime = AgentStatusRuntime::with_epoch(44, AgentStatusAvailability::Ready, None);
+    let collector = AgentStatusCollector::bind(runtime.clone(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let reservation = runtime.reserve_credential("codex-smoke", 1).unwrap();
+    let token = reservation.token().to_owned();
+    let root = probe_process_identity(std::process::id()).unwrap();
+    runtime.register_terminal_root("codex-smoke", 1, root);
+    reservation.activate();
+
+    let dir = tempfile::tempdir().unwrap();
+    let cli = dir.path().join("codex");
+    symlink("/bin/sh", &cli).unwrap();
+    let binary = env!("CARGO_BIN_EXE_dam-hopper-server");
+
+    use tokio::io::AsyncBufReadExt;
+
+    let mut child = Command::new(&cli)
+        .arg("-c")
+        .arg(format!(
+            "while IFS= read -r line; do printf '%s\\n' \"$line\" | '{binary}' integration codex report-hook; echo DONE; done"
+        ))
+        .env(ENV_AGENT_STATUS_URL, collector.ws_url())
+        .env(ENV_AGENT_STATUS_TOKEN, &token)
+        .env(ENV_AGENT_HOOKS_SOCKET, collector.socket_path().unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout_lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+
+    // 1. UserPromptSubmit: Working
+    stdin.write_all(
+        br#"{"hook_event_name":"UserPromptSubmit","session_id":"sess-codex-smoke","turn_id":"turn-smoke-1","prompt":"sensitive"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row1 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(row1.state, AgentState::Working);
+    assert_eq!(row1.turn_id.as_deref(), Some("turn-smoke-1"));
+
+    // 2. PreToolUse: stays Working
+    stdin.write_all(
+        br#"{"hook_event_name":"PreToolUse","session_id":"sess-codex-smoke","turn_id":"turn-smoke-1","tool_name":"exec"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row2 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(row2.state, AgentState::Working);
+
+    // 3. Interrupt: Idle with Interrupted outcome, no completion attention
+    stdin.write_all(
+        br#"{"hook_event_name":"Interrupt","session_id":"sess-codex-smoke","turn_id":"turn-smoke-1"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row3 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(row3.state, AgentState::Idle);
+    assert_eq!(row3.last_outcome, Some(dam_hopper_server::agent_status::TurnOutcome::Interrupted));
+
+    drop(stdin);
+    let status = child.wait().await.unwrap();
+    assert!(status.success());
+    collector.shutdown();
+}
+
+#[tokio::test]
+async fn test_claude_smoke_lifecycle_notification_and_subagent_rejection() {
+    let runtime = AgentStatusRuntime::with_epoch(45, AgentStatusAvailability::Ready, None);
+    let collector = AgentStatusCollector::bind(runtime.clone(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let reservation = runtime.reserve_credential("claude-smoke", 1).unwrap();
+    let token = reservation.token().to_owned();
+    let root = probe_process_identity(std::process::id()).unwrap();
+    runtime.register_terminal_root("claude-smoke", 1, root);
+    reservation.activate();
+
+    let dir = tempfile::tempdir().unwrap();
+    let cli = dir.path().join("claude");
+    symlink("/bin/sh", &cli).unwrap();
+    let binary = env!("CARGO_BIN_EXE_dam-hopper-server");
+
+    use tokio::io::AsyncBufReadExt;
+
+    let mut child = Command::new(&cli)
+        .arg("-c")
+        .arg(format!(
+            "while IFS= read -r line; do printf '%s\\n' \"$line\" | '{binary}' integration claude report-hook; echo DONE; done"
+        ))
+        .env(ENV_AGENT_STATUS_URL, collector.ws_url())
+        .env(ENV_AGENT_STATUS_TOKEN, &token)
+        .env(ENV_AGENT_HOOKS_SOCKET, collector.socket_path().unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout_lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+
+    // 1. UserPromptSubmit: Working
+    stdin.write_all(
+        br#"{"hook_event_name":"UserPromptSubmit","session_id":"sess-claude-smoke","prompt_id":"prompt-smoke-1"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row1 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(row1.state, AgentState::Working);
+    assert_eq!(row1.turn_id.as_deref(), Some("prompt-smoke-1"));
+
+    // 2. Notification(permission_prompt): Blocked(Approval)
+    stdin.write_all(
+        br#"{"hook_event_name":"Notification","session_id":"sess-claude-smoke","prompt_id":"prompt-smoke-1","notification_type":"permission_prompt"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row2 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(row2.state, AgentState::Blocked);
+    assert_eq!(row2.reason, Some(dam_hopper_server::agent_status::BlockedReason::Approval));
+
+    // 3. Subagent UserPromptSubmit: must be rejected silently without changing root Blocked state
+    stdin.write_all(
+        br#"{"hook_event_name":"UserPromptSubmit","session_id":"sess-claude-smoke","prompt_id":"child-prompt-1","agent_id":"child-agent-uuid"}"#,
+    ).await.unwrap();
+    stdin.write_all(b"\n").await.unwrap();
+    stdin.flush().await.unwrap();
+    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
+    let row3 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(
+        row3.state,
+        AgentState::Blocked,
+        "subagent event must not modify root state"
+    );
+    assert_eq!(row3.turn_id.as_deref(), Some("prompt-smoke-1"));
+
+    drop(stdin);
+    let status = child.wait().await.unwrap();
+    assert!(status.success());
+    collector.shutdown();
+}

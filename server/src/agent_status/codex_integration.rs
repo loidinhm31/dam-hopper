@@ -12,19 +12,7 @@ use crate::agent_status::integration::{
 use crate::agent_status::types::AgentKind;
 
 /// Canonical events managed by DamHopper for Codex CLI.
-pub const CODEX_MANAGED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PreCompact",
-    "PostCompact",
-    "Stop",
-    "Interrupt",
-    "SessionEnd",
-];
+pub const CODEX_MANAGED_EVENTS: &[&str] = crate::agent_status::codex_hooks::CODEX_QUALIFIED_EVENTS;
 
 /// Resolve the preferred config path for Codex in the given agent directory.
 /// Prefers `config.toml` if it already contains an inline `[hooks]` section and `hooks.json` does not exist.

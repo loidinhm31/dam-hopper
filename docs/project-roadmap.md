@@ -4,10 +4,12 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Codex and Claude native-hook status (2026-09-29)
 
-- **Plan status: IN PROGRESS (3/6 phases; 50%; Phase 03 updated 2026-09-29 Asia/Saigon).** Phases 01–03 are DONE; Phases 04–06 remain pending.
+- **Plan status: IN PROGRESS (4/6 phases; ~67%; Phase 04 updated 2026-09-29 Asia/Saigon).** Phases 01–04 are DONE; Phases 05–06 remain pending.
 - **Phase 03 — Managed installation and complete removal — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered managed Codex/Claude install, status, update, and complete removal through explicit native paths; config-preserving registration changes, exact ownership manifests, readiness/trust/policy distinctions, and restart-aware cleanup.
+- **Phase 04 — Codex and Claude native event adapters — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered conservative Codex/Claude event normalization with root/turn/session fencing, correlated blocker resolution, and no false completion alerts.
+- **Validation:** All **3,606 tests passed** overall; Phase 04 focused validation covered **74 unit + 7 integration tests**. Cycle 1 review approved **9.5/10**. See the [Phase 04 plan](../plans/260929-0140-agent-status-codex-claude/phase-04-native-event-adapters.md) and [review](../plans/reports/code-review-260929-1103-phase-04-codex-claude-native-event-adapters.md).
 - **Validation:** Cycle 2 review approved **9.5/10** with no critical issues; focused status tests passed **87/87** (15 integration, 59 library, 8 runtime, 5 hooks). Review follow-up notes remain non-blocking. See the [Phase 03 plan](../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md), [parent plan](../plans/260929-0140-agent-status-codex-claude/plan.md), and [Cycle 2 review](../plans/reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
-- **Next:** Phase 04 native event adapters; Phase 05 Settings/notification cutover; Phase 06 Linux end-to-end qualification. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
+- **Next:** Phase 05 Agent Settings/notification cutover; Phase 06 Linux end-to-end qualification. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
 
 ### Agent Store install paths and settings refactor (2026-09-28)
 
