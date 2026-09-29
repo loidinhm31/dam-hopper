@@ -272,6 +272,16 @@ pub async fn edit_commit_message(
             }
         }
     }
+    if repo.is_shallow() {
+        let mut blocked = GitActionResult::blocked(
+            GitBlockReason::UnsupportedHistory,
+            "shallow repository history is not supported for rewrite",
+            "unshallow repository before rewriting commit messages",
+        );
+        blocked.hash = Some(hash.to_string());
+        blocked.branch = Some(captured.branch);
+        return Ok(blocked);
+    }
 
     // Normalize incoming message: append one LF iff missing
     let mut normalized_message = message.as_bytes().to_vec();

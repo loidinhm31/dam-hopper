@@ -1964,31 +1964,99 @@ Clone a repository.
 Body: `{ url: string, recursive?: bool }`
 
 **POST /api/git/push**
-Push commits.
+Ordinary fast-forward push for the checked-out branch.
 
 Route: `/api/git/push`
 
-Body: `{ project: string, root?: string, force?: boolean }`
+Body: `{ project: string, worktreePath?: string, root?: string }`
 
 Client behavior:
 
-- Project-level pushes now use a root-aware contract in the UI. The project root still calls `api.git.push(project)`, while a selected child root calls `api.git.push(project, root)`.
-- ProjectInfoPanel, WorkspaceGitPanel, and GitPage each expose both `Push` and `Force Push` actions. The destructive button confirms first, then sends the same root-aware payload with `force: true`.
-- The shared SSH retry flow normalizes a single Git result or an array of results before checking for auth failures, so push retries follow the same path as fetch and pull.
-- Successful push operations now surface a shared status banner as well, so plain push, force push, and push-after-passphrase-retry all confirm completion in the UI.
-- Non-auth push failures now surface through the same shared status banner path, so non-fast-forward rejections are visible instead of disappearing behind an HTTP 200 response.
-- Successful pushes now invalidate the broader Git cache set on the client: branches, git log, project status, diff, conflicts, file-tree, and project list data refresh together instead of only the push caller.
-- The Git page now uses the same root-aware push path for single-project views, so a selected root is preserved consistently across page-level and sidebar-level push actions.
-- The SSH passphrase retry dialog can retry immediately or save the passphrase for later when the server and OS keyring support it.
-- Retry status messages are rendered through a shared frontend status model, so push/fetch/pull retries report the same wording and state handling.
-- For a bulk operation, the SSH retry request contains only targets whose
-  initial result was an SSH authentication failure. Successful targets remain
-  in the returned combined result and are not replayed. A changed owner
-  generation cancels the pending retry.
-- The backend push path uses libgit2 `Remote::push(...)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials.
-- Push scope is intentionally narrow: the checked-out branch is pushed to its configured upstream only. If `branch.<name>.remote` or `branch.<name>.merge` is missing, the route returns a clear push error instead of inferring a destination. Setting `force: true` changes only the refspec mode; it does not broaden destination inference.
-- See `ProjectInfoPanel.test.ts` and `use-git-with-ssh-retry.test.ts` for the root-selection and retry normalization coverage added in this phase.
+- Requests may select a worktree and VCS root with `worktreePath` and `root`.
+- The endpoint pushes only the checked-out branch to its configured upstream. It rejects non-fast-forward updates; the legacy `force` field is rejected with `422 Unprocessable Entity`. If `branch.<name>.remote` or `branch.<name>.merge` is missing, it returns a clear push error. Use leased publication below for destructive publication.
 
+**POST /api/git/{project}/push/prepare**
+Prepare an exact-OID leased publication preview. Inspects the checked-out branch, upstream remote, and remote reference without mutating any state.
+
+Route: `/api/git/{project}/push/prepare`
+
+Body: `{ worktreePath?: string, root?: string }`
+
+Response: `PublishPreview`:
+
+```json
+{
+  "status": "ready",
+  "snapshot": {
+    "branch": "refs/heads/main",
+    "sourceOid": "1111111111111111111111111111111111111111",
+    "remoteName": "origin",
+    "destinationRef": "refs/heads/main",
+    "expectedRemoteOid": "2222222222222222222222222222222222222222",
+    "remoteIdentity": "sha256-of-push-url",
+    "repositoryIdentity": "sha256-of-repo-roots"
+  },
+  "alreadyCurrent": false
+}
+```
+
+Or blocked when detached HEAD, missing upstream, ambiguous destination, or missing remote:
+
+```json
+{
+  "status": "blocked",
+  "reason": "detached-head",
+  "message": "HEAD is detached; leased publication requires a checked-out local branch under refs/heads/"
+}
+```
+
+**POST /api/git/{project}/push/publish**
+Publish a previously prepared and user-confirmed leased push snapshot with an exact remote-OID lease.
+
+Route: `/api/git/{project}/push/publish`
+
+Body:
+
+```json
+{
+  "snapshot": {
+    "branch": "refs/heads/main",
+    "sourceOid": "1111111111111111111111111111111111111111",
+    "remoteName": "origin",
+    "destinationRef": "refs/heads/main",
+    "expectedRemoteOid": "2222222222222222222222222222222222222222",
+    "remoteIdentity": "sha256-of-push-url",
+    "repositoryIdentity": "sha256-of-repo-roots"
+  },
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+Response: `PublishResult`:
+
+```json
+{
+  "status": "published",
+  "branch": "refs/heads/main",
+  "remoteName": "origin",
+  "destinationRef": "refs/heads/main",
+  "sourceOid": "1111111111111111111111111111111111111111",
+  "expectedRemoteOid": "2222222222222222222222222222222222222222",
+  "actualRemoteOid": "1111111111111111111111111111111111111111",
+  "message": "Successfully published refs/heads/main to origin/refs/heads/main"
+}
+```
+
+Statuses:
+- `published`: Push succeeded; remote destination ref moved to `sourceOid`.
+- `already-current`: Remote is already up to date with `sourceOid`; no push needed.
+- `stale-remote`: Remote moved from `expectedRemoteOid` to a different commit before or during negotiation; push aborted, no remote mutation.
+- `stale-local`: Local branch tip moved from `sourceOid` after preview; push aborted.
+- `stale-config`: Checked-out branch, upstream configuration, or push URL changed; push aborted.
+- `rejected`: Remote receive-pack hook declined the update; local edit is preserved.
+- `auth-required`: SSH or credential authentication failed before transfer.
+- `unknown`: Transport dropped after negotiation/send; status uncertain pending refresh.
 ### SSH Credential APIs
 
 **POST /api/ssh/keys/load**

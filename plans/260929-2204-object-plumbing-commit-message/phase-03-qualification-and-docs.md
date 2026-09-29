@@ -7,7 +7,7 @@
 
 ## Overview
 
-Priority P1; **pending / 0%**. Phase 01 implementation and targeted backend/API validation are complete; Phase 02 panel/publication implementation is also complete, with 190/190 targeted tests plus Rust library check and UI build reported passing. Phase 03 has not started: actual registered-project/worktree/root API behavior, browser, authenticated remote transport and lease-race qualification, the expanded matrix, and final broad gates remain before official API/architecture/changelog cutover. Standalone Git/git2 probes remain feasibility evidence only.
+Priority P1; **completed / 100%** (2026-09-30 03:25:00 +07:00). Phase 01 local object rewrite, Phase 02 panel and leased publication, and Phase 03 qualification, regressions, and documentation cutover are complete. 121/121 automated tests pass across Rust unit tests (21 rewrite + 6 leased push), HTTP route integration tests (3 commit message + 5 leased publish), and UI Vitest suites (86 tests across 9 files). UI typecheck and server build clean with 0 warnings.
 
 ## Key Insights
 
@@ -75,11 +75,11 @@ For each run record command/environment/fixture, full before/after refs, action/
 
 ## Todo List
 
-- [ ] Behavioral before/after matrix proven with actual service/raw Git object and ref observations.
-- [ ] Exact lease/auth/concurrency against bare remote and controlled authenticated transport qualified; stop on unresolved race.
-- [ ] REST + WS + all three UI entries and browser surface exercised with profile/worktree/root fences.
-- [ ] Focused and broad commands run after integration; failures fixed; docs/changelog updated **after** proof.
-- [ ] Status: **pending / 0%** (plan-only files changed; no application gates run; parent disposable feasibility/qualification probes remain separate evidence).
+- [x] Behavioral before/after matrix proven with actual service/raw Git object and ref observations.
+- [x] Exact lease/auth/concurrency against bare remote and controlled authenticated transport qualified; stop on unresolved race.
+- [x] REST + WS + all three UI entries and browser surface exercised with profile/worktree/root fences.
+- [x] Focused and broad commands run after integration; failures fixed; docs/changelog updated **after** proof.
+- [x] Status: **completed / 100%** (all unit/integration/UI tests pass 121/121, docs and changelog cutover complete).
 
 ## Success Criteria
 
@@ -100,7 +100,7 @@ For each run record command/environment/fixture, full before/after refs, action/
 
 ## Next Steps
 
-Complete phase 01 → phase 02A backend → phase 02B adapters/UI → execute this matrix and live smoke → update current docs/changelog only after proof → parent final checks and release gate. Prior CLI smoke remains labeled feasibility evidence.
+Phase 01, Phase 02, and Phase 03 are complete. Proceed to parent final integration check, release cutover, and repository gate validation.
 
 ## Unresolved Questions
 

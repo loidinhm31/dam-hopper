@@ -323,4 +323,183 @@ describe("useLeasedGitPush", () => {
     expect(currentHook?.state).toBe("published");
     expect(currentHook?.result).toEqual(publishedResult);
   });
+  it("transitions publishing -> stale when local tip changed (stale-local)", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const staleLocalResult: PublishResult = {
+      status: "stale-local",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Local branch tip changed",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(staleLocalResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("stale");
+    expect(currentHook?.result).toEqual(staleLocalResult);
+  });
+
+  it("transitions publishing -> stale when config changed (stale-config)", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const staleConfigResult: PublishResult = {
+      status: "stale-config",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Remote URL changed",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(staleConfigResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("stale");
+    expect(currentHook?.result).toEqual(staleConfigResult);
+  });
+
+  it("transitions publishing -> rejected when remote server rejects with hook error", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const rejectedResult: PublishResult = {
+      status: "rejected",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Remote rejected: pre-receive hook declined",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(rejectedResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("rejected");
+    expect(currentHook?.result).toEqual(rejectedResult);
+  });
+
+  it("transitions publishing -> unknown on uncertain completion", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const unknownResult: PublishResult = {
+      status: "unknown",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Connection dropped after send",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(unknownResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("unknown");
+    expect(currentHook?.result).toEqual(unknownResult);
+  });
+
+  it("transitions publishing -> already-current when re-advertised remote was already at tip", async () => {
+    const readyPreview: PublishPreview = {
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    };
+    const currentResult: PublishResult = {
+      status: "already-current",
+      branch: mockSnapshot.branch,
+      remoteName: mockSnapshot.remoteName,
+      destinationRef: mockSnapshot.destinationRef,
+      sourceOid: mockSnapshot.sourceOid,
+      expectedRemoteOid: mockSnapshot.expectedRemoteOid,
+      message: "Branch is already up to date on remote",
+    };
+
+    mocks.prepareMutateAsync.mockResolvedValueOnce(readyPreview);
+    mocks.publishMutateAsync.mockResolvedValueOnce(currentResult);
+
+    await act(async () => {
+      root?.render(<Harness project="demo" />);
+    });
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(currentHook?.state).toBe("already-current");
+    expect(currentHook?.result).toEqual(currentResult);
+  });
 });
