@@ -560,6 +560,33 @@
   outline-offset: -2px;
 }
 
+/* ── Workspace Advisor Host ── */
+.workspace-advisor-host-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-advisor-host-content.plugin-host-page {
+  min-height: 0 !important;
+  height: 100% !important;
+  width: 100% !important;
+  padding: 0;
+  margin: 0;
+}
+
+.workspace-advisor-host-content .plugin-frame-shell {
+  min-height: 0 !important;
+  height: 100% !important;
+  border: 0;
+  border-radius: 0;
+}
+
+.workspace-advisor-host-content .plugin-frame {
+  min-height: 0 !important;
+  height: 100% !important;
+  border: 0;
+}
+
 @media (max-width: 639px) {
   .plugin-host-page {
     height: max(

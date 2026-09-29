@@ -4,7 +4,7 @@ import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 export interface ActivateToolRequest {
   nonce: number;
   toolId: string;
-  exclusiveTarget?: "git" | "ports" | "project" | "terminals";
+  exclusiveTarget?: "git" | "ports" | "project" | "terminals" | "advisor";
 }
 
 export interface ResolveRevealActiveFileOutcomeArgs {
