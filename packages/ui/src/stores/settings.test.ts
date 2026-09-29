@@ -54,7 +54,7 @@ function resetSettingsStore() {
     terminalSuggestionsEnabled: true,
     terminalAutoSwitchProjectEnabled: true,
     terminalAgentNotifications: {
-      version: 1,
+      version: 2,
       agents: {
         codex: {
           enabled: false,
@@ -65,6 +65,14 @@ function resetSettingsStore() {
           pattern: "default",
         },
         omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        claude: {
           enabled: false,
           toast: true,
           browser: true,
@@ -123,7 +131,7 @@ describe("settings store terminal agent notification fields", () => {
     expect(state.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(state.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(state.terminalAgentNotifications).toEqual({
-      version: 1,
+      version: 2,
       agents: {
         codex: {
           enabled: false,
@@ -134,6 +142,14 @@ describe("settings store terminal agent notification fields", () => {
           pattern: "default",
         },
         omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        claude: {
           enabled: false,
           toast: true,
           browser: true,
@@ -186,7 +202,7 @@ describe("settings store terminal agent notification fields", () => {
 
     expect(updateUi).toHaveBeenCalledWith({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           codex: {
             enabled: true,
@@ -197,6 +213,14 @@ describe("settings store terminal agent notification fields", () => {
             pattern: "default",
           },
           omp: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          claude: {
             enabled: false,
             toast: true,
             browser: true,
@@ -291,7 +315,7 @@ describe("settings store terminal agent notification fields", () => {
 
     expect(updateUi).toHaveBeenCalledWith({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           codex: {
             enabled: false,
@@ -309,6 +333,14 @@ describe("settings store terminal agent notification fields", () => {
             volume: 100,
             pattern: "two-tone",
           },
+          claude: {
+            enabled: false,
+            toast: true,
+            browser: true,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
         },
       },
     });
@@ -318,7 +350,7 @@ describe("settings store terminal agent notification fields", () => {
     getGlobalConfig.mockResolvedValue({
       ui: {
         terminalAgentNotifications: {
-          version: 2,
+          version: 3,
           agents: {
             codex: {
               enabled: true,
@@ -344,9 +376,9 @@ describe("settings store terminal agent notification fields", () => {
 
     await useSettingsStore.getState().hydrate();
     const state = useSettingsStore.getState();
-    expect(state.terminalAgentNotifications.version).toBe(2);
-    expect(state.terminalAgentNotifications.agents.codex.enabled).toBe(true);
-    expect(state.terminalAgentNotifications.agents.omp.enabled).toBe(true);
+    expect(state.terminalAgentNotifications.version).toBe(3);
+    expect(state.terminalAgentNotifications.agents.codex.enabled).toBe(false);
+    expect(state.terminalAgentNotifications.agents.omp.enabled).toBe(false);
 
     // Attempt to save agent notification policy on unsupported version
     useSettingsStore
@@ -359,7 +391,7 @@ describe("settings store terminal agent notification fields", () => {
     useSettingsStore.getState().saveDebounced({
       systemFontSize: 16,
       terminalAgentNotifications: {
-        version: 2,
+        version: 3,
         agents: state.terminalAgentNotifications.agents,
       },
     });
@@ -367,6 +399,43 @@ describe("settings store terminal agent notification fields", () => {
     expect(updateUi).toHaveBeenCalledWith({
       systemFontSize: 16,
     });
+  });
+
+  it("migrates canonical v1 terminalAgentNotifications on hydrate", async () => {
+    getGlobalConfig.mockResolvedValue({
+      ui: {
+        terminalAgentNotifications: {
+          version: 1,
+          agents: {
+            codex: {
+              enabled: true,
+              toast: false,
+              browser: true,
+              sound: false,
+              volume: 60,
+              pattern: "soft",
+            },
+            omp: {
+              enabled: true,
+              toast: true,
+              browser: false,
+              sound: true,
+              volume: 90,
+              pattern: "urgent",
+            },
+          },
+        },
+      },
+    });
+
+    await useSettingsStore.getState().hydrate();
+    const state = useSettingsStore.getState();
+    expect(state.terminalAgentNotifications.version).toBe(2);
+    expect(state.terminalAgentNotifications.agents.codex.enabled).toBe(true);
+    expect(state.terminalAgentNotifications.agents.codex.volume).toBe(60);
+    expect(state.terminalAgentNotifications.agents.omp.enabled).toBe(true);
+    expect(state.terminalAgentNotifications.agents.omp.volume).toBe(90);
+    expect(state.terminalAgentNotifications.agents.claude.enabled).toBe(false);
   });
 
   it("marks hydrate complete when global config load fails", async () => {
@@ -441,7 +510,7 @@ describe("settings store terminal agent notification fields", () => {
     const payload = updateUi.mock.calls[0]?.[0];
     expect(payload).toEqual({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           codex: {
             enabled: true,
@@ -455,6 +524,14 @@ describe("settings store terminal agent notification fields", () => {
             enabled: true,
             toast: true,
             browser: false,
+            sound: true,
+            volume: 100,
+            pattern: "default",
+          },
+          claude: {
+            enabled: false,
+            toast: true,
+            browser: true,
             sound: true,
             volume: 100,
             pattern: "default",

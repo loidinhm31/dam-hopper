@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use super::types::{
-    validate_opaque_id, validate_safe_integer, AgentAttentionEvent, AgentKind, AgentState,
+    validate_opaque_id, validate_safe_integer, AgentAttentionEvent, AgentKind, AgentObservationSource, AgentState,
     AgentStatusAvailability, AgentStatusError, AgentStatusRemovedPayload, AgentStatusSnapshotV1,
     AttentionKind, BlockedReason, ReporterEventKind, ReporterHello, ReporterReport,
-    TerminalAgentStatusRow, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION,
+    TerminalAgentStatusRow, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION, DEFAULT_LEASE_MS,
 };
 
 /// Result of applying an event to an agent reducer.
@@ -34,6 +34,7 @@ pub struct TerminalAgentReducer {
     pub last_accepted_seq: u64,
     pub last_report: Option<ReporterReport>,
     pub last_report_time_ms: u64,
+    pub observed_at_ms: Option<u64>,
 
     // Semantic state
     pub state: AgentState,
@@ -84,6 +85,7 @@ impl TerminalAgentReducer {
             last_accepted_seq: 0,
             last_report: None,
             last_report_time_ms: now_ms,
+            observed_at_ms: None,
             state: AgentState::Unknown,
             agent_session_id: hello.agent_session_id.clone(),
             current_turn_id: None,
@@ -103,6 +105,18 @@ impl TerminalAgentReducer {
             agent_session_id: self.agent_session_id.clone(),
             reporter_epoch: self.reporter_epoch,
             state: self.state,
+            source: if self.agent_kind == AgentKind::Omp {
+                AgentObservationSource::Lifecycle
+            } else {
+                AgentObservationSource::Hook
+            },
+            observed_at_ms: self.observed_at_ms,
+            expires_at_ms: if self.agent_kind == AgentKind::Omp {
+                None
+            } else {
+                self.observed_at_ms
+                    .map(|at| at.saturating_add(DEFAULT_LEASE_MS))
+            },
             reason: self.blocked_reason,
             turn_id: self.current_turn_id.clone(),
             attention_revision: self.attention_revision,
@@ -149,7 +163,7 @@ impl TerminalAgentReducer {
         validate_opaque_id("agent_session_id", &hello.agent_session_id)?;
         validate_opaque_id("adapter_version", &hello.adapter_version)?;
 
-        let state_changed = self.state != AgentState::Unknown;
+        let state_changed = self.state != AgentState::Unknown || self.observed_at_ms.is_some();
 
         self.agent_kind = hello.agent_kind;
         self.reporter_id = hello.reporter_id.clone();
@@ -158,6 +172,7 @@ impl TerminalAgentReducer {
         self.last_accepted_seq = 0;
         self.last_report = None;
         self.last_report_time_ms = now_ms;
+        self.observed_at_ms = None;
         self.agent_session_id = hello.agent_session_id.clone();
         self.state = AgentState::Unknown;
         self.current_turn_id = None;
@@ -216,6 +231,13 @@ impl TerminalAgentReducer {
         }
 
         self.validate_report_consistency(&report)?;
+        // The persistent reporter protocol is OMP-only. Native hook events require
+        // separate admission and correlation; never interpret Stop as TurnEnded.
+        if self.agent_kind != AgentKind::Omp {
+            return Err(AgentStatusError::AuthorityLost(
+                "native hook events require private hook admission".to_string(),
+            ));
+        }
 
         // Record accepted sequence and report
         self.last_accepted_seq = report.seq;
@@ -410,6 +432,9 @@ impl TerminalAgentReducer {
             || self.current_turn_id != old_turn_id
             || self.agent_session_id != old_session_id
             || self.last_outcome != old_outcome;
+        if state_changed {
+            self.observed_at_ms = Some(now_ms);
+        }
 
         Ok(ReducerOutput {
             state_changed,
@@ -423,11 +448,13 @@ impl TerminalAgentReducer {
     pub fn mark_unknown(&mut self) -> ReducerOutput {
         let state_changed = self.state != AgentState::Unknown
             || self.blocked_reason.is_some()
-            || self.current_turn_id.is_some();
+            || self.current_turn_id.is_some()
+            || self.observed_at_ms.is_some();
 
         self.state = AgentState::Unknown;
         self.blocked_reason = None;
         self.current_turn_id = None;
+        self.observed_at_ms = None;
 
         ReducerOutput {
             state_changed,

@@ -869,15 +869,23 @@ pub struct TerminalAgentNotificationAgents {
     pub codex: TerminalAgentNotificationPolicy,
     #[serde(default)]
     pub omp: TerminalAgentNotificationPolicy,
+    #[serde(default)]
+    pub claude: TerminalAgentNotificationPolicy,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSettingsPaths {
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "omp_agent_dir")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "omp_agent_dir"
+    )]
     pub omp_agent_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "codex_dir")]
     pub codex_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "claude_dir")]
+    pub claude_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -890,7 +898,7 @@ pub struct TerminalAgentNotifications {
 }
 
 fn terminal_agent_notifications_version() -> u8 {
-    1
+    2
 }
 
 impl Default for TerminalAgentNotifications {
@@ -973,12 +981,49 @@ pub(crate) fn migrate_terminal_agent_notifications(ui: &mut serde_json::Value) {
     } else if let Some(snake) = fields.remove("terminal_agent_notifications") {
         fields.insert("terminalAgentNotifications".to_string(), snake);
     }
-    if fields.contains_key("terminalAgentNotifications") || legacy.is_empty() {
+
+    if let Some(canonical) = fields.get_mut("terminalAgentNotifications") {
+        if let Some(obj) = canonical.as_object_mut() {
+            let version = obj.get("version").and_then(|v| v.as_u64());
+            if version == Some(1) {
+                obj.insert("version".to_string(), serde_json::json!(2));
+                if let Some(agents) = obj.get_mut("agents").and_then(|a| a.as_object_mut()) {
+                    if !agents.contains_key("claude") {
+                        agents.insert(
+                            "claude".to_string(),
+                            serde_json::to_value(TerminalAgentNotificationPolicy::default())
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+            } else if version == Some(2) {
+                if let Some(agents) = obj.get_mut("agents").and_then(|a| a.as_object_mut()) {
+                    if !agents.contains_key("claude") {
+                        agents.insert(
+                            "claude".to_string(),
+                            serde_json::to_value(TerminalAgentNotificationPolicy::default())
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if legacy.is_empty() {
         return;
     }
     fields.insert(
         "terminalAgentNotifications".to_string(),
-        serde_json::json!({"version": 1, "agents": {"codex": legacy}}),
+        serde_json::json!({
+            "version": 2,
+            "agents": {
+                "codex": legacy,
+                "omp": serde_json::to_value(TerminalAgentNotificationPolicy::default()).unwrap_or_default(),
+                "claude": serde_json::to_value(TerminalAgentNotificationPolicy::default()).unwrap_or_default(),
+            }
+        }),
     );
 }
 
@@ -1216,12 +1261,13 @@ impl UiConfig {
     }
 
     pub fn validate_terminal_notification_sound_volume(&self) -> Result<(), String> {
-        if self.terminal_agent_notifications.version != 1 {
+        if self.terminal_agent_notifications.version != 2 {
             return Err("Unsupported terminal agent notifications version".to_string());
         }
         for policy in [
             &self.terminal_agent_notifications.agents.codex,
             &self.terminal_agent_notifications.agents.omp,
+            &self.terminal_agent_notifications.agents.claude,
         ] {
             if policy.volume > 100 {
                 return Err(

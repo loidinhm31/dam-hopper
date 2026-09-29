@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => {
   const settingsStore = {
     mobileCustomKeyboardEnabled: false,
     terminalAgentNotifications: {
-      version: 1,
+      version: 2,
       agents: {
         codex: {
           enabled: true,
@@ -27,6 +27,14 @@ const mocks = vi.hoisted(() => {
           pattern: "default",
         },
         omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        claude: {
           enabled: false,
           toast: true,
           browser: true,

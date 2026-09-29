@@ -1749,12 +1749,17 @@ enabled = true
         TerminalAgentNotificationSoundPattern::Default
     );
     assert!(ui.terminal_agent_notifications.agents.omp.enabled);
+    assert_eq!(ui.terminal_agent_notifications.version, 2);
+    assert!(!ui.terminal_agent_notifications.agents.claude.enabled);
 
     let roundtrip = loaded.clone();
     write_global_config_at(&path, &roundtrip).unwrap();
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(!written.contains("terminal_codex_"));
+    assert!(written.contains("version = 2"));
+    assert!(!written.contains("version = 1"));
     assert!(written.contains("[ui.terminal_agent_notifications.agents.omp]"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.claude]"));
     assert_eq!(
         read_global_config_at(&path)
             .unwrap()
@@ -1776,15 +1781,16 @@ terminal_codex_notifications_enabled = true
 terminal_codex_notification_sound_volume = 42
 
 [ui.terminal_agent_notifications]
-version = 2
-
+version = 3
 [ui.terminal_agent_notifications.agents.codex]
 enabled = false
 "#;
     std::fs::write(&path, unsupported).unwrap();
 
     let error = read_global_config_at(&path).unwrap_err();
-    assert!(error.to_string().contains("Unsupported terminal agent notifications version"));
+    assert!(error
+        .to_string()
+        .contains("Unsupported terminal agent notifications version"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), unsupported);
 }
 
@@ -1793,19 +1799,20 @@ fn global_ui_update_rejects_unsupported_notification_version_without_legacy_fall
     let mut incoming = serde_json::json!({
         "terminalCodexNotificationsEnabled": true,
         "terminalAgentNotifications": {
-            "version": 2,
+            "version": 3,
             "agents": { "codex": { "enabled": false } }
         }
     });
     super::schema::migrate_terminal_agent_notifications(&mut incoming);
-    assert_eq!(incoming["terminalAgentNotifications"]["version"], 2);
+    assert_eq!(incoming["terminalAgentNotifications"]["version"], 3);
     assert_eq!(
         incoming["terminalAgentNotifications"]["agents"]["codex"]["enabled"],
         false
     );
     let ui: UiConfig = serde_json::from_value(incoming).unwrap();
     assert_eq!(
-        ui.validate_terminal_notification_sound_volume().unwrap_err(),
+        ui.validate_terminal_notification_sound_volume()
+            .unwrap_err(),
         "Unsupported terminal agent notifications version"
     );
 }
@@ -1818,15 +1825,23 @@ fn global_config_write_preserves_stored_preferences_on_unsupported_version() {
         ui: Some(UiConfig::default()),
         ..GlobalConfig::default()
     };
-    config.ui.as_mut().unwrap().terminal_agent_notifications.agents.codex.enabled = true;
+    config
+        .ui
+        .as_mut()
+        .unwrap()
+        .terminal_agent_notifications
+        .agents
+        .codex
+        .enabled = true;
     write_global_config_at(&path, &config).unwrap();
     let original = std::fs::read_to_string(&path).unwrap();
 
     let ui = config.ui.as_mut().unwrap();
-    ui.terminal_agent_notifications.version = 2;
-    ui.terminal_agent_notifications.agents.codex.enabled = false;
+    ui.terminal_agent_notifications.version = 3;
     let error = write_global_config_at(&path, &config).unwrap_err();
-    assert!(error.to_string().contains("Unsupported terminal agent notifications version"));
+    assert!(error
+        .to_string()
+        .contains("Unsupported terminal agent notifications version"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     assert!(
         read_global_config_at(&path)
@@ -1847,16 +1862,125 @@ fn global_config_startup_check_propagates_unsupported_version_error() {
     let path = dir.path().join("config.toml");
     let unsupported = r#"
 [ui.terminal_agent_notifications]
-version = 2
+version = 3
 "#;
     std::fs::write(&path, unsupported).unwrap();
 
     // Matches the pattern in main.rs: read_global_config_at(&path)?.unwrap_or_default()
     let result = read_global_config_at(&path);
-    assert!(result.is_err(), "Unsupported version must return an Err, not Ok(None)");
+    assert!(
+        result.is_err(),
+        "Unsupported version must return an Err, not Ok(None)"
+    );
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("Unsupported terminal agent notifications version"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), unsupported);
+}
+
+#[test]
+fn global_config_load_migrates_v1_to_v2_preserving_omp_and_codex_and_adding_disabled_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[ui.terminal_agent_notifications]
+version = 1
+
+[ui.terminal_agent_notifications.agents.codex]
+enabled = true
+toast = true
+browser = false
+sound = true
+volume = 75
+pattern = "urgent"
+
+[ui.terminal_agent_notifications.agents.omp]
+enabled = true
+toast = false
+browser = true
+sound = false
+volume = 60
+pattern = "soft"
+"#,
+    )
+    .unwrap();
+
+    let loaded = read_global_config_at(&path)
+        .unwrap()
+        .expect("loaded config");
+    let ui = loaded.ui.as_ref().expect("ui");
+    assert_eq!(ui.terminal_agent_notifications.version, 2);
+    let codex = &ui.terminal_agent_notifications.agents.codex;
+    assert!(codex.enabled);
+    assert!(codex.toast);
+    assert!(!codex.browser);
+    assert!(codex.sound);
+    assert_eq!(codex.volume, 75);
+    assert_eq!(codex.pattern, TerminalAgentNotificationSoundPattern::Urgent);
+
+    let omp = &ui.terminal_agent_notifications.agents.omp;
+    assert!(omp.enabled);
+    assert!(!omp.toast);
+    assert!(omp.browser);
+    assert!(!omp.sound);
+    assert_eq!(omp.volume, 60);
+    assert_eq!(omp.pattern, TerminalAgentNotificationSoundPattern::Soft);
+
+    let claude = &ui.terminal_agent_notifications.agents.claude;
+    assert!(!claude.enabled);
+    assert!(claude.toast);
+    assert!(claude.browser);
+    assert!(claude.sound);
+    assert_eq!(claude.volume, 100);
+    assert_eq!(
+        claude.pattern,
+        TerminalAgentNotificationSoundPattern::Default
+    );
+
+    // Verify canonical v2 persistence (no dual-writing v1)
+    write_global_config_at(&path, &loaded).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("version = 2"));
+    assert!(!written.contains("version = 1"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.claude]"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.codex]"));
+    assert!(written.contains("[ui.terminal_agent_notifications.agents.omp]"));
+
+    let reloaded = read_global_config_at(&path)
+        .unwrap()
+        .expect("reloaded config");
+    assert_eq!(
+        reloaded.ui.unwrap().terminal_agent_notifications,
+        ui.terminal_agent_notifications
+    );
+}
+
+#[test]
+fn global_config_persists_claude_dir_independently_in_agent_settings_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let config = GlobalConfig {
+        ui: Some(UiConfig {
+            agent_settings_paths: Some(super::schema::AgentSettingsPaths {
+                omp_agent_dir: Some("/path/to/omp".to_string()),
+                codex_dir: Some("/path/to/codex".to_string()),
+                claude_dir: Some("/path/to/claude".to_string()),
+            }),
+            ..UiConfig::default()
+        }),
+        ..GlobalConfig::default()
+    };
+    write_global_config_at(&path, &config).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("[ui.agent_settings_paths]"));
+    assert!(written.contains("claude_dir = \"/path/to/claude\""));
+
+    let loaded = read_global_config_at(&path).unwrap().expect("loaded");
+    let paths = loaded.ui.unwrap().agent_settings_paths.expect("paths");
+    assert_eq!(paths.claude_dir.as_deref(), Some("/path/to/claude"));
+    assert_eq!(paths.codex_dir.as_deref(), Some("/path/to/codex"));
+    assert_eq!(paths.omp_agent_dir.as_deref(), Some("/path/to/omp"));
 }
 
 #[test]

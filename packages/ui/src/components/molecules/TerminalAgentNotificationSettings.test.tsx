@@ -37,7 +37,7 @@ let container: HTMLDivElement | null = null;
 
 const defaultProps = {
   notifications: {
-    version: 1 as const,
+    version: 2 as const,
     agents: {
       codex: {
         enabled: true,
@@ -48,6 +48,14 @@ const defaultProps = {
         volume: 100,
       },
       omp: {
+        enabled: false,
+        toast: true,
+        browser: true,
+        sound: true,
+        pattern: "default" as const,
+        volume: 100,
+      },
+      claude: {
         enabled: false,
         toast: true,
         browser: true,
@@ -268,15 +276,15 @@ describe("TerminalAgentNotificationSettings", () => {
     ).toBe("true");
   });
 
-  it("renders an unsupported version notice and disables editing when version !== 1", async () => {
+  it("renders an unsupported version notice and disables editing when version !== 2", async () => {
     const onSave = await mount({
       notifications: {
-        version: 2,
+        version: 3,
         agents: defaultProps.notifications.agents,
       },
     });
     expect(container?.textContent).toContain(
-      "Unsupported notification preferences version (2)",
+      "Unsupported notification preferences version (3)",
     );
     expect(
       container?.querySelector('[aria-label="Enable Codex notifications"]'),

@@ -2245,7 +2245,7 @@ export function useOmpExtensionStatus(
 
   return useQuery<ExtensionStatusReport>({
     queryKey,
-    queryFn: () => getApi(owner).terminal.getOmpExtensionStatus(agentDir),
+    queryFn: () => (owner ? getApi(owner) : api).terminal.getOmpExtensionStatus(agentDir),
     staleTime: 5_000,
   });
 }
@@ -2256,7 +2256,7 @@ export function useInstallOmpExtension(options?: { owner?: ConnectionRef }) {
 
   return useMutation<ExtensionStatusReport, Error, string | undefined>({
     mutationFn: (agentDir) =>
-      getApi(owner).terminal.installOmpExtension(agentDir),
+      (owner ? getApi(owner) : api).terminal.installOmpExtension(agentDir),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: owner
@@ -2278,7 +2278,7 @@ export function useUninstallOmpExtension(options?: { owner?: ConnectionRef }) {
 
   return useMutation<ExtensionStatusReport, Error, string | undefined>({
     mutationFn: (agentDir) =>
-      getApi(owner).terminal.uninstallOmpExtension(agentDir),
+      (owner ? getApi(owner) : api).terminal.uninstallOmpExtension(agentDir),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: owner
@@ -2312,7 +2312,7 @@ export function useAgentPathsVerification(
 
   return useQuery<AgentPathsVerification>({
     queryKey,
-    queryFn: () => getApi(owner).terminal.getAgentPathsVerification(params),
+    queryFn: () => (owner ? getApi(owner) : api).terminal.getAgentPathsVerification(params),
     staleTime: 5_000,
   });
 }

@@ -55,7 +55,10 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
                     .or_else(|| ui.get("terminalAgentNotifications"))
             })
             .and_then(|canonical| canonical.get("version"))
-            .is_some_and(|version| version.as_integer() != Some(1))
+            .is_some_and(|version| {
+                let v = version.as_integer();
+                v != Some(1) && v != Some(2)
+            })
     }) {
         return Err(AppError::Config(
             "Unsupported terminal agent notifications version".to_string(),
@@ -85,7 +88,7 @@ pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), 
     if config
         .ui
         .as_ref()
-        .is_some_and(|ui| ui.terminal_agent_notifications.version != 1)
+        .is_some_and(|ui| ui.terminal_agent_notifications.version != 2)
     {
         return Err(AppError::Config(
             "Unsupported terminal agent notifications version".to_string(),
@@ -184,12 +187,14 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalAgentNotifications" => "terminal_agent_notifications",
             "agentSettingsPaths" | "agent_settings_paths" => {
                 if let Value::Object(inner) = &mut value {
-                    let inner_entries: Vec<(String, Value)> = inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let inner_entries: Vec<(String, Value)> =
+                        inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     inner.clear();
                     for (ik, iv) in inner_entries {
                         let toml_ik = match ik.as_str() {
                             "ompAgentDir" | "omp_agent_dir" => "omp_agent_dir",
                             "codexDir" | "codex_dir" => "codex_dir",
+                            "claudeDir" | "claude_dir" => "claude_dir",
                             other => other,
                         };
                         inner.insert(toml_ik.to_string(), iv);

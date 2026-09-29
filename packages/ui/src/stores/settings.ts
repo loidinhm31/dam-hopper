@@ -246,7 +246,7 @@ function applySnapshotToStore(
       snapshot.mobileCustomKeyboardRowGap,
     );
   if (snapshot.agentSettingsPaths !== undefined)
-    clamped.agentSettingsPaths = snapshot.agentSettingsPaths;
+    clamped.agentSettingsPaths = snapshot.agentSettingsPaths ?? undefined;
   set(clamped);
 }
 function pickPersistedSettings(
@@ -531,12 +531,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   saveAgentNotificationPolicy: (agent, patch) => {
     const current = get().terminalAgentNotifications;
-    if (current.version !== 1) {
+    if (current.version !== 2) {
       return;
     }
     get().saveDebounced({
       terminalAgentNotifications: {
-        version: 1,
+        version: 2,
         agents: {
           ...current.agents,
           [agent]: { ...current.agents[agent], ...patch },
@@ -558,7 +558,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const persistedPatch = pickPersistedSettingsPatch(partial, get());
     if (
       persistedPatch.terminalAgentNotifications &&
-      persistedPatch.terminalAgentNotifications.version !== 1
+      persistedPatch.terminalAgentNotifications.version !== 2
     ) {
       delete persistedPatch.terminalAgentNotifications;
     }

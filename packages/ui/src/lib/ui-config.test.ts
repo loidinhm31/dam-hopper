@@ -17,7 +17,7 @@ describe("withUiConfigDefaults", () => {
     expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(ui.terminalAgentNotifications).toEqual({
-      version: 1,
+      version: 2,
       agents: {
         codex: {
           enabled: false,
@@ -28,6 +28,14 @@ describe("withUiConfigDefaults", () => {
           pattern: "default",
         },
         omp: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+        claude: {
           enabled: false,
           toast: true,
           browser: true,
@@ -128,7 +136,15 @@ describe("withUiConfigDefaults", () => {
       volume: 60,
       pattern: "soft",
     });
-    expect(ui.explorerLanguageFilter).toBe("java");
+    expect(ui.terminalAgentNotifications?.agents.claude).toEqual({
+      enabled: false,
+      toast: true,
+      browser: true,
+      sound: true,
+      volume: 100,
+      pattern: "default",
+    });
+    expect(ui.terminalAgentNotifications?.version).toBe(2);
     expect(ui.mobileCustomKeyboardEnabled).toBe(false);
     expect(ui.mobileCustomKeyboardFontSize).toBe(14);
     expect(ui.mobileCustomKeyboardPadding).toBe(9);
@@ -163,6 +179,8 @@ describe("withUiConfigDefaults", () => {
       pattern: "urgent",
     });
     expect(ui.terminalAgentNotifications?.agents.omp.enabled).toBe(false);
+    expect(ui.terminalAgentNotifications?.agents.claude.enabled).toBe(false);
+    expect(ui.terminalAgentNotifications?.version).toBe(2);
     expect(
       Object.keys(ui).filter(
         (key) =>
@@ -209,13 +227,13 @@ describe("withUiConfigDefaults", () => {
       pattern: "default",
     });
   });
-  it("does not downgrade an unsupported canonical version to legacy preferences", () => {
+  it("refuses unsupported canonical preferences without enabling untrusted channels", () => {
     const ui = withUiConfigDefaults({
       systemFontSize: 19,
       terminalCodexNotificationsEnabled: true,
       terminalCodexNotificationSoundVolume: 37,
       terminalAgentNotifications: {
-        version: 2,
+        version: 3,
         agents: {
           codex: { enabled: true, volume: 37 },
           omp: { enabled: true },
@@ -224,11 +242,67 @@ describe("withUiConfigDefaults", () => {
     } as never);
 
     expect(ui.systemFontSize).toBe(19);
-    expect(ui.terminalAgentNotifications.version).toBe(2);
-    expect(ui.terminalAgentNotifications.agents.codex.enabled).toBe(true);
-    expect(ui.terminalAgentNotifications.agents.codex.volume).toBe(37);
-    expect(ui.terminalAgentNotifications.agents.omp.enabled).toBe(true);
+    expect(ui.terminalAgentNotifications.version).toBe(3);
+    expect(ui.terminalAgentNotifications.agents.codex.enabled).toBe(false);
+    expect(ui.terminalAgentNotifications.agents.omp.enabled).toBe(false);
+    expect(ui.terminalAgentNotifications.agents.claude.enabled).toBe(false);
     expect("terminalCodexNotificationsEnabled" in ui).toBe(false);
+  });
+
+  it("migrates canonical v1 terminalAgentNotifications to v2, preserving policies and adding disabled Claude", () => {
+    const ui = withUiConfigDefaults({
+      terminalAgentNotifications: {
+        version: 1,
+        agents: {
+          codex: {
+            enabled: true,
+            toast: false,
+            browser: true,
+            sound: false,
+            volume: 70,
+            pattern: "soft",
+          },
+          omp: {
+            enabled: true,
+            toast: true,
+            browser: false,
+            sound: true,
+            volume: 85,
+            pattern: "two-tone",
+          },
+        },
+      },
+    } as never);
+
+    expect(ui.terminalAgentNotifications).toEqual({
+      version: 2,
+      agents: {
+        codex: {
+          enabled: true,
+          toast: false,
+          browser: true,
+          sound: false,
+          volume: 70,
+          pattern: "soft",
+        },
+        omp: {
+          enabled: true,
+          toast: true,
+          browser: false,
+          sound: true,
+          volume: 85,
+          pattern: "two-tone",
+        },
+        claude: {
+          enabled: false,
+          toast: true,
+          browser: true,
+          sound: true,
+          volume: 100,
+          pattern: "default",
+        },
+      },
+    });
   });
 
   it("bounds malformed partial policies without enabling OMP or reviving legacy values", () => {

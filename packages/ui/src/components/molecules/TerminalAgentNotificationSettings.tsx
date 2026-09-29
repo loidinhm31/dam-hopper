@@ -168,7 +168,7 @@ export function TerminalAgentNotificationSettings({
           </p>
         </div>
       </div>
-      {notifications.version !== 1 ? (
+      {notifications.version !== 2 ? (
         <div className="rounded border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">
           Unsupported notification preferences version ({notifications.version}
           ). Editing is disabled until migrated.
