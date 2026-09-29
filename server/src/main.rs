@@ -89,8 +89,25 @@ struct NativeIntegrationArgs {
     action: NativeIntegrationAction,
 }
 
+#[derive(Debug, clap::Args)]
+struct NativeActionArgs {
+    /// Absolute path to the agent config directory (e.g. ~/.codex or ~/.claude)
+    #[arg(long)]
+    agent_dir: PathBuf,
+
+    /// Emit status or outcome as JSON
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Debug, clap::Subcommand)]
 enum NativeIntegrationAction {
+    /// Install or upgrade the managed native hooks integration
+    Install(NativeActionArgs),
+    /// Inspect the status of the managed native hooks integration
+    Status(NativeActionArgs),
+    /// Safely uninstall the managed native hooks integration
+    Uninstall(NativeActionArgs),
     /// Internal hook reporter invoked by native hook events
     ReportHook,
 }
@@ -164,6 +181,47 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
             }
         },
         IntegrationTarget::Codex(args) => match args.action {
+            NativeIntegrationAction::Install(action_args) => {
+                let report = dam_hopper_server::agent_status::install_codex(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Installed Codex agent status hooks at {}",
+                        report.launcher_path.display()
+                    );
+                    println!("Status: {}, Readiness: {}", report.status, report.readiness);
+                }
+            }
+            NativeIntegrationAction::Status(action_args) => {
+                let report = dam_hopper_server::agent_status::check_codex_status(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Codex Integration Status: {} (readiness: {})",
+                        report.status, report.readiness
+                    );
+                    println!("Launcher: {}", report.launcher_path.display());
+                    if let Some(cfg) = &report.config_path {
+                        println!("Config: {}", cfg.display());
+                    }
+                    if let Some(details) = &report.details {
+                        println!("Details: {details}");
+                    }
+                }
+            }
+            NativeIntegrationAction::Uninstall(action_args) => {
+                let report = dam_hopper_server::agent_status::uninstall_codex(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Uninstalled Codex agent status hooks from {}",
+                        action_args.agent_dir.display()
+                    );
+                }
+            }
             NativeIntegrationAction::ReportHook => {
                 dam_hopper_server::agent_status::hook_reporter::execute_report_hook(
                     dam_hopper_server::agent_status::AgentKind::Codex,
@@ -173,6 +231,47 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
             }
         },
         IntegrationTarget::Claude(args) => match args.action {
+            NativeIntegrationAction::Install(action_args) => {
+                let report = dam_hopper_server::agent_status::install_claude(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Installed Claude agent status hooks at {}",
+                        report.launcher_path.display()
+                    );
+                    println!("Status: {}, Readiness: {}", report.status, report.readiness);
+                }
+            }
+            NativeIntegrationAction::Status(action_args) => {
+                let report = dam_hopper_server::agent_status::check_claude_status(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Claude Integration Status: {} (readiness: {})",
+                        report.status, report.readiness
+                    );
+                    println!("Launcher: {}", report.launcher_path.display());
+                    if let Some(cfg) = &report.config_path {
+                        println!("Config: {}", cfg.display());
+                    }
+                    if let Some(details) = &report.details {
+                        println!("Details: {details}");
+                    }
+                }
+            }
+            NativeIntegrationAction::Uninstall(action_args) => {
+                let report = dam_hopper_server::agent_status::uninstall_claude(&action_args.agent_dir)?;
+                if action_args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "Uninstalled Claude agent status hooks from {}",
+                        action_args.agent_dir.display()
+                    );
+                }
+            }
             NativeIntegrationAction::ReportHook => {
                 dam_hopper_server::agent_status::hook_reporter::execute_report_hook(
                     dam_hopper_server::agent_status::AgentKind::Claude,
@@ -335,6 +434,51 @@ mod tests {
             Some(Commands::Integration(super::IntegrationArgs {
                 target: IntegrationTarget::Claude(super::NativeIntegrationArgs {
                     action: super::NativeIntegrationAction::ReportHook,
+                }),
+            }))
+        ));
+
+        let args_codex_install = [
+            "dam-hopper-server",
+            "integration",
+            "codex",
+            "install",
+            "--agent-dir",
+            "/tmp/codex-home",
+            "--json",
+        ];
+        let parsed_codex_install =
+            Cli::try_parse_from(args_codex_install).expect("valid codex install args");
+        assert!(matches!(
+            parsed_codex_install.command,
+            Some(Commands::Integration(super::IntegrationArgs {
+                target: IntegrationTarget::Codex(super::NativeIntegrationArgs {
+                    action: super::NativeIntegrationAction::Install(super::NativeActionArgs {
+                        json: true,
+                        ..
+                    }),
+                }),
+            }))
+        ));
+
+        let args_claude_status = [
+            "dam-hopper-server",
+            "integration",
+            "claude",
+            "status",
+            "--agent-dir",
+            "/tmp/claude-home",
+        ];
+        let parsed_claude_status =
+            Cli::try_parse_from(args_claude_status).expect("valid claude status args");
+        assert!(matches!(
+            parsed_claude_status.command,
+            Some(Commands::Integration(super::IntegrationArgs {
+                target: IntegrationTarget::Claude(super::NativeIntegrationArgs {
+                    action: super::NativeIntegrationAction::Status(super::NativeActionArgs {
+                        json: false,
+                        ..
+                    }),
                 }),
             }))
         ));

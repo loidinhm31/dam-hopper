@@ -2,8 +2,13 @@ use std::path::Path;
 use tempfile::tempdir;
 
 use dam_hopper_server::agent_status::{
-    check_extension_status, install_extension, uninstall_extension,
-    IntegrationError, ManagedExtensionStatus, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION,
+    check_claude_status, check_codex_status, check_extension_status,
+    check_native_integration_status, install_claude, install_codex, install_extension,
+    install_native_integration, uninstall_claude, uninstall_codex, uninstall_extension,
+    uninstall_native_integration, AgentKind, IntegrationError, ManagedExtensionStatus,
+    ManagedInstallationStatus, ManagedReadinessStatus, CLAUDE_MANAGED_EVENTS,
+    CODEX_MANAGED_EVENTS, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION, MANAGED_LAUNCHER_SUBPATH,
+    MANAGED_MANIFEST_SUBPATH,
 };
 
 #[test]
@@ -257,4 +262,471 @@ fn test_cli_integration_subcommand() {
         serde_json::from_slice(&uninstall_out.stdout).expect("parse uninstall json");
     assert_eq!(uninstall_json["status"], "absent");
     assert!(!agent_dir.join(EXTENSION_SUBPATH).exists());
+}
+
+#[test]
+fn test_codex_hooks_json_lifecycle() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Pre-populate hooks.json with user-defined hooks
+    let hooks_json_path = agent_dir.join("hooks.json");
+    let initial_user_json = serde_json::json!({
+        "hooks": {
+            "SessionStart": [
+                { "command": "/usr/local/bin/user-session-hook" }
+            ],
+            "CustomUserEvent": [
+                { "command": "/usr/local/bin/custom-event-hook" }
+            ]
+        }
+    });
+    std::fs::write(&hooks_json_path, serde_json::to_string_pretty(&initial_user_json).unwrap())
+        .expect("write initial user hooks.json");
+
+    // 1. Initial status is Absent
+    let report = check_codex_status(&agent_dir).expect("status check");
+    assert_eq!(report.status, ManagedInstallationStatus::Absent);
+    assert_eq!(report.readiness, ManagedReadinessStatus::Unverified);
+
+    // 2. Install Codex hooks
+    let install_report = install_codex(&agent_dir).expect("install codex");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+    assert_eq!(install_report.readiness, ManagedReadinessStatus::TrustRequired);
+    assert!(install_report.launcher_path.is_file());
+    assert!(install_report.manifest_path.is_file());
+
+    // Check launcher permissions on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&install_report.launcher_path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o111, 0o111, "launcher should be executable");
+    }
+
+    // Verify hooks.json contents: all 11 managed events present AND user hook preserved
+    let installed_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_json_path).unwrap()).unwrap();
+    let hooks_map = installed_json.get("hooks").unwrap().as_object().unwrap();
+
+    assert!(hooks_map.contains_key("CustomUserEvent"), "custom user event must be preserved");
+    let session_start_arr = hooks_map.get("SessionStart").unwrap().as_array().unwrap();
+    assert!(
+        session_start_arr.iter().any(|h| h.get("command").and_then(|c| c.as_str()) == Some("/usr/local/bin/user-session-hook")),
+        "user session start hook must be preserved"
+    );
+
+    for event in CODEX_MANAGED_EVENTS {
+        assert!(hooks_map.contains_key(*event), "event {event} must be registered");
+    }
+
+    // 3. Status confirms Current
+    let status_current = check_codex_status(&agent_dir).expect("status current");
+    assert_eq!(status_current.status, ManagedInstallationStatus::Current);
+    assert_eq!(status_current.readiness, ManagedReadinessStatus::TrustRequired);
+
+    // 4. Idempotency: re-running install does not duplicate entries
+    let reinstall_report = install_codex(&agent_dir).expect("reinstall codex");
+    assert_eq!(reinstall_report.status, ManagedInstallationStatus::Current);
+    let re_installed_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_json_path).unwrap()).unwrap();
+    let re_session_start_arr = re_installed_json["hooks"]["SessionStart"].as_array().unwrap();
+    let managed_count = re_session_start_arr
+        .iter()
+        .filter(|h| h["command"].as_str() == Some(install_report.launcher_path.to_str().unwrap()))
+        .count();
+    assert_eq!(managed_count, 1, "managed command must not be duplicated");
+
+    // 5. Uninstall Codex hooks
+    let uninstall_report = uninstall_codex(&agent_dir).expect("uninstall codex");
+    assert_eq!(uninstall_report.status, ManagedInstallationStatus::Absent);
+    assert!(!install_report.launcher_path.exists(), "launcher must be deleted");
+    assert!(!install_report.manifest_path.exists(), "manifest must be deleted");
+
+    // hooks.json must STILL exist because user hooks were present
+    assert!(hooks_json_path.is_file(), "hooks.json with user hooks must remain");
+    let after_uninstall_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_json_path).unwrap()).unwrap();
+    let after_hooks = after_uninstall_json.get("hooks").unwrap().as_object().unwrap();
+    assert!(after_hooks.contains_key("CustomUserEvent"), "user hook must remain");
+    let remaining_session_start = after_hooks.get("SessionStart").unwrap().as_array().unwrap();
+    assert_eq!(remaining_session_start.len(), 1);
+    assert_eq!(remaining_session_start[0]["command"], "/usr/local/bin/user-session-hook");
+
+    // Managed events that only had dam-hopper should be cleaned up
+    assert!(!after_hooks.contains_key("PreToolUse"));
+    assert!(!after_hooks.contains_key("PostToolUse"));
+}
+
+#[test]
+fn test_codex_config_toml_inline_lifecycle() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Pre-populate config.toml with an inline [hooks] table and user comments
+    let config_toml_path = agent_dir.join("config.toml");
+    let initial_toml = r#"# Top-level configuration comment
+[features]
+hooks = true
+
+[hooks]
+# User hook description
+UserPromptSubmit = [{ command = "/usr/bin/user-prompt-tracer" }]
+"#;
+    std::fs::write(&config_toml_path, initial_toml).expect("write initial config.toml");
+
+    // 1. Initial status is Absent
+    let report = check_codex_status(&agent_dir).expect("status check");
+    assert_eq!(report.status, ManagedInstallationStatus::Absent);
+
+    // 2. Install Codex hooks
+    let install_report = install_codex(&agent_dir).expect("install codex");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+
+    // hooks.json must NOT be created because config.toml already had [hooks]
+    assert!(!agent_dir.join("hooks.json").exists(), "must not create duplicate hooks.json");
+
+    // Verify config.toml preserves comments
+    let updated_toml = std::fs::read_to_string(&config_toml_path).expect("read updated config.toml");
+    assert!(updated_toml.contains("# Top-level configuration comment"));
+    assert!(updated_toml.contains("# User hook description"));
+    assert!(updated_toml.contains("/usr/bin/user-prompt-tracer"));
+
+    // 3. Uninstall Codex hooks
+    let uninstall_report = uninstall_codex(&agent_dir).expect("uninstall codex");
+    assert_eq!(uninstall_report.status, ManagedInstallationStatus::Absent);
+
+    // Verify user hook and comments are STILL in config.toml
+    let cleaned_toml = std::fs::read_to_string(&config_toml_path).expect("read cleaned config.toml");
+    assert!(cleaned_toml.contains("# Top-level configuration comment"));
+    assert!(cleaned_toml.contains("# User hook description"));
+    assert!(cleaned_toml.contains("/usr/bin/user-prompt-tracer"));
+    assert!(!cleaned_toml.contains("dam-hopper-agent-status"));
+}
+
+#[test]
+fn test_codex_refuse_overwrite_or_delete_modified() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Install cleanly
+    let install_report = install_codex(&agent_dir).expect("install codex");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+
+    // Tamper with launcher content
+    let tampered = format!("{}\n# tampered by attacker\n", std::fs::read_to_string(&install_report.launcher_path).unwrap());
+    std::fs::write(&install_report.launcher_path, tampered).expect("write tampered launcher");
+
+    // Status check should report Modified
+    let status_report = check_codex_status(&agent_dir).expect("check status");
+    assert_eq!(status_report.status, ManagedInstallationStatus::Modified);
+
+    // Attempting to install or uninstall should be refused
+    let err_install = install_codex(&agent_dir).expect_err("should refuse overwrite modified");
+    assert!(matches!(err_install, IntegrationError::RefusingOverwriteModified(_)));
+
+    let err_uninstall = uninstall_codex(&agent_dir).expect_err("should refuse delete modified");
+    assert!(matches!(err_uninstall, IntegrationError::RefusingDeleteModified(_)));
+}
+
+#[test]
+fn test_claude_settings_json_lifecycle() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Pre-populate settings.json with user settings and custom matchers
+    let settings_path = agent_dir.join("settings.json");
+    let initial_settings = serde_json::json!({
+        "theme": "dark",
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "bash",
+                    "hooks": [
+                        { "type": "command", "command": "/usr/local/bin/bash-guard" }
+                    ]
+                }
+            ]
+        }
+    });
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&initial_settings).unwrap())
+        .expect("write initial settings.json");
+
+    // 1. Initial status is Absent
+    let report = check_claude_status(&agent_dir).expect("status check");
+    assert_eq!(report.status, ManagedInstallationStatus::Absent);
+    assert_eq!(report.readiness, ManagedReadinessStatus::Unverified);
+
+    // 2. Install Claude hooks
+    let install_report = install_claude(&agent_dir).expect("install claude");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+    assert_eq!(install_report.readiness, ManagedReadinessStatus::Unverified);
+    assert!(install_report.launcher_path.is_file());
+    assert!(install_report.manifest_path.is_file());
+
+    // Verify settings.json contents: all 12 managed events present AND user settings preserved
+    let installed_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(installed_json["theme"], "dark", "theme setting must be preserved");
+
+    let hooks_map = installed_json.get("hooks").unwrap().as_object().unwrap();
+    for event in CLAUDE_MANAGED_EVENTS {
+        assert!(hooks_map.contains_key(*event), "event {event} must be registered");
+    }
+
+    // Sibling matcher for PreToolUse (bash) must be preserved
+    let pre_tool_matchers = hooks_map.get("PreToolUse").unwrap().as_array().unwrap();
+    assert!(
+        pre_tool_matchers.iter().any(|m| m.get("matcher").and_then(|v| v.as_str()) == Some("bash")),
+        "sibling bash matcher must be preserved"
+    );
+
+    // 3. Status confirms Current
+    let status_current = check_claude_status(&agent_dir).expect("status current");
+    assert_eq!(status_current.status, ManagedInstallationStatus::Current);
+
+    // 4. Idempotency: re-running install does not duplicate entries
+    let reinstall_report = install_claude(&agent_dir).expect("reinstall claude");
+    assert_eq!(reinstall_report.status, ManagedInstallationStatus::Current);
+
+    // 5. Uninstall Claude hooks
+    let uninstall_report = uninstall_claude(&agent_dir).expect("uninstall claude");
+    assert_eq!(uninstall_report.status, ManagedInstallationStatus::Absent);
+    assert!(!install_report.launcher_path.exists(), "launcher must be deleted");
+    assert!(!install_report.manifest_path.exists(), "manifest must be deleted");
+
+    // settings.json must STILL exist with theme and custom matcher
+    assert!(settings_path.is_file());
+    let after_uninstall_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(after_uninstall_json["theme"], "dark");
+    let remaining_pre_tool = after_uninstall_json["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(remaining_pre_tool.len(), 1);
+    assert_eq!(remaining_pre_tool[0]["matcher"], "bash");
+}
+
+#[test]
+fn test_claude_policy_disabled() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    let settings_path = agent_dir.join("settings.json");
+    let initial_settings = serde_json::json!({
+        "disableAllHooks": true
+    });
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&initial_settings).unwrap())
+        .expect("write settings.json");
+
+    install_claude(&agent_dir).expect("install claude");
+
+    let status = check_claude_status(&agent_dir).expect("status check");
+    assert_eq!(status.status, ManagedInstallationStatus::Current);
+    assert_eq!(status.readiness, ManagedReadinessStatus::PolicyDisabled);
+    assert!(status.details.unwrap().contains("disableAllHooks"));
+}
+
+#[test]
+fn test_claude_refuse_overwrite_or_delete_modified() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    let install_report = install_claude(&agent_dir).expect("install claude");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+
+    // Tamper with launcher
+    std::fs::write(&install_report.launcher_path, "#!/bin/sh\necho tampered\n")
+        .expect("write tampered launcher");
+
+    let status = check_claude_status(&agent_dir).expect("check status");
+    assert_eq!(status.status, ManagedInstallationStatus::Modified);
+
+    let err_install = install_claude(&agent_dir).expect_err("refuse overwrite");
+    assert!(matches!(err_install, IntegrationError::RefusingOverwriteModified(_)));
+
+    let err_uninstall = uninstall_claude(&agent_dir).expect_err("refuse delete");
+    assert!(matches!(err_uninstall, IntegrationError::RefusingDeleteModified(_)));
+}
+
+#[test]
+fn test_cli_native_integration_subcommands() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_dir = tmp.path().join("codex");
+    let claude_dir = tmp.path().join("claude");
+    std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+    std::fs::create_dir_all(&claude_dir).expect("create claude dir");
+
+    let server_bin = env!("CARGO_BIN_EXE_dam-hopper-server");
+
+    // 1. Codex CLI install, status, uninstall
+    let codex_install_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "codex",
+            "install",
+            "--agent-dir",
+            codex_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec codex install");
+    assert!(codex_install_out.status.success());
+    let codex_install_json: serde_json::Value =
+        serde_json::from_slice(&codex_install_out.stdout).expect("parse json");
+    assert_eq!(codex_install_json["status"], "current");
+    assert_eq!(codex_install_json["readiness"], "trust-required");
+
+    let codex_status_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "codex",
+            "status",
+            "--agent-dir",
+            codex_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec codex status");
+    assert!(codex_status_out.status.success());
+    let codex_status_json: serde_json::Value =
+        serde_json::from_slice(&codex_status_out.stdout).expect("parse json");
+    assert_eq!(codex_status_json["status"], "current");
+
+    let codex_uninstall_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "codex",
+            "uninstall",
+            "--agent-dir",
+            codex_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec codex uninstall");
+    assert!(codex_uninstall_out.status.success());
+    let codex_uninstall_json: serde_json::Value =
+        serde_json::from_slice(&codex_uninstall_out.stdout).expect("parse json");
+    assert_eq!(codex_uninstall_json["status"], "absent");
+
+    // 2. Claude CLI install, status, uninstall
+    let claude_install_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "claude",
+            "install",
+            "--agent-dir",
+            claude_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec claude install");
+    assert!(claude_install_out.status.success());
+    let claude_install_json: serde_json::Value =
+        serde_json::from_slice(&claude_install_out.stdout).expect("parse json");
+    assert_eq!(claude_install_json["status"], "current");
+
+    let claude_status_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "claude",
+            "status",
+            "--agent-dir",
+            claude_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec claude status");
+    assert!(claude_status_out.status.success());
+    let claude_status_json: serde_json::Value =
+        serde_json::from_slice(&claude_status_out.stdout).expect("parse json");
+    assert_eq!(claude_status_json["status"], "current");
+
+    let claude_uninstall_out = std::process::Command::new(server_bin)
+        .args([
+            "integration",
+            "claude",
+            "uninstall",
+            "--agent-dir",
+            claude_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("exec claude uninstall");
+    assert!(claude_uninstall_out.status.success());
+    let claude_uninstall_json: serde_json::Value =
+        serde_json::from_slice(&claude_uninstall_out.stdout).expect("parse json");
+    assert_eq!(claude_uninstall_json["status"], "absent");
+}
+
+#[tokio::test]
+async fn test_api_native_integration_endpoints() {
+    let tmp = tempdir().expect("tempdir");
+    let non_existent_dir = tmp.path().join("does-not-exist");
+
+    // 1. GET status for non-existent dir returns Absent without creating directory
+    let q_absent = dam_hopper_server::api::agent_status::ExtensionQuery {
+        agent_dir: Some(non_existent_dir.to_str().unwrap().to_string()),
+    };
+    let get_res = dam_hopper_server::api::agent_status::get_native_integration_status(
+        axum::extract::Path("codex".to_string()),
+        axum::extract::Query(q_absent),
+    )
+    .await
+    .expect("get native status")
+    .0;
+
+    assert_eq!(get_res.status, ManagedInstallationStatus::Absent);
+    assert_eq!(get_res.agent_kind, AgentKind::Codex);
+    assert!(!non_existent_dir.exists(), "GET status must not create directory");
+
+    // 2. POST install creates dir and installs
+    let install_body = dam_hopper_server::api::agent_status::ExtensionInstallBody {
+        agent_dir: Some(non_existent_dir.to_str().unwrap().to_string()),
+    };
+    let install_res = dam_hopper_server::api::agent_status::install_native_integration_handler(
+        axum::extract::Path("codex".to_string()),
+        axum::Json(install_body),
+    )
+    .await
+    .expect("install native")
+    .0;
+
+    assert_eq!(install_res.status, ManagedInstallationStatus::Current);
+    assert!(non_existent_dir.is_dir(), "POST install creates directory");
+    assert!(non_existent_dir.join(MANAGED_LAUNCHER_SUBPATH).is_file());
+
+    // 3. DELETE uninstall removes native integration
+    let q_uninstall = dam_hopper_server::api::agent_status::ExtensionQuery {
+        agent_dir: Some(non_existent_dir.to_str().unwrap().to_string()),
+    };
+    let del_res = dam_hopper_server::api::agent_status::uninstall_native_integration_handler(
+        axum::extract::Path("codex".to_string()),
+        axum::extract::Query(q_uninstall),
+    )
+    .await
+    .expect("uninstall native")
+    .0;
+
+    assert_eq!(del_res.status, ManagedInstallationStatus::Absent);
+    assert!(!non_existent_dir.join(MANAGED_LAUNCHER_SUBPATH).exists());
+}
+
+#[test]
+fn test_generic_native_integration_dispatch() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_dir = tmp.path().join("codex");
+    std::fs::create_dir_all(&codex_dir).expect("create dir");
+
+    let status = check_native_integration_status(AgentKind::Codex, &codex_dir).expect("check status");
+    assert_eq!(status.status, ManagedInstallationStatus::Absent);
+
+    let installed = install_native_integration(AgentKind::Codex, &codex_dir).expect("install");
+    assert_eq!(installed.status, ManagedInstallationStatus::Current);
+    assert_eq!(installed.manifest_path, codex_dir.join(MANAGED_MANIFEST_SUBPATH));
+
+    let uninstalled = uninstall_native_integration(AgentKind::Codex, &codex_dir).expect("uninstall");
+    assert_eq!(uninstalled.status, ManagedInstallationStatus::Absent);
+
+    // OMP kind returns ConfigurationError
+    let err = check_native_integration_status(AgentKind::Omp, &codex_dir).expect_err("omp fails");
+    assert!(matches!(err, IntegrationError::ConfigurationError(_)));
 }

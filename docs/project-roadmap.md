@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Codex and Claude native-hook status (2026-09-29)
+
+- **Plan status: IN PROGRESS (3/6 phases; 50%; Phase 03 updated 2026-09-29 Asia/Saigon).** Phases 01–03 are DONE; Phases 04–06 remain pending.
+- **Phase 03 — Managed installation and complete removal — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered managed Codex/Claude install, status, update, and complete removal through explicit native paths; config-preserving registration changes, exact ownership manifests, readiness/trust/policy distinctions, and restart-aware cleanup.
+- **Validation:** Cycle 2 review approved **9.5/10** with no critical issues; focused status tests passed **87/87** (15 integration, 59 library, 8 runtime, 5 hooks). Review follow-up notes remain non-blocking. See the [Phase 03 plan](../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md), [parent plan](../plans/260929-0140-agent-status-codex-claude/plan.md), and [Cycle 2 review](../plans/reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
+- **Next:** Phase 04 native event adapters; Phase 05 Settings/notification cutover; Phase 06 Linux end-to-end qualification. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
+
 ### Agent Store install paths and settings refactor (2026-09-28)
 
 - **Plan status: COMPLETED (4/4 phases; 100%; updated 2026-09-28 23:57:01 +07:00).** Close-out follows explicit project approval. Agent Store now has a unified Agent Settings surface and server-profile-specific OMP/Codex path configuration.

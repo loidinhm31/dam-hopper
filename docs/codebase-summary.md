@@ -416,11 +416,11 @@ content-free; terminal bytes, commands, arguments, and environment are not
 used as idle-suspend identity.
 
 The workflow persists Plan/Phase/Task, sessions, links, notes, and bounded SQLite events; telemetry is opt-in and aggregate-only. Media tickets and browser-debug artifacts use scoped, expiring capabilities.
-Agent status is complete through Phase 05; Linux qualification passed C01–C19.
-Phase 01 defines Rust `server/src/agent_status/` and TypeScript `packages/ui/src/api/agent-status-types.ts`; Phase 02 adds private loopback reporting with PTY-scoped credentials.
+Agent status has two tracks: OMP-first is complete through Phase 05 with Linux C01–C19 qualification; Codex/Claude native rollout has Phases 01–03 complete, with Phases 04–06 pending.
+Phase 01 defines Rust `server/src/agent_status/` and TypeScript `packages/ui/src/api/agent-status-types.ts`; Phase 02 adds PTY-scoped OMP reporting plus separate private one-shot Codex/Claude ingress and 15-second evidence expiry.
 The protected snapshot is `GET /api/agent-status/v1/snapshot`; authenticated pushes are `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`.
-Phase 03 embeds OMP and provides `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`; Phase 04 delivers profile-safe badges and notifications (`terminalAgentNotifications`); Phase 05 qualified Linux x86_64 with OMP 18.4.1. See [architecture](./architecture/agent-status.md) and [qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
-Agent Store's **Agent Settings** replaces the Integrations tab and Appearance notification panel. `GET /api/agent-status/paths` supplies per-profile path eligibility; UI enablement requires exact configured/runtime path equality plus a current OMP extension or an existing Codex config file. Runtime dispatch still uses the saved `enabled` flag without path revalidation.
+OMP Phase 03 embeds its adapter and exposes `integration omp {install|status|uninstall}`; Codex/Claude Phase 03 adds `integration {codex|claude} {install|status|uninstall}` and `GET|POST|DELETE /api/agent-status/integrations/{agent}`. See [architecture](./architecture/agent-status.md), the [native installation plan](../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md), and the [OMP qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+Agent Store's **Agent Settings** replaces the Integrations tab and Appearance notification panel. `GET /api/agent-status/paths` supplies per-profile path eligibility; OMP requires a current managed extension, and Codex config verification recognizes `config.toml` or `hooks.json`. Runtime dispatch still uses the saved `enabled` flag without path revalidation.
 ## Backend path and configuration normalization (Phase 01)
 
 The path/config boundary is implemented by

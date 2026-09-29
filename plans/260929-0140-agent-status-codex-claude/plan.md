@@ -12,7 +12,7 @@ created: 2026-09-29
 # Codex and Claude native-hook status
 
 ## Approved outcome
-Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status badges, and applicable existing notification channels. User approved **native hooks with explicit Unknown for lifecycle gaps** after discussing screen detection, token cost, installation, and removal. Phase 01's approved contract-only scope was completed on 2026-09-29 (Asia/Saigon): status/source/freshness DTOs, v1→v2 preference migration, Claude config path, strict UI decoding, and static exact-version evidence. Native ingress, runtime expiry, installation, live qualification, and rollout remain incomplete. Effort is a planning estimate, not measured delivery time.
+Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status badges, and applicable existing notification channels. User approved **native hooks with explicit Unknown for lifecycle gaps** after discussing screen detection, token cost, installation, and removal. Phase 01's approved contract-only scope was completed on 2026-09-29 (Asia/Saigon): status/source/freshness DTOs, v1→v2 preference migration, Claude config path, strict UI decoding, and static exact-version evidence. Native private ingress, runtime expiry, and managed installation are now complete; event adapters, live qualification, and rollout remain incomplete.
 
 ## Decisions
 - Silent command hooks only: no model requests, context injection, approval/continuation decisions, transcript reading, or terminal-screen detection. Hooks have local process/IPC overhead, not intended model-token cost.
@@ -29,14 +29,14 @@ Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status b
 |---|---|---|---|---|
 | 1 | [Capabilities and observation contract](./phase-01-capabilities-and-observation-contract.md) | DONE — approved contract-only scope / 100% (2026-09-29 Asia/Saigon) | 6h | None |
 | 2 | [Private one-shot ingress and lifetime](./phase-02-private-hook-ingress.md) | DONE — private UDS ingress, generation fencing, 15s expiry / 100% (2026-09-29 Asia/Saigon) | 10h | 1 |
-| 3 | [Managed installer and full removal](./phase-03-managed-hook-installation.md) | Pending / 0% | 8h | 1–2 CLI/DTO contract |
+| 3 | [Managed installer and full removal](./phase-03-managed-hook-installation.md) | DONE — install/status/update/uninstall / 100% (2026-09-29 Asia/Saigon; Cycle 2 review 9.5/10, [report](../reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md)) | 8h | 1–2 CLI/DTO contract |
 | 4 | [Codex and Claude event adapters](./phase-04-native-event-adapters.md) | Pending / 0% | 8h | 1–2 |
 | 5 | [Agent Settings and notification ownership](./phase-05-settings-and-notification-cutover.md) | Pending / 0% | 8h | 2–4 |
 | 6 | [Linux end-to-end qualification](./phase-06-linux-qualification.md) | Pending / 0% | 8h | 1–5 |
 
-**Roadmap checkpoint (2026-09-29 Asia/Saigon):** Phases 01 and 02 are DONE. Native 15-second runtime expiry, private UDS ingress, and cross-transport generation fencing are complete and verified. Phases 03–06 remain pending. Live provider qualification targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified subsequent gates.
+**Roadmap checkpoint (2026-09-29 Asia/Saigon):** Phases 01–03 are DONE (3/6; 50%). Native 15-second runtime expiry, private UDS ingress, cross-transport generation fencing, and managed native installer/uninstaller are implemented. Phase 03 Cycle 2 review approved 9.5/10; focused tests passed 87/87. Phases 04–06 remain pending. Live provider qualification targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified subsequent gates.
 
-Phases 3 and 4 can run independently after their shared contracts land. One owner integrates shared Rust exports/CLI/DTOs; no mid-flight builds over inconsistent edits.
+Phase 04 consumes the completed Phase 01/02 contracts and Phase 03 native registration interfaces; Phase 05 follows the adapters, then Phase 06 performs Linux end-to-end qualification.
 
 ## Contracts and evidence
 - [Proposed architecture](../../docs/architecture/agent-status.md#proposed-codex-and-claude-native-hook-rollout--not-implemented); existing OMP sections remain normative for implemented behavior.

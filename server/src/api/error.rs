@@ -48,6 +48,7 @@ impl IntoResponse for ApiError {
             409 => StatusCode::CONFLICT,
             413 => StatusCode::PAYLOAD_TOO_LARGE,
             415 => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            428 => StatusCode::PRECONDITION_REQUIRED,
             503 => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

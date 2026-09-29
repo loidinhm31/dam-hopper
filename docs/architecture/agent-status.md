@@ -1,8 +1,8 @@
 # Agent status — OMP-first architecture
 
-Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). Codex/Claude Phase 01 is contract-only; Phase 02 private ingress/lease is in progress. Native hooks are not installed or qualified.** Updated: 2026-09-29.
+Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). The separate Codex/Claude native-hook rollout has Phases 01–03 delivered; Phases 04–06 remain pending. Native lifecycle behavior is not yet qualified.** Updated: 2026-09-29.
 OMP-first plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
-Codex/Claude: [approved Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md); [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md). No hooks were installed and no native model turns were run.
+The Phase 01 contract and static capability review installed no hooks or ran native model turns. Phase 03 managed installation is now implemented, but no live Codex/Claude provider behavior has been qualified.
 OMP baseline evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
 OMP-first Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
@@ -15,7 +15,7 @@ tabs, and Fleet rows, unified preferences (`terminalAgentNotifications`),
 toast viewport, and notification history center. Phase 05 delivers full Linux
 end-to-end qualification across scenarios C01–C19.
 
-The separate Codex/Claude Phase 01 is contract-only: public DTOs and v2 preferences changed, but the collector remains OMP-only. Phase 02 private ingress/lease work is in progress; Phases 03–06 remain pending, including installer/trust, event adapters, OSC 9 removal and native UI freshness, and live qualification.
+The separate Codex/Claude rollout has delivered the approved Phase 01 contract, Phase 02 private one-shot ingress and 15-second evidence lease, and Phase 03 managed installation/status/update/uninstall. Native event adapters, Agent Settings/notification cutover, and live Linux qualification (Phases 04–06) remain pending; no live native provider turns have been qualified.
 
 ## Delivery Scope and Invariants
 
@@ -62,8 +62,7 @@ unknown fields; server identifiers are non-empty, ASCII graphic, and at most
 JavaScript's safe-integer maximum (`9,007,199,254,740,991`). The UI public
 decoders validate bounded non-empty strings, closed enums, protocol version,
 and nonnegative safe integers; they do not reject unknown object fields. Public
-`AgentKind` includes `omp`, `codex`, and `claude`; the private collector remains
-OMP-only.
+`AgentKind` includes `omp`, `codex`, and `claude`. The persistent WebSocket reporter protocol remains OMP-only; Codex and Claude use the separate bounded one-shot hook ingress delivered in Phase 02. Neither path proves provider truth.
 
 ### State
 
@@ -116,24 +115,29 @@ exported through `mod.rs` and `server/src/lib.rs`; public TypeScript DTOs and
 decoders are in `packages/ui/src/api/agent-status-types.ts`, with focused
 decoder tests in `agent-status-types.test.ts`.
 
-The public Rust and TypeScript status DTOs now include `omp`, `codex`, and `claude`,
+The public Rust and TypeScript status DTOs include `omp`, `codex`, and `claude`,
 plus `source`, `observedAtMs`, and `expiresAtMs`. The UI decoder treats a missing
 `source` on a legacy OMP row as `lifecycle`; native `hook` rows require safe
 observation/expiry timestamps for non-Unknown state, with expiry later than
 observation. Unknown hook rows have no expiry; lifecycle rows cannot expire.
-This is DTO/decoder support only: the private collector rejects non-OMP hello
-kinds. The client status API and decoder do not imply native event admission.
+Phase 02 adds a separate private one-shot Codex/Claude ingress through
+`server/src/agent_status/{hook_reporter.rs,hook_ingress.rs}`; accepted native
+evidence uses the 15-second lease, while the persistent WebSocket collector
+continues to admit OMP only. Native ingress does not qualify event mappings;
+Codex/Claude lifecycle adapters remain Phase 04 work.
 Reducer test cases exercise normal turns, blockers, continuation/cancellation,
 outcomes, session switches, sequence/epoch fences, reconnect, leases, and
-retirement. Phase 02 server integration lives in
+retirement. OMP-first Phase 02 server integration lives in
 `server/src/agent_status/{runtime.rs,collector.rs}`, `server/src/api/agent_status.rs`,
 `server/src/api/{router.rs,ws.rs,ws_protocol.rs}`, `server/src/pty/manager.rs`,
 `server/src/state.rs`, and `server/src/main.rs`; lifecycle/socket coverage is in
-`server/tests/agent_status_runtime.rs` and focused PTY/API tests. Phase 02
-verification passed with 100% test success. See the
-[Phase 01 plan](../../plans/260928-0318-agent-status-omp-first/phase-01-semantic-contract-and-reducer.md)
-and [Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md).
-The separate Codex/Claude [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md) and [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md) document the approved contract-only extension; they do not qualify native runtime behavior.
+`server/tests/agent_status_runtime.rs` and focused PTY/API tests. See the
+[OMP Phase 01 plan](../../plans/260928-0318-agent-status-omp-first/phase-01-semantic-contract-and-reducer.md)
+and [OMP Phase 02 plan](../../plans/260928-0318-agent-status-omp-first/phase-02-reporter-transport-and-pty-lifecycle.md).
+The separate Codex/Claude [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md),
+[Phase 02 ingress plan](../../plans/260929-0140-agent-status-codex-claude/phase-02-private-hook-ingress.md),
+and [Phase 03 managed installation plan](../../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md)
+document delivered native infrastructure. They do not qualify provider lifecycle behavior.
 
 ## Implemented PTY/runtime lifecycle (Phase 02)
 
@@ -229,9 +233,9 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 ## Agent Store path verification
 
 - The Agent Store's **Agent Settings** tab replaces the former Integrations tab for agent setup and the former Appearance agent-notification panel. It uses one OMP install path and one Codex config path for the selected server profile. Global `agentSettingsPaths` also persists optional `claudeDir`, but the current Agent Settings UI and path-verification endpoint do not configure or verify Claude readiness. `agentSettingsPaths` and `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.
-- The UI asks the selected server for `GET /api/agent-status/paths?agentDir=...&codexDir=...`. The response contains configured and runtime paths, OMP managed-extension status, Codex `config.toml` file-presence state, and per-agent `canEnable`/reason fields. `~/` is expanded against the home of `service_user` or `plugin_owner_user` from `/etc/dam-hopper/host.toml` when resolvable, otherwise against the API process's home (`/` is the endpoint fallback if no home can be resolved). Relative paths and `..` components are rejected.
+- The UI asks the selected server for `GET /api/agent-status/paths?agentDir=...&codexDir=...`. The response contains configured and runtime paths, OMP managed-extension status, Codex `config.toml` or `hooks.json` file-presence state, and per-agent `canEnable`/reason fields. `~/` is expanded against the home of `service_user` or `plugin_owner_user` from `/etc/dam-hopper/host.toml` when resolvable, otherwise against the API process's home (`/` is the endpoint fallback if no home can be resolved). Relative paths and `..` components are rejected.
 - Runtime directories come from absolute `PI_CODING_AGENT_DIR` and `CODEX_HOME` values in the server process environment when set; otherwise they are `<effective-home>/.omp/agent` and `<effective-home>/.codex`. This endpoint does not inspect per-PTY `HOME` or other per-terminal environment.
-- **Enable-toggle eligibility requires strict path matching:** each configured directory must compare equal to its distinct runtime directory after `~/` expansion; paths are not filesystem-canonicalized. OMP also requires the managed extension status `current`. Codex also requires `config.toml` to pass `is_file`; the path endpoint does not establish readability or TOML validity, while Codex sync reads/parses the file when the master policy changes.
+- **Enable-toggle eligibility requires strict path matching:** each configured directory must compare equal to its distinct runtime directory after `~/` expansion; paths are not filesystem-canonicalized. OMP also requires the managed extension status `current`. Codex path eligibility accepts either `config.toml` or `hooks.json` passing `is_file`; this presence check does not establish read access or syntax validity.
 - The global-config update path separately rechecks OMP path equality and current-extension status before persisting an enabled OMP policy. Codex persistence requires the configured `config.toml` to exist, then sync reads and parses it on a master-policy transition; the config update path does not independently compare the Codex directory with `CODEX_HOME`.
 - **Existing enabled policies are not revalidated at notification dispatch.** Agent Settings gates the enable control using the latest path verification, but runtime dispatch reads the saved `enabled` flag. A path/config/installation change can therefore make the UI control appear unchecked/disabled while leaving the saved policy enabled and delivery active; this is not fail-closed dispatch-time revalidation.
 - Filesystem reads/writes run with API-service OS permissions. Linux production defaults to `dam-hopper`; it receives no automatic access to a separate PTY user's home or Codex directory. `~` only selects the server-side home resolution above; it does not switch identity or grant permissions.
@@ -244,57 +248,90 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Phase 05 qualified the Linux x86_64 release path against OMP 18.4.1 across
   C01–C19, including live OMP/browser behavior and standalone binary installation.
   See the [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md).
-- The private collector still admits only OMP through its persistent reporter protocol. Codex and Claude native-hook behavior, screen reconstruction and universal agent support are not delivered.
+- The persistent private WebSocket collector admits only OMP. Codex and Claude have a separate Phase 02 one-shot ingress and Phase 03 managed installer; native event adapters, settings/notification cutover, and live qualification are not delivered.
 
-## Proposed Codex and Claude native-hook rollout — not implemented
+## Codex and Claude native-hook rollout — Phases 01–03 delivered; Phases 04–06 pending
 
 Design date: 2026-09-29. [Rollout plan](../../plans/260929-0140-agent-status-codex-claude/plan.md).
 The user selected ordinary CLI native hooks with explicit Unknown for gaps,
-not Herdr-style screen detection or a controlled app-server launch mode. The
-approved [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md)
-and [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md)
-cover contract work only. Phase 02 private ingress, cross-transport generation
-fencing, and 15-second evidence lease expiry are implemented and verified.
-Managed hook installation, native event adapters, and qualification (Phases 03–06)
-remain pending; no native hooks are installed and no live model turns ran.
-OMP reporter/lifecycle semantics remain unchanged.
+not Herdr-style screen detection or a controlled app-server launch mode. Phase 01
+froze the contract; Phase 02 delivered private one-shot ingress, incarnation and
+generation fencing, and 15-second evidence expiry; Phase 03 delivered the
+managed installation lifecycle. OMP reporter/lifecycle semantics remain unchanged.
+No Codex/Claude event adapter, Agent Settings/notification cutover, or live
+provider qualification has shipped; no live native model turns have been run.
 
-- Codex and Claude command hooks invoke a packaged reporting subcommand through
-  managed launchers in their server-side native configuration directories.
-  Codex uses `CODEX_HOME`/`hooks.json`; Claude uses
-  `CLAUDE_CONFIG_DIR`/`settings.json`. Defaults are `.codex` and `.claude` under
-  the effective terminal user's home. Preserve unrelated hooks and configuration.
-- Reporting is passive: no model calls, prompt/agent hooks, stdout/context
-  injection, approval decisions, continuation decisions, or transcript access.
-  The launcher is dormant without the existing PTY-scoped private credentials.
-- Add bounded one-shot ingress on the existing private loopback collector,
-  separate from OMP's persistent WebSocket admission. Strip native payloads to
-  allowlisted event/identity metadata before transport. Reuse registry ownership,
-  public status pushes, silent baselines, and terminal-incarnation revocation.
-- Native observations carry source/freshness metadata. Initially use a
-  15-second evidence lease renewed only by accepted native events, not by a
-  timer replaying cached state. Expiry becomes Unknown without completion.
-  Long silent reasoning and permission waits can therefore show Unknown.
-  This lease bounds staleness; it does not prove continuous semantic liveness.
-- Root process/session/turn attribution, delayed callbacks, and subagent exclusion
-  require exact-version qualification. Ambiguous, stale, or uncorrelated events
-  cannot overwrite a current root turn. Process identity is private metadata,
-  not public state or proof of model truth.
-- `Stop` is a continuation opportunity, not final-settle proof. Hook-only adapters
-  do not emit normal turn-ended attention from Stop or a quiet/debounce timeout.
-  DamHopper's Codex OSC 9 parser/alerts and automatic TUI-config writes remain
-  legacy behavior, not native readiness or verified completion; Phase 05 removal
-  is pending. Codex native integration is initially status-only; Claude may emit
-  qualified explicit attention/error signals. Unsupported transitions become
-  Unknown, not success.
-- Managed installation status and live reporting readiness are separate. Codex
-  native hook trust, Claude disabled/managed-only policies, per-PTY config paths,
-  permissions, and connection generation gate readiness. No trust bypass or sudo.
-- Uninstall removes owned registrations before owned launchers, preserves user
-  changes, invalidates delivery eligibility, and requires agent reload/restart
-  before claiming no cached hook can execute. Report conflicts/partial failures.
-- The v2 schema already includes a disabled Claude policy; rollout must close the remaining profile/path/delivery-gate gaps before exposing Claude controls or enabling native reporting. Matched server/UI releases and explicit config migration remain required; older strict decoders are not forward-compatible by assumption.
-- Static capability evidence inspected Codex CLI 0.158.0 and Claude Code 2.1.250; neither has native lifecycle qualification. Version probes and static schemas are not qualification evidence.
+### Managed installation and removal (Phase 03 delivered)
+
+The server binary provides local Codex and Claude install, status, and uninstall
+commands. Each action requires an existing absolute native configuration
+directory; `--json` is optional. These commands dispatch before normal server
+authentication, database, and listener startup:
+
+```text
+dam-hopper-server integration codex install --agent-dir <absolute-agent-dir>
+dam-hopper-server integration codex status --agent-dir <absolute-agent-dir>
+dam-hopper-server integration codex uninstall --agent-dir <absolute-agent-dir>
+dam-hopper-server integration claude install --agent-dir <absolute-agent-dir>
+dam-hopper-server integration claude status --agent-dir <absolute-agent-dir>
+dam-hopper-server integration claude uninstall --agent-dir <absolute-agent-dir>
+```
+
+The protected API exposes `GET`, `POST`, and `DELETE` on
+`/api/agent-status/integrations/{agent}` for `codex` or `claude`.
+`agentDir` is a query parameter for status/uninstall and a camelCase JSON
+property for install. Without it, absolute `CODEX_HOME` or `CLAUDE_CONFIG_DIR`
+values are used, falling back to `<effective-home>/.codex` or
+`<effective-home>/.claude`. CLI and API dispatch through the same managers. See
+the [Phase 03 plan](../../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md)
+and [Cycle 2 review](../../plans/reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
+
+Implementation spans `server/src/agent_status/{integration.rs,codex_integration.rs,claude_integration.rs,assets/native-agent-status.sh}`,
+`server/src/api/{agent_status.rs,router.rs,error.rs}`, `server/src/error.rs`, and
+`server/src/main.rs`; lifecycle coverage is in
+`server/tests/agent_status_integration.rs` and
+`server/tests/agent_status_runtime.rs`. The Cycle 2 review scored 9.5/10 and
+recorded 87 passing agent-status test executions.
+
+- Codex uses an existing `hooks.json`; if absent, an existing `config.toml`
+  `[hooks]` table is updated in place, otherwise `hooks.json` is the target.
+  Claude registrations merge into `settings.json`. Existing user hooks,
+  unrelated settings, and sibling matchers are preserved.
+- Install stages a packaged-binary launcher and ownership manifest, then
+  registers hooks. Per-file writes are atomic. The manifest records the exact
+  launcher hash and managed entries/assets; symlinks, malformed/oversized
+  configuration, and locally modified owned launchers are rejected.
+- Uninstall removes managed registrations before the verified launcher and
+  manifest, preserves user-owned configuration, and removes only files and
+  empty directories recorded as created by DamHopper. Modified managed assets
+  or conflicting entries are reported rather than overwritten or deleted.
+- Installation state (`absent`, `current`, `outdated`, `modified`) is reported
+  separately from runtime readiness. A current install is not proof of hook
+  trust, policy eligibility, loaded configuration, or qualified live reporting.
+  Codex `/hooks` trust remains user-controlled; Claude policy is not bypassed.
+- Native applications may cache hook configuration in active sessions. Reload or
+  restart affected sessions after install/removal; until then, do not claim that
+  cached invocations are impossible. OMP installation and event semantics are
+  unchanged.
+
+### Remaining native rollout gates
+
+- Phase 04 adds exact-version Codex/Claude event adapters. Root/session/turn
+  attribution, delayed callbacks, and subagent exclusion require qualification;
+  ambiguous, stale, or uncorrelated events cannot overwrite a current root turn.
+- Native hooks remain passive: no model calls, prompt/context injection,
+  approval or continuation decisions, or transcript access. `Stop` is not
+  final-settle proof; unsupported transitions become Unknown, not success.
+  Codex is initially status-only; any Claude attention/error signals require
+  qualification.
+- Phase 05 completes Agent Settings, profile/path/delivery readiness gates, and
+  notification ownership. It also removes DamHopper's legacy Codex OSC 9
+  parser/alerts and automatic TUI-config writes; there is no fallback handler.
+  Matched server/UI releases and explicit v1-to-v2 preference migration remain
+  required; the v2 schema already includes Claude disabled by default.
+- Phase 06 performs live Linux qualification. Codex CLI 0.158.0 and Claude Code
+  2.1.250 are research targets, not qualified version promises. Static schemas
+  and version probes do not establish native lifecycle behavior.
 
 Sources: [Codex hooks](https://developers.openai.com/codex/hooks/),
 [Claude hooks](https://code.claude.com/docs/en/hooks),
