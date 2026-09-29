@@ -1,4 +1,5 @@
 export const UI_BRIDGE_VERSION = "1.0.0";
+export const ADVISOR_WORKSPACE_EXTENSION_V1 = "workspace-advisor-v1";
 export const MAX_BRIDGE_PAYLOAD_BYTES = 16 * 1024 * 1024;
 export const MAX_BRIDGE_CONTROL_BYTES = 64 * 1024;
 export const MAX_BRIDGE_ID_LENGTH = 128;
@@ -10,7 +11,27 @@ const MAX_CAPABILITIES = 256;
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const OPERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/;
 
+export type AdvisorHistoryScope = "history-root" | "project" | "unavailable";
+export type AdvisorContextScope = "history-root" | "project";
+
+export interface AdvisorWorkspaceProject {
+  projectId: string;
+  label: string | null;
+}
+
+export interface AdvisorWorkspaceContext {
+  revision: number;
+  authorityKey: string;
+  project: AdvisorWorkspaceProject;
+  historyScope: AdvisorHistoryScope;
+  contextScope: AdvisorContextScope;
+  allowedOperations: string[];
+}
+
+export type UiIntent = "activate" | "dismiss";
 export interface FrameReadyMessage {
   type: "frame.ready";
   bridgeVersion: typeof UI_BRIDGE_VERSION;
@@ -45,10 +66,19 @@ export interface FrameCancelMessage {
   requestId: string;
 }
 
+export interface FrameUiIntentMessage {
+  type: "frame.uiIntent";
+  bridgeVersion: typeof UI_BRIDGE_VERSION;
+  frameSession: string;
+  activationGeneration: number;
+  intent: UiIntent;
+}
+
 export type FramePortMessage =
   | FramePortAckMessage
   | FrameRequestMessage
-  | FrameCancelMessage;
+  | FrameCancelMessage
+  | FrameUiIntentMessage;
 
 export interface HostBootstrapMessage {
   type: "host.bootstrap";
@@ -58,6 +88,24 @@ export interface HostBootstrapMessage {
   pluginId: string;
   nonce: string;
   capabilities: string[];
+  extensions?: string[];
+  workspaceContext?: AdvisorWorkspaceContext;
+}
+
+export interface HostContextReadyMessage {
+  type: "host.contextReady";
+  bridgeVersion: typeof UI_BRIDGE_VERSION;
+  frameSession: string;
+  activationGeneration: number;
+  workspaceContext: AdvisorWorkspaceContext;
+}
+
+export interface HostWorkspaceChangedMessage {
+  type: "host.workspaceChanged";
+  bridgeVersion: typeof UI_BRIDGE_VERSION;
+  frameSession: string;
+  activationGeneration: number;
+  workspaceContext: AdvisorWorkspaceContext;
 }
 
 export interface HostResponseError {
@@ -89,6 +137,79 @@ export class BridgeValidationError extends Error {
     super(message);
     this.name = "BridgeValidationError";
   }
+}
+
+export function validateAdvisorWorkspaceContext(
+  data: unknown,
+): AdvisorWorkspaceContext {
+  const value = asRecord(data);
+  requireExactKeys(value, [
+    "revision",
+    "authorityKey",
+    "project",
+    "historyScope",
+    "contextScope",
+    "allowedOperations",
+  ]);
+  if (
+    typeof value.revision !== "number" ||
+    !Number.isInteger(value.revision) ||
+    value.revision < 1
+  ) {
+    throw new BridgeValidationError("Invalid workspaceContext revision");
+  }
+  if (
+    typeof value.authorityKey !== "string" ||
+    !SHA256_HEX_PATTERN.test(value.authorityKey)
+  ) {
+    throw new BridgeValidationError("Invalid workspaceContext authorityKey");
+  }
+  const proj = asRecord(value.project);
+  requireExactKeys(proj, ["projectId", "label"]);
+  if (
+    typeof proj.projectId !== "string" ||
+    !SHA256_HEX_PATTERN.test(proj.projectId)
+  ) {
+    throw new BridgeValidationError("Invalid workspaceContext project.projectId");
+  }
+  if (proj.label !== null && typeof proj.label !== "string") {
+    throw new BridgeValidationError("Invalid workspaceContext project.label");
+  }
+  if (typeof proj.label === "string") {
+    if (proj.label.length > 256 || CONTROL_CHAR_PATTERN.test(proj.label)) {
+      throw new BridgeValidationError("Invalid workspaceContext project.label characters or length");
+    }
+  }
+  if (
+    value.historyScope !== "history-root" &&
+    value.historyScope !== "project" &&
+    value.historyScope !== "unavailable"
+  ) {
+    throw new BridgeValidationError("Invalid workspaceContext historyScope");
+  }
+  if (
+    value.contextScope !== "history-root" &&
+    value.contextScope !== "project"
+  ) {
+    throw new BridgeValidationError("Invalid workspaceContext contextScope");
+  }
+  if (!Array.isArray(value.allowedOperations)) {
+    throw new BridgeValidationError("workspaceContext allowedOperations must be an array");
+  }
+  if (value.allowedOperations.length > MAX_CAPABILITIES) {
+    throw new BridgeValidationError("workspaceContext allowedOperations exceeds limit");
+  }
+  for (const op of value.allowedOperations) {
+    if (
+      typeof op !== "string" ||
+      op.length === 0 ||
+      op.length > MAX_BRIDGE_OPERATION_LENGTH ||
+      !OPERATION_PATTERN.test(op)
+    ) {
+      throw new BridgeValidationError(`Invalid allowedOperation: ${String(op)}`);
+    }
+  }
+  return value as unknown as AdvisorWorkspaceContext;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -354,6 +475,26 @@ export function validateFramePortMessage(
       );
     }
     return value as unknown as FrameCancelMessage;
+  }
+
+  if (value.type === "frame.uiIntent") {
+    requireExactKeys(value, [
+      "type",
+      "bridgeVersion",
+      "frameSession",
+      "activationGeneration",
+      "intent",
+    ]);
+    requireEnvelopeFence(value, frameSession, activationGeneration);
+    if (value.intent !== "activate" && value.intent !== "dismiss") {
+      throw new BridgeValidationError("Invalid uiIntent value");
+    }
+    if (encodedJsonSize(value, "Bridge uiIntent") > MAX_BRIDGE_CONTROL_BYTES) {
+      throw new BridgeValidationError(
+        "Bridge uiIntent exceeds the control limit",
+      );
+    }
+    return value as unknown as FrameUiIntentMessage;
   }
 
   throw new BridgeValidationError("Unsupported frame-to-host envelope");

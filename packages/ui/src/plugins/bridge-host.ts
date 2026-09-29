@@ -7,14 +7,21 @@ import type {
 } from "@/api/client.js";
 import { onConnectionInvalidated } from "@/api/connections.js";
 import {
+  ADVISOR_WORKSPACE_EXTENSION_V1,
   BridgeValidationError,
   UI_BRIDGE_VERSION,
+  type AdvisorWorkspaceContext,
   type FrameCancelMessage,
   type FrameRequestMessage,
+  type FrameUiIntentMessage,
   type HostBootstrapMessage,
+  type HostContextReadyMessage,
   type HostContextRevokedMessage,
   type HostResponseError,
   type HostResponseMessage,
+  type HostWorkspaceChangedMessage,
+  type UiIntent,
+  validateAdvisorWorkspaceContext,
   validateCapabilities,
   validateFramePortMessage,
   validateFrameReady,
@@ -88,6 +95,11 @@ export interface FrameSessionOptions {
   allowedOperations: string[];
   allowCurrentAccountPolicy?: boolean;
   backend: FrameSessionBackend;
+  extension?: string;
+  workspaceContext?: AdvisorWorkspaceContext;
+  expectedContextScope?: "history-root" | "project";
+  visible?: boolean;
+  onUiIntent?: (intent: UiIntent) => void;
   onStateChange?: (state: FrameSessionState, detail?: string) => void;
 }
 
@@ -167,10 +179,20 @@ export class FrameSession {
   private readonly capabilities: string[];
   private readonly unsubscribeContext: () => void;
   private readonly unsubscribeOwner: () => void;
+  private readonly extension?: string;
+  private workspaceContext?: AdvisorWorkspaceContext;
+  private readonly expectedContextScope?: "history-root" | "project";
+  private visible: boolean;
+  private readonly onUiIntent?: (intent: UiIntent) => void;
 
   constructor(private readonly options: FrameSessionOptions) {
     this.installationId = options.installationId;
     this.activationGeneration = options.activationGeneration;
+    this.extension = options.extension;
+    this.workspaceContext = options.workspaceContext ? { ...options.workspaceContext } : undefined;
+    this.expectedContextScope = options.expectedContextScope;
+    this.visible = options.visible ?? true;
+    this.onUiIntent = options.onUiIntent;
     this.capabilities = validateCapabilities(options.allowedOperations);
     this.allowedOperations = new Set(this.capabilities);
     this.unsubscribeContext = options.backend.onContextRevoked(
@@ -249,6 +271,8 @@ export class FrameSession {
       pluginId: this.installationId,
       nonce: this.nonce,
       capabilities: [...this.capabilities],
+      ...(this.extension ? { extensions: [this.extension] } : {}),
+      ...(this.workspaceContext ? { workspaceContext: this.workspaceContext } : {}),
     };
     this.acknowledgementTimer = setTimeout(() => {
       this.acknowledgementTimer = null;
@@ -336,11 +360,20 @@ export class FrameSession {
     }
     if (message.type === "request") {
       void this.handleRequest(message);
-    } else {
+    } else if (message.type === "cancel") {
       this.handleCancel(message);
+    } else if (message.type === "frame.uiIntent") {
+      if (
+        this.stateValue !== "Ready" ||
+        !this.visible ||
+        this.extension !== ADVISOR_WORKSPACE_EXTENSION_V1
+      ) {
+        this.revoke("uiIntent rejected: frame not ready, not visible, or extension unnegotiated");
+        return;
+      }
+      this.onUiIntent?.(message.intent);
     }
   }
-
   private async openContextAfterAcknowledgement(): Promise<void> {
     const revision = this.revision;
     try {
@@ -353,6 +386,9 @@ export class FrameSession {
         allowedOperations: [...this.capabilities],
         ...(this.options.allowCurrentAccountPolicy
           ? { allowCurrentAccountPolicy: true }
+          : {}),
+        ...(this.expectedContextScope
+          ? { scopeKind: this.expectedContextScope }
           : {}),
       });
       if (
@@ -368,7 +404,32 @@ export class FrameSession {
         }
         return;
       }
+      if (
+        this.expectedContextScope &&
+        opened.scopeKind !== this.expectedContextScope
+      ) {
+        await this.options.backend.closeContext({
+          epoch,
+          contextId: opened.contextId,
+        });
+        this.revoke("Plugin context scope mismatch");
+        return;
+      }
       this.context = { epoch, contextId: opened.contextId };
+      if (
+        this.extension === ADVISOR_WORKSPACE_EXTENSION_V1 &&
+        this.workspaceContext &&
+        this.port
+      ) {
+        const readyMessage: HostContextReadyMessage = {
+          type: "host.contextReady",
+          bridgeVersion: UI_BRIDGE_VERSION,
+          frameSession: this.frameSession,
+          activationGeneration: this.activationGeneration,
+          workspaceContext: this.workspaceContext,
+        };
+        this.port.postMessage(readyMessage);
+      }
       this.transition("Ready");
     } catch {
       this.revoke("Plugin context is unavailable");
@@ -514,5 +575,44 @@ export class FrameSession {
     this.context = null;
     if (!context) return;
     await this.options.backend.closeContext(context).catch(() => undefined);
+  }
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+  }
+
+  get authorityKey(): string | null {
+    return this.workspaceContext?.authorityKey ?? null;
+  }
+
+  get currentWorkspaceContext(): AdvisorWorkspaceContext | null {
+    return this.workspaceContext ? { ...this.workspaceContext } : null;
+  }
+
+  updateWorkspaceContext(newContext: AdvisorWorkspaceContext): boolean {
+    if (
+      this.stateValue === "Revoked" ||
+      this.stateValue !== "Ready" ||
+      !this.port ||
+      this.extension !== ADVISOR_WORKSPACE_EXTENSION_V1 ||
+      !this.workspaceContext
+    ) {
+      return false;
+    }
+    if (newContext.authorityKey !== this.workspaceContext.authorityKey) {
+      return false;
+    }
+    if (newContext.revision <= this.workspaceContext.revision) {
+      return false;
+    }
+    this.workspaceContext = { ...newContext };
+    const msg: HostWorkspaceChangedMessage = {
+      type: "host.workspaceChanged",
+      bridgeVersion: UI_BRIDGE_VERSION,
+      frameSession: this.frameSession,
+      activationGeneration: this.activationGeneration,
+      workspaceContext: this.workspaceContext,
+    };
+    this.port.postMessage(msg);
+    return true;
   }
 }
