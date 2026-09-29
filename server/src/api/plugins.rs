@@ -31,6 +31,13 @@ pub struct TargetWireDto {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DescribeViewRequest {
+    pub installation_id: String,
+    pub target: TargetWireDto,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenContextRequest {
     pub epoch: u64,
     pub installation_id: String,
@@ -160,6 +167,66 @@ pub async fn list_plugins_handler(
         .await
     {
         Ok(plugins) => Json(ListPluginsResponse { plugins }).into_response(),
+        Err(e) => plugin_error_response(e),
+    }
+}
+
+pub async fn describe_view_handler(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Json(request): Json<DescribeViewRequest>,
+) -> Response {
+    if let Err(resp) = check_no_auth(state.no_auth) {
+        return resp;
+    }
+
+    let Some(Extension(actor)) = actor else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
+    };
+
+    if request.target.project.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Project target is required" })),
+        )
+            .into_response();
+    }
+
+    let configured_root = match state
+        .workspace_target_project_path(&request.target.project)
+        .await
+    {
+        Ok(path) => path,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Project target not found" })),
+            )
+                .into_response();
+        }
+    };
+
+    let target_ref = ProjectTargetRef {
+        project: request.target.project,
+        worktree_path: request.target.worktree_path,
+    };
+
+    match state
+        .plugin_service
+        .describe_view(
+            &actor,
+            &request.installation_id,
+            &target_ref,
+            &configured_root,
+            state.no_auth,
+        )
+        .await
+    {
+        Ok(res) => Json(res).into_response(),
         Err(e) => plugin_error_response(e),
     }
 }

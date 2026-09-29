@@ -7,7 +7,7 @@ use dam_hopper_server::plugins::contexts::{ContextRecord, PluginContextTable};
 use dam_hopper_server::plugins::contract::budgets::{
     MAX_CONTEXTS_PER_WORKER, MAX_OPERATIONS_PER_CONTEXT,
 };
-use dam_hopper_server::plugins::contract::{ContextScopeKind, GrantKey};
+use dam_hopper_server::plugins::contract::{ContextScopeKind, GrantKey, HistoryScopeKind};
 use dam_hopper_server::plugins::error::PluginErrorCode;
 use dam_hopper_server::plugins::registry_state::OwnerHistorySource;
 
@@ -546,4 +546,228 @@ fn test_root_history_authorization_denies_when_owner_source_unconfigured_or_revo
         )
         .unwrap_err();
     assert_eq!(err.code, PluginErrorCode::ContextRevoked);
+}
+
+#[test]
+fn test_compute_effective_permissions_history_root_implicit() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry);
+
+    auth_service.set_owner_history_source(
+        "evcrate.advisor",
+        Some(OwnerHistorySource {
+            root_path: "/home/user/.evcrate/history".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        }),
+    );
+
+    let capabilities = vec![
+        "history.refresh".to_string(),
+        "history.summary".to_string(),
+        "history.page".to_string(),
+        "history.detail".to_string(),
+        "policy.readCurrent".to_string(),
+        "evaluations.list".to_string(),
+    ];
+
+    let (history_scope, context_scope, allowed_ops, allow_policy, is_target_bound) =
+        auth_service.compute_effective_permissions("anyone", "evcrate.advisor", "proj-a", &capabilities);
+
+    assert_eq!(history_scope, HistoryScopeKind::HistoryRoot);
+    assert_eq!(context_scope, ContextScopeKind::HistoryRoot);
+    assert_eq!(
+        allowed_ops,
+        vec![
+            "history.refresh".to_string(),
+            "history.summary".to_string(),
+            "history.page".to_string(),
+            "history.detail".to_string(),
+        ]
+    );
+    assert!(!allow_policy);
+    assert!(!is_target_bound);
+}
+
+#[test]
+fn test_compute_effective_permissions_project_only_history() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry);
+
+    auth_service.set_actor_grants(
+        "alice",
+        vec![GrantKey {
+            actor_subject: "alice".to_string(),
+            installation_id: "evcrate.advisor".to_string(),
+            configured_project_target: "proj-a".to_string(),
+            allowed_operations: vec!["history.summary".to_string()],
+            allow_current_account_policy: false,
+        }],
+    );
+
+    let capabilities = vec![
+        "history.refresh".to_string(),
+        "history.summary".to_string(),
+        "policy.readCurrent".to_string(),
+    ];
+
+    let (history_scope, context_scope, allowed_ops, allow_policy, is_target_bound) =
+        auth_service.compute_effective_permissions("alice", "evcrate.advisor", "proj-a", &capabilities);
+
+    assert_eq!(history_scope, HistoryScopeKind::Project);
+    assert_eq!(context_scope, ContextScopeKind::Project);
+    assert_eq!(allowed_ops, vec!["history.summary".to_string()]);
+    assert!(!allow_policy);
+    assert!(is_target_bound);
+
+    // For proj-b, alice has no grants: unavailable
+    let (history_scope_b, _, allowed_ops_b, _, _) =
+        auth_service.compute_effective_permissions("alice", "evcrate.advisor", "proj-b", &capabilities);
+    assert_eq!(history_scope_b, HistoryScopeKind::Unavailable);
+    assert!(allowed_ops_b.is_empty());
+}
+
+#[test]
+fn test_compute_effective_permissions_policy_eval_only_no_history() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry);
+
+    auth_service.set_actor_grants(
+        "bob",
+        vec![GrantKey {
+            actor_subject: "bob".to_string(),
+            installation_id: "evcrate.advisor".to_string(),
+            configured_project_target: "proj-a".to_string(),
+            allowed_operations: vec![
+                "policy.readCurrent".to_string(),
+                "evaluations.list".to_string(),
+            ],
+            allow_current_account_policy: true,
+        }],
+    );
+
+    let capabilities = vec![
+        "history.refresh".to_string(),
+        "history.summary".to_string(),
+        "policy.readCurrent".to_string(),
+        "evaluations.list".to_string(),
+    ];
+
+    let (history_scope, context_scope, allowed_ops, allow_policy, is_target_bound) =
+        auth_service.compute_effective_permissions("bob", "evcrate.advisor", "proj-a", &capabilities);
+
+    assert_eq!(history_scope, HistoryScopeKind::Unavailable);
+    assert_eq!(context_scope, ContextScopeKind::Project);
+    assert_eq!(
+        allowed_ops,
+        vec![
+            "policy.readCurrent".to_string(),
+            "evaluations.list".to_string(),
+        ]
+    );
+    assert!(allow_policy);
+    assert!(is_target_bound);
+}
+
+#[test]
+fn test_mixed_context_open_authorization() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry.clone());
+    let actor = AuthenticatedActor::new("carol", None);
+    let epoch = epoch_registry.issue_epoch("carol", None);
+
+    auth_service.set_owner_history_source(
+        "evcrate.advisor",
+        Some(OwnerHistorySource {
+            root_path: "/home/user/.evcrate/history".to_string(),
+            root_identity: "a".repeat(64),
+            source_revision: 1,
+            all_authenticated_history_read: true,
+        }),
+    );
+
+    // Grant for policy.readCurrent on proj-a
+    auth_service.set_actor_grants(
+        "carol",
+        vec![GrantKey {
+            actor_subject: "carol".to_string(),
+            installation_id: "evcrate.advisor".to_string(),
+            configured_project_target: "proj-a".to_string(),
+            allowed_operations: vec!["policy.readCurrent".to_string()],
+            allow_current_account_policy: false,
+        }],
+    );
+
+    // Open mixed context: history ops (implicit root grant) + policy.readCurrent (explicit grant)
+    assert!(auth_service
+        .check_open_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "proj-a",
+            Some(ContextScopeKind::HistoryRoot),
+            &[
+                "history.summary".to_string(),
+                "policy.readCurrent".to_string(),
+            ],
+            false,
+            false,
+        )
+        .is_ok());
+
+    // Mixed context requesting an ungranted non-history op fails
+    let err = auth_service
+        .check_open_authorization(
+            &actor,
+            epoch,
+            "evcrate.advisor",
+            "proj-a",
+            Some(ContextScopeKind::HistoryRoot),
+            &[
+                "history.summary".to_string(),
+                "evaluations.list".to_string(),
+            ],
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, PluginErrorCode::Forbidden);
+}
+
+#[test]
+fn test_multi_grant_union() {
+    let epoch_registry = Arc::new(EpochRegistry::new());
+    let auth_service = PluginAuthorizationService::new(epoch_registry);
+
+    // Two grants for dave:
+    // 1) wildcard target: allows current account policy
+    // 2) specific target "proj-a": allows evaluations.list
+    auth_service.set_actor_grants(
+        "dave",
+        vec![
+            GrantKey {
+                actor_subject: "dave".to_string(),
+                installation_id: "evcrate.advisor".to_string(),
+                configured_project_target: "*".to_string(),
+                allowed_operations: vec![],
+                allow_current_account_policy: true,
+            },
+            GrantKey {
+                actor_subject: "dave".to_string(),
+                installation_id: "evcrate.advisor".to_string(),
+                configured_project_target: "proj-a".to_string(),
+                allowed_operations: vec!["evaluations.list".to_string()],
+                allow_current_account_policy: false,
+            },
+        ],
+    );
+
+    let capabilities = vec!["evaluations.list".to_string()];
+    let (_, _, allowed_ops, allow_policy, is_target_bound) =
+        auth_service.compute_effective_permissions("dave", "evcrate.advisor", "proj-a", &capabilities);
+
+    assert_eq!(allowed_ops, vec!["evaluations.list".to_string()]);
+    assert!(allow_policy);
+    assert!(is_target_bound); // because one grant is target-specific to proj-a
 }

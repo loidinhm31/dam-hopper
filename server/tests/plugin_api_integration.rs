@@ -1175,3 +1175,170 @@ async fn test_root_history_api_admission_and_authorization() {
 
     let _ = harness.shutdown_tx.send(true);
 }
+
+#[tokio::test]
+async fn test_describe_view_api_behavioral() {
+    let temp_dir = TempDir::new().unwrap();
+    let harness = create_test_harness(&temp_dir, false).await;
+    let router = build_router(harness.state.clone());
+
+    // 1. Configure trusted owner-history root on the installation via admin API
+    let admin_token = generate_auth_token("admin-user", "test-jwt-secret");
+    let history_root = temp_dir.path().join("advisor_history_root");
+    fs::create_dir_all(&history_root).unwrap();
+    let root_identity = "78be05fd4e2291fb9eb0b5f9e1cf560bc8e14f7d78406d29a5d86f878ceb69f8".to_string();
+
+    let admin_req = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/api/plugins/admin/installations/{}/owner-history-source", harness.installation_id))
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "expectedSecurityRevision": 1,
+            "ownerHistorySource": {
+                "rootPath": history_root.to_string_lossy().to_string(),
+                "rootIdentity": root_identity,
+                "sourceRevision": 1,
+                "allAuthenticatedHistoryRead": true
+            }
+        })).unwrap()))
+        .unwrap();
+    let admin_resp = router.clone().oneshot(admin_req).await.unwrap();
+    assert_eq!(admin_resp.status(), StatusCode::OK);
+
+    let bob_token = generate_auth_token("bob-view-user", "test-jwt-secret");
+
+    // Case 1: Unauthenticated request is rejected with 401
+    let unauth_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" }
+        })).unwrap()))
+        .unwrap();
+    let unauth_resp = router.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(unauth_resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Case 2: Unknown/unregistered project target is rejected with 404 (no fallback!)
+    let unknown_proj_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "non-existent-proj" }
+        })).unwrap()))
+        .unwrap();
+    let unknown_resp = router.clone().oneshot(unknown_proj_req).await.unwrap();
+    assert_eq!(unknown_resp.status(), StatusCode::NOT_FOUND);
+
+    // Case 3: Empty project name rejected with 400
+    let empty_proj_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "   " }
+        })).unwrap()))
+        .unwrap();
+    let empty_resp = router.clone().oneshot(empty_proj_req).await.unwrap();
+    assert_eq!(empty_resp.status(), StatusCode::BAD_REQUEST);
+
+    // Case 4: Client supplying browser-computed projectId or root rejected by deny_unknown_fields
+    let forged_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" },
+            "projectId": "forged-hash-64",
+            "root": "/forged/path"
+        })).unwrap()))
+        .unwrap();
+    let forged_resp = router.clone().oneshot(forged_req).await.unwrap();
+    assert_eq!(forged_resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Case 5: Valid describe request returns 200 with canonical project ID and safe metadata
+    let describe_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj" }
+        })).unwrap()))
+        .unwrap();
+    let describe_resp = router.clone().oneshot(describe_req).await.unwrap();
+    assert_eq!(describe_resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(describe_resp.into_body(), 64 * 1024).await.unwrap();
+    let view_ctx: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    // Verify canonical project ID equals sha256 of canonical target directory
+    let proj_dir = dunce::canonicalize(temp_dir.path().join("test-proj")).unwrap();
+    let expected_project_id = hex::encode(Sha256::digest(proj_dir.to_str().unwrap().as_bytes()));
+
+    assert_eq!(view_ctx["workspaceProject"]["projectId"], expected_project_id);
+    assert_eq!(view_ctx["workspaceProject"]["label"], "test-proj");
+    assert_eq!(view_ctx["historyScope"], "history-root");
+    assert_eq!(view_ctx["contextScope"], "history-root");
+    assert_eq!(view_ctx["metadata"]["ownerHistorySource"], serde_json::Value::Null); // safe metadata: never leak raw paths
+    let auth_key_a = view_ctx["authorityKey"].as_str().unwrap().to_string();
+    assert_eq!(auth_key_a.len(), 64);
+
+    // Case 6: Project switch A -> B under unchanged root/global authority keeps authorityKey
+    // Register project B in app state
+    let proj_b_dir = temp_dir.path().join("test_project_dir_b");
+    fs::create_dir_all(&proj_b_dir).unwrap();
+    {
+        let mut cfg = harness.state.config.write().await;
+        cfg.projects.push(ProjectConfig {
+            name: "test-proj-b".to_string(),
+            path: proj_b_dir.to_string_lossy().to_string(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: RestartPolicy::Never,
+            restart_max_retries: 0,
+            health_check_url: None,
+        });
+    }
+
+    let describe_b_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": harness.installation_id,
+            "target": { "project": "test-proj-b" }
+        })).unwrap()))
+        .unwrap();
+    let describe_b_resp = router.clone().oneshot(describe_b_req).await.unwrap();
+    assert_eq!(describe_b_resp.status(), StatusCode::OK);
+
+    let body_b_bytes = axum::body::to_bytes(describe_b_resp.into_body(), 64 * 1024).await.unwrap();
+    let view_ctx_b: serde_json::Value = serde_json::from_slice(&body_b_bytes).unwrap();
+
+    let expected_b_project_id = hex::encode(Sha256::digest(dunce::canonicalize(&proj_b_dir).unwrap().to_str().unwrap().as_bytes()));
+    assert_eq!(view_ctx_b["workspaceProject"]["projectId"], expected_b_project_id);
+    assert_ne!(expected_project_id, expected_b_project_id);
+
+    // Because root/global authority is active, authorityKey must be identical across A and B!
+    let auth_key_b = view_ctx_b["authorityKey"].as_str().unwrap();
+    assert_eq!(auth_key_a, auth_key_b);
+
+    let _ = harness.shutdown_tx.send(true);
+}

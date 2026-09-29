@@ -1419,6 +1419,8 @@ function channelToEndpoint(
       return { method: "DELETE", url: "/api/workflow/history", body: data };
 
     // Plugins
+    case "plugins:describeView":
+      return { method: "POST", url: "/api/plugins/view-context", body: data };
     case "plugins:openContext":
       return { method: "POST", url: "/api/plugins/contexts/open", body: data };
     case "plugins:closeContext":

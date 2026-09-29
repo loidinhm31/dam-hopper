@@ -177,6 +177,33 @@ pub enum ContextScopeKind {
     HistoryRoot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoryScopeKind {
+    HistoryRoot,
+    Project,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceProjectIdentity {
+    pub project_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginViewContext {
+    pub metadata: PluginMetadataItem,
+    pub workspace_project: WorkspaceProjectIdentity,
+    pub history_scope: HistoryScopeKind,
+    pub context_scope: ContextScopeKind,
+    pub allowed_operations: Vec<String>,
+    pub allow_current_account_policy: bool,
+    pub authority_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextScopeDescriptor {

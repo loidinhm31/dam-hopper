@@ -469,6 +469,11 @@ pub fn build_router_with_web_dir_and_origins(
         // Plugins
         .route("/api/plugins", get(plugins_api::list_plugins_handler))
         .route(
+            "/api/plugins/view-context",
+            post(plugins_api::describe_view_handler)
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
             "/api/plugins/contexts/open",
             post(plugins_api::open_context_handler)
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
