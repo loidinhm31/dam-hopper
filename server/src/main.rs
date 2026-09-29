@@ -2,19 +2,19 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
-        ConfigResolutionInput, ConfigSource, DamHopperConfig, global_config_path,
-        global_env_path, global_registry_path, read_global_config_at, resolve_startup_config,
+        global_config_path, global_env_path, global_registry_path, read_global_config_at,
+        resolve_startup_config, ConfigResolutionInput, ConfigSource, DamHopperConfig,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
     fs::FsSubsystem,
-    port_forward::{PortForwardManager, proc_poll_loop},
+    port_forward::{proc_poll_loop, PortForwardManager},
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager, PtyTargetContext},
     state::AppState,
@@ -77,6 +77,22 @@ struct IntegrationArgs {
 enum IntegrationTarget {
     /// Oh My Pi (OMP) agent integration
     Omp(OmpIntegrationArgs),
+    /// OpenAI Codex CLI integration
+    Codex(NativeIntegrationArgs),
+    /// Anthropic Claude Code integration
+    Claude(NativeIntegrationArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct NativeIntegrationArgs {
+    #[command(subcommand)]
+    action: NativeIntegrationAction,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum NativeIntegrationAction {
+    /// Internal hook reporter invoked by native hook events
+    ReportHook,
 }
 #[derive(Debug, clap::Args)]
 struct OmpIntegrationArgs {
@@ -105,7 +121,7 @@ enum OmpIntegrationAction {
     Uninstall(OmpActionArgs),
 }
 
-fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()> {
+async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()> {
     match integration.target {
         IntegrationTarget::Omp(omp_args) => match omp_args.action {
             OmpIntegrationAction::Install(args) => {
@@ -120,7 +136,8 @@ fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()> {
                 }
             }
             OmpIntegrationAction::Status(args) => {
-                let report = dam_hopper_server::agent_status::check_extension_status(&args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::check_extension_status(&args.agent_dir)?;
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -144,6 +161,24 @@ fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()> {
                         report.target_path.display()
                     );
                 }
+            }
+        },
+        IntegrationTarget::Codex(args) => match args.action {
+            NativeIntegrationAction::ReportHook => {
+                dam_hopper_server::agent_status::hook_reporter::execute_report_hook(
+                    dam_hopper_server::agent_status::AgentKind::Codex,
+                )
+                .await;
+                std::process::exit(0);
+            }
+        },
+        IntegrationTarget::Claude(args) => match args.action {
+            NativeIntegrationAction::ReportHook => {
+                dam_hopper_server::agent_status::hook_reporter::execute_report_hook(
+                    dam_hopper_server::agent_status::AgentKind::Claude,
+                )
+                .await;
+                std::process::exit(0);
             }
         },
     }
@@ -174,10 +209,7 @@ where
         if arg == std::ffi::OsStr::new("--config") {
             return args.next().map(PathBuf::from);
         }
-        if let Some(value) = arg
-            .to_str()
-            .and_then(|arg| arg.strip_prefix("--config="))
-        {
+        if let Some(value) = arg.to_str().and_then(|arg| arg.strip_prefix("--config=")) {
             return Some(PathBuf::from(value));
         }
     }
@@ -211,10 +243,7 @@ mod tests {
             OsString::from(r"C:\dam-hopper\dam-hopper.toml"),
         ]);
 
-        assert_eq!(
-            path,
-            Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml"))
-        );
+        assert_eq!(path, Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml")));
     }
 
     #[test]
@@ -223,18 +252,22 @@ mod tests {
             r"--config=C:\dam-hopper\dam-hopper.toml",
         )]);
 
-        assert_eq!(
-            path,
-            Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml"))
-        );
+        assert_eq!(path, Some(PathBuf::from(r"C:\dam-hopper\dam-hopper.toml")));
     }
 
     #[test]
     fn integration_subcommands_are_parsed_correctly() {
-        use clap::Parser;
         use super::{Cli, Commands, IntegrationTarget, OmpIntegrationAction};
+        use clap::Parser;
 
-        let args = ["dam-hopper-server", "integration", "omp", "install", "--agent-dir", "/tmp/agent"];
+        let args = [
+            "dam-hopper-server",
+            "integration",
+            "omp",
+            "install",
+            "--agent-dir",
+            "/tmp/agent",
+        ];
         let parsed = Cli::try_parse_from(args).expect("valid install args");
         match parsed.command {
             Some(Commands::Integration(i)) => match i.target {
@@ -245,11 +278,22 @@ mod tests {
                     }
                     _ => panic!("expected install action"),
                 },
+                IntegrationTarget::Codex(_) | IntegrationTarget::Claude(_) => {
+                    panic!("expected OMP integration")
+                }
             },
             None => panic!("expected integration command"),
         }
 
-        let args2 = ["dam-hopper-server", "integration", "omp", "status", "--agent-dir", "/tmp/agent", "--json"];
+        let args2 = [
+            "dam-hopper-server",
+            "integration",
+            "omp",
+            "status",
+            "--agent-dir",
+            "/tmp/agent",
+            "--json",
+        ];
         let parsed2 = Cli::try_parse_from(args2).expect("valid status args");
         match parsed2.command {
             Some(Commands::Integration(i)) => match i.target {
@@ -260,6 +304,9 @@ mod tests {
                     }
                     _ => panic!("expected status action"),
                 },
+                IntegrationTarget::Codex(_) | IntegrationTarget::Claude(_) => {
+                    panic!("expected OMP integration")
+                }
             },
             None => panic!("expected integration command"),
         }
@@ -268,14 +315,42 @@ mod tests {
         let parsed3 = Cli::try_parse_from(args3).expect("valid normal args");
         assert!(parsed3.command.is_none());
         assert_eq!(parsed3.port, 4900);
+
+        let args_codex = ["dam-hopper-server", "integration", "codex", "report-hook"];
+        let parsed_codex = Cli::try_parse_from(args_codex).expect("valid codex report-hook args");
+        assert!(matches!(
+            parsed_codex.command,
+            Some(Commands::Integration(super::IntegrationArgs {
+                target: IntegrationTarget::Codex(super::NativeIntegrationArgs {
+                    action: super::NativeIntegrationAction::ReportHook,
+                }),
+            }))
+        ));
+
+        let args_claude = ["dam-hopper-server", "integration", "claude", "report-hook"];
+        let parsed_claude =
+            Cli::try_parse_from(args_claude).expect("valid claude report-hook args");
+        assert!(matches!(
+            parsed_claude.command,
+            Some(Commands::Integration(super::IntegrationArgs {
+                target: IntegrationTarget::Claude(super::NativeIntegrationArgs {
+                    action: super::NativeIntegrationAction::ReportHook,
+                }),
+            }))
+        ));
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Early hook reporting dispatch before dotenv/tracing/global config/db.
+    // If invoked as `integration <codex|claude> report-hook`, this silently exits 0.
+    if dam_hopper_server::agent_status::hook_reporter::maybe_dispatch_early_report_hook().await {
+        std::process::exit(0);
+    }
+
     // Early CWD-based .env lookup (matches standard dotenv behavior)
     dotenvy::dotenv().ok();
-
     let diagnostics = DiagnosticStore::default();
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
@@ -289,7 +364,7 @@ async fn main() -> anyhow::Result<()> {
     load_explicit_config_env();
     let cli = Cli::parse();
     if let Some(Commands::Integration(integration)) = cli.command {
-        return dispatch_integration(integration);
+        return dispatch_integration(integration).await;
     }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.
@@ -532,7 +607,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
     let opaque_server_setup =
         load_or_create_server_setup().expect("Failed to load or create OPAQUE server setup");
@@ -666,7 +740,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(dam_hopper_server::idle_suspend::UnavailableExecutor::new(
             "Idle suspend helper and systemd suspend are only supported on Linux",
         ));
-    state.start_idle_suspend_coordinator(idle_suspend_executor).await;
+    state
+        .start_idle_suspend_coordinator(idle_suspend_executor)
+        .await;
 
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
     state.host_resource_monitor.start();
@@ -699,7 +775,7 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(unix)]
     let shutdown_signal = async {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).unwrap_or_else(|_| {
             // fallback: never fires, but ctrl_c still works
             signal(SignalKind::hangup()).expect("failed to install SIGTERM handler")

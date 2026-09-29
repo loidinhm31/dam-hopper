@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use super::types::{
-    validate_opaque_id, validate_safe_integer, AgentAttentionEvent, AgentKind, AgentObservationSource, AgentState,
-    AgentStatusAvailability, AgentStatusError, AgentStatusRemovedPayload, AgentStatusSnapshotV1,
-    AttentionKind, BlockedReason, ReporterEventKind, ReporterHello, ReporterReport,
-    TerminalAgentStatusRow, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION, DEFAULT_LEASE_MS,
+    validate_opaque_id, validate_safe_integer, AgentAttentionEvent, AgentKind,
+    AgentObservationSource, AgentState, AgentStatusAvailability, AgentStatusError,
+    AgentStatusRemovedPayload, AgentStatusSnapshotV1, AttentionKind, BlockedReason,
+    PrivateHookEnvelope, ReporterEventKind, ReporterHello, ReporterReport, TerminalAgentStatusRow,
+    TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION, DEFAULT_LEASE_MS,
 };
 
 /// Result of applying an event to an agent reducer.
@@ -18,6 +19,27 @@ pub struct ReducerOutput {
     pub attention: Option<AgentAttentionEvent>,
 }
 
+/// Maximum number of recent event IDs retained for deduplication.
+pub const MAX_SEEN_EVENT_IDS: usize = 512;
+
+/// Maximum number of retired turn identifiers retained to reject late events.
+pub const MAX_RETIRED_TURN_IDS: usize = 128;
+
+/// Maximum number of retired session identifiers retained to reject late events.
+pub const MAX_RETIRED_SESSION_IDS: usize = 32;
+
+/// Maximum number of retired native root process identities retained to reject late events.
+pub const MAX_RETIRED_ROOTS: usize = 32;
+
+/// Off-lock process-exit evidence is valid only for this exact native owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeOwner {
+    pub root: crate::pty::activity::ProcessIdentity,
+    pub generation: u64,
+}
+
+/// Minimum duration (ms) between bounded freshness updates for same-state native lease renewal.
+pub const MIN_FRESHNESS_UPDATE_INTERVAL_MS: u64 = 1_000;
 /// Reducer managing agent status transitions for a specific terminal incarnation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalAgentReducer {
@@ -28,11 +50,13 @@ pub struct TerminalAgentReducer {
 
     // Reporter connection
     pub agent_kind: AgentKind,
+    pub native_root: Option<crate::pty::activity::ProcessIdentity>,
     pub reporter_id: String,
     pub reporter_epoch: u64,
     pub adapter_version: String,
     pub last_accepted_seq: u64,
     pub last_report: Option<ReporterReport>,
+    pub reporter_lease_active: bool,
     pub last_report_time_ms: u64,
     pub observed_at_ms: Option<u64>,
 
@@ -46,8 +70,14 @@ pub struct TerminalAgentReducer {
     // Attention
     pub attention_revision: u64,
     pub latest_attention: Option<AgentAttentionEvent>,
-}
 
+    // Deduplication and causal ordering
+    pub seen_event_ids: VecDeque<String>,
+    pub retired_turn_ids: VecDeque<String>,
+    pub retired_session_ids: VecDeque<String>,
+    pub retired_native_roots: VecDeque<crate::pty::activity::ProcessIdentity>,
+    pub last_published_freshness_ms: u64,
+}
 impl TerminalAgentReducer {
     /// Create a new reducer for an admitted reporter.
     pub fn new(
@@ -76,6 +106,7 @@ impl TerminalAgentReducer {
 
         Ok(Self {
             terminal_id,
+            native_root: None,
             incarnation,
             server_epoch,
             agent_kind: hello.agent_kind,
@@ -84,6 +115,7 @@ impl TerminalAgentReducer {
             adapter_version: hello.adapter_version.clone(),
             last_accepted_seq: 0,
             last_report: None,
+            reporter_lease_active: true,
             last_report_time_ms: now_ms,
             observed_at_ms: None,
             state: AgentState::Unknown,
@@ -93,6 +125,491 @@ impl TerminalAgentReducer {
             last_outcome: None,
             attention_revision: 0,
             latest_attention: None,
+            seen_event_ids: VecDeque::new(),
+            retired_turn_ids: VecDeque::new(),
+            retired_session_ids: VecDeque::new(),
+            retired_native_roots: VecDeque::new(),
+            last_published_freshness_ms: now_ms,
+        })
+    }
+    /// Create a new reducer initialized for native hook reporting.
+    pub fn new_for_hook(
+        server_epoch: u64,
+        terminal_id: String,
+        incarnation: u64,
+        reporter_epoch: u64,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+    ) -> Result<Self, AgentStatusError> {
+        validate_safe_integer("server_epoch", server_epoch)?;
+        validate_safe_integer("incarnation", incarnation)?;
+        validate_safe_integer("reporter_epoch", reporter_epoch)?;
+
+        validate_opaque_id("terminal_id", &terminal_id)?;
+        validate_opaque_id("agent_session_id", &envelope.agent_session_id)?;
+        validate_opaque_id("adapter_version", &envelope.adapter_version)?;
+
+        Ok(Self {
+            terminal_id,
+            incarnation,
+            server_epoch,
+            agent_kind: envelope.agent_kind,
+            native_root: Some(envelope.root_process),
+            reporter_id: format!("hook:{}", envelope.agent_session_id),
+            reporter_epoch,
+            adapter_version: envelope.adapter_version.clone(),
+            last_accepted_seq: 0,
+            last_report: None,
+            reporter_lease_active: false,
+            last_report_time_ms: now_ms,
+            observed_at_ms: Some(now_ms),
+            state: AgentState::Unknown,
+            agent_session_id: envelope.agent_session_id.clone(),
+            current_turn_id: None,
+            blocked_reason: None,
+            last_outcome: None,
+            attention_revision: 0,
+            latest_attention: None,
+            seen_event_ids: VecDeque::new(),
+            retired_turn_ids: VecDeque::new(),
+            retired_session_ids: VecDeque::new(),
+            retired_native_roots: VecDeque::new(),
+            last_published_freshness_ms: now_ms,
+        })
+    }
+
+    /// Process a native command hook event payload.
+    pub fn apply_hook(
+        &mut self,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+    ) -> Result<ReducerOutput, AgentStatusError> {
+        self.apply_hook_with_prior_exited(envelope, now_ms, false)
+    }
+
+    /// Registry callers must bind off-lock exit evidence to the current owner.
+    fn apply_hook_with_prior_exited(
+        &mut self,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+        prior_exited: bool,
+    ) -> Result<ReducerOutput, AgentStatusError> {
+        // 1. Process identity and root fencing: reject any callback from a retired root
+        if self
+            .retired_native_roots
+            .iter()
+            .any(|r| r == &envelope.root_process)
+        {
+            return Ok(ReducerOutput {
+                state_changed: false,
+                row: Some(self.to_row()),
+                attention: None,
+            });
+        }
+
+        // 2. Deduplication: check if event_id has already been processed
+        if self
+            .seen_event_ids
+            .iter()
+            .any(|id| id == &envelope.event_id)
+        {
+            return Ok(ReducerOutput {
+                state_changed: false,
+                row: Some(self.to_row()),
+                attention: None,
+            });
+        }
+        // 3. Session verification and causal correlation
+        if self
+            .retired_session_ids
+            .iter()
+            .any(|id| id == &envelope.agent_session_id)
+        {
+            // Callback from a retired session is ignored
+            return Ok(ReducerOutput {
+                state_changed: false,
+                row: Some(self.to_row()),
+                attention: None,
+            });
+        }
+
+        let is_qualifying_baseline = envelope.event == "SessionStart"
+            || (envelope.event == "UserPromptSubmit" && envelope.turn_id.is_some());
+
+        match self.native_root {
+            Some(existing_root) => {
+                if existing_root == envelope.root_process {
+                    if self.agent_kind != envelope.agent_kind {
+                        return Err(AgentStatusError::AuthorityLost(
+                            "native root claim does not match terminal owner".to_string(),
+                        ));
+                    }
+                } else if prior_exited && is_qualifying_baseline {
+                    // Prior process identity proven exited and callback is qualifying baseline:
+                    // Retire prior root, session, turn fencing.
+                    self.retired_native_roots.push_back(existing_root);
+                    if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
+                        self.retired_native_roots.pop_front();
+                    }
+                    if let Some(turn) = self.current_turn_id.take() {
+                        self.retired_turn_ids.push_back(turn);
+                        if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                            self.retired_turn_ids.pop_front();
+                        }
+                    }
+                    if !self.agent_session_id.is_empty()
+                        && self.agent_session_id != envelope.agent_session_id
+                    {
+                        self.retired_session_ids
+                            .push_back(self.agent_session_id.clone());
+                        if self.retired_session_ids.len() > MAX_RETIRED_SESSION_IDS {
+                            self.retired_session_ids.pop_front();
+                        }
+                    }
+                    // Turn IDs are scoped to an owner; the retired root fence
+                    // prevents callbacks from the previous process.
+                    self.retired_turn_ids.clear();
+                    self.native_root = Some(envelope.root_process);
+                    self.agent_kind = envelope.agent_kind;
+                    self.reporter_id = format!("hook:{}", envelope.agent_session_id);
+                    self.agent_session_id = envelope.agent_session_id.clone();
+                    self.current_turn_id = None;
+                    self.state = AgentState::Unknown;
+                    self.blocked_reason = None;
+                    self.last_outcome = None;
+                } else {
+                    return Err(AgentStatusError::AuthorityLost(
+                        "native root claim does not match terminal owner".to_string(),
+                    ));
+                }
+            }
+            None => {
+                // SessionEnd retired the native root, or OMP disconnected.
+                if is_qualifying_baseline {
+                    self.retired_turn_ids.clear();
+                    self.native_root = Some(envelope.root_process);
+                    self.agent_kind = envelope.agent_kind;
+                    self.reporter_id = format!("hook:{}", envelope.agent_session_id);
+                    self.agent_session_id = envelope.agent_session_id.clone();
+                    self.current_turn_id = None;
+                    self.state = AgentState::Unknown;
+                    self.blocked_reason = None;
+                    self.last_outcome = None;
+                } else {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+            }
+        }
+
+        self.seen_event_ids.push_back(envelope.event_id.clone());
+        if self.seen_event_ids.len() > MAX_SEEN_EVENT_IDS {
+            self.seen_event_ids.pop_front();
+        }
+
+        if self.agent_session_id != envelope.agent_session_id {
+            // A callback for an unestablished session cannot invalidate or revive
+            // the current session. Only a startup baseline with no active turn
+            // establishes a new session on the same live root.
+            if envelope.event != "SessionStart" || self.current_turn_id.is_some() {
+                return Ok(ReducerOutput {
+                    state_changed: false,
+                    row: Some(self.to_row()),
+                    attention: None,
+                });
+            }
+            if !self.agent_session_id.is_empty() {
+                self.retired_session_ids
+                    .push_back(self.agent_session_id.clone());
+                if self.retired_session_ids.len() > MAX_RETIRED_SESSION_IDS {
+                    self.retired_session_ids.pop_front();
+                }
+            }
+            self.retired_turn_ids.clear();
+            self.agent_session_id = envelope.agent_session_id.clone();
+            self.current_turn_id = None;
+            self.blocked_reason = None;
+            self.last_outcome = None;
+            self.latest_attention = None;
+            self.state = AgentState::Unknown;
+            self.last_report_time_ms = now_ms;
+            self.observed_at_ms = Some(now_ms);
+            self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
+            self.last_published_freshness_ms = now_ms;
+            return Ok(ReducerOutput {
+                state_changed: true,
+                row: Some(self.to_row()),
+                attention: None,
+            });
+        }
+
+        let old_state = self.state;
+        let old_reason = self.blocked_reason;
+        let old_turn_id = self.current_turn_id.clone();
+        let old_outcome = self.last_outcome;
+
+        let mut attention = None;
+
+        // 4. Conservative event qualification
+        match envelope.event.as_str() {
+            "SessionStart" => {
+                // A delayed startup callback cannot reset an already observed turn.
+                if self.current_turn_id.is_some() {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                self.state = AgentState::Unknown;
+                self.blocked_reason = None;
+                self.last_outcome = None;
+            }
+
+            "UserPromptSubmit" => {
+                let Some(turn_id) = &envelope.turn_id else {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                };
+                if self.retired_turn_ids.iter().any(|id| id == turn_id) {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                if let Some(cur_turn) = &self.current_turn_id {
+                    if cur_turn == turn_id {
+                        // Duplicate prompt delivery is not fresh progress, even
+                        // when a provider gives it a different delivery ID.
+                        return Ok(ReducerOutput {
+                            state_changed: false,
+                            row: Some(self.to_row()),
+                            attention: None,
+                        });
+                    }
+                    if cur_turn != turn_id {
+                        // Native IDs are opaque. Receipt order cannot prove whether this
+                        // prompt is newer or a delayed callback from an unseen old turn.
+                        self.retired_turn_ids.push_back(cur_turn.clone());
+                        self.retired_turn_ids.push_back(turn_id.clone());
+                        while self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                            self.retired_turn_ids.pop_front();
+                        }
+                        self.current_turn_id = None;
+                        self.state = AgentState::Unknown;
+                        self.blocked_reason = None;
+                        self.observed_at_ms = None;
+                        self.latest_attention = None;
+                        return Ok(ReducerOutput {
+                            state_changed: true,
+                            row: Some(self.to_row()),
+                            attention: None,
+                        });
+                    }
+                }
+                self.current_turn_id = Some(turn_id.clone());
+                self.state = AgentState::Working;
+                self.blocked_reason = None;
+                self.last_outcome = None;
+            }
+
+            "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                self.state = AgentState::Working;
+                self.blocked_reason = None;
+            }
+            "PermissionRequest" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                self.state = AgentState::Unknown;
+                self.blocked_reason = None;
+            }
+            "Notification" => {
+                if envelope.notification_type.as_deref() != Some("permission_prompt")
+                    || envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                let was_blocked = self.state == AgentState::Blocked
+                    && self.blocked_reason == Some(BlockedReason::Approval);
+                self.state = AgentState::Blocked;
+                self.blocked_reason = Some(BlockedReason::Approval);
+                if !was_blocked {
+                    self.attention_revision = self.attention_revision.saturating_add(1);
+                    attention = Some(AgentAttentionEvent {
+                        id: AgentAttentionEvent::format_id(
+                            self.server_epoch,
+                            &self.terminal_id,
+                            self.incarnation,
+                            self.attention_revision,
+                        ),
+                        kind: AttentionKind::NeedsAttention,
+                        terminal_id: self.terminal_id.clone(),
+                        incarnation: self.incarnation,
+                        agent_kind: self.agent_kind,
+                        agent_session_id: self.agent_session_id.clone(),
+                        turn_id: self.current_turn_id.clone(),
+                        reason: Some(BlockedReason::Approval),
+                        outcome: None,
+                        attention_revision: self.attention_revision,
+                        timestamp_ms: now_ms,
+                    });
+                }
+            }
+            "StopFailure" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                let was_error = self.state == AgentState::Blocked
+                    && self.blocked_reason == Some(BlockedReason::Error);
+                self.state = AgentState::Blocked;
+                self.blocked_reason = Some(BlockedReason::Error);
+                if !was_error {
+                    self.attention_revision = self.attention_revision.saturating_add(1);
+                    attention = Some(AgentAttentionEvent {
+                        id: AgentAttentionEvent::format_id(
+                            self.server_epoch,
+                            &self.terminal_id,
+                            self.incarnation,
+                            self.attention_revision,
+                        ),
+                        kind: AttentionKind::NeedsAttention,
+                        terminal_id: self.terminal_id.clone(),
+                        incarnation: self.incarnation,
+                        agent_kind: self.agent_kind,
+                        agent_session_id: self.agent_session_id.clone(),
+                        turn_id: self.current_turn_id.clone(),
+                        reason: Some(BlockedReason::Error),
+                        outcome: None,
+                        attention_revision: self.attention_revision,
+                        timestamp_ms: now_ms,
+                    });
+                }
+            }
+            "Stop" | "Interrupt" => {
+                if envelope.turn_id.as_ref() != self.current_turn_id.as_ref()
+                    || self.current_turn_id.is_none()
+                {
+                    return Ok(ReducerOutput {
+                        state_changed: false,
+                        row: Some(self.to_row()),
+                        attention: None,
+                    });
+                }
+                let turn_id = self.current_turn_id.take().expect("checked current turn");
+                self.retired_turn_ids.push_back(turn_id);
+                if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                    self.retired_turn_ids.pop_front();
+                }
+                if envelope.event == "Stop" {
+                    self.state = AgentState::Unknown;
+                } else {
+                    self.state = AgentState::Idle;
+                    self.last_outcome = Some(TurnOutcome::Interrupted);
+                }
+                self.blocked_reason = None;
+            }
+
+            "SessionEnd" => {
+                if let Some(root) = self.native_root.take() {
+                    self.retired_native_roots.push_back(root);
+                    if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
+                        self.retired_native_roots.pop_front();
+                    }
+                }
+                if let Some(turn) = self.current_turn_id.take() {
+                    self.retired_turn_ids.push_back(turn);
+                    if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                        self.retired_turn_ids.pop_front();
+                    }
+                }
+                self.retired_session_ids
+                    .push_back(self.agent_session_id.clone());
+                if self.retired_session_ids.len() > MAX_RETIRED_SESSION_IDS {
+                    self.retired_session_ids.pop_front();
+                }
+                self.state = AgentState::Unknown;
+                self.blocked_reason = None;
+                self.last_outcome = None;
+                self.latest_attention = None;
+                self.observed_at_ms = None;
+                attention = None;
+            }
+
+            _ => {
+                // Unsupported event: no-op, does not renew lease
+                return Ok(ReducerOutput {
+                    state_changed: false,
+                    row: Some(self.to_row()),
+                    attention: None,
+                });
+            }
+        }
+
+        self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
+        self.last_report_time_ms = now_ms;
+        self.observed_at_ms = self.native_root.map(|_| now_ms);
+
+        if attention.is_some() {
+            self.latest_attention = attention.clone();
+        }
+
+        let semantic_changed = old_state != self.state
+            || old_reason != self.blocked_reason
+            || old_turn_id != self.current_turn_id
+            || old_outcome != self.last_outcome
+            || attention.is_some();
+
+        let state_changed = if semantic_changed {
+            self.last_published_freshness_ms = now_ms;
+            true
+        } else if self.state != AgentState::Unknown
+            && now_ms.saturating_sub(self.last_published_freshness_ms)
+                >= MIN_FRESHNESS_UPDATE_INTERVAL_MS
+        {
+            self.last_published_freshness_ms = now_ms;
+            true
+        } else {
+            false
+        };
+
+        Ok(ReducerOutput {
+            state_changed,
+            row: Some(self.to_row()),
+            attention,
         })
     }
 
@@ -111,7 +628,8 @@ impl TerminalAgentReducer {
                 AgentObservationSource::Hook
             },
             observed_at_ms: self.observed_at_ms,
-            expires_at_ms: if self.agent_kind == AgentKind::Omp {
+            expires_at_ms: if self.agent_kind == AgentKind::Omp || self.state == AgentState::Unknown
+            {
                 None
             } else {
                 self.observed_at_ms
@@ -152,18 +670,36 @@ impl TerminalAgentReducer {
             });
         }
 
-        // A different reporter is rejected while the old one is live and authoritative.
-        if self.is_authoritative() && self.reporter_id != hello.reporter_id {
+        validate_opaque_id("reporter_id", &hello.reporter_id)?;
+        validate_opaque_id("agent_session_id", &hello.agent_session_id)?;
+        validate_opaque_id("adapter_version", &hello.adapter_version)?;
+        // OMP takeover: an incoming OMP reporter evicts and retires any native owner.
+        if self.agent_kind != AgentKind::Omp && hello.agent_kind == AgentKind::Omp {
+            if let Some(root) = self.native_root.take() {
+                self.retired_native_roots.push_back(root);
+                if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
+                    self.retired_native_roots.pop_front();
+                }
+            }
+            if let Some(turn) = self.current_turn_id.take() {
+                self.retired_turn_ids.push_back(turn);
+                if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                    self.retired_turn_ids.pop_front();
+                }
+            }
+            if !self.agent_session_id.is_empty() {
+                self.retired_session_ids
+                    .push_back(self.agent_session_id.clone());
+                if self.retired_session_ids.len() > MAX_RETIRED_SESSION_IDS {
+                    self.retired_session_ids.pop_front();
+                }
+            }
+        } else if self.is_authoritative() && self.reporter_id != hello.reporter_id {
+            // A different reporter is rejected while the old one is live and authoritative.
             return Err(AgentStatusError::ReporterOccupied {
                 active: self.reporter_id.clone(),
             });
         }
-
-        validate_opaque_id("reporter_id", &hello.reporter_id)?;
-        validate_opaque_id("agent_session_id", &hello.agent_session_id)?;
-        validate_opaque_id("adapter_version", &hello.adapter_version)?;
-
-        let state_changed = self.state != AgentState::Unknown || self.observed_at_ms.is_some();
 
         self.agent_kind = hello.agent_kind;
         self.reporter_id = hello.reporter_id.clone();
@@ -171,14 +707,18 @@ impl TerminalAgentReducer {
         self.adapter_version = hello.adapter_version.clone();
         self.last_accepted_seq = 0;
         self.last_report = None;
+        self.reporter_lease_active = true;
         self.last_report_time_ms = now_ms;
         self.observed_at_ms = None;
         self.agent_session_id = hello.agent_session_id.clone();
         self.state = AgentState::Unknown;
         self.current_turn_id = None;
         self.blocked_reason = None;
+        self.latest_attention = None;
+        self.last_outcome = None;
 
-        Ok(state_changed)
+        // A new owner generation is publicly observable even while Unknown.
+        Ok(true)
     }
 
     /// Process a report received from the reporter socket.
@@ -194,6 +734,13 @@ impl TerminalAgentReducer {
                 current: self.reporter_epoch,
                 got: reporter_epoch,
             });
+        }
+        if !self.reporter_lease_active
+            || now_ms.saturating_sub(self.last_report_time_ms) >= DEFAULT_LEASE_MS
+        {
+            return Err(AgentStatusError::AuthorityLost(
+                "reporter lease is no longer active".to_string(),
+            ));
         }
 
         validate_safe_integer("seq", report.seq)?;
@@ -450,12 +997,37 @@ impl TerminalAgentReducer {
             || self.blocked_reason.is_some()
             || self.current_turn_id.is_some()
             || self.observed_at_ms.is_some();
+        let state_changed = state_changed || self.reporter_lease_active;
+        self.reporter_lease_active = false;
+
+        if self.agent_kind != AgentKind::Omp {
+            if let Some(root) = self.native_root.take() {
+                self.retired_native_roots.push_back(root);
+                if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
+                    self.retired_native_roots.pop_front();
+                }
+            }
+            if let Some(turn) = self.current_turn_id.take() {
+                self.retired_turn_ids.push_back(turn);
+                if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                    self.retired_turn_ids.pop_front();
+                }
+            }
+            if !self.agent_session_id.is_empty() {
+                self.retired_session_ids
+                    .push_back(self.agent_session_id.clone());
+                if self.retired_session_ids.len() > MAX_RETIRED_SESSION_IDS {
+                    self.retired_session_ids.pop_front();
+                }
+            }
+        }
 
         self.state = AgentState::Unknown;
         self.blocked_reason = None;
         self.current_turn_id = None;
         self.observed_at_ms = None;
-
+        self.latest_attention = None;
+        self.last_outcome = None;
         ReducerOutput {
             state_changed,
             row: Some(self.to_row()),
@@ -463,17 +1035,34 @@ impl TerminalAgentReducer {
         }
     }
 
-    /// Check lease expiration. If expired, transition to unknown without completion alert.
+    /// Expiry retires native turn evidence, not the still-live process/session.
+    /// Fresh baselines can recover that owner; old turn callbacks cannot.
     pub fn check_lease(&mut self, now_ms: u64, lease_ms: u64) -> Option<ReducerOutput> {
-        if self.state == AgentState::Unknown {
+        let has_evidence = self.reporter_lease_active
+            || self.observed_at_ms.is_some()
+            || self.current_turn_id.is_some();
+        if !has_evidence || now_ms.saturating_sub(self.last_report_time_ms) < lease_ms {
             return None;
         }
-
-        if now_ms.saturating_sub(self.last_report_time_ms) >= lease_ms {
-            Some(self.mark_unknown())
-        } else {
-            None
+        if self.agent_kind == AgentKind::Omp {
+            return Some(self.mark_unknown());
         }
+        if let Some(turn) = self.current_turn_id.take() {
+            self.retired_turn_ids.push_back(turn);
+            if self.retired_turn_ids.len() > MAX_RETIRED_TURN_IDS {
+                self.retired_turn_ids.pop_front();
+            }
+        }
+        self.state = AgentState::Unknown;
+        self.blocked_reason = None;
+        self.last_outcome = None;
+        self.latest_attention = None;
+        self.observed_at_ms = None;
+        Some(ReducerOutput {
+            state_changed: true,
+            row: Some(self.to_row()),
+            attention: None,
+        })
     }
 
     /// Validate report event, state, outcome, and blocked reason combinations.
@@ -610,6 +1199,7 @@ pub struct AgentStatusRegistry {
     pub revision: u64,
     pub availability: AgentStatusAvailability,
     terminals: BTreeMap<(String, u64), TerminalAgentReducer>,
+    next_reporter_epoch: u64,
 }
 
 impl AgentStatusRegistry {
@@ -620,6 +1210,7 @@ impl AgentStatusRegistry {
             revision: 1,
             availability,
             terminals: BTreeMap::new(),
+            next_reporter_epoch: 0,
         }
     }
 
@@ -653,10 +1244,10 @@ impl AgentStatusRegistry {
         &mut self,
         terminal_id: String,
         incarnation: u64,
-        reporter_epoch: u64,
         hello: &ReporterHello,
         now_ms: u64,
     ) -> Result<TerminalAgentStatusRow, AgentStatusError> {
+        let reporter_epoch = self.allocate_owner_generation()?;
         let key = (terminal_id.clone(), incarnation);
         if let Some(existing) = self.terminals.get_mut(&key) {
             let changed = existing.reconnect(reporter_epoch, hello, now_ms)?;
@@ -702,6 +1293,99 @@ impl AgentStatusRegistry {
         }
         Ok(output)
     }
+    /// Apply a native hook event to the registry.
+    pub fn apply_hook(
+        &mut self,
+        terminal_id: &str,
+        incarnation: u64,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+    ) -> Result<ReducerOutput, AgentStatusError> {
+        self.apply_hook_with_prior_exited(terminal_id, incarnation, envelope, now_ms, None)
+    }
+
+    /// Apply a native hook event with proof that prior root process has exited.
+    pub fn apply_hook_with_prior_exited(
+        &mut self,
+        terminal_id: &str,
+        incarnation: u64,
+        envelope: &PrivateHookEnvelope,
+        now_ms: u64,
+        exited_owner: Option<NativeOwner>,
+    ) -> Result<ReducerOutput, AgentStatusError> {
+        let key = (terminal_id.to_string(), incarnation);
+        if exited_owner.is_some() && self.get_native_owner(terminal_id, incarnation) != exited_owner
+        {
+            return Err(AgentStatusError::AuthorityLost(
+                "native owner changed while checking process exit".to_string(),
+            ));
+        }
+        let candidate_generation = self.next_reporter_epoch.saturating_add(1);
+        validate_safe_integer("reporter_epoch", candidate_generation)?;
+        let output = if let Some(existing) = self.terminals.get_mut(&key) {
+            if existing.agent_kind == AgentKind::Omp && existing.reporter_lease_active {
+                return Err(AgentStatusError::AuthorityLost(
+                    "terminal is occupied by OMP reporter".to_string(),
+                ));
+            }
+            let prior_root = existing.native_root;
+            let expired = existing.check_lease(now_ms, DEFAULT_LEASE_MS).is_some();
+            let mut output =
+                existing.apply_hook_with_prior_exited(envelope, now_ms, exited_owner.is_some())?;
+            output.state_changed |= expired;
+            if existing.native_root != prior_root {
+                self.next_reporter_epoch = candidate_generation;
+                existing.reporter_epoch = candidate_generation;
+                existing.reporter_lease_active = false;
+                existing.latest_attention = None;
+                output.row = Some(existing.to_row());
+                output.state_changed = true;
+            }
+            output
+        } else {
+            // Candidate/unknown hooks cannot claim a terminal or manufacture freshness.
+            if envelope.event != "SessionStart"
+                && !(envelope.event == "UserPromptSubmit" && envelope.turn_id.is_some())
+            {
+                return Ok(ReducerOutput {
+                    state_changed: false,
+                    row: None,
+                    attention: None,
+                });
+            }
+            let mut reducer = TerminalAgentReducer::new_for_hook(
+                self.server_epoch,
+                terminal_id.to_string(),
+                incarnation,
+                candidate_generation,
+                envelope,
+                now_ms,
+            )?;
+            let mut output =
+                reducer.apply_hook_with_prior_exited(envelope, now_ms, exited_owner.is_some())?;
+            self.next_reporter_epoch = candidate_generation;
+            // Inserting an Unknown baseline still publishes a new terminal row.
+            output.state_changed = true;
+            self.terminals.insert(key, reducer);
+            output
+        };
+
+        if output.state_changed {
+            self.advance_revision()?;
+        }
+        Ok(output)
+    }
+
+    /// Capture the root and generation together before checking process exit.
+    pub fn get_native_owner(&self, terminal_id: &str, incarnation: u64) -> Option<NativeOwner> {
+        let key = (terminal_id.to_string(), incarnation);
+        self.terminals.get(&key).and_then(|reducer| {
+            reducer.native_root.map(|root| NativeOwner {
+                root,
+                generation: reducer.reporter_epoch,
+            })
+        })
+    }
 
     /// Mark a terminal's agent status as unknown.
     pub fn mark_unknown(
@@ -724,7 +1408,18 @@ impl AgentStatusRegistry {
             });
         }
 
-        let output = reducer.mark_unknown();
+        let retiring_native_root = reducer.native_root.is_some();
+        let next_generation = self.next_reporter_epoch.saturating_add(1);
+        if retiring_native_root {
+            validate_safe_integer("reporter_epoch", next_generation)?;
+        }
+        let mut output = reducer.mark_unknown();
+        if retiring_native_root {
+            self.next_reporter_epoch = next_generation;
+            reducer.reporter_epoch = next_generation;
+            output.row = Some(reducer.to_row());
+            output.state_changed = true;
+        }
         if output.state_changed {
             self.advance_revision()?;
         }
@@ -774,6 +1469,13 @@ impl AgentStatusRegistry {
     pub fn get_row(&self, terminal_id: &str, incarnation: u64) -> Option<TerminalAgentStatusRow> {
         let key = (terminal_id.to_string(), incarnation);
         self.terminals.get(&key).map(|r| r.to_row())
+    }
+
+    fn allocate_owner_generation(&mut self) -> Result<u64, AgentStatusError> {
+        let next = self.next_reporter_epoch.saturating_add(1);
+        validate_safe_integer("reporter_epoch", next)?;
+        self.next_reporter_epoch = next;
+        Ok(next)
     }
 
     /// Advance snapshot revision monotonically.

@@ -11,10 +11,10 @@ use std::{
     time::Duration,
 };
 
-use std::sync::atomic::AtomicU64;
 use portable_pty::{Child as PtyChild, CommandBuilder, NativePtySystem, PtySize, PtySystem as _};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::Notify;
@@ -1179,11 +1179,13 @@ impl PtySessionManager {
     pub(crate) fn try_claim_agent_activity_handoff(
         &self,
         admission: crate::idle_suspend::activity::AgentActivityAdmission<'_>,
-    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError>
+    {
         let mut inner = self.inner.lock().unwrap();
 
         // 1. Startup automatic policy must be AgentActivity and enabled
-        if admission.automatic_policy != crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity
+        if admission.automatic_policy
+            != crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentActivity
             || !admission.automatic_enabled
         {
             return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
@@ -1192,7 +1194,8 @@ impl PtySessionManager {
         // 2. Request and revision values must match accepted admission
         if admission.accepted_request_id != admission.ticket.request_id
             || admission.accepted_activity_revision != admission.ticket.activity_revision
-            || admission.accepted_epoch_activity_revision != admission.ticket.epoch_activity_revision
+            || admission.accepted_epoch_activity_revision
+                != admission.ticket.epoch_activity_revision
             || admission.accepted_timing_revision != admission.ticket.timing_revision
         {
             return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
@@ -1219,10 +1222,12 @@ impl PtySessionManager {
 
         // 6. Fleet generation must match ticket
         if inner.fleet.generation() != admission.ticket.fleet_generation {
-            return Err(crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
-                expected: admission.ticket.fleet_generation,
-                actual: inner.fleet.generation(),
-            });
+            return Err(
+                crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
+                    expected: admission.ticket.fleet_generation,
+                    actual: inner.fleet.generation(),
+                },
+            );
         }
 
         // 7. Check live sessions match roots in ticket
@@ -1244,7 +1249,9 @@ impl PtySessionManager {
 
         // 8. Check raw output fences
         for fence in &admission.ticket.output_fences {
-            let current_seq = fence.output_sequence.load(std::sync::atomic::Ordering::Acquire);
+            let current_seq = fence
+                .output_sequence
+                .load(std::sync::atomic::Ordering::Acquire);
             if current_seq >= crate::pty::activity::SATURATED_COUNTER_SENTINEL
                 || current_seq != fence.accepted_sequence
             {
@@ -1253,7 +1260,9 @@ impl PtySessionManager {
         }
 
         // 9. Atomic fleet handoff claim (checks closing, disposing, handoff_active, creating, restart_pending)
-        inner.fleet.try_claim_agent_handoff(admission.ticket.fleet_generation)
+        inner
+            .fleet
+            .try_claim_agent_handoff(admission.ticket.fleet_generation)
     }
 
     pub fn release_handoff(&self) {
@@ -1490,9 +1499,21 @@ impl PtySessionManager {
         if let Some(res) = &status_reservation {
             cmd.env(crate::agent_status::ENV_AGENT_STATUS_URL, res.url());
             cmd.env(crate::agent_status::ENV_AGENT_STATUS_TOKEN, res.token());
+            if let Some(path) = self
+                .agent_status_runtime()
+                .and_then(|runtime| runtime.hook_socket_path())
+            {
+                cmd.env(
+                    crate::agent_status::ENV_AGENT_HOOKS_SOCKET,
+                    path.as_os_str(),
+                );
+            } else {
+                cmd.env_remove(crate::agent_status::ENV_AGENT_HOOKS_SOCKET);
+            }
         } else {
             cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_URL);
             cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_TOKEN);
+            cmd.env_remove(crate::agent_status::ENV_AGENT_HOOKS_SOCKET);
         }
         // Log env keys only — values may contain secrets (API keys, tokens).
         debug!(id = %opts.id, env_keys = ?opts.env.keys().collect::<Vec<_>>(), "Spawning PTY");
@@ -1527,6 +1548,7 @@ impl PtySessionManager {
                 reason: "PTY child did not provide a process ID".into(),
             },
         };
+        let status_root_identity = root_qualification.process_identity();
         let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
         // portable-pty requires clone_reader before take_writer
@@ -1632,6 +1654,11 @@ impl PtySessionManager {
             creation_generation
         };
         if let Some(res) = status_reservation {
+            if let Some(root) = status_root_identity {
+                if let Some(runtime) = self.agent_status_runtime() {
+                    runtime.register_terminal_root(&opts.id, incarnation, root);
+                }
+            }
             res.activate();
         }
 
@@ -1804,9 +1831,7 @@ impl PtySessionManager {
             ));
         }
         if inner.closing {
-            return Err(AppError::Unavailable(
-                "PTY manager is shutting down".into(),
-            ));
+            return Err(AppError::Unavailable("PTY manager is shutting down".into()));
         }
         if inner.fleet.is_disposing() {
             return Err(AppError::Unavailable(
@@ -1841,7 +1866,12 @@ impl PtySessionManager {
             }
         }
     }
-    pub fn write_if_incarnation(&self, id: &str, incarnation: u64, data: &[u8]) -> Result<(), AppError> {
+    pub fn write_if_incarnation(
+        &self,
+        id: &str,
+        incarnation: u64,
+        data: &[u8],
+    ) -> Result<(), AppError> {
         if data.is_empty() {
             return Ok(());
         }
@@ -1853,9 +1883,7 @@ impl PtySessionManager {
             ));
         }
         if inner.closing {
-            return Err(AppError::Unavailable(
-                "PTY manager is shutting down".into(),
-            ));
+            return Err(AppError::Unavailable("PTY manager is shutting down".into()));
         }
         if inner.fleet.is_disposing() {
             return Err(AppError::Unavailable(
@@ -1869,7 +1897,9 @@ impl PtySessionManager {
         };
 
         if session.incarnation != incarnation {
-            return Err(AppError::BrowserDebug(BrowserDebugError::IncarnationMismatch));
+            return Err(AppError::BrowserDebug(
+                BrowserDebugError::IncarnationMismatch,
+            ));
         }
 
         if inner.input_revision == u64::MAX {
@@ -1897,7 +1927,12 @@ impl PtySessionManager {
     }
 
     pub fn live_incarnation(&self, id: &str) -> Option<u64> {
-        self.inner.lock().unwrap().live.get(id).map(|s| s.incarnation)
+        self.inner
+            .lock()
+            .unwrap()
+            .live
+            .get(id)
+            .map(|s| s.incarnation)
     }
 
     /// Capture replay bytes and lifecycle state at one PTY boundary.
@@ -4254,9 +4289,21 @@ async fn respawn_internal(
     if let Some(res) = &status_reservation {
         build_cmd.env(crate::agent_status::ENV_AGENT_STATUS_URL, res.url());
         build_cmd.env(crate::agent_status::ENV_AGENT_STATUS_TOKEN, res.token());
+        if let Some(path) = agent_status
+            .as_ref()
+            .and_then(|runtime| runtime.hook_socket_path())
+        {
+            build_cmd.env(
+                crate::agent_status::ENV_AGENT_HOOKS_SOCKET,
+                path.as_os_str(),
+            );
+        } else {
+            build_cmd.env_remove(crate::agent_status::ENV_AGENT_HOOKS_SOCKET);
+        }
     } else {
         build_cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_URL);
         build_cmd.env_remove(crate::agent_status::ENV_AGENT_STATUS_TOKEN);
+        build_cmd.env_remove(crate::agent_status::ENV_AGENT_HOOKS_SOCKET);
     }
 
     let mut child = match pair.slave.spawn_command(build_cmd) {
@@ -4288,6 +4335,7 @@ async fn respawn_internal(
             reason: "PTY child did not provide a process ID".into(),
         },
     };
+    let status_root_identity = root_qualification.process_identity();
     let raw_output_sequence = Arc::new(AtomicU64::new(0));
 
     let reader = match pair.master.try_clone_reader() {
@@ -4423,6 +4471,9 @@ async fn respawn_internal(
         inner_guard.publish_activity_invalidation();
     }
     if let Some(res) = status_reservation {
+        if let (Some(runtime), Some(root)) = (agent_status.as_ref(), status_root_identity) {
+            runtime.register_terminal_root(session_id, incarnation, root);
+        }
         res.activate();
     }
 
@@ -4628,42 +4679,43 @@ fn apply_child_env(cmd: &mut CommandBuilder, env: &HashMap<String, String>) {
 }
 #[cfg(unix)]
 fn resolve_current_user_account() -> Option<(String, String, String)> {
-    static CACHE: std::sync::LazyLock<Option<(String, String, String)>> = std::sync::LazyLock::new(|| {
-        let euid = unsafe { libc::geteuid() };
-        let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
-        let mut result = std::ptr::null_mut();
-        let mut buf = vec![0u8; 4096];
-        let rc = unsafe {
-            libc::getpwuid_r(
-                euid,
-                pwd.as_mut_ptr(),
-                buf.as_mut_ptr() as *mut libc::c_char,
-                buf.len(),
-                &mut result,
-            )
-        };
-        if rc == 0 && !result.is_null() {
-            let pwd_ref = unsafe { &*result };
-            let name = unsafe {
-                std::ffi::CStr::from_ptr(pwd_ref.pw_name)
-                    .to_string_lossy()
-                    .into_owned()
+    static CACHE: std::sync::LazyLock<Option<(String, String, String)>> =
+        std::sync::LazyLock::new(|| {
+            let euid = unsafe { libc::geteuid() };
+            let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+            let mut result = std::ptr::null_mut();
+            let mut buf = vec![0u8; 4096];
+            let rc = unsafe {
+                libc::getpwuid_r(
+                    euid,
+                    pwd.as_mut_ptr(),
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                    buf.len(),
+                    &mut result,
+                )
             };
-            let home = unsafe {
-                std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            let shell = unsafe {
-                std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            Some((name, home, shell))
-        } else {
-            None
-        }
-    });
+            if rc == 0 && !result.is_null() {
+                let pwd_ref = unsafe { &*result };
+                let name = unsafe {
+                    std::ffi::CStr::from_ptr(pwd_ref.pw_name)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                let home = unsafe {
+                    std::ffi::CStr::from_ptr(pwd_ref.pw_dir)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                let shell = unsafe {
+                    std::ffi::CStr::from_ptr(pwd_ref.pw_shell)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                Some((name, home, shell))
+            } else {
+                None
+            }
+        });
     CACHE.clone()
 }
 
@@ -4708,36 +4760,58 @@ pub(crate) fn build_child_env_from_parent_snapshot(
 
     #[cfg(windows)]
     {
-        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("SystemRoot")) {
-            if let Some(val) = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir")) {
+        if !child_env
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("SystemRoot"))
+        {
+            if let Some(val) = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"))
+            {
                 child_env.push(("SystemRoot".to_string(), val));
             } else {
                 child_env.push(("SystemRoot".to_string(), OsString::from(r"C:\Windows")));
             }
         }
-        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("SystemDrive")) {
+        if !child_env
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("SystemDrive"))
+        {
             if let Some(val) = std::env::var_os("SystemDrive") {
                 child_env.push(("SystemDrive".to_string(), val));
             } else {
                 child_env.push(("SystemDrive".to_string(), OsString::from("C:")));
             }
         }
-        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("COMSPEC")) {
+        if !child_env
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("COMSPEC"))
+        {
             if let Some(val) = std::env::var_os("COMSPEC") {
                 child_env.push(("COMSPEC".to_string(), val));
             } else {
-                child_env.push(("COMSPEC".to_string(), OsString::from(r"C:\Windows\System32\cmd.exe")));
+                child_env.push((
+                    "COMSPEC".to_string(),
+                    OsString::from(r"C:\Windows\System32\cmd.exe"),
+                ));
             }
         }
-        if !child_env.iter().any(|(k, _)| k.eq_ignore_ascii_case("PATHEXT")) {
+        if !child_env
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("PATHEXT"))
+        {
             if let Some(val) = std::env::var_os("PATHEXT") {
                 child_env.push(("PATHEXT".to_string(), val));
             } else {
-                child_env.push(("PATHEXT".to_string(), OsString::from(".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")));
+                child_env.push((
+                    "PATHEXT".to_string(),
+                    OsString::from(".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"),
+                ));
             }
         }
         if !child_env.iter().any(|(k, _)| k == "HOME") {
-            if let Some((_, profile)) = child_env.iter().find(|(k, _)| k.eq_ignore_ascii_case("USERPROFILE")) {
+            if let Some((_, profile)) = child_env
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("USERPROFILE"))
+            {
                 let p = profile.clone();
                 child_env.push(("HOME".to_string(), p));
             } else if let Some(home) = dirs::home_dir() {
@@ -4758,6 +4832,7 @@ pub(crate) fn build_child_env_from_parent_snapshot(
 pub fn is_reserved_agent_status_env_var(key: &str) -> bool {
     key.eq_ignore_ascii_case(crate::agent_status::ENV_AGENT_STATUS_URL)
         || key.eq_ignore_ascii_case(crate::agent_status::ENV_AGENT_STATUS_TOKEN)
+        || key.eq_ignore_ascii_case(crate::agent_status::ENV_AGENT_HOOKS_SOCKET)
 }
 
 fn safe_baseline_env_from(parent_env: &HashMap<String, OsString>) -> Vec<(&'static str, OsString)> {
@@ -5064,18 +5139,12 @@ mod tests {
                 "COMSPEC".to_string(),
                 OsString::from(r"C:\Windows\System32\cmd.exe"),
             ),
-            (
-                "PATHEXT".to_string(),
-                OsString::from(".COM;.EXE;.BAT;.CMD"),
-            ),
+            ("PATHEXT".to_string(), OsString::from(".COM;.EXE;.BAT;.CMD")),
             (
                 "USERPROFILE".to_string(),
                 OsString::from(r"C:\Users\testuser"),
             ),
-            (
-                "SECRET_VAR".to_string(),
-                OsString::from("secret"),
-            ),
+            ("SECRET_VAR".to_string(), OsString::from("secret")),
         ]);
 
         let child_env = build_child_env_from_parent_snapshot(&parent_env, &HashMap::new())

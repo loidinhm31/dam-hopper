@@ -28,13 +28,13 @@ Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status b
 | # | Phase | Status / progress | Estimate | Dependency |
 |---|---|---|---|---|
 | 1 | [Capabilities and observation contract](./phase-01-capabilities-and-observation-contract.md) | DONE — approved contract-only scope / 100% (2026-09-29 Asia/Saigon) | 6h | None |
-| 2 | [Private one-shot ingress and lifetime](./phase-02-private-hook-ingress.md) | Pending / 0% | 10h | 1 |
+| 2 | [Private one-shot ingress and lifetime](./phase-02-private-hook-ingress.md) | DONE — private UDS ingress, generation fencing, 15s expiry / 100% (2026-09-29 Asia/Saigon) | 10h | 1 |
 | 3 | [Managed installer and full removal](./phase-03-managed-hook-installation.md) | Pending / 0% | 8h | 1–2 CLI/DTO contract |
 | 4 | [Codex and Claude event adapters](./phase-04-native-event-adapters.md) | Pending / 0% | 8h | 1–2 |
 | 5 | [Agent Settings and notification ownership](./phase-05-settings-and-notification-cutover.md) | Pending / 0% | 8h | 2–4 |
 | 6 | [Linux end-to-end qualification](./phase-06-linux-qualification.md) | Pending / 0% | 8h | 1–5 |
 
-**Roadmap checkpoint (2026-09-29 Asia/Saigon):** Phase 01 is DONE only for its approved contract-only scope. Phase 02 is the next incomplete phase; Phases 02–06 remain pending. Native 15-second runtime expiry, live hook observations/root ordering, trust/readiness, and rollout are not complete.
+**Roadmap checkpoint (2026-09-29 Asia/Saigon):** Phases 01 and 02 are DONE. Native 15-second runtime expiry, private UDS ingress, and cross-transport generation fencing are complete and verified. Phases 03–06 remain pending. Live provider qualification targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified subsequent gates.
 
 Phases 3 and 4 can run independently after their shared contracts land. One owner integrates shared Rust exports/CLI/DTOs; no mid-flight builds over inconsistent edits.
 

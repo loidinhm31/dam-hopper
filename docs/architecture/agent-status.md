@@ -253,9 +253,11 @@ The user selected ordinary CLI native hooks with explicit Unknown for gaps,
 not Herdr-style screen detection or a controlled app-server launch mode. The
 approved [Phase 01 contract](../../plans/260929-0140-agent-status-codex-claude/phase-01-capabilities-and-observation-contract.md)
 and [static capability evidence](../../plans/260929-0140-agent-status-codex-claude/reports/phase-01-capability-evidence.md)
-cover contract work only. Phase 02 private ingress/lease work is in progress,
-but no native hooks are installed, no native events were qualified, and no live
-model turns ran. OMP reporter/lifecycle semantics remain unchanged.
+cover contract work only. Phase 02 private ingress, cross-transport generation
+fencing, and 15-second evidence lease expiry are implemented and verified.
+Managed hook installation, native event adapters, and qualification (Phases 03–06)
+remain pending; no native hooks are installed and no live model turns ran.
+OMP reporter/lifecycle semantics remain unchanged.
 
 - Codex and Claude command hooks invoke a packaged reporting subcommand through
   managed launchers in their server-side native configuration directories.
