@@ -64,7 +64,7 @@ interface SshRetryState {
   status: string | undefined;
 }
 
-interface UseGitWithSshRetryResult {
+export interface UseGitWithSshRetryResult {
   /** Pass these props to PassphraseDialog near the top of your JSX tree */
   passphraseDialogProps: ComponentProps<typeof PassphraseDialog>;
   statusMessage?: string;
@@ -76,6 +76,14 @@ interface UseGitWithSshRetryResult {
     options: ExecuteWithRetryOptions,
     fn: () => Promise<GitRetryResult>,
   ) => Promise<GitOpResult[]>;
+  /**
+   * Wraps a leased push operation. If it returns auth-required status,
+   * opens the passphrase dialog, loads key, then retries the same operation once.
+   */
+  executeLeasedWithRetry: <T extends { status: string }>(
+    owner: ConnectionRef | undefined,
+    fn: () => Promise<T>,
+  ) => Promise<T>;
 }
 
 export function getSshLoadKeyStatus(
@@ -172,11 +180,15 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
   const rejectRef = useRef<((err: unknown) => void) | null>(null);
   const ownerRef = useRef<ConnectionRef | null>(null);
   const initialSuccessfulResultsRef = useRef<GitOpResult[]>([]);
+  const pendingLeasedRetryRef = useRef<{
+    fn: () => Promise<unknown>;
+    resolve: (val: unknown) => void;
+    reject: (err: unknown) => void;
+  } | null>(null);
 
   const sshAddKey = useSshAddKey();
   const { data: availableKeys = [] } = useSshListKeys();
   const operationRef = useRef<GitOperationLabel>("push");
-
   const executeWithRetry = useCallback(
     async (
       options: ExecuteWithRetryOptions,
@@ -203,6 +215,35 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
         pendingRetryRef.current = fn;
         resolveRef.current = resolve;
         rejectRef.current = reject;
+        setState({
+          open: true,
+          loading: false,
+          error: undefined,
+          status: undefined,
+        });
+      });
+    },
+    [],
+  );
+
+  const executeLeasedWithRetry = useCallback(
+    async <T extends { status: string }>(
+      owner: ConnectionRef | undefined,
+      fn: () => Promise<T>,
+    ): Promise<T> => {
+      ownerRef.current = owner ?? null;
+      setState((current) => ({ ...current, status: undefined }));
+      const initial = await fn();
+      if (initial.status !== "auth-required") {
+        return initial;
+      }
+
+      return new Promise<T>((resolve, reject) => {
+        pendingLeasedRetryRef.current = {
+          fn: fn as () => Promise<unknown>,
+          resolve: resolve as (val: unknown) => void,
+          reject,
+        };
         setState({
           open: true,
           loading: false,
@@ -269,9 +310,26 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
         resolveRef.current = null;
         const reject = rejectRef.current;
         rejectRef.current = null;
+        const leasedPending = pendingLeasedRetryRef.current;
+        pendingLeasedRetryRef.current = null;
         ownerRef.current = null;
         initialSuccessfulResultsRef.current = [];
         reject?.(new Error("SSH_CANCELLED_STALE_CONNECTION"));
+        leasedPending?.reject(new Error("SSH_CANCELLED_STALE_CONNECTION"));
+        return;
+      }
+
+      if (pendingLeasedRetryRef.current) {
+        const { fn: leasedFn, resolve: leasedResolve, reject: leasedReject } =
+          pendingLeasedRetryRef.current;
+        pendingLeasedRetryRef.current = null;
+        ownerRef.current = null;
+        try {
+          const retried = await leasedFn();
+          leasedResolve(retried);
+        } catch (err) {
+          leasedReject(err);
+        }
         return;
       }
 
@@ -313,6 +371,8 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
 
   const handleCancel = useCallback(() => {
     const reject = rejectRef.current;
+    const leasedPending = pendingLeasedRetryRef.current;
+    pendingLeasedRetryRef.current = null;
     pendingRetryRef.current = null;
     resolveRef.current = null;
     rejectRef.current = null;
@@ -327,6 +387,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     }));
     // Reject with a user-cancelled marker so callers can handle gracefully
     reject?.(new Error("SSH_CANCELLED"));
+    leasedPending?.reject(new Error("SSH_CANCELLED"));
   }, []);
   const passphraseDialogProps = {
     open: state.open,
@@ -341,5 +402,6 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     passphraseDialogProps,
     statusMessage: state.status,
     executeWithRetry,
+    executeLeasedWithRetry,
   };
 }

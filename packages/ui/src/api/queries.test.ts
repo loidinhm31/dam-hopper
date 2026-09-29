@@ -6,18 +6,16 @@ describe("resolveGitPushTarget", () => {
     expect(resolveGitPushTarget("dam-hopper")).toEqual([
       "dam-hopper",
       undefined,
-      undefined,
     ]);
   });
 
-  it("preserves root-aware force-push arguments", () => {
+  it("preserves root-aware push arguments", () => {
     expect(
       resolveGitPushTarget({
         project: "dam-hopper",
         root: "modules/child",
-        force: true,
       }),
-    ).toEqual(["dam-hopper", "modules/child", true]);
+    ).toEqual(["dam-hopper", "modules/child"]);
   });
 });
 

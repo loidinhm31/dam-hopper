@@ -10,12 +10,14 @@ use crate::git::diff::{
     stage_files, unstage_files,
 };
 use crate::git::repository::{
-    checkout_branch, cherry_pick, create_branch, delete_branch, force_push, get_log, get_status,
+    checkout_branch, cherry_pick, create_branch, delete_branch, get_log, get_status,
     list_branches, push, reset_to_commit, undo_last_commit, update_branch,
 };
 use crate::git::types::{
-    CheckoutStrategy, GitProgressPhase, ResetMode, VcsRootKind, VcsRootMappingState,
+    CheckoutStrategy, GitProgressPhase, PublishPreview, PublishResultStatus, ResetMode,
+    VcsRootKind, VcsRootMappingState,
 };
+use crate::git::{prepare_leased_push, publish_leased_push};
 use crate::git::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, edit_commit_message,
     get_commit_message, revert_commit, revert_commit_files,
@@ -495,7 +497,7 @@ async fn push_selected_nested_root_only_updates_that_remote() {
 }
 
 #[tokio::test]
-async fn force_push_overwrites_non_fast_forward_remote_history() {
+async fn push_rejects_non_fast_forward_remote_history() {
     let (remote, seed, clone) = make_remote_clone_repo();
 
     std::fs::write(clone.path().join("remote.txt"), "remote\n").unwrap();
@@ -509,13 +511,187 @@ async fn force_push_overwrites_non_fast_forward_remote_history() {
 
     let regular_push = push(seed.path(), "seed", &None, None).await;
     assert!(!regular_push.success, "{regular_push:?}");
+    assert_ne!(
+        git_output(&["rev-parse", "HEAD"], remote.path()),
+        git_output(&["rev-parse", "HEAD"], seed.path())
+    );
+}
 
-    let force_result = force_push(seed.path(), "seed", &None, None).await;
-    assert!(force_result.success, "{force_result:?}");
+#[tokio::test]
+async fn leased_push_prepare_captures_snapshot_and_publishes_matching_lease() {
+    let (remote, seed, clone) = make_remote_clone_repo();
+
+    std::fs::write(clone.path().join("remote.txt"), "remote\n").unwrap();
+    git(&["add", "remote.txt"], clone.path());
+    git(&["commit", "-m", "remote commit"], clone.path());
+    git(&["push"], clone.path());
+
+    std::fs::write(seed.path().join("local.txt"), "local\n").unwrap();
+    git(&["add", "local.txt"], seed.path());
+    git(&["commit", "-m", "local rewrite"], seed.path());
+
+    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+        .await
+        .expect("prepare_leased_push should succeed");
+
+    let snapshot = match preview {
+        PublishPreview::Ready {
+            snapshot,
+            already_current,
+        } => {
+            assert!(!already_current);
+            assert_eq!(snapshot.branch, "refs/heads/main");
+            assert_eq!(snapshot.remote_name, "origin");
+            assert_eq!(snapshot.destination_ref, "refs/heads/main");
+            assert_eq!(
+                snapshot.expected_remote_oid,
+                git_output(&["rev-parse", "HEAD"], remote.path())
+            );
+            assert_eq!(
+                snapshot.source_oid,
+                git_output(&["rev-parse", "HEAD"], seed.path())
+            );
+            snapshot
+        }
+        PublishPreview::Blocked { reason, message } => {
+            panic!("expected ready preview, got blocked {reason:?}: {message}");
+        }
+    };
+
+    let pub_res = publish_leased_push(
+        seed.path(),
+        seed.path(),
+        "seed",
+        &snapshot,
+        &None,
+        None,
+    )
+    .await
+    .expect("publish_leased_push should succeed");
+
+    assert_eq!(pub_res.status, PublishResultStatus::Published);
     assert_eq!(
         git_output(&["rev-parse", "HEAD"], remote.path()),
         git_output(&["rev-parse", "HEAD"], seed.path())
     );
+}
+
+#[tokio::test]
+async fn leased_push_rejects_stale_remote_when_remote_advances_after_preview() {
+    let (remote, seed, clone) = make_remote_clone_repo();
+
+    std::fs::write(seed.path().join("local.txt"), "local\n").unwrap();
+    git(&["add", "local.txt"], seed.path());
+    git(&["commit", "-m", "local commit"], seed.path());
+
+    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+        .await
+        .expect("prepare_leased_push should succeed");
+
+    let snapshot = match preview {
+        PublishPreview::Ready { snapshot, .. } => snapshot,
+        PublishPreview::Blocked { reason, message } => {
+            panic!("expected ready preview, got blocked {reason:?}: {message}");
+        }
+    };
+
+    // Advance remote independently from clone
+    std::fs::write(clone.path().join("concurrent.txt"), "concurrent\n").unwrap();
+    git(&["add", "concurrent.txt"], clone.path());
+    git(&["commit", "-m", "concurrent commit"], clone.path());
+    git(&["push"], clone.path());
+    let concurrent_head = git_output(&["rev-parse", "HEAD"], remote.path());
+
+    let pub_res = publish_leased_push(
+        seed.path(),
+        seed.path(),
+        "seed",
+        &snapshot,
+        &None,
+        None,
+    )
+    .await
+    .expect("publish should return result without panic");
+
+    assert_eq!(pub_res.status, PublishResultStatus::StaleRemote);
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], remote.path()),
+        concurrent_head,
+        "remote HEAD must be preserved and not overwritten on stale lease"
+    );
+}
+
+#[tokio::test]
+async fn leased_push_already_current_returns_no_op_without_push() {
+    let (_remote, seed, _clone) = make_remote_clone_repo();
+
+    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+        .await
+        .expect("prepare should succeed");
+
+    let snapshot = match preview {
+        PublishPreview::Ready {
+            snapshot,
+            already_current,
+        } => {
+            assert!(already_current);
+            snapshot
+        }
+        PublishPreview::Blocked { reason, message } => {
+            panic!("expected ready preview, got blocked {reason:?}: {message}");
+        }
+    };
+
+    let pub_res = publish_leased_push(
+        seed.path(),
+        seed.path(),
+        "seed",
+        &snapshot,
+        &None,
+        None,
+    )
+    .await
+    .expect("publish should return result");
+
+    assert_eq!(pub_res.status, PublishResultStatus::AlreadyCurrent);
+}
+
+#[tokio::test]
+async fn leased_push_rejects_stale_local_when_local_tip_changes_after_preview() {
+    let (_remote, seed, _clone) = make_remote_clone_repo();
+
+    std::fs::write(seed.path().join("local1.txt"), "local1\n").unwrap();
+    git(&["add", "local1.txt"], seed.path());
+    git(&["commit", "-m", "local 1"], seed.path());
+
+    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+        .await
+        .expect("prepare should succeed");
+
+    let snapshot = match preview {
+        PublishPreview::Ready { snapshot, .. } => snapshot,
+        PublishPreview::Blocked { reason, message } => {
+            panic!("expected ready preview, got blocked {reason:?}: {message}");
+        }
+    };
+
+    // Advance local branch further
+    std::fs::write(seed.path().join("local2.txt"), "local2\n").unwrap();
+    git(&["add", "local2.txt"], seed.path());
+    git(&["commit", "-m", "local 2"], seed.path());
+
+    let pub_res = publish_leased_push(
+        seed.path(),
+        seed.path(),
+        "seed",
+        &snapshot,
+        &None,
+        None,
+    )
+    .await
+    .expect("publish should return result");
+
+    assert_eq!(pub_res.status, PublishResultStatus::StaleLocal);
 }
 
 #[test]

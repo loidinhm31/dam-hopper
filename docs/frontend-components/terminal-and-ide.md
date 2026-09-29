@@ -557,7 +557,7 @@ interface TerminalPanelProps {
 
 ### Project Info Panel
 
-**Location:** `packages/ui/src/components/organisms/ProjectInfoPanel.tsx`
+**Locations:** `packages/ui/src/components/organisms/ProjectInfoGitSection.tsx`, `packages/ui/src/components/organisms/ProjectInfoPanel.tsx`
 
 **Purpose:** Provides the project-level Git action strip used in the workspace sidebar.
 
@@ -565,14 +565,13 @@ interface TerminalPanelProps {
 
 - Fetches VCS roots with `useGitRoots(projectName)` and shows a root selector when the project exposes more than one root.
 - Falls back to the project root when discovery has not returned any roots yet, so fetch/pull/push still have a stable scope.
-- Builds the push payload from the selected root: project-root pushes stay `api.git.push(project)`, while child-root pushes pass `{ project, root }`.
-- Exposes a separate `Force Push` action that confirms before sending the same root-aware payload with `force: true`.
-- Uses force push only as an explicit publish step for an already-rewritten branch; it does not bypass the pushed-history safety guards in the history actions UI.
-- Routes fetch, pull, and push through the SSH retry hook so passphrase prompts are reused for all three actions.
-- Relies on the shared backend libgit2 credential callback path for fetch/pull/push, so retry behavior is consistent across all three operations instead of being push-specific.
-- Reuses the shared retry status banner for push completion feedback, so successful push and force-push actions confirm visibly in the same place as SSH and failure feedback.
-- Retries exactly once after a successful SSH key load; if the retry still fails with SSH auth, the hook surfaces the failure status and a later action can reopen the prompt instead of getting stuck behind stale cache state.
-- Surfaces non-auth push failures, including non-fast-forward rejections, through the shared retry status banner instead of dropping them on the floor.
+- Normal `Push` uses the selected root's fast-forward-only path; it does not take a force flag.
+- The separate `Force Push` action opens a live preview and confirmation. It publishes only the configured destination if the expected remote OID still matches the approved snapshot; missing or ambiguous mappings are blocked rather than guessed.
+- The leased-publish dialog is shared with Workspace Git and the Git page. Canceling leaves a local commit-message rewrite intact; editing a message never publishes automatically.
+- The approved lease is bound to the selected profile/project/worktree/root, branch, source OID, remote, and destination ref. A stale local, remote, or config snapshot requires a fresh preview and confirmation.
+- Fetch, pull, and normal Push use shared SSH retry. Leased publication retries only a known pre-write authentication failure with the same approved snapshot; unknown, rejected, and stale outcomes are not blindly replayed.
+- Fetch/pull/push use the shared backend libgit2 credential callbacks and SSH passphrase prompt; mutation results invalidate only the selected target's caches.
+- Non-auth normal-push failures and leased-publish outcomes remain visible in their respective UI status/dialog flows.
 - Uses the same root labels and mapping-state descriptions as the workspace Git panel, so project-level and branch-level root selectors stay consistent.
 - Renders a root selector only when a project actually has multiple discovered roots, keeping the sidebar compact for single-root repos.
 - Keeps the root-aware project selector test-covered, including default-root fallback, child-root push payloads, and selector rendering.

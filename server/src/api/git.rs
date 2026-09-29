@@ -185,13 +185,11 @@ pub async fn pull_projects(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PushBody {
     pub project: String,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
-    #[serde(default)]
-    pub force: bool,
 }
 
 pub async fn push_project(
@@ -204,7 +202,7 @@ pub async fn push_project(
         .map_err(ApiError::from_app)?;
     let progress = Some(create_progress_channel());
 
-    if let Some(ref tx) = progress {
+    if let Some(tx) = &progress {
         let mut rx = tx.subscribe();
         let sink = state.event_sink.clone();
         tokio::spawn(async move {
@@ -215,12 +213,83 @@ pub async fn push_project(
         });
     }
 
-    let result = if body.force {
-        crate::git::repository::force_push(&root.root_path, &body.project, &progress, ssh_cred)
-            .await
-    } else {
-        crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await
-    };
+    let result =
+        crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/:project/push/prepare
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareLeasedPushBody {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+}
+
+pub async fn prepare_leased_push_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    body: Option<Json<PrepareLeasedPushBody>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let project_path = resolve_target_path(&state, &project, body.worktree_path).await?;
+    let root = resolve_git_request_root(&project_path, body.root.as_deref())
+        .map_err(ApiError::from_app)?;
+    let ssh_cred = state.ssh_creds.read().await.clone();
+    let preview = crate::git::prepare_leased_push(&project_path, &root.root_path, ssh_cred)
+        .await
+        .map_err(ApiError::from_app)?;
+    Ok(Json(preview))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/:project/push/publish
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishLeasedPushBody {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+    pub snapshot: crate::git::PublishSnapshot,
+}
+
+pub async fn publish_leased_push_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<PublishLeasedPushBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let project_path = resolve_target_path(&state, &project, body.worktree_path).await?;
+    let root = resolve_git_request_root(&project_path, body.root.as_deref())
+        .map_err(ApiError::from_app)?;
+    let ssh_cred = state.ssh_creds.read().await.clone();
+    let progress = Some(create_progress_channel());
+
+    if let Some(tx) = &progress {
+        let mut rx = tx.subscribe();
+        let sink = state.event_sink.clone();
+        tokio::spawn(async move {
+            while let Ok(evt) = rx.recv().await {
+                let payload = serde_json::to_value(&evt).unwrap_or_default();
+                sink.broadcast("git:progress", payload);
+            }
+        });
+    }
+
+    let result = crate::git::publish_leased_push(
+        &project_path,
+        &root.root_path,
+        &project,
+        &body.snapshot,
+        &progress,
+        ssh_cred,
+    )
+    .await
+    .map_err(ApiError::from_app)?;
+
     Ok(Json(result))
 }
 

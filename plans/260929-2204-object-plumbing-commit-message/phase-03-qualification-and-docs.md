@@ -7,7 +7,7 @@
 
 ## Overview
 
-Priority P1; **pending / 0%**. Start after Phases 01 and 02 targeted tests and changed-path runtime smoke, before claiming shipped behavior. Phase 01 implementation and targeted backend/API validation are complete; Phase 02 panel/publication work remains pending. Extend qualification across actual server/API, browser and authenticated transport against disposable repos/bare remotes; then update current docs/changelog. The Phase 01 tester report identifies additional raw-object, signature and CAS cases not established by its 17 targeted tests; carry them into this phase's acceptance run. Parent's separate disposable Git/git2 probes remain feasibility evidence only.
+Priority P1; **pending / 0%**. Phase 01 implementation and targeted backend/API validation are complete; Phase 02 panel/publication implementation is also complete, with 190/190 targeted tests plus Rust library check and UI build reported passing. Phase 03 has not started: actual registered-project/worktree/root API behavior, browser, authenticated remote transport and lease-race qualification, the expanded matrix, and final broad gates remain before official API/architecture/changelog cutover. Standalone Git/git2 probes remain feasibility evidence only.
 
 ## Key Insights
 

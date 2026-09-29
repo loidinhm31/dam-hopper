@@ -30,6 +30,7 @@ import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js";
 import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
+import { useLeasedGitPush } from "@/hooks/use-leased-git-push.js";
 import {
   GitDropCommitDialog,
   GitEditCommitMessageDialog,
@@ -41,7 +42,6 @@ import {
 } from "@/components/organisms/GitHistoryActions.js";
 import {
   buildProjectInfoPushTarget,
-  buildProjectInfoPushTargetWithMode,
   formatProjectInfoRootLabel,
 } from "@/components/organisms/ProjectInfoPanel.js";
 
@@ -258,7 +258,6 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
   const historyActions = useGitHistoryActions(targetRef, selectedRootId);
   const queryClient = useQueryClient();
   const gitPush = useGitPush();
-  const [forcePushOpen, setForcePushOpen] = useState(false);
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
   const offset = page * WORKSPACE_GIT_LOG_LIMIT;
@@ -274,6 +273,18 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
   const selectedRootLabel = selectedRoot
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
+
+  const leasedPushTarget = useMemo(
+    () => ({
+      ...targetRef,
+      project,
+    }),
+    [project, targetRef],
+  );
+  const leasedPush = useLeasedGitPush(
+    leasedPushTarget,
+    selectedRootId === DEFAULT_GIT_ROOT_ID ? undefined : selectedRootId,
+  );
   const activeBranch = branches.find((branch) => branch.isCurrent)?.name ?? "";
   const historyBranch =
     historyTargetKey === targetKey &&
@@ -363,8 +374,14 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
     );
   };
 
-  const handleEditCommitMessageConfirm = async (message: string) => {
-    const editedHash = await historyActions.handleEditCommitMessage(message);
+  const handleEditCommitMessageConfirm = async (
+    message: string,
+    allowSignatureRemoval?: boolean,
+  ) => {
+    const editedHash = await historyActions.handleEditCommitMessage(
+      message,
+      allowSignatureRemoval,
+    );
     if (!editedHash) return;
     setSelectedCommit((current) =>
       current?.hash === editedHash ? null : current,
@@ -423,25 +440,18 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
   return (
     <>
       <PassphraseDialog {...passphraseDialogProps} />
+      <PassphraseDialog {...leasedPush.passphraseDialogProps} />
       <GitForcePushDialog
-        open={forcePushOpen}
+        open={leasedPush.state !== "closed"}
         project={project}
         rootLabel={selectedRootLabel}
-        loading={gitPush.isPending}
-        onClose={() => setForcePushOpen(false)}
-        onConfirm={() => {
-          setForcePushOpen(false);
-          void executeWithRetry({ operation: "push" }, () =>
-            gitPush.mutateAsync(
-              buildProjectInfoPushTargetWithMode(
-                project,
-                selectedRootId,
-                true,
-                targetRef,
-              ),
-            ),
-          ).catch(() => {});
-        }}
+        state={leasedPush.state}
+        preview={leasedPush.preview}
+        result={leasedPush.result}
+        error={leasedPush.error}
+        onPrepare={() => void leasedPush.prepare()}
+        onPublish={() => void leasedPush.publish()}
+        onClose={leasedPush.close}
       />
       <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
         <div
@@ -516,7 +526,7 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
               status={historyActions.status}
             />
             <div className="mt-2 flex items-center justify-between gap-2">
-              <SshRetryStatusMessage message={statusMessage} />
+              <SshRetryStatusMessage message={statusMessage || leasedPush.sshStatus} />
               <Button
                 size="sm"
                 variant="secondary"
@@ -540,8 +550,11 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
               <Button
                 size="sm"
                 variant="danger"
-                loading={gitPush.isPending}
-                onClick={() => setForcePushOpen(true)}
+                loading={
+                  leasedPush.state === "preparing" ||
+                  leasedPush.state === "publishing"
+                }
+                onClick={() => void leasedPush.prepare()}
               >
                 <Upload className="h-3 w-3" />
                 Force Push
@@ -670,8 +683,11 @@ export function WorkspaceGitPanel({ project, target }: WorkspaceGitPanelProps) {
         loading={historyActions.editCommitMessageLoading}
         saving={historyActions.isEditCommitMessagePending}
         error={historyActions.editCommitMessageError}
+        signatureConsentRequired={historyActions.signatureConsentRequired}
         onClose={() => historyActions.setEditCommit(null)}
-        onConfirm={(message) => void handleEditCommitMessageConfirm(message)}
+        onConfirm={(message, allowSignatureRemoval) =>
+          void handleEditCommitMessageConfirm(message, allowSignatureRemoval)
+        }
       />
       <GitRevertCommitDialog
         commit={historyActions.revertCommit}

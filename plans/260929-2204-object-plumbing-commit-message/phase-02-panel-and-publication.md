@@ -7,7 +7,7 @@
 
 ## Overview
 
-Priority P1; **pending / 0%**. Dependency: phase 01 local edit DTO and safe git2 HEAD/branch transaction. Separate message edit from remote publication; replace all reachable unconditional Force Push UI/API behavior with a one-ref exact-remote-OID lease. No implementation or tests performed in this planning phase.
+Priority P1; **DONE (2026-09-30 02:38:37 +07:00) / 100%**. Parent plan: **IN PROGRESS (2/3 phases; ~67%); Phase 03 remains Pending**. Dependency: phase 01 local edit DTO and safe git2 HEAD/branch transaction. Implementation and scoped validation are complete; integrated qualification and docs remain Phase 03 scope.
 
 ## Key Insights
 
@@ -101,11 +101,11 @@ If git2's callback cannot enforce old OID under push races or transport behavior
 
 ## Todo List
 
-- [ ] 2A: typed preview/publish endpoints, authenticated exact lease, source/config/ref fencing, legacy force disabled.
-- [ ] 2B: client/WS/query/SSH integration; edit menu/CAS/signature consent; shared dialog and **all three** force callers migrated.
-- [ ] Both: local edit success separate from publication outcome; normal Push and other history guards unchanged.
-- [ ] 2A service lease bare-remote smoke + focused Rust regressions pass; 2B targeted UI/API regressions + changed-path app smoke pass before phase 03.
-- [ ] Status: **pending / 0%** (plan only).
+- [x] 2A: typed preview/publish endpoints, authenticated exact lease, source/config/ref fencing, legacy force disabled.
+- [x] 2B: client/WS/query/SSH integration; edit menu/CAS/signature consent; shared dialog and **all three** force callers migrated.
+- [x] Both: local edit success separate from publication outcome; normal Push and other history guards unchanged.
+- [x] 2A service lease bare-remote smoke + focused Rust regressions pass; 2B targeted UI/API regressions + changed-path app smoke pass before phase 03.
+- [x] Status: **DONE (2026-09-30 02:38:37 +07:00) / 100%**; 190/190 targeted tests passed.
 
 ## Success Criteria
 
@@ -126,7 +126,7 @@ If git2's callback cannot enforce old OID under push races or transport behavior
 
 ## Next Steps
 
-Implement phase 01 first; then 2A backend DTO/auth/callback before 2B UI migration. Phase 03 qualifies actual Rust service and browser against real disposable Git remote, then updates current docs/changelog after passing proof. Parent owns final integration and checks.
+Phase 02 backend (2A) and UI integration (2B) completed 2026-09-30 02:38:37 +07:00; targeted tests passed 190/190. Parent plan is **IN PROGRESS (2/3 phases; ~67%)**; Phase 03 remains **Pending** and owns integrated qualification, browser verification, and documentation cutover.
 
 ## Unresolved Questions
 

@@ -33,15 +33,6 @@ export function buildProjectInfoPushTarget(
   rootId: string,
   target?: ProjectTargetRef,
 ) {
-  return buildProjectInfoPushTargetWithMode(project, rootId, false, target);
-}
-
-export function buildProjectInfoPushTargetWithMode(
-  project: string,
-  rootId: string,
-  force: boolean,
-  target?: ProjectTargetRef,
-) {
   const targetFields = {
     project,
     ...(target?.profileId ? { profileId: target.profileId } : {}),
@@ -49,11 +40,9 @@ export function buildProjectInfoPushTargetWithMode(
       ? { worktreePath: target.worktreePath }
       : {}),
   };
-  const pushTarget =
-    rootId === DEFAULT_GIT_ROOT_ID
-      ? targetFields
-      : { ...targetFields, root: rootId };
-  return force ? { ...pushTarget, force: true } : pushTarget;
+  return rootId === DEFAULT_GIT_ROOT_ID
+    ? targetFields
+    : { ...targetFields, root: rootId };
 }
 
 export function formatWorktreeRemovalBlockerMessage(

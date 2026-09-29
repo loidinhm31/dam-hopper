@@ -1834,11 +1834,81 @@ export interface GitActionResult {
     | "pushed-commit"
     | "unreachable-commit"
     | "root-commit"
-    | "mixed-vcs-roots";
+    | "mixed-vcs-roots"
+    | "signature-consent-required"
+    | "publication-uncertain";
   recommendation?: string;
+  oldTargetOid?: string;
+  newTargetOid?: string;
+  oldHeadOid?: string;
+  newHeadOid?: string;
+  rewrittenCount?: number;
+  noOp?: boolean;
+  signaturesRemoved?: boolean;
 }
 
 export interface CommitMessageResponse {
+  message: string;
+  branch: string;
+  headOid: string;
+}
+
+export interface EditCommitMessageInput {
+  message: string;
+  expectedBranch: string;
+  expectedHeadOid: string;
+  allowSignatureRemoval?: boolean;
+}
+
+export interface PublishSnapshot {
+  branch: string;
+  sourceOid: string;
+  remoteName: string;
+  destinationRef: string;
+  expectedRemoteOid: string;
+  remoteIdentity: string;
+  repositoryIdentity: string;
+}
+
+export type PublishBlockReason =
+  | "detached-head"
+  | "missing-upstream"
+  | "ambiguous-destination"
+  | "missing-destination"
+  | "remote-unavailable"
+  | "auth-required"
+  | "stale-preview";
+
+export type PublishPreview =
+  | {
+      status: "ready";
+      snapshot: PublishSnapshot;
+      alreadyCurrent: boolean;
+    }
+  | {
+      status: "blocked";
+      reason: PublishBlockReason;
+      message: string;
+    };
+
+export type PublishResultStatus =
+  | "published"
+  | "already-current"
+  | "stale-remote"
+  | "stale-local"
+  | "stale-config"
+  | "rejected"
+  | "auth-required"
+  | "unknown";
+
+export interface PublishResult {
+  status: PublishResultStatus;
+  branch: string;
+  remoteName: string;
+  destinationRef: string;
+  sourceOid: string;
+  expectedRemoteOid: string;
+  actualRemoteOid?: string;
   message: string;
 }
 
@@ -2026,11 +2096,25 @@ export function createApiClient(
         transport.invoke<GitOpResult[]>("git:fetch", toWireTargetList(targets)),
       pull: (targets?: ProjectTargetInput[]) =>
         transport.invoke<GitOpResult[]>("git:pull", toWireTargetList(targets)),
-      push: (target: ProjectTargetInput, root?: string, force?: boolean) =>
+      push: (target: ProjectTargetInput, root?: string) =>
         transport.invoke<GitOpResult>("git:push", {
           ...toWireTarget(target),
           root,
-          force,
+        }),
+      prepareLeasedPush: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<PublishPreview>("git:prepareLeasedPush", {
+          ...toWireTarget(target),
+          root,
+        }),
+      publishLeasedPush: (
+        target: ProjectTargetInput,
+        snapshot: PublishSnapshot,
+        root?: string,
+      ) =>
+        transport.invoke<PublishResult>("git:publishLeasedPush", {
+          ...toWireTarget(target),
+          snapshot,
+          root,
         }),
       worktrees: (project: string) =>
         transport.invoke<Worktree[]>("git:worktrees", project),
@@ -2236,13 +2320,13 @@ export function createApiClient(
       editCommitMessage: (
         target: ProjectTargetInput,
         hash: string,
-        message: string,
+        input: EditCommitMessageInput,
         root?: string,
       ) =>
         transport.invoke<GitActionResult>("git:editCommitMessage", {
           ...toWireTarget(target),
           hash,
-          message,
+          ...input,
           root,
         }),
       commitFileDiff: (
@@ -3046,8 +3130,16 @@ export interface ApiClient {
     push: (
       target: ProjectTargetInput,
       root?: string,
-      force?: boolean,
     ) => Promise<GitOpResult>;
+    prepareLeasedPush: (
+      target: ProjectTargetInput,
+      root?: string,
+    ) => Promise<PublishPreview>;
+    publishLeasedPush: (
+      target: ProjectTargetInput,
+      snapshot: PublishSnapshot,
+      root?: string,
+    ) => Promise<PublishResult>;
     worktrees: (project: string) => Promise<Worktree[]>;
     roots: (target: ProjectTargetInput) => Promise<VcsRoot[]>;
     addWorktree: (
@@ -3168,7 +3260,7 @@ export interface ApiClient {
     editCommitMessage: (
       target: ProjectTargetInput,
       hash: string,
-      message: string,
+      input: EditCommitMessageInput,
       root?: string,
     ) => Promise<GitActionResult>;
     commitFileDiff: (

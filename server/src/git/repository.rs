@@ -4,8 +4,10 @@
 /// Network operations use a shared libgit2 credential callback stack.
 /// Pull still falls back to CLI when fast-forward merge application fails.
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 use git2::{BranchType, PackBuilderStage, PushOptions, Repository, StatusOptions};
 
@@ -80,7 +82,7 @@ impl CredentialAttemptTracker {
     }
 }
 
-fn attach_credential_callbacks(
+pub(crate) fn attach_credential_callbacks(
     callbacks: &mut git2::RemoteCallbacks<'static>,
     ssh_cred: Option<Arc<SshCredStore>>,
 ) {
@@ -381,6 +383,13 @@ pub(crate) struct PushTarget {
 }
 
 pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppError> {
+    if repo
+        .head_detached()
+        .map_err(|e| AppError::Git(e.message().to_string()))?
+    {
+        return Err(AppError::Git("Detached HEAD".to_string()));
+    }
+
     let head = repo
         .head()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -389,7 +398,6 @@ pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppEr
         .shorthand()
         .ok_or_else(|| AppError::Git("Detached HEAD".to_string()))?
         .to_string();
-
     let config = repo
         .config()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -422,6 +430,71 @@ pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppEr
         )));
     }
 
+    if !merge_ref.starts_with("refs/heads/") {
+        return Err(AppError::Git(format!(
+            "Upstream branch '{merge_ref}' must be a full ref starting with 'refs/heads/'"
+        )));
+    }
+
+    if let Ok(mirror) = config.get_bool(&format!("remote.{remote_name}.mirror")) {
+        if mirror {
+            return Err(AppError::Git(format!(
+                "Remote '{remote_name}' has mirror mode enabled; refusing ambiguous push target"
+            )));
+        }
+    }
+
+    let mut push_refspecs = Vec::new();
+    if let Ok(entries) =
+        config.entries(Some(&format!(r"^remote\.{}\.push$", regex::escape(&remote_name))))
+    {
+        let _ = entries.for_each(|entry| {
+            if let Some(val) = entry.value() {
+                push_refspecs.push(val.to_string());
+            }
+        });
+    }
+    for spec in &push_refspecs {
+        if spec.contains('*') {
+            return Err(AppError::Git(format!(
+                "Remote '{remote_name}' has wildcard push refspec '{spec}'; refusing ambiguous push target"
+            )));
+        }
+    }
+    if push_refspecs.len() > 1 {
+        return Err(AppError::Git(format!(
+            "Remote '{remote_name}' has multiple push refspecs configured; refusing ambiguous push target"
+        )));
+    }
+
+    let mut push_urls = Vec::new();
+    if let Ok(entries) = config.entries(Some(&format!(
+        r"^remote\.{}\.pushurl$",
+        regex::escape(&remote_name)
+    ))) {
+        let _ = entries.for_each(|entry| {
+            if let Some(val) = entry.value() {
+                push_urls.push(val.to_string());
+            }
+        });
+    }
+    if push_urls.len() > 1 {
+        return Err(AppError::Git(format!(
+            "Remote '{remote_name}' has multiple push URLs configured; refusing ambiguous push target"
+        )));
+    }
+
+    let remote = repo
+        .find_remote(&remote_name)
+        .map_err(|e| AppError::Git(format!("Remote '{remote_name}' not found: {}", e.message())))?;
+
+    let effective_url = remote.pushurl().or_else(|| remote.url());
+    if effective_url.is_none() || effective_url.unwrap().trim().is_empty() {
+        return Err(AppError::Git(format!(
+            "Cannot resolve effective push URL for remote '{remote_name}'"
+        )));
+    }
+
     let remote_branch = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
 
     Ok(PushTarget {
@@ -430,6 +503,27 @@ pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppEr
         merge_ref: merge_ref.clone(),
         summary: format!("Pushed {branch_name} to {remote_name}/{remote_branch}"),
     })
+}
+
+pub(crate) fn format_pack_stage(stage: PackBuilderStage) -> &'static str {
+    match stage {
+        PackBuilderStage::AddingObjects => "adding",
+        PackBuilderStage::Deltafication => "deltafication",
+    }
+}
+
+pub(crate) fn handle_push_update_reference(
+    remote_rejection: &Arc<Mutex<Option<String>>>,
+    refname: &str,
+    status: Option<&str>,
+) -> Result<(), git2::Error> {
+    if let Some(status) = status {
+        let message = format!("Remote rejected {refname}: {status}");
+        *remote_rejection.lock() = Some(message.clone());
+        return Err(git2::Error::from_str(&message));
+    }
+
+    Ok(())
 }
 
 fn make_push_opts(
@@ -481,29 +575,6 @@ fn make_push_opts(
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
     push_opts
-}
-
-fn format_pack_stage(stage: PackBuilderStage) -> &'static str {
-    match stage {
-        PackBuilderStage::AddingObjects => "adding",
-        PackBuilderStage::Deltafication => "deltafication",
-    }
-}
-
-fn handle_push_update_reference(
-    remote_rejection: &Arc<Mutex<Option<String>>>,
-    refname: &str,
-    status: Option<&str>,
-) -> Result<(), git2::Error> {
-    if let Some(status) = status {
-        let message = format!("Remote rejected {refname}: {status}");
-        *remote_rejection
-            .lock()
-            .expect("push rejection mutex poisoned") = Some(message.clone());
-        return Err(git2::Error::from_str(&message));
-    }
-
-    Ok(())
 }
 
 pub async fn fetch(
@@ -608,12 +679,11 @@ pub async fn fetch(
     }
 }
 
-async fn push_with_mode(
+pub async fn push(
     project_path: &Path,
     project_name: &str,
     progress: &Option<ProgressSender>,
     ssh_cred: Option<Arc<SshCredStore>>,
-    force: bool,
 ) -> GitOperationResult {
     let start = Instant::now();
     emit_started(progress, project_name, "push", "Pushing...");
@@ -626,11 +696,7 @@ async fn push_with_mode(
     let result = tokio::task::spawn_blocking(move || {
         let repo = open_repo(&project_path)?;
         let target = resolve_push_target(&repo)?;
-        let refspec = if force {
-            format!("+refs/heads/{}:{}", target.branch_name, target.merge_ref)
-        } else {
-            format!("refs/heads/{}:{}", target.branch_name, target.merge_ref)
-        };
+        let refspec = format!("refs/heads/{}:{}", target.branch_name, target.merge_ref);
 
         let mut remote = repo
             .find_remote(&target.remote_name)
@@ -647,7 +713,6 @@ async fn push_with_mode(
         remote.push(&[refspec], Some(&mut push_opts)).map_err(|e| {
             remote_rejection
                 .lock()
-                .expect("push rejection mutex poisoned")
                 .clone()
                 .map(AppError::Git)
                 .unwrap_or_else(|| AppError::Git(e.message().to_string()))
@@ -697,25 +762,6 @@ async fn push_with_mode(
         }
     }
 }
-
-pub async fn push(
-    project_path: &Path,
-    project_name: &str,
-    progress: &Option<ProgressSender>,
-    ssh_cred: Option<Arc<SshCredStore>>,
-) -> GitOperationResult {
-    push_with_mode(project_path, project_name, progress, ssh_cred, false).await
-}
-
-pub(crate) async fn force_push(
-    project_path: &Path,
-    project_name: &str,
-    progress: &Option<ProgressSender>,
-    ssh_cred: Option<Arc<SshCredStore>>,
-) -> GitOperationResult {
-    push_with_mode(project_path, project_name, progress, ssh_cred, true).await
-}
-
 pub async fn pull(
     project_path: &Path,
     project_name: &str,
@@ -809,10 +855,7 @@ mod tests {
         .expect_err("remote rejection should become an error");
 
         assert_eq!(
-            remote_rejection
-                .lock()
-                .expect("push rejection mutex poisoned")
-                .as_deref(),
+            remote_rejection.lock().as_deref(),
             Some("Remote rejected refs/heads/main: hook declined")
         );
         assert_eq!(

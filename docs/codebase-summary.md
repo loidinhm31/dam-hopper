@@ -153,7 +153,7 @@ captured connection owner. Root and registered worktree targets remain distinct.
 | Bounded previews   | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                      |
 | Federated search   | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`     | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
 | Search replace     | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`      | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.           |
-| Git edits and retry | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/api/git.rs` | Retries preserve successful target results; local message edits bind to a branch/tip snapshot, rewrite the raw commit DAG, and preserve trees and dirty worktree/index state without publishing. |
+| Git edits and publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` | Paired message reads/edits use branch+HEAD CAS and preserve local state without publishing; separate publish uses a live one-ref exact-OID lease, bound to target and remote/repository identity. Normal Push remains fast-forward-only. |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
 Clean editor tabs reload after external/Git mutations; dirty tabs preserve local
@@ -167,9 +167,9 @@ may make the result incomplete. `Replace Next` and `Replace All` re-read and
 mtime-check before writing, skip dirty files without overwriting them, and
 reload only clean open tabs.
 
-The focused contract coverage is in
-`packages/ui/src/api/phase-03-files-editor-search-git.test.ts`. The full source
-and behavior map is [Phase 03: Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md).
+Phase 02 coverage is in `server/src/git/tests.rs`, `server/src/api/tests.rs`,
+`packages/ui/src/api/ws-transport.test.ts` and `queries.test.ts`, the leased-push
+hook, and Git panel/dialog tests. Targeted tests/builds passed; broad qualification remains Phase 03.
 
 ### Transport-safe FS subscription follow-up (Phase 01, 2026-09-20)
 

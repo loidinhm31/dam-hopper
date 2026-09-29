@@ -164,19 +164,33 @@ ambiguous edit. Dirty-tab isolation is target-qualified:
 
 ## Git and SSH retry
 
-Fetch and pull accept a list of root/worktree target references and return one
-result per target. Push carries the selected target plus the selected VCS root
-and force mode. Target resolution remains server-authoritative; an unavailable
-worktree is reported as `targetUnavailable` and is not redirected to the root.
+Fetch and pull accept lists of root/worktree targets and return per-target
+results. Normal Push remains fast-forward-only; there is no `force` flag or
+unconditional force-push route.
 
-The shared SSH passphrase flow handles only recognized SSH authentication
-failures. After a successful key load and an unchanged owner generation, the
-retry operation contains only targets that failed authentication; successful
-initial targets are retained in the combined result and are never replayed.
-Non-authentication failures are reported without opening the passphrase dialog.
-A disconnect, profile replacement, or generation change while the dialog is
-open cancels the retry. Fetch, pull, and push use the same status model and
-preserve independent target results.
+Commit-message editing is local and does not depend on cached `isPushed`. The UI
+captures the selected message, branch, and HEAD tip together, then submits that
+branch/tip snapshot for a compare-and-swap check. A successful edit rewrites the
+local history only; it never publishes automatically. Existing drop, undo,
+reset, and revert protections remain independent. Removing affected signatures
+requires explicit consent.
+
+Publishing rewritten history is a separate, user-confirmed action shared by
+the Workspace Git panel, Git page, and Project Info Git section. A fresh
+preview resolves the configured upstream and displays the destination and
+expected remote/local OIDs. Missing or ambiguous destinations are blocked.
+Confirmation publishes the captured branch to that one destination only if
+the expected remote OID still matches. Stale state requires a new preview; an
+unknown outcome is not retried blindly.
+
+Git operations stay bound to the selected profile, project/worktree, and VCS
+root. Changing the target or root clears a pending lease preview; unavailable
+targets do not fall through to another profile or the project root. For fetch,
+pull, and normal Push, the shared SSH passphrase flow retains successful target
+results and retries only targets that failed authentication after owner
+validation. Leased publication retries only a known pre-write authentication
+failure and reuses the approved snapshot.
+
 
 ## Source map and verification
 
@@ -189,7 +203,7 @@ preserve independent target results.
 | Scoped explorer state and watcher | `packages/ui/src/stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts` |
 | CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` |
 | Search and replace | `hooks/use-file-search.ts`, `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` |
-| Git retry and invalidation | `hooks/use-git-with-ssh-retry.ts`, `api/queries.ts` |
-| Focused contract tests | `packages/ui/src/api/phase-03-files-editor-search-git.test.ts` |
+| Git edit and leased publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
+| Focused regressions | `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git history/dialog/panel tests |
 
 Related contracts: [API Reference](./api-reference.md), [System Architecture](./system-architecture.md), [Code Standards](./code-standards.md), and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).

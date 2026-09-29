@@ -113,6 +113,10 @@ search/replace.
 - Replace Next/All captures the match target and skips dirty files.
 - Fetch/pull/push retain independent target results; SSH retry does not replay
   successful targets.
+- Normal Push remains fast-forward-only. Publishing rewritten history uses a
+  separate live preview and explicitly confirmed exact-OID lease.
+- Commit-message edits submit a captured branch/HEAD snapshot and never publish
+  automatically.
 - Live tree subscriptions stay on the target's originating transport through
   event binding, child loading, cleanup, and unsubscribe; remounts obtain a
   fresh watch instead of reusing a retired subscription ID.

@@ -3,6 +3,7 @@ pub mod cli_fallback;
 pub mod commit_file_ops;
 pub mod commit_message_rewrite;
 pub mod diff;
+pub mod leased_push;
 pub mod progress;
 pub mod repository;
 pub mod types;
@@ -22,6 +23,7 @@ pub use diff::{
     get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,
     stage_files, unstage_files,
 };
+pub use leased_push::{prepare_leased_push, publish_leased_push};
 pub use progress::ProgressSender;
 pub use repository::{
     checkout_branch, cherry_pick, create_branch, delete_branch, fetch, get_log, get_status,
@@ -31,7 +33,8 @@ pub use types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
     FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry, GitOperation,
     GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation, GitRecoveryState,
-    GitStatus, HunkInfo, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind,
+    GitStatus, HunkInfo, PublishBlockReason, PublishPreview, PublishResult, PublishResultStatus,
+    PublishSnapshot, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind,
     VcsRootMappingState, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
 pub use vcs_roots::{

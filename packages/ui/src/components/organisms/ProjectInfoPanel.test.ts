@@ -9,7 +9,6 @@ import { useProjectTargetStore } from "@/stores/project-target.js";
 import {
   ProjectInfoPanel,
   buildProjectInfoPushTarget,
-  buildProjectInfoPushTargetWithMode,
   describeProjectInfoRoot,
   formatProjectInfoRootLabel,
   projectInfoRootOptions,
@@ -108,6 +107,9 @@ vi.mock("@/api/queries.js", () => ({
   useGitPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
   useAddWorktree: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
   useRemoveWorktree: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
+  resolveTargetOwner: vi.fn(() => undefined),
+  useGitPrepareLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
+  useGitPublishLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
 }));
 
 vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
@@ -140,13 +142,16 @@ describe("ProjectInfoPanel git helpers", () => {
     );
   });
 
-  it("builds a force-push payload when the UI requests destructive push", () => {
+  it("builds a push payload with worktree path preserved", () => {
     expect(
-      buildProjectInfoPushTargetWithMode("demo-project", "modules/child", true),
+      buildProjectInfoPushTarget("demo-project", "modules/child", {
+        project: "demo-project",
+        worktreePath: "/tmp/wt",
+      }),
     ).toEqual({
       project: "demo-project",
+      worktreePath: "/tmp/wt",
       root: "modules/child",
-      force: true,
     });
   });
 

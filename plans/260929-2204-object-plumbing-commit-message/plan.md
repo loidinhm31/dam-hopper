@@ -22,10 +22,10 @@ Replace the current message-edit implementation fully. Keep local editing and pu
 | Phase | Work packages | Status | Progress |
 | --- | --- | --- | --- |
 | [1. Object rewrite](./phase-01-object-rewrite.md) | Local request/result contract; raw commit DAG engine; locked ref publication; real-filesystem regression coverage | DONE (2026-09-30 00:44:16 +07:00) | 100% |
-| [2. Panel and publication](./phase-02-panel-and-publication.md) | Backend preview/leased push; typed transports/hooks; all Git panel/dialog callers; ownership and outcome handling | Pending | 0% |
+| [2. Panel and publication](./phase-02-panel-and-publication.md) | Backend preview/leased push; typed transports/hooks; all Git panel/dialog callers; ownership and outcome handling | DONE (2026-09-30 02:38:37 +07:00) | 100% |
 | [3. Qualification and docs](./phase-03-qualification-and-docs.md) | Integrated API/browser/remote scenarios; full gates; architecture/API/user docs and changelog cutover | Pending | 0% |
 
-**Plan status: IN PROGRESS (1/3 phases; ~33%; updated 2026-09-30 00:44:16 +07:00).** Phase 01's implementation and targeted backend/API gate are complete; Phases 02–03 remain pending.
+**Plan status: IN PROGRESS (2/3 phases; ~67%; updated 2026-09-30 02:38:37 +07:00).** Phases 01 and 02 are complete; Phase 03 remains Pending.
 
 Use documented file ownership and dependencies for remaining phases. Never give two agents the same file concurrently. Lower-rank agents must follow exact algorithms, DTOs, fixtures and stop gates in the phase files; do not invent fallback behavior.
 

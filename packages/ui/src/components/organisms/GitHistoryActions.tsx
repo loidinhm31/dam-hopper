@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useGitCherryPick,
   useGitCherryPickCommitFiles,
@@ -253,12 +253,21 @@ export function GitDropCommitDialog({
   );
 }
 
+export function normalizeCommitMessage(message: string): string {
+  return message.endsWith("\n") ? message : `${message}\n`;
+}
+
 export function canSubmitEditedCommitMessage(
   message: string,
   originalMessage: string | undefined,
   loading: boolean,
 ) {
-  return !loading && message.trim().length > 0 && message !== originalMessage;
+  return (
+    !loading &&
+    message.trim().length > 0 &&
+    originalMessage !== undefined &&
+    normalizeCommitMessage(message) !== normalizeCommitMessage(originalMessage)
+  );
 }
 
 interface GitEditCommitMessageDialogProps {
@@ -267,8 +276,9 @@ interface GitEditCommitMessageDialogProps {
   loading: boolean;
   saving: boolean;
   error?: string;
+  signatureConsentRequired?: boolean;
   onClose: () => void;
-  onConfirm: (message: string) => void;
+  onConfirm: (message: string, allowSignatureRemoval?: boolean) => void;
 }
 
 export function GitEditCommitMessageDialog({
@@ -277,6 +287,7 @@ export function GitEditCommitMessageDialog({
   loading,
   saving,
   error,
+  signatureConsentRequired,
   onClose,
   onConfirm,
 }: GitEditCommitMessageDialogProps) {
@@ -300,6 +311,7 @@ export function GitEditCommitMessageDialog({
           loading={loading}
           saving={saving}
           error={error}
+          signatureConsentRequired={signatureConsentRequired}
           isHead={isHead}
           onClose={onClose}
           onConfirm={onConfirm}
@@ -314,11 +326,13 @@ function GitEditCommitMessageForm({
   loading,
   saving,
   error,
+  signatureConsentRequired,
   isHead,
   onClose,
   onConfirm,
 }: Omit<GitEditCommitMessageDialogProps, "commit"> & { isHead: boolean }) {
   const [message, setMessage] = useState(originalMessage ?? "");
+  const [allowSignatureRemoval, setAllowSignatureRemoval] = useState(false);
 
   return (
     <>
@@ -335,8 +349,24 @@ function GitEditCommitMessageForm({
       ) : (
         <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
           {isHead
-            ? "This rewrites the selected local commit hash."
-            : "Editing an older commit rewrites that commit and all descendant hashes."}
+            ? "This rewrites the selected local commit hash. If pushed, remote update will require leased publication."
+            : "Editing an older commit rewrites that commit and all descendant hashes. If pushed, remote update will require leased publication."}
+        </div>
+      )}
+      {signatureConsentRequired && (
+        <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-500/15 p-2.5 text-xs text-amber-200">
+          <span>
+            This commit or its descendants contain signatures that will be invalidated and removed by rewriting history.
+          </span>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allowSignatureRemoval}
+              onChange={(e) => setAllowSignatureRemoval(e.target.checked)}
+              className="rounded border-[var(--color-border)]"
+            />
+            <span>Allow removal of invalidated signatures</span>
+          </label>
         </div>
       )}
       <DialogFooter>
@@ -355,9 +385,15 @@ function GitEditCommitMessageForm({
           disabled={
             saving ||
             Boolean(error) ||
+            (signatureConsentRequired && !allowSignatureRemoval) ||
             !canSubmitEditedCommitMessage(message, originalMessage, loading)
           }
-          onClick={() => onConfirm(message)}
+          onClick={() =>
+            onConfirm(
+              message,
+              signatureConsentRequired ? allowSignatureRemoval : undefined,
+            )
+          }
         >
           Edit Commit Message
         </Button>
@@ -584,6 +620,31 @@ export function useGitHistoryActions(
     editCommit?.hash ?? "",
     root,
   );
+  const [signatureConsentRequired, setSignatureConsentRequired] = useState(false);
+  const [frozenSnapshot, setFrozenSnapshot] = useState<{
+    hash: string;
+    message: string;
+    branch: string;
+    headOid: string;
+    scope: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!editCommit) {
+      setFrozenSnapshot(null);
+      setSignatureConsentRequired(false);
+      return;
+    }
+    if (commitMessageQuery.data && !commitMessageQuery.isLoading) {
+      setFrozenSnapshot({
+        hash: editCommit.hash,
+        message: commitMessageQuery.data.message,
+        branch: commitMessageQuery.data.branch,
+        headOid: commitMessageQuery.data.headOid,
+        scope,
+      });
+    }
+  }, [editCommit, commitMessageQuery.data, commitMessageQuery.isLoading, scope]);
 
   function setStatus(value: GitHistoryActionStatus | null) {
     setStatusState({ project: scope, value });
@@ -859,25 +920,40 @@ export function useGitHistoryActions(
     return null;
   }
 
-  async function handleEditCommitMessage(message: string) {
-    if (!project || !editCommit) return null;
-    const targetHash = editCommit.hash;
-    if (editCommit.isPushed) {
-      setStatus({
-        kind: "blocked",
-        message:
-          "Edit Commit Message is only available for commits not pushed upstream",
-        detail: "Use a new commit for shared history.",
-      });
+  async function handleEditCommitMessage(
+    message: string,
+    allowSignatureRemoval?: boolean,
+  ) {
+    if (
+      !project ||
+      !editCommit ||
+      !frozenSnapshot ||
+      frozenSnapshot.scope !== scope ||
+      frozenSnapshot.hash !== editCommit.hash
+    ) {
       return null;
     }
-
+    const targetHash = editCommit.hash;
     setStatus(null);
     try {
       const result = await editCommitMutation.mutateAsync({
         hash: targetHash,
-        message,
+        input: {
+          message,
+          expectedBranch: frozenSnapshot.branch,
+          expectedHeadOid: frozenSnapshot.headOid,
+          allowSignatureRemoval,
+        },
       });
+      if (result.blockedReason === "signature-consent-required") {
+        setSignatureConsentRequired(true);
+        setStatus({
+          kind: "blocked",
+          message: "Commit signatures would be invalidated",
+          detail: "Check the box to allow removing signatures and retry.",
+        });
+        return null;
+      }
       setStatus(
         formatGitActionStatus(
           result,
@@ -887,6 +963,8 @@ export function useGitHistoryActions(
       );
       if (result.ok) {
         setEditCommitState({ project: scope, commit: null });
+        setFrozenSnapshot(null);
+        setSignatureConsentRequired(false);
         return targetHash;
       }
     } catch (caughtError) {
@@ -912,6 +990,8 @@ export function useGitHistoryActions(
     setRevertCommitState((current) => ({ ...current, commit: null }));
     setUndoLastCommitState((current) => ({ ...current, commit: null }));
     setSelectedChangesState((current) => ({ ...current, operation: null }));
+    setFrozenSnapshot(null);
+    setSignatureConsentRequired(false);
     clearStatus();
   }, [clearStatus]);
 
@@ -919,12 +999,16 @@ export function useGitHistoryActions(
     dropCommit,
     isDropCommitPending: dropCommitMutation.isPending,
     editCommit,
-    editCommitMessage: commitMessageQuery.data,
+    editCommitMessage:
+      frozenSnapshot?.hash === editCommit?.hash
+        ? frozenSnapshot?.message
+        : commitMessageQuery.data?.message,
     editCommitMessageLoading: commitMessageQuery.isLoading,
     editCommitMessageError:
       commitMessageQuery.error instanceof Error
         ? commitMessageQuery.error.message
         : undefined,
+    signatureConsentRequired,
     isEditCommitMessagePending: editCommitMutation.isPending,
     revertCommit,
     isRevertCommitPending: revertCommitMutation.isPending,

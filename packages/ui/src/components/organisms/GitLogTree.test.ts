@@ -18,11 +18,10 @@ describe("GitLogTree helpers", () => {
     });
   });
 
-  it("enables Edit Commit Message only for unpushed commits", () => {
+  it("enables Edit Commit Message for both pushed and unpushed commits", () => {
     expect(getEditCommitMessageMenuState({ isPushed: true })).toEqual({
-      disabled: true,
-      title:
-        "Edit Commit Message is only available for commits not pushed upstream",
+      disabled: false,
+      title: undefined,
     });
     expect(getEditCommitMessageMenuState({ isPushed: false })).toEqual({
       disabled: false,

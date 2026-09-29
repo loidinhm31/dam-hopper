@@ -1195,7 +1195,7 @@ async fn git_push_route_uses_selected_root_when_provided() {
 }
 
 #[tokio::test]
-async fn git_push_route_force_pushes_when_explicitly_requested() {
+async fn git_push_route_rejects_legacy_force_and_requires_leased_endpoints() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
 
@@ -1262,17 +1262,40 @@ async fn git_push_route_force_pushes_when_explicitly_requested() {
     assert_eq!(json["success"], false);
 
     let resp = post_json(
-        state,
+        state.clone(),
         "/api/git/push",
         serde_json::json!({ "project": "project", "force": true }),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let prep_resp = post_json(
+        state.clone(),
+        "/api/git/project/push/prepare",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(prep_resp.status(), StatusCode::OK);
+    let prep_raw = axum::body::to_bytes(prep_resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    assert_eq!(json["success"], true);
+    let prep_json: serde_json::Value = serde_json::from_slice(&prep_raw).unwrap();
+    assert_eq!(prep_json["status"], "ready");
+    assert_eq!(prep_json["alreadyCurrent"], false);
+    let snapshot = &prep_json["snapshot"];
+
+    let pub_resp = post_json(
+        state,
+        "/api/git/project/push/publish",
+        serde_json::json!({ "snapshot": snapshot }),
+    )
+    .await;
+    assert_eq!(pub_resp.status(), StatusCode::OK);
+    let pub_raw = axum::body::to_bytes(pub_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let pub_json: serde_json::Value = serde_json::from_slice(&pub_raw).unwrap();
+    assert_eq!(pub_json["status"], "published");
     assert_eq!(
         git_output(&["rev-parse", "HEAD"], &remote),
         git_output(&["rev-parse", "HEAD"], &project)

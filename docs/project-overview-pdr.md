@@ -98,7 +98,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Push invalidates branch, history, status, diff, conflict, file-tree, and project data
 - ✓ Retry hook normalizes single-result and array Git responses before auth checks
 - ✓ Fetch/pull/push share one backend credential order and push reports missing-upstream configuration clearly
-- ✓ Push entrypoints now expose an explicit force-push action for intentional published-history updates
+- ✓ Force-publish is a separately confirmed exact-OID lease; normal Push stays fast-forward-only and local message edits never publish automatically
 
 **Technical Constraints:**
 
@@ -106,14 +106,14 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Loaded SSH keys live in-memory per server session; optional saved passphrases are delegated to the host OS credential store
 - Constant-time comparison for auth tokens
 - History mutations must distinguish safe recovery from rewrite actions
-- Pushed/shared history must prefer revert over destructive history actions; force-push is a separate explicit push action
-- Published-history rewrite must stay opt-in and explicit when it is allowed
+- Preserve pushed-history guards for drop/undo/reset/revert; message edits are local snapshot-CAS operations and remote replacement requires an exact lease
+- Commit-message edits and remote publication remain separate user actions; no automatic publish follows a local rewrite
 
 **Phase-Based Implementation:**
 
-- Phase 01: Backend Git operations and repo-state guards
-- Phase 02: Web Git workspace semantics and refresh flow
-- Phase 03: IntelliJ-compatible actions, including undo last commit and selected-change revert/drop split
+- Phase 01: Object-only commit-message rewrite with branch/HEAD compare-and-swap
+- Phase 02: Git panel integration and explicitly leased publication
+- Phase 03: Broad qualification and documentation cutover after acceptance gates
 
 ### PR-004: IDE File Explorer (Phase 01)
 

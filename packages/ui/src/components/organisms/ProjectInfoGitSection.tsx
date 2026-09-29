@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Download, GitBranch, RefreshCw, Upload } from "lucide-react";
 import {
   isGitUnavailableError,
@@ -17,10 +17,10 @@ import { GitForcePushDialog } from "@/components/organisms/GitForcePushDialog.js
 import { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
 import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
+import { useLeasedGitPush } from "@/hooks/use-leased-git-push.js";
 import { cn } from "@/lib/utils.js";
 import {
   buildProjectInfoPushTarget,
-  buildProjectInfoPushTargetWithMode,
   describeProjectInfoRoot,
   formatProjectInfoRootLabel,
   projectInfoRootOptions,
@@ -50,7 +50,6 @@ export function ProjectInfoGitSection({
   const gitFetch = useGitFetch();
   const gitPull = useGitPull();
   const gitPush = useGitPush();
-  const [forcePushOpen, setForcePushOpen] = useState(false);
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
   const selectedRoot =
@@ -60,6 +59,17 @@ export function ProjectInfoGitSection({
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
 
+  const leasedPushTarget = useMemo(
+    () => ({
+      ...targetRef,
+      project: projectName,
+    }),
+    [projectName, targetRef],
+  );
+  const leasedPush = useLeasedGitPush(
+    leasedPushTarget,
+    resolvedRootId === DEFAULT_GIT_ROOT_ID ? undefined : resolvedRootId,
+  );
   if (
     isGitUnavailableError(rootsError) ||
     isGitUnavailableError(branchesError)
@@ -75,25 +85,18 @@ export function ProjectInfoGitSection({
   return (
     <div className="px-3 py-2 space-y-2">
       <PassphraseDialog {...passphraseDialogProps} />
+      <PassphraseDialog {...leasedPush.passphraseDialogProps} />
       <GitForcePushDialog
-        open={forcePushOpen}
+        open={leasedPush.state !== "closed"}
         project={projectName}
         rootLabel={selectedRootLabel}
-        loading={gitPush.isPending}
-        onClose={() => setForcePushOpen(false)}
-        onConfirm={() => {
-          setForcePushOpen(false);
-          void executeWithRetry({ operation: "push" }, () =>
-            gitPush.mutateAsync(
-              buildProjectInfoPushTargetWithMode(
-                projectName,
-                resolvedRootId,
-                true,
-                targetRef,
-              ),
-            ),
-          ).catch(() => {});
-        }}
+        state={leasedPush.state}
+        preview={leasedPush.preview}
+        result={leasedPush.result}
+        error={leasedPush.error}
+        onPrepare={() => void leasedPush.prepare()}
+        onPublish={() => void leasedPush.publish()}
+        onClose={leasedPush.close}
       />
       {rootOptions.length > 1 && (
         <div className="space-y-1">
@@ -163,14 +166,17 @@ export function ProjectInfoGitSection({
         <Button
           size="sm"
           variant="danger"
-          loading={gitPush.isPending}
-          onClick={() => setForcePushOpen(true)}
+          loading={
+            leasedPush.state === "preparing" ||
+            leasedPush.state === "publishing"
+          }
+          onClick={() => void leasedPush.prepare()}
         >
           <Upload className="h-3 w-3" />
           Force Push
         </Button>
       </div>
-      <SshRetryStatusMessage message={statusMessage} />
+      <SshRetryStatusMessage message={statusMessage || leasedPush.sshStatus} />
       {branches.length > 0 && (
         <div className="space-y-0.5">
           <p className="text-xs text-[var(--color-text-muted)] font-medium">
