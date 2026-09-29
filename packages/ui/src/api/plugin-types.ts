@@ -6,6 +6,29 @@
 import type { ServerProjectTarget } from "./ownership.js";
 
 export type CancelOutcome = "accepted" | "alreadySettled" | "unknown";
+export type ContextScopeKind = "project" | "history-root";
+export type HistoryScopeKind = "history-root" | "project" | "unavailable";
+
+export interface WorkspaceProjectIdentity {
+  projectId: string;
+  label: string | null;
+}
+
+export interface DescribeViewRequest {
+  installationId: string;
+  target: ServerProjectTarget;
+}
+
+export interface PluginViewContext {
+  metadata: PluginMetadataItem;
+  workspaceProject: WorkspaceProjectIdentity;
+  historyScope: HistoryScopeKind;
+  contextScope: ContextScopeKind;
+  allowedOperations: string[];
+  allowCurrentAccountPolicy: boolean;
+  authorityKey: string;
+}
+
 
 export interface PluginMetadataItem {
   /** Server-authoritative installation ID used by routes and API calls. */
@@ -46,12 +69,14 @@ export interface OpenContextRequest {
   epoch: number;
   installationId: string;
   target: ServerProjectTarget;
+  scopeKind?: ContextScopeKind;
   allowedOperations?: string[];
   allowCurrentAccountPolicy?: boolean;
 }
 
 export interface ContextOpenResult {
   contextId: string;
+  scopeKind?: ContextScopeKind;
   bindingRevision: number;
   grantRevision: number;
   activationGeneration: number;

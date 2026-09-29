@@ -10,7 +10,7 @@ use super::contract::budgets::MAX_PAYLOAD_BYTES;
 use super::contract::{
     ContextCloseResult, ContextOpenParams, ContextOpenResult, ContextScopeDescriptor,
     ContextScopeKind, PluginInvokeParams, PluginMetadataItem, PluginReadUiParams,
-    RequestCancelResult,
+    PluginViewContext, RequestCancelResult, WorkspaceProjectIdentity,
 };
 use super::error::PluginError;
 use super::runner_client::RunnerClient;
@@ -148,6 +148,158 @@ impl PluginApiService {
             .collect();
 
         Ok(visible)
+    }
+
+    /// Describe view context for an installation and target.
+    pub async fn describe_view(
+        &self,
+        actor: &AuthenticatedActor,
+        installation_id: &str,
+        target_ref: &ProjectTargetRef,
+        configured_project_root: &Path,
+        no_auth: bool,
+    ) -> Result<PluginViewContext, PluginError> {
+        if no_auth {
+            return Err(PluginError::unauthorized(
+                "Plugin operations are strictly denied in --no-auth mode",
+            ));
+        }
+
+        self.check_runner_generation();
+
+        // 1. Resolve project target and worktree
+        let resolved = self
+            .workspace_target_resolver
+            .resolve(target_ref, configured_project_root)
+            .await
+            .map_err(|e| {
+                PluginError::invalid_input(format!(
+                    "Failed to resolve project target '{}/{}': {e}",
+                    target_ref.project,
+                    target_ref.worktree_path.as_deref().unwrap_or("")
+                ))
+            })?;
+
+        if !resolved.available() {
+            return Err(PluginError::invalid_input("Project target is unavailable"));
+        }
+
+        // 2. Resolve enabled installation from runner
+        let plugins = self.runner_client.list_plugins(true).await?.plugins;
+        let active_plugin = plugins
+            .into_iter()
+            .find(|plugin| plugin.id == installation_id && plugin.enabled)
+            .ok_or_else(|| PluginError::forbidden("Plugin is unavailable or disabled"))?;
+
+        if let Some(source) = &active_plugin.owner_history_source {
+            self.auth_service
+                .set_owner_history_source(installation_id, Some(source.clone()));
+        }
+
+        // 3. Visibility check
+        if !self.auth_service.has_actor_visibility(
+            &actor.subject,
+            installation_id,
+            &target_ref.project,
+        ) {
+            return Err(PluginError::forbidden("Plugin is unavailable for this actor and target"));
+        }
+
+        // 4. Compute canonical target path & project ID with exact writer rules
+        let canonical_target = dunce::canonicalize(resolved.target_path())
+            .map_err(|e| PluginError::invalid_input(format!("Target path canonicalization failed: {e}")))?;
+
+        if !canonical_target.is_dir() {
+            return Err(PluginError::invalid_input("Target path is not a valid directory"));
+        }
+
+        let canonical_str = canonical_target
+            .to_str()
+            .ok_or_else(|| PluginError::invalid_input("Target path contains invalid UTF-8 encoding"))?;
+
+        if canonical_str.contains('\0') {
+            return Err(PluginError::invalid_input("Target path contains invalid null byte"));
+        }
+
+        #[cfg(not(windows))]
+        {
+            if canonical_str == "/" {
+                return Err(PluginError::invalid_input("Target root directory alone is unsafe"));
+            }
+        }
+        #[cfg(windows)]
+        {
+            let path_obj = std::path::Path::new(canonical_str);
+            if let Some(std::path::Component::Prefix(_)) = path_obj.components().next() {
+                if path_obj.components().count() <= 2 {
+                    return Err(PluginError::invalid_input("Target drive root alone is unsafe"));
+                }
+            }
+        }
+
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(canonical_str.as_bytes());
+        let project_id = hex::encode(hasher.finalize());
+
+        let label = if let Some(wt) = resolved.worktree() {
+            Some(format!("{} ({})", target_ref.project, wt.branch))
+        } else {
+            Some(target_ref.project.clone())
+        };
+
+        let mut safe_metadata = active_plugin.clone();
+        safe_metadata.owner_history_source = None;
+
+        // 5. Effective capabilities and scopes
+        let (history_scope, context_scope, allowed_operations, allow_current_account_policy, is_target_bound) =
+            self.auth_service.compute_effective_permissions(
+                &actor.subject,
+                installation_id,
+                &target_ref.project,
+                &active_plugin.capabilities,
+            );
+
+        // 6. authority_key computation
+        let grant_target_part = if is_target_bound {
+            target_ref.project.as_str()
+        } else {
+            "*"
+        };
+
+        let owner_source_revision = self
+            .auth_service
+            .get_owner_history_source(installation_id)
+            .map(|s| s.source_revision)
+            .unwrap_or(0);
+
+        let raw_authority = format!(
+            "inst:{}:digest:{}:gen:{}:scope:{:?}:sec:{}:src:{}:target:{}",
+            installation_id,
+            active_plugin.active_digest,
+            active_plugin.active_generation,
+            context_scope,
+            self.auth_service.security_revision(),
+            owner_source_revision,
+            grant_target_part,
+        );
+
+        let mut auth_hasher = Sha256::new();
+        auth_hasher.update(raw_authority.as_bytes());
+        let authority_key = hex::encode(auth_hasher.finalize());
+
+        Ok(PluginViewContext {
+            metadata: safe_metadata,
+            workspace_project: WorkspaceProjectIdentity {
+                project_id,
+                label,
+            },
+            history_scope,
+            context_scope,
+            allowed_operations,
+            allow_current_account_policy,
+            authority_key,
+        })
     }
 
     /// Read the exact active UI document after current actor/target and

@@ -70,6 +70,11 @@ export type {
 };
 import type {
   AdminInstallationDto,
+  ContextScopeKind,
+  DescribeViewRequest,
+  HistoryScopeKind,
+  PluginViewContext,
+  WorkspaceProjectIdentity,
   AdminInstallationListResult,
   AdminRemoveResult,
   ApproveStageRequest,
@@ -99,6 +104,11 @@ import type {
 } from "./plugin-types.js";
 export type {
   AdminInstallationDto,
+  ContextScopeKind,
+  DescribeViewRequest,
+  HistoryScopeKind,
+  PluginViewContext,
+  WorkspaceProjectIdentity,
   AdminInstallationListResult,
   AdminRemoveResult,
   ApproveStageRequest,
@@ -2876,6 +2886,8 @@ export function createApiClient(
           `plugins:list?${query.toString()}`,
         );
       },
+      describeView: (req: DescribeViewRequest) =>
+        transport.invoke<PluginViewContext>("plugins:describeView", req),
       getEpoch: () => {
         const method = (transport as Transport & PluginTransportSeam)
           .getPluginEpoch;
@@ -3472,6 +3484,7 @@ export interface ApiClient {
     purgeHistory: (req: PurgeHistoryRequest) => Promise<PurgeDto>;
   };
   plugins: {
+    describeView: (req: DescribeViewRequest) => Promise<PluginViewContext>;
     list: (target: ServerProjectTarget) => Promise<ListPluginsResponse>;
     getEpoch: () => Promise<PluginEpoch>;
     readUiAsset: (

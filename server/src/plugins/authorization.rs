@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::RwLock;
 use rand::Rng;
 
-use super::contract::{ContextScopeKind, GrantKey};
+use super::contract::{ContextScopeKind, GrantKey, HistoryScopeKind};
 use super::error::PluginError;
 use super::registry_state::OwnerHistorySource;
 use crate::api::auth::AuthenticatedActor;
@@ -188,17 +188,27 @@ impl PluginAuthorizationService {
 
     /// Set explicit grants for an actor subject.
     pub fn set_actor_grants(&self, actor_subject: &str, grants: Vec<GrantKey>) {
-        self.grants.write().insert(actor_subject.to_string(), grants);
+        let mut grants_guard = self.grants.write();
+        if grants_guard.get(actor_subject) == Some(&grants) {
+            return;
+        }
+        grants_guard.insert(actor_subject.to_string(), grants);
+        drop(grants_guard);
         self.bump_security_revision();
     }
+
     /// Set or update the owner-history source for an installation.
     pub fn set_owner_history_source(&self, installation_id: &str, source: Option<OwnerHistorySource>) {
         let mut sources = self.owner_history_sources.write();
+        if sources.get(installation_id) == source.as_ref() {
+            return;
+        }
         if let Some(src) = source {
             sources.insert(installation_id.to_string(), src);
         } else {
             sources.remove(installation_id);
         }
+        drop(sources);
         self.bump_security_revision();
     }
 
@@ -272,15 +282,17 @@ impl PluginAuthorizationService {
                 )));
             }
 
-            let has_non_history_ops = requested_ops
+            let non_history_ops: Vec<String> = requested_ops
                 .iter()
-                .any(|op| !ROOT_HISTORY_ALLOWED_OPERATIONS.contains(&op.as_str()));
-            if has_non_history_ops || allow_current_policy {
+                .filter(|op| !ROOT_HISTORY_ALLOWED_OPERATIONS.contains(&op.as_str()))
+                .cloned()
+                .collect();
+            if !non_history_ops.is_empty() || allow_current_policy {
                 self.verify_grant(
                     &actor.subject,
                     installation_id,
                     project_target,
-                    requested_ops,
+                    &non_history_ops,
                     allow_current_policy,
                 )?;
             }
@@ -369,34 +381,119 @@ impl PluginAuthorizationService {
             )));
         };
 
-        // Explicit grants configured: find matching grant
-        let matching = actor_grants.iter().find(|g| {
-            g.actor_subject == actor_subject
-                && g.installation_id == installation_id
-                && (g.configured_project_target == "*" || g.configured_project_target == project_target)
-        });
+        // Explicit grants configured: find matching grants
+        let matching: Vec<&GrantKey> = actor_grants
+            .iter()
+            .filter(|g| {
+                g.actor_subject == actor_subject
+                    && g.installation_id == installation_id
+                    && (g.configured_project_target == "*"
+                        || g.configured_project_target == project_target)
+            })
+            .collect();
 
-        match matching {
-            Some(grant) => {
-                if allow_current_policy && !grant.allow_current_account_policy {
-                    return Err(PluginError::forbidden(format!(
-                        "Actor '{actor_subject}' does not have allowCurrentAccountPolicy grant"
-                    )));
-                }
-                for op in operations {
-                    if !grant.allowed_operations.contains(&"*".to_string())
-                        && !grant.allowed_operations.contains(op)
-                    {
-                        return Err(PluginError::forbidden(format!(
-                            "Operation '{op}' is not in allowed operations for actor '{actor_subject}'"
-                        )));
+        if matching.is_empty() {
+            return Err(PluginError::forbidden(format!(
+                "Actor '{actor_subject}' has no grant for installation '{installation_id}' on target '{project_target}'"
+            )));
+        }
+
+        if allow_current_policy && !matching.iter().any(|g| g.allow_current_account_policy) {
+            return Err(PluginError::forbidden(format!(
+                "Actor '{actor_subject}' does not have allowCurrentAccountPolicy grant"
+            )));
+        }
+
+        for op in operations {
+            let permitted = matching.iter().any(|g| {
+                g.allowed_operations.contains(&"*".to_string()) || g.allowed_operations.contains(op)
+            });
+            if !permitted {
+                return Err(PluginError::forbidden(format!(
+                    "Operation '{op}' is not in allowed operations for actor '{actor_subject}'"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Compute actor-effective permissions, history scope, and context scope for an installation and target.
+    pub fn compute_effective_permissions(
+        &self,
+        actor_subject: &str,
+        installation_id: &str,
+        project_target: &str,
+        plugin_capabilities: &[String],
+    ) -> (HistoryScopeKind, ContextScopeKind, Vec<String>, bool, bool) {
+        let has_owner_history = self.has_owner_history_source(installation_id);
+
+        let grants_guard = self.grants.read();
+        let matching_grants: Vec<GrantKey> = grants_guard
+            .get(actor_subject)
+            .map(|grants| {
+                grants
+                    .iter()
+                    .filter(|g| {
+                        g.installation_id == installation_id
+                            && (g.configured_project_target == "*"
+                                || g.configured_project_target == project_target)
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let allow_current_account_policy =
+            matching_grants.iter().any(|g| g.allow_current_account_policy);
+
+        let mut allowed_operations = Vec::new();
+        let mut has_history_ops = false;
+
+        for cap in plugin_capabilities {
+            let is_root_history_op = ROOT_HISTORY_ALLOWED_OPERATIONS.contains(&cap.as_str());
+            if is_root_history_op && has_owner_history {
+                allowed_operations.push(cap.clone());
+                has_history_ops = true;
+            } else {
+                let permitted_by_grant = matching_grants.iter().any(|g| {
+                    g.allowed_operations.contains(&"*".to_string())
+                        || g.allowed_operations.contains(cap)
+                });
+                if permitted_by_grant {
+                    allowed_operations.push(cap.clone());
+                    if is_root_history_op {
+                        has_history_ops = true;
                     }
                 }
-                Ok(())
             }
-            None => Err(PluginError::forbidden(format!(
-                "Actor '{actor_subject}' has no grant for installation '{installation_id}' on target '{project_target}'"
-            ))),
         }
+
+        let history_scope = if has_owner_history {
+            HistoryScopeKind::HistoryRoot
+        } else if has_history_ops {
+            HistoryScopeKind::Project
+        } else {
+            HistoryScopeKind::Unavailable
+        };
+
+        let context_scope = if history_scope == HistoryScopeKind::HistoryRoot {
+            ContextScopeKind::HistoryRoot
+        } else {
+            ContextScopeKind::Project
+        };
+
+        let is_target_bound = context_scope == ContextScopeKind::Project
+            || matching_grants
+                .iter()
+                .any(|g| g.configured_project_target != "*");
+
+        (
+            history_scope,
+            context_scope,
+            allowed_operations,
+            allow_current_account_policy,
+            is_target_bound,
+        )
     }
 }
