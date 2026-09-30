@@ -87,10 +87,11 @@ export function WorkspaceAdvisorPlacementProvider({
     (element: HTMLElement | null) => {
       internalLauncherRef.current = element;
       if (externalLauncherRef) {
-        // eslint-disable-next-line react-hooks/immutability
+        /* eslint-disable react-hooks/immutability */
         (
           externalLauncherRef as React.MutableRefObject<HTMLElement | null>
         ).current = element;
+        /* eslint-enable react-hooks/immutability */
       }
     },
     [externalLauncherRef],
@@ -112,6 +113,7 @@ export function WorkspaceAdvisorPlacementProvider({
       updateSlot,
       onUiIntent,
       onClose,
+      launcherRef,
       setLauncherElement,
     ],
   );

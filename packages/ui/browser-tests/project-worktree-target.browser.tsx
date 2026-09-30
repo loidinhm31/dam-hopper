@@ -267,8 +267,6 @@ vi.mock("@/api/queries.js", () => ({
   useGitRevertCommitFiles: () => ({ mutateAsync: vi.fn() }),
   useGitReset: () => ({ mutateAsync: vi.fn() }),
   useGitUndoLastCommit: () => ({ mutateAsync: vi.fn() }),
-  useGitPrepareLeasedPush: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useGitPublishLeasedPush: () => ({ isPending: false, mutateAsync: vi.fn() }),
   invalidateGitFileOperation: vi.fn().mockResolvedValue(undefined),
   markTargetUnavailableIfNeeded: vi.fn(),
   resolveTargetOwner: (options?: {
