@@ -95,6 +95,18 @@ const SESSION_ID = mocks.sessionId;
 
 vi.mock("react-router-dom", () => ({
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  Link: ({
+    children,
+    to,
+    ...props
+  }: {
+    children?: ReactNode;
+    to: string;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -408,10 +420,7 @@ describe("WorkspacePage notification navigation in Chromium", () => {
         rateLimitMs: 0,
         terminalOrder: 1,
         onSelect: () =>
-          dispatchTerminalNotificationSelection(
-            SESSION_ID,
-            window,
-          ),
+          dispatchTerminalNotificationSelection(SESSION_ID, window),
       },
     );
 

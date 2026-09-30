@@ -11,8 +11,21 @@ import type { PluginMetadataItem } from "@/api/client.js";
 const mockParams = { installationId: "evcrate.advisor" };
 vi.mock("react-router-dom", () => ({
   useParams: () => mockParams,
+  Link: ({
+    children,
+    to,
+    ...props
+  }: {
+    children?: React.ReactNode;
+    to: string;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
+const mockDescribeView = vi.fn();
 const mockSettingsList = vi.fn();
 const mockWorkspaceList = vi.fn();
 const mockSettingsReadUiAsset = vi.fn();
@@ -48,8 +61,15 @@ vi.mock("@/api/connections.js", () => ({
   }),
   getApi: (owner: { profileId: string }) => ({
     plugins: {
-      list: owner.profileId === "settings-profile" ? mockSettingsList : mockWorkspaceList,
-      readUiAsset: owner.profileId === "settings-profile" ? mockSettingsReadUiAsset : mockWorkspaceReadUiAsset,
+      describeView: mockDescribeView,
+      list:
+        owner.profileId === "settings-profile"
+          ? mockSettingsList
+          : mockWorkspaceList,
+      readUiAsset:
+        owner.profileId === "settings-profile"
+          ? mockSettingsReadUiAsset
+          : mockWorkspaceReadUiAsset,
     },
     transport: {
       onEvent: () => () => {},
@@ -79,13 +99,18 @@ vi.mock("@/hooks/use-aggregated-projects.js", () => ({
   }),
 }));
 
-const targetCache = new Map<string, { target: { profileId: string; project: string } }>();
+const targetCache = new Map<
+  string,
+  { target: { profileId: string; project: string } }
+>();
 vi.mock("@/hooks/use-project-target.js", () => ({
   useProjectTarget: (ref: { profileId: string; project: string } | null) => {
     if (!ref) return null;
     const key = `${ref.profileId}:${ref.project}`;
     if (!targetCache.has(key)) {
-      targetCache.set(key, { target: { profileId: ref.profileId, project: ref.project } });
+      targetCache.set(key, {
+        target: { profileId: ref.profileId, project: ref.project },
+      });
     }
     return targetCache.get(key) ?? null;
   },
@@ -108,7 +133,13 @@ vi.mock("@/plugins/plugin-document.js", () => ({
 }));
 
 vi.mock("@/components/templates/AppLayout.js", () => ({
-  AppLayout: ({ title, children }: { title?: string; children?: React.ReactNode }) => (
+  AppLayout: ({
+    title,
+    children,
+  }: {
+    title?: string;
+    children?: React.ReactNode;
+  }) => (
     <div data-testid="app-layout" data-title={title}>
       {children}
     </div>
@@ -134,12 +165,27 @@ describe("PluginHostPage Settings Target Server routing", () => {
       settingsProfileId: "settings-profile",
     });
     useWorkspaceStore.setState({
-      selectedProject: { profileId: "workspace-profile", project: "workspace-repo" },
+      selectedProject: {
+        profileId: "workspace-profile",
+        project: "workspace-repo",
+      },
       activeProject: "workspace-repo",
       activeProjectRevision: 1,
       navigationRevision: 1,
     });
 
+    mockDescribeView.mockResolvedValue({
+      metadata: advisorMetadata,
+      allowedOperations: advisorMetadata.capabilities,
+      allowCurrentAccountPolicy: true,
+      authorityKey: "auth-1",
+      contextScope: "history-root",
+      historyScope: "all-authenticated",
+      workspaceProject: {
+        projectId: "proj-1",
+        label: "Settings Repo",
+      },
+    });
     mockSettingsList.mockResolvedValue({ plugins: [advisorMetadata] });
     mockWorkspaceList.mockResolvedValue({ plugins: [otherMetadata] });
     mockSettingsReadUiAsset.mockResolvedValue({
@@ -162,11 +208,13 @@ describe("PluginHostPage Settings Target Server routing", () => {
   it("routes EVCrate Advisor to Settings Target Server regardless of workspace selectedProject", async () => {
     await act(async () => {
       root.render(<PluginHostPage />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
-
-    // Should query settings server, NOT workspace server
-    expect(mockSettingsList).toHaveBeenCalledWith({
-      project: "settings-repo",
+    expect(mockDescribeView).toHaveBeenCalledWith({
+      installationId: "evcrate.advisor",
+      target: { project: "settings-repo" },
     });
     expect(mockWorkspaceList).not.toHaveBeenCalled();
 

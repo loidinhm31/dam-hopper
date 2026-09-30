@@ -45,9 +45,7 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
 - Worker processes use immutable D01 package roots, private framed stdin/stdout,
   bounded stderr, a cleared/allowlisted environment, and a Unix process group.
   One supervisor generation owns one worker and revokes contexts on crash/deadline.
-- D03 adds protected public `/api/plugins` routes, actor/grant/target checks,
-  random WebSocket connection epochs, opaque contexts, invoke-time
-  authorization, selective revocation, and owner-bound UI mappings. See
+- D03 adds protected public `/api/plugins` routes and `POST /api/plugins/view-context`, with actor/grant/target checks, server-derived safe view context, random WebSocket connection epochs, opaque contexts, invoke-time authorization, selective revocation, and owner-bound UI mappings. See
   [D03 architecture](./architecture/plugin-platform-d03.md).
 - D05 adds `/api/plugins/admin*` listing, streaming stage/approval, rollback,
   enable/disable/remove, grants, and bindings. `require_bearer_auth` rejects
@@ -61,7 +59,7 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   durable publication, preserves current security intent on rollback, fences
   mutations by security revision, and exposes crash recovery.
 - D05 source map: `server/src/plugins/{admin,lifecycle_journal,lifecycle,
-  runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`,
+runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`,
   `packages/ui/src/api/{plugin-types,client,ws-transport}.ts`, and
   `packages/ui/src/components/pages/settings-page/PluginManagementSection.tsx`.
 - Focused D05 evidence is in `server/tests/plugin_admin_api.rs`,
@@ -144,15 +142,15 @@ Phase 03 completes the profile-qualified IDE workbench. The browser target is
 the server wire target `{ project, worktreePath? }` only after checking the
 captured connection owner. Root and registered worktree targets remain distinct.
 
-| Area               | Source boundary                                                        | Invariant                                                                                                  |
-| ------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Target selection   | `stores/project-target.ts`                                             | A missing or prunable worktree is unavailable; requests do not fall back silently.                         |
-| Editor models      | `stores/editor.ts`, `components/organisms/MonacoHost.tsx`              | Tab/model keys and in-memory Monaco URIs include profile and target scope.                                 |
-| File tree/watchers | `stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts`              | Tree state, events, language scans, and invalidations are target-scoped.                                   |
-| CRUD/upload        | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` | CRUD, mtime-guarded writes, and acknowledged chunk uploads use the owning transport.                       |
-| Bounded previews   | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                      |
-| Federated search   | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`     | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500. |
-| Search replace     | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`      | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.           |
+| Area                      | Source boundary                                                                                                                                                                           | Invariant                                                                                                                                                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target selection          | `stores/project-target.ts`                                                                                                                                                                | A missing or prunable worktree is unavailable; requests do not fall back silently.                                                                                                                                                       |
+| Editor models             | `stores/editor.ts`, `components/organisms/MonacoHost.tsx`                                                                                                                                 | Tab/model keys and in-memory Monaco URIs include profile and target scope.                                                                                                                                                               |
+| File tree/watchers        | `stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts`                                                                                                                                 | Tree state, events, language scans, and invalidations are target-scoped.                                                                                                                                                                 |
+| CRUD/upload               | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts`                                                                                                                    | CRUD, mtime-guarded writes, and acknowledged chunk uploads use the owning transport.                                                                                                                                                     |
+| Bounded previews          | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients                                                                                                                    | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                                                                                                                                                    |
+| Federated search          | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`                                                                                                                        | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500.                                                                                                                               |
+| Search replace            | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`                                                                                                                         | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.                                                                                                                                         |
 | Git edits and publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` | Paired message reads/edits use branch+HEAD CAS and preserve local state without publishing; separate publish uses a live one-ref exact-OID lease, bound to target and remote/repository identity. Normal Push remains fast-forward-only. |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
@@ -234,17 +232,17 @@ catalogs, projects, PTYs, tunnels, and artifact files server-local; the
 frontend never merges same-named data or routes a delayed operation through the
 active profile.
 
-| Boundary             | Source modules                                                           | Contract                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Boundary             | Source modules                                                                                                     | Contract                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Agent Store owner    | `components/pages/AgentStorePage.tsx`, `components/organisms/AgentSettings.tsx`, `api/queries.ts`, `api/client.ts` | Explicit profile selector; owner/generation-qualified store operations plus per-profile path verification, OMP extension actions, and notification controls. |
-| Memory draft         | `components/organisms/MemoryEditor.tsx`                                  | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target.              |
-| Import lifecycle     | `components/organisms/ImportDialog.tsx`                                  | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs.                |
-| Port aggregation     | `hooks/use-ports.ts`, `hooks/use-tunnels.ts`                             | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct.  |
-| Browser target       | `hooks/use-browser-debug.ts`, `lib/browser-debug-origin.ts`              | Target carries owner, exact origin/source, optional tunnel, and revision; only loopback or ready owner-local tunnel origins are trusted. |
-| Handoff pipeline     | `components/pages/WorkspacePage.tsx`, `lib/browser-terminal-handoff.ts`  | Same-profile mounted/live terminal only; owner, target revision, and terminal incarnation rechecked after each await.                    |
-| Artifact admission   | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs`   | Required `terminalIncarnation`, private expiring metadata, one claim, structured mismatch conflict.                                      |
-| PTY admission        | `server/src/pty/manager.rs`                                              | `write_if_incarnation` keeps lookup/check/input-revision/write under one lock and rolls back failed writes.                              |
-| Feature availability | `hooks/use-feature-flag.ts`                                              | Owner-local `unknown`/`loading`/`available`/`unavailable` state derived from the selected connection snapshot.                           |
+| Memory draft         | `components/organisms/MemoryEditor.tsx`                                                                            | Draft identity `{ profileId, projectName, agent }`; clean-only refresh; dirty content cannot be replaced by another target.                                  |
+| Import lifecycle     | `components/organisms/ImportDialog.tsx`                                                                            | Opening owner binds server `tmpDir`/local path; `scanRevision` rejects late results; profile change closes stale dialogs.                                    |
+| Port aggregation     | `hooks/use-ports.ts`, `hooks/use-tunnels.ts`                                                                       | Detected identity `(profileId, port, terminalId, incarnation)`; tunnel identity `(profileId, tunnelId)`; equal numbers remain distinct.                      |
+| Browser target       | `hooks/use-browser-debug.ts`, `lib/browser-debug-origin.ts`                                                        | Target carries owner, exact origin/source, optional tunnel, and revision; only loopback or ready owner-local tunnel origins are trusted.                     |
+| Handoff pipeline     | `components/pages/WorkspacePage.tsx`, `lib/browser-terminal-handoff.ts`                                            | Same-profile mounted/live terminal only; owner, target revision, and terminal incarnation rechecked after each await.                                        |
+| Artifact admission   | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs`                                             | Required `terminalIncarnation`, private expiring metadata, one claim, structured mismatch conflict.                                                          |
+| PTY admission        | `server/src/pty/manager.rs`                                                                                        | `write_if_incarnation` keeps lookup/check/input-revision/write under one lock and rolls back failed writes.                                                  |
+| Feature availability | `hooks/use-feature-flag.ts`                                                                                        | Owner-local `unknown`/`loading`/`available`/`unavailable` state derived from the selected connection snapshot.                                               |
 
 The Browser handoff sequence captures `{ profileId, generation }`, target
 revision, and `TerminalInstanceRef` before artifact creation. It rejects a
@@ -330,15 +328,15 @@ true all-scope teardown; `openScope` loads or reuses one scope; `closeScope`
 tears down one scope; `reconcileKnownScopes` updates retention metadata without
 changing the epoch or opening/closing scopes.
 
-| Boundary | Source modules | Contract |
-| --- | --- | --- |
-| Rust lifecycle | `apps/native/src-tauri/src/ssh_forward/manager.rs`, `model.rs` | `HashMap<scopeId, ActiveScope>`; every scoped command carries context, token, scope ID, and scope generation. |
-| Runtime isolation | `apps/native/src-tauri/src/ssh_forward/connection_runtime.rs` | Registry keys are `(scopeId, connectionProfileId)`; child rules remain under their parent connection; equal IDs across scopes cannot collide. |
-| IPC and ACL | `commands.rs`, `command_names.in.rs`, `permissions/ssh-forward.toml`, `capabilities/ssh-forward.json`, `src/lib.rs` | Exactly 21 Windows commands; every handler requires the `main` webview. |
-| Frontend adapter | `apps/native/src/native-ssh-forward-host.ts` | One client context, `Map<scopeId, ScopeHandle>`, per-scope mutation queues, strict DTO/counter/identity checks, refetch-only event hints. |
-| React lifecycle | `packages/ui/src/contexts/SshForwardHostContext.tsx`, `hooks/use-ssh-forward.ts` | Profile list drives known-scope reconciliation; explicit `NativeScopeRef` reaches every snapshot/mutation; focus does not switch scope. |
-| Browser owner | `packages/ui/src/lib/browser-debug-origin.ts`, `apps/native/src/native-browser-debug-host.ts` | Native child receives Phase 05 `BrowserDebugTarget.owner`; one child lease, stale relay rejection, no SSH-scope inference. |
-| Persistence and trust | `scope_retention.rs`, `store.rs`, `known_hosts.rs` | Per-scope hashed store, unavailable-vs-empty retention distinction, endpoint-first trust, scoped secret/challenge cleanup. |
+| Boundary              | Source modules                                                                                                      | Contract                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust lifecycle        | `apps/native/src-tauri/src/ssh_forward/manager.rs`, `model.rs`                                                      | `HashMap<scopeId, ActiveScope>`; every scoped command carries context, token, scope ID, and scope generation.                                 |
+| Runtime isolation     | `apps/native/src-tauri/src/ssh_forward/connection_runtime.rs`                                                       | Registry keys are `(scopeId, connectionProfileId)`; child rules remain under their parent connection; equal IDs across scopes cannot collide. |
+| IPC and ACL           | `commands.rs`, `command_names.in.rs`, `permissions/ssh-forward.toml`, `capabilities/ssh-forward.json`, `src/lib.rs` | Exactly 21 Windows commands; every handler requires the `main` webview.                                                                       |
+| Frontend adapter      | `apps/native/src/native-ssh-forward-host.ts`                                                                        | One client context, `Map<scopeId, ScopeHandle>`, per-scope mutation queues, strict DTO/counter/identity checks, refetch-only event hints.     |
+| React lifecycle       | `packages/ui/src/contexts/SshForwardHostContext.tsx`, `hooks/use-ssh-forward.ts`                                    | Profile list drives known-scope reconciliation; explicit `NativeScopeRef` reaches every snapshot/mutation; focus does not switch scope.       |
+| Browser owner         | `packages/ui/src/lib/browser-debug-origin.ts`, `apps/native/src/native-browser-debug-host.ts`                       | Native child receives Phase 05 `BrowserDebugTarget.owner`; one child lease, stale relay rejection, no SSH-scope inference.                    |
+| Persistence and trust | `scope_retention.rs`, `store.rs`, `known_hosts.rs`                                                                  | Per-scope hashed store, unavailable-vs-empty retention distinction, endpoint-first trust, scoped secret/challenge cleanup.                    |
 
 Scope teardown removes live admission before aborting workers, canceling and
 closing registry entries, clearing scope-keyed credentials, and clearing host
@@ -364,13 +362,13 @@ preserved one ordinary host `QueryClient`; feature state is keyed by
 `ConnectionRef { profileId, generation }`, while server identifiers remain
 server-local.
 
-| Boundary | Current implementation and invariant |
-| --- | --- |
-| Media lifecycle | `api/connections.ts` stores one in-memory UUIDv4 `mediaClientId` per owner tuple, supplies a stable disconnected-profile fallback, and removes serialized `[profileId, generation]` keys on profile retirement. `api/media-session.ts` bounds a generated ID to the legacy cleanup boundary. |
-| Owner-bound shell | `TopNav`, `DashboardPage`, `WorkspacePage`, `use-aggregated-projects`, `use-command-search`, and `use-ports` bind API/transport work to an explicit owner; import dialogs capture their opening owner; idle-suspend fleet reads remain nullable-safe. |
-| Browser gate | `vitest.browser.config.ts` defines the strict API/fixture port `15173`, defaults the live server URL to A `14801`, and accepts one Chromium channel or executable path. |
-| Linux release tests | `server/src/linux_release/api_runtime.rs` uses `tests::FAKE_FD_BASE` to distinguish injected fake descriptors from real descriptors during `Drop`. |
-| Live qualification | `scripts/qualify-phase09-workbench.mjs` creates isolated A/B roots, repositories, markers, PTYs, media fixtures, and configs; checks S01–S12 on ports `14801`/`14802`; runs four embedded browser assertions; and tears down only owned processes and temporary paths. |
+| Boundary            | Current implementation and invariant                                                                                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Media lifecycle     | `api/connections.ts` stores one in-memory UUIDv4 `mediaClientId` per owner tuple, supplies a stable disconnected-profile fallback, and removes serialized `[profileId, generation]` keys on profile retirement. `api/media-session.ts` bounds a generated ID to the legacy cleanup boundary. |
+| Owner-bound shell   | `TopNav`, `DashboardPage`, `WorkspacePage`, `use-aggregated-projects`, `use-command-search`, and `use-ports` bind API/transport work to an explicit owner; import dialogs capture their opening owner; idle-suspend fleet reads remain nullable-safe.                                        |
+| Browser gate        | `vitest.browser.config.ts` defines the strict API/fixture port `15173`, defaults the live server URL to A `14801`, and accepts one Chromium channel or executable path.                                                                                                                      |
+| Linux release tests | `server/src/linux_release/api_runtime.rs` uses `tests::FAKE_FD_BASE` to distinguish injected fake descriptors from real descriptors during `Drop`.                                                                                                                                           |
+| Live qualification  | `scripts/qualify-phase09-workbench.mjs` creates isolated A/B roots, repositories, markers, PTYs, media fixtures, and configs; checks S01–S12 on ports `14801`/`14802`; runs four embedded browser assertions; and tears down only owned processes and temporary paths.                       |
 
 The reconciled execution ledger is **3,504 passed / 9 skipped or ignored**:
 Rust server 1,416, UI unit 1,769, UI browser 209, shared 15, Browser bridge
@@ -416,11 +414,15 @@ content-free; terminal bytes, commands, arguments, and environment are not
 used as idle-suspend identity.
 
 The workflow persists Plan/Phase/Task, sessions, links, notes, and bounded SQLite events; telemetry is opt-in and aggregate-only. Media tickets and browser-debug artifacts use scoped, expiring capabilities.
-Agent status has two tracks: OMP-first is complete through Phase 05 with Linux C01–C19 qualification; the Codex/Claude native rollout has Phases 01–05 complete, with Phase 06 live Linux qualification pending.
+Agent status has two tracks: OMP-first is complete through Phase 05 with Linux
+C01–C19 qualification; native Codex/Claude Phases 01–06 are live-qualified on
+Linux x86_64 for Codex CLI 0.158.0 and Claude Code 2.1.250 (N01–N32). Other
+native versions and server platforms remain unqualified.
 Phase 01 defines Rust `server/src/agent_status/` and TypeScript `packages/ui/src/api/agent-status-types.ts`; Phase 02 adds PTY-scoped OMP reporting plus separate private one-shot Codex/Claude ingress and 15-second evidence expiry.
 The protected snapshot is `GET /api/agent-status/v1/snapshot`; authenticated pushes are `terminal:agentStatusChanged`, `terminal:agentStatusRemoved`, and `terminal:agentStatusInvalidated`.
-OMP Phase 03 embeds its adapter and exposes `integration omp {install|status|uninstall}`; Codex/Claude Phase 03 adds `integration {codex|claude} {install|status|uninstall}` and `GET|POST|DELETE /api/agent-status/integrations/{agent}`. See [architecture](./architecture/agent-status.md), the [Phase 05 cutover](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md), and the [OMP qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+OMP Phase 03 embeds its adapter and exposes `integration omp {install|status|uninstall}`; Codex/Claude Phase 03 adds `integration {codex|claude} {install|status|uninstall}` and `GET|POST|DELETE /api/agent-status/integrations/{agent}`. See [architecture](./architecture/agent-status.md), the [Phase 05 cutover](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md), [OMP qualification](../plans/reports/qualification-260928-1815-agent-status-omp.md), and [native qualification](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 Agent Store's **Agent Settings** owns per-profile OMP/Codex/Claude paths and native integration management, with separate installation and readiness status. `GET /api/agent-status/paths` supplies path eligibility: OMP requires a current managed extension, Codex notification enablement is unsupported (status-only), and Claude requires matching paths and ready hooks. Notification preferences use version 2, migrate version 1/legacy values, and route OMP alerts and Claude needs-attention only; Codex OSC 9 delivery and automatic Codex TUI notification sync are removed. Dispatch still uses the saved `enabled` policy without filesystem path revalidation.
+
 ## Backend path and configuration normalization (Phase 01)
 
 The path/config boundary is implemented by
@@ -473,12 +475,12 @@ System-specific boundaries are covered by
 `server/src/system/monitor.rs`; portable state/monitor behavior remains
 separate from Linux-only `/dev` and sysfs fixtures.
 
-
 Serial Windows Phase 02 evidence passed **978 tests, 0 failed, 3 ignored**;
 focused API/Git/system filters passed **160/160**, **90/90**, and **36/36**.
 See the [Phase 02 plan](../plans/260920-1312-windows-server-build-and-verify/phase-02-test-harness-and-platform-gating.md), [test report](../plans/reports/tester-260920-1707-phase02-windows-test-harness.md), and [review](../plans/reports/code-review-260920-1710-phase02-test-harness-and-platform-gating.md).
 
 ## Windows server build, qualification, and docs (Phase 03)
+
 `server/Cargo.toml` sets `dam-hopper-server` as Cargo's default binary while
 retaining all four declared targets. Windows check/build/release/test gates,
 Linux-only stub behavior, and the loopback `/api/health` smoke passed; see the
@@ -723,7 +725,6 @@ boundaries are maintained in the [release and deployment detail](./codebase-summ
 That page records the release-source evidence summarized from `repomix-output.xml`,
 including profile gates, six-subject attestation, and the fixture-backed Windows
 installer harness.
-
 
 ## Frontend architecture
 

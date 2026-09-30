@@ -1,15 +1,22 @@
 # System Architecture
 
-## Agent status — Phases 01–05 complete (Qualified on Linux 2026-09-28)
+## Agent status — OMP-first Phases 01–05 complete; Codex/Claude native Phases 01–06 complete
 
 The [agent-status architecture](./architecture/agent-status.md) is normative.
-Phases 01–05 are fully implemented and qualified on Linux:
+OMP-first Phases 01–05 are fully implemented and qualified on Linux:
+
 - Phase 01: Agent-neutral semantic contract, pure reducer, and TypeScript DTO decoders.
 - Phase 02: Server-owned runtime, private loopback WebSocket collector, PTY-scoped credentials, protected snapshot endpoint (`/api/agent-status/v1/snapshot`), and semantic broadcast.
 - Phase 03: OMP adapter embedded in `dam-hopper-server`; manage it on the server host with `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>`.
 - Phase 04: Profile-safe UI badges across tabs, split tabs, and Fleet rows; unified preferences (`terminalAgentNotifications`), toast viewport, and notification history center.
 - Phase 05: Linux x86_64 end-to-end qualification passed for C01–C19 against OMP 18.4.1, including fault injection, standalone release installer verification, and documentation ([report](../plans/reports/qualification-260928-1815-agent-status-omp.md)).
-Process/output status, workflow completion, and idle-suspend remain separate; turn end does not prove task success.
+  Process/output status, workflow completion, and idle-suspend remain separate; turn end does not prove task success.
+
+The separate Codex/Claude native-hook rollout completed Phases 01–06 and passed
+Linux x86_64 live qualification for Codex CLI 0.158.0 and Claude Code 2.1.250
+across N01–N32. Other provider versions and server platforms remain unqualified
+([report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md)).
+
 ## Unified-profile workbench (Phases 00–09; Phase 09 web qualification complete 2026-09-17)
 
 This is the frontend ownership cutover for the unified workbench. It is
@@ -491,13 +498,13 @@ no aggregate metric calculation, and no background 1-second sampler.
 
 Focused evidence:
 
-| Boundary | Evidence | Result |
-| --- | --- | --- |
-| Scope, owner/generation keys, 15s snapshots, partial failure, stale generations, alert buckets, fleet/card/popover semantics | Six focused Vitest files under `packages/ui/src/` | 83/83 passed |
-| Fleet/profile navigation, keyboard focus and Escape restoration | Existing Chromium suite plus five multi-profile flows | 19/19 passed |
-| Tiered polling and action ownership | Fleet disables detail polling; visible connected drilldown enables only its owner; disconnect/close disables it | Verified |
-| Layout and accessibility | 320x700 and 1280x800 viewports, safe areas, no horizontal overflow, contrast, semantic state, 44px controls | Verified |
-| Security negatives | Markup-like profile/host text remains literal; offline cards expose no actions; force-sleep stays bound to the inspected owner | Verified |
+| Boundary                                                                                                                     | Evidence                                                                                                                       | Result       |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| Scope, owner/generation keys, 15s snapshots, partial failure, stale generations, alert buckets, fleet/card/popover semantics | Six focused Vitest files under `packages/ui/src/`                                                                              | 83/83 passed |
+| Fleet/profile navigation, keyboard focus and Escape restoration                                                              | Existing Chromium suite plus five multi-profile flows                                                                          | 19/19 passed |
+| Tiered polling and action ownership                                                                                          | Fleet disables detail polling; visible connected drilldown enables only its owner; disconnect/close disables it                | Verified     |
+| Layout and accessibility                                                                                                     | 320x700 and 1280x800 viewports, safe areas, no horizontal overflow, contrast, semantic state, 44px controls                    | Verified     |
+| Security negatives                                                                                                           | Markup-like profile/host text remains literal; offline cards expose no actions; force-sleep stays bound to the inspected owner | Verified     |
 
 The browser flows retain the prior single-profile cases while adding
 Fleet -> profile A -> Fleet -> profile B navigation, duplicate incident-ID
@@ -650,14 +657,14 @@ integration and D06 Linux qualification remain separate gates.
 
 ### G0 candidate artifact set
 
-| Artifact | Candidate location or rule |
-| --- | --- |
-| Generic SDK | `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz`; SHA-256 pinned jointly at G0 |
-| Contract schemas | `manifest-v1`, `runner-protocol-v1`, `worker-sdk-v1`, and `ui-bridge-v1` under `packages/plugin-sdk/schemas/` |
-| Fixtures | Positive/negative JSON fixtures and the self-contained `opaque-ui` fixture under `packages/plugin-sdk/fixtures/` |
-| TypeScript evidence | Framing, manifest, runner, worker cancellation, error, and bridge sources/tests under `packages/plugin-sdk/src/` |
-| Rust evidence | Serde DTOs, errors, and the matching frame decoder under `server/src/plugins/`, exported by `server/src/lib.rs` |
-| Browser evidence | `packages/ui/browser-tests/plugin-isolation.browser.tsx` covering CSP, opaque origin, port acknowledgement, and revocation |
+| Artifact            | Candidate location or rule                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Generic SDK         | `packages/plugin-sdk/dam-hopper-plugin-sdk-0.1.0.tgz`; SHA-256 pinned jointly at G0                                        |
+| Contract schemas    | `manifest-v1`, `runner-protocol-v1`, `worker-sdk-v1`, and `ui-bridge-v1` under `packages/plugin-sdk/schemas/`              |
+| Fixtures            | Positive/negative JSON fixtures and the self-contained `opaque-ui` fixture under `packages/plugin-sdk/fixtures/`           |
+| TypeScript evidence | Framing, manifest, runner, worker cancellation, error, and bridge sources/tests under `packages/plugin-sdk/src/`           |
+| Rust evidence       | Serde DTOs, errors, and the matching frame decoder under `server/src/plugins/`, exported by `server/src/lib.rs`            |
+| Browser evidence    | `packages/ui/browser-tests/plugin-isolation.browser.tsx` covering CSP, opaque origin, port acknowledgement, and revocation |
 
 The candidate wire format is a four-byte big-endian byte length followed by
 UTF-8 JSON-RPC 2.0. Payloads are capped at 16 MiB before body allocation,
@@ -909,7 +916,6 @@ The Settings page's Plugin Platform section uses the owner-bound client to
 refresh installation state, show worker/revision details, stream package
 uploads with progress, display stage review, and confirm rollback/removal.
 Source map and phase evidence are maintained in the [D05 architecture page](./architecture/plugin-platform-d05.md).
-
 
 ## High-Level Overview
 
@@ -2029,7 +2035,6 @@ Handles registry loading, legacy discovery fallback, and feature flags.
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
-
 ### Project worktree targets (Phase 07 target lifecycle)
 
 A configured project remains the stable authorization, configuration, and
@@ -2161,7 +2166,7 @@ Dependency-free runtime helpers shared by browser packages.
 - Sensitive metadata is redacted recursively before sink delivery by default
 - Web bootstrap reads the desired log level from Vite env and falls back to `debug` in development or `warn` in production
 
-### Semantic agent status and notifications (Phase 05)
+### Semantic agent status and notifications (OMP and Codex/Claude Phases 01–06)
 
 The semantic agent-status and attention path is separate from xterm output:
 
@@ -2181,8 +2186,9 @@ client-runtime state and is requested only by an explicit user action.
 
 For exact reporter, reducer, path, installation, and readiness contracts, see
 the [agent-status architecture](./architecture/agent-status.md). Native hook
-installation/readiness does not qualify live provider lifecycle behavior;
-Phase 06 live Linux qualification remains a separate gate.
+lifecycle is Linux x86_64-qualified for Codex CLI 0.158.0 and Claude Code
+2.1.250 (N01–N32); other versions and non-Linux server platforms remain
+runtime-unqualified. See the [qualification report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
 Runtime browser notifications use the standard `Notification` contract: web
 builds use browser notifications, while native Tauri v2 registers
@@ -3843,17 +3849,17 @@ events, diagnostics, or logs.
 `apps/native/src-tauri/src/ssh_forward/commands.rs` exposes exactly the command
 names in `command_names.in.rs` and `permissions/ssh-forward.toml`:
 
-| Lifecycle / snapshot | Connection / rules | Credentials / trust | Retention |
-| --- | --- | --- | --- |
-| `ssh_forward_open_client` | `ssh_forward_create_connection` | `ssh_forward_list_keys` | `ssh_forward_purge_scope` |
-| `ssh_forward_open_scope` | `ssh_forward_update_connection` | `ssh_forward_load_key` |  |
-| `ssh_forward_close_scope` | `ssh_forward_delete_connection` | `ssh_forward_load_password` |  |
-| `ssh_forward_reconcile_known_scopes` | `ssh_forward_create_rule` | `ssh_forward_forget_credential` |  |
-| `ssh_forward_snapshot` | `ssh_forward_update_rule` | `ssh_forward_approve_host` |  |
-|  | `ssh_forward_delete_rule` |  |  |
-|  | `ssh_forward_connect` |  |  |
-|  | `ssh_forward_disconnect` |  |  |
-|  | `ssh_forward_set_rule_enabled` |  |  |
+| Lifecycle / snapshot                 | Connection / rules              | Credentials / trust             | Retention                 |
+| ------------------------------------ | ------------------------------- | ------------------------------- | ------------------------- |
+| `ssh_forward_open_client`            | `ssh_forward_create_connection` | `ssh_forward_list_keys`         | `ssh_forward_purge_scope` |
+| `ssh_forward_open_scope`             | `ssh_forward_update_connection` | `ssh_forward_load_key`          |                           |
+| `ssh_forward_close_scope`            | `ssh_forward_delete_connection` | `ssh_forward_load_password`     |                           |
+| `ssh_forward_reconcile_known_scopes` | `ssh_forward_create_rule`       | `ssh_forward_forget_credential` |                           |
+| `ssh_forward_snapshot`               | `ssh_forward_update_rule`       | `ssh_forward_approve_host`      |                           |
+|                                      | `ssh_forward_delete_rule`       |                                 |                           |
+|                                      | `ssh_forward_connect`           |                                 |                           |
+|                                      | `ssh_forward_disconnect`        |                                 |                           |
+|                                      | `ssh_forward_set_rule_enabled`  |                                 |                           |
 
 The `ssh-forward-main` capability grants these commands only to the `main`
 window on Windows. Every handler repeats the main-window label check, so the
@@ -3914,11 +3920,11 @@ supports picker/navigation only; console forwarding remains disabled.
 
 #### Platform and qualification
 
-| Surface | Windows | Linux | macOS / mobile |
-| --- | --- | --- | --- |
-| Native SSH forwarding | Registered; release-gated | No host or Tauri command | No host or Tauri command |
-| Native Browser child | WebView2 v1 gate | Implemented; runtime-unverified | macOS deferred; mobile iframe |
-| Web Browser | iframe/extension policy | iframe/extension policy | iframe/extension policy |
+| Surface               | Windows                   | Linux                           | macOS / mobile                |
+| --------------------- | ------------------------- | ------------------------------- | ----------------------------- |
+| Native SSH forwarding | Registered; release-gated | No host or Tauri command        | No host or Tauri command      |
+| Native Browser child  | WebView2 v1 gate          | Implemented; runtime-unverified | macOS deferred; mobile iframe |
+| Web Browser           | iframe/extension policy   | iframe/extension policy         | iframe/extension policy       |
 
 Linux focused evidence for Phase 08 is 135/135: shared 15/15, native 48/48,
 UI 25/25, and Cargo 47/47. This does not exercise Windows-gated manager and
@@ -4126,21 +4132,20 @@ not rewritten.
 
 Source map for the delivered harness boundary:
 
-| Area | Files |
-| --- | --- |
-| API command/output assertions | `server/src/api/tests.rs` |
-| Shared integration commands and cwd | `server/tests/common/mod.rs` |
-| Git fixture policy and Windows diff rewrite | `server/src/git/tests.rs`, `server/src/git/diff.rs` |
-| System metrics/alerts | `server/src/system/tests.rs`, `server/src/system/alerts.rs`, `server/src/system/monitor.rs` |
-| Integration consumers | `server/tests/browser_debug_artifacts.rs`, `server/tests/idle_suspend.rs`, `server/tests/idle_suspend_phase07.rs`, `server/tests/workflow_api.rs`, `server/tests/project_worktree_lifecycle.rs` |
+| Area                                        | Files                                                                                                                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API command/output assertions               | `server/src/api/tests.rs`                                                                                                                                                                       |
+| Shared integration commands and cwd         | `server/tests/common/mod.rs`                                                                                                                                                                    |
+| Git fixture policy and Windows diff rewrite | `server/src/git/tests.rs`, `server/src/git/diff.rs`                                                                                                                                             |
+| System metrics/alerts                       | `server/src/system/tests.rs`, `server/src/system/alerts.rs`, `server/src/system/monitor.rs`                                                                                                     |
+| Integration consumers                       | `server/tests/browser_debug_artifacts.rs`, `server/tests/idle_suspend.rs`, `server/tests/idle_suspend_phase07.rs`, `server/tests/workflow_api.rs`, `server/tests/project_worktree_lifecycle.rs` |
 
-
-| Boundary | Windows rule | Linux/non-Windows rule |
-| --- | --- | --- |
-| API and integration PTYs | Use `cmd.exe` expansion (`%NAME%`, `%CD%`), existing temp cwd, bounded hold command, and explicit cleanup | Keep Unix shell commands and existing temp-resource cleanup |
-| Git fixtures | Configure each repository/clone locally with `core.autocrlf=false`, `core.eol=lf`; clone from an existing temp parent | Same local config; no global/user config dependency |
-| Target metadata | Compare `target_path_identity`/canonical paths, not raw separator or drive-case strings | Preserve platform-native identity contract |
-| Host-specific tests | Do not probe Linux kernel paths | `/dev`, sysfs, procfs/netlink, and systemd assertions run only on Linux |
+| Boundary                 | Windows rule                                                                                                          | Linux/non-Windows rule                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| API and integration PTYs | Use `cmd.exe` expansion (`%NAME%`, `%CD%`), existing temp cwd, bounded hold command, and explicit cleanup             | Keep Unix shell commands and existing temp-resource cleanup             |
+| Git fixtures             | Configure each repository/clone locally with `core.autocrlf=false`, `core.eol=lf`; clone from an existing temp parent | Same local config; no global/user config dependency                     |
+| Target metadata          | Compare `target_path_identity`/canonical paths, not raw separator or drive-case strings                               | Preserve platform-native identity contract                              |
+| Host-specific tests      | Do not probe Linux kernel paths                                                                                       | `/dev`, sysfs, procfs/netlink, and systemd assertions run only on Linux |
 
 The shared helpers live in `server/src/api/tests.rs` and
 `server/tests/common/mod.rs`; `browser_debug_artifacts`, `idle_suspend`,
@@ -4272,7 +4277,6 @@ across callers. The dialog loads credentials into the shared backend callback
 stack; it does not depend on CLI `ssh_askpass` helpers or TTY prompt shims.
 The Force Push UI action uses the prepared, explicitly confirmed leased
 publication flow below; it never selects an unleased force refspec.
-
 
 **Object-only commit message editing and leased publication (2026-09-30)** —
 Replaced rebase-based commit message editing with a tree-preserving raw ODB DAG

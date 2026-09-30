@@ -645,8 +645,8 @@ async fn test_agent_paths_verification_api() {
     assert!(res2.omp_can_enable);
     assert!(res2.omp_reason.is_none());
     assert!(res2.codex_config_exists);
-    assert!(res2.codex_can_enable);
-    assert!(res2.codex_reason.is_none());
+    assert!(!res2.codex_can_enable);
+    assert!(res2.codex_reason.as_deref().unwrap().contains("Codex native hooks track status only"));
 
     // 5. Test path mismatch: point agent_dir to another directory
     let other_dir = tmp.path().join("other-agent");

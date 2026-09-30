@@ -144,6 +144,18 @@ function TargetPreviewSurfaces() {
 
 vi.mock("react-router-dom", () => ({
   useSearchParams: () => [searchParams, setSearchParams],
+  Link: ({
+    children,
+    to,
+    ...props
+  }: {
+    children?: ReactNode;
+    to: string;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -235,6 +247,14 @@ vi.mock("@/api/queries.js", () => ({
   useGitFetch: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useGitPull: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useGitPush: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useGitPrepareLeasedPush: vi.fn(() => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  })),
+  useGitPublishLeasedPush: vi.fn(() => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  })),
   useGitHistoryActions: () => ({}),
   useGitCommitFiles: () => ({ data: [], isLoading: false }),
   useGitCherryPick: () => ({ mutateAsync: vi.fn() }),

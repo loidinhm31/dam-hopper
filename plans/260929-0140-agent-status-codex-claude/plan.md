@@ -1,7 +1,7 @@
 ---
 title: "Codex and Claude native-hook status rollout"
 description: "Extend OMP-first status to removable Codex and Claude command hooks, with bounded evidence, explicit Unknown, and profile-safe settings."
-status: in-progress
+status: completed
 priority: P2
 effort: 48h
 branch: main
@@ -12,7 +12,7 @@ created: 2026-09-29
 # Codex and Claude native-hook status
 
 ## Approved outcome
-Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status badges, and applicable existing notification channels. User approved **native hooks with explicit Unknown for lifecycle gaps** after discussing screen detection, token cost, installation, and removal. Phase 01's approved contract-only scope was completed on 2026-09-29 (Asia/Saigon): status/source/freshness DTOs, v1→v2 preference migration, Claude config path, strict UI decoding, and static exact-version evidence. Native private ingress, runtime expiry, managed installation, and Phase 04 event adapters are complete; settings/notification cutover and live qualification remain incomplete.
+Phase 01's approved contract-only scope was completed on 2026-09-29 (Asia/Saigon): status/source/freshness DTOs, v1→v2 preference migration, Claude config path, strict UI decoding, and static exact-version evidence. Native private ingress, runtime expiry, managed installation, Phase 04 event adapters, settings/notification cutover, and Linux x86_64 end-to-end qualification are complete; all 6/6 phases are DONE (2026-09-30 Asia/Saigon).
 
 ## Decisions
 - Silent command hooks only: no model requests, context injection, approval/continuation decisions, transcript reading, or terminal-screen detection. Hooks have local process/IPC overhead, not intended model-token cost.
@@ -22,7 +22,7 @@ Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status b
 - Managed launchers live under selected server-side `$CODEX_HOME/hooks/` and `$CLAUDE_CONFIG_DIR/hooks/`; merge Codex `hooks.json` or existing inline hook representation and Claude `settings.json`. Preserve user hooks, `notify`, and unrelated settings.
 - Complete managed uninstall after reload/restart: no registrations, launcher, or active reporter; preserve unrelated content, report local-edit conflicts and partial failures honestly.
 - Scope includes existing path/profile/delivery-gate gaps needed for safe rollout, not a general settings refactor. Version 2 notification preferences migrate v1 values; matched server/UI rollout, explicit rollback snapshot.
-- Linux first. Observed qualification targets: Codex 0.158.0; Claude Code 2.1.250. These versions are **not yet qualified**; no minimum-version promise.
+- Linux first. Qualified targets: Codex 0.158.0; Claude Code 2.1.250 on Linux x86_64.
 
 ## Phases
 | # | Phase | Status / progress | Estimate | Dependency |
@@ -32,13 +32,11 @@ Add normal interactive **Codex CLI and Claude Code** to Agent Settings, status b
 | 3 | [Managed installer and full removal](./phase-03-managed-hook-installation.md) | DONE — install/status/update/uninstall / 100% (2026-09-29 Asia/Saigon; Cycle 2 review 9.5/10, [report](../reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md)) | 8h | 1–2 CLI/DTO contract |
 | 4 | [Codex and Claude event adapters](./phase-04-native-event-adapters.md) | DONE — native qualified event adapters, fencing, blocker correlation / 100% (2026-09-29 Asia/Saigon; Cycle 1 review 9.5/10, [report](../reports/code-review-260929-1103-phase-04-codex-claude-native-event-adapters.md)) | 8h | 1–2 |
 | 5 | [Agent Settings and notification ownership](./phase-05-settings-and-notification-cutover.md) | DONE — Phase 05 completed: native settings, honest gating, semantic dispatch, clean OSC9 removal / 100% (2026-09-29 Asia/Saigon; Review 9.2/10, advisor completion; [report](../reports/code-review-260929-1250-phase-05-settings-notification-cutover.md)) | 8h | 2–4 |
-| 6 | [Linux end-to-end qualification](./phase-06-linux-qualification.md) | Pending / 0% | 8h | 1–5 |
+| 6 | [Linux end-to-end qualification](./phase-06-linux-qualification.md) | DONE — Linux x86_64 qualification passed 32/32 scenarios (N01–N32; Codex CLI 0.158.0; Claude Code 2.1.250) / 100% (2026-09-30 Asia/Saigon; [report](../reports/qualification-260930-1045-agent-status-linux-qualification.md); [review](../reports/code-review-260930-1053-phase-06-linux-qualification.md)) | 8h | 1–5 |
 
-**Roadmap checkpoint (2026-09-29 Asia/Saigon):** Phases 01–05 are DONE (5/6; ~83%). Native 15-second runtime expiry, private UDS ingress, cross-transport generation fencing, managed native installer/uninstaller, concrete native event adapters with turn/blocker fencing, Agent Settings integration management, semantic attention dispatch with honest gating, and complete removal of legacy Codex OSC9 are implemented. Backend tests (139 config, 80 agent_status), UI unit tests, and browser tests pass. Cycle 1 review approved 9.2/10 ([report](../reports/code-review-260929-1250-phase-05-settings-notification-cutover.md)). Phase 06 (Linux end-to-end qualification) remains pending. Live provider qualification targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified subsequent gates.
+**Roadmap checkpoint (2026-09-30 Asia/Saigon):** All 6 phases are DONE (6/6; 100%). Native 15-second runtime expiry, private UDS ingress, cross-transport generation fencing, managed native installer/uninstaller, concrete native event adapters with turn/blocker fencing, Agent Settings integration management, semantic attention dispatch with honest gating, complete removal of legacy Codex OSC9, and Linux end-to-end qualification (Codex 0.158.0; Claude Code 2.1.250) are complete. Backend tests (110 agent_status), UI unit tests (1,979 across 281 files), and browser tests (223 across 45 files) pass with zero errors. All 32 acceptance scenarios (N01–N32) qualified.
 
-**Phase 05 validation:** 2,383 tests passed (139 config, 80 agent_status, 1,944 UI unit, 220 browser); review approved 9.2/10 and advisor completion recorded. Phase 06 is the only pending phase, and Linux end-to-end qualification remains unverified.
-
-Phase 04 consumes the completed Phase 01/02 contracts and Phase 03 native registration interfaces; Phase 05 follows the adapters, then Phase 06 performs Linux end-to-end qualification.
+**Phase 06 validation:** 110 server agent status tests, 1,979 UI unit tests, 223 browser tests passed; full CLI install/status/uninstall lifecycle verified against live host Codex and Claude binaries. All acceptance criteria satisfied.
 
 ## Contracts and evidence
 - [Proposed architecture](../../docs/architecture/agent-status.md#proposed-codex-and-claude-native-hook-rollout--not-implemented); existing OMP sections remain normative for implemented behavior.
@@ -64,4 +62,4 @@ Phase 01 contract-only scope completed on 2026-09-29 (Asia/Saigon), approved aft
 - Action items incorporated: clean OSC9 handler/parser/caller/test removal and automatic TUI-sync removal in Phase 05; live/replayed OSC9 must produce zero DamHopper alerts in Phase 06. Preserve unrelated user Codex configuration and existing policy values without presenting unsupported alert controls as usable.
 
 ## Unresolved questions
-No unresolved product architecture choice. Implementation gates: exact-binary event availability/ordering, trustworthy root/session/turn attribution, native trust/effective-policy readiness, and safe handling of events without correlation. Unsupported evidence remains Unknown. No release claim until real Linux PTY/browser qualification passes.
+No unresolved questions. Phase 06 qualification passed all 32/32 acceptance scenarios on Linux x86_64 with Codex CLI 0.158.0 and Claude Code 2.1.250; native event availability, trust/readiness, correlation, and privacy constraints are covered by the limited-hook contract. Unsupported evidence continues to resolve to Unknown.
