@@ -8,10 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { UiIntent } from "@/plugins/bridge-validators.js";
-import type {
-  AdvisorSlotDescriptor,
-  AdvisorSlotPlacementMode,
-} from "@/lib/workspace-advisor-placement.js";
+import type { AdvisorSlotDescriptor } from "@/lib/workspace-advisor-placement.js";
 
 export interface WorkspaceAdvisorPlacementContextValue {
   activeSlot: AdvisorSlotDescriptor | null;
@@ -47,7 +44,8 @@ export function WorkspaceAdvisorPlacementProvider({
   const launcherRef = externalLauncherRef ?? internalLauncherRef;
   const resolveActiveSlot = useCallback(() => {
     const slots = Array.from(slotsRef.current.values());
-    const visibleSlot = slots.find((s) => s.visible && s.element !== null) ?? null;
+    const visibleSlot =
+      slots.find((s) => s.visible && s.element !== null) ?? null;
     setActiveSlot((current) => {
       if (
         current?.id === visibleSlot?.id &&
@@ -85,10 +83,18 @@ export function WorkspaceAdvisorPlacementProvider({
     [resolveActiveSlot],
   );
 
-  const setLauncherElement = useCallback((element: HTMLElement | null) => {
-    // eslint-disable-next-line react-hooks/immutability
-    launcherRef.current = element;
-  }, [launcherRef]);
+  const setLauncherElement = useCallback(
+    (element: HTMLElement | null) => {
+      internalLauncherRef.current = element;
+      if (externalLauncherRef) {
+        // eslint-disable-next-line react-hooks/immutability
+        (
+          externalLauncherRef as React.MutableRefObject<HTMLElement | null>
+        ).current = element;
+      }
+    },
+    [externalLauncherRef],
+  );
 
   const value = useMemo<WorkspaceAdvisorPlacementContextValue>(
     () => ({

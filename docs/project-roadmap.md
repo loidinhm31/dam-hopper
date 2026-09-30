@@ -11,16 +11,16 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 02 validation:** Targeted Rust Git/API and UI tests passed **190/190** (107 Git, 2 push-route, 81 UI); `cargo check --manifest-path server/Cargo.toml --lib` and the UI build passed. Code review approved **9.8/10**. See the [tester report](../plans/reports/tester-260930-0215-phase-02-panel-and-publication.md) and [code review](../plans/reports/code-review-260930-0218-phase-02-panel-and-publication.md).
 - **Phase 03 — Qualification and docs — DONE (2026-09-30 03:28:00 +07:00; 100%).** Real HTTP router integration tests cover commit-message CAS and leased publication; exact-OID single-ref publication, stale-remote/local rejection, and hook rejection were exercised against disposable bare remotes. The phase plan records **121/121 targeted tests**, clean UI typecheck and server build (0 warnings), and the API, architecture, and changelog cutover. See the [Phase 03 plan](../plans/260929-2204-object-plumbing-commit-message/phase-03-qualification-and-docs.md).
 
-### Codex and Claude native-hook status (2026-09-29)
+### Codex and Claude native-hook status (2026-09-29–30)
 
-- **Plan status: IN PROGRESS (5/6 phases; ~83%; Phase 05 updated 2026-09-29 Asia/Saigon).** Phases 01–05 are DONE; Phase 06 remains pending.
+- **Plan status: COMPLETED (6/6 phases; 100%; updated 2026-09-30 Asia/Saigon).** Phases 01–06 are DONE; Phase 06 Linux end-to-end qualification completed 2026-09-30.
 - **Phase 03 — Managed installation and complete removal — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered managed Codex/Claude install, status, update, and complete removal through explicit native paths; config-preserving registration changes, exact ownership manifests, readiness/trust/policy distinctions, and restart-aware cleanup.
 - **Phase 04 — Codex and Claude native event adapters — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered conservative Codex/Claude event normalization with root/turn/session fencing, correlated blocker resolution, and no false completion alerts.
 - **Validation:** All **3,606 tests passed** overall; Phase 04 focused validation covered **74 unit + 7 integration tests**. Cycle 1 review approved **9.5/10**. See the [Phase 04 plan](../plans/260929-0140-agent-status-codex-claude/phase-04-native-event-adapters.md) and [review](../plans/reports/code-review-260929-1103-phase-04-codex-claude-native-event-adapters.md).
 - **Validation:** Cycle 2 review approved **9.5/10** with no critical issues; focused status tests passed **87/87** (15 integration, 59 library, 8 runtime, 5 hooks). Review follow-up notes remain non-blocking. See the [Phase 03 plan](../plans/260929-0140-agent-status-codex-claude/phase-03-managed-hook-installation.md), [parent plan](../plans/260929-0140-agent-status-codex-claude/plan.md), and [Cycle 2 review](../plans/reports/code-review-260929-0953-phase-03-managed-installation-and-complete-removal.md).
 - **Phase 05 — Agent Settings and notification ownership — DONE (2026-09-29 Asia/Saigon; 100%).** Delivered profile-owned native settings, distinct installation/readiness badges, honest Codex status-only and Claude attention-only gating, semantic notification dispatch, and complete Codex OSC9/TUI-sync removal.
 - **Phase 05 validation:** 2,383 tests passed (139 config, 80 agent_status, 1,944 UI unit, 220 browser); review approved 9.2/10 and advisor completion recorded. See the [Phase 05 plan](../plans/260929-0140-agent-status-codex-claude/phase-05-settings-and-notification-cutover.md) and [review](../plans/reports/code-review-260929-1250-phase-05-settings-notification-cutover.md).
-- **Next:** Phase 06 Linux end-to-end qualification remains pending. Live provider targets (Codex 0.158.0; Claude Code 2.1.250) remain unverified.
+- **Phase 06 — Linux end-to-end qualification — DONE (2026-09-30 Asia/Saigon; 100%).** Qualified Linux x86_64 with Codex CLI 0.158.0 and Claude Code 2.1.250; all **32/32** acceptance scenarios (N01–N32) passed. Review approved **9.4/10**. Validation recorded 110 backend agent-status tests, 1,979 UI unit tests, and 223 browser tests passed (4 skipped). See the [Phase 06 plan](../plans/260929-0140-agent-status-codex-claude/phase-06-linux-qualification.md), [qualification report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md), [review](../plans/reports/code-review-260930-1053-phase-06-linux-qualification.md), and [parent plan](../plans/260929-0140-agent-status-codex-claude/plan.md).
 
 ### Agent Store install paths and settings refactor (2026-09-28)
 
@@ -63,13 +63,11 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Production security gates (separate from phase completion):** The initial Phase 02 review identified an account-enumeration risk from missing/disabled-account login handling; the Phase 01 review identified a key-loader metadata/read TOCTOU risk. Phase 05's final review covered Phase 05 files, not `auth.rs` or `auth/secret.rs`; resolve or formally disposition and independently review these findings before production rollout. Protected `DAM_HOPPER_MFA_KEY_FILE` provisioning, matched client/server deployment, and restarting old instances are also required. See the [Phase 02 review](../plans/reports/code-review-260927-0031-phase-02-auth-api.md), [Phase 01 review](../plans/reports/code-review-260926-2258-phase01-auth-state-and-policy.md), and [configuration guide](./configuration-guide.md).
 - **Next:** Merge after review of the carried-forward security findings; production rollout only after they are closed or formally dispositioned and all documented key/deployment prerequisites are met.
 
-
 ### All-project advisor history integration (2026-09-24)
 
 - **Progress: 50% (3/6 phases complete; Phases 00–02 DONE).** Phase 02 host root authorization and context is complete; Phase 03 worker root history provider is next.
 - **Phase 02 — Host root authorization and context — DONE (2026-09-24).** Bound account-wide history to the durable trusted installation source, admitted authenticated accounts, hydrated owner-source state on context open, reauthorized at the runner, and cleared cached sources/contexts during lifecycle invalidation.
 - **Validation:** Targeted host authorization, lifecycle, runner, and API tests plus plugin SDK/UI and EVCrate suites passed. Follow-up checks covered restart hydration, ancestor-symlink rejection, and wrong-owner UID denial; one Windows-only test was skipped in the base suite.
-
 
 ### Windows release asset and bootstrap installer (2026-09-21)
 
@@ -78,7 +76,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 02 — PowerShell bootstrap installer — DONE (2026-09-21; 100%).** Added the non-admin `dam-hopper-install.ps1` command contract (`-Version`/`-Latest`, `-InstallDir`, `-AddToPath`, `-VerifyAttestation`, and `-DryRun`), digest-first download, bounded ZIP validation, config preservation, User PATH handling, and a loopback fixture-backed PowerShell harness.
 - **Validation:** Focused Windows asset-gate coverage passed **23/23 assertions**; Phase 02 installer integration coverage passed **14/14 scenarios**; deterministic package-twice and Node release-script syntax verification passed. See the [Phase 01 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-01-asset-schema-and-packaging.md), [Phase 02 plan](../plans/260920-2327-windows-release-asset-and-installer/phase-02-powershell-installer.md), and [parent plan](../plans/260920-2327-windows-release-asset-and-installer/plan.md).
 - **Next:** Phase 03 — Windows CI publication, six-asset release gating, attestation wiring, and README/configuration guidance.
-
 
 ### Trusted plugin platform (2026-09-23)
 
@@ -106,7 +103,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **G4 status (2026-09-23):** D06 implementation and local release/deployment/LAN-harness validation are complete. Physical separate-machine HTTPS/LAN execution, exact Node runtime pin, and E05 cross-repository sign-off remain required before standalone retirement.
 - **Next:** Joint G0/G1/G2/G3/G4 cross-repository and deployment sign-off, including physical LAN evidence and the E05 standalone-retirement decision.
 
-
 ### Windows dam-hopper-server build and verification (2026-09-20)
 
 - **Plan status: COMPLETED (3/3 phases; 100%; updated 2026-09-20 18:40:00 +07:00).** Phase 01, Phase 02, and Phase 03 are complete.
@@ -116,7 +112,6 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 - **Phase 03 — Server build, verification, and documentation — DONE (2026-09-20 18:40:00 +07:00; 100%; 3/3h):** Added `default-run = "dam-hopper-server"`, verified Windows MSVC all-target/build/release gates, confirmed Linux-only stubs fail closed, passed the serial suite with **978 tests passed, 0 failed, 3 ignored**, completed the loopback no-auth `/api/health` smoke with cleanup, and published Windows runbook guidance. See the [Phase 03 plan](../plans/260920-1312-windows-server-build-and-verify/phase-03-server-build-and-verification.md) and [review](../plans/reports/code-review-260920-1835-phase03-server-build-and-verification.md).
 - **Validation:** `cargo run -- --help` resolved the server binary; debug and release builds passed; `/api/health` returned HTTP 200 with `schemaVersion=1`, `status="ok"`; unsupported helper/release binaries exited 1 with expected messages. Windows evidence remains distinct from Linux production diagnostics and deployment qualification.
 - **Next:** Parent plan complete. Continue with normal Linux CI/regression qualification and optional dedicated Windows CI; native Windows host activity/suspend remains out of scope.
-
 
 ### Multi-profile Host Resources watch (2026-09-20)
 

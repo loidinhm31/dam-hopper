@@ -1,8 +1,8 @@
 # Agent status — OMP-first architecture
 
-Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). The separate Codex/Claude native-hook rollout has Phases 01–05 delivered; Phase 06 live Linux qualification remains pending. Native provider lifecycle behavior is not yet live-qualified.** Updated: 2026-09-29.
+Status: **OMP-first Phases 01–05 complete (Linux x86_64 qualified 2026-09-28). Codex/Claude native-hook rollout Phases 01–06 complete (Linux x86_64 qualified 2026-09-30; Codex 0.158.0 and Claude Code 2.1.250).** Updated: 2026-09-30.
 OMP-first plan: [OMP-first agent status](../../plans/260928-0318-agent-status-omp-first/plan.md).
-The Phase 01 contract and static capability review installed no hooks or ran native model turns. Phase 04 Codex/Claude adapters now implement the statically qualified mappings; no live Codex/Claude provider behavior has been qualified.
+Codex/Claude rollout plan: [Codex/Claude native hooks](../../plans/260929-0140-agent-status-codex-claude/plan.md). Evidence: [qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 OMP baseline evidence: [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md), [brainstorm](../../plans/reports/brainstorm-260928-0300-herdr-agent-status-adoption.md), [review](../../plans/260928-0318-agent-status-omp-first/reports/report-review.md).
 
 OMP-first Phase 01 defines the version-1 Rust contract and in-memory reducer/registry,
@@ -15,7 +15,7 @@ tabs, and Fleet rows, unified preferences (`terminalAgentNotifications`),
 toast viewport, and notification history center. Phase 05 delivers full Linux
 end-to-end qualification across scenarios C01–C19.
 
-The separate Codex/Claude rollout has delivered Phases 01–05: contract, private one-shot ingress and evidence lease, managed installation, statically qualified native event adapters, and Agent Settings/notification ownership cutover. Phase 06 live Linux qualification remains pending; no live native provider turns have been qualified.
+The separate Codex/Claude rollout has delivered Phases 01–06: contract, private one-shot ingress and evidence lease, managed installation, provider-version-specific event adapters, Agent Settings/notification ownership cutover, and Linux end-to-end qualification (Codex 0.158.0; Claude Code 2.1.250).
 
 ## Delivery Scope and Invariants
 
@@ -26,7 +26,7 @@ The separate Codex/Claude rollout has delivered Phases 01–05: contract, privat
 
 ## End-to-end data flow (Phases 01–05 implemented)
 
-```text
+````text
 installed managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
           ^                                                    |
 PTY spawn injects scoped capability                             +-- protected REST snapshot
@@ -193,7 +193,7 @@ profiles need their explicit agent-directory path.
 dam-hopper-server integration omp install --agent-dir <absolute-agent-dir>
 dam-hopper-server integration omp status --agent-dir <absolute-agent-dir>
 dam-hopper-server integration omp uninstall --agent-dir <absolute-agent-dir>
-```
+````
 
 `--json` is optional for each action. These local integration commands dispatch
 before server token, database, and listener startup; they do not require normal
@@ -220,6 +220,7 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 [Phase 03 plan](../../plans/260928-0318-agent-status-omp-first/phase-03-omp-adapter-and-installer.md).
 
 ## Frontend, reconnect, and notifications (Phase 04)
+
 - One app-root bridge mounted in `packages/ui/src/embed/dam-hopper-app.tsx`, beside the existing notification viewport, watches connected profiles. Not in TerminalPanel or KeepAliveHost.
 - Subscribe before requesting initial snapshot. Buffer at most 256 incoming semantic messages during baseline; install snapshot revision R, discard messages <= R, then apply newer ones. This suppresses historical attention while preserving events genuinely newer than baseline. Overflow/invalid data/gap => resnapshot without replay alerts.
 - Reconcile every 15 seconds while connected and immediately on invalidation/reconnect. Coalesce fetches; reject results from retired connection generation/server epoch. No endpoint retry loop on 404: mark unsupported for that connection.
@@ -248,21 +249,23 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Phase 05 qualified the Linux x86_64 release path against OMP 18.4.1 across
   C01–C19, including live OMP/browser behavior and standalone binary installation.
   See the [qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md).
-- The persistent private WebSocket collector admits only OMP. Codex and Claude use separate Phase 02 one-shot hook ingress and Phase 03 managed installation; Phase 04 delivered native event adapters, and Phase 05 completed Agent Settings, notification ownership, and removal of Codex OSC 9/TUI notification integration. Phase 06 live qualification remains pending.
+- The persistent private WebSocket collector admits only OMP. Codex and Claude use separate Phase 02 one-shot hook ingress and Phase 03 managed installation; Phase 04 delivered native event adapters, and Phase 05 completed Agent Settings, notification ownership, and removal of Codex OSC 9/TUI notification integration. Phase 06 live Linux qualification is complete (Codex 0.158.0; Claude Code 2.1.250).
 
-## Codex and Claude native-hook rollout — Phases 01–05 delivered; Phase 06 pending
+## Codex and Claude native-hook rollout — Phases 01–06 complete
 
 Design date: 2026-09-29. [Rollout plan](../../plans/260929-0140-agent-status-codex-claude/plan.md).
 The user selected ordinary CLI native hooks with explicit Unknown for gaps,
 not Herdr-style screen detection or a controlled app-server launch mode. Phase 01
 froze the contract; Phase 02 delivered private one-shot ingress and 15-second
 evidence expiry; Phase 03 delivered managed installation; Phase 04 delivered
-statically qualified Codex/Claude event adapters and conservative normalization;
+provider-version-specific Codex/Claude event adapters and conservative normalization;
 Phase 05 delivered Agent Settings, installation/readiness presentation,
 notification ownership, version-2 policy migration, and complete Codex OSC 9 and
-automatic TUI notification-setting removal. OMP reporter/lifecycle semantics
-remain unchanged. No live native model turns or provider lifecycle behavior have
-been qualified.
+automatic TUI notification-setting removal. OMP reporter and lifecycle semantics
+remain unchanged.
+
+Linux x86_64 live native lifecycle qualification is complete for Codex CLI
+0.158.0 and Claude Code 2.1.250 across N01–N32. Evidence: [qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
 ### Managed installation and removal (Phase 03 delivered)
 
@@ -317,16 +320,16 @@ recorded 87 passing agent-status test executions.
   cached invocations are impossible. OMP installation and event semantics are
   unchanged.
 
-### Native event adapters and ingress (Phase 04 delivered; Phase 06 live qualification pending)
+### Native event adapters and ingress (Phases 04 and 06 qualified)
 
-The adapters implement the Phase 01 static event inventories for Codex CLI
-0.158.0 and Claude Code 2.1.250. Those versions are research targets, not live
-qualification promises. The managed registrations and normalizers use these
-provider-specific allowlists:
+The adapters implement the Phase 01 event inventories for Codex CLI 0.158.0
+and Claude Code 2.1.250. Phase 06 live-qualified these versions on Linux
+x86_64; other provider versions and operating systems remain unqualified.
+Managed registrations and normalizers use these provider-specific allowlists:
 
-| Provider | Qualified events |
-| --- | --- |
-| Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Interrupt`, `SessionEnd` |
+| Provider    | Qualified events                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex       | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Interrupt`, `SessionEnd`                                         |
 | Claude Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `Notification`, `Stop`, `StopFailure`, `SessionEnd` |
 
 Each native callback invokes
@@ -389,21 +392,14 @@ focused coverage is in `server/src/agent_status/tests.rs` and
 `server/tests/agent_status_hooks.rs`. See the
 [Phase 04 plan](../../plans/260929-0140-agent-status-codex-claude/phase-04-native-event-adapters.md).
 
-### Remaining native rollout gates
+### Native rollout status and remaining gates
 
-- Phase 06 remains pending and performs live Linux qualification. Exercise real
-  interactive provider sequences and hook coexistence before claiming native
-  lifecycle behavior. Codex CLI 0.158.0 and Claude Code 2.1.250 are research
-  targets, not qualified version promises; static schemas and version probes do
-  not establish live behavior. See the
+- Phase 06 Linux x86_64 end-to-end qualification is complete for Codex CLI 0.158.0 and Claude Code 2.1.250 across all 32 acceptance scenarios (N01–N32). Evidence: [qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md). Windows and other non-Linux server platforms remain runtime platform-unqualified. Future native agent versions require re-qualification against this test ledger before claiming support. See the
   [Phase 06 plan](../../plans/260929-0140-agent-status-codex-claude/phase-06-linux-qualification.md).
-
 Sources: [Codex hooks](https://developers.openai.com/codex/hooks/),
 [Claude hooks](https://code.claude.com/docs/en/hooks),
 [Herdr's differing screen-authority model](https://herdr.dev/docs/agents/).
 
 ## Unresolved questions
 
-None for the Linux x86_64 release path against OMP 18.4.1. Windows and other
-non-Linux server runtimes, plus other OMP versions, remain unqualified; Linux
-evidence does not establish those platform/version combinations.
+None for the Linux x86_64 release path against OMP 18.4.1, Codex 0.158.0, and Claude Code 2.1.250. Windows and other non-Linux server runtimes, plus other agent versions, remain unqualified; Linux evidence does not establish those platform/version combinations.

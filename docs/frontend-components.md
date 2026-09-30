@@ -59,6 +59,7 @@ defaults; profile and generation ownership is encoded by
 ## Profile-owned enrollment and MFA UI (Phase 04)
 
 **Locations:**
+
 - `packages/ui/src/api/auth-client.ts`, `packages/ui/src/api/auth-types.ts`,
   `packages/ui/src/api/connections.ts`, `packages/ui/src/api/ws-transport.ts`,
   and `packages/ui/src/api/server-config.ts`
@@ -151,6 +152,28 @@ See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phas
 [Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20)
 section for source maps and polling tiers.
 
+## Profile-scoped plugin host and view context (Phase D03)
+
+The EVCrate Advisor host is pinned to the Settings target profile and selects
+only a project owned by that profile. Generic plugin hosts use the selected
+workspace project when available, otherwise a project under the Settings/active
+profile.
+
+`usePluginNavigation` queries the Settings target for Advisor metadata and the
+workspace project owner for generic plugin metadata.
+
+`usePluginHost` captures the API owner/target and fences changes. An owner
+generation change revokes the old session. For Advisor, a same-authority project
+selection updates workspace context in place; a changed authority key revokes
+and recreates the old frame rather than carrying context across authorities.
+
+The Advisor host resolves view context through the authenticated owner-bound
+API and uses its canonical target and authority metadata.
+`components/organisms/WorkspaceAdvisorHost.tsx` hosts Advisor across integrated
+placements (IDE dock, Terminal float, and compact overlay);
+`WorkspaceAdvisorHost.test.tsx` covers placement and lifecycle contracts.
+Standalone `/plugins/:installationId` routing has been removed, and bookmarked
+URLs fail closed without an unavailable screen.
 ## Unified-profile integration and qualification (Phase 09)
 
 The integrated shell keeps one explicit owner through project aggregation,
@@ -357,7 +380,6 @@ is keyed by surface, profile, project, and target, and keeps the existing
 therefore replaces only its Explorer region; it does not remount the workspace
 shell, editor, or active terminal hosts. Changing the target clears a latched
 boundary error without resetting unrelated workspace state.
-
 
 ## Usage Insights Settings
 

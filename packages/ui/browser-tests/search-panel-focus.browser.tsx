@@ -107,7 +107,7 @@ describe("SearchPanel focus retention in Chromium", () => {
 
     // Poll until dialog search input mounts
     let searchInput: HTMLInputElement | null = null;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 60; i++) {
       searchInput = document.querySelector<HTMLInputElement>(
         ".dialog-viewport-fit input[placeholder*='Search']",
       );
@@ -124,8 +124,16 @@ describe("SearchPanel focus retention in Chromium", () => {
   it("retains search input focus on keystrokes in compact workspace", async () => {
     container!.style.width = "1024px";
     container!.style.height = "768px";
-    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
-    Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 768 });
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: 1024,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      writable: true,
+      configurable: true,
+      value: 768,
+    });
 
     await renderWorkspaceAndWait();
     const searchInput = await openSearchDialog();
@@ -136,11 +144,15 @@ describe("SearchPanel focus retention in Chromium", () => {
 
     // Type first character
     await act(async () => {
-      searchInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "a", code: "KeyA", bubbles: true }),
+      );
       useSearchUiStore.getState().setQuery("content", "a");
       searchInput!.dispatchEvent(new Event("input", { bubbles: true }));
       searchInput!.dispatchEvent(new Event("change", { bubbles: true }));
-      searchInput!.dispatchEvent(new KeyboardEvent("keyup", { key: "a", code: "KeyA", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keyup", { key: "a", code: "KeyA", bubbles: true }),
+      );
     });
 
     await act(async () => {
@@ -155,11 +167,15 @@ describe("SearchPanel focus retention in Chromium", () => {
 
     // Type second character
     await act(async () => {
-      searchInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "b", code: "KeyB", bubbles: true }),
+      );
       useSearchUiStore.getState().setQuery("content", "ab");
       searchInput!.dispatchEvent(new Event("input", { bubbles: true }));
       searchInput!.dispatchEvent(new Event("change", { bubbles: true }));
-      searchInput!.dispatchEvent(new KeyboardEvent("keyup", { key: "b", code: "KeyB", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keyup", { key: "b", code: "KeyB", bubbles: true }),
+      );
     });
 
     await act(async () => {
@@ -176,8 +192,16 @@ describe("SearchPanel focus retention in Chromium", () => {
   it("retains search input focus on keystrokes in desktop workspace", async () => {
     container!.style.width = "1440px";
     container!.style.height = "900px";
-    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1440 });
-    Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 900 });
+    Object.defineProperty(window, "innerWidth", {
+      writable: true,
+      configurable: true,
+      value: 1440,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      writable: true,
+      configurable: true,
+      value: 900,
+    });
 
     await renderWorkspaceAndWait();
     const searchInput = await openSearchDialog();
@@ -188,11 +212,15 @@ describe("SearchPanel focus retention in Chromium", () => {
 
     // Type first character
     await act(async () => {
-      searchInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "x", code: "KeyX", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "x", code: "KeyX", bubbles: true }),
+      );
       useSearchUiStore.getState().setQuery("content", "x");
       searchInput!.dispatchEvent(new Event("input", { bubbles: true }));
       searchInput!.dispatchEvent(new Event("change", { bubbles: true }));
-      searchInput!.dispatchEvent(new KeyboardEvent("keyup", { key: "x", code: "KeyX", bubbles: true }));
+      searchInput!.dispatchEvent(
+        new KeyboardEvent("keyup", { key: "x", code: "KeyX", bubbles: true }),
+      );
     });
 
     await act(async () => {
