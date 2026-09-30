@@ -160,6 +160,25 @@ only request-cache metadata. The Force Machine to Sleep dialog still captures
 endpoint, generation, fleet snapshot, status revision, and request ID; stale
 conflicts require fresh confirmation and ambiguous requests are not retried.
 
+### Host-resource delivery modes and UI presentation
+
+The UI coordinates host resource streams across seven distinct operational modes per profile:
+
+1. **`UNSUPPORTED`**: The server returns 404/405 or a native runtime lacks owner-bound streaming. A current connected, visible owner uses exact-owner REST fallback (15 s snapshot; 5 s visible detail metrics).
+2. **`STARTING`**: SSE is opening; cached readings may remain visible with their observation ages until a valid paired frame arrives.
+3. **`LIVE`**: A paired SSE frame updates snapshot and metrics atomically and suppresses both resource REST pollers. Freshness uses server monotonic observation ages and the clamped TTL; a live socket does not make a stale/degraded section fresh.
+4. **`SWITCHING`**: A synchronous local fence advances the owner/source generation before query cancellation. From fence onset through paired commit, snapshot and metrics REST starts/completions and WS resource cache writes are blocked.
+5. **`ERROR`**: Transport, network, or framing failure schedules bounded retries. REST fallback is allowed only for the current connected owner with visible interest; offline, hidden, auth-blocked, or retired owners make no resource request.
+6. **`AUTH_BLOCKED`**: `AUTH_REQUIRED`, `MFA_REQUIRED`, or `503 AUTH_UNAVAILABLE` cancels/fences snapshot and metrics REST, including requests already in flight. MFA/session errors require the selected profile's auth flow; `AUTH_UNAVAILABLE` means the server cannot verify auth, not that credentials are invalid. The state persists through retries and hidden periods; it clears only on a valid authenticated paired frame or a new connection generation.
+7. **`HIDDEN`**: A hidden document pauses/disposes the stream, and closing the popover removes its interest. No resource REST polling runs while hidden; visible cached values retain their age and are not presented as live.
+
+**Key presentation behaviors:**
+- **Fresh equal-revision reconnect baseline:** A current new attempt may accept the same epoch/revision only with an immediately preceding matching status and complete paired frame. This re-establishes freshness metadata; it does not mean the host was sampled again.
+- **Per-section stale indicators:** A stalled/degraded sensor (for example, a process-scan timeout) marks its section stale/unavailable even while the SSE connection is live; never fabricate zero values or label carried-forward data as newly observed.
+- **WebSocket notifications without cache rollback:** WS alerts update profile/incident unread state and coalesce visible REST history refreshes at 30 s, but cannot overwrite the LIVE/switching SSE pair. The owner bridge's non-resource events (PTY, terminal, git, workspace) remain available across QueryClient changes.
+- **No new setting:** Users do not need to enable SSE; no SSE preference or host-resource polling control is added.
+- **Privileged actions:** Force Machine to Sleep and idle-suspend remain manual, separately authenticated actions; telemetry never triggers them.
+
 See the [host-resource SSE architecture](./architecture/host-resource-sse.md)
 for source arbitration and the [Phase 04 plan](../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md) for focused evidence. The earlier [Phase 06 Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) documents the underlying owner boundary.
 

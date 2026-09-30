@@ -4601,12 +4601,13 @@ invalidates the read-only queries; recovery (`resolvedAt`, including zero)
 removes only that incident. The browser rejects malformed or unexpected nested
 evidence before changing cache state. An explicit empty `currentAlerts` array
 clears resource presentation, while a missing field is retained for
-old-server compatibility rather than interpreted as recovery. REST projections
-remain authoritative after reconnect, missed events, or profile changes. Deep
-Linux reads degrade per signal, while `GET /api/system/metrics` remains the
-compatibility fallback and rollback seam.
+old-server compatibility rather than interpreted as recovery. While an eligible
+owner is LIVE, the paired SSE frame is authoritative for snapshot and metrics;
+exact-owner REST remains the permitted compatibility fallback after stream loss
+or when the source gate allows polling. Deep Linux reads degrade per signal;
+`GET /api/system/metrics` retains its compatible projection.
 
-### Host-resource SSE delivery (Phases 01–05 implementation; target qualification pending)
+### Host-resource SSE delivery (Phases 01–06 implemented; target qualification pending)
 
 The [host-resource SSE architecture](./architecture/host-resource-sse.md) is
 normative: Phases 01–04 complete the cached publisher, authenticated route,
@@ -4619,16 +4620,30 @@ is profile/incident scoped, history stays REST-backed, and WS snapshot patches
 require REST authority. Matched server ages plus local monotonic TTL drive
 freshness; TanStack `isStale` is only query-cache metadata.
 
-Phase 05 adds test-only run-scoped hooks, mandatory-Mongo HTTP tests, and a
-harness runner; its focused suite passed 11/11. The short N=0/1/32 local smoke
-used 1 s warmup/2 s measurement with no soak, and is not target qualification.
-C01–C43 remain pending/unqualified. The browser, authenticated release-PID,
-30-minute soak, named-host, deployed-proxy, active-socket shutdown, and native
-C42 gates remain pending/blocked. Current hooks SHA-256 hash auth targets,
-admission subjects, and cleanup details. These deterministic, linkable digests
-are not anonymous; screen future artifacts before sharing. The pre-fix smoke
-artifact was removed. Phase 06 rollout is not qualified.
+Monitor freshness configuration changes are committed as atomic metadata-only
+revisions retaining actual observation instants; unchanged effective configuration
+creates no revision, and status reads do not clone snapshot or metrics projections.
+Shutdown bounds feature cleanup (publisher and tasks) to ≤2 seconds from OS
+signal onset, while `ForceCloseListener` forces accepted HTTP/WS I/O cancellation
+at signal+10 seconds; this bounds HTTP drain, not total process exit if a Linux
+procfs/PSI collector syscall stalls.
 
+Phase 05 delivered scoped test-only hooks, mandatory-Mongo HTTP qualification,
+and a harness runner (focused suite 11/11); this is not target qualification.
+Phase 06 documentation and artifact rollout/rollback runbooks closed at
+2026-10-01 02:53:43 +07:00 for the intended Linux-web-first scope. Reference/
+weak hosts and the deployed proxy must still be identified and qualified.
+Release gates remain pending: matched authenticated release-PID CPU/RSS,
+30-minute N=32 soak, live Chromium/browser, deployed-proxy verification, active
+auth revocation, and forced active HTTP/WS shutdown (C16/C17 verify persisted
+revocation only; C19 verifies idle shutdown only). C42 remains pending for a
+later native-only release; unsupported or unverified native targets use
+owner-bound REST and do not block a qualified Linux-web-only release. A
+default-cadence whole-monitor ≤2% target requires the separate Phase 00 monitor
+profiler; ten collector-only scans do not qualify it. Missing performance
+evidence is null+reason/blocked, never zero or green. See the
+[server rollout runbook](./configuration/server-configuration.md#host-resources-sse-delivery-and-reverse-proxy-operations-phase-06)
+and [C01–C43 validation matrix](../plans/260929-1522-host-resources-sse/validation-matrix.md).
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing
 server-side lifecycle scaffolding, where present, is outside the current
@@ -4850,9 +4865,10 @@ availability (and stale cached values where applicable). Non-Linux platforms
 report battery availability as `unsupported`.
 
 Process inventory is bounded to 4,096 scanned PIDs, 20 returned processes, and PSS
-reads for the top 5 by RSS, with a 100 ms deadline. The response includes scan,
-truncation, deadline, skipped, and issue counters for permission denied, invalid
-UTF-8, malformed, and disappeared process files. Process strings are capped at
+reads for the top 5 by RSS, with a 150 ms deadline (clamped config; snapshot wait
+deadline is 500 ms and does not bound host CPU or cancel a blocked syscall). The response
+includes scan, truncation, deadline, skipped, and issue counters for permission denied,
+invalid UTF-8, malformed, and disappeared process files. Process strings are capped at
 256 bytes.
 
 Cache attribution is descriptive rather than additive accounting. Labels identify

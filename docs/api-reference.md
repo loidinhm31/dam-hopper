@@ -543,12 +543,15 @@ The resource monitoring and diagnosis UI is read-only for generic host
 remediation. The top-nav popover may also display the separate authenticated
 idle-suspend status and existing manual force-suspend action; that action is
 governed by the idle-suspend contract and does not mutate resource-monitor
-state. REST responses remain authoritative after reconnect, missed events,
-profile changes, or malformed push data. If the deep snapshot is unavailable,
-the diagnosis popover retains CPU and disk from the compatible metrics endpoint
-and labels the deep data unavailable; it never fabricates a zero value. Cgroup
-v1 is reported as unsupported; constrained Linux and containers report
-per-section availability and scope rather than host-wide failure.
+state. While the paired SSE stream is LIVE, its snapshot and metrics frame is
+authoritative as one observation. After stream loss, missed or malformed
+frames, profile changes, or reconnect, the UI may use only exact-owner REST
+fallback where its gate permits; stale profile or connection responses cannot
+become authoritative. If the deep snapshot is unavailable, the diagnosis popover
+retains CPU and disk from the compatible metrics endpoint and labels the deep
+data unavailable; it never fabricates a zero value. Cgroup v1 is reported as
+unsupported; constrained Linux and containers report per-section availability
+and scope rather than host-wide failure.
 
 #### GET /api/system/resources/v1/snapshot
 
@@ -575,6 +578,20 @@ newest first by `updatedAt`. Optional `limit` is clamped by the server (default
 resource incidents use the resource shape above and include `resolvedAt` only
 after recovery. A zero `resolvedAt` is a valid recovery timestamp. This endpoint
 reports evidence only and performs no remediation.
+
+#### GET /api/system/resources/v1/events
+
+Authenticated Server-Sent Events (SSE) delivery of complete paired host-resource snapshots and metrics for an eligible, connected, visible profile owner. REST remains the fallback; SSE changes no host sampling or alert authority.
+
+- **Transport:** HTTP GET streaming via profile-owned browser `fetch()` with reader-stream processing (`credentials: "omit"`, `cache: "no-store"`, `redirect: "error"`, `Accept: text/event-stream`). Requires `Authorization: Bearer <token>` except explicit development `--no-auth`; cookies, query tokens, native `EventSource`, and browser-only `profileId` in the wire route are not supported.
+- **Origin and headers:** A supplied `Origin` must match configured CORS origins; malformed, multiple, or disallowed values return `403` before auth-store/database work. A missing `Origin` does not bypass bearer authentication. `OPTIONS` never consumes SSE permits or auth; configured CORS handles allowed preflight, otherwise the ordinary GET-only route may return `405`. Return `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: private, no-store, no-transform`, `X-Accel-Buffering: no`; disable buffering and compression at every proxy hop.
+- **Admission & limits:** At most 32 live response-body leases per server process and 4 per authenticated subject. Rejections are HTTP `429 Too Many Requests`, JSON `{ "code": "HOST_RESOURCE_STREAM_LIMIT", "error": "Global host resource stream limit reached" }` or `{ "code": "HOST_RESOURCE_STREAM_LIMIT", "error": "Per-subject host resource stream limit reached" }`, with `Retry-After: 30`. Admission auth has a 2-second timeout; timeout or auth-store failure returns HTTP `503` `{ "code": "AUTH_UNAVAILABLE", "error": "Authentication backend unavailable" }`.
+- **`host-resources-status` control:** Exact JSON fields are `{ "serverEpoch": "<UUID>", "revision": "<decimal u64>", "snapshotAgeMs": <number|null>, "metricsAgeMs": <number|null>, "freshnessTtlMs": <number> }`. Send an initial status, a matching status immediately before every data frame, and periodic status at least every 15 seconds; use a small `: keepalive` comment within 15 seconds if no other bytes are sent. Ages are nonnegative monotonic milliseconds since each projection's last successful observation, remain unchanged by degraded timestamps/heartbeats, and are `null` before its first success. `freshnessTtlMs` is `2 × (lightSampleMs + snapshotDeadlineMs + jitterMs)` using clamped server settings (11,500 ms at defaults); status alone does not assert a fresh sample.
+- **`host-resources` data event:** Exact top-level fields are `{ "schemaVersion": 1, "serverEpoch": "<UUID>", "revision": "<decimal u64>", "snapshot": <HostResourceSnapshotV1>, "metrics": <HostMetrics>, "lightSampleMs": <number> }`. Each event is a complete pair; revisions may be skipped. No profile ID, SSE `id:`, delta, replay buffer, or `Last-Event-ID` dependency. The entire framed data event is capped at 262,144 bytes; the entire framed status/error control is capped at 4,096 bytes.
+- **Errors:** A post-header `host-resources-error` control uses `{ "code": "MFA_REQUIRED" | "AUTH_REQUIRED" | "AUTH_UNAVAILABLE" | "FRAME_TOO_LARGE", "error": "<safe reason>" }`; delivery and EOF are best effort under backpressure. Pre-header oversize returns HTTP `503` JSON `{ "code": "FRAME_TOO_LARGE", "error": "<safe reason>" }`, distinct from `AUTH_UNAVAILABLE`.
+- **Supervision & shutdown:** Live streams revalidate signed claims every 5 seconds against persisted sessions/users (2 DB reads/check) with a 2-second timeout; auth failures stop new emission. On OS signal, feature cleanup is bounded to ≤2 seconds and `ForceCloseListener` cancels accepted HTTP/WS I/O at signal+10 seconds. This bounds HTTP drain, not total process exit under a blocked collector syscall; active backpressured HTTP/WS shutdown remains unqualified.
+- **Client coordination & fallback:** While LIVE, a paired SSE frame is authority for both resource query keys and suppresses snapshot/metrics REST. Only the current connected owner with visible interest may use REST fallback: snapshot every 15 seconds and visible detail metrics every 5 seconds during `STARTING`, retry/error, or 404/405/unsupported transport. Hidden, disconnected, switching, or `AUTH_BLOCKED` owners start no resource REST work; cached values may remain visible with their last-known age. `AUTH_UNAVAILABLE` blocks resource REST until a valid authenticated pair or a new connection generation.
+- **WebSocket behavior:** Host-alert unread state remains profile/incident-scoped; visible REST alert history refresh is coalesced at 30 seconds. WS snapshot patches run only when REST has authority and never roll back a LIVE or switching SSE pair. Non-resource WS events remain on their existing owner-bound bridge.
 
 #### `host:alertChanged` transport event
 
@@ -931,8 +948,9 @@ snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
 `reclaimable_cache_percent` (25), `available_warning_percent` (15),
 `available_critical_percent` (10), `available_oom_percent` (5),
 `psi_some_percent` (10), and `psi_full_percent` (1). Values are clamped to
-safe ranges at runtime.
-
+safe ranges at runtime. The 500 ms `snapshot_deadline_millis` is a wait
+deadline, not a blocking syscall or CPU bound; process deadline defaults to
+150 ms.
 Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
 unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
 build. The no-tunnel container shutdown measurement is not a claim about active

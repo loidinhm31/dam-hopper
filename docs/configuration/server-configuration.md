@@ -512,6 +512,39 @@ G2-Web is qualified; G2-Native remains blocked until real Windows S13 runtime,
 SSH, WebView2/DPAPI, and Browser relay evidence is recorded. Old browser
 layouts/history discarded by the fresh reset cannot be restored by rollback.
 
+## Host resources SSE delivery and reverse proxy operations (Phase 06)
+The authenticated `GET /api/system/resources/v1/events` stream serves an eligible connected, visible profile. While a paired stream is LIVE it updates snapshot and metrics together; the existing REST endpoints remain the gated fallback. Phase 06 closes documentation and runbooks, not target release qualification.
+### Reverse proxy requirements
+Buffering, caching, compression, and body transformation must be disabled for the SSE route at every proxy/CDN hop. Preserve `X-Accel-Buffering: no`; on Nginx use `proxy_buffering off`, `proxy_cache off`, `gzip off`, and `proxy_set_header Accept-Encoding ""` (the last disables upstream compression only; also disable downstream gzip/Brotli).
+Set the upstream idle-read timeout to at least 45 s; status/keepalive bytes arrive at least every 15 s. HTTP/1.1 browsers commonly cap connections per origin and multiple SSE tabs can delay REST/WS traffic; HTTP/2 multiplexing mitigates this, but stage-test the actual deployed chain with HTTP/2 enabled and concurrent REST/WS requests.
+**Nginx example** (4801 is the documented systemd API port; direct/Docker defaults to 4800. Match the actual `DAM_HOPPER_PORT`):
+```nginx
+location /api/system/resources/v1/events {
+    proxy_pass http://127.0.0.1:4801;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Accept-Encoding "";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_read_timeout 60s;
+}
+```
+
+### Admission, capacity, and qualification gates
+Each server process admits at most 32 live response bodies globally and 4 per authenticated subject. Rejections return HTTP `429` with `code: "HOST_RESOURCE_STREAM_LIMIT"` and `Retry-After: 30`; auth admission timeout/store failure returns `503 AUTH_UNAVAILABLE` after 2 s.
+Independent auth supervision checks each body every 5 s (2 persisted reads/check): about 12.8 persisted reads/s at N=32 is a model, not observed load. No SSE setting is added; existing server-owned monitor cadences remain unchanged, REST fallback is 15 s snapshot/5 s visible-detail metrics, and history remains 30 s/coalesced.
+The process inventory deadline is 150 ms; the 500 ms snapshot deadline is a wait, not a CPU or blocked-syscall bound. The default-cadence whole-monitor ≤2% one-core target requires the separate Phase 00 monitor profiler; ten collector-only scans do not qualify it.
+Before any target rollout, identify reference/weak Linux hosts and the deployed proxy, then close the applicable Phase 05 matrix gates: same-run optimized harness evidence vs separately attributed authenticated release-PID CPU/RSS, 30-minute soak, live Chromium/browser, and deployed-proxy verification. Active auth revocation (C16/C17) and active backpressured HTTP/WS shutdown (C19) remain unproven by the 11/11 focused suite. Missing metric producer/population is null+reason and blocked, never zero/green. C42 is a pending native-only gate; unsupported native targets stay on owner-bound REST and do not block a qualified Linux-web-only release. See the [C01–C43 matrix](../../plans/260929-1522-host-resources-sse/validation-matrix.md).
+### Rollout and rollback
+Roll forward only after applicable target gates pass: deploy the backend first so old clients continue REST snapshot/metrics and WS; then deploy the web bundle. A new client on an older backend treats `/events` 404/405 as REST-only. Verify the deployed proxy's buffering, compression, idle timeout, and HTTP version during staging.
+Roll back artifacts, not a runtime flag: restore the prior REST/WS UI first, and refresh/close tabs running the new client so their active SSE bodies can close; then, only if needed, replace the backend with its prior artifact. New clients left loaded after backend rollback fall back to REST on 404/405.
+Keep `/api/system/resources/v1/snapshot`, `/api/system/metrics`, host-alert/history and unread behavior, the non-resource WS bridge, monitor cadence/configuration, and separately authorized Force Machine to Sleep/idle-suspend behavior intact. On an auth/security violation stop the affected rollout and revert the client and/or backend artifact; never log bearer tokens or raw resource payloads.
+### Shutdown bounds
+On OS signal the server revokes SSE admission/emission immediately, bounds feature cleanup to ≤2 s, and forces accepted HTTP/WS I/O cancellation at signal+10 s. This bounds HTTP drain, not total process exit if a collector syscall blocks; later PTY cleanup remains ordered.
+
 ## SSH Key Management
 
 SSH credentials are loaded on-demand via `/api/ssh/keys/load`. Use an

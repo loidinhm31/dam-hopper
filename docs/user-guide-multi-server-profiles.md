@@ -284,6 +284,18 @@ In a multi-profile environment, different pages resolve API and WebSocket endpoi
 - **Workspace Advisor (`/workspace`)**: The **EVCrate Advisor** plugin (`evcrate.advisor`) is integrated directly into the Workspace as an IDE dock, Terminal float, and compact overlay tool. It requires a selected workspace project to establish admitted profile context; standalone `/plugins/evcrate.advisor` route is retired with fail-closed status. Ordinary custom/third-party plugins remain hosted under `/plugins/:installationId`.
 - **Agent Store (`/agent-store`) & Usage (`/usage`)**: Dedicated on-page server switchers allow managing catalog inventory and token analytics for any connected profile independently of workspace project selection.
 
+## Host resources and health delivery across profiles
+
+The Host Resources popover and Fleet Deck monitor system health independently for each connected server profile:
+
+- **Per-profile delivery:** Each connected profile owns an independent stream. A current connected, visible profile uses paired SSE on a capable server; a 404/405 or unsupported native stream uses owner-bound REST (snapshot every 15 s, visible detail metrics every 5 s). No profile ID is sent in the wire route.
+- **Live and starting:** A paired LIVE stream updates snapshot and metrics together and suppresses their REST polling. While starting, cached readings may be shown with their observation age; a live socket does not guarantee every section is fresh.
+- **Offline or hidden:** Disconnected profiles and hidden documents do not start resource requests. Last-known values may remain visible with an offline/stale label and age; they must not be read as current. REST does not run while a page is hidden.
+- **Auth blocked:** `MFA_REQUIRED` means complete authentication for that profile. `AUTH_UNAVAILABLE` means the server could not verify the session; it does not by itself mean the token is invalid. Both block/cancel resource REST. Auth blocking clears only after a valid authenticated paired frame or a new connection generation.
+- **Switching:** Profile changes synchronously fence resource REST and WebSocket cache updates until the selected owner's paired snapshot/metrics commit, preventing cross-profile cache leakage.
+- **Alerts and other events:** WebSocket alert notifications and unread counts continue independently; visible alert history is refreshed through coalesced REST requests at 30 s. Resource alert events cannot roll back an active SSE pair, and non-resource PTY, terminal, Git, and workspace WS events remain owner-bound and available.
+- **Privileged host actions:** Force Machine to Sleep and idle-suspend behavior remain unchanged, manually invoked, and independently authenticated. Resource monitoring never triggers them.
+
 ## Troubleshooting
 
 ### The profile list is empty
