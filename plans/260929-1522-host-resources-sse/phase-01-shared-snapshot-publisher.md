@@ -5,7 +5,7 @@
 - Source: `server/src/system/monitor.rs`, `server/src/system/config.rs`, `server/src/system.rs`; fixture seam: `server/tests/common/host_resource_fixtures.rs` (new in 00).
 
 ## Overview
-- Date: 2026-09-29; priority: P2; implementation: **pending (0%)**; review: **pending**. Planning only; no gates run.
+- Date: 2026-09-29; priority: P2; status: **DONE (2026-09-30; 100%)**; review: **complete (9.0/10)**. Targeted monitor tests passed 13/13 and publisher tests passed 6/6; see the [review](../reports/code-review-260930-1838-phase-01-shared-snapshot-publisher.md).
 - Build one monitor-owned atomic pair/revision and one demand-driven bounded shared encoder. 02 consumes the published frame; 03 independently implements frozen client contract. No endpoint yet.
 
 ## Key Insights
@@ -40,9 +40,9 @@
 3. **B01-I — integrator owns `server/src/system/monitor.rs` + `server/src/system.rs` overlap and integration:** after both workers land, reconcile imports/types, monitor lock ordering (`reconfigure` vs `update`), watch wake/lost-wake and payload serialization; arrange one module owner for shared paths if workers overlap. Workers: **edit only; skip gates, builds, tests, formatters**. Integrator alone runs gates after all land and shares frozen `PublishedFrame`/subscription signatures with 02; no implementation code in 03's frontend files.
 
 ## Todo list
-- [ ] B01-A — atomic revision/observation/config metadata across both commit branches.
-- [ ] B01-B — demand-driven bounded one-encoder frame stream and control encoder.
-- [ ] B01-I — integrate, exercise behavior, deliver backend publisher seam to 02.
+- [x] B01-A — atomic revision/observation/config metadata across both commit branches.
+- [x] B01-B — demand-driven bounded one-encoder frame stream and control encoder.
+- [x] B01-I — integrate, exercise behavior, deliver backend publisher seam to 02.
 
 ## Success Criteria
 - After implementation, integrator runs `cargo test --manifest-path server/Cargo.toml --lib system::monitor::tests` and `cargo test --manifest-path server/Cargo.toml --lib system::resource_stream::tests`, then `cargo test --manifest-path server/Cargo.toml`. These new module tests exist only after B01-B.

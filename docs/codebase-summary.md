@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`): 2,439 files, 5,673,594 tokens, and 23,828,881 characters. Repomix security scanning excluded 5 files.
+**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,737,855 bytes).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -402,7 +402,7 @@ Thirteen Phase 05 tests in `server/tests/auth_mfa.rs` use `AuthTestFixture`;
 the common fixture isolates MongoDB and cleans the temporary DB on `Drop`.
 See the [Authentication API](./authentication-api.md).
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
-browser-debug, host-resource, and idle-suspend surfaces. Shared state owns
+browser-debug, host-resource, and idle-suspend surfaces. Host-resource delivery now has a monitor-owned revisioned atomic snapshot/metrics pair (`CachedHostResourcePair`) and metadata-only `StreamStatusBasis`; one demand-driven `HostResourcePublisher` shares bounded frames with latest-only `StreamSubscription`s. Phase 01 is a backend seam only: no SSE HTTP route is exposed. See [host-resource SSE architecture](./architecture/host-resource-sse.md). Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,
 workflow services, and feature-specific managers. Root-sensitive filesystem
 operations resolve through project/target sandbox validation rather than a

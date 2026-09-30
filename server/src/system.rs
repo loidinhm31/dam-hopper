@@ -1,11 +1,17 @@
 pub mod alerts;
 pub mod config;
 pub mod monitor;
+pub mod resource_stream;
 pub use alerts::{
     AlertChange, AlertEngine, AlertEngineState, AlertEvidence, AlertIncident, AlertSample,
     AlertSeverity, AlertState, AlertSummary, AlertThresholds,
 };
-pub use monitor::HostResourceMonitor;
+pub use monitor::{CachedHostResourcePair, HostResourceMonitor, StreamStatusBasis};
+pub use resource_stream::{
+    encode_control_event, encode_data_frame, encode_error_control, encode_status_control,
+    encode_status_control_for_frame, ControlFrameError, FrameTooLarge, HostResourcePublisher,
+    PublishedFrame, StreamSubscription, MAX_CONTROL_FRAME_BYTES, MAX_DATA_FRAME_BYTES,
+};
 
 use std::{
     ffi::OsStr,

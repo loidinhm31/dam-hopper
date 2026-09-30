@@ -12,7 +12,7 @@ created: 2026-09-29
 # Host-resource SSE delivery plan
 
 ## Scope and decision
-- **Implementation underway; 1/7 phases complete (14%).** Phase 00 baseline and contract fixtures are complete. Canonical implementation target: [host-resource SSE architecture](../../docs/architecture/host-resource-sse.md). One unchanged monitor, metadata-only **new revision** on changed freshness config (retains observation instants; no sampling/alerts), shared bounded encoder and metadata-only periodic status, 32 global/4 subject authenticated body leases, matched status/full snapshot+metrics, one current owner+QueryClient stream, WS alerts/history and REST fallback. No host actions, settings, sampler rewrite, extra protocol or new collector.
+- **Implementation underway; 2/7 phases complete (29%).** Phase 00 baseline and contract fixtures and Phase 01 shared snapshot publisher are complete. Canonical implementation target: [host-resource SSE architecture](../../docs/architecture/host-resource-sse.md). One unchanged monitor, metadata-only **new revision** on changed freshness config (retains observation instants; no sampling/alerts), shared bounded encoder and metadata-only periodic status, 32 global/4 subject authenticated body leases, matched status/full snapshot+metrics, one current owner+QueryClient stream, WS alerts/history and REST fallback. No host actions, settings, sampler rewrite, extra protocol or new collector.
 - [Validation matrix C01–C43](./validation-matrix.md): scenario/setup/assertions/evidence by phase, all pending. Development rules file `docs/development-rules.md` is absent in current tree; use [AGENTS.md](../../AGENTS.md), existing source conventions and frozen architecture instead.
 - Prior [overload analysis](./research/host-overload-analysis.md), [local collector-only profile](./research/local-collector-profile.md), [transport research](./research/sse-transport-and-security.md), [client research](./research/client-lifecycle-and-cutover.md). Exploratory reports are subordinate to the architecture: bearer Fetch, two persisted reads/check, independent supervisor, both snapshot **and** metrics cutover, 15 s snapshot/5 s visible detail REST fallback, not EventSource/cookies or body-polled auth.
 
@@ -20,7 +20,7 @@ created: 2026-09-29
 | Phase | Deliverable | Status |
 |---|---|---|
 | [00 — baseline and contract fixtures](./phase-00-baseline-and-contract-fixtures.md) | Map existing behavior/fixtures; no tests against unimplemented route. | DONE (2026-09-30 16:41:39 +07:00) · 100% |
-| [01 — shared snapshot publisher](./phase-01-shared-snapshot-publisher.md) | Atomic pair/epoch/revision/observation metadata, demand-driven bounded shared encoding. | Pending · 0% |
+| [01 — shared snapshot publisher](./phase-01-shared-snapshot-publisher.md) | Atomic pair/epoch/revision/observation metadata, demand-driven bounded shared encoding. | DONE (2026-09-30) · 100% |
 | [02 — authenticated SSE endpoint](./phase-02-authenticated-sse-endpoint.md) | Route/Origin/admission/auth/body lifetime/status/shutdown. | Pending · 0% |
 | [03 — profile-owned stream client](./phase-03-profile-owned-stream-client.md) | Owner fetch, framed parser, freshness, retry/coordinator fences. | Pending · 0% |
 | [04 — resource query and UI cutover](./phase-04-resource-query-and-ui-cutover.md) | QueryClient/root binding, dual-key arbitration, fleet/detail/WS/history. | Pending · 0% |
@@ -45,8 +45,7 @@ created: 2026-09-29
 
 ## Validation Summary
 
-**Plan approved:** 2026-09-29. **Phase 00 implementation:** DONE (2026-09-30; 100%). Scoped baseline and smoke evidence are recorded in the [Phase 00 plan](./phase-00-baseline-and-contract-fixtures.md). **Overall:** 1/7 phases complete; Phases 01–06 and release qualification remain pending.
-
+**Plan approved:** 2026-09-29. **Phase 00 implementation:** DONE (2026-09-30; 100%). **Phase 01 shared snapshot publisher:** DONE (2026-09-30; 100%); targeted monitor and publisher tests passed 19/19, code review scored 9.0/10 with no critical/high findings and four non-blocking medium recommendations. See the [Phase 01 plan](./phase-01-shared-snapshot-publisher.md) and [review](../reports/code-review-260930-1838-phase-01-shared-snapshot-publisher.md). **Overall:** 2/7 phases complete (29%); Phases 02–06 and release qualification remain pending.
 ### Confirmed Decisions
 - **Shared collection/publication:** one existing monitor per server process, one atomic snapshot/metrics cache and one shared latest-only encoded frame per published revision. No per-subscriber collector or extra collector pool. Fleet/detail share a connection for the same owner and QueryClient; cross-tab pooling is not included.
 - **Delivery limits:** **32 global / 4 per authenticated user**, confirmed after explaining these count response-body/network connections, not collectors. Separate connections retain independent authorization and bounded delivery state.

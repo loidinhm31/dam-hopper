@@ -4,8 +4,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 ### Host-resource SSE delivery (2026-09-30)
 
-- **Plan status: IN PROGRESS (1/7 phases; 14%; updated 2026-09-30 16:41:39 +07:00).** Phase 00 — baseline and contract fixtures — **DONE (2026-09-30 16:41:39 +07:00; 100%)**. Phases 01–06 remain pending; no SSE route/client or release qualification is delivered.
+- **Plan status: IN PROGRESS (2/7 phases; 29%; updated 2026-09-30).** Phase 00 — baseline and contract fixtures — **DONE (2026-09-30 16:41:39 +07:00; 100%)**; Phase 01 — shared snapshot publisher — **DONE (2026-09-30; 100%)**. Phases 02–06 remain pending; no SSE endpoint/client or release qualification is delivered.
 - Added shared representative/degraded fixtures, current REST/monitor regression coverage, and an opt-in whole-monitor CPU/RSS/cadence profiler. The focused baseline passed **7/7**; the server suite passed **1,709**, with **0 failures and 5 ignored**. Profiler smoke produced complete schemaVersion 1 JSON. This local smoke is baseline evidence only, not reference/weak-host or proxy qualification. See the [Phase 00 plan](../plans/260929-1522-host-resources-sse/phase-00-baseline-and-contract-fixtures.md), [parent plan](../plans/260929-1522-host-resources-sse/plan.md), [test report](../plans/reports/tester-260930-1615-phase-00-host-resource-sse-baseline.md), and [Cycle 2 review](../plans/reports/code-review-260930-1634-phase-00-baseline-and-fixtures-cycle-2.md).
+- **Phase 01 — shared snapshot publisher — DONE (2026-09-30; 100%).** Delivered atomic monitor snapshot/metrics publication and demand-driven bounded shared-frame encoding. Review: **9.0/10**, no critical/high findings; four medium recommendations remain non-blocking. Scoped gates passed: monitor tests **13/13**, publisher tests **6/6**. See the [Phase 01 plan](../plans/260929-1522-host-resources-sse/phase-01-shared-snapshot-publisher.md) and [review](../plans/reports/code-review-260930-1838-phase-01-shared-snapshot-publisher.md).
 
 ### Object-only commit-message rewrite (2026-09-30)
 
