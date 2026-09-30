@@ -2,6 +2,11 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Host-resource SSE delivery (2026-09-30)
+
+- **Plan status: IN PROGRESS (1/7 phases; 14%; updated 2026-09-30 16:41:39 +07:00).** Phase 00 — baseline and contract fixtures — **DONE (2026-09-30 16:41:39 +07:00; 100%)**. Phases 01–06 remain pending; no SSE route/client or release qualification is delivered.
+- Added shared representative/degraded fixtures, current REST/monitor regression coverage, and an opt-in whole-monitor CPU/RSS/cadence profiler. The focused baseline passed **7/7**; the server suite passed **1,709**, with **0 failures and 5 ignored**. Profiler smoke produced complete schemaVersion 1 JSON. This local smoke is baseline evidence only, not reference/weak-host or proxy qualification. See the [Phase 00 plan](../plans/260929-1522-host-resources-sse/phase-00-baseline-and-contract-fixtures.md), [parent plan](../plans/260929-1522-host-resources-sse/plan.md), [test report](../plans/reports/tester-260930-1615-phase-00-host-resource-sse-baseline.md), and [Cycle 2 review](../plans/reports/code-review-260930-1634-phase-00-baseline-and-fixtures-cycle-2.md).
+
 ### Object-only commit-message rewrite (2026-09-30)
 
 - **Plan status: COMPLETED (3/3 phases; 100%; updated 2026-09-30 03:28:00 +07:00).** Phase 01 — Local object-only commit-message rewrite — **DONE (2026-09-30 00:44:16 +07:00; 100%)**; Phase 02 — Git panel integration and explicitly leased publication — **DONE (2026-09-30 02:38:37 +07:00; 100%)**; Phase 03 — Qualification and docs — **DONE (2026-09-30 03:28:00 +07:00; 100%)**.
