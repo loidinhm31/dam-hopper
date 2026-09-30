@@ -11,6 +11,9 @@ import type { PluginMetadataItem } from "@/api/client.js";
 const mockParams = { installationId: "evcrate.advisor" };
 vi.mock("react-router-dom", () => ({
   useParams: () => mockParams,
+  Link: ({ children, to, ...props }: { children?: React.ReactNode; to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props}>{children}</a>
+  ),
 }));
 
 const mockSettingsList = vi.fn();
@@ -159,27 +162,20 @@ describe("PluginHostPage Settings Target Server routing", () => {
     container.remove();
   });
 
-  it("routes EVCrate Advisor to Settings Target Server regardless of workspace selectedProject", async () => {
+  it("rejects evcrate.advisor with unavailable state before list or asset calls", async () => {
     await act(async () => {
       root.render(<PluginHostPage />);
     });
 
-    // Should query settings server, NOT workspace server
-    expect(mockSettingsList).toHaveBeenCalledWith({
-      project: "settings-repo",
-    });
+    // Zero list or asset calls on either server
+    expect(mockSettingsList).not.toHaveBeenCalled();
     expect(mockWorkspaceList).not.toHaveBeenCalled();
-
-    expect(mockSettingsReadUiAsset).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installationId: "evcrate.advisor",
-        target: { project: "settings-repo" },
-      }),
-      expect.anything(),
-    );
+    expect(mockSettingsReadUiAsset).not.toHaveBeenCalled();
+    expect(mockWorkspaceReadUiAsset).not.toHaveBeenCalled();
 
     const layout = container.querySelector('[data-testid="app-layout"]');
-    expect(layout?.getAttribute("data-title")).toBe("Plugin · EVCrate Advisor");
+    expect(layout?.getAttribute("data-title")).toBe("Plugin · Unavailable");
+    expect(container.querySelector(".plugin-unavailable-state")).not.toBeNull();
   });
 
   it("routes non-Advisor plugins to the workspace project's server", async () => {

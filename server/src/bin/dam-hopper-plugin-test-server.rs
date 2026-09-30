@@ -110,7 +110,7 @@ struct SessionDescriptor {
     package_sha256: String,
     ui_sha256: String,
     activation_generation: u64,
-    plugin_url: String,
+    workspace_url: String,
     direct_asset_url: String,
     state_dir: String,
 }
@@ -451,7 +451,7 @@ async fn main() -> anyhow::Result<()> {
         package_sha256,
         ui_sha256: ui.sha256,
         activation_generation: installation.activation_generation,
-        plugin_url: format!("{public_origin}/plugins/{}", installation.installation_id),
+        workspace_url: format!("{public_origin}/workspace"),
         direct_asset_url: format!("{public_origin}{asset_path}"),
         state_dir: state_dir.display().to_string(),
     };
