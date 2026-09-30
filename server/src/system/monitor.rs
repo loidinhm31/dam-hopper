@@ -7,6 +7,7 @@ use std::{
     },
     time::Duration,
 };
+use uuid::Uuid;
 
 use tokio::sync::{Notify, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -38,7 +39,51 @@ pub struct AggregateSample {
     pub psi_full_avg10: Option<f64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CachedHostResourcePair {
+    pub server_epoch: Uuid,
+    pub revision: u64,
+    pub snapshot: HostResourceSnapshotV1,
+    pub metrics: HostMetrics,
+    pub snapshot_observed_at: Option<std::time::Instant>,
+    pub metrics_observed_at: Option<std::time::Instant>,
+    pub light_sample_ms: u64,
+    pub snapshot_deadline_ms: u64,
+    pub jitter_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamStatusBasis {
+    pub server_epoch: Uuid,
+    pub revision: u64,
+    pub snapshot_observed_at: Option<std::time::Instant>,
+    pub metrics_observed_at: Option<std::time::Instant>,
+    pub light_sample_ms: u64,
+    pub snapshot_deadline_ms: u64,
+    pub jitter_ms: u64,
+}
+
+impl StreamStatusBasis {
+    pub fn freshness_ttl_ms(&self) -> u64 {
+        freshness_ttl_ms(self.light_sample_ms, self.snapshot_deadline_ms, self.jitter_ms)
+    }
+}
+
+pub fn freshness_ttl_ms(light_sample_ms: u64, snapshot_deadline_ms: u64, jitter_ms: u64) -> u64 {
+    light_sample_ms
+        .saturating_mul(2)
+        .saturating_add(snapshot_deadline_ms.saturating_mul(2))
+        .saturating_add(jitter_ms.saturating_mul(2))
+}
+
 pub struct MonitorCache {
+    pub server_epoch: Uuid,
+    pub revision: u64,
+    pub snapshot_observed_at: Option<std::time::Instant>,
+    pub metrics_observed_at: Option<std::time::Instant>,
+    pub light_sample_ms: u64,
+    pub snapshot_deadline_ms: u64,
+    pub jitter_ms: u64,
     pub latest: HostResourceSnapshotV1,
     pub legacy: HostMetrics,
     pub aggregate: VecDeque<AggregateSample>,
@@ -50,6 +95,18 @@ pub struct MonitorCache {
     resource_engine: ResourceAlertEngineState,
 }
 
+impl MonitorCache {
+    pub(crate) fn bump_revision(&mut self) -> u64 {
+        self.revision = match self.revision.checked_add(1) {
+            Some(next) => next,
+            None => {
+                self.server_epoch = Uuid::new_v4();
+                0
+            }
+        };
+        self.revision
+    }
+}
 #[derive(Clone)]
 pub struct HostResourceMonitor {
     source: Arc<dyn HostResourceSource>,
@@ -58,6 +115,7 @@ pub struct HostResourceMonitor {
     config: Arc<RwLock<HostResourceMonitorConfig>>,
     config_generation: Arc<AtomicU64>,
     config_changed: Arc<Notify>,
+    stream_watch_tx: tokio::sync::watch::Sender<u64>,
     cache: Arc<RwLock<MonitorCache>>,
     cancellation: CancellationToken,
     task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -85,6 +143,11 @@ impl HostResourceMonitor {
         let alert = healthy_summary(now);
         let mut latest = HostResourceSnapshotV1::unavailable(now, &workspace);
         latest.alert = Some(alert.clone());
+        let light_sample_ms = config.light_sample_seconds.saturating_mul(1_000);
+        let snapshot_deadline_ms = config.snapshot_deadline_millis;
+        let jitter_ms = config.jitter_millis;
+        let server_epoch = Uuid::new_v4();
+        let (stream_watch_tx, _) = tokio::sync::watch::channel(0);
         Self {
             source,
             workspace_dir,
@@ -92,7 +155,15 @@ impl HostResourceMonitor {
             config: Arc::new(RwLock::new(config)),
             config_generation: Arc::new(AtomicU64::new(0)),
             config_changed: Arc::new(Notify::new()),
+            stream_watch_tx,
             cache: Arc::new(RwLock::new(MonitorCache {
+                server_epoch,
+                revision: 0,
+                snapshot_observed_at: None,
+                metrics_observed_at: Some(std::time::Instant::now()),
+                light_sample_ms,
+                snapshot_deadline_ms,
+                jitter_ms,
                 latest,
                 legacy,
                 aggregate: VecDeque::with_capacity(ring_capacity),
@@ -177,6 +248,38 @@ impl HostResourceMonitor {
         self.cache.read().await.legacy.clone()
     }
 
+    pub async fn read_stream_pair(&self) -> CachedHostResourcePair {
+        let cache = self.cache.read().await;
+        CachedHostResourcePair {
+            server_epoch: cache.server_epoch,
+            revision: cache.revision,
+            snapshot: cache.latest.clone(),
+            metrics: cache.legacy.clone(),
+            snapshot_observed_at: cache.snapshot_observed_at,
+            metrics_observed_at: cache.metrics_observed_at,
+            light_sample_ms: cache.light_sample_ms,
+            snapshot_deadline_ms: cache.snapshot_deadline_ms,
+            jitter_ms: cache.jitter_ms,
+        }
+    }
+
+    pub async fn current_status_basis(&self) -> StreamStatusBasis {
+        let cache = self.cache.read().await;
+        StreamStatusBasis {
+            server_epoch: cache.server_epoch,
+            revision: cache.revision,
+            snapshot_observed_at: cache.snapshot_observed_at,
+            metrics_observed_at: cache.metrics_observed_at,
+            light_sample_ms: cache.light_sample_ms,
+            snapshot_deadline_ms: cache.snapshot_deadline_ms,
+            jitter_ms: cache.jitter_ms,
+        }
+    }
+
+    pub fn subscribe_stream_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.stream_watch_tx.subscribe()
+    }
+
     pub async fn alerts(&self, limit: usize) -> Vec<HostResourceAlertIncident> {
         let cache = self.cache.read().await;
         let mut incidents = cache
@@ -213,6 +316,10 @@ impl HostResourceMonitor {
     /// second monitor. The current sample remains valid until the next tick.
     pub async fn reconfigure(&self, config: HostResourceMonitorConfig) {
         let config = config.clamped();
+        let new_light_sample_ms = config.light_sample_seconds.saturating_mul(1_000);
+        let new_snapshot_deadline_ms = config.snapshot_deadline_millis;
+        let new_jitter_ms = config.jitter_millis;
+
         *self.config.write().await = config.clone();
         self.config_generation.fetch_add(1, Ordering::Release);
         let mut cache = self.cache.write().await;
@@ -223,7 +330,24 @@ impl HostResourceMonitor {
             cache.incidents.pop_front();
         }
         trim_resource_alert_retention(&mut cache, config.max_alert_incidents);
+
+        let freshness_changed = cache.light_sample_ms != new_light_sample_ms
+            || cache.snapshot_deadline_ms != new_snapshot_deadline_ms
+            || cache.jitter_ms != new_jitter_ms;
+
+        let notified_revision = if freshness_changed {
+            cache.light_sample_ms = new_light_sample_ms;
+            cache.snapshot_deadline_ms = new_snapshot_deadline_ms;
+            cache.jitter_ms = new_jitter_ms;
+            Some(cache.bump_revision())
+        } else {
+            None
+        };
+
         drop(cache);
+        if let Some(rev) = notified_revision {
+            let _ = self.stream_watch_tx.send(rev);
+        }
         self.config_changed.notify_one();
     }
 
@@ -418,8 +542,15 @@ impl HostResourceMonitor {
                 cache.incidents.pop_front();
             }
             cache.alert = transition.summary.clone();
+            cache.light_sample_ms = config.light_sample_seconds.saturating_mul(1_000);
+            cache.snapshot_deadline_ms = config.snapshot_deadline_millis;
+            cache.jitter_ms = config.jitter_millis;
+            cache.metrics_observed_at = Some(std::time::Instant::now());
+            cache.snapshot_observed_at = Some(std::time::Instant::now());
+            let new_revision = cache.bump_revision();
             let should_emit_memory = transition.change.is_some();
             drop(cache);
+            let _ = self.stream_watch_tx.send(new_revision);
             if should_emit_memory {
                 self.event_sink.send_host_alert_changed(&transition.summary);
             }
@@ -434,7 +565,14 @@ impl HostResourceMonitor {
         while cache.incidents.len() > config.max_alert_incidents {
             cache.incidents.pop_front();
         }
+        cache.light_sample_ms = config.light_sample_seconds.saturating_mul(1_000);
+        cache.snapshot_deadline_ms = config.snapshot_deadline_millis;
+        cache.jitter_ms = config.jitter_millis;
+        cache.metrics_observed_at = Some(std::time::Instant::now());
+        // snapshot_observed_at is retained from prior successful observation
+        let new_revision = cache.bump_revision();
         drop(cache);
+        let _ = self.stream_watch_tx.send(new_revision);
         for incident in &resource_events {
             self.event_sink.send_host_resource_alert_changed(incident);
         }
@@ -880,5 +1018,131 @@ mod tests {
             crate::system::AvailabilityState::Stale
         );
         drop(monitor);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_initial_pair_metadata_and_revisions() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+
+        let pair = monitor.read_stream_pair().await;
+        assert!(!pair.server_epoch.is_nil());
+        assert_eq!(pair.revision, 0);
+        assert!(pair.snapshot_observed_at.is_none());
+        assert!(pair.metrics_observed_at.is_some());
+        assert_eq!(pair.light_sample_ms, 5_000);
+        assert_eq!(pair.snapshot_deadline_ms, 500);
+        assert_eq!(pair.jitter_ms, 250);
+
+        let basis = monitor.current_status_basis().await;
+        assert_eq!(basis.server_epoch, pair.server_epoch);
+        assert_eq!(basis.revision, 0);
+        assert!(basis.snapshot_observed_at.is_none());
+        assert_eq!(basis.metrics_observed_at, pair.metrics_observed_at);
+        assert_eq!(basis.freshness_ttl_ms(), 11_500);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_observed_commit_advances_revision_and_updates_both_instants() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+        let mut watch_rx = monitor.subscribe_stream_changes();
+        assert_eq!(*watch_rx.borrow_and_update(), 0);
+
+        let legacy = monitor.legacy_metrics().await;
+        let snapshot = HostResourceSnapshotV1::unavailable(1, PathBuf::from("/tmp").as_path());
+        monitor.update(snapshot, legacy, Some(10), 10).await;
+
+        let pair = monitor.read_stream_pair().await;
+        assert_eq!(pair.revision, 1);
+        assert!(pair.snapshot_observed_at.is_some());
+        assert!(pair.metrics_observed_at.is_some());
+
+        assert!(watch_rx.has_changed().unwrap());
+        assert_eq!(*watch_rx.borrow_and_update(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_degraded_commit_advances_revision_and_retains_prior_deep_instant() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+
+        // First observed commit sets a snapshot observation instant
+        let legacy = monitor.legacy_metrics().await;
+        let snapshot = HostResourceSnapshotV1::unavailable(1, PathBuf::from("/tmp").as_path());
+        monitor.update(snapshot, legacy.clone(), Some(10), 10).await;
+
+        let first_pair = monitor.read_stream_pair().await;
+        let first_deep_instant = first_pair.snapshot_observed_at.expect("deep instant set");
+        assert_eq!(first_pair.revision, 1);
+
+        // Second commit is degraded (None for observed_at_ms)
+        let snapshot2 = HostResourceSnapshotV1::unavailable(2, PathBuf::from("/tmp").as_path());
+        monitor.update(snapshot2, legacy, None, 20).await;
+
+        let second_pair = monitor.read_stream_pair().await;
+        assert_eq!(second_pair.revision, 2);
+        // snapshot_observed_at must retain the prior successful instant!
+        assert_eq!(second_pair.snapshot_observed_at, Some(first_deep_instant));
+        // metrics_observed_at must be updated
+        assert!(second_pair.metrics_observed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_reconfigure_freshness_revisions() {
+        let root = Arc::new(RwLock::new(PathBuf::from("/tmp")));
+        let (sink, _) = BroadcastEventSink::new(8);
+        let monitor = HostResourceMonitor::system(root, sink, Default::default());
+        let mut watch_rx = monitor.subscribe_stream_changes();
+        assert_eq!(*watch_rx.borrow_and_update(), 0);
+
+        // 1. Reconfigure non-freshness input only (e.g. max_alert_incidents)
+        monitor
+            .reconfigure(HostResourceMonitorConfig {
+                max_alert_incidents: 10,
+                ..Default::default()
+            })
+            .await;
+
+        let pair = monitor.read_stream_pair().await;
+        assert_eq!(pair.revision, 0, "non-freshness config change must not increment revision");
+        assert!(!watch_rx.has_changed().unwrap());
+
+        // 2. Reconfigure freshness input (light_sample_seconds: 2 instead of default 5)
+        monitor
+            .reconfigure(HostResourceMonitorConfig {
+                light_sample_seconds: 2,
+                max_alert_incidents: 10,
+                ..Default::default()
+            })
+            .await;
+
+        let pair2 = monitor.read_stream_pair().await;
+        assert_eq!(pair2.revision, 1, "changed freshness config must increment revision");
+        assert_eq!(pair2.light_sample_ms, 2_000);
+        assert_eq!(pair2.snapshot_deadline_ms, 500);
+        assert_eq!(pair2.jitter_ms, 250);
+        let expected_ttl = 2_000 * 2 + 500 * 2 + 250 * 2; // 4000 + 1000 + 500 = 5500
+        let basis = monitor.current_status_basis().await;
+        assert_eq!(basis.freshness_ttl_ms(), expected_ttl);
+
+        assert!(watch_rx.has_changed().unwrap());
+        assert_eq!(*watch_rx.borrow_and_update(), 1);
+
+        // 3. Reapply identical config: no new revision!
+        monitor
+            .reconfigure(HostResourceMonitorConfig {
+                light_sample_seconds: 2,
+                max_alert_incidents: 10,
+                ..Default::default()
+            })
+            .await;
+
+        let pair3 = monitor.read_stream_pair().await;
+        assert_eq!(pair3.revision, 1, "identical config must not increment revision");
+        assert!(!watch_rx.has_changed().unwrap());
     }
 }
