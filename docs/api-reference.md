@@ -585,12 +585,12 @@ finite non-negative timestamps, allowed kind/state/severity,
 bounded required text, and the exact evidence fields for that kind. Invalid or
 unknown evidence is discarded without updating cached resource state.
 
-A valid resource event merges or replaces only its `incidentId` in the cached
-`currentAlerts`; an event with `resolvedAt` removes only that incident. The
-client then invalidates snapshot and history queries. An explicit
-`currentAlerts: []` from the authoritative snapshot clears retained resource
-incidents, while an omitted additive field preserves them for old-server
-compatibility until REST establishes current state.
+A valid event updates only its `incidentId` in the owner's snapshot when REST has
+source authority; `resolvedAt` removes only that incident. While switching or
+LIVE, WS cannot patch/invalidate the snapshot; the paired SSE frame is authority.
+The owner bridge dispatches once per transport and suppresses the matching
+ambient listener; it coalesces owner/QueryClient history invalidations.
+`currentAlerts: []` clears active incidents; omission preserves older-server compatibility.
 
 ### Terminal idle suspend
 

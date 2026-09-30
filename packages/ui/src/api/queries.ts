@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
   api,
   isGitUnavailableError,
@@ -79,9 +79,18 @@ import {
   getApi,
   getTransport as getBoundTransport,
   getConnectionSnapshot,
+  isCurrentConnection,
 } from "./connections.js";
 import { profileQueryKey, profileQueryPrefix } from "./query-client.js";
-import type { ConnectionRef, ProfileId } from "./ownership.js";
+import { ConnectionOwnerError, type ConnectionRef, type ProfileId } from "./ownership.js";
+import {
+  registerHostResourceInterest,
+  getHostResourceSource,
+  subscribeHostResourceSource,
+  captureResourceSource,
+  isResourceSourceCurrent,
+  canUseResourceRest,
+} from "./host-resource-stream-coordinator.js";
 import { resolveWorkflowOwner } from "./workflow-queries.js";
 export * from "./workflow-queries.js";
 
@@ -500,28 +509,119 @@ export function useProjectStatus(target: ProjectTargetInput, enabled = true) {
 }
 
 export function useHostMetrics(enabled: boolean, options?: OwnerInput) {
+  const qc = useQueryClient();
   const owner = resolveTargetOwner(options);
+
+  useEffect(() => {
+    if (!enabled || !owner) return;
+    return registerHostResourceInterest(owner, qc, "detailMetrics");
+  }, [enabled, owner, qc]);
+
+  useSyncExternalStore(
+    useCallback(
+      (notify) => {
+        if (!owner) return () => {};
+        return subscribeHostResourceSource(owner, qc, notify);
+      },
+      [owner, qc],
+    ),
+    () => (owner ? getHostResourceSource(owner, qc) : null),
+    () => null,
+  );
+
   const queryKey = owner
     ? profileQueryKey(owner, "system", "metrics")
     : (["system", "metrics"] as const);
+  const canRest = owner ? canUseResourceRest(owner, qc) : false;
+  const isQueryEnabled = enabled && Boolean(owner);
+
   return useQuery<HostMetrics>({
     queryKey,
-    queryFn: () => getBoundApiClient(owner).system.metrics(),
-    enabled,
-    refetchInterval: enabled ? 1_000 : false,
+    queryFn: async ({ signal }) => {
+      if (!owner) throw new Error("No owner specified for host metrics");
+      if (!isCurrentConnection(owner) || !canUseResourceRest(owner, qc)) {
+        const cached = qc.getQueryData<HostMetrics>(queryKey);
+        if (cached) return cached;
+        throw new ConnectionOwnerError("Host metrics REST not permitted", "unavailable");
+      }
+      const sourceGen = captureResourceSource(owner, qc);
+      const metrics = await getBoundApiClient(owner).system.metrics(signal);
+      if (
+        !isCurrentConnection(owner) ||
+        !isResourceSourceCurrent(owner, qc, sourceGen) ||
+        !canUseResourceRest(owner, qc)
+      ) {
+        const cached = qc.getQueryData<HostMetrics>(queryKey);
+        if (cached) return cached;
+        throw new ConnectionOwnerError(
+          "Host metrics response stale or REST blocked",
+          "stale",
+        );
+      }
+      return metrics;
+    },
+    enabled: isQueryEnabled && canRest,
+    refetchInterval: isQueryEnabled && canRest ? 5_000 : false,
   });
 }
 
 export function useHostResourceSnapshot(enabled = true, options?: OwnerInput) {
+  const qc = useQueryClient();
   const owner = resolveTargetOwner(options);
+
+  useEffect(() => {
+    if (!enabled || !owner) return;
+    return registerHostResourceInterest(owner, qc, "detailSnapshot");
+  }, [enabled, owner, qc]);
+
+  useSyncExternalStore(
+    useCallback(
+      (notify) => {
+        if (!owner) return () => {};
+        return subscribeHostResourceSource(owner, qc, notify);
+      },
+      [owner, qc],
+    ),
+    () => (owner ? getHostResourceSource(owner, qc) : null),
+    () => null,
+  );
+
   const queryKey = owner
     ? profileQueryKey(owner, "system", "resource-snapshot")
     : (["system", "resource-snapshot"] as const);
+  const canRest = owner ? canUseResourceRest(owner, qc) : false;
+  const isQueryEnabled = enabled && Boolean(owner);
+
   return useQuery<HostResourceSnapshotV1>({
     queryKey,
-    queryFn: () => getBoundApiClient(owner).system.resourceSnapshot(),
-    enabled,
-    refetchInterval: enabled ? 15_000 : false,
+    queryFn: async ({ signal }) => {
+      if (!owner) throw new Error("No owner specified for host resource snapshot");
+      if (!isCurrentConnection(owner) || !canUseResourceRest(owner, qc)) {
+        const cached = qc.getQueryData<HostResourceSnapshotV1>(queryKey);
+        if (cached) return cached;
+        throw new ConnectionOwnerError(
+          "Host resource snapshot REST not permitted",
+          "unavailable",
+        );
+      }
+      const sourceGen = captureResourceSource(owner, qc);
+      const snapshot = await getBoundApiClient(owner).system.resourceSnapshot(signal);
+      if (
+        !isCurrentConnection(owner) ||
+        !isResourceSourceCurrent(owner, qc, sourceGen) ||
+        !canUseResourceRest(owner, qc)
+      ) {
+        const cached = qc.getQueryData<HostResourceSnapshotV1>(queryKey);
+        if (cached) return cached;
+        throw new ConnectionOwnerError(
+          "Host resource snapshot response stale or REST blocked",
+          "stale",
+        );
+      }
+      return snapshot;
+    },
+    enabled: isQueryEnabled && canRest,
+    refetchInterval: isQueryEnabled && canRest ? 15_000 : false,
   });
 }
 
@@ -530,15 +630,46 @@ export function useHostResourceAlerts(
   limit = 20,
   options?: OwnerInput,
 ) {
+  const qc = useQueryClient();
   const owner = resolveTargetOwner(options);
+
+  const sourceState = useSyncExternalStore(
+    useCallback(
+      (notify) => {
+        if (!owner) return () => {};
+        return subscribeHostResourceSource(owner, qc, notify);
+      },
+      [owner, qc],
+    ),
+    () => (owner ? getHostResourceSource(owner, qc) : null),
+    () => null,
+  );
+
   const queryKey = owner
     ? profileQueryKey(owner, "system", "resource-alerts", limit)
     : (["system", "resource-alerts", limit] as const);
+
+  const isAuthBlocked = sourceState?.mode === "AUTH_BLOCKED";
+  const isVisible =
+    typeof document === "undefined" || document.visibilityState === "visible";
+  const canPollHistory = enabled && Boolean(owner) && !isAuthBlocked && isVisible;
+
   return useQuery<HostResourceAlertIncident[]>({
     queryKey,
-    queryFn: () => getBoundApiClient(owner).system.resourceAlerts(limit),
-    enabled,
-    refetchInterval: enabled ? 30_000 : false,
+    queryFn: async () => {
+      if (!owner) throw new Error("No owner specified for resource alerts");
+      if (sourceState?.mode === "AUTH_BLOCKED") {
+        const cached = qc.getQueryData<HostResourceAlertIncident[]>(queryKey);
+        if (cached) return cached;
+        throw new ConnectionOwnerError(
+          "Resource alerts REST blocked by auth latch",
+          "unavailable",
+        );
+      }
+      return getBoundApiClient(owner).system.resourceAlerts(limit);
+    },
+    enabled: enabled && Boolean(owner) && !isAuthBlocked,
+    refetchInterval: canPollHistory ? 30_000 : false,
   });
 }
 export const IDLE_SUSPEND_STATUS_QUERY_KEY = [

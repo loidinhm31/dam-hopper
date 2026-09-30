@@ -12,6 +12,7 @@ import {
   useMultiHostResources,
   type UseMultiHostResourcesResult,
 } from "./use-multi-host-resources.js";
+import { registerConnectionRegistryQueryClient } from "@/api/host-resource-stream-coordinator.js";
 
 const state = vi.hoisted(() => ({
   profileVersion: 1,
@@ -42,6 +43,9 @@ vi.mock("@/api/connections.js", () => ({
     const snap = state.snapshots.get(owner.profileId);
     return snap?.status === "connected" && snap.owner.generation === owner.generation;
   },
+  getTransport: () => ({
+    supportsHostResourceStreaming: () => false,
+  }),
 }));
 
 vi.mock("@/api/queries.js", () => ({
@@ -144,14 +148,18 @@ describe("useMultiHostResources", () => {
         queries: { retry: false, gcTime: Infinity },
       },
     });
+    unregisterClient = registerConnectionRegistryQueryClient(client);
     container = document.createElement("div");
     root = createRoot(container);
   });
+
+  let unregisterClient: (() => void) | undefined;
 
   afterEach(async () => {
     await act(async () => {
       root.unmount();
     });
+    unregisterClient?.();
     vi.useRealTimers();
   });
 

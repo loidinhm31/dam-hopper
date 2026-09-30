@@ -108,9 +108,9 @@ mount stays visibly missing rather than silently binding to another filesystem.
 
 Fleet mode is documented in the architecture's
 [Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20)
-section: its toolbar keeps a Fleet toggle and profile pills, 1-second
-compatibility metrics run only for the visible connected drilldown, and a
-removed/disconnected selection returns to Fleet without ambient fallback.
+section: its toolbar keeps a Fleet toggle and profile pills. At this 2026-09-17
+baseline, visible connected detail used a 1-second metrics query; later Phase 04
+SSE changes REST fallback to 5 seconds under the owner/QueryClient source gate.
 
 `use-host-resource-alert-presentation.ts` tracks unread incident versions both
 in a compatibility aggregate and in `byProfile`. Resource incidents are keyed

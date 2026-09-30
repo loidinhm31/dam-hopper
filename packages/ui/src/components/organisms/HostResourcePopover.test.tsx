@@ -715,4 +715,37 @@ describe("HostResourcePopover", () => {
       expect(fleetPill?.textContent).toContain("Fleet");
     });
   });
+
+  describe("04-P freshness integration", () => {
+    it("renders popover trigger and consumes freshness without crashing", async () => {
+      mockMultiResources = {
+        configuredProfileCount: 1,
+        entries: [],
+        summary: {
+          watchedCount: 1,
+          connectedCount: 1,
+          attentionCount: 0,
+          unavailableCount: 0,
+          unreadCount: 0,
+          presentation: {
+            baseLabel: "Healthy",
+            label: "Healthy",
+            statusClassName: "",
+            statusIconClassName: "",
+            triggerClassName: "",
+            badgeClassName: "",
+            icon: "check",
+            rank: 0,
+            mode: "current",
+          },
+        },
+      };
+
+      const dom = await renderComponent(
+        <HostResourcePopover owner={{ profileId: "p1", generation: 1 }} />,
+      );
+
+      expect(dom.querySelector("button")).not.toBeNull();
+    });
+  });
 });

@@ -13,6 +13,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   connectProfile,
   syncActiveProfileConnection,
+  registerConnectionRegistryQueryClient,
 } from "@/api/connections.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
@@ -262,6 +263,10 @@ export function DamHopperApp() {
     activeProfileId ? (getAuthToken(activeProfileId) ?? "") : "",
   ]);
   const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
+
+  useEffect(() => {
+    return registerConnectionRegistryQueryClient(qc);
+  }, [qc]);
 
   useEffect(() => {
     const settings = useSettingsStore.getState();

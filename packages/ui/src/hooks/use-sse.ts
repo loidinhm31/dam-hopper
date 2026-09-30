@@ -26,7 +26,14 @@ import {
 import { useEditorStore } from "@/stores/editor.js";
 import type { ConnectionRef, ProfileId } from "../api/ownership.js";
 import { profileQueryKey, profileQueryPrefix } from "../api/query-client.js";
-
+import { isCurrentConnection } from "../api/connections.js";
+import {
+  canUseResourceRest,
+  getHostResourceSource,
+  captureResourceSource,
+  isResourceSourceCurrent,
+} from "../api/host-resource-stream-coordinator.js";
+import { useHostResourceAlertPresentationStore } from "./use-host-resource-alert-presentation.js";
 export type IpcStatus = ConnectionStatus;
 
 export interface IpcEvent<T = unknown> {
@@ -412,6 +419,51 @@ function hasValidOptionalPercent(value: unknown): boolean {
 
 let initialized = false;
 const unsubscribers: Array<() => void> = [];
+const ownerBridgeTransports = new Set<Transport>();
+
+interface PendingHistoryInvalidation {
+  owner: ConnectionRef;
+  qc: QueryClient;
+}
+const pendingHistoryInvalidations = new Map<string, PendingHistoryInvalidation>();
+let historyInvalidationScheduled = false;
+const qcIds = new WeakMap<QueryClient, number>();
+let nextQcId = 1;
+
+function getQcId(qc: QueryClient): number {
+  let id = qcIds.get(qc);
+  if (id === undefined) {
+    id = nextQcId++;
+    qcIds.set(qc, id);
+  }
+  return id;
+}
+
+function scheduleHistoryInvalidation(owner: ConnectionRef, qc: QueryClient): void {
+  const key = `${owner.profileId}@${owner.generation}::${getQcId(qc)}`;
+  pendingHistoryInvalidations.set(key, { owner, qc });
+  if (!historyInvalidationScheduled) {
+    historyInvalidationScheduled = true;
+    queueMicrotask(() => {
+      historyInvalidationScheduled = false;
+      const drain = Array.from(pendingHistoryInvalidations.values());
+      pendingHistoryInvalidations.clear();
+
+      const isVisible =
+        typeof document === "undefined" || document.visibilityState === "visible";
+      for (const item of drain) {
+        if (!isCurrentConnection(item.owner)) continue;
+        const source = getHostResourceSource(item.owner, item.qc);
+        if (source.mode === "AUTH_BLOCKED") continue;
+        if (!isVisible) continue;
+
+        void item.qc.invalidateQueries({
+          queryKey: profileQueryKey(item.owner, "system", "resource-alerts"),
+        });
+      }
+    });
+  }
+}
 
 export function initTransportListeners(): void {
   if (initialized) return;
@@ -419,6 +471,12 @@ export function initTransportListeners(): void {
     const transport = getTransport();
     initialized = true;
     for (const channel of PUSH_EVENT_CHANNELS) {
+      if (
+        (channel === "host:alertChanged" || channel === "host:alertsInvalidated") &&
+        ownerBridgeTransports.has(transport)
+      ) {
+        continue;
+      }
       const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
       unsubscribers.push(unsub);
     }
@@ -432,77 +490,114 @@ export function initTransportListeners(): void {
     // Transport not yet ready; allow subsequent attempts
   }
 }
+
 export function installTransportBridge(
   owner: ConnectionRef,
   transport: Transport,
-  qc?: QueryClient,
+  getQueryClients?: QueryClient | (() => readonly QueryClient[]),
 ): () => void {
+  ownerBridgeTransports.add(transport);
   const bridgeUnsubs: Array<() => void> = [];
+
+  const resolveQcs = (): readonly QueryClient[] => {
+    if (!getQueryClients) return [];
+    if (typeof getQueryClients === "function") {
+      return getQueryClients();
+    }
+    return [getQueryClients];
+  };
 
   for (const channel of PUSH_EVENT_CHANNELS) {
     const unsub = transport.onEvent(channel, (data: unknown) => {
+      if (!isCurrentConnection(owner)) return;
       dispatch(channel, data, owner);
 
-      if (qc) {
-        if (channel === "workspace:changed") {
+      const qcs = resolveQcs();
+
+      if (channel === "workspace:changed") {
+        for (const qc of qcs) {
           void handleWorkspaceChanged(qc, owner);
-        } else if (channel === "config:changed") {
+        }
+      } else if (channel === "config:changed") {
+        for (const qc of qcs) {
           void qc.invalidateQueries({
             queryKey: profileQueryKey(owner, "config"),
           });
           void qc.invalidateQueries({
             queryKey: profileQueryKey(owner, "projects"),
           });
-        } else if (channel === "terminal:changed") {
+        }
+      } else if (channel === "terminal:changed") {
+        for (const qc of qcs) {
           void qc.invalidateQueries({
             queryKey: profileQueryKey(owner, "terminal-sessions"),
           });
-        } else if (channel === "status:changed") {
-          try {
-            const { projectName } = data as { projectName: string };
+        }
+      } else if (channel === "status:changed") {
+        try {
+          const { projectName } = data as { projectName: string };
+          for (const qc of qcs) {
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "git", projectName, null),
             });
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "projects"),
             });
-          } catch {
+          }
+        } catch {
+          for (const qc of qcs) {
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "projects"),
             });
           }
-        } else if (channel === "host:alertChanged") {
-          const alertEvent = asHostResourceAlertChangedEvent({
-            type: "host:alertChanged",
-            data,
-            timestamp: Date.now(),
-          });
-          if (alertEvent) {
-            qc.setQueryData<HostResourceSnapshotV1>(
-              profileQueryKey(owner, "system", "resource-snapshot"),
-              (snapshot) => applyHostResourceAlert(snapshot, alertEvent.data),
-            );
+        }
+      } else if (channel === "host:alertChanged") {
+        const alertEvent = asHostResourceAlertChangedEvent({
+          type: "host:alertChanged",
+          data,
+          timestamp: Date.now(),
+        });
+        if (alertEvent) {
+          useHostResourceAlertPresentationStore
+            .getState()
+            .recordAlert(alertEvent.data, owner.profileId);
+
+          for (const qc of qcs) {
+            if (canUseResourceRest(owner, qc)) {
+              const sourceGen = captureResourceSource(owner, qc);
+              qc.setQueryData<HostResourceSnapshotV1>(
+                profileQueryKey(owner, "system", "resource-snapshot"),
+                (snapshot) => applyHostResourceAlert(snapshot, alertEvent.data),
+              );
+              if (
+                isResourceSourceCurrent(owner, qc, sourceGen) &&
+                canUseResourceRest(owner, qc)
+              ) {
+                void qc.invalidateQueries({
+                  queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
+                });
+              }
+            }
+            scheduleHistoryInvalidation(owner, qc);
+          }
+        }
+      } else if (channel === "host:alertsInvalidated") {
+        for (const qc of qcs) {
+          if (canUseResourceRest(owner, qc)) {
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
             });
-            void qc.invalidateQueries({
-              queryKey: profileQueryKey(owner, "system", "resource-alerts"),
-            });
           }
-        } else if (channel === "host:alertsInvalidated") {
-          void qc.invalidateQueries({
-            queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
-          });
-          void qc.invalidateQueries({
-            queryKey: profileQueryKey(owner, "system", "resource-alerts"),
-          });
-        } else if (channel === "host:idleSuspendChanged") {
-          const changeEvent = asHostIdleSuspendChangedEvent({
-            type: "host:idleSuspendChanged",
-            data,
-            timestamp: Date.now(),
-          });
-          if (changeEvent) {
+          scheduleHistoryInvalidation(owner, qc);
+        }
+      } else if (channel === "host:idleSuspendChanged") {
+        const changeEvent = asHostIdleSuspendChangedEvent({
+          type: "host:idleSuspendChanged",
+          data,
+          timestamp: Date.now(),
+        });
+        if (changeEvent) {
+          for (const qc of qcs) {
             void qc.invalidateQueries({
               queryKey: profileQueryKey(
                 owner,
@@ -528,6 +623,7 @@ export function installTransportBridge(
   }
 
   return () => {
+    ownerBridgeTransports.delete(transport);
     bridgeUnsubs.forEach((fn) => fn());
     bridgeUnsubs.length = 0;
   };

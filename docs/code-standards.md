@@ -2120,7 +2120,7 @@ function. Keyed connections own transport lifecycle per profile, and a
 replacement advances that profile's generation before stale results can update
 state. Workflow data remains memory-only, never a localStorage cache.
 
-### Host resource fleet hook standards (Phase 01)
+### Host resource fleet hook and SSE arbitration standards (Phases 01–04)
 
 Keep host-resource fleet state split between the React boundary and pure
 domain helpers:
@@ -2138,21 +2138,21 @@ auto-connect profiles as non-fetching entries, and omit disconnected manual
 profiles. Derive an explicit `watchReason`; do not infer watch membership from
 the active profile, route, or Settings target.
 
-Use one `useQueries` spec per watched owner. Build the key with
-`profileQueryKey(owner, "system", "resource-snapshot")`, call
-`getBoundApiClient(owner)`, and never share a request or client across profile
-entries. Enable a query only when the hook is enabled and that entry is
-connected; preserve per-entry loading, error, stale, and cached last-known
-state so a failing host cannot gate healthy peers. The connected refresh
-interval is 15 seconds.
+`DamHopperApp` registers the actual QueryClient in a reference-counted registry.
+Coordinators key on QueryClient identity plus `connectionKey(owner)`; the bridge
+resolves the current registered-client set for each event.
 
-Generation is an admission fence, not display metadata. After every awaited
-snapshot request, require `isCurrentConnection(owner)`; reject stale results
-with `ConnectionOwnerError`. Repeat the check before recording snapshot alerts;
-derive entry state only from the owner/generation-keyed query result. Since the
-generation is in `profileQueryKey`, a replacement starts a separate cache
-lineage. Do not fallback to the active profile or republish a late response
-under a newer generation.
+Canonical keys are `profileQueryKey(owner, "system", "resource-snapshot")` and
+`profileQueryKey(owner, "system", "metrics")`. Fleet/detail share snapshot;
+only visible detail uses metrics. `canUseResourceRest` gates REST on current
+owner/client registration, connected state, visibility, interest, allowed mode, and no switch/auth latch.
+Fallback cadence: 15-second snapshot, 5-second metrics, 30-second visible history.
+
+Forward `AbortSignal` and capture source generation before awaits; recheck owner,
+generation, and REST permission after every await. Exact cancellation is not
+enough for noncooperative promises. Entering LIVE fences before canceling both
+exact keys; recheck current owner, client, and attempt, then batch the paired
+cache writes. Advance the fence before enabling fallback.
 
 Fleet aggregation must call
 `resolveHostResourceFleetSummary(entries)` rather than duplicating counts in
@@ -2215,9 +2215,9 @@ Keep `HostResourcePopover` as the single dialog and drilldown owner:
   expose status without an action. Fleet opening marks no profile read;
   inspection marks only that profile.
 - Enable `useHostMetrics` only for the visible connected drilldown
-  (`open && isDrilldown`), preserving its 1-second cadence. Fleet, close,
-  disconnect, and removal must disable detail polling; Phase 01 snapshot
-  reconciliation remains the 15-second fleet observer.
+  (`open && isDrilldown`); its 5-second REST interval is active only when the
+  shared source predicate permits fallback. Fleet, close, disconnect, removal,
+  SSE LIVE, switching, and auth-blocked states do not poll detail metrics.
 - On invalidation, clear diagnosis and force-sleep context before returning to
   Fleet. Bind pin, idle-suspend, and force-sleep labels/actions to the
   inspected entry; preserve generation and stale-action fences.
@@ -2229,7 +2229,7 @@ Component tests should assert user-visible mode, pressed-pill/read semantics,
 owner-specific drilldown text, polling enablement, and disconnect/removal
 fallback; do not assert Tailwind classes or hook call order.
 
-### Host-resource verification standards (Phase 04)
+### Host-resource verification standards (Multi-profile phase 04, 2026-09-20)
 
 Extend the existing Chromium host-resource suite rather than creating another
 harness. Keep fixtures synthetic: mock transports, owner-bound snapshots,
@@ -2241,8 +2241,8 @@ visible status text, focus, invocation owner, and viewport geometry. Cover:
 
 - Fleet -> profile A -> Fleet -> profile B navigation with pointer, Enter, and
   Space activation plus Escape/close trigger restoration.
-- No detail polling in Fleet/closed/offline views; only the visible connected
-  drilldown enables 1-second compatibility metrics for its `ConnectionRef`.
+- No detail polling in Fleet/closed/offline views; visible connected drilldown
+  uses 5-second metrics REST fallback only while the owner/QueryClient gate allows it.
 - Per-profile unread buckets, including duplicate incident IDs; opening Fleet
   changes none and inspecting one profile clears only that profile.
 - 320x700 and 1280x800 safe-area/no-overflow layouts, readable non-color state,

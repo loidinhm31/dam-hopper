@@ -11,8 +11,9 @@ import type {
 import type { ServerProfile } from "@/api/server-config.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { ConnectionStatus } from "@/api/connections.js";
+import type { ProjectionFreshness } from "@/api/host-resource-sse-codec.js";
+import type { SourceMode } from "@/api/host-resource-stream-coordinator.js";
 import { formatBytes } from "@/lib/host-metrics-format.js";
-
 const ALERT_LABELS: Record<AlertState | ResourceAlertState, string> = {
   healthy: "Healthy",
   reclaimableCacheHigh: "High reclaimable cache",
@@ -47,10 +48,13 @@ export function formatAlertState(
   return ALERT_LABELS[state];
 }
 
-export function formatAvailability(availability: Availability): string {
+export function formatAvailability(
+  availability?: Availability | null,
+): string {
+  if (!availability || !availability.state) return "Available";
   return availability.detailCode
-    ? `${AVAILABILITY_LABELS[availability.state]} (${availability.detailCode})`
-    : AVAILABILITY_LABELS[availability.state];
+    ? `${AVAILABILITY_LABELS[availability.state] ?? availability.state} (${availability.detailCode})`
+    : (AVAILABILITY_LABELS[availability.state] ?? availability.state);
 }
 
 export function formatOptionalBytes(bytes: number | null | undefined): string {
@@ -173,6 +177,8 @@ export interface HostResourceStatusInput {
   isError?: boolean;
   isStale?: boolean;
   unreadCount?: number;
+  freshness?: ProjectionFreshness | null;
+  sourceMode?: SourceMode | null;
 }
 
 interface HostResourceStatusVariant {
@@ -284,7 +290,7 @@ export function resolveHostResourceMemory(
     };
   }
 
-  const availability = snapshot?.memory.availability;
+  const availability = snapshot?.memory?.availability;
   if (
     !snapshot ||
     !availability ||
@@ -293,8 +299,8 @@ export function resolveHostResourceMemory(
     return { source: "unavailable", availability };
   }
 
-  const totalBytes = finitePositive(snapshot.memory.totalBytes);
-  const availableBytes = finiteNonNegative(snapshot.memory.availableBytes);
+  const totalBytes = finitePositive(snapshot?.memory?.totalBytes);
+  const availableBytes = finiteNonNegative(snapshot?.memory?.availableBytes);
   const usedBytes =
     totalBytes !== undefined && availableBytes !== undefined
       ? Math.max(totalBytes - availableBytes, 0)
@@ -382,7 +388,20 @@ export function resolveHostResourceStatus({
   isError = false,
   isStale = false,
   unreadCount = 0,
+  freshness,
+  sourceMode,
 }: HostResourceStatusInput): HostResourceStatusPresentation {
+  if (sourceMode === "AUTH_BLOCKED") {
+    return createStatusPresentation(
+      "Authentication blocked",
+      "Auth blocked",
+      "terminal-unavailable",
+      0,
+      "danger",
+      unreadCount,
+    );
+  }
+
   if (!snapshot) {
     if (isError) {
       return createStatusPresentation(
@@ -394,7 +413,7 @@ export function resolveHostResourceStatus({
         unreadCount,
       );
     }
-    if (isLoading || isFetching) {
+    if (isLoading || isFetching || sourceMode === "STARTING") {
       return createStatusPresentation(
         "Sampling host",
         "Sampling host",
@@ -418,26 +437,28 @@ export function resolveHostResourceStatus({
   let mode: HostResourceStatusMode = "current";
   let qualifier: string | undefined;
 
+  const memoryState = snapshot.memory?.availability?.state;
+  const effectiveStale = freshness
+    ? freshness.serverEpoch !== null && !freshness.isSnapshotFresh
+    : isStale || memoryState === "stale";
+
   if (isError) {
     mode = "refresh-error";
     qualifier = "refresh failed";
   } else if (
-    snapshot.memory.availability.state === "unsupported" ||
-    snapshot.memory.availability.state === "permissionDenied" ||
-    snapshot.memory.availability.state === "temporarilyUnavailable"
+    memoryState === "unsupported" ||
+    memoryState === "permissionDenied" ||
+    memoryState === "temporarilyUnavailable"
   ) {
     mode = "unavailable";
     qualifier = "core data unavailable";
   } else if (snapshot.currentAlerts === undefined) {
     mode = "unavailable";
     qualifier = "resource alert status unavailable";
-  } else if (
-    (isStale || snapshot.memory.availability.state === "stale") &&
-    (isLoading || isFetching)
-  ) {
+  } else if (effectiveStale && (isLoading || isFetching)) {
     mode = "stale-refreshing";
     qualifier = "stale, refreshing";
-  } else if (isStale || snapshot.memory.availability.state === "stale") {
+  } else if (effectiveStale) {
     mode = "stale";
     qualifier = "stale";
   } else if (isLoading || isFetching) {
@@ -585,6 +606,8 @@ export function resolveHostResourceEntryStatus({
   isError = false,
   isStale = false,
   unreadCount = 0,
+  freshness,
+  sourceMode,
 }: HostResourceStatusInput & {
   connectionStatus: ConnectionStatus;
   connected: boolean;
@@ -621,6 +644,8 @@ export function resolveHostResourceEntryStatus({
     isError,
     isStale,
     unreadCount,
+    freshness,
+    sourceMode,
   });
 }
 
