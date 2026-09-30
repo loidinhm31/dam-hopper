@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+use axum::serve::ListenerExt;
+use dam_hopper_server::http_shutdown::{ForceCloseIo, ForceCloseListener};
+use tokio_util::sync::CancellationToken;
+
 use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
@@ -890,6 +894,7 @@ async fn main() -> anyhow::Result<()> {
 
     let host_resource_monitor_shutdown = state.host_resource_monitor.clone();
     state.host_resource_monitor.start();
+    state.host_resource_events.start();
 
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
     let browser_debug_artifacts_shutdown = state.browser_debug_artifacts.clone();
@@ -916,9 +921,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(addr = %addr, "Listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let force_close_token = CancellationToken::new();
+    let force_close_token_for_shutdown = force_close_token.clone();
+    let listener = ForceCloseListener::new(listener, force_close_token)
+        .tap_io(|_: &mut ForceCloseIo| {});
+
+    let host_resource_events_shutdown = state.host_resource_events.clone();
 
     #[cfg(unix)]
-    let shutdown_signal = async {
+    let shutdown_signal = async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).unwrap_or_else(|_| {
             // fallback: never fires, but ctrl_c still works
@@ -928,11 +939,33 @@ async fn main() -> anyhow::Result<()> {
             _ = tokio::signal::ctrl_c() => {},
             _ = sigterm.recv() => {},
         }
+        tracing::info!("Received shutdown signal, beginning graceful shutdown");
+
+        let force = force_close_token_for_shutdown;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tracing::warn!("HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed");
+            force.cancel();
+        });
+
+        host_resource_events_shutdown.revoke_emission();
+        host_resource_events_shutdown.shutdown().await;
     };
 
     #[cfg(windows)]
-    let shutdown_signal = async {
+    let shutdown_signal = async move {
         let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Received shutdown signal, beginning graceful shutdown");
+
+        let force = force_close_token_for_shutdown;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tracing::warn!("HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed");
+            force.cancel();
+        });
+
+        host_resource_events_shutdown.revoke_emission();
+        host_resource_events_shutdown.shutdown().await;
     };
 
     let serve_result = axum::serve(

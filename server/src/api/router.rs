@@ -30,7 +30,7 @@ use super::{
     agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
     diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
     media_session, plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
-    port_forward as port_forward_api, settings, ssh, system, terminal, tunnel, usage,
+    port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel, usage,
     usage_sessions, workflow, workspace, ws,
 };
 
@@ -618,6 +618,34 @@ pub fn build_router_with_web_dir_and_origins(
         ));
 
 
+    // Feature-local host resource SSE stream route.
+    // Reverse layer order: subject -> bearer -> feature auth helper -> Origin -> global permit
+    let host_resource_stream_routes = Router::new()
+        .route(
+            "/api/system/resources/v1/events",
+            get(resource_events::events_handler),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            resource_events::subject_admission_layer,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            resource_events::bearer_required_layer,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::authenticate_stream_request,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            resource_events::origin_admission_layer,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            resource_events::global_admission_layer,
+        ));
+
     let router = Router::new()
         .merge(public)
         .merge(protected)
@@ -625,8 +653,8 @@ pub fn build_router_with_web_dir_and_origins(
         .merge(plugin_asset_routes)
         .merge(ide_routes)
         .merge(video_stream)
-        .merge(image_stream);
-
+        .merge(image_stream)
+        .merge(host_resource_stream_routes);
     let router = match web_dir {
         Some(dir) => router
             // Preserve API 404 semantics; the SPA fallback is only for browser paths.

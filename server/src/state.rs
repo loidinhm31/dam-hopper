@@ -91,6 +91,8 @@ pub struct AppState {
     pub opaque_registrations: OpaqueRegistrations,
     /// Host-resource monitor for current metrics and alert state.
     pub host_resource_monitor: HostResourceMonitor,
+    /// Bounded authenticated host-resource SSE delivery runtime.
+    pub host_resource_events: Arc<crate::api::resource_events::HostResourceEvents>,
     /// Capability-gated host remediation actions.
     pub host_actions: HostActionService,
     /// Backend diagnostics ring and JSONL persistence handle.
@@ -264,6 +266,9 @@ impl AppState {
             event_sink.clone(),
             config.server.host_resources.clone(),
         );
+        let host_resource_events = Arc::new(
+            crate::api::resource_events::HostResourceEvents::new(host_resource_monitor.clone()),
+        );
         let host_action_config_dir = config
             .config_path
             .parent()
@@ -402,6 +407,7 @@ impl AppState {
             opaque_server_setup: Arc::new(opaque_server_setup),
             opaque_registrations: OpaqueRegistrations::default(),
             host_resource_monitor,
+            host_resource_events,
             host_actions,
             diagnostics,
             browser_debug_artifacts,
