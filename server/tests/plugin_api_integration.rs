@@ -239,12 +239,6 @@ async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
             "role": "user",
         }).await;
         let _ = col.insert_one(mongodb::bson::doc! {
-            "username": "bob-view-user",
-            "passwordHash": &password_hash,
-            "isEnabled": true,
-            "role": "user",
-        }).await;
-        let _ = col.insert_one(mongodb::bson::doc! {
             "username": "attacker-user",
             "passwordHash": &password_hash,
             "isEnabled": true,
@@ -259,7 +253,6 @@ async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
         for (username, sid) in [
             ("admin-user", "session-admin"),
             ("bob-new-user", "session-bob-new"),
-            ("bob-view-user", "session-bob-view"),
             ("attacker-user", "session-attacker"),
         ] {
             let _ = sess_col.insert_one(mongodb::bson::doc! {
@@ -1213,7 +1206,7 @@ async fn test_describe_view_api_behavioral() {
     let admin_resp = router.clone().oneshot(admin_req).await.unwrap();
     assert_eq!(admin_resp.status(), StatusCode::OK);
 
-    let bob_token = generate_auth_token("bob-view-user", "test-jwt-secret");
+    let bob_token = generate_auth_token("bob-new-user", "test-jwt-secret");
 
     // Case 1: Unauthenticated request is rejected with 401
     let unauth_req = Request::builder()

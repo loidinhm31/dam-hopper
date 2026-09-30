@@ -4,11 +4,8 @@ import {
   getConnectionSnapshot,
   subscribeConnections,
 } from "@/api/connections.js";
-import {
-  toServerProjectTarget,
-  type PluginMetadataItem,
-  type ProjectRef,
-} from "@/api/client.js";
+import { toServerProjectTarget } from "@/api/ownership.js";
+import type { PluginMetadataItem, ProjectRef } from "@/api/client.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
@@ -142,13 +139,18 @@ export function usePluginNavigation(
     if (project?.profileId === settingsTargetProfileId) {
       return project;
     }
-    const matching = allProjects.find((p) => p.profileId === settingsTargetProfileId);
+    const matching = allProjects.find(
+      (p) => p.profileId === settingsTargetProfileId,
+    );
     return matching ? matching.ref : null;
   }, [allProjects, project, settingsTargetProfileId]);
 
   const settingsConnection = useSyncExternalStore(
     subscribeConnections,
-    () => (settingsTargetProfileId ? getConnectionSnapshot(settingsTargetProfileId) : null),
+    () =>
+      settingsTargetProfileId
+        ? getConnectionSnapshot(settingsTargetProfileId)
+        : null,
     () => null,
   );
   const settingsProjectTarget = useProjectTarget(settingsProjectRef);
@@ -156,7 +158,8 @@ export function usePluginNavigation(
   const workspaceProfileId = project?.profileId ?? "";
   const workspaceConnection = useSyncExternalStore(
     subscribeConnections,
-    () => (workspaceProfileId ? getConnectionSnapshot(workspaceProfileId) : null),
+    () =>
+      workspaceProfileId ? getConnectionSnapshot(workspaceProfileId) : null,
     () => null,
   );
   const workspaceProjectTarget = useProjectTarget(project);
@@ -178,18 +181,18 @@ export function usePluginNavigation(
 
   const canQuerySettings = Boolean(
     settingsTargetProfileId &&
-      settingsProjectRef &&
-      settingsProjectTarget &&
-      settingsConnection?.status === "connected" &&
-      settingsConnection.owner,
+    settingsProjectRef &&
+    settingsProjectTarget &&
+    settingsConnection?.status === "connected" &&
+    settingsConnection.owner,
   );
 
   const canQueryWorkspace = Boolean(
     project &&
-      project.profileId &&
-      workspaceProjectTarget &&
-      workspaceConnection?.status === "connected" &&
-      workspaceConnection.owner,
+    project.profileId &&
+    workspaceProjectTarget &&
+    workspaceConnection?.status === "connected" &&
+    workspaceConnection.owner,
   );
 
   useEffect(() => {
@@ -208,7 +211,11 @@ export function usePluginNavigation(
         const itemMap = new Map<string, PluginNavigationItem>();
 
         // Query settings target server for Advisor
-        if (canQuerySettings && settingsConnection?.owner && settingsProjectTarget) {
+        if (
+          canQuerySettings &&
+          settingsConnection?.owner &&
+          settingsProjectTarget
+        ) {
           const api = getApi(settingsConnection.owner);
           const target = toServerProjectTarget(settingsProjectTarget.target);
           const response = await api.plugins.list(target);
@@ -216,7 +223,8 @@ export function usePluginNavigation(
           if (response && Array.isArray(response.plugins)) {
             const parsed = response.plugins.map(parsePluginMetadata);
             const isWorkspaceSameServer =
-              canQueryWorkspace && project?.profileId === settingsTargetProfileId;
+              canQueryWorkspace &&
+              project?.profileId === settingsTargetProfileId;
             for (const meta of parsed) {
               if (
                 meta &&
@@ -230,7 +238,11 @@ export function usePluginNavigation(
         }
 
         // Query workspace project server for non-advisor plugins
-        if (canQueryWorkspace && workspaceConnection?.owner && workspaceProjectTarget) {
+        if (
+          canQueryWorkspace &&
+          workspaceConnection?.owner &&
+          workspaceProjectTarget
+        ) {
           const isSameTarget =
             canQuerySettings &&
             project?.profileId === settingsTargetProfileId &&
@@ -242,8 +254,7 @@ export function usePluginNavigation(
             const response = await api.plugins.list(target);
             if (!active || revision !== requestRevision) return;
             if (response && Array.isArray(response.plugins)) {
-              const workspaceParsed =
-                response.plugins.map(parsePluginMetadata);
+              const workspaceParsed = response.plugins.map(parsePluginMetadata);
               for (const meta of workspaceParsed) {
                 if (meta && meta.id !== "evcrate.advisor") {
                   itemMap.set(meta.id, pluginNavigationItem(meta));

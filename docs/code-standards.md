@@ -51,7 +51,7 @@ server/src/
 └── commands/         # Command registry
 ```
 
-### Agent status contract, integrations, and notification ownership (Phases 01–05)
+### Agent status contract, integrations, and notification ownership (OMP Phases 01–05; native Phases 01–06)
 
 `server/src/agent_status/{types,reducer}.rs` owns the canonical v1 state,
 protocol DTOs, validation, and pure in-memory reducer/registry. Keep this model
@@ -63,8 +63,11 @@ installer. Phases 04–05 add native Codex/Claude hooks, Agent Settings, separat
 installation/readiness badges, and profile-safe semantic notifications. OMP
 supports turn-ended and needs-attention alerts; Claude supports qualified
 needs-attention only; Codex is status-only with no OSC 9 handling or automatic
-TUI notification-setting writes. Phase 06 live native-provider qualification
-remains pending. See the [agent-status architecture](./architecture/agent-status.md).
+TUI notification-setting writes. Phase 06 Linux x86_64 live qualification
+passed for Codex CLI 0.158.0 and Claude Code 2.1.250 (32/32 N01–N32); other
+provider versions and server platforms remain unqualified. See the
+[agent-status architecture](./architecture/agent-status.md) and the
+[native qualification report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
 ### Trusted plugin contract candidate (Phase D00)
 
@@ -154,12 +157,12 @@ The complete endpoint and lifecycle contract is in
   service boundaries. Do not create a no-auth fallback that loads packages or
   worker data.
 - Keep plugin DTOs camelCase and target fields narrow: `{ project,
-  worktreePath? }`. Resolve targets with `WorkspaceTargetResolver`; never accept
+worktreePath? }`. Resolve targets with `WorkspaceTargetResolver`; never accept
   `profileId`, browser generation, filesystem root, or grant claims as server
   authority, and never silently fall back to the main worktree.
 - Treat `GrantKey` as explicit default-deny authority:
   `(actorSubject, installationId, configuredProjectTarget,
-  allowedOperations, allowCurrentAccountPolicy)`. Support exact values and the
+allowedOperations, allowCurrentAccountPolicy)`. Support exact values and the
   documented `*` wildcards only. Visibility/listing is not invoke permission.
 - A context is an opaque, ephemeral association, not an authorization lease.
   Store actor/epoch/installation/target, revisions, expiry, and counters only.
@@ -424,7 +427,6 @@ across config, target, host, and Agent Store boundaries:
 Tests should assert observable path identity and refusal behavior with
 `tempfile`, platform-gated Windows cases, and real Git worktrees. Do not use
 string-only slash replacement on POSIX or silently normalize unsafe input.
-
 
 ### PTY activity observation and input admission (Phase 02)
 
@@ -2196,6 +2198,7 @@ layout/list boundary and leave scrolling to the owning popover. Focused
 component behavior belongs in `HostResourceFleetCard.test.tsx` and
 `HostResourceFleetDeck.test.tsx`; formatter and status invariants remain in
 `host-resource-state.test.ts`.
+
 ### Host-resource Fleet Deck & Drilldown standards (Phase 03)
 
 Keep `HostResourcePopover` as the single dialog and drilldown owner:
@@ -2253,7 +2256,6 @@ checks, hook-call ordering, and implementation-only mock details. The Phase 04
 gate is six focused unit/component files (83 tests) plus
 `browser-tests/host-resource-monitoring.browser.tsx` (19 Chromium tests);
 coverage percentages are not implied when instrumentation is not run.
-
 
 Mutation hooks invalidate the `['workflow']` root only from `onSuccess`.
 Do not perform optimistic snapshot writes in this layer. A failure must retain

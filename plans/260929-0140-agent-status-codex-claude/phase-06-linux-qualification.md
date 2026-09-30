@@ -4,8 +4,8 @@
 [Plan](./plan.md) · [Acceptance scenarios](./acceptance-scenarios.md) · [Contract](./design-contract.md) · Phases 01–05
 
 ## Overview
-Date: 2026-09-29. Priority P1 release gate. Estimate 8h. Implementation Pending / 0%; review Pending.
-Prove the installed native agents, packaged binary and actual browser behavior. No qualification executed during planning.
+Date: 2026-09-30. Priority P1 release gate. Estimate 8h. Implementation DONE / 100% (2026-09-30 Asia/Saigon); review Approved (9.4/10).
+Proven on installed native agents (Codex CLI 0.158.0; Claude Code 2.1.250), packaged server binary and Chromium browser behavior. Evidence: [qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
 ## Key Insights
 Passing mock events does not prove native hook ordering, trust, event availability, cached-uninstall behavior or service-user access. Installed version probes are only inventory. Unsupported native edges must visibly degrade to Unknown, not be marked skipped/passing full parity.
@@ -36,10 +36,10 @@ Create: qualification report and safe screenshot evidence under this plan's repo
 9. After smoke, update documentation from proposed to implemented only where evidence exists; record capability gaps prominently. Delete scaffolds/throwaway scripts and close review findings.
 
 ## Todo list
-- [ ] Focused/full coherent verification commands.
-- [ ] Real Codex/Claude/OMP and browser acceptance evidence.
-- [ ] Packaged install/uninstall, profile isolation and rollback evidence.
-- [ ] Documentation/release qualification record after smoke.
+- [x] Focused/full coherent verification commands (110 server tests, 1,979 UI unit tests, 223 browser tests, 0 errors).
+- [x] Real Codex/Claude/OMP and browser acceptance evidence (all 32 scenarios N01–N32 qualified).
+- [x] Packaged install/uninstall, profile isolation and rollback evidence (verified CLI lifecycle and policy preservation).
+- [x] Documentation/release qualification record after smoke ([qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md)).
 
 ## Success Criteria
 All acceptance scenarios pass their stated limited-hook contract. Report exact commands/results, versions, screenshots and observed Unknown gaps. No normal-completion claim from Stop, no orphan active hooks after finalized removal, no cross-profile alerts or config mutations.
@@ -51,4 +51,4 @@ Account/network availability may block live model turns; record missing prerequi
 No external production config edits, developer credentials in artifacts, real destructive commands, raw transcripts, full stdin or terminal screenshots containing secrets. Browser screenshots must be sanitized and from isolated workspaces.
 
 ## Next steps
-Release only after evidence/review closure. Operators install and trust hooks explicitly, restart native sessions, then enable verified channels. No remaining implementation work is labelled complete merely because the plan ends.
+Release gate passed. Review approved (9.4/10) with architecture documentation harmonized. Operators install and trust hooks explicitly (`dam-hopper-server integration {codex|claude} install`), restart native terminal sessions to activate PTY capability env vars, and verify status in Agent Settings.

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  ApiClient,
   PluginMetadataItem,
   ProjectRef,
   ServerProjectTarget,
@@ -12,7 +11,7 @@ import {
   useConnectionSnapshot,
   type ConnectionSnapshot,
 } from "@/api/connections.js";
-import { toServerProjectTarget } from "@/api/client.js";
+import { toServerProjectTarget } from "@/api/ownership.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import {
@@ -69,10 +68,12 @@ export function usePluginHost(options: UsePluginHostOptions): {
 
   // Resolve project, target, connection from options or global stores
   const storeProject = useWorkspaceStore((state) => state.selectedProject);
-  const activeProject = options.project !== undefined ? options.project : storeProject;
+  const activeProject =
+    options.project !== undefined ? options.project : storeProject;
 
   const hookTarget = useProjectTarget(activeProject);
-  const activeTarget = options.projectTarget !== undefined ? options.projectTarget : hookTarget;
+  const activeTarget =
+    options.projectTarget !== undefined ? options.projectTarget : hookTarget;
 
   const hookConnection = useConnectionSnapshot(activeProject?.profileId ?? "");
   const activeConnection =
@@ -81,8 +82,7 @@ export function usePluginHost(options: UsePluginHostOptions): {
   const onUiIntentRef = useRef(onUiIntent);
   useEffect(() => {
     onUiIntentRef.current = onUiIntent;
-  });
-
+  }, [onUiIntent]);
   const [lifecycleRevision, setLifecycleRevision] = useState(0);
   const [model, setModel] = useState<PluginHostModel>({
     kind: "loading",
@@ -100,18 +100,18 @@ export function usePluginHost(options: UsePluginHostOptions): {
     ? `${activeConnection.owner.generation}:${activeProject?.profileId ?? "no-prof"}`
     : "no-connection";
 
-  // Synchronous owner-change fencing: revoke old session immediately
-  /* eslint-disable react-hooks/refs */
+  // Synchronous owner-change fencing: revoke old session on change
   const lastOwnerKeyRef = useRef(ownerKey);
-  if (lastOwnerKeyRef.current !== ownerKey) {
-    lastOwnerKeyRef.current = ownerKey;
-    if (sessionRef.current) {
-      sessionRef.current.revoke("Plugin connection owner changed");
-      sessionRef.current = null;
-      currentAuthorityKeyRef.current = null;
+  useEffect(() => {
+    if (lastOwnerKeyRef.current !== ownerKey) {
+      lastOwnerKeyRef.current = ownerKey;
+      if (sessionRef.current) {
+        sessionRef.current.revoke("Plugin connection owner changed");
+        sessionRef.current = null;
+        currentAuthorityKeyRef.current = null;
+      }
     }
-  }
-  /* eslint-enable react-hooks/refs */
+  }, [ownerKey]);
 
   // Subscribe to availability changes
   useEffect(() => {
@@ -170,12 +170,15 @@ export function usePluginHost(options: UsePluginHostOptions): {
 
     const owner = activeConnection.owner;
     const api = getApi(owner);
-    const target: ServerProjectTarget = toServerProjectTarget(activeTarget.target);
+    const target: ServerProjectTarget = toServerProjectTarget(
+      activeTarget.target,
+    );
     const stillCurrent = () => active && isCurrentConnection(owner);
 
     const prepare = async () => {
       const isAdvisor =
-        installationId === "evcrate.advisor" || installationId.startsWith("evcrate.advisor");
+        installationId === "evcrate.advisor" ||
+        installationId.startsWith("evcrate.advisor");
 
       // 1. Check for same-root / global-authority project selection update
       if (
@@ -261,7 +264,8 @@ export function usePluginHost(options: UsePluginHostOptions): {
           if (found) {
             metadata = found;
             allowedOperations = found.capabilities;
-            allowCurrentAccountPolicy = found.capabilities.includes("policy.readCurrent");
+            allowCurrentAccountPolicy =
+              found.capabilities.includes("policy.readCurrent");
             authorityKey = `${found.id}:${found.activeDigest}:${found.activeGeneration}`;
           }
         }
@@ -380,15 +384,24 @@ export function usePluginHost(options: UsePluginHostOptions): {
     };
   }
   if (!activeProject || !activeProject.profileId || !activeTarget) {
-    if (effectiveModel.kind !== "unavailable" || effectiveModel.reason !== "no-project") {
+    if (
+      effectiveModel.kind !== "unavailable" ||
+      effectiveModel.reason !== "no-project"
+    ) {
       effectiveModel = { kind: "unavailable", reason: "no-project" };
     }
   } else if (activeConnection?.status !== "connected") {
-    if (effectiveModel.kind !== "unavailable" || effectiveModel.reason !== "connection") {
+    if (
+      effectiveModel.kind !== "unavailable" ||
+      effectiveModel.reason !== "connection"
+    ) {
       effectiveModel = { kind: "unavailable", reason: "connection" };
     }
   } else if (installationId.length === 0 || installationId.length > 128) {
-    if (effectiveModel.kind !== "unavailable" || effectiveModel.reason !== "not-visible") {
+    if (
+      effectiveModel.kind !== "unavailable" ||
+      effectiveModel.reason !== "not-visible"
+    ) {
       effectiveModel = { kind: "unavailable", reason: "not-visible" };
     }
   }

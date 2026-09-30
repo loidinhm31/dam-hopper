@@ -20,6 +20,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Store global defaults at ~/.config/dam-hopper/config.toml
 
 **Acceptance Criteria:**
+
 - ✓ Load and parse explicit or global `dam-hopper.toml` registry files
 - ✓ Resolve relative project paths against the registry file and preserve absolute project paths
 - ✓ Preserve Windows drive, mixed-separator, UNC, and `\\?\` project paths through TOML round trips; reject traversal and rooted relative fields
@@ -383,7 +384,6 @@ See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integratio
 [multi-server guide](./user-guide-multi-server-profiles.md), and
 [system architecture](./system-architecture.md).
 
-
 ### PR-007A: Profile-qualified files, editor, search, and Git (Phase 03)
 
 **Status:** Implemented frontend contract on 2026-09-17. This slice extends
@@ -428,7 +428,6 @@ creating a second server workspace hierarchy.
       `Server profile required` rejections for subscription/mutation calls.
 - [x] Desktop, compact, and terminal-floating Explorer surfaces each have a
       target-keyed local `ErrorBoundary` around `FileTree`/`Suspense`.
-
 
 **Acceptance criteria:**
 
@@ -882,11 +881,13 @@ the server emission path for the UI's optional `plugin:lifecycle_revision`
 event also needs a qualification decision. Deployment ownership/rotation for
 the host allowlist remains a D06/operator input.
 
-### PR-026: Native Agent Status and Notification Ownership (Phase 05)
+### PR-026: Native Agent Status and Notification Ownership (Phases 01–06)
 
-**Status:** Phase 05 completed on 2026-09-29. The current record reports 2,383
-passing tests and a 9.2/10 review. Phase 06 live native-provider qualification
-remains pending; Phase 05 does not claim live provider lifecycle qualification.
+**Status:** Phase 05 implementation completed on 2026-09-29 (recorded 2,383
+passing tests and a 9.2/10 review). Phase 06 Linux x86_64 live qualification
+passed on 2026-09-30 for Codex CLI 0.158.0 and Claude Code 2.1.250 (32/32
+scenarios). Other native versions and server platforms remain unqualified; see
+the [qualification report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
 **Functional Requirements:**
 
@@ -912,8 +913,9 @@ remains pending; Phase 05 does not claim live provider lifecycle qualification.
 - ✓ Installation badges and readiness badges communicate distinct states.
 - ✓ Notification selection requires current profile/terminal ownership and
   status/attention identity; stale or mismatched targets are ignored.
-- ✓ Native-provider live lifecycle behavior remains explicitly unqualified
-  until the Phase 06 gate is complete.
+- ✓ Native lifecycle qualification passed on Linux x86_64 for Codex CLI 0.158.0
+  and Claude Code 2.1.250 (32/32 Phase 06 scenarios); other versions/platforms
+  remain unqualified.
 
 **Technical Constraints:**
 

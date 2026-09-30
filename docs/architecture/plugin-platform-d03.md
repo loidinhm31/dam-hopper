@@ -45,13 +45,13 @@ matching live WebSocket connection epoch. `--no-auth` is an explicit denial for
 every production plugin route (`403`, `NoAuthForbidden`), not a synthetic
 plugin identity. Request DTOs use camelCase.
 
-| Route | Request | Success result |
-| --- | --- | --- |
-| `GET /api/plugins?project=<name>&worktreePath=<path>` | Required project and optional registered worktree | `{ plugins: PluginMetadataItem[] }` visible to actor/target |
-| `POST /api/plugins/contexts/open` | `epoch`, `installationId`, `target`, optional `allowedOperations`, optional `allowCurrentAccountPolicy` | `contextId`, `bindingRevision`, `grantRevision`, `activationGeneration`, `expiresAt` |
-| `POST /api/plugins/contexts/close` | `epoch`, `contextId` | `{ closed: boolean }`; client close is idempotent |
-| `POST /api/plugins/invoke` | `epoch`, `contextId`, `operation`, opaque JSON `payload`, optional `deadlineMs` | `{ result: unknown }` |
-| `POST /api/plugins/cancel` | `epoch`, `contextId`, `requestId` | `{ outcome: "accepted" | "alreadySettled" | "unknown" }` |
+| Route                                                 | Request                                                                                                 | Success result                                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------- | ------------ |
+| `GET /api/plugins?project=<name>&worktreePath=<path>` | Required project and optional registered worktree                                                       | `{ plugins: PluginMetadataItem[] }` visible to actor/target                          |
+| `POST /api/plugins/contexts/open`                     | `epoch`, `installationId`, `target`, optional `allowedOperations`, optional `allowCurrentAccountPolicy` | `contextId`, `bindingRevision`, `grantRevision`, `activationGeneration`, `expiresAt` |
+| `POST /api/plugins/contexts/close`                    | `epoch`, `contextId`                                                                                    | `{ closed: boolean }`; client close is idempotent                                    |
+| `POST /api/plugins/invoke`                            | `epoch`, `contextId`, `operation`, opaque JSON `payload`, optional `deadlineMs`                         | `{ result: unknown }`                                                                |
+| `POST /api/plugins/cancel`                            | `epoch`, `contextId`, `requestId`                                                                       | `{ outcome: "accepted"                                                               | "alreadySettled" | "unknown" }` |
 
 ### List
 
@@ -67,15 +67,17 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "plugins": [{
-    "id": "advisor",
-    "version": "0.1.0",
-    "publisher": "evcrate",
-    "capabilities": ["advisor.scan"],
-    "hasUi": true,
-    "activeGeneration": 3,
-    "enabled": true
-  }]
+  "plugins": [
+    {
+      "id": "advisor",
+      "version": "0.1.0",
+      "publisher": "evcrate",
+      "capabilities": ["advisor.scan"],
+      "hasUi": true,
+      "activeGeneration": 3,
+      "enabled": true
+    }
+  ]
 }
 ```
 
@@ -110,17 +112,17 @@ connection failure settles once; the API does not replay a non-idempotent call.
 
 The handler maps plugin failures to bounded HTTP responses with `{ error, code }`:
 
-| Condition | HTTP |
-| --- | ---: |
-| Missing/invalid actor or epoch | 401 |
-| Grant, operation, or policy denial | 403 |
-| Invalid DTO or target reference | 400 |
-| Missing installation/source | 404 |
-| Context revoked/expired | 410 |
-| Overloaded admission | 429 |
-| Deadline exceeded | 504 |
-| Cancelled | 409 |
-| Worker/runner unavailable | 503 |
+| Condition                          | HTTP |
+| ---------------------------------- | ---: |
+| Missing/invalid actor or epoch     |  401 |
+| Grant, operation, or policy denial |  403 |
+| Invalid DTO or target reference    |  400 |
+| Missing installation/source        |  404 |
+| Context revoked/expired            |  410 |
+| Overloaded admission               |  429 |
+| Deadline exceeded                  |  504 |
+| Cancelled                          |  409 |
+| Worker/runner unavailable          |  503 |
 
 Messages are sanitized; worker stderr, tokens, source paths, and policy text do
 not cross the API boundary.
@@ -183,16 +185,16 @@ context errors as terminal for the old context.
 
 The generic host/runner ceilings are:
 
-| Resource | Limit |
-| --- | ---: |
-| Contexts per installation worker | 16 |
-| In-flight invokes per context | 4 |
-| In-flight invokes per worker | 16 |
-| Declared long-running operation per worker | 1 |
-| Context idle TTL | 15 minutes |
-| Ordinary invoke deadline | 10 seconds |
-| Long-running/scan deadline | 30 seconds |
-| Generic invoke payload | 16 MiB |
+| Resource                                   |      Limit |
+| ------------------------------------------ | ---------: |
+| Contexts per installation worker           |         16 |
+| In-flight invokes per context              |          4 |
+| In-flight invokes per worker               |         16 |
+| Declared long-running operation per worker |          1 |
+| Context idle TTL                           | 15 minutes |
+| Ordinary invoke deadline                   | 10 seconds |
+| Long-running/scan deadline                 | 30 seconds |
+| Generic invoke payload                     |     16 MiB |
 
 Current over-limit behavior is immediate `OVERLOADED`; the contract's 32-entry
 queue constant is not a shipped fair FIFO. Full-duplex runner/worker transport
@@ -203,38 +205,54 @@ Domain snapshot, history, evaluation, and page budgets remain E02-owned.
 
 `packages/ui/src/api/plugin-types.ts` defines the DTOs and closed cancellation
 union. `createApiClient(owner, transport)` exposes `api.plugins.list`,
-`openContext`, `closeContext`, `invoke`, and `cancel`. `WsTransport` maps these
+`describeView`, `openContext`, `closeContext`, `invoke`, and `cancel`. `WsTransport` maps these
 channels to the REST routes above, captures its profile connection generation,
 and ignores messages from a replaced socket. The wire target projection sends
 only `project` and optional `worktreePath`; local `profileId` remains an
 ownership key. A profile/project/worktree switch must close the old context
 rather than move it to a new owner.
 
+### Server-derived view context
+
+`POST /api/plugins/view-context` accepts strict camelCase
+`{ installationId, target: { project, worktreePath? } }` and requires an
+authenticated actor, an enabled installation, and actor visibility for that
+target. The server resolves the registered project/worktree and returns
+`PluginViewContext`: safe plugin metadata, a canonical workspace project ID and
+label, effective history/context scopes and operations, the current-account
+policy bit, and an `authorityKey`. Raw owner-history source paths are removed
+from response metadata. The route does not use a WebSocket epoch or accept a
+client-supplied project ID or filesystem root.
+
+The behavioral integration test covers authentication, unknown/empty targets,
+strict rejection of forged fields, canonical project identity, privacy-safe
+metadata, and stable authority across projects sharing root/global authority.
+
 ## Source map and evidence
 
-| Area | Source of truth |
-| --- | --- |
-| Grant/epoch checks | `server/src/plugins/authorization.rs` |
-| Context ownership/TTL/counters | `server/src/plugins/contexts.rs` |
-| API orchestration | `server/src/plugins/api_service.rs` |
-| REST DTOs/error/status mapping | `server/src/api/plugins.rs` |
-| Auth actor/logout and epoch issuance | `server/src/api/auth.rs`, `server/src/api/ws.rs` |
-| Epoch protocol messages | `server/src/api/ws_protocol.rs` |
-| Router/state composition | `server/src/api/router.rs`, `server/src/state.rs` |
-| UI DTO/client/transport mapping | `packages/ui/src/api/plugin-types.ts`, `client.ts`, `ws-transport.ts` |
-| Focused evidence | `server/tests/plugin_authorization.rs`, `plugin_api_integration.rs`, `plugin_runner_supervision.rs` |
+| Area                                 | Source of truth                                                                                     |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Grant/epoch checks                   | `server/src/plugins/authorization.rs`                                                               |
+| Context ownership/TTL/counters       | `server/src/plugins/contexts.rs`                                                                    |
+| API orchestration                    | `server/src/plugins/api_service.rs`                                                                 |
+| REST DTOs/error/status mapping       | `server/src/api/plugins.rs`                                                                         |
+| Auth actor/logout and epoch issuance | `server/src/api/auth.rs`, `server/src/api/ws.rs`                                                    |
+| Epoch protocol messages              | `server/src/api/ws_protocol.rs`                                                                     |
+| Router/state composition             | `server/src/api/router.rs`, `server/src/state.rs`                                                   |
+| UI DTO/client/transport mapping      | `packages/ui/src/api/plugin-types.ts`, `client.ts`, `ws-transport.ts`                               |
+| Focused evidence                     | `server/tests/plugin_authorization.rs`, `server/tests/plugin_api_integration.rs::test_describe_view_api_behavioral`, `server/tests/plugin_runner_supervision.rs` |
 
 D03 scoped evidence: authorization 7/7, supervision 6/6, API integration 3/3,
-UI transport 1,845/1,845, and a clean UI build. These are phase checks, not a
-claim that joint G1 or production lifecycle/deployment is complete.
+UI transport 1,845/1,845, and a clean UI build. These are historical phase checks,
+not a claim that joint G1 or production lifecycle/deployment is complete.
 
 ## Unresolved questions
 
 - Should logout/actor revocation emit an immediate push event so clients discard
-a token before their next request, or is transport teardown sufficient?
+  a token before their next request, or is transport teardown sufficient?
 - Should actor revocation remove epoch map entries eagerly and should a periodic
-expiry sweep run independently of context traffic?
+  expiry sweep run independently of context traffic?
 - What canonical `EVCRATE_ROOT`/relative lookup should standalone packaging use?
 - How should a public REST caller obtain or choose the runner request ID for
-active invoke cancellation? The current invoke DTO returns only `{ result }`;
-the focused integration uses a synthetic cancellation ID.
+  active invoke cancellation? The current invoke DTO returns only `{ result }`;
+  the focused integration uses a synthetic cancellation ID.
