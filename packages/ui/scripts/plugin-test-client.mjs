@@ -81,7 +81,7 @@ function sanitizedSession(session) {
     packageSha256: session.packageSha256,
     uiSha256: session.uiSha256,
     activationGeneration: session.activationGeneration,
-    pluginUrl: session.pluginUrl,
+    workspaceUrl: session.workspaceUrl,
     directAssetUrl: session.directAssetUrl,
   };
 }
@@ -231,10 +231,15 @@ async function runQualification(page, context, session, evidenceDir) {
     scenarios.push({ name, status: "passed", detail });
 
   const start = Date.now();
-  await page.goto(session.pluginUrl, {
+  await page.goto(session.workspaceUrl, {
     waitUntil: "domcontentloaded",
     timeout: 30_000,
   });
+  const advisorLauncher = page
+    .locator('button[aria-label="Advisor"], button[title="Advisor"]')
+    .first();
+  await advisorLauncher.waitFor({ state: "visible", timeout: 15_000 });
+  await advisorLauncher.click();
   const iframe = await waitForReady(page);
   pass("authenticated remote plugin load", { elapsedMs: Date.now() - start });
 

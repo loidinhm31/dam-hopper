@@ -29,6 +29,7 @@ export function ActivityBar({
         key={tool.id}
         onClick={() => onToggle(tool.id)}
         title={tool.label}
+        aria-label={tool.label}
         className={cn(
           "p-2 rounded-sm transition-all group relative",
           isActive
