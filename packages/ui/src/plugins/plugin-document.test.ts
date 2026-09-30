@@ -136,7 +136,7 @@ describe("pluginNavigationItem labels", () => {
     version: "1.0.0",
   };
 
-  it("labels evcrate.advisor or evcrate publisher as EVCrate Advisor", () => {
+  it("labels evcrate.advisor as EVCrate Advisor and non-advisor evcrate plugins by ID", () => {
     const item1 = pluginNavigationItem({
       ...baseMeta,
       id: "evcrate.advisor",
@@ -149,7 +149,7 @@ describe("pluginNavigationItem labels", () => {
       id: "custom.plugin",
       publisher: "evcrate",
     });
-    expect(item2.label).toBe("EVCrate Advisor");
+    expect(item2.label).toBe("CUSTOM.PLUGIN");
   });
 
   it("does not label unrelated long plugin IDs as EVCrate Advisor", () => {

@@ -329,3 +329,21 @@ sudo dam-hopper start
   - Cancel Acknowledgement: p50 = 16 ms, p95 = 20 ms, max = 20 ms (Target: <= 250 ms) — PASS
   - Cancel Settlement: p50 = 105 ms, p95 = 125 ms, max = 125 ms (Target: <= 1,000 ms) — PASS
 - **Overall Status:** 5/5 Performance Budgets Passed.
+
+## Workspace Advisor Integration Qualification (Phase 09)
+
+- **Date:** 2026-09-30
+- **Candidate Pair:** EVCrate Advisor Plugin Candidate (`f76ec1af...`, v0.1.0) paired with DamHopper Host + SDK (`1bcb63a3...`, v0.1.0).
+- **Commands:** `dam-hopper-plugin-test-server` with `--transport local-smoke` and `plugin-test-client` via Playwright Chromium.
+- **Scenarios (11/11 Passed):**
+  1. `authenticated remote plugin load`: Passed (1,978 ms).
+  2. `opaque frame storage and network isolation`: Passed (localStorage, sessionStorage, cookie, fetch blocked with SecurityError/TypeError; zero child network requests).
+  3. `embedded E03 identity`: Passed (provider `dam-hopper`).
+  4. `overview refresh`: Passed (captured `01-overview.png`).
+  5. `history list and detail`: Passed (captured `02-history-detail.png`).
+  6. `current policy configuration`: Passed (captured `03-configuration.png`).
+  7. `counsel evaluations`: Passed (captured `04-evaluations.png`).
+  8. `protected inert asset`: Passed (authenticated 200, anonymous 401, digest `2111bae2...` verified).
+  9. `same-route connection reuse`: Passed (1 WebSocket connection maintained).
+  10. `profile owner switch revocation`: Passed (switchedToUnavailableOwner: true).
+  11. `reload creates fresh frame fence`: Passed (frame session fence rotated).

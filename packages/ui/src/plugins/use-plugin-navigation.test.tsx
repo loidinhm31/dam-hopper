@@ -136,7 +136,7 @@ describe("usePluginNavigation Settings Target Server routing", () => {
     container.remove();
   });
 
-  it("queries Settings Target Server for EVCrate Advisor when workspace project is null", async () => {
+  it("excludes evcrate.advisor from standalone navigation when workspace project is null", async () => {
     let latestState: PluginNavigationState | null = null;
 
     await act(async () => {
@@ -153,17 +153,15 @@ describe("usePluginNavigation Settings Target Server routing", () => {
     await vi.waitFor(() => {
       expect(latestState).not.toBeNull();
       expect(latestState?.loading).toBe(false);
-      expect(latestState?.items.length).toBe(1);
+      expect(latestState?.items.length).toBe(0);
     });
 
     expect(mockSettingsPluginsList).toHaveBeenCalledWith({
       project: "settings-repo",
     });
-    expect(latestState?.items[0].installationId).toBe("evcrate.advisor");
-    expect(latestState?.items[0].label).toBe("EVCrate Advisor");
   });
 
-  it("queries Settings Target Server for Advisor and workspace server for other plugins", async () => {
+  it("excludes evcrate.advisor and includes ordinary plugins across servers", async () => {
     const workspaceRef: ProjectRef = {
       profileId: "workspace-profile",
       project: "workspace-repo",
@@ -184,7 +182,7 @@ describe("usePluginNavigation Settings Target Server routing", () => {
     await vi.waitFor(() => {
       expect(latestState).not.toBeNull();
       expect(latestState?.loading).toBe(false);
-      expect(latestState?.items.length).toBe(2);
+      expect(latestState?.items.length).toBe(1);
     });
     expect(mockSettingsPluginsList).toHaveBeenCalledWith({
       project: "settings-repo",
@@ -194,11 +192,11 @@ describe("usePluginNavigation Settings Target Server routing", () => {
     });
 
     const ids = latestState?.items.map((i) => i.installationId);
-    expect(ids).toContain("evcrate.advisor");
+    expect(ids).not.toContain("evcrate.advisor");
     expect(ids).toContain("custom.plugin");
   });
 
-  it("includes both Advisor and ordinary plugins when workspace and settings profile are identical", async () => {
+  it("excludes evcrate.advisor while including ordinary plugins when workspace and settings profile are identical", async () => {
     mockSettingsPluginsList.mockResolvedValue({
       plugins: [advisorMetadata, otherMetadata],
     });
@@ -223,11 +221,55 @@ describe("usePluginNavigation Settings Target Server routing", () => {
     await vi.waitFor(() => {
       expect(latestState).not.toBeNull();
       expect(latestState?.loading).toBe(false);
-      expect(latestState?.items.length).toBe(2);
+      expect(latestState?.items.length).toBe(1);
     });
 
     const ids = latestState?.items.map((i) => i.installationId);
-    expect(ids).toContain("evcrate.advisor");
+    expect(ids).not.toContain("evcrate.advisor");
     expect(ids).toContain("custom.plugin");
+  });
+
+  it("preserves other plugins with publisher evcrate in standalone navigation", async () => {
+    const evcrateOtherMetadata: PluginMetadataItem = {
+      id: "evcrate.custom-tool",
+      version: "0.3.0",
+      publisher: "evcrate",
+      capabilities: ["custom.op"],
+      hasUi: true,
+      activeDigest: "c".repeat(64),
+      activeGeneration: 1,
+      enabled: true,
+    };
+
+    mockSettingsPluginsList.mockResolvedValue({
+      plugins: [advisorMetadata, evcrateOtherMetadata],
+    });
+
+    const sameProfileRef: ProjectRef = {
+      profileId: "settings-profile",
+      project: "settings-repo",
+    };
+    let latestState: PluginNavigationState | null = null;
+
+    await act(async () => {
+      root.render(
+        <Harness
+          project={sameProfileRef}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(latestState).not.toBeNull();
+      expect(latestState?.loading).toBe(false);
+      expect(latestState?.items.length).toBe(1);
+    });
+
+    const ids = latestState?.items.map((i) => i.installationId);
+    expect(ids).not.toContain("evcrate.advisor");
+    expect(ids).toContain("evcrate.custom-tool");
   });
 });
