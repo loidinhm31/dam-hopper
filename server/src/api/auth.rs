@@ -113,6 +113,12 @@ impl AuthenticatedActor {
         }
     }
 }
+/// Preserves verified full claims from successful JWT authentication.
+///
+/// Intentionally contains no bearer material or secrets.
+#[derive(Clone, Debug)]
+pub struct VerifiedAuthClaims(pub AuthClaims);
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,28 +167,30 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
 // Auth middleware
 // ---------------------------------------------------------------------------
 
-/// Validates JWT auth on every protected request.
-pub async fn require_auth(
-    State(state): State<AppState>,
-    jar: CookieJar,
+/// Validates authentication and evaluates auth policy for an incoming request.
+///
+/// Returns the request with `AuthenticatedActor`, `CredentialMechanism`, and (for signed auth)
+/// `VerifiedAuthClaims` inserted into extensions, or an error `Response`.
+pub(crate) async fn authenticate_request(
+    state: &AppState,
+    jar: &CookieJar,
     mut request: Request,
-    next: Next,
-) -> Response {
+) -> Result<Request, Response> {
     // Dev mode has a fixed actor so ticket binding remains identical to production.
     if state.no_auth {
         request.extensions_mut().insert(AuthenticatedActor::dev_user());
         request
             .extensions_mut()
             .insert(CredentialMechanism::NoAuthDev);
-        return next.run(request).await;
+        return Ok(request);
     }
 
-    let Some((token, mechanism)) = extract_token_and_mechanism(&request, &jar) else {
-        return unauthorized();
+    let Some((token, mechanism)) = extract_token_and_mechanism(&request, jar) else {
+        return Err(unauthorized());
     };
 
     let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) else {
-        return unauthorized();
+        return Err(unauthorized());
     };
 
     match state.auth_service.evaluate_claims(&claims).await {
@@ -201,16 +209,15 @@ pub async fn require_auth(
             );
             request.extensions_mut().insert(actor);
             request.extensions_mut().insert(mechanism);
-            next.run(request).await
+            request.extensions_mut().insert(VerifiedAuthClaims(claims));
+            Ok(request)
         }
-        AuthDecision::MfaRequired { .. } => {
-            auth_error_response(
-                StatusCode::UNAUTHORIZED,
-                "MFA_REQUIRED",
-                "MFA verification required",
-                None,
-            )
-        }
+        AuthDecision::MfaRequired { .. } => Err(auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "MFA_REQUIRED",
+            "MFA verification required",
+            None,
+        )),
         AuthDecision::FullLoginRequired { reason } => {
             let code = if reason.contains("expired") {
                 "SESSION_EXPIRED"
@@ -224,17 +231,65 @@ pub async fn require_auth(
             } else {
                 "AUTH_REQUIRED"
             };
-            auth_error_response(StatusCode::UNAUTHORIZED, code, reason, None)
+            Err(auth_error_response(StatusCode::UNAUTHORIZED, code, reason, None))
         }
-        AuthDecision::Unavailable { reason } => {
-            auth_error_response(
+        AuthDecision::Unavailable { reason } => Err(auth_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AUTH_UNAVAILABLE",
+            format!("Authentication backend unavailable: {reason}"),
+            None,
+        )),
+    }
+}
+
+/// Validates JWT auth on every protected request.
+pub async fn require_auth(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> Response {
+    match authenticate_request(&state, &jar, request).await {
+        Ok(request) => next.run(request).await,
+        Err(response) => response,
+    }
+}
+
+/// Feature-local authentication middleware for the host resource SSE stream.
+///
+/// Bounded to a strict 2-second timeout around the auth/policy evaluation future ONLY.
+/// `Next.run` runs outside the timeout so downstream first-frame/serializer delays
+/// are never mislabeled as AUTH_UNAVAILABLE.
+pub async fn authenticate_stream_request(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() != axum::http::Method::GET {
+        return next.run(request).await;
+    }
+
+    let auth_result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        authenticate_request(&state, &jar, request),
+    )
+    .await;
+
+    let request = match auth_result {
+        Ok(Ok(request)) => request,
+        Ok(Err(response)) => return response,
+        Err(_timeout) => {
+            return auth_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "AUTH_UNAVAILABLE",
-                format!("Authentication backend unavailable: {reason}"),
+                "Authentication backend unavailable",
                 None,
-            )
+            );
         }
-    }
+    };
+
+    next.run(request).await
 }
 
 /// Middleware that enforces bearer token authentication for protected management operations

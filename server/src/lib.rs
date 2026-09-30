@@ -16,6 +16,7 @@ pub mod linux_release;
 #[cfg(windows)]
 #[path = "linux_release_windows.rs"]
 pub mod linux_release;
+pub mod http_shutdown;
 pub mod idle_suspend;
 pub mod persistence;
 pub mod plugins;

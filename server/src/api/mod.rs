@@ -24,6 +24,7 @@ pub mod plugin_assets;
 pub mod plugins;
 pub mod plugin_admin;
 pub mod port_forward;
+pub mod resource_events;
 pub mod router;
 pub mod settings;
 pub mod ssh;
