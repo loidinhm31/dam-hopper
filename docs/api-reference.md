@@ -94,19 +94,28 @@ actor visibility only. Every public plugin route is denied with `403`
 
 ### Public endpoints
 
-| Method and path | Body/query | Result |
-| --- | --- | --- |
-| `GET /api/plugins` | Query: required `project`; optional `worktreePath` | `{ plugins: PluginMetadataItem[] }` visible to actor/target |
-| `POST /api/plugins/contexts/open` | `{ epoch, installationId, target, allowedOperations?, allowCurrentAccountPolicy? }` | `{ contextId, bindingRevision, grantRevision, activationGeneration, expiresAt }` |
-| `POST /api/plugins/contexts/close` | `{ epoch, contextId }` | `{ closed }`; idempotent |
-| `POST /api/plugins/invoke` | `{ epoch, contextId, operation, payload, deadlineMs? }` | `{ result }` |
-| `POST /api/plugins/cancel` | `{ epoch, contextId, requestId }` | `{ outcome }` |
+| Method and path                    | Body/query                                                                          | Result                                                                           |
+| ---------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `GET /api/plugins`                 | Query: required `project`; optional `worktreePath`                                  | `{ plugins: PluginMetadataItem[] }` visible to actor/target                      |
+| `POST /api/plugins/view-context`   | `{ installationId, target }`                                                        | Server-derived `PluginViewContext` for the authenticated actor and target        |
+| `POST /api/plugins/contexts/open`  | `{ epoch, installationId, target, allowedOperations?, allowCurrentAccountPolicy? }` | `{ contextId, bindingRevision, grantRevision, activationGeneration, expiresAt }` |
+| `POST /api/plugins/contexts/close` | `{ epoch, contextId }`                                                              | `{ closed }`; idempotent                                                         |
+| `POST /api/plugins/invoke`         | `{ epoch, contextId, operation, payload, deadlineMs? }`                             | `{ result }`                                                                     |
+| `POST /api/plugins/cancel`         | `{ epoch, contextId, requestId }`                                                   | `{ outcome }`                                                                    |
 
 `target` is `{ project, worktreePath? }`; browser `profileId`, connection
 generation, filesystem roots, grant claims, and history hashes are not accepted
 server inputs. The server resolves registered project/worktree targets before
 opening a context. `payload` is bounded opaque JSON; the host does not parse
 plugin-domain evaluation data.
+
+`view-context` resolves the server target, checks enabled-installation
+visibility for the authenticated actor, and returns `metadata`,
+`workspaceProject` (`projectId`, `label`), `historyScope`, `contextScope`,
+`allowedOperations`, `allowCurrentAccountPolicy`, and `authorityKey`. Its
+request rejects unknown fields; project identity and authority are
+server-derived, and raw owner-history source paths are omitted from metadata.
+This read-only description route does not require a WebSocket epoch.
 
 ### Public authorization and lifecycle
 
@@ -151,18 +160,18 @@ All fields use camelCase. Lifecycle and authority mutations carry
 `expectedSecurityRevision`, a compare-and-swap fence read from
 `GET /api/plugins/admin`; stale values are rejected rather than merged.
 
-| Method and path | Request | Success result |
-| --- | --- | --- |
-| `GET /api/plugins/admin` | none | `AdminInstallationListResult` (`installations`, `securityRevision`) |
-| `GET /api/plugins/admin/installations/{id}` | none | `AdminInstallationDto` |
-| `POST /api/plugins/admin/stages` | streaming `application/gzip`/`application/octet-stream`; `Content-Length`, `X-Expected-SHA256` | `201 StageReviewDto` |
-| `POST /api/plugins/admin/stages/{stageId}/approve` | `{ expectedSha256, expectedSecurityRevision, initialBindings?, initialGrants? }` | `AdminInstallationDto` |
-| `POST /api/plugins/admin/installations/{id}/rollback` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
-| `POST /api/plugins/admin/installations/{id}/enable` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
-| `POST /api/plugins/admin/installations/{id}/disable` | `{ expectedSecurityRevision }` | `AdminInstallationDto` |
-| `DELETE /api/plugins/admin/installations/{id}` | query `expectedSecurityRevision`, or `X-Expected-Security-Revision` header | `AdminRemoveResult` |
-| `PUT /api/plugins/admin/installations/{id}/grants` | `{ expectedSecurityRevision, grants }` | `AdminInstallationDto` |
-| `PUT /api/plugins/admin/installations/{id}/bindings` | `{ expectedSecurityRevision, bindings }` | `AdminInstallationDto` |
+| Method and path                                       | Request                                                                                        | Success result                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `GET /api/plugins/admin`                              | none                                                                                           | `AdminInstallationListResult` (`installations`, `securityRevision`) |
+| `GET /api/plugins/admin/installations/{id}`           | none                                                                                           | `AdminInstallationDto`                                              |
+| `POST /api/plugins/admin/stages`                      | streaming `application/gzip`/`application/octet-stream`; `Content-Length`, `X-Expected-SHA256` | `201 StageReviewDto`                                                |
+| `POST /api/plugins/admin/stages/{stageId}/approve`    | `{ expectedSha256, expectedSecurityRevision, initialBindings?, initialGrants? }`               | `AdminInstallationDto`                                              |
+| `POST /api/plugins/admin/installations/{id}/rollback` | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
+| `POST /api/plugins/admin/installations/{id}/enable`   | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
+| `POST /api/plugins/admin/installations/{id}/disable`  | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
+| `DELETE /api/plugins/admin/installations/{id}`        | query `expectedSecurityRevision`, or `X-Expected-Security-Revision` header                     | `AdminRemoveResult`                                                 |
+| `PUT /api/plugins/admin/installations/{id}/grants`    | `{ expectedSecurityRevision, grants }`                                                         | `AdminInstallationDto`                                              |
+| `PUT /api/plugins/admin/installations/{id}/bindings`  | `{ expectedSecurityRevision, bindings }`                                                       | `AdminInstallationDto`                                              |
 
 Stage upload requires a non-zero declared length, a 64-character hexadecimal
 `X-Expected-SHA256`, and a body within the 32 MiB compressed package limit. The
@@ -325,14 +334,14 @@ server exposes no forwarding CRUD route or forwarding event authority.
 The client opens one desktop context and then addresses each server profile
 through an independent scope:
 
-| Operation | Input / result boundary |
-| --- | --- |
-| `openClient(knownScopes)` | Starts a new client epoch and returns `DesktopClientContext`; globally tears down prior live scopes/resources. |
-| `openScope(scopeId)` | Opens or reuses one UUIDv4 scope; returns `ScopeHandle { ref, snapshot }`. |
-| `closeScope(scope)` | Accepts the complete `NativeScopeRef`; closes only that scope's live resources. |
-| `reconcileKnownScopes(knownScopes)` | Updates retention metadata; does not open/close scopes or advance the epoch. |
-| `snapshot(scope)` and mutations | Carry the explicit scope reference and return an authoritative scoped snapshot. |
-| `purgeScope(scopeId, knownScopes)` | Purges only an inactive, confirmed-absent scope when known-scope storage is available. |
+| Operation                           | Input / result boundary                                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `openClient(knownScopes)`           | Starts a new client epoch and returns `DesktopClientContext`; globally tears down prior live scopes/resources. |
+| `openScope(scopeId)`                | Opens or reuses one UUIDv4 scope; returns `ScopeHandle { ref, snapshot }`.                                     |
+| `closeScope(scope)`                 | Accepts the complete `NativeScopeRef`; closes only that scope's live resources.                                |
+| `reconcileKnownScopes(knownScopes)` | Updates retention metadata; does not open/close scopes or advance the epoch.                                   |
+| `snapshot(scope)` and mutations     | Carry the explicit scope reference and return an authoritative scoped snapshot.                                |
+| `purgeScope(scopeId, knownScopes)`  | Purges only an inactive, confirmed-absent scope when known-scope storage is available.                         |
 
 `NativeScopeRef` binds `DesktopClientContext` (`desktopInstanceId`,
 `managerSessionId`, `clientEpoch`) to `scopeId`, `scopeGeneration`, and
@@ -932,14 +941,16 @@ still-unobserved Windows CI result, canary-host profiling, staged
 monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
 work; none of those checks is passed evidence.
 
-## Agent Status API (OMP-first Phases 01–05)
+## Agent Status API (OMP-first Phases 01–05; native Phases 01–06)
 
 The OMP-first semantic status track is complete through Linux x86_64 Phase 05
 qualification with OMP 18.4.1 across C01–C19. The separate Codex/Claude native
-rollout also completed Phases 01–05, including Agent Settings and notification
-ownership; live native-provider qualification remains Phase 06. See the
-[agent-status architecture](./architecture/agent-status.md) and
-[OMP qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md).
+rollout completed Phases 01–06 and passed Linux x86_64 live qualification on
+Codex CLI 0.158.0 and Claude Code 2.1.250 (N01–N32); other provider versions
+and server platforms remain unqualified. See the
+[agent-status architecture](./architecture/agent-status.md), the
+[OMP qualification report](../plans/reports/qualification-260928-1815-agent-status-omp.md),
+and the [native qualification report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 The snapshot route uses normal `/api/*` Bearer auth middleware.
 
 ### GET /api/agent-status/v1/snapshot
@@ -1538,26 +1549,26 @@ commit-message edit return `GitActionResult`:
 
 Result flags:
 
-| Field            | Meaning                                                                                                                                               |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`             | `true` when the Git action completed; `false` for a blocked or recoverable outcome.                                                                      |
-| `message`        | Human-readable operation summary or recovery hint.                                                                                                    |
-| `branch`         | Branch affected by branch create/checkout; full local ref on message-edit results.                                                             |
-| `hash`           | Commit affected by cherry-pick/reset; rewritten target OID on successful message edits.                                                         |
-| `stashed`        | Checkout used `strategy: "stash"` and created a stash before switching branches.                                                                      |
-| `conflict`       | Cherry-pick or reset reached a Git conflict state.                                                                                                    |
-| `dirty`          | The operation was blocked by local working tree changes.                                                                                              |
-| `destructive`    | The selected mode can discard local state, such as force checkout or hard reset.                                                                      |
-| `recovery`       | Active operation metadata when recovery commands are available.                                                                                       |
-| `blockedReason`  | Machine-readable reason; includes operation-specific guards and message-edit reasons such as `stale-ref`, `unsupported-history`, `invalid-commit-metadata`, `signature-consent-required`, and `publication-uncertain`. |
-| `recommendation` | User-facing next action for blocked or recoverable operations.                                                                                        |
-| `oldTargetOid`    | Original target commit OID for a message edit.                                                                                                        |
-| `newTargetOid`    | Rewritten target commit OID; also returned as `hash` for a successful edit.                                                                            |
-| `oldHeadOid`      | Captured branch-tip OID before a message edit.                                                                                                         |
-| `newHeadOid`      | Branch-tip OID after a successful rewrite; unchanged for a no-op.                                                                                     |
-| `rewrittenCount`  | Number of rewritten commits; zero for a no-op.                                                                                                         |
-| `noOp`            | Whether the normalized message matched the raw target message and no object/ref update was made.                                                       |
-| `signaturesRemoved` | Whether invalidated signature or merge-tag headers were removed after explicit consent.                                                                 |
+| Field               | Meaning                                                                                                                                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`                | `true` when the Git action completed; `false` for a blocked or recoverable outcome.                                                                                                                                    |
+| `message`           | Human-readable operation summary or recovery hint.                                                                                                                                                                     |
+| `branch`            | Branch affected by branch create/checkout; full local ref on message-edit results.                                                                                                                                     |
+| `hash`              | Commit affected by cherry-pick/reset; rewritten target OID on successful message edits.                                                                                                                                |
+| `stashed`           | Checkout used `strategy: "stash"` and created a stash before switching branches.                                                                                                                                       |
+| `conflict`          | Cherry-pick or reset reached a Git conflict state.                                                                                                                                                                     |
+| `dirty`             | The operation was blocked by local working tree changes.                                                                                                                                                               |
+| `destructive`       | The selected mode can discard local state, such as force checkout or hard reset.                                                                                                                                       |
+| `recovery`          | Active operation metadata when recovery commands are available.                                                                                                                                                        |
+| `blockedReason`     | Machine-readable reason; includes operation-specific guards and message-edit reasons such as `stale-ref`, `unsupported-history`, `invalid-commit-metadata`, `signature-consent-required`, and `publication-uncertain`. |
+| `recommendation`    | User-facing next action for blocked or recoverable operations.                                                                                                                                                         |
+| `oldTargetOid`      | Original target commit OID for a message edit.                                                                                                                                                                         |
+| `newTargetOid`      | Rewritten target commit OID; also returned as `hash` for a successful edit.                                                                                                                                            |
+| `oldHeadOid`        | Captured branch-tip OID before a message edit.                                                                                                                                                                         |
+| `newHeadOid`        | Branch-tip OID after a successful rewrite; unchanged for a no-op.                                                                                                                                                      |
+| `rewrittenCount`    | Number of rewritten commits; zero for a no-op.                                                                                                                                                                         |
+| `noOp`              | Whether the normalized message matched the raw target message and no object/ref update was made.                                                                                                                       |
+| `signaturesRemoved` | Whether invalidated signature or merge-tag headers were removed after explicit consent.                                                                                                                                |
 
 Recoverable dirty checkout example:
 
@@ -1646,15 +1657,15 @@ Commit-message edits can target a commit already pushed elsewhere, but update
 only the selected local branch; they never publish automatically. A later
 push is separate and may be rejected by remote policy.
 
-| Operation          | History effect       | Shared-history behavior                                  |
-| ------------------ | -------------------- | -------------------------------------------------------- |
-| `revert`           | Adds inverse commit  | Allowed and recommended                                  |
-| `revert-files`     | Worktree inverse     | Allowed; selected changes stay uncommitted for review    |
-| `drop`             | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
-| `drop-files`       | Rewrites branch      | Blocked for pushed/shared commits; use revert instead    |
+| Operation          | History effect        | Shared-history behavior                                  |
+| ------------------ | --------------------- | -------------------------------------------------------- |
+| `revert`           | Adds inverse commit   | Allowed and recommended                                  |
+| `revert-files`     | Worktree inverse      | Allowed; selected changes stay uncommitted for review    |
+| `drop`             | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
+| `drop-files`       | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
 | `message`          | Rewrites local branch | Allowed for reachable commits; remote ref is not changed |
-| `undo-last-commit` | Rewrites local HEAD  | Blocked for pushed/shared commits; use revert instead    |
-| `reset --hard`     | Rewrites local state | Allowed only after explicit request and preflight checks |
+| `undo-last-commit` | Rewrites local HEAD   | Blocked for pushed/shared commits; use revert instead    |
+| `reset --hard`     | Rewrites local state  | Allowed only after explicit request and preflight checks |
 
 Manual verification checklist for browser integrations:
 
@@ -1902,11 +1913,12 @@ configured-root or legacy project behavior.
 Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`.
 
 **Windows cmd.exe semantics & test implications:**
+
 - Environment variable expansion in `cmd.exe` uses `%VAR%` syntax rather than Unix `$VAR`.
 - `cmd.exe` output uses CRLF (`\r\n`); normalize captured terminal output in test assertions. Input is submitted to the PTY as raw bytes, so callers choose the line terminator.
 - Windows does not provide Unix shell lifecycle integration (e.g. zsh/fish precmd/preexec hooks, prompt tracking, or sysfs/procfs monitoring); terminal sessions on Windows operate in unmonitored raw mode without Unix-specific shell lifecycle events.
 - Unix shell selection, bash fallback, and POSIX process management remain completely unchanged on Linux/macOS.
-For the isolated Windows loopback startup and cleanup procedure, see the [Server Configuration](./configuration/server-configuration.md#windows-server-loopback-smoke-checklist).
+  For the isolated Windows loopback startup and cleanup procedure, see the [Server Configuration](./configuration/server-configuration.md#windows-server-loopback-smoke-checklist).
 
 Response: the created `SessionInfo`, including `worktreePath` when the session
 is target-scoped.
@@ -2049,6 +2061,7 @@ Response: `PublishResult`:
 ```
 
 Statuses:
+
 - `published`: Push succeeded; remote destination ref moved to `sourceOid`.
 - `already-current`: Remote is already up to date with `sourceOid`; no push needed.
 - `stale-remote`: Remote moved from `expectedRemoteOid` to a different commit before or during negotiation; push aborted, no remote mutation.
@@ -2057,6 +2070,7 @@ Statuses:
 - `rejected`: Remote receive-pack hook declined the update; local edit is preserved.
 - `auth-required`: SSH or credential authentication failed before transfer.
 - `unknown`: Transport dropped after negotiation/send; status uncertain pending refresh.
+
 ### SSH Credential APIs
 
 **POST /api/ssh/keys/load**

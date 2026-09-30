@@ -1206,7 +1206,7 @@ async fn test_describe_view_api_behavioral() {
     let admin_resp = router.clone().oneshot(admin_req).await.unwrap();
     assert_eq!(admin_resp.status(), StatusCode::OK);
 
-    let bob_token = generate_auth_token("bob-view-user", "test-jwt-secret");
+    let bob_token = generate_auth_token("bob-new-user", "test-jwt-secret");
 
     // Case 1: Unauthenticated request is rejected with 401
     let unauth_req = Request::builder()
