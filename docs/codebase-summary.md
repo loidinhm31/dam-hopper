@@ -80,7 +80,7 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
-- Workspace Advisor integration (Phases 00–09) hosts the EVCrate Advisor plugin directly within the Workspace (IDE dock, Terminal float, compact overlay) with selected-project admission, single persistent frame preservation, and fail-closed cutover of standalone `/plugins/evcrate.advisor` routes; paired qualification passed 11/11 browser scenarios on 2026-09-30.
+- Workspace Advisor integration (Phases 00–09) hosts the EVCrate Advisor plugin directly within the Workspace (IDE dock, Terminal float, compact overlay) with selected-project admission, single persistent frame preservation, and complete removal of standalone `/plugins/:installationId` routing; paired qualification passed 11/11 browser scenarios on 2026-09-30.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
@@ -786,8 +786,7 @@ material remain bounded, non-persistent capabilities.
   canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and
   phase acceptance criteria.
-- [Configuration Guide](./configuration-guide.md) — configuration and runtime
-  setup.
+- [Configuration Guide](./configuration-guide.md) — configuration and runtime setup.
 - [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md) —
   canonical/legacy config migration, audit state, descriptor safety, and
   no-replace publication.
