@@ -21,7 +21,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 05 Agents, Ports, and Browser](./phase-05-agents-ports-and-browser.md)** — Owner-bound Agent Store, multi-profile ports/tunnels, Browser target trust, and incarnation-safe terminal handoff
 - **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
 - **[Multi-profile Host Resources verification](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md)** — Completed focused unit/component and Chromium gate: 102/102 tests covering navigation, focus, polling tiers, unread isolation, responsive accessibility, and security negatives
-- **[Host-resource SSE architecture](./architecture/host-resource-sse.md)** — Phases 01–04 implement the authenticated stream/UI cutover; Phase 05 scoped instrumentation and tests are done, while release/browser/proxy target qualification and Phase 06 rollout remain pending.
+- **[Host-resource SSE architecture](./architecture/host-resource-sse.md)** — Phases 01–06 delivery and rollback design for the intended Linux-web-first scope; target-specific browser, release-PID/soak, auth/shutdown, proxy, and native C42 gates remain pending.
 - **[Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)** — UUIDv4-namespaced media sessions, ticket-bound native streams, narrow remote cleanup, and owner-qualified encrypted writes
 - **[Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)** — Concurrent Windows native SSH scopes, lifecycle fences, per-scope teardown, and explicit Browser target ownership
 - **[Phase 09 Integration and Qualification](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)** — Dual-server harness, reconciled test ledger, web/native release gates, and rollback boundaries
@@ -58,7 +58,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 ## Deployment
 
 - **[Project and UI Configuration](./configuration-guide.md)** — TOML registry, terminal environment, UI preferences, and Agent Settings
-- **[Server Configuration](./configuration/server-configuration.md)** — Server runtime, environment variables, deployment, and troubleshooting
+- **[Server Configuration](./configuration/server-configuration.md)** — Server runtime, environment variables, deployment, troubleshooting, and the Phase 06 SSE proxy/rollout/rollback runbook.
 - **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI, required Linux runner packaging invariant, v0.5.1 operator checklist, and Linux bootstrap ownership
 - **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
 - **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
