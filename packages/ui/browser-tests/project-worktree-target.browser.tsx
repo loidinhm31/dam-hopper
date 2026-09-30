@@ -302,6 +302,13 @@ vi.mock("@/api/client.js", () => ({
     target.worktreePath == null
       ? { project: target.project }
       : { project: target.project, worktreePath: target.worktreePath },
+  toServerProjectTarget: (target: {
+    project: string;
+    worktreePath?: string;
+  }) =>
+    target.worktreePath == null
+      ? { project: target.project }
+      : { project: target.project, worktreePath: target.worktreePath },
   projectTargetCacheKey: (target: {
     project: string;
     worktreePath?: string;

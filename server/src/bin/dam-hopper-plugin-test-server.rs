@@ -28,7 +28,6 @@ use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
 use dam_hopper_server::state::AppState;
 use dam_hopper_server::tunnel::{CloudflaredDriver, TunnelSessionManager};
 use dam_hopper_server::workspace_target::WorkspaceTargetResolver;
-use jsonwebtoken::{EncodingKey, Header};
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
 use serde::Serialize;
@@ -86,12 +85,6 @@ struct Args {
     actor: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Claims {
-    sub: String,
-    exp: usize,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,7 +103,7 @@ struct SessionDescriptor {
     package_sha256: String,
     ui_sha256: String,
     activation_generation: u64,
-    plugin_url: String,
+    workspace_url: String,
     direct_asset_url: String,
     state_dir: String,
 }
@@ -156,15 +149,17 @@ fn validate_origin(origin: &str, transport: &TransportDeclaration) -> anyhow::Re
 }
 
 fn encode_token(subject: &str, secret: &str) -> anyhow::Result<String> {
-    let claims = Claims {
+    let now = chrono::Utc::now();
+    let claims = dam_hopper_server::auth::model::AuthClaims {
+        v: 2,
         sub: subject.to_string(),
-        exp: chrono::Utc::now().timestamp() as usize + 8 * 60 * 60,
+        sid: format!("session-{}", subject.trim_end_matches("-user")),
+        auth_version: 0,
+        credential_version: 0,
+        iat: now.timestamp() as usize,
+        exp: 2_000_000_000,
     };
-    Ok(jsonwebtoken::encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )?)
+    claims.encode(secret)
 }
 
 #[tokio::main]
@@ -409,7 +404,7 @@ async fn main() -> anyhow::Result<()> {
     let diagnostics = DiagnosticStore::new(state_dir.join("diagnostics.jsonl"));
     let jwt_secret = Uuid::new_v4().to_string();
     let token = encode_token(&args.actor, &jwt_secret)?;
-    let state = AppState::new(
+    let mut state = AppState::new(
         state_dir.clone(),
         config,
         GlobalConfig::default(),
@@ -427,6 +422,33 @@ async fn main() -> anyhow::Result<()> {
         dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )?
     .with_plugin_service(plugin_service);
+
+    let sid = format!("session-{}", args.actor.trim_end_matches("-user"));
+    let mock_user = dam_hopper_server::auth::model::UserRecord {
+        id: None,
+        username: args.actor.clone(),
+        password_hash: String::new(),
+        is_enabled: true,
+        role: dam_hopper_server::auth::model::UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    let now = chrono::Utc::now();
+    let exp_chrono = chrono::DateTime::from_timestamp(2_000_000_000, 0).unwrap();
+    let mock_session = dam_hopper_server::auth::model::AuthSession {
+        id: sid,
+        username: args.actor.clone(),
+        auth_version: 0,
+        credential_version: 0,
+        issued_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        expires_at: dam_hopper_server::auth::model::chrono_to_bson(exp_chrono),
+        mfa_verified_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        revoked_at: None,
+    };
+    state.auth_service = Arc::new(dam_hopper_server::auth::AuthService::new_mock(mock_user, mock_session));
 
     let profile_id = Uuid::new_v4().to_string();
     let asset_path = format!(
@@ -451,7 +473,7 @@ async fn main() -> anyhow::Result<()> {
         package_sha256,
         ui_sha256: ui.sha256,
         activation_generation: installation.activation_generation,
-        plugin_url: format!("{public_origin}/plugins/{}", installation.installation_id),
+        workspace_url: format!("{public_origin}/workspace"),
         direct_asset_url: format!("{public_origin}{asset_path}"),
         state_dir: state_dir.display().to_string(),
     };
@@ -543,7 +565,9 @@ async fn auto_auth_middleware(
         .map(|c| c.contains("damhopper-auth="))
         .unwrap_or(false);
 
-    if !has_auth && !has_cookie {
+    let is_direct_asset = path.starts_with("/api/plugins/") && path.contains("/ui");
+
+    if !has_auth && !has_cookie && !is_direct_asset {
         if let Ok(bearer_val) = axum::http::HeaderValue::from_str(&format!("Bearer {}", auth.token))
         {
             request
@@ -570,7 +594,7 @@ async fn auto_auth_middleware(
 
     let mut response = next.run(request).await;
 
-    if !has_cookie {
+    if !has_cookie && !is_direct_asset {
         let cookie_val = format!(
             "damhopper-auth={}; HttpOnly; SameSite=Lax; Path=/",
             auth.token

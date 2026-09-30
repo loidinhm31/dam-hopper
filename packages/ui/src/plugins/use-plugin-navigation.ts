@@ -38,7 +38,7 @@ export interface PluginNavigationState {
 }
 
 export function isAdvisorMetadata(metadata: PluginMetadataItem): boolean {
-  return metadata.id === "evcrate.advisor" || metadata.publisher === "evcrate";
+  return metadata.id === "evcrate.advisor";
 }
 
 export function parsePluginMetadata(value: unknown): PluginMetadataItem | null {
@@ -228,9 +228,8 @@ export function usePluginNavigation(
             for (const meta of parsed) {
               if (
                 meta &&
-                (isAdvisorMetadata(meta) ||
-                  !canQueryWorkspace ||
-                  isWorkspaceSameServer)
+                meta.id !== "evcrate.advisor" &&
+                (!canQueryWorkspace || isWorkspaceSameServer)
               ) {
                 itemMap.set(meta.id, pluginNavigationItem(meta));
               }
@@ -257,7 +256,7 @@ export function usePluginNavigation(
             if (response && Array.isArray(response.plugins)) {
               const workspaceParsed = response.plugins.map(parsePluginMetadata);
               for (const meta of workspaceParsed) {
-                if (meta && !isAdvisorMetadata(meta)) {
+                if (meta && meta.id !== "evcrate.advisor") {
                   itemMap.set(meta.id, pluginNavigationItem(meta));
                 }
               }

@@ -168,10 +168,12 @@ selection updates workspace context in place; a changed authority key revokes
 and recreates the old frame rather than carrying context across authorities.
 
 The Advisor host resolves view context through the authenticated owner-bound
-API and uses its canonical target and authority metadata. `PluginHostPage.tsx`,
-`plugins/use-plugin-navigation.ts`, and `plugins/use-plugin-host.ts` implement
-the routing; `PluginHostPage.test.tsx` covers Advisor-versus-generic ownership.
-
+API and uses its canonical target and authority metadata.
+`components/organisms/WorkspaceAdvisorHost.tsx` hosts Advisor across integrated
+placements (IDE dock, Terminal float, and compact overlay);
+`WorkspaceAdvisorHost.test.tsx` covers placement and lifecycle contracts.
+Standalone `/plugins/:installationId` routing has been removed, and bookmarked
+URLs fail closed without an unavailable screen.
 ## Unified-profile integration and qualification (Phase 09)
 
 The integrated shell keeps one explicit owner through project aggregation,

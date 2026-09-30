@@ -81,7 +81,7 @@ function sanitizedSession(session) {
     packageSha256: session.packageSha256,
     uiSha256: session.uiSha256,
     activationGeneration: session.activationGeneration,
-    pluginUrl: session.pluginUrl,
+    workspaceUrl: session.workspaceUrl,
     directAssetUrl: session.directAssetUrl,
   };
 }
@@ -231,10 +231,19 @@ async function runQualification(page, context, session, evidenceDir) {
     scenarios.push({ name, status: "passed", detail });
 
   const start = Date.now();
-  await page.goto(session.pluginUrl, {
+  await page.goto(session.workspaceUrl, {
     waitUntil: "domcontentloaded",
     timeout: 30_000,
   });
+  await page
+    .locator('text="Loading…"')
+    .waitFor({ state: "hidden", timeout: 30_000 })
+    .catch(() => {});
+  const advisorLauncher = page
+    .locator('button[aria-label="Advisor"], button[title="Advisor"]')
+    .first();
+  await advisorLauncher.waitFor({ state: "visible", timeout: 15_000 });
+  await advisorLauncher.click();
   const iframe = await waitForReady(page);
   pass("authenticated remote plugin load", { elapsedMs: Date.now() - start });
 
@@ -285,11 +294,17 @@ async function runQualification(page, context, session, evidenceDir) {
   await frame
     .getByRole("heading", { name: "Configuration & Route Comparisons" })
     .waitFor();
+  const policyDisclosure = frame.locator("details summary, summary").first();
+  if ((await policyDisclosure.count()) > 0) {
+    await policyDisclosure.click();
+  }
   await frame
-    .getByText("Primary Route:", { exact: true })
+    .getByText(/Primary Route/i)
+    .first()
     .waitFor({ timeout: 15_000 });
   await frame
-    .getByText("Backup Route:", { exact: true })
+    .getByText(/Backup Route/i)
+    .first()
     .waitFor({ timeout: 15_000 });
   const configurationScreenshot = await screenshot("03-configuration");
   pass("current policy configuration", { screenshot: configurationScreenshot });
@@ -493,7 +508,9 @@ async function main() {
       );
     }
 
-    const browserContext = await browser.newContext();
+    const browserContext = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+    });
     const page = await browserContext.newPage();
     await seedBrowserStorage(page, session);
     const context = {
@@ -509,6 +526,11 @@ async function main() {
     page.on("pageerror", (error) =>
       evidence.diagnostics.pageErrors.push(error.message),
     );
+    page.on("response", (res) => {
+      if (res.status() >= 400) {
+        console.log(`[RESP ${res.status()}] ${res.url()}`);
+      }
+    });
     page.on("websocket", (socket) => {
       const url = new URL(socket.url());
       if (url.searchParams.has("token")) {

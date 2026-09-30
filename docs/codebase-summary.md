@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-30 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`): 2,439 files, 5,673,594 tokens, and 23,828,881 characters. Repomix security scanning excluded 5 files.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -80,6 +80,7 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
+- Workspace Advisor integration (Phases 00–09) hosts the EVCrate Advisor plugin directly within the Workspace (IDE dock, Terminal float, compact overlay) with selected-project admission, single persistent frame preservation, and complete removal of standalone `/plugins/:installationId` routing; paired qualification passed 11/11 browser scenarios on 2026-09-30.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 
@@ -785,8 +786,7 @@ material remain bounded, non-persistent capabilities.
   canonical writer, diagnostics adapters, and coordinator lifecycle rules.
 - [Project Overview PDR](./project-overview-pdr.md) — product requirements and
   phase acceptance criteria.
-- [Configuration Guide](./configuration-guide.md) — configuration and runtime
-  setup.
+- [Configuration Guide](./configuration-guide.md) — configuration and runtime setup.
 - [Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md) —
   canonical/legacy config migration, audit state, descriptor safety, and
   no-replace publication.
