@@ -5,10 +5,12 @@ import {
 } from "./connections.js";
 import type { DataFrame, StatusFrame } from "./host-resource-sse-codec.js";
 import {
+  __resetRegisteredQueryClientsForTests,
   canUseResourceRest,
   captureResourceSource,
   cleanupCoordinatorsForQueryClient,
   cleanupCoordinatorsForOwner,
+  getRegisteredQueryClients,
   getHostResourceSource,
   isQueryClientRegistered,
   isResourceSourceCurrent,
@@ -19,6 +21,7 @@ import {
   HostResourceStreamCoordinator,
   type QueryClient,
 } from "./host-resource-stream-coordinator.js";
+import { profileQueryKey } from "./query-client.js";
 import { WsTransport } from "./ws-transport.js";
 
 const VALID_UUID = "12345678-1234-4234-8234-123456789abc";
@@ -471,5 +474,91 @@ describe("HostResourceStreamCoordinator (03-I)", () => {
 
     unreg();
     transport.destroy();
+  });
+});
+
+describe("HostResourceStreamCoordinator (04-I cache/registry integrator)", () => {
+  const owner = { profileId: "p-04i", generation: 1 };
+
+  beforeEach(() => {
+    __resetRegisteredQueryClientsForTests();
+    resetConnections();
+    __setConnectionSnapshotForTests(owner.profileId, {
+      owner,
+      status: "connected",
+    });
+  });
+
+  afterEach(() => {
+    cleanupCoordinatorsForOwner(owner);
+    __resetRegisteredQueryClientsForTests();
+    resetConnections();
+  });
+
+  it("getRegisteredQueryClients tracks multiple registered QCs and refcounts", () => {
+    const qc1: QueryClient = { id: 1 };
+    const qc2: QueryClient = { id: 2 };
+
+    const unreg1 = registerConnectionRegistryQueryClient(qc1);
+    const unreg1b = registerConnectionRegistryQueryClient(qc1);
+    const unreg2 = registerConnectionRegistryQueryClient(qc2);
+
+    expect(getRegisteredQueryClients()).toContain(qc1);
+    expect(getRegisteredQueryClients()).toContain(qc2);
+    expect(getRegisteredQueryClients()).toHaveLength(2);
+
+    unreg1();
+    // qc1 refcount was 2, now 1 -> still registered
+    expect(isQueryClientRegistered(qc1)).toBe(true);
+
+    unreg1b();
+    // qc1 refcount now 0 -> removed
+    expect(isQueryClientRegistered(qc1)).toBe(false);
+    expect(getRegisteredQueryClients()).toEqual([qc2]);
+
+    unreg2();
+    expect(isQueryClientRegistered(qc2)).toBe(false);
+    expect(getRegisteredQueryClients()).toHaveLength(0);
+  });
+
+  it("cancels exact queries and writes paired snapshot + metrics into QueryClient cache on switch", async () => {
+    const cancelCalls: Array<{ queryKey: readonly unknown[]; exact?: boolean }> = [];
+    const cache = new Map<string, unknown>();
+
+    const mockQc = {
+      cancelQueries: vi.fn(async (filters: { queryKey: readonly unknown[]; exact?: boolean }) => {
+        cancelCalls.push(filters);
+      }),
+      setQueryData: vi.fn((key: readonly unknown[], val: unknown) => {
+        cache.set(JSON.stringify(key), val);
+      }),
+      invalidateQueries: vi.fn(async () => {}),
+    } as unknown as QueryClient;
+
+    const unregQc = registerConnectionRegistryQueryClient(mockQc);
+    const coord = new HostResourceStreamCoordinator(owner, mockQc);
+    coord.attemptNumber = 1;
+
+    const initialGen = coord.sourceGeneration;
+    const snapshotKey = profileQueryKey(owner, "system", "resource-snapshot");
+    const metricsKey = profileQueryKey(owner, "system", "metrics");
+
+    const switched = await coord.switchToHostResourceFrame(initialGen, MOCK_FRAME, MOCK_STATUS, 1);
+    expect(switched).toBe(true);
+    expect(coord.mode).toBe("LIVE");
+    expect(coord.switching).toBe(false);
+    expect(coord.sourceGeneration).toBe(initialGen + 1);
+
+    // Exact in-flight queries were cancelled
+    expect(cancelCalls).toHaveLength(2);
+    expect(cancelCalls).toContainEqual({ queryKey: snapshotKey, exact: true });
+    expect(cancelCalls).toContainEqual({ queryKey: metricsKey, exact: true });
+
+    // Paired cache writes occurred
+    expect(cache.get(JSON.stringify(snapshotKey))).toEqual(MOCK_FRAME.snapshot);
+    expect(cache.get(JSON.stringify(metricsKey))).toEqual(MOCK_FRAME.metrics);
+
+    unregQc();
+    coord.dispose();
   });
 });

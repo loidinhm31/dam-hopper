@@ -58,27 +58,16 @@ import {
 import { generateUUID } from "../lib/utils.js";
 import {
   cleanupCoordinatorsForOwner,
+  getRegisteredQueryClients,
   isQueryClientRegistered,
   registerConnectionRegistryQueryClient,
 } from "./host-resource-stream-coordinator.js";
 
 export {
+  getRegisteredQueryClients,
   isQueryClientRegistered,
   registerConnectionRegistryQueryClient,
 };
-
-let registryQueryClient: QueryClient | null = null;
-let legacyQueryClientDisposer: (() => void) | null = null;
-export function setConnectionRegistryQueryClient(
-  queryClient: QueryClient | null,
-): void {
-  registryQueryClient = queryClient;
-  legacyQueryClientDisposer?.();
-  legacyQueryClientDisposer = null;
-  if (queryClient) {
-    legacyQueryClientDisposer = registerConnectionRegistryQueryClient(queryClient);
-  }
-}
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;
@@ -569,7 +558,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   entry.unsubBridge = installTransportBridge(
     owner,
     transport,
-    registryQueryClient ?? undefined,
+    getRegisteredQueryClients,
   );
   const client = createApiClient(owner, transport);
   entry.api = client;
@@ -906,7 +895,7 @@ if (typeof window !== "undefined") {
 
 export function __setConnectionSnapshotForTests(
   profileId: ProfileId,
-  snapshot: Partial<ConnectionSnapshot> | null,
+  snapshot: (Partial<ConnectionSnapshot> & { api?: ApiClient | null; transport?: Transport | null }) | null,
   transport?: Transport | null,
 ): void {
   if (snapshot === null) {
@@ -921,8 +910,12 @@ export function __setConnectionSnapshotForTests(
   if (snapshot.status !== undefined) {
     entry.status = snapshot.status;
   }
-  if (transport !== undefined) {
-    entry.transport = transport;
+  const effectiveTransport = transport !== undefined ? transport : snapshot.transport;
+  if (effectiveTransport !== undefined) {
+    entry.transport = effectiveTransport;
+  }
+  if (snapshot.api !== undefined) {
+    entry.api = snapshot.api;
   }
   entry.snapshot = freezeSnapshot(entry);
   notifyListeners();

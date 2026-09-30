@@ -436,13 +436,12 @@ entering a connected drilldown marks only that profile read. The shared
 drilldown body binds snapshot/history/config/pin/idle-suspend/force-suspend
 reads and mutations to the selected `ConnectionRef`, with no ambient fallback.
 
-The fleet hook continues 15-second snapshot reconciliation per watched
-connected profile. Detail compatibility metrics use an isolated 1-second query
-only while the popover is open on a connected drilldown; Fleet, close, and
-offline views disable it. If the selected profile is removed or disconnects,
-the popover clears the selection, diagnosis/action context, and returns to
-Fleet rather than retargeting another profile. Single-profile ownership,
-status, focus, and action guards remain unchanged.
+After the Phase 04 SSE cutover, the source gate permits a 15-second snapshot
+REST fallback for watched connected owners and a 5-second metrics fallback
+only for visible connected detail. Fleet remains a snapshot observer; metrics
+do not poll outside detail. Source-generation checks fence in-flight results,
+and the coordinator gates REST during LIVE, switching, hidden, or auth-blocked
+states. Removal/disconnect still clears detail context without retargeting.
 
 `HostIdleSuspendStatus` presents server-authoritative fleet/timing/measurement
 state without turning unknown values into quiet or zero. `ForceSleepDialog`
@@ -479,15 +478,13 @@ surfaces watched/connected, attention, and unread counts without relying on
 color. Fleet opening does not acknowledge alerts; entering a connected
 drilldown acknowledges only that profile.
 
-`useMultiHostResources` continues owner/generation-qualified 15-second snapshot
-watching for the fleet. The compatibility metrics query is enabled only for
-the visible, connected drilldown (`open && isDrilldown`) and remains bound to
-the selected owner, so no Fleet view or background popover starts 1-second
-metrics polling. If the selected profile is removed or disconnects, selection
-and local diagnosis/force-sleep context reset and the view returns to Fleet;
-it never falls through to Settings or the active profile.
+At the 2026-09-20 baseline, fleet snapshots refreshed every 15 seconds and
+visible detail metrics used a 1-second poll. The 2026-09-30 SSE cutover
+supersedes that detail interval with a 5-second REST fallback gated by the
+owner/QueryClient source state. Removal/disconnect still clears selection and
+diagnosis/force-sleep context without falling through to another profile.
 
-### Phase 04 verification and testing (Multi-profile Host Resources, 2026-09-20)
+### Historical Phase 04 verification (Multi-profile Host Resources, 2026-09-20; superseded by the 2026-09-30 SSE cutover)
 
 Phase 04 closes the verification gate for the Fleet Deck and owner-bound
 Host Resources drilldown. The existing Chromium suite was extended in
@@ -513,13 +510,16 @@ labels. Tests use synthetic profiles, snapshots, transports, and suspend
 mutations only; they do not contact a host, invoke RTC/systemd, use
 credentials, or persist profile state.
 
-Phase 04 found no architecture drift. The durable dataflow remains:
+The dataflow below records the state at that 2026-09-20 verification gate. The
+2026-09-30 SSE cutover superseded its 1-second compatibility-metrics poll with
+a 5-second REST fallback gated by owner and QueryClient source state, and paired
+the snapshot and metrics projections:
 
 ```text
 profiles + ConnectionRef generations
   -> owner-qualified fleet snapshot queries (15s)
   -> Fleet Deck / profile cards
-  -> one selected connected drilldown (1s compatibility metrics)
+  -> one selected connected drilldown (historical baseline: 1s compatibility metrics)
   -> owner-bound diagnosis, pin, idle-suspend, and force-sleep boundaries
 ```
 
@@ -4606,20 +4606,20 @@ remain authoritative after reconnect, missed events, or profile changes. Deep
 Linux reads degrade per signal, while `GET /api/system/metrics` remains the
 compatibility fallback and rollback seam.
 
-### Proposed host-resource SSE delivery (not implemented)
+### Host-resource SSE delivery (Phases 01–04 implemented; qualification pending)
 
-The [host-resource SSE architecture](./architecture/host-resource-sse.md)
-specifies a future bounded, authenticated, per-profile Fetch stream for the
-**cached** snapshot and compatibility metrics together. It does not change
-the currently implemented REST/WS behavior described here. The proposed
-cutover admits one stream per connected visible owner, shares one serialized
-frame across bounded subscribers, and keeps the shared collector's cadence
-and all host-action semantics unchanged. Only validated full frames become
-authoritative for both owner-qualified resource queries; until then and on
-unsupported/failed streams, REST remains authoritative. WS host-alert
-notification and history handling continue; while SSE is live, WS events
-must not overwrite the stream's resource snapshot. Performance targets in
-that design remain unqualified.
+The [host-resource SSE architecture](./architecture/host-resource-sse.md) is
+normative: Phases 01–04 complete the cached publisher, authenticated route,
+profile-owned stream, and owner-fenced QueryClient/UI cutover. A paired full
+frame owns both canonical owner keys while LIVE; REST is the gated fallback.
+`DamHopperApp` registers its actual QueryClient; coordinators are isolated by
+`(QueryClient, ConnectionRef)`. REST fallback is a 15-second snapshot and
+5-second visible-detail metrics query. WS alerts remain separate: unread state
+is profile/incident scoped, history stays REST-backed, and WS snapshot patches
+require REST authority. Matched server ages plus local monotonic TTL drive
+freshness; TanStack `isStale` is only query-cache metadata.
+
+Phase 05 qualification and Phase 06 rollout remain pending; no production performance or deployment claim is made.
 
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing
@@ -4668,25 +4668,25 @@ pending/offline host without issuing a request. Manual, disconnected profiles
 are omitted. The derived `watchReason` is one of `connected`,
 `auto-connect`, or `connected-and-auto-connect`; it is not an error state.
 
-The hook uses an owner-isolated `useQueries` architecture. It creates one query
-spec per watched profile with
-`profileQueryKey(owner, "system", "resource-snapshot")` and calls the bound
-client from that same owner. Only `enabled && connected` queries run, and
-connected queries refresh every 15 seconds. A disconnected auto-connect entry
-has no query request but may still expose a cached snapshot as last-known
-state. Query failures stay on their profile entry; one unavailable host cannot
-hide healthy peers or fail a fleet-wide request. Snapshot alerts are recorded
-in the per-profile presentation store only after the query result passes the
-owner check.
+The hook uses one owner-isolated `useQueries` spec per watched profile with the canonical snapshot key and bound owner client. Connected owners
+register fleet interest; `canUseResourceRest` gates the 15-second snapshot
+fallback. Disconnected auto-connect entries issue no request but may retain
+cached state. Fleet/detail share the snapshot key; only visible connected detail
+enables 5-second metrics REST fallback. Alert history refreshes every 30 seconds
+while visible and not auth-blocked.
 
-Every asynchronous snapshot is generation-fenced. After the bound client
-resolves, `isCurrentConnection(owner)` must still be true; otherwise the query
-throws `ConnectionOwnerError` and cannot publish the old generation's data.
-The generation is also part of the query key, so replacement creates an
-isolated cache lineage. Alert recording repeats the current-owner check, while
-each entry retains the owner generation that produced its query state.
-Disconnects, endpoint replacement, and reconnects therefore cannot route a late
-response into a newer owner.
+Each async query captures owner/source generation, forwards its abort signal,
+and rechecks connection, generation, and REST permission after await. Entering
+LIVE advances the fence, cancels exact snapshot/metrics keys, rechecks
+owner/client/attempt, and batches writes from one paired frame. Stream loss
+advances the fence before fallback.
+
+Fleet/detail consume exact-owner mode and `ProjectionFreshness`: matched server
+observation ages plus monotonic elapsed time against the paired TTL. Local
+expiry notifies without network I/O; TanStack `isStale` is cache metadata. WS
+alerts validate once per owner transport, suppress ambient duplicates, retain
+profile-scoped unread IDs, and coalesce history invalidations. WS snapshot
+patches require REST authority and cannot overwrite switching or LIVE data.
 
 `resolveHostResourceFleetSummary(entries)` is a pure deterministic reduction
 over the ordered entries; it does not merge host metric values or deduplicate

@@ -5,7 +5,7 @@
 - Dependencies: phase 00 -> phases 01 and 03 in parallel; 01 -> 02; **02 + 03 -> 04**. Phase 05 qualification then 06 rollout. Phase 04 must integrate phase 03 into real QueryClient and all readers; no UI redesign.
 
 ## Overview
-- Date: 2026-09-29. Priority: P2. Implementation: **Pending (0%)**. Review: **Pending**. No gates or implementation run while planning.
+- Date: 2026-09-29. Priority: P2. Implementation: **DONE (2026-09-30; 100%)**. Review: **Complete (Cycle 2 Score: 9.9/10)**. Scoped validation passed: **136 unit tests across 8 files and 4 browser tests (140/140 total)**; UI build succeeded.
 - Make validated full SSE data the sole snapshot **and** metrics writer for visible/current/consuming owners; preserve cached REST fallback and WS alert presentation/history, with owner/source-generation fencing and strict fresh-vs-transport separation.
 
 ## Key Insights
@@ -44,12 +44,12 @@
 6. **04-B browser surface regression, same integrator after 04-P.** Path (1): `packages/ui/browser-tests/host-resource-sse-cutover.browser.tsx` [new]. Existing `host-resource-monitoring.browser.tsx` globally mocks `useMultiHostResources` and `queries`; do **not** extend that test for integration proof. Mount real HostResourcePopover/hooks against two bound owner profiles/QC with controlled browser `fetch` returning cancellable byte-stream responses (assert bearer/header/options); observe fleet→detail→hidden/resume→fallback UI, paired snapshot/metrics and stale/unknown after heartbeat, new attempt's equal-revision valid baseline, auth block retry/resume without REST, and hold cancelQueries pending while new observer + WS alert arrive (no snapshot/metrics request or write). Verify WS history/unread and unrelated owner bridge events survive without duplicate ambient host alert delivery. Avoid hook mocks/source-text assertions. Phase05 separately proves real loopback HTTP/deployed proxy/native, not CPU from browser fixture. Non-goal: benchmark browser CPU.
 
 ## Todo list
-- [ ] 04-Q signal-forwarded owner/source-fenced dual query hooks and 15 s/5 s/30 s request tiers.
-- [ ] 04-F fleet observer/selector matched freshness with offline last-known preservation.
-- [ ] 04-W WS unread/history preserved; no live WS resource cache mutation.
-- [ ] 04-I atomic paired cache authority, QC binding, transition and race integration.
-- [ ] 04-P attach actual QC in app; existing popover receives freshness without redesign.
-- [ ] 04-B actual browser surface regression using connected owner fixture.
+- [x] 04-Q signal-forwarded owner/source-fenced dual query hooks and 15 s/5 s/30 s request tiers.
+- [x] 04-F fleet observer/selector matched freshness with offline last-known preservation.
+- [x] 04-W WS unread/history preserved; no live WS resource cache mutation.
+- [x] 04-I atomic paired cache authority, QC binding, transition and race integration.
+- [x] 04-P attach actual QC in app; existing popover receives freshness without redesign.
+- [x] 04-B actual browser surface regression using connected owner fixture.
 
 ## Success Criteria
 - **After implementation only; unrun in planning:** `pnpm --filter @dam-hopper/ui test -- src/api/host-resource-query-source.test.tsx src/api/host-resource-stream-coordinator.test.ts src/hooks/use-multi-host-resources.test.tsx src/hooks/use-sse.test.ts src/lib/host-resource-state.test.ts src/components/organisms/HostResourcePopover.test.tsx`; `pnpm --filter @dam-hopper/ui test:browser -- browser-tests/host-resource-sse-cutover.browser.tsx`; `pnpm --filter @dam-hopper/ui build`. Parent integration: `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui test:browser`, `pnpm lint`, `pnpm check` (includes native build), `cargo test --manifest-path server/Cargo.toml`.

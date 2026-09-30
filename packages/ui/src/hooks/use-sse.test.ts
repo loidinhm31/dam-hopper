@@ -2,11 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostResourceSnapshotV1 } from "../api/client.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
+const connectionState = vi.hoisted(() => ({
+  isCurrent: true,
+  canRest: true,
+}));
 
 const getTransport = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/transport.js", () => ({ getTransport }));
-
+vi.mock("../api/connections.js", () => ({
+  isCurrentConnection: () => connectionState.isCurrent,
+  getConnectionSnapshot: () => ({ status: "connected" }),
+}));
+vi.mock("../api/host-resource-stream-coordinator.js", () => ({
+  canUseResourceRest: () => connectionState.canRest,
+  getHostResourceSource: () => ({ mode: connectionState.canRest ? "STARTING" : "LIVE" }),
+  captureResourceSource: () => 1,
+  isResourceSourceCurrent: () => true,
+}));
 import {
   applyHostResourceAlert,
   asHostResourceAlertChangedEvent,
@@ -18,7 +31,9 @@ import {
   handleWorkspaceChanged,
   handleTerminalTargetUnavailable,
   asHostIdleSuspendChangedEvent,
+  installTransportBridge,
 } from "./use-sse.js";
+import { profileQueryKey } from "../api/query-client.js";
 
 function validAlertEvent() {
   return {
@@ -565,5 +580,93 @@ describe("host:idleSuspendChanged event validation", () => {
         data: { version: 1, revision: 42 },
       }),
     ).toBeNull();
+  });
+});
+
+describe("installTransportBridge for 04-W", () => {
+  const owner = { profileId: "test-profile-1", generation: 1 };
+
+  beforeEach(() => {
+    connectionState.isCurrent = true;
+    connectionState.canRest = true;
+  });
+
+  it("dispatches non-resource events to all registered QueryClients", () => {
+    const transport = eventTransport();
+    const qc1 = { invalidateQueries: vi.fn() };
+    const qc2 = { invalidateQueries: vi.fn() };
+
+    const cleanup = installTransportBridge(
+      owner,
+      transport as unknown as import("../api/transport.js").Transport,
+      () => [qc1 as unknown as import("@tanstack/react-query").QueryClient, qc2 as unknown as import("@tanstack/react-query").QueryClient],
+    );
+
+    transport.emit("config:changed", {});
+
+    expect(qc1.invalidateQueries).toHaveBeenCalled();
+    expect(qc2.invalidateQueries).toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("gates WS snapshot cache patch and invalidation with canUseResourceRest", () => {
+    const transport = eventTransport();
+    const qc = {
+      setQueryData: vi.fn(),
+      invalidateQueries: vi.fn(),
+    };
+
+    const cleanup = installTransportBridge(
+      owner,
+      transport as unknown as import("../api/transport.js").Transport,
+      () => [qc as unknown as import("@tanstack/react-query").QueryClient],
+    );
+
+    // When canRest is true: sets query data
+    connectionState.canRest = true;
+    transport.emit("host:alertChanged", validAlertEvent().data);
+    expect(qc.setQueryData).toHaveBeenCalled();
+
+    qc.setQueryData.mockClear();
+    qc.invalidateQueries.mockClear();
+
+    // When canRest is false (LIVE mode): does not set query data or invalidate snapshot
+    connectionState.canRest = false;
+    transport.emit("host:alertChanged", validAlertEvent().data);
+    expect(qc.setQueryData).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("coalesces history invalidations across multiple burst events", async () => {
+    const transport = eventTransport();
+    const qc = {
+      setQueryData: vi.fn(),
+      invalidateQueries: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cleanup = installTransportBridge(
+      owner,
+      transport as unknown as import("../api/transport.js").Transport,
+      () => [qc as unknown as import("@tanstack/react-query").QueryClient],
+    );
+
+    connectionState.canRest = false; // LIVE mode
+    transport.emit("host:alertsInvalidated", {});
+    transport.emit("host:alertsInvalidated", {});
+    transport.emit("host:alertsInvalidated", {});
+
+    await vi.waitFor(() => {
+      expect(qc.invalidateQueries).toHaveBeenCalledTimes(1);
+    });
+
+    // Should coalesce to 1 call for resource-alerts
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: profileQueryKey(owner, "system", "resource-alerts"),
+    });
+
+    cleanup();
   });
 });

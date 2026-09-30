@@ -2644,9 +2644,18 @@ export function createApiClient(
       get: () => transport.invoke<HealthResponse>("health:get"),
     },
     system: {
-      metrics: () => transport.invoke<HostMetrics>("system:metrics"),
-      resourceSnapshot: () =>
-        transport.invoke<HostResourceSnapshotV1>("system:resourceSnapshot"),
+      metrics: (signal?: AbortSignal) =>
+        transport.invoke<HostMetrics>(
+          "system:metrics",
+          undefined,
+          signal ? { signal } : undefined,
+        ),
+      resourceSnapshot: (signal?: AbortSignal) =>
+        transport.invoke<HostResourceSnapshotV1>(
+          "system:resourceSnapshot",
+          undefined,
+          signal ? { signal } : undefined,
+        ),
       resourceAlerts: (limit = 20) =>
         transport.invoke<HostResourceAlertIncident[]>("system:resourceAlerts", {
           limit,
@@ -3443,8 +3452,8 @@ export interface ApiClient {
     get: () => Promise<HealthResponse>;
   };
   system: {
-    metrics: () => Promise<HostMetrics>;
-    resourceSnapshot: () => Promise<HostResourceSnapshotV1>;
+    metrics: (signal?: AbortSignal) => Promise<HostMetrics>;
+    resourceSnapshot: (signal?: AbortSignal) => Promise<HostResourceSnapshotV1>;
     resourceAlerts: (limit?: number) => Promise<HostResourceAlertIncident[]>;
     idleSuspendStatus: () => Promise<IdleSuspendStatusV1>;
     updateIdleSuspendTiming: (

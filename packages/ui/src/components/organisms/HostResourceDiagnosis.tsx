@@ -40,7 +40,7 @@ export function HostResourceDiagnosis({
   pinError = null,
 }: Props) {
   const { memory, pressure, processes, mountContext } = snapshot;
-  const visibleCgroups = snapshot.cgroups.filter(isUsableCgroup);
+  const visibleCgroups = snapshot.cgroups?.filter(isUsableCgroup) ?? [];
   const availableProgress = normalizeProgressRatio(
     memory.availableBytes,
     memory.totalBytes,
@@ -304,19 +304,19 @@ function isUsableCgroup(
 }
 
 function formatVisibleCgroups(
-  cgroups: HostResourceSnapshotV1["cgroups"],
+  cgroups: HostResourceSnapshotV1["cgroups"] | undefined,
   fallback: HostResourceSnapshotV1["capabilities"]["linuxDeepMetrics"],
 ): string {
-  const visible = cgroups.filter(isUsableCgroup);
+  const visible = cgroups?.filter(isUsableCgroup) ?? [];
   if (visible.length > 0) {
     return `${visible.length} visible · ${formatAvailability(visible[0].availability)}`;
   }
-  const degraded = cgroups.find(
-    (cgroup) => cgroup.availability.state !== "available",
+  const degraded = cgroups?.find(
+    (cgroup) => cgroup?.availability?.state !== "available",
   );
   return degraded
     ? formatAvailability(degraded.availability)
-    : fallback.state === "available"
+    : fallback?.state === "available"
       ? "No cgroup data"
       : formatAvailability(fallback);
 }

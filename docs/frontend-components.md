@@ -135,22 +135,33 @@ idle-suspend state, and `hostResourcePinnedMount` stay owner-local. With no
 profile pill per watched entry. Connected pills enter a profile drilldown;
 disconnected pills remain status-only.
 
-The shared drilldown binds all reads and actions to the selected
-`ConnectionRef`. Fleet opening marks no profile read; inspection marks only the
-selected profile. Compatibility metrics poll at 1 second only while the
-popover is visible on a connected drilldown; Fleet, closed, or disconnected
-views disable that query. Removal/disconnect clears the selection and returns
-to Fleet rather than falling back to Settings or the active profile. The
-transport bridge validates `host:alertChanged` and revision hints, patches only
-the matching owner's cache, and lets REST repair missed or stale events.
-Unread incident presentation is tracked per profile and keyed by `incidentId`.
-The Force Machine to Sleep dialog captures endpoint, generation, fleet snapshot,
-status revision, and request ID; stale conflicts require fresh confirmation and
-ambiguous requests are not retried.
+The shared drilldown binds reads and actions to the selected `ConnectionRef`.
+Fleet opening marks no profile read; inspection marks only the selected profile.
+`DamHopperApp` registers the real `QueryClient` with the connection registry;
+stream coordinators are keyed by that client identity and exact connection
+owner. Distinct QueryClients never share cache authority, and roots sharing one
+client reuse its coordinator.
 
-See the [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) and the architecture's
-[Fleet Deck & Drilldown Popover](./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20)
-section for source maps and polling tiers.
+Fleet and detail use the owner's canonical snapshot key. The coordinator
+arbitrates it and the metrics key against REST: snapshot fallback is 15 seconds,
+and compatibility metrics fallback is 5 seconds only for visible connected
+detail. REST requests carry an abort signal and source-generation fence; entering
+LIVE cancels exact owner queries and writes the paired snapshot/metrics frame
+atomically. Removing or disconnecting the selection returns to Fleet rather
+than falling back to Settings or the active profile.
+
+The WS bridge validates an owner-qualified alert once per transport and avoids
+a second ambient alert delivery. Incident/unread presentation is profile- and
+incident-ID-scoped; history invalidations are coalesced, and WS resource cache
+patches are allowed only while REST has authority. They cannot overwrite a
+switching or LIVE SSE pair. Fleet and detail status use the matched stream
+observation ages plus monotonic elapsed time and TTL; TanStack `isStale` is
+only request-cache metadata. The Force Machine to Sleep dialog still captures
+endpoint, generation, fleet snapshot, status revision, and request ID; stale
+conflicts require fresh confirmation and ambiguous requests are not retried.
+
+See the [host-resource SSE architecture](./architecture/host-resource-sse.md)
+for source arbitration and the [Phase 04 plan](../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md) for focused evidence. The earlier [Phase 06 Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md) documents the underlying owner boundary.
 
 ## Profile-scoped plugin host and view context (Phase D03)
 
@@ -252,13 +263,16 @@ by `incidentId`; a recovery event with `resolvedAt` removes only that target and
 the history retains its resolved record. `resolvedAt: 0` is still a recovery.
 
 The transport listener accepts legacy memory events and resource events on the
-same `host:alertChanged` channel. It validates each resource kind, state,
-finite timestamp/value, required bounded text, and exact evidence keys before
-updating the query cache; invalid payloads do nothing. It then refetches
-snapshot and history, so REST corrects missed events, reconnects, and profile
-switches. A current server's explicit empty `currentAlerts` array clears
-resource presentation; an omitted field is treated as an older-server response
-and does not falsely clear an active incident.
+same `host:alertChanged` channel. It validates owner-qualified resource
+payloads and dispatches each event once per transport; a registered owner bridge
+suppresses the matching ambient listener. It patches only the owning snapshot
+while `canUseResourceRest` permits REST authority, never the metrics key, and
+does not patch or invalidate the snapshot while switching or LIVE. History
+invalidations are coalesced by owner generation and QueryClient, then drained
+only for a current, visible, non-auth-blocked owner. Alert history stays
+REST-backed, and REST snapshots reconcile missed events and reconnects. A
+current server's explicit empty `currentAlerts` array clears resource
+presentation; omission preserves older-server compatibility.
 
 The diagnosis also keeps the legacy `HostMetrics` path for CPU and workspace-disk
 summary values, real temperature rows, and an explicit unavailable state when

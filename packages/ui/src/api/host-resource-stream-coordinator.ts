@@ -24,12 +24,46 @@ import {
   HostResourceSseParser,
   type ParsedPiece,
 } from "./host-resource-sse-parser.js";
+import * as TanStackReactQuery from "@tanstack/react-query";
+import type { QueryClient as TanStackQueryClient } from "@tanstack/react-query";
+
+function batchQueryUpdates(fn: () => void): void {
+  const nm = (
+    TanStackReactQuery as unknown as {
+      notifyManager?: { batch?: (cb: () => void) => void };
+    }
+  ).notifyManager;
+  if (typeof nm?.batch === "function") {
+    nm.batch(fn);
+  } else {
+    fn();
+  }
+}
 import { connectionKey, type ConnectionRef } from "./ownership.js";
+import { profileQueryKey } from "./query-client.js";
 import { WsTransport } from "./ws-transport.js";
 
-// Opaque QueryClient type (avoiding tight import coupling in phase 03)
-export type QueryClient = object;
+export interface QueryClientLike {
+  cancelQueries(filters: { queryKey: readonly unknown[]; exact?: boolean }): Promise<void>;
+  setQueryData<T>(queryKey: readonly unknown[], updater: T | ((prev: T | undefined) => T)): void;
+  invalidateQueries(filters: { queryKey: readonly unknown[]; exact?: boolean }): Promise<void>;
+}
 
+function asQueryClientLike(qc: unknown): QueryClientLike | null {
+  if (
+    typeof qc === "object" &&
+    qc !== null &&
+    "cancelQueries" in qc &&
+    "setQueryData" in qc &&
+    typeof (qc as Record<string, unknown>).cancelQueries === "function" &&
+    typeof (qc as Record<string, unknown>).setQueryData === "function"
+  ) {
+    return qc as unknown as QueryClientLike;
+  }
+  return null;
+}
+
+export type QueryClient = TanStackQueryClient;
 export type SourceMode =
   | "STOPPED"
   | "STARTING"
@@ -38,6 +72,8 @@ export type SourceMode =
   | "REST_ONLY"
   | "AUTH_BLOCKED"
   | "PAUSED";
+
+type TimerId = ReturnType<typeof setTimeout>;
 
 export type ConsumerKind = "fleet" | "detailSnapshot" | "detailMetrics";
 
@@ -81,8 +117,19 @@ export function registerConnectionRegistryQueryClient(
   };
 }
 
+export function getRegisteredQueryClients(): readonly QueryClient[] {
+  return Array.from(registeredQueryClients.keys());
+}
 export function isQueryClientRegistered(qc: QueryClient): boolean {
   return (registeredQueryClients.get(qc) ?? 0) > 0;
+}
+
+export function __resetRegisteredQueryClientsForTests(): void {
+  for (const qc of Array.from(registeredQueryClients.keys())) {
+    cleanupCoordinatorsForQueryClient(qc);
+  }
+  registeredQueryClients.clear();
+  coordinatorsByQc.clear();
 }
 
 // Map from QueryClient -> (connectionKey -> HostResourceStreamCoordinator)
@@ -117,11 +164,11 @@ export class HostResourceStreamCoordinator {
   public set attemptNumber(v: number) {
     this.streamAttemptFence = v;
   }
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private dataDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
-  private byteIdleTimer: ReturnType<typeof setTimeout> | null = null;
-  private stableWindowTimer: ReturnType<typeof setTimeout> | null = null;
-
+  private retryTimer: TimerId | null = null;
+  private dataDeadlineTimer: TimerId | null = null;
+  private byteIdleTimer: TimerId | null = null;
+  private stableWindowTimer: TimerId | null = null;
+  private ttlExpiryTimer: TimerId | null = null;
   private currentAbortController: AbortController | null = null;
   private currentCloseHandle: (() => void) | null = null;
 
@@ -145,9 +192,11 @@ export class HostResourceStreamCoordinator {
   ) {
     this.setupVisibilityListeners();
   }
+  private cachedSnapshot: HostResourceSourceState | null = null;
 
   private notify(): void {
     if (this.disposed) return;
+    this.cachedSnapshot = null;
     for (const listener of this.listeners) {
       listener();
     }
@@ -159,12 +208,15 @@ export class HostResourceStreamCoordinator {
   }
 
   public getSnapshot(): HostResourceSourceState {
-    return {
-      mode: this.mode,
-      sourceGeneration: this.sourceGeneration,
-      switching: this.switching,
-      freshness: computeProjectionFreshness(this.freshnessTracker),
-    };
+    if (!this.cachedSnapshot) {
+      this.cachedSnapshot = {
+        mode: this.mode,
+        sourceGeneration: this.sourceGeneration,
+        switching: this.switching,
+        freshness: computeProjectionFreshness(this.freshnessTracker),
+      };
+    }
+    return this.cachedSnapshot;
   }
 
   public isAuthBlockedLatched(): boolean {
@@ -318,6 +370,10 @@ export class HostResourceStreamCoordinator {
       clearTimeout(this.stableWindowTimer);
       this.stableWindowTimer = null;
     }
+    if (this.ttlExpiryTimer) {
+      clearTimeout(this.ttlExpiryTimer);
+      this.ttlExpiryTimer = null;
+    }
   }
 
   private stopActiveStream(clearRetryTimer = true): void {
@@ -337,8 +393,12 @@ export class HostResourceStreamCoordinator {
       clearTimeout(this.stableWindowTimer);
       this.stableWindowTimer = null;
     }
+    if (this.ttlExpiryTimer) {
+      clearTimeout(this.ttlExpiryTimer);
+      this.ttlExpiryTimer = null;
+    }
     this.revisionsCommittedInStableWindow = 0;
-
+    this.freshnessTracker = null;
     if (this.currentCloseHandle) {
       try {
         this.currentCloseHandle();
@@ -386,6 +446,25 @@ export class HostResourceStreamCoordinator {
     void this.executeAttempt(controller.signal, capturedAttempt);
   }
 
+  private armTtlExpiryDeadline(status: StatusFrame): void {
+    if (this.ttlExpiryTimer !== null) {
+      clearTimeout(this.ttlExpiryTimer);
+      this.ttlExpiryTimer = null;
+    }
+    const snapAge = status.snapshotAgeMs ?? 0;
+    const metricsAge = status.metricsAgeMs ?? 0;
+    const maxAge = Math.max(snapAge, metricsAge);
+    const remainingMs = status.freshnessTtlMs - maxAge;
+
+    if (remainingMs > 0 && Number.isFinite(remainingMs)) {
+      this.ttlExpiryTimer = setTimeout(() => {
+        this.ttlExpiryTimer = null;
+        if (this.disposed) return;
+        this.notify();
+      }, remainingMs);
+    }
+  }
+
   private armByteIdleDeadline(capturedAttempt: number): void {
     if (this.byteIdleTimer !== null) {
       clearTimeout(this.byteIdleTimer);
@@ -411,8 +490,14 @@ export class HostResourceStreamCoordinator {
       this.handleStreamFailure(capturedAttempt, err);
       return;
     }
+    const hasCapability =
+      transport instanceof WsTransport ||
+      (typeof transport === "object" &&
+        transport !== null &&
+        "openHostResourceEvents" in transport &&
+        typeof (transport as Record<string, unknown>).openHostResourceEvents === "function");
 
-    if (!(transport instanceof WsTransport)) {
+    if (!hasCapability) {
       this.restOnlyLatch = true;
       this.stopActiveStream(true);
       this.mode = "REST_ONLY";
@@ -420,7 +505,12 @@ export class HostResourceStreamCoordinator {
       return;
     }
 
-    if (!transport.supportsHostResourceStreaming()) {
+    const streamingSupported =
+      typeof (transport as Record<string, unknown>).supportsHostResourceStreaming === "function"
+        ? (transport as { supportsHostResourceStreaming: () => boolean }).supportsHostResourceStreaming()
+        : true;
+
+    if (!streamingSupported) {
       this.restOnlyLatch = true;
       this.stopActiveStream(true);
       this.mode = "REST_ONLY";
@@ -430,7 +520,9 @@ export class HostResourceStreamCoordinator {
 
     let openResult;
     try {
-      openResult = await transport.openHostResourceEvents(signal);
+      openResult = await (
+        transport as { openHostResourceEvents: (s: AbortSignal) => Promise<any> }
+      ).openHostResourceEvents(signal);
     } catch (err) {
       if (signal.aborted || this.disposed || capturedAttempt !== this.streamAttemptFence) {
         return;
@@ -438,7 +530,6 @@ export class HostResourceStreamCoordinator {
       this.handleStreamFailure(capturedAttempt, err);
       return;
     }
-
     if (signal.aborted || this.disposed || capturedAttempt !== this.streamAttemptFence) {
       openResult.close();
       return;
@@ -478,7 +569,7 @@ export class HostResourceStreamCoordinator {
 
         const pieces = parser.push(value);
         for (const piece of pieces) {
-          this.handleParsedPiece(capturedAttempt, piece, transport);
+          this.handleParsedPiece(capturedAttempt, piece, transport as unknown as WsTransport);
         }
       }
 
@@ -528,15 +619,18 @@ export class HostResourceStreamCoordinator {
         transport.reportHostResourceErrorControl(decoded.code);
         if (decoded.code === "AUTH_UNAVAILABLE") {
           this.authBlockedLatch = true;
+          this.sourceGeneration += 1;
           this.stopActiveStream(true);
+          const qcLike = asQueryClientLike(this.queryClient);
+          if (qcLike) {
+            const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+            const metricsKey = profileQueryKey(this.owner, "system", "metrics");
+            void Promise.all([
+              qcLike.cancelQueries({ queryKey: snapshotKey, exact: true }),
+              qcLike.cancelQueries({ queryKey: metricsKey, exact: true }),
+            ]);
+          }
           this.mode = "AUTH_BLOCKED";
-          this.notify();
-          return;
-        }
-        if (decoded.code === "FRAME_TOO_LARGE") {
-          this.restOnlyLatch = true;
-          this.stopActiveStream(true);
-          this.mode = this.authBlockedLatch ? "AUTH_BLOCKED" : "REST_ONLY";
           this.notify();
           return;
         }
@@ -552,8 +646,16 @@ export class HostResourceStreamCoordinator {
     if (decoded.kind === "status") {
       this.lastStatusForAttempt = decoded;
       this.statusAdjacent = true;
-      this.freshnessTracker = createFreshnessTracker(decoded);
-      this.notify();
+      if (
+        this.mode !== "LIVE" ||
+        (this.lastCommittedServerEpoch === decoded.serverEpoch &&
+          this.lastCommittedRevisionBigInt !== null &&
+          decoded.revisionBigInt === this.lastCommittedRevisionBigInt)
+      ) {
+        this.freshnessTracker = createFreshnessTracker(decoded);
+        this.armTtlExpiryDeadline(decoded);
+        this.notify();
+      }
       return;
     }
 
@@ -648,15 +750,56 @@ export class HostResourceStreamCoordinator {
       if (
         this.disposed ||
         !isCurrentConnection(this.owner) ||
+        !isQueryClientRegistered(this.queryClient) ||
         currentAttempt !== this.streamAttemptFence ||
         this.switchToken !== currentSwitchToken
       ) {
+        if (this.switchToken === currentSwitchToken) {
+          this.switching = false;
+          this.notify();
+        }
         return false;
+      }
+
+      // Cancel exact in-flight owner queries before paired writes
+      const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+      const metricsKey = profileQueryKey(this.owner, "system", "metrics");
+      const qcLike = asQueryClientLike(this.queryClient);
+
+      if (qcLike) {
+        await Promise.all([
+          qcLike.cancelQueries({ queryKey: snapshotKey, exact: true }),
+          qcLike.cancelQueries({ queryKey: metricsKey, exact: true }),
+        ]);
+      }
+
+      // Re-verify after cancellation await
+      if (
+        this.disposed ||
+        !isCurrentConnection(this.owner) ||
+        !isQueryClientRegistered(this.queryClient) ||
+        currentAttempt !== this.streamAttemptFence ||
+        this.switchToken !== currentSwitchToken
+      ) {
+        if (this.switchToken === currentSwitchToken) {
+          this.switching = false;
+          this.notify();
+        }
+        return false;
+      }
+
+      // Paired cache writes via batchQueryUpdates
+      if (qcLike) {
+        batchQueryUpdates(() => {
+          qcLike.setQueryData(snapshotKey, decoded.snapshot);
+          qcLike.setQueryData(metricsKey, decoded.metrics);
+        });
       }
 
       this.lastCommittedServerEpoch = decoded.serverEpoch;
       this.lastCommittedRevisionBigInt = decoded.revisionBigInt;
       this.freshnessTracker = createFreshnessTracker(matchedStatus);
+      this.armTtlExpiryDeadline(matchedStatus);
 
       this.mode = "LIVE";
       this.switching = false;
@@ -761,7 +904,23 @@ export class HostResourceStreamCoordinator {
   ): void {
     void _err;
     if (this.disposed || capturedAttempt !== this.streamAttemptFence) return;
+    const wasLive = this.mode === "LIVE";
+    if (wasLive) {
+      this.sourceGeneration += 1;
+    }
     this.scheduleRetry(capturedAttempt);
+
+    if (wasLive && canUseResourceRest(this.owner, this.queryClient)) {
+      const qcLike = asQueryClientLike(this.queryClient);
+      if (qcLike) {
+        const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+        const metricsKey = profileQueryKey(this.owner, "system", "metrics");
+        void qcLike.invalidateQueries({ queryKey: snapshotKey, exact: true });
+        if (this.interestCounts.detailMetrics > 0) {
+          void qcLike.invalidateQueries({ queryKey: metricsKey, exact: true });
+        }
+      }
+    }
   }
 
   private scheduleRetry(
@@ -873,6 +1032,13 @@ export function registerHostResourceInterest(
   return coord.registerInterest(kind);
 }
 
+const STOPPED_SOURCE_STATE: HostResourceSourceState = Object.freeze({
+  mode: "STOPPED",
+  sourceGeneration: 0,
+  switching: false,
+  freshness: computeProjectionFreshness(null),
+});
+
 export function getHostResourceSource(
   owner: ConnectionRef,
   qc: QueryClient,
@@ -880,12 +1046,7 @@ export function getHostResourceSource(
   const byConn = coordinatorsByQc.get(qc);
   const coord = byConn?.get(connectionKey(owner));
   if (!coord) {
-    return {
-      mode: "STOPPED",
-      sourceGeneration: 0,
-      switching: false,
-      freshness: computeProjectionFreshness(null),
-    };
+    return STOPPED_SOURCE_STATE;
   }
   return coord.getSnapshot();
 }

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type {
   HostResourceAlert,
   HostResourceResourceAlert,
@@ -20,7 +20,15 @@ import {
 } from "@/api/connections.js";
 import { resolveTargetOwner, getBoundApiClient } from "@/api/queries.js";
 import { profileQueryKey } from "@/api/query-client.js";
-import { ConnectionOwnerError, type ConnectionRef } from "@/api/ownership.js";
+import { ConnectionOwnerError, connectionKey, type ConnectionRef } from "@/api/ownership.js";
+import {
+  registerHostResourceInterest,
+  getHostResourceSource,
+  subscribeHostResourceSource,
+  captureResourceSource,
+  isResourceSourceCurrent,
+  canUseResourceRest,
+} from "@/api/host-resource-stream-coordinator.js";
 import {
   resolveHostResourceWatchReason,
   resolveHostResourceFleetSummary,
@@ -56,6 +64,7 @@ type LastAlerts = { alert?: HostResourceAlert | null; alerts?: HostResourceResou
 export function useMultiHostResources({
   enabled = true,
 }: UseMultiHostResourcesOptions = {}): UseMultiHostResourcesResult {
+  const qc = useQueryClient();
   const profileVersion = useSyncExternalStore(
     subscribeToProfileChanges,
     () => getProfileChangeVersion(),
@@ -92,26 +101,112 @@ export function useMultiHostResources({
     }
     return list;
   }, [profiles, connectionSignature]);
+  const interestCleanupsRef = useRef<Map<string, () => void>>(new Map());
+  useEffect(() => {
+    const cleanups = interestCleanupsRef.current;
+    const currentKeys = new Set<string>();
+
+    if (enabled) {
+      for (const target of watchedTargets) {
+        if (target.connected) {
+          const key = connectionKey(target.owner);
+          currentKeys.add(key);
+          if (!cleanups.has(key)) {
+            cleanups.set(key, registerHostResourceInterest(target.owner, qc, "fleet"));
+          }
+        }
+      }
+    }
+
+    for (const [key, dispose] of cleanups.entries()) {
+      if (!currentKeys.has(key)) {
+        dispose();
+        cleanups.delete(key);
+      }
+    }
+  }, [watchedTargets, enabled, qc]);
+
+  useEffect(() => {
+    return () => {
+      for (const dispose of interestCleanupsRef.current.values()) {
+        dispose();
+      }
+      interestCleanupsRef.current.clear();
+    };
+  }, []);
+
+  const sourceSignature = useSyncExternalStore(
+    useCallback(
+      (notify) => {
+        const unsubs: Array<() => void> = [];
+        for (const target of watchedTargets) {
+          if (target.connected) {
+            unsubs.push(subscribeHostResourceSource(target.owner, qc, notify));
+          }
+        }
+        return () => {
+          for (const unsub of unsubs) unsub();
+        };
+      },
+      [watchedTargets, qc],
+    ),
+    () =>
+      watchedTargets
+        .filter((t) => t.connected)
+        .map((t) => {
+          const s = getHostResourceSource(t.owner, qc);
+          return `${t.owner.profileId}:${s.mode}:${s.sourceGeneration}:${s.freshness.serverEpoch}:${s.freshness.isSnapshotFresh}`;
+        })
+        .join("|"),
+    () => "",
+  );
 
   const querySpecs = useMemo(() => {
     return watchedTargets.map((target) => {
-      const isQueryEnabled = enabled && target.connected;
+      const canRest = target.connected ? canUseResourceRest(target.owner, qc) : false;
+      const isQueryEnabled = enabled && target.connected && canRest;
       return {
         queryKey: profileQueryKey(target.owner, "system", "resource-snapshot"),
-        queryFn: async (): Promise<HostResourceSnapshotV1> => {
+        queryFn: async ({ signal }: { signal: AbortSignal }): Promise<HostResourceSnapshotV1> => {
           if (!target.connected) throw new Error("Target is not connected");
-          const snapshot = await getBoundApiClient(target.owner).system.resourceSnapshot();
-          if (!isCurrentConnection(target.owner)) {
-            throw new ConnectionOwnerError("Host resource snapshot owner is stale", "stale");
+          if (!isCurrentConnection(target.owner) || !canUseResourceRest(target.owner, qc)) {
+            const cached = qc.getQueryData<HostResourceSnapshotV1>(
+              profileQueryKey(target.owner, "system", "resource-snapshot"),
+            );
+            if (cached) return cached;
+            throw new ConnectionOwnerError("Host resource snapshot REST not permitted", "unavailable");
+          }
+          const sourceGen = captureResourceSource(target.owner, qc);
+          const snapshot = await getBoundApiClient(target.owner).system.resourceSnapshot(signal);
+          if (
+            !isCurrentConnection(target.owner) ||
+            !isResourceSourceCurrent(target.owner, qc, sourceGen) ||
+            !canUseResourceRest(target.owner, qc)
+          ) {
+            const key = profileQueryKey(target.owner, "system", "resource-snapshot");
+            const cached = qc.getQueryData<HostResourceSnapshotV1>(key);
+            if (cached) return cached;
+            const err = new ConnectionOwnerError(
+              "Host resource snapshot owner or source is stale",
+              "stale",
+            );
+            const query = qc.getQueryCache().find({ queryKey: key });
+            if (query) {
+              query.setState({
+                status: "error",
+                error: err,
+                errorUpdatedAt: Date.now(),
+              });
+            }
+            throw err;
           }
           return snapshot;
         },
         enabled: isQueryEnabled,
-        refetchInterval: (isQueryEnabled ? 15_000 : false) as number | false,
+        refetchInterval: (isQueryEnabled && canRest ? 15_000 : false) as number | false,
       };
     });
-  }, [watchedTargets, enabled]);
-
+  }, [watchedTargets, enabled, qc, sourceSignature]);
   const queryResults = useQueries({ queries: querySpecs });
   const byProfile = useHostResourceAlertPresentationStore((s) => s.byProfile);
   const recordSnapshotAlerts = useHostResourceAlertPresentationStore((s) => s.recordSnapshotAlerts);
@@ -146,6 +241,7 @@ export function useMultiHostResources({
       const isFetching = isConnected ? (query?.isFetching ?? false) : false;
       const isError = isConnected ? (query?.isError ?? false) : false;
       const isStale = isConnected ? (query?.isStale ?? false) : false;
+      const sourceState = isConnected ? getHostResourceSource(target.owner, qc) : null;
 
       const status = resolveHostResourceEntryStatus({
         snapshot,
@@ -156,8 +252,9 @@ export function useMultiHostResources({
         isError,
         isStale,
         unreadCount,
+        freshness: sourceState?.freshness,
+        sourceMode: sourceState?.mode,
       });
-
       return {
         profile: target.profile,
         owner: target.owner,
@@ -173,7 +270,7 @@ export function useMultiHostResources({
         isStale,
       };
     });
-  }, [watchedTargets, queryResults, byProfile]);
+  }, [watchedTargets, queryResults, byProfile, qc, sourceSignature]);
 
   const summary = useMemo(() => resolveHostResourceFleetSummary(entries), [entries]);
 

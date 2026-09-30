@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,737,855 bytes).
+**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 24,678,679 bytes; 2,492 source files packed, six security-scan exclusions).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -113,28 +113,27 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
-### Multi-profile host resources (Phases 01–04)
+### Multi-profile host resources and SSE (Phases 01–04)
 
-`useMultiHostResources` builds an owner/generation-qualified fleet read model:
-connected profiles query, disconnected auto-connect profiles remain visible as
-unavailable, and one profile failure never contaminates another cache.
-`isCurrentConnection` fences late snapshots; `resolveHostResourceFleetSummary`
-keeps severity, unavailable, sampling, and stale precedence without averaging
-or summing host metrics.
+`useMultiHostResources` keeps an owner/generation-qualified fleet view; connected profiles query, while disconnected auto-connect entries stay unavailable.
+`DamHopperApp` registers the actual QueryClient; reference-counted coordinators are keyed by `(QueryClient identity, connectionKey(owner))`; distinct clients remain isolated.
 
-`HostResourceFleetDeck`/`HostResourceFleetCard` are pure presentation over
-`MultiHostResourceEntry[]`. They preserve configured order, expose explicit
-empty/offline states, keep incident/read state per profile, and offer inspection
-only for connected cards. `HostResourcePopover` enters Fleet mode only for
-multi-profile contexts; drilldown queries and destructive actions stay bound to
-the inspected owner and generation.
+Fleet/detail share the canonical owner snapshot key; metrics use a separate key.
+`canUseResourceRest` gates 15-second snapshot, 5-second detail-metrics, and
+30-second alert-history fallback by owner/client, visibility, interest, and mode.
+Forward query signals and recheck source generation after every await.
 
-Polling is 15 seconds for fleet snapshots and 1 second only for an open,
-connected drilldown. Disconnect/removal clears owner-local diagnosis state and
-returns to Fleet without falling back to Settings or another profile. Focused
-verification passed 102/102 tests (83 Vitest/component plus 19 Chromium);
-fixtures used synthetic transports and did not touch real credentials, hosts,
-RTC, systemd, network endpoints, or persistence.
+Entering LIVE fences and cancels the exact snapshot/metrics queries, then
+batches both cache writes from one validated status/data pair. WS alerts are
+validated once per owner transport; ambient duplicates are suppressed, unread
+IDs are profile-scoped, and history invalidations are coalesced. Snapshot
+patches require REST authority; alert history remains REST-backed.
+
+Fleet/detail use matched `ProjectionFreshness`: server ages plus local monotonic
+elapsed time against the paired TTL; expiry notifies without network I/O.
+TanStack `isStale` is cache metadata; the existing layout/actions are unchanged.
+The [SSE architecture](./architecture/host-resource-sse.md) is normative;
+Phase 04 records 136 unit tests, four browser tests, and a successful UI build ([plan](../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md)).
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 
@@ -402,7 +401,7 @@ Thirteen Phase 05 tests in `server/tests/auth_mfa.rs` use `AuthTestFixture`;
 the common fixture isolates MongoDB and cleans the temporary DB on `Drop`.
 See the [Authentication API](./authentication-api.md).
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
-browser-debug, host-resource, and idle-suspend surfaces. Host-resource delivery now has a monitor-owned revisioned atomic snapshot/metrics pair (`CachedHostResourcePair`) and metadata-only `StreamStatusBasis`; one demand-driven `HostResourcePublisher` shares bounded frames with latest-only `StreamSubscription`s. Phase 01 is a backend seam only: no SSE HTTP route is exposed. See [host-resource SSE architecture](./architecture/host-resource-sse.md). Shared state owns
+browser-debug, host-resource, and idle-suspend surfaces. Host-resource delivery includes the revisioned monitor pair, shared publisher, authenticated SSE route, owner-owned stream coordinator, and Phase 04 paired QueryClient cache handoff. See [host-resource SSE architecture](./architecture/host-resource-sse.md); Phase 05 qualification remains pending. Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,
 workflow services, and feature-specific managers. Root-sensitive filesystem
 operations resolve through project/target sandbox validation rather than a

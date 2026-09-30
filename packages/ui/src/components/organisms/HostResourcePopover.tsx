@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
@@ -36,12 +37,13 @@ import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import { cn } from "@/lib/utils.js";
 import { useMultiHostResources } from "@/hooks/use-multi-host-resources.js";
 import { HostResourceFleetDeck } from "@/components/organisms/HostResourceFleetDeck.js";
-
+import { getHostResourceSource } from "@/api/host-resource-stream-coordinator.js";
 export interface HostResourcePopoverProps {
   owner?: OwnerInput;
 }
 
 export function HostResourcePopover({ owner }: HostResourcePopoverProps = {}) {
+  const qc = useQueryClient();
   const multiResources = useMultiHostResources({ enabled: true });
   const fleetMode = owner === undefined && multiResources.configuredProfileCount > 1;
 
@@ -91,9 +93,10 @@ export function HostResourcePopover({ owner }: HostResourcePopoverProps = {}) {
   const legacyAlertPresentation = useHostResourceAlertPresentation(
     alert,
     currentAlerts,
-    legacyResolvedOwner?.profileId,
+    detailOwner?.profileId ?? legacyResolvedOwner?.profileId,
   );
 
+  const sourceState = detailOwner ? getHostResourceSource(detailOwner, qc) : null;
   const singleStatus = resolveHostResourceStatus({
     snapshot: snapshot.data,
     isLoading: snapshot.isLoading,
@@ -101,6 +104,8 @@ export function HostResourcePopover({ owner }: HostResourcePopoverProps = {}) {
     isError: snapshot.isError,
     isStale: snapshot.isStale,
     unreadCount: legacyAlertPresentation.unreadCount,
+    freshness: sourceState?.freshness,
+    sourceMode: sourceState?.mode,
   });
 
   const effectiveStatus: HostResourceStatusPresentation = fleetMode
@@ -240,9 +245,9 @@ export function HostResourcePopover({ owner }: HostResourcePopoverProps = {}) {
   }, [open, fleetMode]);
 
   const detailSnapshot = snapshot.data ?? selectedEntry?.snapshot;
-  const hostname = detailSnapshot?.host.hostname ?? (selectedEntry ? selectedEntry.profile.name : "Host");
-  const osName = detailSnapshot?.host.osName ?? "System";
-  const sampleLabel = detailSnapshot
+  const hostname = detailSnapshot?.host?.hostname ?? (selectedEntry ? selectedEntry.profile.name : "Host");
+  const osName = detailSnapshot?.host?.osName ?? "System";
+  const sampleLabel = detailSnapshot?.sampledAt
     ? ` · sampled ${formatSampleAge(detailSnapshot.sampledAt)} ago`
     : "";
   const drilldownStatus = fleetMode

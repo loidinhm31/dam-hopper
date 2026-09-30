@@ -660,4 +660,53 @@ describe("multi-host resource watch reasons and fleet summary", () => {
     expect(summary.presentation.tone).toBe("warning");
     expect(summary.presentation.label).toBe("1 host unavailable");
   });
+
+  it("resolves status using ProjectionFreshness and ignores TanStack isStale when fresh", () => {
+    const snap = makeSnapshot({
+      alert: { state: "healthy" } as HostResourceSnapshotV1["alert"],
+      currentAlerts: [],
+    });
+    const freshStatus = resolveHostResourceStatus({
+      snapshot: snap,
+      isStale: true, // TanStack query stale flag is true
+      freshness: {
+        serverEpoch: "epoch-1",
+        revision: "10",
+        snapshotAgeMs: 50,
+        metricsAgeMs: 50,
+        freshnessTtlMs: 10000,
+        isSnapshotFresh: true,
+        isMetricsFresh: true,
+        isFresh: true,
+      },
+    });
+    expect(freshStatus.mode).toBe("current");
+    expect(freshStatus.label).toBe("Healthy");
+
+    const staleStatus = resolveHostResourceStatus({
+      snapshot: snap,
+      isStale: false,
+      freshness: {
+        serverEpoch: "epoch-1",
+        revision: "10",
+        snapshotAgeMs: 15000,
+        metricsAgeMs: 15000,
+        freshnessTtlMs: 10000,
+        isSnapshotFresh: false,
+        isMetricsFresh: false,
+        isFresh: false,
+      },
+    });
+    expect(staleStatus.mode).toBe("stale");
+    expect(staleStatus.label).toContain("stale");
+  });
+
+  it("resolves status for AUTH_BLOCKED sourceMode", () => {
+    const status = resolveHostResourceStatus({
+      snapshot: null,
+      sourceMode: "AUTH_BLOCKED",
+    });
+    expect(status.label).toBe("Authentication blocked");
+    expect(status.tone).toBe("danger");
+  });
 });

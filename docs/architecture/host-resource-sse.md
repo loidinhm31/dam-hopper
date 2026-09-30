@@ -1,10 +1,10 @@
 # Host-resource SSE — architecture and implementation status
 
-**Status:** Frozen end-to-end design contract (2026-09-29); Phases 01–03 are implemented and verified. Phase 03 delivers the profile-owned frontend stream client, but not resource-query/UI cutover or end-to-end stream authority. The six focused UI suites pass 96/96, and `pnpm --filter @dam-hopper/ui build` completes with zero TypeScript errors (verified 2026-09-30). Phase 04 query/UI cutover and Phase 05 performance/deployment qualification remain later work.
+**Status:** Phases 01–04 implemented (2026-09-30). Phase 04 query/UI cutover is complete; its scoped record reports 136 UI unit tests across eight files, four browser tests, and a successful UI build ([Phase 04 plan](../../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md)). Phase 05 deployment/security/performance qualification and Phase 06 rollout remain pending; no production performance, proxy, or native qualification is claimed.
 
-The endpoint sits alongside the protected cached REST snapshot (`GET /api/system/resources/v1/snapshot`), legacy metrics (`GET /api/system/metrics`), alert history (`GET /api/system/resources/v1/alerts`), and WS host alerts. Browser consumers continue using those paths until healthy stream cutover. The design replaces both resource/metrics polling for supported visible clients only after that cutover. It adds no new monitor, generic event bus, host mutation, persistence, or settings UI, and leaves existing WS alerts/history, idle-suspend action authorization, and all host-action boundaries intact.
+The authenticated event stream complements the protected cached REST snapshot (`GET /api/system/resources/v1/snapshot`), legacy metrics (`GET /api/system/metrics`), REST alert history (`GET /api/system/resources/v1/alerts`), and WS host alerts. For an eligible visible owner, a validated paired SSE frame becomes the writer for both resource projections; exact-owner REST remains the fallback when the coordinator permits it. The monitor, host-action boundaries, and separate WS alert/history behavior remain unchanged.
 
-This remains a target end-to-end flow rather than a completed server-to-UI path. Phases 01–03 implement the shared monitor cache/publisher, authenticated endpoint, and profile-owned client transport/parser/codec/coordinator. Phase 04 resource-query/UI integration and Phase 05 release qualification remain pending.
+Phases 01–04 complete the end-to-end server-to-UI path: the shared monitor cache/publisher, authenticated endpoint, profile-owned stream client, then owner-fenced QueryClient cutover and presentation integration. Phase 05 qualifies security, overload, browser, proxy, and supported-target behavior; Phase 06 documents rollout only after measured gates.
 
 ## Phase 01 backend publisher contract (implemented)
 
@@ -37,9 +37,10 @@ The Phase 02 record reports 9/9 HTTP integration tests and 6/6 unit tests passin
 one server-started HostResourceMonitor -> one atomic cache pair + revision
   -> one feature-local, demand-driven bounded encoder -> latest pre-encoded watch frame
   -> at most 32 admitted authenticated response bodies (at most 4 per subject)
-  -> Phase 03 coordinator per connected ConnectionRef + QueryClient
-  -> Phase 04 exact-owner snapshot AND metrics TanStack keys -> fleet/detail presentation
-WS host alert feed -> validated notification/unread + REST history (not live resource cache)
+  -> coordinator per captured ConnectionRef + exact QueryClient
+  -> paired exact-owner snapshot + metrics query keys -> fleet/detail presentation
+WS host alerts -> one validated owner event -> profile unread state + REST-permitted snapshot patch
+  -> coalesced owner-scoped REST alert-history refresh (never an SSE alert channel)
 ```
 
 - The monitor collects independent of readers, even at zero SSE subscribers; no subscriber-driven Linux reads, faster cadence, new sampler, concurrent retry worker, or alteration to alert classification. Configuration is server-owned and clamped: light 1–60 s (default 5), processes 5–300 s (default 15), PSS 15–600 s (default 60), jitter ≤1,000 ms (default 250), process deadline default 150 ms, snapshot wait default 500 ms. A wait deadline does **not** bound host CPU or cancel a blocked syscall. The constructor currently samples legacy metrics synchronously; `sample_legacy` has no wait deadline. SSE must not conceal either behavior with extra workers. Source: [`monitor.rs`](../../server/src/system/monitor.rs), [`config.rs`](../../server/src/system/config.rs).
@@ -47,7 +48,7 @@ WS host alert feed -> validated notification/unread + REST history (not live res
 - Publisher owns one feature-local task and a latest-only `tokio::sync::watch` of a shared immutable frame record: pre-encoded data `Bytes`/`Arc`, its `{ serverEpoch, revision }`, and that **same pair's** captured observation metadata and active freshness configuration. Subscribers clone only the shared handle. While interest exists encode at most once per published revision, coalescing intermediate commits while busy; the per-client **small status control** is encoded separately at emission, never reserialize/deep-copy snapshot JSON per client. With zero interest retain at most one encoded frame record, perform **no new encoding** or serialized backlog even if the monitor commits, and drop any older record on demand if its revision is no longer current. On next interest reuse a matching current-revision record; otherwise the one publisher encodes the latest cached pair once. Do not release and re-encode an unchanged revision. No cache/watch guard across serialization, awaits, socket writes or subscriber callbacks. Subscribers borrow-and-update briefly, send current frame explicitly on subscribe, then observe `changed`; recheck revision to avoid duplicate bootstrap or lost wakeups. A slow subscriber skips intermediate frames (not already-buffered bytes); no per-subscriber producer/JSON/deep copy.
 - The complete encoded **data event** (event name, JSON data, framing) is capped at 256 KiB. Use a bounded `serde_json::to_writer`-style sink (limit before extending its buffer), then append SSE framing within the same limit; avoid first allocating an unbounded JSON string. `Body::from_stream` with the project's existing re-exported `Bytes` can send shared frames without `axum::response::sse::Event::data` copying per client; no new crates. Oversize is never truncated: publish a bounded `FRAME_TOO_LARGE` error control and revoke/close current streams; return **503 JSON** `{ "code": "FRAME_TOO_LARGE", "error": "<safe reason>" }` before headers on a new admission if the latest cached pair still exceeds the frame limit. Recheck the latest revision before this decision; a later monitor revision may fit. This code, including HTTP 503, is **sticky REST-only for that connection generation**, not a transient 5xx retry. Alerts and monitoring continue. Bound the **entire encoded status/error control event including framing** to 4 KiB with a bounded sink and bounded safe reason; controls never contain snapshots. Keepalive comments are fixed and small.
 
-## HTTP and wire contract (backend Phase 02 and stream client Phase 03 implemented; query/UI cutover pending)
+## HTTP and wire contract (backend Phase 02, stream client Phase 03, and owner-fenced query/UI cutover Phase 04 implemented)
 
 - New **GET** `/api/system/resources/v1/events` on the existing per-profile HTTP server. No profile ID in wire route/target, no new token, cookies, mutation, query-token, event ID, replay buffer or `Last-Event-ID` dependency. Browser uses authenticated `fetch` streaming with captured `Authorization: Bearer <token>`, `credentials: "omit"`, `cache: "no-store"`, `redirect: "error"`, and `Accept: text/event-stream`. Native `EventSource` cannot set Authorization. Return `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: private, no-store, no-transform` (sensitive host information; neither private nor shared caches may store it), `X-Accel-Buffering: no`; no HTTP/2-invalid `Connection` header. Disable compression/transform and buffering at each proxy, ensure proxy idle-read timeout ≥45 s. No proxy behavior is assumed qualified.
 - On authenticated admission send an initial **status control** immediately, then the latest cached full pair (after first-demand encode if needed), before awaiting the next revision; send status at least every 15 s and on no-sample/unchanged conditions requiring freshness notice. An initial snapshot can be old or `unavailable`: neither `200`, status, nor heartbeat asserts fresh host data. Initial status may name a newer revision than the data frame selected later, so it is not automatically consumed for data. **Immediately before every data event**, after selecting that immutable frame and after any wait/backpressure, calculate and enqueue a small status for **that frame's captured revision and successful-observation monotonic metadata**, using the server's monotonic clock at actual emission, then enqueue its data event as the next event without an interleaved status/heartbeat. Do not read the current cache revision to label the selected frame; prior status or a newer periodic status must never freshen older data. Emit a `: keepalive\n\n` comment as transport-only heartbeat within 15 s if no other bytes. Status/heartbeat must never invoke sampling.
@@ -67,7 +68,7 @@ WS host alert feed -> validated notification/unread + REST history (not live res
 
 ### Phase 03 profile-owned stream client (implemented and verified)
 
-Phase 03 implements a client-side reader for the Phase 02 endpoint. It owns fetch, parsing, decoding, retry, and lifecycle state per captured `ConnectionRef` and exact `QueryClient`; it does **not** route application resource queries through SSE or write decoded frames into the TanStack cache. Existing resource queries and WS alert paths therefore remain in use until Phase 04 cutover.
+Phase 03 implements the profile-owned reader: fetch, parsing, decoding, retry, and lifecycle state are scoped to a captured `ConnectionRef` and exact `QueryClient`. Its stream coordinator initially exposed source state without owning application cache writes; Phase 04 connects that source contract to the real query and presentation paths.
 
 - **03-T transport:** `WsTransport` issues `GET /api/system/resources/v1/events` using its captured profile URL and bearer token, with `Accept: text/event-stream`, `credentials: "omit"`, `cache: "no-store"`, and `redirect: "error"`. It returns a readable stream, a finite response (status, parsed code, `Retry-After`), or `unsupported`; its idempotent close cancels the fetch and reader. Finite error bodies are read up to 4 KiB. Recognized MFA/session error codes notify the existing connection-drop path, deduplicated within the transport. The transport checks response status/body readability but does not independently validate the response MIME type.
 - **03-P parser:** `HostResourceSseParser` incrementally handles fatal UTF-8, LF/CRLF/CR boundaries, multiline `data:` fields, comments, and named events. It caps complete raw data events at 256 KiB and status/error controls at 4 KiB; comments are separate pieces so the coordinator can break status/data adjacency.
@@ -75,15 +76,75 @@ Phase 03 implements a client-side reader for the Phase 02 endpoint. It owns fetc
 - **03-I coordinator and `connections.ts`:** Coordinators are keyed by the `QueryClient` object and `connectionKey(owner)`. `registerConnectionRegistryQueryClient(qc)` reference-counts client registration and cleans that client's coordinators when its last registration is disposed; connection invalidation also cleans the affected owner. Fleet, detail-snapshot, and detail-metrics interests on the same pair share a stream. A stream starts only for a current connected owner with a registered client, visible document, and positive interest; hidden documents pause it and page hide disposes it. The transport uses captured per-profile credentials rather than an ambient API transport.
 - **03-I pairing and source state:** Every accepted full data frame needs an immediately preceding status from the same attempt with matching epoch and revision; comments and intervening events break adjacency. A paired full frame can establish an equal-revision baseline on a new attempt, while duplicate/regressing revisions within a live attempt are ignored. Seven coordinator modes are exposed: `STOPPED`, `STARTING`, `LIVE`, `RETRY_WAIT`, `REST_ONLY`, `AUTH_BLOCKED`, and `PAUSED`.
 - **03-I deadlines and errors:** The coordinator has a 10 s first-data deadline, 45 s byte-idle deadline, and at most five retries after the initial attempt. Retry delay is jittered exponential backoff, capped at 30 s; a 429 `Retry-After` is capped at 60 s. A 60 s stable LIVE window with at least one accepted frame resets the retry budget. Unsupported streaming, 404/405, coded `FRAME_TOO_LARGE`, and unknown 401/403 settle on REST-only; `AUTH_UNAVAILABLE` latches `AUTH_BLOCKED`. Recognized MFA/session errors use the transport's connection-drop behavior.
-- **03-I public source API:** The coordinator exposes registration/interest, source snapshots/subscriptions, source-generation fencing, `canUseResourceRest`, and a frame-switch entry point. `switchToHostResourceFrame` fences the owner/attempt, increments `sourceGeneration`, records revision/freshness, and marks the coordinator `LIVE`; it does not cancel resource queries or write either query key. `canUseResourceRest` and these APIs are not yet wired into application query hooks or result/WS writers.
+- **03-I public source API:** Registration/interest, source snapshots/subscriptions, source-generation fencing, `canUseResourceRest`, and the frame-switch entry point are consumed by Phase 04. `switchToHostResourceFrame` remains the only stream handoff into application state and commits a paired frame to both exact-owner resource keys.
 
 The Phase 03 scoped verification passed on 2026-09-30: six focused UI test files, 96/96 tests, plus `pnpm --filter @dam-hopper/ui build` with zero TypeScript errors. See the [Phase 03 plan](../../plans/260929-1522-host-resources-sse/phase-03-profile-owned-stream-client.md) for implementation scope.
 
-### Phase 04 query/UI cutover remains pending
+### Phase 04 owner-fenced resource query and UI cutover (implemented)
 
-Phase 04 must integrate the coordinator's source fence with the resource snapshot and metrics query/cache writers: stop or cancel exact-owner REST work before handoff, recheck owner/source generation after awaits, and apply the validated full pair to both owner-scoped cache keys. Until that integration lands, coordinator `LIVE` means a paired stream frame was accepted locally; it does not mean the rendered UI is stream-authoritative.
+`DamHopperApp` registers the actual `useQueryClient()` instance with
+`registerConnectionRegistryQueryClient()` in an effect. Registration is
+reference-counted: roots sharing the same client share its coordinators, while
+each distinct QueryClient has isolated source/cache authority. The connection
+bridge reads the current registered-client set rather than retaining a stale
+client captured when the transport was installed. Coordinators are keyed by
+`(QueryClient identity, connectionKey(owner))`; profile and generation never
+come from an active-profile or ambient-client fallback.
 
-Phase 04's target fallback is a 15 s snapshot poll and a 5 s visible-detail metrics poll, with no resource polling while hidden. The current snapshot hooks poll every 15 s, but `useHostMetrics` still polls every 1 s when enabled; Phase 04 must align the intended cadence and apply source arbitration to REST reads/results and WS resource snapshot patches/invalidation. Preserve the separate WS alert notification/unread path and REST alert history; healthy SSE data must not be rolled back by an out-of-order WS resource update.
+The canonical consumer keys remain
+`profileQueryKey(owner, "system", "resource-snapshot")` and
+`profileQueryKey(owner, "system", "metrics")`. Owner-bound API methods accept
+an optional `AbortSignal` and pass it into transport invocation. Fleet and
+detail snapshot observers share the snapshot key; the open visible detail alone
+registers metrics interest. Snapshot REST fallback is 15 seconds, compatibility
+metrics fallback is 5 seconds only in visible detail, and alert history
+refreshes every 30 seconds while visible and not auth-blocked.
+
+REST is allowed only for the current connected owner and registered QueryClient
+with visible-document interest, when the source is `STARTING`, `RETRY_WAIT`, or
+`REST_ONLY` and is neither switching nor auth-blocked. Query functions check
+that predicate and the captured source generation/connection before the
+request and after its await; transport signals reach the request. Hidden,
+disconnected, paused, LIVE, switching, or auth-blocked owners cannot start or
+commit resource REST work. TanStack cancellation alone is not the fence.
+
+On a valid paired status+full-data frame, the coordinator synchronously marks
+`switching` and advances the source generation before awaiting cancellation of
+the exact snapshot and metrics keys. It rechecks owner, client registration,
+attempt, and switch token after the await, then batches the paired cache writes
+and publishes `LIVE`. This fences delayed REST completions and blocks WS
+resource snapshot patches/invalidation during the handoff and LIVE mode. On
+stream loss, the attempt is fenced before the permitted owner/QC REST catch-up;
+only interested detail metrics join that catch-up.
+
+The WS bridge keeps alert notification/unread and history separate from SSE
+resource authority. It validates each owner-qualified `host:alertChanged`
+event, dispatches it once per transport, and resolves the currently registered
+QueryClients at delivery. Ambient alert listeners are suppressed for a
+transport with an owner bridge, avoiding duplicate delivery. Unread state is
+partitioned by profile and incident ID; identical incident versions do not add
+another unread item. A WS event may patch the owner's snapshot only while
+`canUseResourceRest` permits it; it never writes the metrics key. History
+invalidations are coalesced by owner generation and QueryClient, then drained
+only for a current, visible, non-auth-blocked owner. History remains REST-backed.
+
+`ProjectionFreshness` projects server-reported snapshot/metrics observation
+ages with elapsed local `performance.now()` time against the applicable TTL.
+Before the first full frame, a status may update a preliminary projection but
+does not publish data or grant LIVE cache authority. On handoff, the status
+paired with the committed frame becomes the freshness basis. While LIVE, only
+same-epoch/revision status refreshes these ages; newer or different-epoch status
+is informational until its own paired full frame is consumed. A local one-shot
+timer notifies presentation at the remaining TTL boundary without network I/O
+or sampler work. Fleet entries and detail consume the source projection;
+TanStack `isStale` is request-cache metadata, not proof of a new host
+observation. When SSE freshness authority is cleared on fallback, presentation
+uses snapshot section availability and existing last-known/error state.
+
+The existing popover layout and host actions are retained. The detail path
+passes its exact owner to snapshot, metrics, and alert-history queries and uses
+the source freshness/mode for status; the fleet selector applies the same
+freshness-aware status reducer per connected owner. See the [Phase 04 plan](../../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md) for scoped acceptance and evidence.
 
 ## Qualification and rollout gate (later-phase targets; performance unqualified)
 

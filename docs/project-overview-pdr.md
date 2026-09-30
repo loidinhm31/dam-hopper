@@ -481,17 +481,17 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
-**Status:** Phase 07 completed on 2026-08-10 with release-owner approval after local packaging, soak, and browser validation. Phase 02 host-resource restoration alerts completed on 2026-08-11: additive thermal/disk current alerts, mixed history, validated compatible push events, and per-target recovery are now delivered. The still-unobserved Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and rollback rehearsal are owner-authorized deferred follow-up work, not passed gates. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations are deferred together and are not part of the current release.
+**Status:** The read-only monitor, versioned REST projections, and multi-profile presentation remain delivered; the original Phase 07 and Phase 02 alert milestones and their explicitly deferred release follow-ups are unchanged. The separate bounded host-resource SSE plan completed Phases 01–04 on 2026-09-30, including owner/QueryClient cutover, paired snapshot/metrics arbitration, WS alert/unread handling, and observation freshness integration. Phase 05 qualification and Phase 06 rollout remain pending. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations remain outside this delivery.
 
 **Current Functional Requirements:**
 
 - Keep `HostResourceMonitor` read-only, bounded, startup-owned, and independent from every mutation subsystem.
-- Preserve the `GET /api/system/metrics` response shape from the monitor cache; expose immutable deep snapshots and bounded incident history through versioned protected read APIs.
-- Preserve the legacy memory `alert` and publish additive `currentAlerts` for concurrent thermal/disk incidents; return bounded mixed history with per-target recovery records.
-- Publish sanitized, strictly validated compatible `host:alertChanged` events; REST remains authoritative after reconnect, lag, missed events, malformed data, and older servers that omit an additive field.
+- Preserve the `GET /api/system/metrics` response shape and expose immutable deep snapshots and bounded incident history through protected read APIs. Eligible profile UI uses one exact-owner/QueryClient SSE coordinator to publish paired snapshot and metrics values; REST fallback remains 15 seconds for snapshots and 5 seconds for visible detail metrics.
+- Publish sanitized, strictly validated compatible `host:alertChanged` events; REST remains the alert-history authority. WS notification/unread handling deduplicates by profile and incident ID, coalesces history refresh, and cannot patch the resource cache while the SSE source is switching or LIVE.
+- Preserve the legacy memory `alert` and additive `currentAlerts` for concurrent thermal/disk incidents; show status and uncertainty using matched server observation ages, local monotonic elapsed time, and TTL rather than treating query-cache staleness as host freshness.
 - Render in-app status, alert history, evidence, uncertainty, and static
   operator guidance without credentials or generic host-resource remediation
-  controls; the separate idle-suspend status/manual action retains its own
+  controls. The separate idle-suspend status/manual action retains its own
   authenticated actor, origin, fleet, and revision guards.
 - Feature-detect Linux procfs, PSI, and cgroup v2 data. Return explicit unsupported/stale/partial states on constrained Linux, containers, and non-Linux hosts.
 
@@ -559,8 +559,8 @@ Acceptance criteria:
 
 - [x] Fleet opening acknowledges no profile; inspection acknowledges only the
       selected profile.
-- [x] Compatibility metrics use an isolated 1-second query only for the
-      visible connected drilldown; Fleet/closed/offline views do not poll.
+- [x] At this phase, visible connected detail used 1-second metrics; the later
+      SSE cutover supersedes it with a 5-second REST fallback.
 - [x] Removed or disconnected selections return to Fleet without ambient owner
       fallback or stale diagnosis/action context.
 - [x] Profile/endpoint/host labels remain escaped text; destructive actions stay
@@ -570,10 +570,9 @@ Acceptance criteria:
 
 Phase 04 closes the multi-profile Host Resources watch verification gate. The
 existing `host-resource-monitoring.browser.tsx` fixture remains the single
-Chromium harness and now proves Fleet/profile navigation, pointer/Enter/Space
-activation, focus containment and Escape restoration, 15-second fleet versus
-selected-owner 1-second polling, disconnect cleanup, and single-profile
-compatibility.
+Chromium harness and proves Fleet/profile navigation, keyboard/focus, 15-second
+fleet and then-current 1-second detail polling, disconnect cleanup, and
+single-profile compatibility; SSE later sets a 5-second REST fallback by source gate.
 
 Acceptance criteria:
 
