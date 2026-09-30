@@ -123,6 +123,8 @@ impl AuthStore {
 
     /// Retrieve user by username.
     pub async fn get_user(&self, username: &str) -> Result<Option<UserRecord>, StoreError> {
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_auth("get_user", username);
         let user = self
             .users
             .find_one(doc! { "username": username })
@@ -349,6 +351,8 @@ impl AuthStore {
 
     /// Retrieve session by session ID.
     pub async fn get_session(&self, session_id: &str) -> Result<Option<AuthSession>, StoreError> {
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_auth("get_session", session_id);
         let session = self
             .sessions
             .find_one(doc! { "_id": session_id })

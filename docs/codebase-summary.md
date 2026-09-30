@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 24,678,679 bytes; 2,492 source files packed, six security-scan exclusions).
+**Generated:** 2026-10-01 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 24,755,703 bytes; 2,495 source files packed, six security-scan exclusions).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -113,7 +113,7 @@ configuration, PTYs, workflow/usage history, and remote data remain
 server-authoritative. The unified-profile backend-workspace proposal below is
 not part of this implementation.
 
-### Multi-profile host resources and SSE (Phases 01–04)
+### Multi-profile host resources and SSE (Phases 01–05 implementation)
 
 `useMultiHostResources` keeps an owner/generation-qualified fleet view; connected profiles query, while disconnected auto-connect entries stay unavailable.
 `DamHopperApp` registers the actual QueryClient; reference-counted coordinators are keyed by `(QueryClient identity, connectionKey(owner))`; distinct clients remain isolated.
@@ -133,7 +133,7 @@ Fleet/detail use matched `ProjectionFreshness`: server ages plus local monotonic
 elapsed time against the paired TTL; expiry notifies without network I/O.
 TanStack `isStale` is cache metadata; the existing layout/actions are unchanged.
 The [SSE architecture](./architecture/host-resource-sse.md) is normative;
-Phase 04 records 136 unit tests, four browser tests, and a successful UI build ([plan](../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md)).
+Phase 04 records 136 unit tests, four browser tests, and a successful UI build ([plan](../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md)). Phase 05 adds test-only hooks, mandatory-Mongo HTTP tests, and a partial runner; its focused suite passed 11/11 and the local N=0/1/32 smoke is not release proof. Release-PID, 30-minute soak, live browser, named-host and proxy gates remain pending; see [Phase 05 plan](../plans/260929-1522-host-resources-sse/phase-05-overload-security-and-browser-qualification.md).
 
 ## Unified-profile files, editor, search, and Git (Phase 03)
 
@@ -401,7 +401,7 @@ Thirteen Phase 05 tests in `server/tests/auth_mfa.rs` use `AuthTestFixture`;
 the common fixture isolates MongoDB and cleans the temporary DB on `Drop`.
 See the [Authentication API](./authentication-api.md).
 The router exposes authenticated project, filesystem, PTY, Git, workflow,
-browser-debug, host-resource, and idle-suspend surfaces. Host-resource delivery includes the revisioned monitor pair, shared publisher, authenticated SSE route, owner-owned stream coordinator, and Phase 04 paired QueryClient cache handoff. See [host-resource SSE architecture](./architecture/host-resource-sse.md); Phase 05 qualification remains pending. Shared state owns
+browser-debug, host-resource, and idle-suspend surfaces. Host-resource delivery includes the revisioned monitor pair, shared publisher, authenticated SSE route, owner-owned stream coordinator, Phase 04 paired QueryClient cache handoff, and Phase 05 test-only qualification harness. Release/browser/proxy host gates remain pending; see [host-resource SSE architecture](./architecture/host-resource-sse.md). Shared state owns
 configuration, project sandboxes, PTY sessions, event sinks, media tickets,
 workflow services, and feature-specific managers. Root-sensitive filesystem
 operations resolve through project/target sandbox validation rather than a

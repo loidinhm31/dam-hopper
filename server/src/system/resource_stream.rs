@@ -268,6 +268,251 @@ pub(crate) struct PublisherTestCounters {
     pub oversize_count: AtomicU64,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) mod qual_hook {
+    use std::{
+        fs::{File, OpenOptions},
+        io::Write,
+        path::PathBuf,
+        sync::Arc,
+        time::Instant,
+    };
+    use parking_lot::Mutex;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    pub struct QualHookState {
+        pub run_id: String,
+        pub phase: Mutex<String>,
+        pub start_instant: Instant,
+        pub timeline_path: PathBuf,
+        pub timeline_file: Mutex<Option<File>>,
+    }
+
+    impl QualHookState {
+        pub fn new(run_id: String, timeline_path: PathBuf) -> Self {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&timeline_path)
+                .ok();
+            Self {
+                run_id,
+                phase: Mutex::new("init".to_string()),
+                start_instant: Instant::now(),
+                timeline_path,
+                timeline_file: Mutex::new(file),
+            }
+        }
+
+        pub fn set_phase(&self, phase: &str) {
+            *self.phase.lock() = phase.to_string();
+            self.flush();
+        }
+
+        pub fn flush(&self) {
+            if let Some(file) = self.timeline_file.lock().as_mut() {
+                let _ = file.flush();
+            }
+        }
+
+        pub fn record(
+            &self,
+            kind: &str,
+            epoch: Option<Uuid>,
+            revision: Option<u64>,
+            values: serde_json::Value,
+        ) {
+            let mono_ns = self.start_instant.elapsed().as_nanos() as u64;
+            let current_phase = self.phase.lock().clone();
+            let entry = json!({
+                "schemaVersion": 1,
+                "runId": self.run_id,
+                "phase": current_phase,
+                "monoNs": mono_ns,
+                "kind": kind,
+                "epoch": epoch.map(|u| u.to_string()),
+                "revision": revision.map(|r| r.to_string()),
+                "values": values,
+            });
+
+            if let Some(file) = self.timeline_file.lock().as_mut() {
+                if let Ok(line) = serde_json::to_string(&entry) {
+                    let _ = writeln!(file, "{}", line);
+                }
+            }
+        }
+    }
+
+    static ACTIVE_QUAL_HOOK: parking_lot::RwLock<Option<Arc<QualHookState>>> =
+        parking_lot::RwLock::new(None);
+
+    pub fn set_active_hook(hook: Option<Arc<QualHookState>>) {
+        *ACTIVE_QUAL_HOOK.write() = hook;
+    }
+
+    pub fn active_hook() -> Option<Arc<QualHookState>> {
+        ACTIVE_QUAL_HOOK.read().clone()
+    }
+
+    pub fn now_ns() -> u64 {
+        ACTIVE_QUAL_HOOK
+            .read()
+            .as_ref()
+            .map(|h| h.start_instant.elapsed().as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
+    pub fn set_phase(phase: &str) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            h.set_phase(phase);
+        }
+    }
+
+    pub fn record_sample(sample_kind: &str, values: serde_json::Value) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            let mut v = values;
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("sampleKind".to_string(), json!(sample_kind));
+            }
+            h.record("sample", None, None, v);
+        }
+    }
+
+    pub fn record_commit(epoch: Uuid, revision: u64, config_only: bool, values: serde_json::Value) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            let mut val = values;
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("configOnly".to_string(), json!(config_only));
+            }
+            h.record("commit", Some(epoch), Some(revision), val);
+        }
+    }
+
+    pub fn record_encode(
+        epoch: Uuid,
+        revision: u64,
+        start_ns: u64,
+        end_ns: u64,
+        success: bool,
+        bytes: usize,
+    ) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            h.record(
+                "encode",
+                Some(epoch),
+                Some(revision),
+                json!({
+                    "startNs": start_ns,
+                    "endNs": end_ns,
+                    "durationNs": end_ns.saturating_sub(start_ns),
+                    "success": success,
+                    "bytes": bytes,
+                }),
+            );
+        }
+    }
+
+    pub fn record_admission(
+        event: &str,
+        subject: &str,
+        status: u16,
+        global_active: usize,
+        subject_active: usize,
+    ) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            use sha2::{Digest, Sha256};
+            let subject_digest = if subject.is_empty() {
+                String::new()
+            } else {
+                hex::encode(Sha256::digest(subject.as_bytes()))
+            };
+            h.record(
+                "admission",
+                None,
+                None,
+                json!({
+                    "event": event,
+                    "subjectDigest": subject_digest,
+                    "status": status,
+                    "globalActive": global_active,
+                    "subjectActive": subject_active,
+                }),
+            );
+        }
+    }
+
+    pub fn record_auth(op: &str, target: &str) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            use sha2::{Digest, Sha256};
+            let digest = hex::encode(Sha256::digest(target.as_bytes()));
+            h.record(
+                "auth",
+                None,
+                None,
+                json!({
+                    "op": op,
+                    "targetDigest": digest,
+                }),
+            );
+        }
+    }
+
+    pub fn record_auth_check(decision: &str, duration_ms: u64) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            h.record(
+                "auth",
+                None,
+                None,
+                json!({
+                    "op": "supervisor_check",
+                    "decision": decision,
+                    "durationMs": duration_ms,
+                }),
+            );
+        }
+    }
+
+    pub fn record_emission(kind: &str, bytes: usize) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            h.record(
+                "emission",
+                None,
+                None,
+                json!({
+                    "kind": kind,
+                    "bytes": bytes,
+                }),
+            );
+        }
+    }
+
+    pub fn record_cleanup(category: &str, detail: &str) {
+        if let Some(h) = ACTIVE_QUAL_HOOK.read().as_ref() {
+            use sha2::{Digest, Sha256};
+            let detail_digest = if detail.is_empty() {
+                String::new()
+            } else {
+                hex::encode(Sha256::digest(detail.as_bytes()))
+            };
+            h.record(
+                "cleanup",
+                None,
+                None,
+                json!({
+                    "category": category,
+                    "detailDigest": detail_digest,
+                }),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use qual_hook::*;
+
 struct PublisherInner {
     monitor: HostResourceMonitor,
     interest_count: AtomicUsize,
@@ -445,8 +690,26 @@ async fn run_publisher(inner: Arc<PublisherInner>) {
 
                 #[cfg(test)]
                 inner.test_counters.encode_count.fetch_add(1, Ordering::Relaxed);
+                #[cfg(test)]
+                let start_ns = qual_hook::now_ns();
 
                 let frame_res = encode_data_frame(&pair).map(Arc::new);
+                #[cfg(test)]
+                {
+                    let end_ns = qual_hook::now_ns();
+                    let (success, bytes) = match &frame_res {
+                        Ok(f) => (true, f.bytes.len()),
+                        Err(e) => (false, e.frame_bytes),
+                    };
+                    qual_hook::record_encode(
+                        pair.server_epoch,
+                        pair.revision,
+                        start_ns,
+                        end_ns,
+                        success,
+                        bytes,
+                    );
+                }
                 #[cfg(test)]
                 if frame_res.is_err() {
                     inner

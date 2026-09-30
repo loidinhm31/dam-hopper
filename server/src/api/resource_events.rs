@@ -73,6 +73,11 @@ impl Drop for SubjectGuard {
                 counts.remove(&self.subject);
             }
         }
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_cleanup(
+            "subject_guard",
+            &self.subject,
+        );
     }
 }
 
@@ -301,6 +306,14 @@ pub async fn global_admission_layer(
     }
 
     if state.host_resource_events.is_revoked() {
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_admission(
+            "global_rejected_shutdown",
+            "",
+            503,
+            state.host_resource_events.admission().active_global_permits(),
+            0,
+        );
         return auth_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "AUTH_UNAVAILABLE",
@@ -312,6 +325,14 @@ pub async fn global_admission_layer(
     let permit = match state.host_resource_events.admission().try_acquire_global() {
         Ok(permit) => permit,
         Err(()) => {
+            #[cfg(test)]
+            crate::system::resource_stream::qual_hook::record_admission(
+                "global_limit_reached",
+                "",
+                429,
+                state.host_resource_events.admission().active_global_permits(),
+                0,
+            );
             return auth_error_response(
                 StatusCode::TOO_MANY_REQUESTS,
                 "HOST_RESOURCE_STREAM_LIMIT",
@@ -320,6 +341,15 @@ pub async fn global_admission_layer(
             );
         }
     };
+
+    #[cfg(test)]
+    crate::system::resource_stream::qual_hook::record_admission(
+        "global_admitted",
+        "",
+        200,
+        state.host_resource_events.admission().active_global_permits(),
+        0,
+    );
 
     request
         .extensions_mut()
@@ -395,6 +425,14 @@ pub async fn subject_admission_layer(
     {
         Ok(guard) => guard,
         Err(()) => {
+            #[cfg(test)]
+            crate::system::resource_stream::qual_hook::record_admission(
+                "subject_limit_reached",
+                &subject,
+                429,
+                state.host_resource_events.admission().active_global_permits(),
+                state.host_resource_events.admission().active_subject_count(&subject),
+            );
             return auth_error_response(
                 StatusCode::TOO_MANY_REQUESTS,
                 "HOST_RESOURCE_STREAM_LIMIT",
@@ -403,6 +441,15 @@ pub async fn subject_admission_layer(
             );
         }
     };
+
+    #[cfg(test)]
+    crate::system::resource_stream::qual_hook::record_admission(
+        "subject_admitted",
+        &subject,
+        200,
+        state.host_resource_events.admission().active_global_permits(),
+        state.host_resource_events.admission().active_subject_count(&subject),
+    );
 
     request
         .extensions_mut()
@@ -500,11 +547,15 @@ pub async fn events_handler(State(state): State<AppState>, request: Request) -> 
         let _guard = stream_cancel.drop_guard();
 
         // 1. Send initial status control immediately after headers
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_emission("initial_status", initial_status.len());
         if tx.send(Ok(initial_status)).await.is_err() {
             return;
         }
 
         // 2. Send initial full pair
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_emission("initial_pair", initial_frame.bytes.len());
         if tx.send(Ok(initial_frame.bytes.clone())).await.is_err() {
             return;
         }
@@ -554,6 +605,8 @@ pub async fn events_handler(State(state): State<AppState>, request: Request) -> 
                     }
                     match encode_status_control(&basis, Instant::now()) {
                         Ok(status_bytes) => {
+                            #[cfg(test)]
+                            crate::system::resource_stream::qual_hook::record_emission("periodic_status", status_bytes.len());
                             if tx.send(Ok(status_bytes)).await.is_err() {
                                 break;
                             }
@@ -590,6 +643,8 @@ pub async fn events_handler(State(state): State<AppState>, request: Request) -> 
                             // Pre-data matching status for this frame
                             match encode_status_control_for_frame(&frame, Instant::now()) {
                                 Ok(status_bytes) => {
+                                    #[cfg(test)]
+                                    crate::system::resource_stream::qual_hook::record_emission("predata_status", status_bytes.len());
                                     if tx.send(Ok(status_bytes)).await.is_err() {
                                         break;
                                     }
@@ -605,6 +660,8 @@ pub async fn events_handler(State(state): State<AppState>, request: Request) -> 
                             if producer_revocation.is_revoked() || global_cancel.is_cancelled() {
                                 break;
                             }
+                            #[cfg(test)]
+                            crate::system::resource_stream::qual_hook::record_emission("data_frame", frame.bytes.len());
                             if tx.send(Ok(frame.bytes.clone())).await.is_err() {
                                 break;
                             }
@@ -697,12 +754,25 @@ fn spawn_supervisor(
                     break;
                 }
                 _ = interval.tick() => {
+                    #[cfg(test)]
+                    let check_start = std::time::Instant::now();
                     let eval_result = tokio::time::timeout(
                         Duration::from_secs(2),
                         auth_service.evaluate_claims(&claims),
                     )
                     .await;
-
+                    #[cfg(test)]
+                    {
+                        let check_dur = check_start.elapsed().as_millis() as u64;
+                        let decision_str = match &eval_result {
+                            Err(_) => "timeout",
+                            Ok(crate::auth::model::AuthDecision::Authenticated { .. }) => "authenticated",
+                            Ok(crate::auth::model::AuthDecision::MfaRequired { .. }) => "mfa_required",
+                            Ok(crate::auth::model::AuthDecision::FullLoginRequired { .. }) => "full_login_required",
+                            Ok(crate::auth::model::AuthDecision::Unavailable { .. }) => "unavailable",
+                        };
+                        crate::system::resource_stream::qual_hook::record_auth_check(decision_str, check_dur);
+                    }
                     match eval_result {
                         Err(_) => {
                             revocation.revoke(RevocationReason {
@@ -875,5 +945,325 @@ pub(crate) mod tests {
         // Second take returns None
         assert!(state.take_reason().is_none());
         assert!(state.is_revoked());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_host_resource_qualification() {
+        use std::path::PathBuf;
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+        #[cfg(unix)]
+        use tokio::net::UnixListener;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        use crate::api::build_router_with_origins;
+        use crate::auth::model::{AuthClaims, AuthSession, UserRecord, UserRole, chrono_to_bson};
+        use crate::auth::policy::AUTH_PROTOCOL_VERSION;
+        use crate::auth::secret::MfaEncryptionKey;
+        use crate::auth::{AuthService, AuthStore};
+        use crate::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, ServerConfig, WorkspaceInfo};
+        use crate::crypto::DamHopperOpaqueSuite;
+        use crate::diagnostics::DiagnosticStore;
+        use crate::fs::FsSubsystem;
+        use crate::pty::{BroadcastEventSink, PtySessionManager};
+        use crate::state::AppState;
+        use crate::system::resource_stream::qual_hook::{set_active_hook, QualHookState};
+        use crate::telemetry::TelemetryRuntime;
+        use opaque_ke::ServerSetup;
+        use rand::rngs::OsRng;
+        use uuid::Uuid;
+
+        let qual_dir = match std::env::var("HOST_RESOURCE_QUAL_DIR") {
+            Ok(d) if !d.is_empty() => PathBuf::from(d),
+            _ => {
+                eprintln!("HOST_RESOURCE_QUAL_DIR not set; skipping live_host_resource_qualification");
+                return;
+            }
+        };
+
+        let mongo_uri = std::env::var("TEST_MONGODB_URI")
+            .unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
+
+        if std::env::var("HOST_RESOURCE_QUAL_CLEANUP_DB").is_ok() {
+            if let Ok(client) = mongodb::Client::with_uri_str(&mongo_uri).await {
+                if let Ok(db_names) = client.list_database_names().await {
+                    for name in db_names {
+                        if name.starts_with("test_host_resource_qual_") {
+                            let _ = client.database(&name).drop().await;
+                        }
+                    }
+                }
+            }
+            eprintln!("Cleaned up test qualification databases");
+            return;
+        }
+
+        #[cfg(unix)]
+        {
+            let _ = std::fs::create_dir_all(&qual_dir);
+            let _ = std::fs::set_permissions(&qual_dir, std::fs::Permissions::from_mode(0o700));
+        }
+
+        let run_id = Uuid::new_v4().to_string();
+        let db_name = format!("test_host_resource_qual_{}", Uuid::new_v4().simple());
+
+        let client = mongodb::Client::with_uri_str(&mongo_uri)
+            .await
+            .expect("Failed to connect to test MongoDB");
+        let db = client.database(&db_name);
+        db.run_command(mongodb::bson::doc! { "ping": 1 })
+            .await
+            .expect("Failed to ping test MongoDB");
+
+        let store = AuthStore::new(db.clone());
+        let _ = store.init_indexes().await;
+
+        let xdg_dir = qual_dir.join("xdg");
+        let server_config_dir = xdg_dir.join("dam-hopper");
+        std::fs::create_dir_all(&server_config_dir).expect("Failed to create xdg config dir");
+        #[cfg(unix)]
+        let _ = std::fs::set_permissions(&xdg_dir, std::fs::Permissions::from_mode(0o700));
+
+        let signing_secret = format!("jwt-secret-{}", Uuid::new_v4());
+        let token_path = server_config_dir.join("server-token");
+        std::fs::write(&token_path, &signing_secret).expect("Failed to write server-token");
+        #[cfg(unix)]
+        let _ = std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600));
+
+        // Create 8 fixture actors
+        let mut credentials = Vec::new();
+        let now = chrono::Utc::now();
+        let exp = now + chrono::Duration::days(30);
+
+        for i in 1..=8 {
+            let username = format!("actor_{i}");
+            let hashed_pw = bcrypt::hash("password123", bcrypt::DEFAULT_COST).unwrap();
+            let user = UserRecord {
+                id: None,
+                username: username.clone(),
+                password_hash: hashed_pw,
+                is_enabled: true,
+                role: UserRole::User,
+                auth_version: 1,
+                mfa: None,
+                mfa_attempt_window_started_at: None,
+                mfa_attempt_count: 0,
+                mfa_blocked_until: None,
+            };
+            let _ = db.collection::<UserRecord>("users").insert_one(&user).await;
+
+            let session_id = format!("session-actor-{i}-{}", Uuid::new_v4());
+            let session = AuthSession {
+                id: session_id.clone(),
+                username: username.clone(),
+                auth_version: 1,
+                credential_version: 1,
+                issued_at: chrono_to_bson(now),
+                expires_at: chrono_to_bson(exp),
+                mfa_verified_at: chrono_to_bson(now),
+                revoked_at: None,
+            };
+            let _ = db.collection::<AuthSession>("authSessions").insert_one(&session).await;
+
+            let claims = AuthClaims {
+                v: AUTH_PROTOCOL_VERSION,
+                sub: username.clone(),
+                sid: session_id,
+                auth_version: 1,
+                credential_version: 1,
+                iat: now.timestamp() as usize,
+                exp: exp.timestamp() as usize,
+            };
+            let token = claims.encode(&signing_secret).expect("encode jwt");
+            credentials.push(serde_json::json!({
+                "actorId": username.clone(),
+                "username": username,
+                "token": token,
+            }));
+        }
+
+        let cred_path = qual_dir.join("credentials.json");
+        std::fs::write(&cred_path, serde_json::to_string_pretty(&credentials).unwrap()).unwrap();
+        #[cfg(unix)]
+        let _ = std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600));
+
+        let workspace_dir = qual_dir.join("workspace");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        let config_toml_path = if let Ok(cfg_env) = std::env::var("HOST_RESOURCE_QUAL_CONFIG") {
+            PathBuf::from(cfg_env)
+        } else {
+            let default_cfg = workspace_dir.join("dam-hopper.toml");
+            if !default_cfg.exists() {
+                std::fs::write(
+                    &default_cfg,
+                    "[workspace]\nname = \"qual-workspace\"\n\n[server.host_resources]\nlight_sample_seconds = 5\n",
+                ).unwrap();
+            }
+            default_cfg
+        };
+
+        let timeline_path = qual_dir.join("timeline.jsonl");
+        let hook_state = Arc::new(QualHookState::new(run_id.clone(), timeline_path.clone()));
+        set_active_hook(Some(Arc::clone(&hook_state)));
+
+        let (event_sink, _rx) = BroadcastEventSink::new(512);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+        let mut dam_config = crate::config::read_config(&config_toml_path).unwrap_or_else(|_| DamHopperConfig {
+            workspace: WorkspaceInfo {
+                name: "qual-workspace".into(),
+                root: workspace_dir.display().to_string(),
+            },
+            server: ServerConfig::default(),
+            agent_store: None,
+            projects: vec![],
+            features: FeaturesConfig::default(),
+            config_path: config_toml_path.clone(),
+        });
+        dam_config.workspace.root = workspace_dir.display().to_string();
+
+        let global_config = GlobalConfig::default();
+        let store_path = workspace_dir.join(".dam-hopper/agent-store");
+        let agent_store = crate::agent_store::AgentStoreService::new(store_path);
+        let fs = FsSubsystem::new(vec![]);
+        let tunnel_manager = crate::tunnel::TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(crate::tunnel::CloudflaredDriver));
+        let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
+
+        let mut app_state = AppState::new(
+            workspace_dir.clone(),
+            dam_config,
+            global_config,
+            pty_manager,
+            agent_store,
+            event_sink,
+            signing_secret.clone(),
+            fs,
+            Some(db.clone()),
+            false,
+            tunnel_manager,
+            None,
+            ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+            diagnostics,
+            TelemetryRuntime::new(),
+        )
+        .expect("AppState creation failed");
+
+        let mfa_key = MfaEncryptionKey::new([0x55; 32], "test-mfa-key");
+        let clock = Arc::new(crate::auth::policy::SystemClock);
+        let auth_service = Arc::new(AuthService::new(
+            Some(store.clone()),
+            Some(mfa_key),
+            clock,
+        ));
+        app_state = app_state.with_auth_service(auth_service);
+
+        let browser_origin = std::env::var("HOST_RESOURCE_QUAL_BROWSER_ORIGIN")
+            .unwrap_or_else(|_| "http://127.0.0.1:4173".to_string());
+        let origins = vec![HeaderValue::from_str(&browser_origin).unwrap()];
+        let app = build_router_with_origins(app_state, origins);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind tcp");
+        let local_addr = listener.local_addr().expect("local addr");
+        let server_url = format!("http://{}", local_addr);
+
+        let control_path = qual_dir.join("control.sock");
+        let _ = std::fs::remove_file(&control_path);
+
+        let shutdown_token = CancellationToken::new();
+
+        #[cfg(unix)]
+        {
+            let ulistener = UnixListener::bind(&control_path).expect("bind control socket");
+            let _ = std::fs::set_permissions(&control_path, std::fs::Permissions::from_mode(0o600));
+            let s_token = shutdown_token.clone();
+            let h_state = Arc::clone(&hook_state);
+
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = ulistener.accept().await {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    if let Ok(n) = stream.read(&mut buf).await {
+                        if n > 0 {
+                            if let Ok(cmd_json) = serde_json::from_slice::<serde_json::Value>(&buf[..n]) {
+                                let cmd = cmd_json.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+                                match cmd {
+                                    "phase" => {
+                                        if let Some(phase_name) = cmd_json.get("name").and_then(|v| v.as_str()) {
+                                            h_state.set_phase(phase_name);
+                                            let _ = stream.write_all(b"{\"status\":\"ok\"}\n").await;
+                                        } else {
+                                            let _ = stream.write_all(b"{\"status\":\"error\",\"error\":\"missing_name\"}\n").await;
+                                        }
+                                    }
+                                    "clock" => {
+                                        let mono_ns = h_state.start_instant.elapsed().as_nanos() as u64;
+                                        let resp = serde_json::json!({
+                                            "status": "ok",
+                                            "monoNs": mono_ns,
+                                        });
+                                        let _ = stream.write_all(resp.to_string().as_bytes()).await;
+                                        let _ = stream.write_all(b"\n").await;
+                                    }
+                                    "stop" => {
+                                        let _ = stream.write_all(b"{\"status\":\"stopping\"}\n").await;
+                                        s_token.cancel();
+                                        break;
+                                    }
+                                    _ => {
+                                        let _ = stream.write_all(b"{\"status\":\"unknown_cmd\"}\n").await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        let ready_info = serde_json::json!({
+            "schemaVersion": 1,
+            "runId": run_id,
+            "pid": std::process::id(),
+            "url": server_url,
+            "browserOrigin": browser_origin,
+            "clockOrigin": "rust-instant-ns-since-harness-start",
+            "credentialFile": cred_path.display().to_string(),
+            "timelinePath": timeline_path.display().to_string(),
+            "controlPath": control_path.display().to_string(),
+            "databaseName": db_name,
+            "xdgConfigHome": xdg_dir.display().to_string(),
+        });
+        let ready_path = qual_dir.join("ready.json");
+        std::fs::write(&ready_path, serde_json::to_string_pretty(&ready_info).unwrap()).unwrap();
+        #[cfg(unix)]
+        let _ = std::fs::set_permissions(&ready_path, std::fs::Permissions::from_mode(0o600));
+
+        let server_shutdown = shutdown_token.clone();
+        let server_handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    server_shutdown.cancelled().await;
+                })
+                .await
+        });
+
+        let _ = server_handle.await;
+
+        let end_info = serde_json::json!({
+            "schemaVersion": 1,
+            "runId": run_id,
+            "status": "completed",
+            "exitTimestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        let end_path = qual_dir.join("end.json");
+        std::fs::write(&end_path, serde_json::to_string_pretty(&end_info).unwrap()).unwrap();
+        #[cfg(unix)]
+        let _ = std::fs::set_permissions(&end_path, std::fs::Permissions::from_mode(0o600));
+
+        if std::env::var("HOST_RESOURCE_QUAL_RETAIN_DB").unwrap_or_default() != "1" {
+            let _ = db.drop().await;
+        }
+
+        set_active_hook(None);
     }
 }
