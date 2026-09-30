@@ -239,6 +239,12 @@ async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
             "role": "user",
         }).await;
         let _ = col.insert_one(mongodb::bson::doc! {
+            "username": "bob-view-user",
+            "passwordHash": &password_hash,
+            "isEnabled": true,
+            "role": "user",
+        }).await;
+        let _ = col.insert_one(mongodb::bson::doc! {
             "username": "attacker-user",
             "passwordHash": &password_hash,
             "isEnabled": true,
@@ -253,6 +259,7 @@ async fn setup_test_mongo(db_name: &str) -> Option<mongodb::Database> {
         for (username, sid) in [
             ("admin-user", "session-admin"),
             ("bob-new-user", "session-bob-new"),
+            ("bob-view-user", "session-bob-view"),
             ("attacker-user", "session-attacker"),
         ] {
             let _ = sess_col.insert_one(mongodb::bson::doc! {

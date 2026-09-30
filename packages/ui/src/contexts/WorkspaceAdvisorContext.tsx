@@ -86,6 +86,7 @@ export function WorkspaceAdvisorPlacementProvider({
   );
 
   const setLauncherElement = useCallback((element: HTMLElement | null) => {
+    // eslint-disable-next-line react-hooks/immutability
     launcherRef.current = element;
   }, [launcherRef]);
 
