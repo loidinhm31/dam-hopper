@@ -4606,7 +4606,7 @@ remain authoritative after reconnect, missed events, or profile changes. Deep
 Linux reads degrade per signal, while `GET /api/system/metrics` remains the
 compatibility fallback and rollback seam.
 
-### Host-resource SSE delivery (Phases 01–04 implemented; qualification pending)
+### Host-resource SSE delivery (Phases 01–05 implementation; target qualification pending)
 
 The [host-resource SSE architecture](./architecture/host-resource-sse.md) is
 normative: Phases 01–04 complete the cached publisher, authenticated route,
@@ -4619,7 +4619,15 @@ is profile/incident scoped, history stays REST-backed, and WS snapshot patches
 require REST authority. Matched server ages plus local monotonic TTL drive
 freshness; TanStack `isStale` is only query-cache metadata.
 
-Phase 05 qualification and Phase 06 rollout remain pending; no production performance or deployment claim is made.
+Phase 05 adds test-only run-scoped hooks, mandatory-Mongo HTTP tests, and a
+harness runner; its focused suite passed 11/11. The short N=0/1/32 local smoke
+used 1 s warmup/2 s measurement with no soak, and is not target qualification.
+C01–C43 remain pending/unqualified. The browser, authenticated release-PID,
+30-minute soak, named-host, deployed-proxy, active-socket shutdown, and native
+C42 gates remain pending/blocked. Current hooks SHA-256 hash auth targets,
+admission subjects, and cleanup details. These deterministic, linkable digests
+are not anonymous; screen future artifacts before sharing. The pre-fix smoke
+artifact was removed. Phase 06 rollout is not qualified.
 
 Re-authentication, mutation lifecycle/audit, local privileged IPC, enrollment,
 and fixed host operations are one future remediation backlog. Existing

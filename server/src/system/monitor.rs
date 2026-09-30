@@ -335,17 +335,29 @@ impl HostResourceMonitor {
             || cache.snapshot_deadline_ms != new_snapshot_deadline_ms
             || cache.jitter_ms != new_jitter_ms;
 
-        let notified_revision = if freshness_changed {
+        let (notified_revision, _epoch) = if freshness_changed {
             cache.light_sample_ms = new_light_sample_ms;
             cache.snapshot_deadline_ms = new_snapshot_deadline_ms;
             cache.jitter_ms = new_jitter_ms;
-            Some(cache.bump_revision())
+            let rev = cache.bump_revision();
+            (Some(rev), cache.server_epoch)
         } else {
-            None
+            (None, cache.server_epoch)
         };
 
         drop(cache);
         if let Some(rev) = notified_revision {
+            #[cfg(test)]
+            crate::system::resource_stream::qual_hook::record_commit(
+                _epoch,
+                rev,
+                true,
+                serde_json::json!({
+                    "lightSampleMs": new_light_sample_ms,
+                    "snapshotDeadlineMs": new_snapshot_deadline_ms,
+                    "jitterMs": new_jitter_ms,
+                }),
+            );
             let _ = self.stream_watch_tx.send(rev);
         }
         self.config_changed.notify_one();
@@ -418,6 +430,15 @@ impl HostResourceMonitor {
             let sampled_at = source.now_ms();
             let deadline = Duration::from_millis(config.snapshot_deadline_millis);
             let process_deadline_millis = config.process_deadline_millis;
+            #[cfg(test)]
+            crate::system::resource_stream::qual_hook::record_sample(
+                "snapshot_collection",
+                serde_json::json!({
+                    "collectProcesses": collect_processes,
+                    "collectPss": collect_pss,
+                    "processDeadlineMs": process_deadline_millis,
+                }),
+            );
             let mut collection = tokio::task::spawn_blocking(move || {
                 collect_host_resource_snapshot_with_options(
                     source.as_ref(),
@@ -548,6 +569,19 @@ impl HostResourceMonitor {
             cache.metrics_observed_at = Some(std::time::Instant::now());
             cache.snapshot_observed_at = Some(std::time::Instant::now());
             let new_revision = cache.bump_revision();
+            #[cfg(test)]
+            crate::system::resource_stream::qual_hook::record_commit(
+                cache.server_epoch,
+                new_revision,
+                false,
+                serde_json::json!({
+                    "kind": "paired",
+                    "degraded": false,
+                    "lightSampleMs": cache.light_sample_ms,
+                    "snapshotDeadlineMs": cache.snapshot_deadline_ms,
+                    "jitterMs": cache.jitter_ms,
+                }),
+            );
             let should_emit_memory = transition.change.is_some();
             drop(cache);
             let _ = self.stream_watch_tx.send(new_revision);
@@ -571,6 +605,19 @@ impl HostResourceMonitor {
         cache.metrics_observed_at = Some(std::time::Instant::now());
         // snapshot_observed_at is retained from prior successful observation
         let new_revision = cache.bump_revision();
+        #[cfg(test)]
+        crate::system::resource_stream::qual_hook::record_commit(
+            cache.server_epoch,
+            new_revision,
+            false,
+            serde_json::json!({
+                "kind": "paired",
+                "degraded": true,
+                "lightSampleMs": cache.light_sample_ms,
+                "snapshotDeadlineMs": cache.snapshot_deadline_ms,
+                "jitterMs": cache.jitter_ms,
+            }),
+        );
         drop(cache);
         let _ = self.stream_watch_tx.send(new_revision);
         for incident in &resource_events {

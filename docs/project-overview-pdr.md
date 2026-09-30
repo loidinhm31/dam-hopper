@@ -481,7 +481,7 @@ See [Native Browser Debug Support](./native-browser-debug-support.md) for the pl
 
 ### PR-009: Host Resource Monitoring (Current Delivery)
 
-**Status:** The read-only monitor, versioned REST projections, and multi-profile presentation remain delivered; the original Phase 07 and Phase 02 alert milestones and their explicitly deferred release follow-ups are unchanged. The separate bounded host-resource SSE plan completed Phases 01–04 on 2026-09-30, including owner/QueryClient cutover, paired snapshot/metrics arbitration, WS alert/unread handling, and observation freshness integration. Phase 05 qualification and Phase 06 rollout remain pending. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations remain outside this delivery.
+**Status:** The read-only monitor, versioned REST projections, and multi-profile presentation remain delivered; the original Phase 07 and Phase 02 alert milestones and their explicitly deferred release follow-ups are unchanged. The bounded host-resource SSE plan completed Phases 01–04 on 2026-09-30 and Phase 05 scoped implementation/tests on 2026-10-01 (focused qualification suite 11/11). Phase 05 target qualification (release PID, 30-minute soak, browser, reference/weak hosts, deployed proxy) and Phase 06 rollout remain pending/blocked; C42 remains a later native gate. Re-authentication, mutation lifecycle/audit, privileged IPC, enrollment, and fixed host operations remain outside this delivery.
 
 **Current Functional Requirements:**
 

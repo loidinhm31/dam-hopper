@@ -36,6 +36,7 @@ pub struct AuthTestFixture {
     pub clock: Arc<MockClock>,
     pub raw_mfa_key: [u8; 32],
     pub tmp_dir: TempDir,
+    pub state: AppState,
 }
 
 impl AuthTestFixture {
@@ -115,7 +116,8 @@ impl AuthTestFixture {
         ));
 
         let state = state.with_auth_service(auth_service);
-        let app = build_router(state);
+        state.host_resource_events.start();
+        let app = build_router(state.clone());
 
         Some(Self {
             app,
@@ -125,7 +127,16 @@ impl AuthTestFixture {
             clock,
             raw_mfa_key: DEFAULT_MFA_KEY,
             tmp_dir: tmp,
+            state,
         })
+    }
+
+    /// Create a mandatory test fixture. Unlike `new()`, panics if MongoDB is not reachable.
+    /// Used by qualification tests where MongoDB is required and skipping is disallowed.
+    pub async fn mandatory() -> Self {
+        Self::new().await.expect(
+            "Mandatory test MongoDB instance is not available on TEST_MONGODB_URI; skipping is disallowed for qualification",
+        )
     }
 
     pub async fn create_user(
