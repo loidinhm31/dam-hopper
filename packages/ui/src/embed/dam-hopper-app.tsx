@@ -109,11 +109,6 @@ const SshForwardingPage = lazy(() =>
     default: m.SshForwardingPage,
   })),
 );
-const PluginHostPage = lazy(() =>
-  import("@/components/PluginHostPage.js").then((module) => ({
-    default: module.PluginHostPage,
-  })),
-);
 
 const LOADING_FALLBACK = (
   <div className="app-screen-height flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -417,16 +412,6 @@ export function DamHopperApp() {
                   <ErrorBoundary>
                     <Suspense fallback={LOADING_FALLBACK}>
                       <UsagePage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/plugins/:installationId"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <PluginHostPage />
                     </Suspense>
                   </ErrorBoundary>
                 }
