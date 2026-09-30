@@ -3,7 +3,7 @@ use tokio::sync::broadcast;
 
 /// Decouples PTY session events from transport (WebSocket, test stub, etc.)
 pub trait EventSink: Send + Sync + 'static {
-    fn send_terminal_data(&self, session_id: &str, data: &str);
+    fn send_terminal_data(&self, session_id: &str, data: &str, offset: u64, incarnation: u64);
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>);
     fn send_terminal_changed(&self);
     /// Lifecycle events deliberately omit the per-session nonce.
@@ -79,7 +79,7 @@ pub trait EventSink: Send + Sync + 'static {
 pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
-    fn send_terminal_data(&self, _id: &str, _data: &str) {}
+    fn send_terminal_data(&self, _id: &str, _data: &str, _offset: u64, _incarnation: u64) {}
     fn send_terminal_exit(&self, _id: &str, _exit_code: Option<i32>) {}
     fn send_terminal_changed(&self) {}
     fn broadcast(&self, _event_type: &str, _payload: serde_json::Value) {}
@@ -157,11 +157,13 @@ impl BroadcastEventSink {
 }
 
 impl EventSink for BroadcastEventSink {
-    fn send_terminal_data(&self, session_id: &str, data: &str) {
+    fn send_terminal_data(&self, session_id: &str, data: &str, offset: u64, incarnation: u64) {
         self.send_json(json!({
             "kind": "terminal:output",
             "id": session_id,
             "data": data,
+            "offset": offset,
+            "incarnation": incarnation,
         }));
     }
 

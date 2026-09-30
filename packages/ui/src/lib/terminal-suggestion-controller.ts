@@ -110,7 +110,11 @@ export class TerminalSuggestionController {
     }
     this.deferredLifecycle = undefined;
     if (event.lifecycle === "submitted" && event.command !== undefined) {
-      recordCommand(event.command, this.options.project, this.options.profileId);
+      recordCommand(
+        event.command,
+        this.options.project,
+        this.options.profileId,
+      );
     }
     if (event.lifecycle === "editing") {
       this.promptPaintBytesRemaining = MAX_PROMPT_PAINT_BYTES;
@@ -190,6 +194,19 @@ export class TerminalSuggestionController {
       data.length <= this.promptPaintBytesRemaining
     ) {
       this.promptPaintBytesRemaining -= data.length;
+      return;
+    }
+    if (
+      this.current.state === "opaque" &&
+      !this.pendingEcho &&
+      this.promptPaintBytesRemaining === 0 &&
+      !this.promptPaintSgrOpen &&
+      !this.promptPaintText &&
+      !this.pendingNativeBackspace &&
+      !this.timer &&
+      !this.current.rawInput &&
+      this.current.suggestion === undefined
+    ) {
       return;
     }
     if (
@@ -295,6 +312,20 @@ export class TerminalSuggestionController {
   }
 
   private reset(state: TerminalSuggestionState): void {
+    if (
+      state === "opaque" &&
+      this.current.state === "opaque" &&
+      !this.pendingEcho &&
+      this.promptPaintBytesRemaining === 0 &&
+      !this.promptPaintSgrOpen &&
+      !this.promptPaintText &&
+      !this.pendingNativeBackspace &&
+      !this.timer &&
+      !this.current.rawInput &&
+      this.current.suggestion === undefined
+    ) {
+      return;
+    }
     this.pendingEcho = "";
     this.promptPaintBytesRemaining = 0;
     this.promptPaintSgrOpen = false;

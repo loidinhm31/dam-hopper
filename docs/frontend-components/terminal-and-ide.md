@@ -303,7 +303,13 @@ scope or active project.
 
 **Purpose:** Renders a single terminal session using xterm.js and handles output, exit, restart, reconnect, and buffer attachment. Semantic agent status and notification ownership are handled by the app-root agent-status bridge, not by terminal output parsing.
 
-**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Attach/reconnect uses a session-local replay gate: live chunks queue until xterm completes retained-buffer rendering. `TerminalPanel` does not attach Codex OSC 9 notification callbacks or derive semantic agent state from terminal bytes. Attach recovery permits only one in-flight attach per panel, retries an alive session with capped exponential backoff, and creates a replacement only after a `terminal:listDetailed` check confirms the session is missing or dead. Search and terminal cleanup dispose their owned resources on unmount/reconnect/session replacement.
+**Behavior:** Filters out the terminal workspace shortcut so xterm input does not swallow the global mode toggle. Attach/reconnect uses a session-local replay gate: live chunks queue until xterm completes retained-buffer rendering, with authoritative byte offsets preventing replay/live overlap. Historical parsing cannot send terminal replies into the live PTY. Full replacement replay drains preceding parser writes and resets xterm buffers, cursor, and modes; delta replay preserves them. Stream gaps or broadcast lag trigger reattachment. Truncated history cannot reconstruct missing terminal state.
+
+Offsets are scoped to the PTY incarnation, so manual replacement under the same session ID starts a fresh replay rather than discarding the new process's output as duplicates. Parser completion remains fenced across connection rebinding and restart. Native input is temporarily disabled during attach/replay and restored with the current mobile-input policy once replay drains; legitimate live terminal queries still receive responses.
+
+Terminal fitting skips hidden, disconnected, parked, and zero-size surfaces, preserving their last usable PTY dimensions. Renderer selection is committed before fitting a visible host, avoiding transient DOM-to-WebGL column changes on reveal. Hidden terminals release WebGL resources.
+
+`TerminalPanel` does not attach Codex OSC 9 notification callbacks or derive semantic agent state from terminal bytes. Attach recovery retries an alive session with capped exponential backoff; session creation belongs to the terminal manager's explicit launch action. Cleanup disposes owned resources on unmount/reconnect/session replacement.
 
 ### Terminal touch scrolling and page-gesture containment
 
@@ -348,6 +354,9 @@ server-validated `terminal:lifecycle` events; a `submitted` event with an exact 
 only automatic local-history write path. `TerminalPanel` notifies the controller for each
 streamed output write, on attach/replay and process restart, and on composition/paste, so all
 of those boundaries invalidate an in-flight search before it can surface a stale result.
+Already-opaque output state does not republish a new suggestion snapshot for every
+TUI chunk; genuine lifecycle, input, and replay transitions still invalidate
+pending suggestion work.
 
 The input adapter remains deliberately passive: it returns original input through the regular
 `terminalWrite` path without replacement bytes. In desktop layouts, `TerminalPanel` renders only

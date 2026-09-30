@@ -16,6 +16,7 @@ export interface TerminalEntry {
   baseKeyEventHandler?: (event: KeyboardEvent) => boolean;
   invalidateSuggestionGeometry?: () => void;
   terminalRef?: TerminalRef;
+  commitDesiredRenderer?: () => void;
 }
 
 export const terminalRegistry = new Map<string, TerminalEntry>();
@@ -38,6 +39,7 @@ export function registerTerminal(
   findController: TerminalFindController,
   attachmentElement?: HTMLElement,
   ref?: TerminalRef,
+  commitDesiredRenderer?: () => void,
 ): TerminalEntry {
   const key = toTerminalKey(target);
   const terminalRef = typeof target === "object" ? target : ref;
@@ -47,15 +49,20 @@ export function registerTerminal(
     findController,
     attachmentElement,
     terminalRef,
+    commitDesiredRenderer,
   };
   terminalRegistry.set(key, entry);
-  const rawId = typeof target === "object" ? target.id : (terminalRef?.id ?? null);
+  const rawId =
+    typeof target === "object" ? target.id : (terminalRef?.id ?? null);
   if (rawId && rawId !== key) {
     if (!terminalRegistry.has(rawId)) {
       terminalRegistry.set(rawId, entry);
     } else {
       const existing = terminalRegistry.get(rawId);
-      if (existing && existing.terminalRef?.profileId !== terminalRef?.profileId) {
+      if (
+        existing &&
+        existing.terminalRef?.profileId !== terminalRef?.profileId
+      ) {
         terminalRegistry.delete(rawId);
       }
     }

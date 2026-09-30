@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { activateTerminalWebglRenderer } from "./terminal-renderer.js";
-
+import {
+  activateTerminalWebglRenderer,
+  createTerminalRendererController,
+} from "./terminal-renderer.js";
 const diagCalls: Array<{
   type: string;
   scope: string;
@@ -120,5 +122,102 @@ describe("activateTerminalWebglRenderer", () => {
       message: "renderer:dom",
       metadata: { reason: "webgl_context_loss" },
     });
+  });
+});
+
+describe("createTerminalRendererController", () => {
+  beforeEach(() => {
+    diagCalls.length = 0;
+  });
+
+  it("controls transitions between WebGL and DOM renderers", () => {
+    const { addon, terminal } = rendererFixture();
+    let createdCount = 0;
+    const controller = createTerminalRendererController(terminal, {
+      createAddon: () => {
+        createdCount++;
+        return addon;
+      },
+    });
+
+    expect(controller.currentRenderer).toBe("dom");
+
+    // Commit WebGL
+    const first = controller.commitRenderer("webgl");
+    expect(first).toBe("webgl");
+    expect(controller.currentRenderer).toBe("webgl");
+    expect(createdCount).toBe(1);
+    expect(terminal.loadAddon).toHaveBeenCalledOnce();
+
+    // Idempotent when already WebGL
+    const second = controller.commitRenderer("webgl");
+    expect(second).toBe("webgl");
+    expect(createdCount).toBe(1);
+
+    // Commit DOM (revert to DOM)
+    const reverted = controller.commitRenderer("dom");
+    expect(reverted).toBe("dom");
+    expect(controller.currentRenderer).toBe("dom");
+    expect(addon.dispose).toHaveBeenCalledOnce();
+
+    // Dispose cleans up safely
+    controller.dispose();
+    expect(controller.currentRenderer).toBe("dom");
+  });
+
+  it("latches failed WebGL attempt and does not retry every fit until mode transitions", () => {
+    const { terminal } = rendererFixture();
+    let attempts = 0;
+    const controller = createTerminalRendererController(terminal, {
+      createAddon: () => {
+        attempts++;
+        throw new Error("WebGL init failed");
+      },
+    });
+
+    // First attempt fails and falls back to DOM
+    expect(controller.commitRenderer("webgl")).toBe("dom");
+    expect(controller.currentRenderer).toBe("dom");
+    expect(attempts).toBe(1);
+
+    // Subsequent fits with desired="webgl" are latched and do not retry
+    expect(controller.commitRenderer("webgl")).toBe("dom");
+    expect(attempts).toBe(1);
+
+    // Mode transitions to DOM
+    expect(controller.commitRenderer("dom")).toBe("dom");
+
+    // Mode transitions back to WebGL -> retries
+    expect(controller.commitRenderer("webgl")).toBe("dom");
+    expect(attempts).toBe(2);
+  });
+
+  it("accurately updates currentRenderer to DOM and disposes on context loss without retry until transition", () => {
+    const { addon, terminal, loseContext } = rendererFixture();
+    let attempts = 0;
+    const controller = createTerminalRendererController(terminal, {
+      createAddon: () => {
+        attempts++;
+        return addon;
+      },
+    });
+
+    expect(controller.commitRenderer("webgl")).toBe("webgl");
+    expect(controller.currentRenderer).toBe("webgl");
+    expect(attempts).toBe(1);
+
+    // Context loss occurs
+    loseContext();
+    expect(controller.currentRenderer).toBe("dom");
+    expect(addon.dispose).toHaveBeenCalled();
+
+    // Subsequent fits with desired="webgl" do not re-attempt WebGL while in current mode
+    expect(controller.commitRenderer("webgl")).toBe("dom");
+    expect(attempts).toBe(1);
+
+    // Explicit mode transition to DOM then WebGL allows fresh attempt
+    controller.commitRenderer("dom");
+    controller.commitRenderer("webgl");
+    expect(attempts).toBe(2);
   });
 });

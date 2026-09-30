@@ -38,7 +38,10 @@ export interface Transport {
   fsUploadFile?: unknown;
   fsOp?: unknown;
   /** Terminal data stream subscription. Returns unsubscribe fn. */
-  onTerminalData(id: string, cb: (data: string) => void): () => void;
+  onTerminalData(
+    id: string,
+    cb: (data: string, offset: number, incarnation: number) => void,
+  ): () => void;
 
   /** Terminal exit subscription. Returns unsubscribe fn. */
   onTerminalExit(id: string, cb: (exitCode: number | null) => void): () => void;
@@ -99,6 +102,7 @@ export interface Transport {
       offset: number;
       reset: boolean;
       truncated: boolean;
+      incarnation: number;
     }) => void,
   ): () => void;
 

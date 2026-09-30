@@ -1,12 +1,20 @@
 import { logger } from "@dam-hopper/shared/logger";
+import {
+  isTerminalFitEligible,
+  type TerminalFitCandidate,
+} from "./terminal-fit-eligibility.js";
 
+export { isTerminalFitEligible, type TerminalFitCandidate };
 export interface TerminalFitTarget {
   fitAddon: { fit: () => void };
   terminal: {
     focus: () => void;
     rows?: number;
     refresh?: (start: number, end: number) => void;
+    element?: HTMLElement;
   };
+  attachmentElement?: HTMLElement;
+  commitDesiredRenderer?: () => void;
 }
 
 interface ScheduledFit {
@@ -22,8 +30,10 @@ export function fitTerminalNow(
   options: { focus?: boolean; refresh?: boolean } = {},
 ): void {
   if (!target) return;
+  if (!isTerminalFitEligible(target)) return;
 
   try {
+    target.commitDesiredRenderer?.();
     target.fitAddon.fit();
     if (options.refresh && target.terminal.refresh) {
       target.terminal.refresh(0, Math.max(0, (target.terminal.rows ?? 1) - 1));
@@ -66,7 +76,11 @@ export function fitAllTerminals(
   targets: Iterable<TerminalFitTarget>,
   options: { focus?: boolean; refresh?: boolean } = {},
 ): void {
-  for (const target of targets) scheduleTerminalFit(target, options);
+  for (const target of targets) {
+    if (isTerminalFitEligible(target)) {
+      scheduleTerminalFit(target, options);
+    }
+  }
 }
 
 export function cancelScheduledTerminalFit(

@@ -7,10 +7,32 @@ import {
   type TerminalFitTarget,
 } from "./terminal-fit-scheduler.js";
 
-function target(): TerminalFitTarget {
+function measurableElement(overrides: Partial<HTMLElement> = {}): HTMLElement {
+  return {
+    isConnected: true,
+    style: { display: "block" },
+    parentElement: {
+      style: { display: "block" },
+      closest: () => null,
+    },
+    closest: () => null,
+    getBoundingClientRect: () => ({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+    }),
+    ...overrides,
+  } as unknown as HTMLElement;
+}
+
+function target(element: HTMLElement = measurableElement()): TerminalFitTarget {
   return {
     fitAddon: { fit: vi.fn() },
-    terminal: { focus: vi.fn() },
+    terminal: { focus: vi.fn(), element },
+    attachmentElement: element,
   };
 }
 
@@ -75,13 +97,16 @@ describe("terminal fit scheduler", () => {
   });
 
   it("refreshes rendered rows without focusing when requested", () => {
+    const element = measurableElement();
     const terminal = {
       fitAddon: { fit: vi.fn() },
       terminal: {
         rows: 24,
         refresh: vi.fn(),
         focus: vi.fn(),
+        element,
       },
+      attachmentElement: element,
     } satisfies TerminalFitTarget;
 
     fitTerminalNow(terminal, { refresh: true });
@@ -117,5 +142,76 @@ describe("terminal fit scheduler", () => {
     expect(() => frames.flush()).not.toThrow();
     expect(cancelled.fitAddon.fit).not.toHaveBeenCalled();
     expect(() => fitTerminalNow(disposed)).not.toThrow();
+  });
+
+  it("commits desired renderer before calling fitAddon.fit", () => {
+    const events: string[] = [];
+    const element = measurableElement();
+    const terminal: TerminalFitTarget = {
+      fitAddon: {
+        fit: vi.fn(() => events.push("fit")),
+      },
+      terminal: {
+        focus: vi.fn(),
+        element,
+      },
+      attachmentElement: element,
+      commitDesiredRenderer: vi.fn(() => events.push("commit-renderer")),
+    };
+
+    fitTerminalNow(terminal);
+
+    expect(events).toEqual(["commit-renderer", "fit"]);
+  });
+
+  it("skips fit for hidden or parked terminals, preserving existing dimensions", () => {
+    const hiddenTerminal: TerminalFitTarget = {
+      fitAddon: { fit: vi.fn() },
+      terminal: { focus: vi.fn() },
+      attachmentElement: measurableElement({
+        style: { display: "none" } as unknown as CSSStyleDeclaration,
+      }),
+    };
+
+    fitTerminalNow(hiddenTerminal);
+
+    expect(hiddenTerminal.fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it("skips fit when element has zero dimensions", () => {
+    const terminal: TerminalFitTarget = {
+      fitAddon: { fit: vi.fn() },
+      terminal: { focus: vi.fn() },
+      attachmentElement: measurableElement({
+        getBoundingClientRect: () => ({
+          width: 0,
+          height: 0,
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+        }),
+      }),
+    };
+
+    fitTerminalNow(terminal);
+
+    expect(terminal.fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it("fitAllTerminals skips ineligible terminals", () => {
+    const frames = animationFrameFixture();
+    const visible = target();
+    const hidden = target(
+      measurableElement({
+        style: { display: "none" } as unknown as CSSStyleDeclaration,
+      }),
+    );
+
+    fitAllTerminals([visible, hidden]);
+    frames.flush();
+
+    expect(visible.fitAddon.fit).toHaveBeenCalledOnce();
+    expect(hidden.fitAddon.fit).not.toHaveBeenCalled();
   });
 });

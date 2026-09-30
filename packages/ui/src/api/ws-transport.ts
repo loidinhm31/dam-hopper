@@ -575,7 +575,9 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/agent-status/v1/snapshot" };
     case "agentStatus:getOmpExtensionStatus": {
       const d = data as { agentDir?: string } | undefined;
-      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      const q = d?.agentDir
+        ? `?agentDir=${encodeURIComponent(d.agentDir)}`
+        : "";
       return { method: "GET", url: `/api/agent-status/omp/extension${q}` };
     }
     case "agentStatus:installOmpExtension": {
@@ -588,12 +590,16 @@ function channelToEndpoint(
     }
     case "agentStatus:uninstallOmpExtension": {
       const d = data as { agentDir?: string } | undefined;
-      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      const q = d?.agentDir
+        ? `?agentDir=${encodeURIComponent(d.agentDir)}`
+        : "";
       return { method: "DELETE", url: `/api/agent-status/omp/extension${q}` };
     }
     case "agentStatus:getNativeIntegrationStatus": {
       const d = data as { agent: string; agentDir?: string } | undefined;
-      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      const q = d?.agentDir
+        ? `?agentDir=${encodeURIComponent(d.agentDir)}`
+        : "";
       return {
         method: "GET",
         url: `/api/agent-status/integrations/${encodeURIComponent(d?.agent ?? "")}${q}`,
@@ -609,7 +615,9 @@ function channelToEndpoint(
     }
     case "agentStatus:uninstallNativeIntegration": {
       const d = data as { agent: string; agentDir?: string } | undefined;
-      const q = d?.agentDir ? `?agentDir=${encodeURIComponent(d.agentDir)}` : "";
+      const q = d?.agentDir
+        ? `?agentDir=${encodeURIComponent(d.agentDir)}`
+        : "";
       return {
         method: "DELETE",
         url: `/api/agent-status/integrations/${encodeURIComponent(d?.agent ?? "")}${q}`,
@@ -1558,6 +1566,8 @@ const MAX_BACKOFF_MS = 30_000;
 const AUTH_TIMEOUT_MS = 30_000;
 const MAX_PLUGIN_UI_BYTES = 5 * 1024 * 1024;
 
+const utf8Encoder = new TextEncoder();
+
 export class WsTransport implements Transport {
   private ws: WebSocket | null = null;
   private closed = false;
@@ -1580,7 +1590,10 @@ export class WsTransport implements Transport {
   /** channel → callbacks */
   private eventListeners = new Map<string, Set<Callback>>();
   /** sessionId → data callbacks */
-  private dataListeners = new Map<string, Set<(data: string) => void>>();
+  private dataListeners = new Map<
+    string,
+    Set<(data: string, offset: number, incarnation: number) => void>
+  >();
   /** sessionId → exit callbacks (basic: exitCode only) */
   private exitListeners = new Map<
     string,
@@ -1618,6 +1631,7 @@ export class WsTransport implements Transport {
         offset: number;
         reset: boolean;
         truncated: boolean;
+        incarnation: number;
       }) => void
     >
   >();
@@ -2075,21 +2089,68 @@ export class WsTransport implements Transport {
 
       try {
         switch (msg.kind) {
-          case "terminal:output":
-            if (msg.id)
+          case "terminal:output": {
+            if (msg.id) {
+              const offset = msg.offset;
+              const data = msg.data ?? "";
+              const byteLen = utf8Encoder.encode(data).length;
+              const incarnation = msg.incarnation;
+              if (
+                typeof offset !== "number" ||
+                !Number.isSafeInteger(offset) ||
+                offset < byteLen ||
+                typeof incarnation !== "number" ||
+                !Number.isSafeInteger(incarnation) ||
+                incarnation < 0
+              ) {
+                this.eventListeners.get("terminal:lagged")?.forEach((cb) =>
+                  cb({
+                    kind: "terminal:lagged",
+                    id: msg.id,
+                    reason: "invalid_output_frame",
+                    offset,
+                    byteLen,
+                    incarnation,
+                  }),
+                );
+                throw new Error(
+                  `Invalid offset or incarnation in terminal:output for session ${msg.id}: offset=${String(offset)} byteLen=${byteLen} incarnation=${String(incarnation)}`,
+                );
+              }
               this.dataListeners
                 .get(msg.id)
-                ?.forEach((cb) => cb(msg.data ?? ""));
+                ?.forEach((cb) => cb(data, offset, incarnation));
+            }
             break;
+          }
 
           case "terminal:buffer":
             if (msg.id) {
+              const incarnation = msg.incarnation;
+              if (
+                typeof incarnation !== "number" ||
+                !Number.isSafeInteger(incarnation) ||
+                incarnation < 0
+              ) {
+                this.eventListeners.get("terminal:lagged")?.forEach((cb) =>
+                  cb({
+                    kind: "terminal:lagged",
+                    id: msg.id,
+                    reason: "invalid_buffer_frame",
+                    incarnation,
+                  }),
+                );
+                throw new Error(
+                  `Invalid or missing incarnation in terminal:buffer for session ${msg.id}: ${String(incarnation)}`,
+                );
+              }
               this.bufferListeners.get(msg.id)?.forEach((cb) =>
                 cb({
                   data: msg.data ?? "",
                   offset: msg.offset ?? 0,
                   reset: msg.reset ?? true,
                   truncated: msg.truncated ?? false,
+                  incarnation,
                 }),
               );
             }
@@ -2942,7 +3003,10 @@ export class WsTransport implements Transport {
     }
   }
 
-  onTerminalData(id: string, cb: (data: string) => void): () => void {
+  onTerminalData(
+    id: string,
+    cb: (data: string, offset: number, incarnation: number) => void,
+  ): () => void {
     if (!this.dataListeners.has(id)) this.dataListeners.set(id, new Set());
     this.dataListeners.get(id)!.add(cb);
     return () => this.dataListeners.get(id)?.delete(cb);
@@ -3034,6 +3098,7 @@ export class WsTransport implements Transport {
       offset: number;
       reset: boolean;
       truncated: boolean;
+      incarnation: number;
     }) => void,
   ): () => void {
     if (!this.bufferListeners.has(id)) this.bufferListeners.set(id, new Set());

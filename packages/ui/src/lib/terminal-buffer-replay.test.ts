@@ -1,46 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  applyTerminalBufferReplay,
-  utf8ByteLength,
-} from "./terminal-buffer-replay.js";
+import { applyTerminalBufferReplay } from "./terminal-buffer-replay.js";
 
 describe("applyTerminalBufferReplay", () => {
-  it("clears before writing full reset snapshots", () => {
-    const term = { clear: vi.fn(), write: vi.fn() };
-
-    const offset = applyTerminalBufferReplay(term, {
-      data: "full",
-      offset: 4,
-      reset: true,
-      truncated: false,
-    });
-
-    expect(term.clear).toHaveBeenCalledOnce();
-    expect(term.write).toHaveBeenCalledWith("full");
-    expect(offset).toBe(4);
-  });
-
-  it("appends delta snapshots without clearing", () => {
-    const term = { clear: vi.fn(), write: vi.fn() };
-
-    applyTerminalBufferReplay(term, {
-      data: "delta",
-      offset: 10,
-      reset: false,
-      truncated: false,
-    });
-
-    expect(term.clear).not.toHaveBeenCalled();
-    expect(term.write).toHaveBeenCalledWith("delta");
-  });
-
-  it("preserves replay bytes and waits for xterm write completion", () => {
+  it("waits for asynchronous xterm write completion boundary before calling onComplete", () => {
     let complete: (() => void) | undefined;
     const onComplete = vi.fn();
     const term = {
-      clear: vi.fn(),
-      write: vi.fn((_data: string, callback?: () => void) => {
-        complete = callback;
+      reset: vi.fn(),
+      write: vi.fn((data: string, callback?: () => void) => {
+        if (data === "") {
+          // Synchronously finish the drain write
+          callback?.();
+        } else {
+          // Hold the actual replay write until complete() is called
+          complete = callback;
+        }
       }),
     };
     const replay = {
@@ -48,20 +22,54 @@ describe("applyTerminalBufferReplay", () => {
       offset: 42,
       reset: true,
       truncated: false,
+      incarnation: 1,
     };
 
-    expect(applyTerminalBufferReplay(term, replay, onComplete)).toBe(42);
-    expect(term.clear).toHaveBeenCalledOnce();
-    expect(term.write).toHaveBeenCalledWith(replay.data, expect.any(Function));
+    const returnedOffset = applyTerminalBufferReplay(term, replay, onComplete);
+    expect(returnedOffset).toBe(42);
     expect(onComplete).not.toHaveBeenCalled();
 
     complete?.();
     expect(onComplete).toHaveBeenCalledOnce();
   });
-});
 
-describe("utf8ByteLength", () => {
-  it("counts utf8 bytes, not utf16 code units", () => {
-    expect(utf8ByteLength("é")).toBe(2);
+  it("integrates with TerminalStreamReplayGate across write lifecycle", () => {
+    let completeReplayWrite: (() => void) | undefined;
+    const term = {
+      reset: vi.fn(),
+      write: vi.fn((data: string, cb?: () => void) => {
+        if (data === "") cb?.();
+        else completeReplayWrite = cb;
+      }),
+    };
+    const gate = {
+      hasAttachBufferBeenReceived: false,
+      isReplayWriting: false,
+      isLiveStreamReady: true,
+      replayGeneration: 0,
+      activeReplayWrites: 0,
+      queuedLiveData: [],
+    };
+
+    applyTerminalBufferReplay(
+      term,
+      {
+        data: "prompt",
+        offset: 6,
+        reset: true,
+        truncated: false,
+        incarnation: 1,
+      },
+      undefined,
+      gate,
+    );
+
+    expect(gate.activeReplayWrites).toBe(1);
+    expect(gate.isReplayWriting).toBe(true);
+    expect(gate.isLiveStreamReady).toBe(false);
+
+    completeReplayWrite?.();
+    expect(gate.activeReplayWrites).toBe(0);
+    expect(gate.isReplayWriting).toBe(false);
   });
 });

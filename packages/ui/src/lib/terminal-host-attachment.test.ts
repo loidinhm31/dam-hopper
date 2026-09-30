@@ -27,7 +27,38 @@ function elementFixture(events: string[]) {
       events.push(`visibility:${value}`);
     },
   };
-  return { style, parentElement: null } as unknown as HTMLElement;
+  return {
+    isConnected: true,
+    style,
+    parentElement: null,
+    closest: () => null,
+    getBoundingClientRect: () => ({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+    }),
+  } as unknown as HTMLElement;
+}
+
+function hostFixture(
+  events: string[] = [],
+  overrides: Record<string, unknown> = {},
+): HTMLElement {
+  const host = {
+    style: { display: "block" },
+    scrollLeft: 0,
+    scrollTop: 0,
+    closest: () => null,
+    appendChild: (child: HTMLElement) => {
+      events.push("append");
+      Object.defineProperty(child, "parentElement", { value: host });
+    },
+    ...overrides,
+  };
+  return host as unknown as HTMLElement;
 }
 
 function entryFixture(
@@ -57,12 +88,7 @@ describe("attachTerminalsToHost", () => {
     const events: string[] = [];
     const element = elementFixture(events);
     const entry = entryFixture(events, element);
-    const host = {
-      appendChild: (child: HTMLElement) => {
-        events.push("append");
-        Object.defineProperty(child, "parentElement", { value: host });
-      },
-    } as unknown as HTMLElement;
+    const host = hostFixture(events);
 
     attachTerminalsToHost({
       host,
@@ -89,12 +115,7 @@ describe("attachTerminalsToHost", () => {
     const events: string[] = [];
     const element = elementFixture(events);
     const entry = entryFixture(events, element);
-    const host = {
-      appendChild: (child: HTMLElement) => {
-        events.push("append");
-        Object.defineProperty(child, "parentElement", { value: host });
-      },
-    } as unknown as HTMLElement;
+    const host = hostFixture(events);
 
     attachTerminalsToHost({
       host,
@@ -116,16 +137,11 @@ describe("attachTerminalsToHost", () => {
     animationFrameFixture();
     const events: string[] = [];
     const element = elementFixture(events);
-    const oldHost = {} as HTMLElement;
+    const oldHost = hostFixture();
     Object.defineProperty(element, "parentElement", { value: oldHost });
     const entry = entryFixture(events, element);
     const controller = entry.findController;
-    const newHost = {
-      appendChild: (child: HTMLElement) => {
-        events.push("append");
-        Object.defineProperty(child, "parentElement", { value: newHost });
-      },
-    } as unknown as HTMLElement;
+    const newHost = hostFixture(events);
 
     attachTerminalsToHost({
       host: newHost,
@@ -145,13 +161,13 @@ describe("attachTerminalsToHost", () => {
     const events: string[] = [];
     const element = elementFixture(events);
     const entry = entryFixture(events, element);
-    const host = {
+    const host = hostFixture(events, {
       scrollLeft: 24,
       scrollTop: 18,
       appendChild: (child: HTMLElement) => {
         Object.defineProperty(child, "parentElement", { value: host });
       },
-    } as unknown as HTMLElement;
+    });
 
     attachTerminalsToHost({
       host,
@@ -170,14 +186,14 @@ describe("attachTerminalsToHost", () => {
     const terminalElement = elementFixture(events);
     const attachmentElement = elementFixture(events);
     const entry = entryFixture(events, terminalElement, attachmentElement);
-    const host = {
+    const host = hostFixture(events, {
       appendChild: (child: HTMLElement) => {
         events.push(
           child === attachmentElement ? "append-boundary" : "append-xterm",
         );
         Object.defineProperty(child, "parentElement", { value: host });
       },
-    } as unknown as HTMLElement;
+    });
 
     attachTerminalsToHost({
       host,
@@ -189,5 +205,28 @@ describe("attachTerminalsToHost", () => {
     expect(events).toContain("append-boundary");
     expect(events).not.toContain("append-xterm");
     expect(entry.terminal.element).toBe(terminalElement);
+  });
+
+  it("commits desired renderer before fitting on reveal", () => {
+    const frames = animationFrameFixture();
+    const events: string[] = [];
+    const element = elementFixture(events);
+    const entry = entryFixture(events, element);
+    entry.commitDesiredRenderer = () => events.push("commit-renderer");
+    const host = hostFixture(events);
+
+    attachTerminalsToHost({
+      host,
+      sessionIds: ["active"],
+      activeSessionId: "active",
+      resolveTerminal: () => entry,
+    });
+
+    const commitIndex = events.indexOf("commit-renderer");
+    const fitIndex = events.indexOf("fit");
+    expect(commitIndex).toBeGreaterThan(-1);
+    expect(fitIndex).toBeGreaterThan(-1);
+    expect(commitIndex).toBeLessThan(fitIndex);
+    frames.flush();
   });
 });

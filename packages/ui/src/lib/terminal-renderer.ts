@@ -9,11 +9,72 @@ interface WebglAddonLike extends ITerminalAddon {
 
 interface TerminalRendererOptions {
   createAddon?: () => WebglAddonLike;
+  onContextLoss?: () => void;
 }
 
 export interface TerminalRendererHandle {
   renderer: "dom" | "webgl";
   dispose: () => void;
+}
+
+export interface TerminalRendererController {
+  readonly currentRenderer: "dom" | "webgl";
+  commitRenderer: (desired: "dom" | "webgl") => "dom" | "webgl";
+  dispose: () => void;
+}
+
+export function createTerminalRendererController(
+  terminal: Pick<Terminal, "loadAddon" | "refresh" | "rows">,
+  options: TerminalRendererOptions = {},
+): TerminalRendererController {
+  let handle: TerminalRendererHandle | null = null;
+  let activeRenderer: "dom" | "webgl" = "dom";
+  let attemptedDesired: "dom" | "webgl" | null = null;
+
+  return {
+    get currentRenderer() {
+      return activeRenderer;
+    },
+    commitRenderer(desired: "dom" | "webgl") {
+      if (desired === "dom") {
+        if (attemptedDesired === "dom" && activeRenderer === "dom") {
+          return "dom";
+        }
+        attemptedDesired = "dom";
+        handle?.dispose();
+        handle = null;
+        activeRenderer = "dom";
+        return "dom";
+      }
+
+      if (attemptedDesired === "webgl") {
+        return activeRenderer;
+      }
+
+      attemptedDesired = "webgl";
+      handle?.dispose();
+      handle = activateTerminalWebglRenderer(terminal, {
+        ...options,
+        onContextLoss: () => {
+          activeRenderer = "dom";
+          handle = null;
+          options.onContextLoss?.();
+        },
+      });
+      activeRenderer = handle.renderer;
+      if (activeRenderer !== "webgl") {
+        handle.dispose();
+        handle = null;
+      }
+      return activeRenderer;
+    },
+    dispose() {
+      attemptedDesired = null;
+      handle?.dispose();
+      handle = null;
+      activeRenderer = "dom";
+    },
+  };
 }
 
 export function activateTerminalWebglRenderer(
@@ -50,6 +111,7 @@ export function activateTerminalWebglRenderer(
           "terminal disposed before DOM renderer refresh",
         );
       }
+      options.onContextLoss?.();
     });
     terminal.loadAddon(addon);
     recordClientDiagnostic("custom", "terminal-renderer", "renderer:webgl", {});
