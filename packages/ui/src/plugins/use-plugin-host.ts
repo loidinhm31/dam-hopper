@@ -79,7 +79,9 @@ export function usePluginHost(options: UsePluginHostOptions): {
     options.connection !== undefined ? options.connection : hookConnection;
 
   const onUiIntentRef = useRef(onUiIntent);
-  onUiIntentRef.current = onUiIntent;
+  useEffect(() => {
+    onUiIntentRef.current = onUiIntent;
+  });
 
   const [lifecycleRevision, setLifecycleRevision] = useState(0);
   const [model, setModel] = useState<PluginHostModel>({
@@ -99,6 +101,7 @@ export function usePluginHost(options: UsePluginHostOptions): {
     : "no-connection";
 
   // Synchronous owner-change fencing: revoke old session immediately
+  /* eslint-disable react-hooks/refs */
   const lastOwnerKeyRef = useRef(ownerKey);
   if (lastOwnerKeyRef.current !== ownerKey) {
     lastOwnerKeyRef.current = ownerKey;
@@ -108,6 +111,7 @@ export function usePluginHost(options: UsePluginHostOptions): {
       currentAuthorityKeyRef.current = null;
     }
   }
+  /* eslint-enable react-hooks/refs */
 
   // Subscribe to availability changes
   useEffect(() => {

@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-09-30 from the repository compaction `repomix-output.xml`.
+**Generated:** 2026-09-30 from Repomix v1.18.0 XML compaction (`repomix-output.xml`): 2,439 files, 5,673,594 tokens, and 23,828,881 characters. Repomix security scanning excluded 5 files.
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -82,6 +82,7 @@ strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
+- Workspace Advisor integration (Phases 00–09) hosts the EVCrate Advisor plugin directly within the Workspace (IDE dock, Terminal float, compact overlay) with selected-project admission, single persistent frame preservation, and fail-closed cutover of standalone `/plugins/evcrate.advisor` routes; paired qualification passed 11/11 browser scenarios on 2026-09-30.
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

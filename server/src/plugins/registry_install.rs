@@ -131,7 +131,13 @@ impl PluginRegistry {
             .values()
             .find(|i| i.plugin_id == review.plugin_id)
             .map(|i| i.installation_id.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .unwrap_or_else(|| {
+                if review.plugin_id == "evcrate.advisor" {
+                    "evcrate.advisor".to_string()
+                } else {
+                    Uuid::new_v4().to_string()
+                }
+            });
 
         let existing = fresh_state.installations.get(&installation_id);
         let existing_gen = existing
