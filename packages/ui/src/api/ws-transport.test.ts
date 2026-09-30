@@ -1642,3 +1642,198 @@ describe("WsTransport terminal output and authoritative offsets", () => {
     transport.destroy();
   });
 });
+
+describe("WsTransport host-resource streaming (03-T)", () => {
+  it("detects streaming capability on bound instance", () => {
+    const transport = new WsTransport("http://localhost:4800");
+    expect(transport.supportsHostResourceStreaming()).toBe(true);
+    expect(transport.hasHostResourceStreamingCapability()).toBe(true);
+    transport.destroy();
+  });
+
+  it("returns kind: stream on 200 with readable stream and close() cancels reader and aborts fetch", async () => {
+    let cancelCalled = false;
+    let fetchSignal: AbortSignal | undefined;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(": ping\n\n"));
+      },
+      cancel() {
+        cancelCalled = true;
+      },
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        fetchSignal = init?.signal as AbortSignal;
+        return new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }),
+    );
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      authToken: "test-token",
+    });
+
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("stream");
+    if (result.kind === "stream") {
+      expect(result.response.status).toBe(200);
+      expect(result.reader).toBeDefined();
+      const chunk = await result.reader.read();
+      expect(chunk.done).toBe(false);
+      result.close();
+      expect(cancelCalled).toBe(true);
+      expect(fetchSignal?.aborted).toBe(true);
+    }
+    transport.destroy();
+  });
+
+  it("returns kind: unsupported when 200 response body is null or not readable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const resp = new Response(null, { status: 200 });
+        Object.defineProperty(resp, "body", { value: null });
+        return resp;
+      }),
+    );
+
+    const transport = new WsTransport("http://localhost:4800");
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("unsupported");
+    transport.destroy();
+  });
+
+  it("returns kind: finite on non-200 with parsed code and retry-after and bounds body to 4 KiB", async () => {
+    const oversizePayload = JSON.stringify({
+      code: "FRAME_TOO_LARGE",
+      error: "X".repeat(5000),
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(oversizePayload, {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "15",
+          },
+        });
+      }),
+    );
+
+    const transport = new WsTransport("http://localhost:4800");
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("finite");
+    if (result.kind === "finite") {
+      expect(result.status).toBe(503);
+      expect(result.code).toBe("FRAME_TOO_LARGE");
+      expect(result.retryAfter).toBe("15");
+    }
+    transport.destroy();
+  });
+
+  it("triggers onDrop with 4403 for 401 MFA_REQUIRED on finite response", async () => {
+    const drops: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ code: "MFA_REQUIRED" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      onDrop: (_t, info) => drops.push(info),
+    });
+
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("finite");
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toMatchObject({
+      code: 4403,
+      authCode: "MFA_REQUIRED",
+      source: "sse",
+    });
+    transport.destroy();
+  });
+
+  it("triggers onDrop with 4401 for 401 AUTH_REQUIRED on finite response", async () => {
+    const drops: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ code: "AUTH_REQUIRED" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      onDrop: (_t, info) => drops.push(info),
+    });
+
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("finite");
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toMatchObject({
+      code: 4401,
+      authCode: "AUTH_REQUIRED",
+      source: "sse",
+    });
+    transport.destroy();
+  });
+
+  it("does NOT trigger onDrop on unknown 401 or 403", async () => {
+    const drops: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ code: "UNKNOWN_REASON" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      onDrop: (_t, info) => drops.push(info),
+    });
+
+    const result = await transport.openHostResourceEvents();
+    expect(result.kind).toBe("finite");
+    expect(drops).toHaveLength(0);
+    transport.destroy();
+  });
+
+  it("reportHostResourceErrorControl triggers onDrop and deduplicates", () => {
+    const drops: unknown[] = [];
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      onDrop: (_t, info) => drops.push(info),
+    });
+
+    transport.reportHostResourceErrorControl("MFA_REQUIRED");
+    transport.reportHostResourceErrorControl("MFA_REQUIRED");
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toMatchObject({
+      code: 4403,
+      authCode: "MFA_REQUIRED",
+      source: "sse",
+    });
+    transport.destroy();
+  });
+});

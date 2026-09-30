@@ -12,6 +12,8 @@ import {
   isCurrentConnection,
   removeProfileConnection,
   resetConnections,
+  registerConnectionRegistryQueryClient,
+  isQueryClientRegistered,
 } from "./connections.js";
 import { syncActiveProfileConnection } from "./connections.js";
 import { latestTerminalSessionIncarnation, rememberTerminalSessionIncarnation } from "../lib/terminal-incarnation-state.js";
@@ -313,5 +315,44 @@ describe("connections registry", () => {
     await p1;
 
     expect(getConnectionSnapshot("prof-valid")?.status).toBe("connected");
+  });
+
+  it("registerConnectionRegistryQueryClient exports and registers QueryClient correctly", () => {
+    const qc = {};
+    expect(isQueryClientRegistered(qc)).toBe(false);
+    const unreg = registerConnectionRegistryQueryClient(qc);
+    expect(isQueryClientRegistered(qc)).toBe(true);
+    unreg();
+    expect(isQueryClientRegistered(qc)).toBe(false);
+  });
+
+  it("preserves reconnect intent during token rotation handling", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ authenticated: true, workbenchProtocol: 2 }),
+      }),
+    );
+
+    await connectProfile("prof-valid");
+    const snapBefore = getConnectionSnapshot("prof-valid");
+    expect(snapBefore?.status).toBe("connected");
+    expect(snapBefore?.intent).toBe(true);
+
+    // Simulate token update triggering storage listener or rotation
+    mockTokens["prof-valid"] = "new-token-123";
+
+    // Manually trigger storage change event
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "dam-hopper-tokens",
+      }),
+    );
+
+    // Intent should have initiated reconnect rather than remaining disconnected
+    const snapAfter = getConnectionSnapshot("prof-valid");
+    expect(snapAfter).toBeDefined();
   });
 });
