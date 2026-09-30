@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use axum::{
     extract::{
-        State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
+        State, WebSocketUpgrade,
     },
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::Response,
 };
 use axum_extra::extract::CookieJar;
 use base64::{
-    Engine as _, engine::general_purpose::STANDARD as BASE64,
-    engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64,
+    engine::general_purpose::STANDARD as BASE64,
+    engine::general_purpose::URL_SAFE_NO_PAD as OPAQUE_B64, Engine as _,
 };
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
@@ -28,11 +28,11 @@ use zeroize::Zeroizing;
 use crate::api::auth::AUTH_COOKIE;
 use crate::api::ws_protocol::{ClientMsg, FsEventDto, ServerMsg, WireMsg};
 use crate::crypto::opaque::{
-    DamHopperOpaqueSuite, handle_login_finish, handle_login_start, handle_register_finish,
-    handle_register_start, validate_identifier,
+    handle_login_finish, handle_login_start, handle_register_finish, handle_register_start,
+    validate_identifier, DamHopperOpaqueSuite,
 };
 use crate::fs::{
-    EncUploadState, MAX_UPLOAD_BYTES, UploadState, mutate, ops, secure_path, tree_snapshot_sync,
+    mutate, ops, secure_path, tree_snapshot_sync, EncUploadState, UploadState, MAX_UPLOAD_BYTES,
 };
 use crate::state::AppState;
 use crate::workspace_target::{ProjectTargetRef, ResolvedProjectTarget};
@@ -693,6 +693,7 @@ async fn handle_socket(
                             offset: replay.offset,
                             reset: replay.reset,
                             truncated: replay.truncated,
+                            incarnation: replay.incarnation,
                         };
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if let Err(e) = pty_tx.send(WireMsg::Text(json)).await {
@@ -2791,6 +2792,13 @@ async fn pump_pty(
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 warn!(dropped = n, "PTY broadcast lagged; messages dropped");
+                let _order = order.lock().await;
+                let msg = ServerMsg::TermLagged { dropped: n };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    if pty_tx.send(WireMsg::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
@@ -3025,11 +3033,11 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
 
     use super::{
-        FsSubscriptionGuard, pump_fs_events, pump_host_alerts, pump_pty, websocket_auth_ok,
-        websocket_origin_allowed,
+        pump_fs_events, pump_host_alerts, pump_pty, websocket_auth_ok, websocket_origin_allowed,
+        FsSubscriptionGuard,
     };
     use crate::api::ws_protocol::WireMsg;
-    use crate::fs::{FsEvent, FsSubsystem, event::FsEventKind};
+    use crate::fs::{event::FsEventKind, FsEvent, FsSubsystem};
 
     #[test]
     fn no_auth_mode_allows_websocket_without_a_token() {
@@ -3086,6 +3094,36 @@ mod tests {
         assert!(
             matches!(message, WireMsg::Text(value) if value.contains("host:alertsInvalidated"))
         );
+        pump.abort();
+    }
+
+    #[tokio::test]
+    async fn pty_pump_emits_lagged_invalidation_even_with_no_subsequent_output() {
+        let (broadcast_tx, broadcast_rx) = broadcast::channel(1);
+        let (out_tx, mut out_rx) = mpsc::channel(4);
+        let order = Arc::new(tokio::sync::Mutex::new(()));
+
+        // Overfill the broadcast channel (capacity 1) with 2 messages to force RecvError::Lagged(1)
+        broadcast_tx.send("first".into()).unwrap();
+        broadcast_tx.send("second".into()).unwrap();
+
+        // Spawn pump_pty with the lagged receiver.
+        // No further messages will be sent on broadcast_tx!
+        let pump = tokio::spawn(pump_pty(broadcast_rx, out_tx, Arc::clone(&order)));
+
+        // Verify that pump_pty immediately emits terminal:lagged to out_rx even without any subsequent output
+        let message = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        match message {
+            WireMsg::Text(json) => {
+                let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+                assert_eq!(parsed["kind"], "terminal:lagged");
+                assert_eq!(parsed["dropped"], 1);
+            }
+            _ => panic!("expected text wire message with terminal:lagged"),
+        }
         pump.abort();
     }
 

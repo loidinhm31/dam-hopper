@@ -20,7 +20,10 @@ export class IdleTransport implements Transport {
     return "disconnected";
   }
 
-  onTerminalData(): () => void {
+  onTerminalData(
+    _id?: string,
+    _cb?: (data: string, offset: number, incarnation: number) => void,
+  ): () => void {
     return noopUnsubscribe();
   }
 

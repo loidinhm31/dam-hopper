@@ -9,6 +9,26 @@ import {
 } from "./terminal-zoom-invalidation.js";
 
 const sessionId = "zoom:terminal";
+function measurableElement(overrides: Partial<HTMLElement> = {}): HTMLElement {
+  return {
+    isConnected: true,
+    style: { display: "block" },
+    parentElement: {
+      style: { display: "block" },
+      closest: () => null,
+    },
+    closest: () => null,
+    getBoundingClientRect: () => ({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+    }),
+    ...overrides,
+  } as unknown as HTMLElement;
+}
 
 function animationFrameFixture() {
   const frames: FrameRequestCallback[] = [];
@@ -41,8 +61,8 @@ describe("terminal zoom invalidation", () => {
       } as unknown as Terminal,
       { fit } as unknown as FitAddon,
       {} as TerminalFindController,
+      measurableElement(),
     ).invalidateSuggestionGeometry = invalidateSuggestionGeometry;
-
     invalidateTerminalsForAppZoom();
     expect(fit).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
@@ -64,6 +84,7 @@ describe("terminal zoom invalidation", () => {
       { rows: 12, refresh, focus } as unknown as Terminal,
       { fit } as unknown as FitAddon,
       {} as TerminalFindController,
+      measurableElement(),
     );
     const listeners = new Set<EventListener>();
     const target = {
@@ -88,5 +109,26 @@ describe("terminal zoom invalidation", () => {
     cleanup();
     expect(target.removeEventListener).toHaveBeenCalledOnce();
     expect(listeners.size).toBe(0);
+  });
+
+  it("skips suggestion geometry invalidation and fitting for ineligible terminals on zoom change", () => {
+    const frames = animationFrameFixture();
+    const fit = vi.fn();
+    const invalidateSuggestionGeometry = vi.fn();
+    const entry = registerTerminal(
+      sessionId,
+      { rows: 24, refresh: vi.fn(), focus: vi.fn() } as unknown as Terminal,
+      { fit } as unknown as FitAddon,
+      {} as TerminalFindController,
+      measurableElement({
+        style: { display: "none" } as unknown as CSSStyleDeclaration,
+      }),
+    );
+    entry.invalidateSuggestionGeometry = invalidateSuggestionGeometry;
+    invalidateTerminalsForAppZoom();
+    expect(invalidateSuggestionGeometry).not.toHaveBeenCalled();
+
+    frames.flush();
+    expect(fit).not.toHaveBeenCalled();
   });
 });

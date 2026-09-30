@@ -1,7 +1,7 @@
-/// Fixed-capacity scrollback buffer storing raw terminal bytes.
+/// Fixed-capacity scrollback buffer storing validated UTF-8 terminal bytes.
 ///
-/// Maintains the last `capacity` bytes — older data is evicted when full.
-/// UTF-8 is not enforced; the terminal emulator (xterm.js) handles decoding.
+/// Maintains the last `capacity` bytes — older data is evicted on complete UTF-8
+/// scalar boundaries so the retained buffer head never starts with orphaned continuation bytes.
 ///
 /// Tracks a monotonic byte counter (`total_written`) for delta replay support.
 pub struct ScrollbackBuffer {
@@ -35,12 +35,18 @@ impl ScrollbackBuffer {
             let keep_from = total - self.capacity;
             if keep_from >= self.data.len() {
                 // chunk alone exceeds capacity — keep its tail
-                let chunk_keep = chunk.len() - (keep_from - self.data.len());
+                let mut chunk_start = keep_from - self.data.len();
+                while chunk_start < chunk.len() && (chunk[chunk_start] & 0xC0) == 0x80 {
+                    chunk_start += 1;
+                }
                 self.data.clear();
-                self.data
-                    .extend_from_slice(&chunk[chunk.len() - chunk_keep..]);
+                self.data.extend_from_slice(&chunk[chunk_start..]);
             } else {
-                self.data.drain(..keep_from);
+                let mut drain_to = keep_from;
+                while drain_to < self.data.len() && (self.data[drain_to] & 0xC0) == 0x80 {
+                    drain_to += 1;
+                }
+                self.data.drain(..drain_to);
                 self.data.extend_from_slice(chunk);
             }
         } else {
@@ -74,7 +80,7 @@ impl ScrollbackBuffer {
                 data: &self.data,
                 offset: self.total_written,
                 reset: true,
-                truncated: false,
+                truncated: buffer_start_offset > 0,
             };
         };
 
@@ -90,16 +96,28 @@ impl ScrollbackBuffer {
                 data: &self.data,
                 offset: self.total_written,
                 reset: true,
-                truncated: false,
+                truncated: buffer_start_offset > 0,
             }
         } else {
             let skip = (requested_offset - buffer_start_offset) as usize;
-            let skip = skip.min(self.data.len()); // Safety clamp
-            BufferReplay {
-                data: &self.data[skip..],
-                offset: self.total_written,
-                reset: false,
-                truncated: false,
+            if skip < self.data.len() && (self.data[skip] & 0xC0) == 0x80 {
+                // Requested offset landed inside a multi-byte UTF-8 scalar.
+                // A delta cannot start inside a scalar without corrupting the stream or dropping bytes.
+                // Provide explicit reset with full snapshot so client safely resyncs.
+                BufferReplay {
+                    data: &self.data,
+                    offset: self.total_written,
+                    reset: true,
+                    truncated: buffer_start_offset > 0,
+                }
+            } else {
+                let skip = skip.min(self.data.len());
+                BufferReplay {
+                    data: &self.data[skip..],
+                    offset: self.total_written,
+                    reset: false,
+                    truncated: false,
+                }
             }
         }
     }
@@ -133,7 +151,10 @@ impl ScrollbackBuffer {
     pub fn hydrate(&mut self, data: &[u8], total_written: u64) {
         self.data.clear();
         let keep = data.len().min(self.capacity);
-        let start = data.len() - keep;
+        let mut start = data.len() - keep;
+        while start < data.len() && (data[start] & 0xC0) == 0x80 {
+            start += 1;
+        }
         self.data.extend_from_slice(&data[start..]);
         self.total_written = total_written;
     }
@@ -219,7 +240,7 @@ mod tests {
         assert_eq!(full.data, b"7890abcdef");
         assert_eq!(full.offset, 16);
         assert!(full.reset);
-        assert!(!full.truncated);
+        assert!(full.truncated); // buffer_start_offset is 6 > 0, so honestly truncated
 
         let delta = buf.read_replay(Some(10));
         assert_eq!(delta.data, b"abcdef");
@@ -287,5 +308,31 @@ mod tests {
         }
 
         assert_eq!(prev_offset, 30); // 10 pushes × 3 bytes
+    }
+
+    #[test]
+    fn eviction_preserves_utf8_scalar_boundaries_at_head() {
+        // '✦' is 3 bytes: [0xE2, 0x9C, 0xA6]
+        let mut buf = ScrollbackBuffer::new(6);
+        buf.push("✦123".as_bytes()); // 3 + 3 = 6 bytes, fits
+        assert_eq!(buf.as_str_lossy(), "✦123");
+
+        // Now push "ab" (2 bytes). Total = 8 > 6. keep_from = 2.
+        // Byte 2 is inside '✦'. Evicting up to byte 2 would leave continuation byte 0xA6 at index 0.
+        // Drain advances past continuation bytes to byte 3 ('1').
+        buf.push(b"ab");
+        assert_eq!(buf.as_str_lossy(), "123ab");
+    }
+
+    #[test]
+    fn delta_replay_inside_utf8_scalar_returns_reset_replay() {
+        let mut buf = ScrollbackBuffer::new(100);
+        buf.push("hello ✦ world".as_bytes()); // 6 + 3 + 6 = 15 bytes
+                                              // Request offset 7 (inside '✦')
+        let replay = buf.read_replay(Some(7));
+        // Inside scalar triggers explicit reset resync, not silent skipping
+        assert!(replay.reset);
+        assert_eq!(std::str::from_utf8(replay.data).unwrap(), "hello ✦ world");
+        assert_eq!(replay.offset, 15);
     }
 }

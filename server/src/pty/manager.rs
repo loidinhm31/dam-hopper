@@ -113,6 +113,7 @@ pub struct TerminalBufferReplay {
     pub offset: u64,
     pub reset: bool,
     pub truncated: bool,
+    pub incarnation: u64,
 }
 
 #[derive(Debug)]
@@ -916,8 +917,8 @@ impl IncarnationEventSink {
 }
 
 impl EventSink for IncarnationEventSink {
-    fn send_terminal_data(&self, session_id: &str, data: &str) {
-        self.with_current(|sink| sink.send_terminal_data(session_id, data));
+    fn send_terminal_data(&self, session_id: &str, data: &str, offset: u64, incarnation: u64) {
+        self.with_current(|sink| sink.send_terminal_data(session_id, data, offset, incarnation));
     }
 
     fn send_terminal_exit(&self, session_id: &str, exit_code: Option<i32>) {
@@ -1959,6 +1960,7 @@ impl PtySessionManager {
                     offset: replay.offset,
                     reset: replay.reset,
                     truncated: replay.truncated,
+                    incarnation: session.incarnation,
                 },
                 editing_generation: lifecycle.as_ref().and_then(|lifecycle| {
                     attach_editing_generation(
@@ -2020,6 +2022,7 @@ impl PtySessionManager {
                 offset: replay.offset,
                 reset: replay.reset,
                 truncated: replay.truncated,
+                incarnation: session.incarnation,
             });
         }
 
@@ -2035,10 +2038,10 @@ impl PtySessionManager {
                     offset: replay.offset,
                     reset: replay.reset,
                     truncated: replay.truncated,
+                    incarnation: session.incarnation,
                 });
             }
         }
-
         // Release lock before slow I/O
         drop(inner);
 
@@ -2048,14 +2051,24 @@ impl PtySessionManager {
                 .load_buffer(id)
                 .map_err(|e| AppError::PersistenceError(e.to_string()))?
             {
+                let incarnation = store
+                    .load_session_incarnation(id)
+                    .map_err(|e| AppError::PersistenceError(e.to_string()))?
+                    .unwrap_or(0);
                 let buffer_start_offset = total_written.saturating_sub(data.len() as u64);
                 let (slice, reset, truncated) = match from_offset {
-                    None => (&data[..], true, false),
+                    None => (&data[..], true, buffer_start_offset > 0),
                     Some(offset) if offset < buffer_start_offset => (&data[..], true, true),
-                    Some(offset) if offset > total_written => (&data[..], true, false),
+                    Some(offset) if offset > total_written => {
+                        (&data[..], true, buffer_start_offset > 0)
+                    }
                     Some(offset) => {
                         let skip = (offset - buffer_start_offset) as usize;
-                        (&data[skip.min(data.len())..], false, false)
+                        if skip < data.len() && (data[skip] & 0xC0) == 0x80 {
+                            (&data[..], true, buffer_start_offset > 0)
+                        } else {
+                            (&data[skip.min(data.len())..], false, false)
+                        }
                     }
                 };
                 return Ok(TerminalBufferReplay {
@@ -2063,6 +2076,7 @@ impl PtySessionManager {
                     offset: total_written,
                     reset,
                     truncated,
+                    incarnation,
                 });
             }
         }
@@ -2971,12 +2985,34 @@ fn reader_thread(
         } else {
             data.to_vec()
         };
-        let snapshot = {
+        if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
+            crate::port_forward::scan_chunk(
+                &visible_data,
+                &session_id,
+                incarnation,
+                project.as_deref(),
+                pfm,
+                handle,
+            );
+        }
+        let data_str = output_decoder.decode(&visible_data);
+        // A partial UTF-8 scalar has visible bytes but no terminal text yet.
+        // Do not let that empty string flush an editing lifecycle boundary ahead
+        // of the completed scalar in a later PTY read.
+        if data_str.is_empty() && !visible_data.is_empty() {
+            return;
+        }
+        let (snapshot, offset) = if !data_str.is_empty() {
             let mut buf = buffer.lock().unwrap();
-            buf.push(&visible_data);
-            bytes_since_snapshot += visible_data.len();
-            (bytes_since_snapshot >= SNAPSHOT_THRESHOLD && persist_tx.is_some())
-                .then(|| buf.snapshot())
+            buf.push(data_str.as_bytes());
+            bytes_since_snapshot += data_str.len();
+            let snap = (bytes_since_snapshot >= SNAPSHOT_THRESHOLD && persist_tx.is_some())
+                .then(|| buf.snapshot());
+            let off = buf.current_offset();
+            (snap, off)
+        } else {
+            let buf = buffer.lock().unwrap();
+            (None, buf.current_offset())
         };
         if let Some((snapshot_data, total_written)) = snapshot {
             let _persistence_guard = persistence_gate.lock().unwrap();
@@ -3001,27 +3037,12 @@ fn reader_thread(
                 bytes_since_snapshot = 0;
             }
         }
-        let data_str = output_decoder.decode(&visible_data);
-        if let (Some(pfm), Some(handle)) = (&port_forward_manager, &rt_handle) {
-            crate::port_forward::scan_chunk(
-                &visible_data,
-                &session_id,
-                incarnation,
-                project.as_deref(),
-                pfm,
-                handle,
-            );
-        }
-        // A partial UTF-8 scalar has visible bytes but no terminal text yet.
-        // Do not let that empty string flush an editing lifecycle boundary ahead
-        // of the completed scalar in a later PTY read.
-        if data_str.is_empty() && !visible_data.is_empty() {
-            return;
-        }
         if send_visible_output_then_lifecycle(
             sink.as_ref(),
             &session_id,
             &data_str,
+            offset,
+            incarnation,
             &mut pending_lifecycle_events,
             &mut visible_output_since_boundary,
         ) {
@@ -3068,16 +3089,23 @@ fn reader_thread(
 
     drop(process_chunk);
     let decoded_tail = output_decoder.finish();
-    if !decoded_tail.is_empty()
-        && send_visible_output_then_lifecycle(
+    if !decoded_tail.is_empty() {
+        let offset = {
+            let mut buf = buffer.lock().unwrap();
+            buf.push(decoded_tail.as_bytes());
+            buf.current_offset()
+        };
+        if send_visible_output_then_lifecycle(
             sink.as_ref(),
             &session_id,
             &decoded_tail,
+            offset,
+            incarnation,
             &mut pending_lifecycle_events,
             &mut visible_output_since_boundary,
-        )
-    {
-        published_editing.store(true, Ordering::Release);
+        ) {
+            published_editing.store(true, Ordering::Release);
+        }
     }
 
     // Collect real exit code from child. By the time the PTY reader sees EOF the
@@ -3353,11 +3381,13 @@ pub(crate) fn send_visible_output_then_lifecycle(
     sink: &dyn EventSink,
     session_id: &str,
     visible_data: &str,
+    offset: u64,
+    incarnation: u64,
     pending_events: &mut Vec<(u64, LifecycleEvent)>,
     visible_output_since_boundary: &mut bool,
 ) -> bool {
     if !visible_data.is_empty() {
-        sink.send_terminal_data(session_id, visible_data);
+        sink.send_terminal_data(session_id, visible_data, offset, incarnation);
         *visible_output_since_boundary = true;
     }
     let ready_count = pending_events
@@ -5341,7 +5371,7 @@ mod tests {
         let reader_sink =
             IncarnationEventSink::new(Arc::clone(&sink), Arc::clone(&inner), id.to_string(), 10);
 
-        reader_sink.send_terminal_data(id, "before\n");
+        reader_sink.send_terminal_data(id, "before\n", 7, 10);
         assert!(receiver.try_recv().is_ok());
 
         inner
@@ -5349,7 +5379,7 @@ mod tests {
             .unwrap()
             .pending_replacements
             .insert(id.to_string(), 11);
-        reader_sink.send_terminal_data(id, "stale\n");
+        reader_sink.send_terminal_data(id, "stale\n", 13, 10);
         assert!(receiver.try_recv().is_err());
     }
 

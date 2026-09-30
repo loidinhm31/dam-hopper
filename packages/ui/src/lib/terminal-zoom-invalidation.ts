@@ -1,5 +1,8 @@
 import { APP_ZOOM_CHANGE_EVENT } from "./app-zoom.js";
-import { fitAllTerminals } from "./terminal-fit-scheduler.js";
+import {
+  fitAllTerminals,
+  isTerminalFitEligible,
+} from "./terminal-fit-scheduler.js";
 import { terminalRegistry } from "./terminal-registry.js";
 
 interface AppZoomEventTarget {
@@ -10,7 +13,9 @@ interface AppZoomEventTarget {
 export function invalidateTerminalsForAppZoom(): void {
   const terminals = [...terminalRegistry.values()];
   for (const entry of terminals) {
-    entry.invalidateSuggestionGeometry?.();
+    if (isTerminalFitEligible(entry)) {
+      entry.invalidateSuggestionGeometry?.();
+    }
   }
   fitAllTerminals(terminals, { focus: false, refresh: true });
 }

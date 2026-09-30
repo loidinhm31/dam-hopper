@@ -85,11 +85,18 @@ describe("WsTransport terminalAttach", () => {
         offset: 1024,
         reset: true,
         truncated: true,
+        incarnation: 0,
       }),
     });
 
     expect(received).toEqual([
-      { data: "tail", offset: 1024, reset: true, truncated: true },
+      {
+        data: "tail",
+        offset: 1024,
+        reset: true,
+        truncated: true,
+        incarnation: 0,
+      },
     ]);
     transport.destroy();
   });
@@ -682,6 +689,8 @@ describe("WsTransport diagnostics", () => {
         kind: "terminal:output",
         id: "session-1",
         data: "tail",
+        offset: 4,
+        incarnation: 0,
       }),
     });
     diagCalls.length = 0; // reset after connect
@@ -748,12 +757,13 @@ describe("WsTransport diagnostics", () => {
     const transport = new WsTransport("http://localhost:4800");
     const firstSocket = sockets[0];
 
-    firstSocket.onopen?.();
     firstSocket.onmessage?.({
       data: JSON.stringify({
         kind: "terminal:output",
         id: "session-1",
         data: "tail",
+        offset: 4,
+        incarnation: 0,
       }),
     });
     firstSocket.onclose?.();
@@ -816,13 +826,10 @@ describe("WsTransport workflow operations", () => {
     installMockWebSocket();
     const fetchMock = vi.fn().mockImplementation(
       () =>
-        new Response(
-          JSON.stringify({ workspace: { id: "ws1", name: "ws" } }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+        new Response(JSON.stringify({ workspace: { id: "ws1", name: "ws" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const transport = new WsTransport("http://localhost:4800");
@@ -1317,18 +1324,18 @@ describe("WsTransport settings export/import", () => {
   it("requests workspace TOML export and receives raw text", async () => {
     const transport = new WsTransport("http://localhost:4800");
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response("[workspace]\nname = \"ws\"\n", {
+      new Response('[workspace]\nname = "ws"\n', {
         status: 200,
         headers: {
           "content-type": "application/toml; charset=utf-8",
-          "content-disposition": "attachment; filename=\"dam-hopper.toml\"",
+          "content-disposition": 'attachment; filename="dam-hopper.toml"',
         },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await transport.invoke<string>("settings:export");
-    expect(result).toBe("[workspace]\nname = \"ws\"\n");
+    expect(result).toBe('[workspace]\nname = "ws"\n');
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:4800/api/settings/export/workspace.toml",
       expect.objectContaining({
@@ -1358,7 +1365,7 @@ describe("WsTransport settings export/import", () => {
 
     const result = await transport.invoke<{ imported: boolean }>(
       "settings:import",
-      "[workspace]\nname = \"ws\"\n",
+      '[workspace]\nname = "ws"\n',
     );
     expect(result).toEqual({
       imported: true,
@@ -1373,9 +1380,265 @@ describe("WsTransport settings export/import", () => {
         headers: expect.objectContaining({
           "Content-Type": "application/toml; charset=utf-8",
         }),
-        body: "[workspace]\nname = \"ws\"\n",
+        body: '[workspace]\nname = "ws"\n',
       }),
     );
+    transport.destroy();
+  });
+});
+
+describe("WsTransport terminal output and authoritative offsets", () => {
+  it("dispatches live terminal data, authoritative offset, and incarnation to subscribers", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+    socket.onopen?.();
+
+    const received: Array<{
+      data: string;
+      offset: number;
+      incarnation: number;
+    }> = [];
+    const unsub = transport.onTerminalData(
+      "term-1",
+      (data, offset, incarnation) => {
+        received.push({ data, offset, incarnation });
+      },
+    );
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-1",
+        data: "chunk-1",
+        offset: 7,
+        incarnation: 1,
+      }),
+    });
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-1",
+        data: "chunk-2",
+        offset: 14,
+        incarnation: 1,
+      }),
+    });
+
+    expect(received).toEqual([
+      { data: "chunk-1", offset: 7, incarnation: 1 },
+      { data: "chunk-2", offset: 14, incarnation: 1 },
+    ]);
+
+    unsub();
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-1",
+        data: "chunk-3",
+        offset: 21,
+        incarnation: 1,
+      }),
+    });
+    expect(received).toHaveLength(2);
+    transport.destroy();
+  });
+
+  it("strictly validates offset and incarnation in terminal:output", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+    socket.onopen?.();
+
+    const received: Array<{ data: string; offset: number }> = [];
+    transport.onTerminalData("term-strict", (data, offset) => {
+      received.push({ data, offset });
+    });
+
+    diagCalls.length = 0;
+
+    // Missing offset
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-strict",
+        data: "no-offset",
+        incarnation: 0,
+      }),
+    });
+
+    expect(received).toHaveLength(0);
+    expect(
+      diagCalls.some(
+        (c) =>
+          c.message === "ws.dispatch_error" &&
+          c.metadata?.kind === "terminal:output",
+      ),
+    ).toBe(true);
+
+    diagCalls.length = 0;
+
+    // Negative offset
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-strict",
+        data: "negative",
+        offset: -1,
+        incarnation: 0,
+      }),
+    });
+
+    expect(received).toHaveLength(0);
+    expect(
+      diagCalls.some(
+        (c) =>
+          c.message === "ws.dispatch_error" &&
+          c.metadata?.kind === "terminal:output",
+      ),
+    ).toBe(true);
+
+    diagCalls.length = 0;
+
+    // Missing incarnation
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-strict",
+        data: "no-incarnation",
+        offset: 14,
+      }),
+    });
+
+    expect(received).toHaveLength(0);
+    expect(
+      diagCalls.some(
+        (c) =>
+          c.message === "ws.dispatch_error" &&
+          c.metadata?.kind === "terminal:output",
+      ),
+    ).toBe(true);
+
+    diagCalls.length = 0;
+
+    // Offset less than chunk byte length triggers terminal:lagged invalidation
+    const laggedEvents: unknown[] = [];
+    transport.onEvent("terminal:lagged", (payload) =>
+      laggedEvents.push(payload),
+    );
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:output",
+        id: "term-strict",
+        data: "five!", // 5 bytes
+        offset: 2, // invalid: offset < 5
+        incarnation: 0,
+      }),
+    });
+
+    expect(received).toHaveLength(0);
+    expect(laggedEvents).toHaveLength(1);
+    expect(laggedEvents[0]).toMatchObject({
+      kind: "terminal:lagged",
+      id: "term-strict",
+      reason: "invalid_output_frame",
+    });
+    expect(
+      diagCalls.some(
+        (c) =>
+          c.message === "ws.dispatch_error" &&
+          c.metadata?.kind === "terminal:output",
+      ),
+    ).toBe(true);
+
+    transport.destroy();
+  });
+
+  it("dispatches terminal:buffer with incarnation and strictly validates buffer incarnation", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+    socket.onopen?.();
+
+    const buffers: Array<{
+      data: string;
+      offset: number;
+      reset: boolean;
+      truncated: boolean;
+      incarnation: number;
+    }> = [];
+    transport.onTerminalBuffer!("term-buf", (buffer) => {
+      buffers.push(buffer);
+    });
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:buffer",
+        id: "term-buf",
+        data: "snapshot-content",
+        offset: 16,
+        reset: true,
+        truncated: false,
+        incarnation: 3,
+      }),
+    });
+
+    expect(buffers).toEqual([
+      expect.objectContaining({
+        data: "snapshot-content",
+        offset: 16,
+        incarnation: 3,
+      }),
+    ]);
+
+    // Missing buffer incarnation triggers terminal:lagged invalidation
+    const laggedEvents: unknown[] = [];
+    transport.onEvent("terminal:lagged", (payload) =>
+      laggedEvents.push(payload),
+    );
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:buffer",
+        id: "term-buf",
+        data: "corrupt-snapshot",
+        offset: 16,
+        reset: true,
+        truncated: false,
+      }),
+    });
+
+    expect(laggedEvents).toHaveLength(1);
+    expect(laggedEvents[0]).toMatchObject({
+      kind: "terminal:lagged",
+      id: "term-buf",
+      reason: "invalid_buffer_frame",
+    });
+
+    transport.destroy();
+  });
+
+  it("dispatches server terminal:lagged broadcast event via onEvent", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+    socket.onopen?.();
+
+    const laggedEvents: unknown[] = [];
+    transport.onEvent("terminal:lagged", (payload) =>
+      laggedEvents.push(payload),
+    );
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "terminal:lagged",
+        dropped: 42,
+      }),
+    });
+
+    expect(laggedEvents).toEqual([{ kind: "terminal:lagged", dropped: 42 }]);
     transport.destroy();
   });
 });

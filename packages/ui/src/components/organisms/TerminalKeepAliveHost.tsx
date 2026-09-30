@@ -43,6 +43,8 @@ export function TerminalKeepAliveHost({
   return (
     <div
       aria-hidden="true"
+      data-terminal-parking-host="true"
+      data-testid="terminal-keep-alive-host"
       style={{
         position: "absolute",
         visibility: "hidden",

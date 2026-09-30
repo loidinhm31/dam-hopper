@@ -127,8 +127,9 @@ Request buffer replay from a session (for reconnection or delta sync):
 {
   "kind": "terminal:buffer",
   "id": "uuid",
-  "data": "base64_encoded_content",
+  "data": "terminal output text",
   "offset": 5120,
+  "incarnation": 12345,
   "reset": false,
   "truncated": false
 }
@@ -137,14 +138,15 @@ Request buffer replay from a session (for reconnection or delta sync):
 **Fields:**
 
 - `id` — Echo of request session ID
-- `data` — Buffer content (delta if `reset=false`; full snapshot if `reset=true`). Lossy UTF-8 decoding used.
-- `offset` — Current buffer byte offset. Client stores this for next attach.
-- `reset` — Clear the terminal before writing `data` when true; append `data` when false.
-- `truncated` — Requested offset was older than the retained 1 MB tail, so the response is the newest available full snapshot.
+- `incarnation` — PTY instance identity. Offsets are comparable only within the same incarnation; a newer incarnation requires a full attach and emulator reset. Ignore stale-incarnation output and replay.
+- `data` — UTF-8 terminal text, not base64. Delta when `reset=false`; retained history when `reset=true`.
+- `offset` — Authoritative end byte position in the decoded, lifecycle-filtered UTF-8 stream. Incomplete UTF-8 scalars are held before retention and broadcast; offsets restart at zero for a replacement PTY.
+- `reset` — Drain pending parser writes, reset the terminal emulator, then write `data` when true. Preserve emulator state for a contiguous delta when false.
+- `truncated` — Older history was evicted from the retained 1 MiB tail. Full attaches also report truncation; the tail is not a complete terminal-state snapshot.
 
 **Error behavior:** If session not found, server logs warning and sends no response. A missing response is not itself proof that a session is dead: the client checks `terminal:listDetailed` before creating a replacement.
 
-**Use Case:** On WebSocket reconnect, client sends `terminal:attach` with stored offset instead of re-requesting full buffer, reducing bandwidth ~90% in typical scenarios.
+On reconnect, request a delta from the last accepted authoritative offset. Replay parsing must not send historical terminal-query responses to the live PTY. A truncated raw tail cannot reconstruct missing screen, cursor, or mode state; applications may need a fresh redraw.
 
 #### Frontend Reconnect UI (Phase 3)
 
@@ -271,8 +273,25 @@ Single-blob encrypted save for editor text content.
 ### Terminal Output
 
 ```json
-{ "kind": "terminal:output", "id": "uuid", "data": "..." }
+{
+  "kind": "terminal:output",
+  "id": "uuid",
+  "data": "...",
+  "offset": 5123,
+  "incarnation": 12345
+}
 ```
+
+`offset` is the exclusive end position in the same incarnation's byte stream as
+replay. Drop chunks already covered by the replay watermark; trim only the
+overlapping prefix of partially covered chunks. A start position beyond the
+accepted watermark is a gap: stop rendering that stream and attach from the last
+accepted offset. A newer `incarnation` starts a fresh full attach, including manual
+replacement under the same session ID; older-incarnation frames are ignored.
+
+Broadcast lag sends `{ "kind": "terminal:lagged", "dropped": 2 }`. Clients reattach
+their mounted terminal streams even if no later output arrives. Client and server
+must be deployed together: output or replay without the required stream metadata is invalid.
 
 ### Terminal Buffer Replay (Phase 02+)
 
@@ -282,8 +301,9 @@ Response to `terminal:attach` request. Contains accumulated buffer content for r
 {
   "kind": "terminal:buffer",
   "id": "uuid",
-  "data": "base64_encoded_buffer_content",
+  "data": "terminal output text",
   "offset": 5120,
+  "incarnation": 12345,
   "reset": true,
   "truncated": false
 }
@@ -291,16 +311,17 @@ Response to `terminal:attach` request. Contains accumulated buffer content for r
 
 **Fields:**
 
-- `id` — Session UUID
-- `data` — Buffer content (delta or full depending on `reset`). Entire content is lossy UTF-8.
-- `offset` — Current accumulated byte offset (monotonically increasing counter). Client stores for next attach to request delta only.
-- `reset` — Clear terminal before writing when true; append when false.
-- `truncated` — True when the requested offset has been evicted from the retained 1 MB scrollback.
+- `id` — Session UUID.
+- `data` — Decoded terminal text, delta or retained history depending on `reset`; not base64.
+- `offset` — Authoritative end byte position. Store it for the next attach; do not recount duplicated live chunks.
+- `incarnation` — PTY instance identity; never reuse another incarnation's offset or emulator state.
+- `reset` — Reset emulator state before full replacement replay; append contiguous deltas without resetting.
+- `truncated` — Older history was evicted. Missing screen/parser state is not restored by replaying the surviving tail.
 
 **Buffer Management:**
 
-- Server maintains a ring buffer (scrollback) for each live session.
-- `offset` field points to total bytes written since session creation (survives buffer eviction).
+- Server maintains a bounded 1 MiB scrollback buffer per live session, evicting complete UTF-8 scalars at its head.
+- `offset` counts decoded output bytes since this PTY incarnation started and survives buffer eviction.
 - On attach with `from_offset` older than buffer start: fallback to full buffer with `reset=true`, `truncated=true`.
 - On attach with `from_offset` = current offset: returns empty `data` (no new content).
 
@@ -421,7 +442,6 @@ current browser creation uses the REST `terminal:create` channel above. A
 target-unavailable event is emitted for a create or respawn failure only after
 fresh target validation confirms that the registered target was lost; ordinary
 PTY or cwd failures remain ordinary request/recovery errors.
-
 
 ### Agent Status Push Events (Phases 01–05 complete; Linux-qualified)
 

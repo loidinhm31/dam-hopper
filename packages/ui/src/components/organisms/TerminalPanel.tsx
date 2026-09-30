@@ -34,12 +34,13 @@ import {
 } from "@/lib/terminal-find-controller.js";
 import {
   cancelScheduledTerminalFit,
+  isTerminalFitEligible,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
 import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
 import {
-  activateTerminalWebglRenderer,
-  type TerminalRendererHandle,
+  createTerminalRendererController,
+  type TerminalRendererController,
 } from "@/lib/terminal-renderer.js";
 import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
 import { handleTerminalSuggestionKeyEvent } from "@/lib/terminal-suggestion-key-handler.js";
@@ -52,13 +53,17 @@ import {
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
 import {
   applyTerminalBufferReplay,
-  utf8ByteLength,
+  type TerminalBufferReplay,
 } from "@/lib/terminal-buffer-replay.js";
 import { copyToClipboard } from "@/hooks/use-clipboard.js";
 import {
   createTerminalStreamReplayGate,
   markTerminalStreamReadyAfterRestart,
+  reconcileTerminalOutput,
   resetTerminalStreamReplayGateForAttach,
+  shouldForwardTerminalData,
+  utf8ByteLength,
+  type TerminalStreamReplayGate,
 } from "@/lib/terminal-stream-replay-gate.js";
 import { registerTerminalOutputActivity } from "@/lib/terminal-output-activity.js";
 import {
@@ -221,8 +226,28 @@ export function TerminalPanel({
     [safeSessionId],
   );
   // Terminal instance ref — set after term.open(), used by useTerminalSuggestions
+  const shouldEnableWebgl = webglEnabled && appZoomLevel === 100;
+  const desiredRenderer = shouldEnableWebgl ? "webgl" : "dom";
+  const desiredRendererRef = useRef<"dom" | "webgl">(desiredRenderer);
+  desiredRendererRef.current = desiredRenderer;
+  const shouldSuppressNativeKeyboardRef = useRef(shouldSuppressNativeKeyboard);
+  shouldSuppressNativeKeyboardRef.current = shouldSuppressNativeKeyboard;
+  const streamReplayGateRef = useRef<TerminalStreamReplayGate | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const rendererRef = useRef<TerminalRendererHandle | null>(null);
+  const rendererControllerRef = useRef<TerminalRendererController | null>(null);
+
+  const syncEffectiveStdinSuppression = useCallback(
+    (targetTerm: Terminal | null) => {
+      if (!targetTerm) return;
+      const gate = streamReplayGateRef.current;
+      const isReplayOrAttachActive =
+        !gate?.isLiveStreamReady || (gate?.activeReplayWrites ?? 0) > 0;
+      const effectiveSuppression =
+        shouldSuppressNativeKeyboardRef.current || isReplayOrAttachActive;
+      syncNativeKeyboardSuppression(targetTerm, effectiveSuppression);
+    },
+    [],
+  );
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
   const findControllerRef = useRef<TerminalFindController | null>(null);
@@ -340,9 +365,10 @@ export function TerminalPanel({
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
-    syncNativeKeyboardSuppression(term, shouldSuppressNativeKeyboard);
+    syncEffectiveStdinSuppression(term);
     setTermElement(term.element ?? null);
-
+    const rendererController = createTerminalRendererController(term);
+    rendererControllerRef.current = rendererController;
     let releaseTouchScroll = () => {};
     let geometryAdapter: TerminalCursorGeometryAdapter | null = null;
 
@@ -354,6 +380,7 @@ export function TerminalPanel({
       findController,
       terminalBoundary,
       effectiveTerminalRef,
+      () => rendererController.commitRenderer(desiredRendererRef.current),
     );
     geometryAdapter = new TerminalCursorGeometryAdapter(term, (geometry) => {
       setCursorGeometry((current) =>
@@ -366,6 +393,11 @@ export function TerminalPanel({
     onTerminalReady?.(safeSessionId);
     releaseTouchScroll = bindTerminalTouchScroll(term.element ?? null, term);
     let boundServerUrl: string | undefined;
+    // Shared stream gate has same lifetime as terminal instance so in-flight
+    // replay writes from an older connection continue to fence outbound queries
+    // across reconnects and connection swaps.
+    const streamReplayGate = createTerminalStreamReplayGate();
+    streamReplayGateRef.current = streamReplayGate;
     const bindConnection = (): (() => void) => {
       if (
         terminalRef &&
@@ -400,23 +432,27 @@ export function TerminalPanel({
       const binding = { transport, isCurrent };
       boundTransportRef.current = binding;
       term.options.disableStdin = false;
-      // Separate receipt from xterm's asynchronous replay completion. Live output
-      // remains fail-closed before a buffer arrives, then queues until replay parsing
-      // is complete so historical OSC 9 events cannot be delivered as live alerts.
-      const streamReplayGate = createTerminalStreamReplayGate();
+      resetTerminalStreamReplayGateForAttach(streamReplayGate);
       const outputActivity = registerTerminalOutputActivity(
         terminalRegistrationKey,
       );
-      const resetActivityForUnavailableStream = () => {
-        resetTerminalStreamReplayGateForAttach(streamReplayGate);
-        outputActivity.setStreamReady(false);
-      };
       let disposed = false;
       let restartRecoveryPending = false;
       let restartProbeGeneration = 0;
       let recordedSuppressedOutput = false;
       let lastServerOffset = 0;
+      let confirmedRestartPending = false;
+      let pendingReplayBuffer: TerminalBufferReplay | null = null;
+      let attachSentGeneration = 0;
+      let acceptedStreamIncarnation: number | null = null;
 
+      const resetActivityForUnavailableStream = () => {
+        resetTerminalStreamReplayGateForAttach(streamReplayGate);
+        outputActivity.setStreamReady(false);
+        pendingReplayBuffer = null;
+        confirmedRestartPending = false;
+        term.options.disableStdin = true;
+      };
       // Track all cleanups so the effect return can always run them
       let unsubData: (() => void) | null = null;
       let unsubExit: (() => void) | null = null;
@@ -426,18 +462,23 @@ export function TerminalPanel({
       let unsubBuffer: (() => void) | null = null;
       let unsubLifecycle: (() => void) | null = null;
       let unsubStatus: (() => void) | null = null;
+      let unsubLagged: (() => void) | null = null;
       let inputDisposable: { dispose: () => void } | null = null;
       let releaseCompositionGuards = () => {};
       let observer: ResizeObserver | null = null;
       let recoveryController: TerminalAttachRecoveryController | null = null;
       const retryUnavailableAfterReplayRef = { current: false };
-
       const reopenLiveStreamAfterRestart = () => {
         if (!isCurrent()) return;
         restartRecoveryPending = false;
         restartProbeGeneration += 1;
+        lastServerOffset = 0;
+        confirmedRestartPending = streamReplayGate.activeReplayWrites > 0;
         markTerminalStreamReadyAfterRestart(streamReplayGate);
-        outputActivity.setStreamReady(true);
+        if (streamReplayGate.isLiveStreamReady) {
+          syncEffectiveStdinSuppression(term);
+          outputActivity.setStreamReady(true);
+        }
       };
 
       const probeRestartReadiness = () => {
@@ -463,45 +504,98 @@ export function TerminalPanel({
           .catch(() => {});
       };
 
-
       const writeLiveData = (data: string) => {
         term.write(data);
         if (data.length > 0) outputActivity.markOutput();
-        lastServerOffset += utf8ByteLength(data);
         suggestionsRef.current.handleOutput(data);
+      };
+
+      const processLiveChunk = (data: string, endOffset: number) => {
+        const reconciled = reconcileTerminalOutput(
+          data,
+          endOffset,
+          lastServerOffset,
+        );
+        if (reconciled.action === "discard") {
+          return;
+        }
+        if (reconciled.action === "gap") {
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "stream_gap_detected",
+            {
+              sessionId: safeSessionId,
+              expectedOffset: reconciled.expectedOffset,
+              receivedStartOffset: reconciled.receivedStartOffset,
+            },
+          );
+          sendAttach(lastServerOffset);
+          return;
+        }
+        lastServerOffset = reconciled.nextOffset;
+        writeLiveData(reconciled.data);
       };
 
       // ── Register all listeners immediately to avoid race conditions ──────────
       // 1. Stream PTY output → xterm + invalidate the suggestion controller.
       // Output alone never establishes a shell prompt or command boundary.
-      unsubData = transport.onTerminalData(safeSessionId, (data) => {
-        if (!isCurrent()) return;
-        // Output before the first attach buffer is not safely orderable. Output that
-        // arrives while xterm parses a received replay is held until its completion.
-        if (
-          streamReplayGate.hasAttachBufferBeenReceived &&
-          streamReplayGate.isLiveStreamReady
-        ) {
-          writeLiveData(data);
-        } else if (
-          streamReplayGate.hasAttachBufferBeenReceived &&
-          streamReplayGate.isReplayWriting
-        ) {
-          streamReplayGate.queuedLiveData.push(data);
-        } else if (!recordedSuppressedOutput) {
-          recordedSuppressedOutput = true;
-          recordClientDiagnostic(
-            "transport",
-            "terminal-panel",
-            "stream_suppressed_before_buffer",
-            {
-              sessionId: safeSessionId,
-              bytes: utf8ByteLength(data),
-              attachState: attachStateRef.current,
-            },
+      unsubData = transport.onTerminalData(
+        safeSessionId,
+        (data, offset, incarnation) => {
+          if (!isCurrent()) return;
+          const globalIncarnation = latestTerminalSessionIncarnation(
+            terminalRegistrationKey,
           );
-        }
-      });
+          if (
+            globalIncarnation !== undefined &&
+            incarnation < globalIncarnation
+          ) {
+            return;
+          }
+          if (
+            acceptedStreamIncarnation === null ||
+            incarnation > acceptedStreamIncarnation
+          ) {
+            acceptedStreamIncarnation = incarnation;
+            rememberTerminalSessionIncarnation(
+              terminalRegistrationKey,
+              incarnation,
+            );
+            restartRecoveryPending = false;
+            restartProbeGeneration += 1;
+            lastServerOffset = 0;
+            sendAttach(undefined);
+            return;
+          }
+          if (
+            streamReplayGate.hasAttachBufferBeenReceived &&
+            streamReplayGate.isLiveStreamReady
+          ) {
+            processLiveChunk(data, offset);
+          } else if (
+            streamReplayGate.hasAttachBufferBeenReceived ||
+            streamReplayGate.activeReplayWrites > 0 ||
+            attachStateRef.current === "attaching"
+          ) {
+            streamReplayGate.queuedLiveData.push({ data, offset, incarnation });
+          } else if (!recordedSuppressedOutput) {
+            recordedSuppressedOutput = true;
+            recordClientDiagnostic(
+              "transport",
+              "terminal-panel",
+              "stream_suppressed_before_buffer",
+              {
+                sessionId: safeSessionId,
+                bytes: utf8ByteLength(data),
+                offset,
+                incarnation,
+                attachState: attachStateRef.current,
+              },
+            );
+          }
+        },
+      );
 
       // 1a. Only the server's nonce-validated lifecycle may establish an
       // editable command boundary. PTY output and outgoing input stay passive.
@@ -511,36 +605,32 @@ export function TerminalPanel({
           suggestionsRef.current.handleLifecycle(event);
         }) ?? null;
 
-      // 2. Handle PTY buffer (response to terminal:attach)
-      if (transport.onTerminalBuffer) {
-        unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
-          if (!isCurrent()) return;
-          // A delayed response from an attach that predates a confirmed restart,
-          // or any response during its restart gap, must not replace the new
-          // live stream with stale scrollback.
-          if (restartRecoveryPending || streamReplayGate.isLiveStreamReady)
-            return;
-          recoveryController?.onBuffer();
-          suggestionsRef.current.handleReplay();
-          streamReplayGate.hasAttachBufferBeenReceived = true;
-          streamReplayGate.isReplayWriting = true;
-          streamReplayGate.isLiveStreamReady = false;
-          outputActivity.setStreamReady(false);
-          const currentReplayGeneration = ++streamReplayGate.replayGeneration;
-          lastServerOffset = applyTerminalBufferReplay(term, replay, () => {
-            if (
-              !isCurrent() ||
-              currentReplayGeneration !== streamReplayGate.replayGeneration
-            )
+      const applyBuffer = (replay: TerminalBufferReplay) => {
+        recoveryController?.onBuffer();
+        suggestionsRef.current.handleReplay();
+        term.options.disableStdin = true;
+        streamReplayGate.hasAttachBufferBeenReceived = true;
+        streamReplayGate.isLiveStreamReady = false;
+        outputActivity.setStreamReady(false);
+        const currentReplayGeneration = ++streamReplayGate.replayGeneration;
+        lastServerOffset = replay.offset;
+        applyTerminalBufferReplay(
+          term,
+          replay,
+          () => {
+            if (!isCurrent()) return;
+            if (currentReplayGeneration !== streamReplayGate.replayGeneration) {
               return;
+            }
 
-            streamReplayGate.isReplayWriting = false;
             streamReplayGate.isLiveStreamReady = true;
+            syncEffectiveStdinSuppression(term);
             outputActivity.setStreamReady(true);
             const queuedLiveDataSnapshot =
               streamReplayGate.queuedLiveData.splice(0);
-            for (const data of queuedLiveDataSnapshot) {
-              writeLiveData(data);
+            for (const queued of queuedLiveDataSnapshot) {
+              if (!streamReplayGate.isLiveStreamReady) break;
+              processLiveChunk(queued.data, queued.offset);
             }
             recordClientDiagnostic(
               "transport",
@@ -552,22 +642,93 @@ export function TerminalPanel({
               },
             );
             recoveryController?.onReplayComplete();
-          });
-          recordClientDiagnostic(
-            "transport",
-            "terminal-panel",
-            "buffer_replay",
-            {
-              sessionId: safeSessionId,
-              offset: replay.offset,
-              reset: replay.reset,
-              truncated: replay.truncated,
-              hadSuppressedOutput: recordedSuppressedOutput,
-            },
+          },
+          streamReplayGate,
+        );
+        recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
+          sessionId: safeSessionId,
+          offset: replay.offset,
+          reset: replay.reset,
+          truncated: replay.truncated,
+          hadSuppressedOutput: recordedSuppressedOutput,
+        });
+        setAttachState("attached");
+      };
+
+      // 2. Handle PTY buffer (response to terminal:attach)
+      if (transport.onTerminalBuffer) {
+        unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
+          if (!isCurrent()) return;
+          const globalIncarnation = latestTerminalSessionIncarnation(
+            terminalRegistrationKey,
           );
-          setAttachState("attached");
+          if (
+            globalIncarnation !== undefined &&
+            replay.incarnation < globalIncarnation
+          ) {
+            return;
+          }
+
+          const isNewerIncarnation =
+            acceptedStreamIncarnation === null ||
+            replay.incarnation > acceptedStreamIncarnation;
+
+          if (isNewerIncarnation) {
+            acceptedStreamIncarnation = replay.incarnation;
+            rememberTerminalSessionIncarnation(
+              terminalRegistrationKey,
+              replay.incarnation,
+            );
+            // Supersede the old parser completion before accepting this namespace.
+            resetActivityForUnavailableStream();
+            restartRecoveryPending = false;
+            lastServerOffset = 0;
+            attachSentGeneration = streamReplayGate.replayGeneration;
+            if (streamReplayGate.activeReplayWrites > 0) {
+              pendingReplayBuffer = replay;
+              return;
+            }
+            applyBuffer(replay);
+            return;
+          }
+
+          // Same incarnation buffer:
+          if (restartRecoveryPending || streamReplayGate.isLiveStreamReady)
+            return;
+          if (streamReplayGate.activeReplayWrites > 0) {
+            // Defer only if received after a NEW attach/generation/bind
+            if (attachSentGeneration === streamReplayGate.replayGeneration) {
+              pendingReplayBuffer = replay;
+            }
+            return;
+          }
+          applyBuffer(replay);
         });
       }
+
+      const handleReplayDrain = () => {
+        if (!isCurrent()) return;
+        syncEffectiveStdinSuppression(term);
+        if (pendingReplayBuffer) {
+          const nextReplay = pendingReplayBuffer;
+          pendingReplayBuffer = null;
+          applyBuffer(nextReplay);
+          return;
+        }
+        if (confirmedRestartPending) {
+          confirmedRestartPending = false;
+          streamReplayGate.isLiveStreamReady = true;
+          syncEffectiveStdinSuppression(term);
+          outputActivity.setStreamReady(true);
+          const queuedLiveDataSnapshot =
+            streamReplayGate.queuedLiveData.splice(0);
+          for (const queued of queuedLiveDataSnapshot) {
+            if (!streamReplayGate.isLiveStreamReady) break;
+            processLiveChunk(queued.data, queued.offset);
+          }
+        }
+      };
+      streamReplayGate.onReplayDrain = handleReplayDrain;
 
       unsubExitEnhanced =
         transport.onTerminalExitEnhanced?.(safeSessionId, (exitEvent) => {
@@ -618,7 +779,7 @@ export function TerminalPanel({
       // live gate without counting the synthetic restart banner as output.
       unsubRestart =
         transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
-          if (!isCurrent()) return;
+          if (!isCurrent() || !restartRecoveryPending) return;
           reopenLiveStreamAfterRestart();
           suggestionsRef.current.handleReplay();
           const { restartCount } = restartEvent;
@@ -633,9 +794,26 @@ export function TerminalPanel({
         probeRestartReadiness();
       });
 
+      unsubLagged =
+        transport.onEvent?.("terminal:lagged", (payload) => {
+          if (!isCurrent()) return;
+          recordClientDiagnostic(
+            "transport",
+            "terminal-panel",
+            "broadcast_lagged",
+            {
+              sessionId: safeSessionId,
+              payload,
+              lastServerOffset,
+            },
+          );
+          sendAttach(lastServerOffset);
+        }) ?? null;
+
       // 5. Forward user input → PTY stdin, with suggestion interception
       inputDisposable = term.onData((data) => {
         if (!isCurrent()) return;
+        if (!shouldForwardTerminalData(streamReplayGate)) return;
         const result = suggestionsRef.current.handleInput(data);
         if (result.forward) {
           transport.terminalWrite(safeSessionId, result.data);
@@ -651,10 +829,10 @@ export function TerminalPanel({
         textarea?.removeEventListener("paste", suppressComposition);
       };
 
-
       // 6. PTY resize: fired by fitAddon.fit()
       const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
         if (!isCurrent()) return;
+        if (!isTerminalFitEligible(terminalEntry)) return;
         transport.terminalResize(safeSessionId, c, r);
       });
 
@@ -750,6 +928,7 @@ export function TerminalPanel({
         // reconnect must close the prior live-ready gate before sending attach so
         // old-stream output cannot render ahead of the replacement replay.
         resetActivityForUnavailableStream();
+        attachSentGeneration = streamReplayGate.replayGeneration;
         setAttachState("attaching");
         if (retryAttempt === 0) {
           recordClientDiagnostic(
@@ -878,11 +1057,17 @@ export function TerminalPanel({
         unsubBuffer?.();
         unsubLifecycle?.();
         unsubStatus?.();
+        unsubLagged?.();
         outputActivity.dispose();
         recoveryController?.dispose();
         inputDisposable?.dispose();
         resizeDisposable.dispose();
         releaseCompositionGuards();
+        if (streamReplayGate.onReplayDrain === handleReplayDrain) {
+          streamReplayGate.onReplayDrain = undefined;
+        }
+        pendingReplayBuffer = null;
+        confirmedRestartPending = false;
         observer?.disconnect();
       };
     };
@@ -928,8 +1113,8 @@ export function TerminalPanel({
       }
       termRef.current = null;
       openedRef.current = false;
-      rendererRef.current?.dispose();
-      rendererRef.current = null;
+      rendererControllerRef.current?.dispose();
+      rendererControllerRef.current = null;
       term.dispose();
       terminalBoundary.removeEventListener("contextmenu", handleContextMenu);
       terminalBoundary.remove();
@@ -960,25 +1145,18 @@ export function TerminalPanel({
     scheduleTerminalFit(entry, { focus: false });
   }, [safeSessionId, termElement, terminalFontSize, appZoomLevel]);
 
-  const shouldEnableWebgl = webglEnabled && appZoomLevel === 100;
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term || !termElement || !shouldEnableWebgl) {
-      rendererRef.current?.dispose();
-      rendererRef.current = null;
+  useClientLayoutEffect(() => {
+    if (!termElement) return;
+    const entry = getTerminal(terminalRegistrationKey);
+    if (!entry) return;
+    if (!isTerminalFitEligible(entry)) {
+      if (desiredRenderer === "dom") {
+        rendererControllerRef.current?.commitRenderer("dom");
+      }
       return;
     }
-
-    if (rendererRef.current) return;
-
-    rendererRef.current = activateTerminalWebglRenderer(term);
-
-    return () => {
-      rendererRef.current?.dispose();
-      rendererRef.current = null;
-    };
-  }, [shouldEnableWebgl, termElement]);
-
+    scheduleTerminalFit(entry, { focus: false, refresh: true });
+  }, [desiredRenderer, termElement, terminalRegistrationKey]);
   useEffect(() => {
     const controller = findControllerRef.current;
     if (!controller || !termElement) return;
@@ -999,10 +1177,7 @@ export function TerminalPanel({
   }, [termElement]);
 
   useEffect(() => {
-    syncNativeKeyboardSuppression(
-      termRef.current,
-      shouldSuppressNativeKeyboard,
-    );
+    syncEffectiveStdinSuppression(termRef.current);
     if (!shouldSuppressTerminalFocus) return;
     const entry = getTerminal(terminalRegistrationKey);
     if (entry) {
@@ -1014,6 +1189,8 @@ export function TerminalPanel({
     shouldSuppressNativeKeyboard,
     shouldSuppressTerminalFocus,
     termElement,
+    syncEffectiveStdinSuppression,
+    terminalRegistrationKey,
   ]);
 
   useEffect(() => {

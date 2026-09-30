@@ -237,7 +237,12 @@ impl From<FsEvent> for FsEventDto {
 pub enum ServerMsg {
     // Terminal output
     #[serde(rename = "terminal:output")]
-    TermOutput { id: String, data: String },
+    TermOutput {
+        id: String,
+        data: String,
+        offset: u64,
+        incarnation: u64,
+    },
 
     // Terminal buffer replay (response to terminal:attach)
     #[serde(rename = "terminal:buffer")]
@@ -251,6 +256,8 @@ pub enum ServerMsg {
         reset: bool,
         /// True when requested offset was older than retained scrollback tail.
         truncated: bool,
+        /// Authoritative PTY incarnation counter.
+        incarnation: u64,
     },
 
     /// Verified shell lifecycle only. The nonce is never serialized.
@@ -281,6 +288,10 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         incarnation: Option<u64>,
     },
+
+    // Terminal broadcast stream lagged (messages dropped under load)
+    #[serde(rename = "terminal:lagged")]
+    TermLagged { dropped: u64 },
 
     // Terminal agent status events
     #[serde(rename = "terminal:agentStatusChanged")]
@@ -526,10 +537,7 @@ pub enum ServerMsg {
         expires_at: Option<u64>,
     },
     #[serde(rename = "plugin:revoked")]
-    PluginRevoked {
-        context_id: String,
-        reason: String,
-    },
+    PluginRevoked { context_id: String, reason: String },
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.
@@ -538,7 +546,10 @@ pub enum WireMsg {
     Binary(Vec<u8>),
     /// Signal the writer task to send a close frame with the given code.
     CloseOverflow,
-    CloseAuth { code: u16, reason: String },
+    CloseAuth {
+        code: u16,
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -597,6 +608,22 @@ mod tests {
         assert_eq!(json["lifecycle"], "submitted");
         assert_eq!(json["generation"], 12);
         assert!(json.get("nonce").is_none());
+    }
+
+    #[test]
+    fn test_terminal_output_serialization() {
+        let msg = ServerMsg::TermOutput {
+            id: "session-123".into(),
+            data: "hello world".into(),
+            offset: 11,
+            incarnation: 2,
+        };
+        let json = serde_json::to_value(msg).unwrap();
+        assert_eq!(json["kind"], "terminal:output");
+        assert_eq!(json["id"], "session-123");
+        assert_eq!(json["data"], "hello world");
+        assert_eq!(json["offset"], 11);
+        assert_eq!(json["incarnation"], 2);
     }
 
     #[test]

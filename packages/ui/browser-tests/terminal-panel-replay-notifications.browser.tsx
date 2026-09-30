@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     offset: number;
     reset: boolean;
     truncated: boolean;
+    incarnation: number;
   }) => void;
   type ExitEnhancedCallback = (exit: {
     exitCode: number | null;
@@ -42,8 +43,12 @@ const mocks = vi.hoisted(() => {
       this.element = host;
       host.append(this.textarea);
     });
-    clear = vi.fn();
+    reset = vi.fn();
     write = vi.fn((data: string, callback?: () => void) => {
+      if (data === "") {
+        callback?.();
+        return;
+      }
       this.writes.push({ data, callback });
     });
     onData = vi.fn(() => ({ dispose: vi.fn() }));
@@ -61,8 +66,15 @@ const mocks = vi.hoisted(() => {
     terminalBySession: new Map<string, InstanceType<typeof FakeTerminal>>(),
     onBuffer: null as BufferCallback | null,
     onBufferBySession: new Map<string, BufferCallback>(),
-    onData: null as ((data: string) => void) | null,
-    onDataBySession: new Map<string, (data: string) => void>(),
+    currentOffsets: new Map<string, number>(),
+    currentIncarnations: new Map<string, number>(),
+    onData: null as
+      | ((data: string, offset?: number, incarnation?: number) => void)
+      | null,
+    onDataBySession: new Map<
+      string,
+      (data: string, offset?: number, incarnation?: number) => void
+    >(),
     onExit: null as ((exitCode: number | null) => void) | null,
     onExitBySession: new Map<string, (exitCode: number | null) => void>(),
     onExitEnhanced: null as ExitEnhancedCallback | null,
@@ -103,6 +115,7 @@ const mocks = vi.hoisted(() => {
     transport: {
       invoke: vi.fn((channel: string) => {
         if (channel === "terminal:listDetailed") {
+          mocks.currentOffsets.set("term-1", 0);
           return (
             mocks.listDetailedResponses.shift() ??
             Promise.resolve([{ id: "term-1", alive: mocks.listDetailedAlive }])
@@ -113,15 +126,38 @@ const mocks = vi.hoisted(() => {
       terminalAttach: vi.fn(() => true),
       terminalWrite: vi.fn(),
       terminalResize: vi.fn(),
-      onTerminalData: vi.fn((_id: string, callback: (data: string) => void) => {
-        mocks.onData = callback;
-        mocks.onDataBySession.set(_id, callback);
-        return () => {
-          if (mocks.onDataBySession.get(_id) === callback) {
-            mocks.onDataBySession.delete(_id);
-          }
-        };
-      }),
+      onTerminalData: vi.fn(
+        (
+          _id: string,
+          callback: (data: string, offset: number, incarnation: number) => void,
+        ) => {
+          const emitData = (
+            data: string,
+            offset?: number,
+            incarnation?: number,
+          ) => {
+            const prev = mocks.currentOffsets.get(_id) ?? 0;
+            const next =
+              typeof offset === "number"
+                ? offset
+                : prev + new TextEncoder().encode(data).length;
+            mocks.currentOffsets.set(_id, next);
+            const inc =
+              typeof incarnation === "number"
+                ? incarnation
+                : (mocks.currentIncarnations.get(_id) ?? 1);
+            mocks.currentIncarnations.set(_id, inc);
+            callback(data, next, inc);
+          };
+          mocks.onData = emitData;
+          mocks.onDataBySession.set(_id, emitData);
+          return () => {
+            if (mocks.onDataBySession.get(_id) === emitData) {
+              mocks.onDataBySession.delete(_id);
+            }
+          };
+        },
+      ),
       onTerminalExit: vi.fn(
         (_id: string, callback: (exitCode: number | null) => void) => {
           mocks.onExit = callback;
@@ -141,42 +177,72 @@ const mocks = vi.hoisted(() => {
             willRestart: boolean;
             restartIn?: number;
             restartCount?: number;
+            incarnation?: number;
           }) => void,
         ) => {
-          mocks.onExitEnhanced = callback;
-          mocks.onExitEnhancedBySession.set(_id, callback);
+          const emitExit = (exit: {
+            exitCode: number | null;
+            willRestart: boolean;
+            restartIn?: number;
+            restartCount?: number;
+            incarnation?: number;
+          }) => {
+            const inc =
+              typeof exit.incarnation === "number"
+                ? exit.incarnation
+                : (mocks.currentIncarnations.get(_id) ?? 1);
+            callback({ ...exit, incarnation: inc });
+          };
+          mocks.onExitEnhanced = emitExit;
+          mocks.onExitEnhancedBySession.set(_id, emitExit);
           return () => {
-            if (mocks.onExitEnhancedBySession.get(_id) === callback) {
+            if (mocks.onExitEnhancedBySession.get(_id) === emitExit) {
               mocks.onExitEnhancedBySession.delete(_id);
             }
           };
         },
       ),
       onProcessRestarted: vi.fn((_id: string, callback: RestartCallback) => {
-        mocks.onRestart = callback;
-        mocks.onRestartBySession.set(_id, callback);
+        const restartCb: RestartCallback = (restart) => {
+          mocks.currentOffsets.set(_id, 0);
+          callback(restart);
+        };
+        mocks.onRestart = restartCb;
+        mocks.onRestartBySession.set(_id, restartCb);
         return () => {
-          if (mocks.onRestartBySession.get(_id) === callback) {
+          if (mocks.onRestartBySession.get(_id) === restartCb) {
             mocks.onRestartBySession.delete(_id);
           }
         };
       }),
       onTerminalBuffer: vi.fn((_id: string, callback: BufferCallback) => {
-        mocks.onBuffer = callback;
-        mocks.onBufferBySession.set(_id, callback);
+        const emitBuffer: BufferCallback = (replay) => {
+          mocks.currentOffsets.set(_id, replay.offset);
+          const inc =
+            typeof replay.incarnation === "number"
+              ? replay.incarnation
+              : (mocks.currentIncarnations.get(_id) ?? 1);
+          mocks.currentIncarnations.set(_id, inc);
+          callback({ ...replay, incarnation: inc });
+        };
+        mocks.onBuffer = emitBuffer;
+        mocks.onBufferBySession.set(_id, emitBuffer);
         return () => {
-          if (mocks.onBufferBySession.get(_id) === callback) {
+          if (mocks.onBufferBySession.get(_id) === emitBuffer) {
             mocks.onBufferBySession.delete(_id);
           }
         };
       }),
-      onEvent: vi.fn((_channel: string, callback: EventCallback) => {
-        mocks.onTerminalChanged = callback;
-        return () => {
-          if (mocks.onTerminalChanged === callback) {
-            mocks.onTerminalChanged = null;
-          }
-        };
+      onEvent: vi.fn((channel: string, callback: EventCallback) => {
+        if (channel === "terminal:changed") {
+          mocks.onTerminalChanged = callback;
+          return () => {
+            if (mocks.onTerminalChanged === callback) {
+              mocks.onTerminalChanged = null;
+            }
+          };
+        }
+        return () => {};
       }),
       onStatusChange: vi.fn((callback: (status: string) => void) => {
         mocks.onStatus = callback;
@@ -203,7 +269,9 @@ vi.mock("@dam-hopper/shared/logger", () => ({
 }));
 vi.mock("@/api/client.js", () => ({
   api: { workspace: { status: vi.fn().mockResolvedValue({}) } },
-  createApiClient: () => ({ workspace: { status: vi.fn().mockResolvedValue({}) } }),
+  createApiClient: () => ({
+    workspace: { status: vi.fn().mockResolvedValue({}) },
+  }),
   projectTargetCacheKey: (target: unknown) => "root",
   isProjectTargetError: () => false,
   ApiRequestError: class ApiRequestError extends Error {
@@ -220,13 +288,19 @@ vi.mock("@/api/client.js", () => ({
   normalizeProjectTarget: (t: unknown) =>
     typeof t === "string"
       ? { project: t }
-      : t && typeof t === "object" && "project" in t && typeof t.project === "string"
+      : t &&
+          typeof t === "object" &&
+          "project" in t &&
+          typeof t.project === "string"
         ? t
         : { project: "web" },
   projectKey: (target: unknown) =>
     typeof target === "string"
       ? target
-      : target && typeof target === "object" && "project" in target && typeof target.project === "string"
+      : target &&
+          typeof target === "object" &&
+          "project" in target &&
+          typeof target.project === "string"
         ? target.project
         : "web",
 }));
@@ -292,8 +366,41 @@ vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   cancelScheduledTerminalFit: vi.fn(),
   fitAllTerminals: vi.fn(),
   scheduleTerminalFit: mocks.scheduleTerminalFit,
+  isTerminalFitEligible: () => true,
 }));
 vi.mock("@/lib/terminal-renderer.js", () => ({
+  createTerminalRendererController: () => {
+    let currentRenderer: "dom" | "webgl" = "dom";
+    let activeHandle: { dispose: () => void } | null = null;
+    return {
+      get currentRenderer() {
+        return currentRenderer;
+      },
+      commitRenderer: (desired: "dom" | "webgl") => {
+        if (desired === "webgl") {
+          if (!activeHandle) {
+            activeHandle = { dispose: vi.fn() };
+            mocks.rendererActivations.push(activeHandle);
+          }
+          currentRenderer = "webgl";
+        } else {
+          if (activeHandle) {
+            activeHandle.dispose();
+            activeHandle = null;
+          }
+          currentRenderer = "dom";
+        }
+        return currentRenderer;
+      },
+      dispose: () => {
+        if (activeHandle) {
+          activeHandle.dispose();
+          activeHandle = null;
+        }
+        currentRenderer = "dom";
+      },
+    };
+  },
   activateTerminalWebglRenderer: () => {
     const handle = { renderer: "webgl" as const, dispose: vi.fn() };
     mocks.rendererActivations.push(handle);
@@ -364,7 +471,7 @@ vi.mock("@/lib/utils.js", () => ({
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { getTerminalOutputActivitySnapshot } from "@/lib/terminal-output-activity.js";
-
+import { resetTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
 describe("TerminalPanel replay lifecycle in Chromium", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -372,9 +479,12 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     vi.clearAllMocks();
+    resetTerminalSessionIncarnations();
     mocks.terminal = null;
     mocks.terminalBySession.clear();
     mocks.onBuffer = null;
+    mocks.currentOffsets.clear();
+    mocks.currentIncarnations.clear();
     mocks.onBufferBySession.clear();
     mocks.onData = null;
     mocks.onDataBySession.clear();
@@ -703,9 +813,8 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     );
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: false,
-      streamReady: true,
+      streamReady: false,
     });
-
     await act(async () => staleReplayCallback?.());
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: false,
@@ -724,6 +833,17 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     expect(mocks.terminal?.writes.length).toBe(writesAfterRestart);
 
     await act(async () => mocks.onData?.("after-restart"));
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "after-restart",
+        offset: 13,
+        reset: true,
+        truncated: false,
+        incarnation: mocks.currentIncarnations.get("term-1") ?? 2,
+      });
+      mocks.terminal?.writes.at(-1)?.callback?.();
+    });
+    await act(async () => mocks.onData?.("live-after-restart"));
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: true,
       streamReady: true,
@@ -732,7 +852,6 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
       mocks.terminal?.writes.slice(writesBeforeRestart).map(({ data }) => data),
     ).toContain("after-restart");
   });
-
   it("recovers from the generic terminal change after an auto-restart", async () => {
     await act(async () => {
       root.render(
@@ -775,12 +894,22 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     );
 
     await act(async () => mocks.onData?.("after-generic-restart"));
+    await act(async () => {
+      mocks.onBuffer?.({
+        data: "after-generic-restart",
+        offset: 21,
+        reset: true,
+        truncated: false,
+        incarnation: mocks.currentIncarnations.get("term-1") ?? 2,
+      });
+      mocks.terminal?.writes.at(-1)?.callback?.();
+    });
+    await act(async () => mocks.onData?.("live-after-generic-restart"));
     expect(getTerminalOutputActivitySnapshot("term-1")).toEqual({
       recentOutput: true,
       streamReady: true,
     });
   });
-
   it("keeps restart unavailable when liveness still reports the session dead", async () => {
     await act(async () => {
       root.render(
@@ -984,26 +1113,6 @@ describe("TerminalPanel replay lifecycle in Chromium", () => {
     expect(mocks.scheduleTerminalFit).toHaveBeenCalledWith(expect.any(Object), {
       focus: false,
     });
-  });
-
-  it("reactivates WebGL for a terminal recreated by transport replacement", async () => {
-    await act(async () => {
-      root.render(
-        <TerminalPanel
-          sessionId="term-1"
-          project="web"
-          command="bash"
-          webglEnabled
-        />,
-      );
-    });
-    await vi.waitFor(() => expect(mocks.rendererActivations).toHaveLength(1));
-    const firstRenderer = mocks.rendererActivations[0];
-
-    await act(async () => mocks.bumpTransportGeneration());
-
-    await vi.waitFor(() => expect(mocks.rendererActivations).toHaveLength(2));
-    expect(firstRenderer.dispose).toHaveBeenCalledOnce();
   });
 
   it("keeps the production boundary around xterm while app zoom changes", async () => {

@@ -11,7 +11,7 @@ mod pty_tests {
         fs,
         path::Path,
         process::Command,
-        sync::{Arc, Mutex},
+        sync::{atomic::Ordering, Arc, Mutex},
         time::{Duration, Instant},
     };
 
@@ -802,11 +802,11 @@ mod pty_tests {
     }
 
     impl EventSink for RecordingSink {
-        fn send_terminal_data(&self, id: &str, data: &str) {
+        fn send_terminal_data(&self, id: &str, data: &str, offset: u64, incarnation: u64) {
             self.events
                 .lock()
                 .unwrap()
-                .push(format!("data:{id}:{data}"));
+                .push(format!("data:{id}:{data}:{offset}:{incarnation}"));
         }
         fn send_terminal_exit(&self, id: &str, exit_code: Option<i32>) {
             self.events
@@ -888,6 +888,8 @@ mod pty_tests {
             &sink,
             "shell:prompt",
             "prompt> ",
+            8,
+            0,
             &mut pending,
             &mut visible_output_since_boundary,
         );
@@ -895,7 +897,7 @@ mod pty_tests {
         assert_eq!(
             *sink.events.lock().unwrap(),
             [
-                "data:shell:prompt:prompt> ",
+                "data:shell:prompt:prompt> :8:0",
                 "lifecycle:shell:prompt:editing:7"
             ]
         );
@@ -920,10 +922,11 @@ mod pty_tests {
             &sink,
             "shell:prompt",
             "",
+            0,
+            0,
             &mut pending,
             &mut visible_output_since_boundary,
         );
-
         assert!(sink.events.lock().unwrap().is_empty());
         assert_eq!(pending.len(), 1);
     }
@@ -945,10 +948,11 @@ mod pty_tests {
             &sink,
             "shell:prompt",
             "",
+            0,
+            0,
             &mut pending,
             &mut visible_output_since_boundary,
         );
-
         assert_eq!(
             *sink.events.lock().unwrap(),
             ["lifecycle:shell:prompt:editing:7"]
@@ -983,6 +987,8 @@ mod pty_tests {
             &sink,
             "shell:prompt",
             "prompt> ",
+            8,
+            0,
             &mut pending,
             &mut visible_output_since_boundary,
         );
@@ -990,7 +996,7 @@ mod pty_tests {
         assert_eq!(
             *sink.events.lock().unwrap(),
             [
-                "data:shell:prompt:prompt> ",
+                "data:shell:prompt:prompt> :8:0",
                 "lifecycle:shell:prompt:unverified:7",
                 "lifecycle:shell:prompt:editing:7"
             ]
@@ -1030,13 +1036,14 @@ mod pty_tests {
             id,
             r#"bash -c "printf '\342\234'; sleep 0.05; printf '\246'; sleep 2""#,
         );
-        mgr.create(create).unwrap();
+        let meta = mgr.create(create).unwrap();
+        let inc = meta.incarnation;
         assert!(
             wait_for(Duration::from_secs(2), || events
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|event| event == &format!("data:{id}:✦"))),
+                .any(|event| event == &format!("data:{id}:✦:3:{inc}"))),
             "expected exact UTF-8 terminal output, events: {:?}",
             events.lock().unwrap()
         );
@@ -1046,6 +1053,82 @@ mod pty_tests {
             !events.lock().unwrap().join("\n").contains('�'),
             "terminal output must not contain replacement characters"
         );
+        mgr.remove(id).unwrap();
+    }
+
+    #[test]
+    fn attach_snapshot_during_utf8_split_contains_no_replacement_characters_and_monotonic_offsets()
+    {
+        let sink = Arc::new(RecordingSink::default());
+        let events = Arc::clone(&sink.events);
+        let mgr = test_rt().block_on(async { PtySessionManager::new(sink) });
+        let id = "shell:utf8-split-attach";
+
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("ready");
+        let release_file = tmp.path().join("release");
+
+        // Child writes prefix: (7 bytes) + first 2 bytes of '✦' (\342\234),
+        // touches the ready marker file, and waits until release_file exists
+        // before emitting the 3rd byte (\246).
+        let script = format!(
+            "printf 'prefix:\\342\\234'; touch '{}'; while [ ! -f '{}' ]; do sleep 0.01; done; printf '\\246'",
+            ready_file.display(),
+            release_file.display()
+        );
+        let create = opts(id, &script);
+        let meta = mgr.create(create).unwrap();
+        let inc = meta.incarnation;
+
+        // 1. Wait for child to touch ready_file
+        assert!(wait_for(Duration::from_secs(3), || ready_file.exists()));
+
+        // 2. Wait for PTY reader and decoder to process the prefix chunk and publish to sink
+        assert!(wait_for(Duration::from_secs(3), || events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event == &format!("data:{id}:prefix::7:{inc}"))));
+
+        // 3. At this point, the child has emitted prefix:\342\234 and is blocked waiting for release_file.
+        // The PTY reader has read the chunk and output_decoder held \342\234 in pending.
+        // Snapshot must hold strictly at "prefix:" with offset 7 and correct incarnation.
+        // It must NOT contain half-characters or replacement characters.
+        let snapshot = mgr.get_attach_snapshot(id, None).expect("snapshot");
+        assert_eq!(snapshot.replay.data, "prefix:");
+        assert_eq!(snapshot.replay.offset, 7);
+        assert_eq!(snapshot.replay.incarnation, inc);
+        assert!(!snapshot.replay.data.contains('\u{FFFD}'));
+
+        // Events emitted to sink at this point must only have prefix: at offset 7 and incarnation
+        {
+            let recorded = events.lock().unwrap();
+            let data_events: Vec<&String> =
+                recorded.iter().filter(|e| e.starts_with("data:")).collect();
+            assert_eq!(data_events, vec![&format!("data:{id}:prefix::7:{inc}")]);
+        }
+
+        // 4. Release the child to emit the completing byte \246
+        std::fs::File::create(&release_file).unwrap();
+
+        // 5. When the 3rd byte arrives, live output delivers the completed character
+        // with authoritative end offset 10 (7 + 3 = 10) and incarnation.
+        assert!(
+            wait_for(Duration::from_secs(3), || events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event == &format!("data:{id}:✦:10:{inc}"))),
+            "expected completed UTF-8 terminal output with authoritative offset 10, events: {:?}",
+            events.lock().unwrap()
+        );
+
+        // 6. Final snapshot is consistent with live output offset and incarnation
+        let final_snapshot = mgr.get_attach_snapshot(id, None).expect("final snapshot");
+        assert_eq!(final_snapshot.replay.data, "prefix:✦");
+        assert_eq!(final_snapshot.replay.offset, 10);
+        assert_eq!(final_snapshot.replay.incarnation, inc);
+        assert!(!final_snapshot.replay.data.contains('\u{FFFD}'));
         mgr.remove(id).unwrap();
     }
 
@@ -1478,8 +1561,12 @@ mod pty_tests {
         );
         assert!(!meta.alive, "Session should be dead");
 
-        let final_exit_seen = observations.observations.lock().unwrap().iter().any(
-            |observation| {
+        let final_exit_seen = observations
+            .observations
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|observation| {
                 matches!(
                     observation,
                     WorkflowObservation::TerminalFinalExit {
@@ -1488,8 +1575,7 @@ mod pty_tests {
                         ..
                     } if session_id == "restart:retries"
                 )
-            },
-        );
+            });
         assert!(
             final_exit_seen,
             "exhaustion should emit a final-exit observation"
@@ -2307,11 +2393,11 @@ mod pty_tests {
 }
 #[cfg(test)]
 mod fleet_state_tests {
-    use std::sync::Arc;
     use crate::error::AppError;
     use crate::pty::event_sink::NoopEventSink;
     use crate::pty::fleet_state::{HandoffClaimError, PtyFleetState};
     use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
+    use std::sync::Arc;
 
     #[test]
     fn test_pty_fleet_snapshot_content_free_and_quiescence() {
@@ -2413,7 +2499,9 @@ mod fleet_state_tests {
         let expected_gen = state.generation();
 
         // Claim succeeds when quiescent and generation matches
-        let claim = state.try_claim_handoff(expected_gen).expect("claim handoff");
+        let claim = state
+            .try_claim_handoff(expected_gen)
+            .expect("claim handoff");
         assert!(claim.generation > expected_gen);
         assert!(state.is_handoff_active());
         assert!(!state.is_quiescent());
@@ -2424,11 +2512,17 @@ mod fleet_state_tests {
 
         // Create is rejected while handoff in flight
         let create_res = state.begin_create("t2", 300);
-        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+        assert!(matches!(
+            create_res,
+            Err(AppError::IdleSuspendHandoffInProgress(_))
+        ));
 
         // Respawn transition is rejected while handoff in flight
         let respawn_res = state.transition_restart_pending_to_creating("t2", 300, 301);
-        assert!(matches!(respawn_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+        assert!(matches!(
+            respawn_res,
+            Err(AppError::IdleSuspendHandoffInProgress(_))
+        ));
 
         // Release handoff
         state.release_handoff();
@@ -2465,7 +2559,9 @@ mod fleet_state_tests {
 
         // Claim handoff on manager
         let gen = manager.fleet_snapshot().generation;
-        let claim = manager.try_claim_handoff(gen).expect("claim handoff on manager");
+        let claim = manager
+            .try_claim_handoff(gen)
+            .expect("claim handoff on manager");
         assert!(claim.generation > gen);
 
         // Session creation is rejected with typed error without spawning process
@@ -2483,7 +2579,9 @@ mod fleet_state_tests {
             restart_max_retries: 0,
         };
 
-        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        let err = manager
+            .create(create_opts)
+            .expect_err("create should fail during handoff");
         assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
         assert_eq!(err.api_code(), Some("idleSuspendHandoffInProgress"));
         assert_eq!(err.status_code(), 409);
@@ -2522,10 +2620,15 @@ mod fleet_state_tests {
 
         // Forced claim with stale generation fails
         let stale_res = state.try_claim_forced_handoff(active_gen - 1);
-        assert!(matches!(stale_res, Err(HandoffClaimError::GenerationMismatch { .. })));
+        assert!(matches!(
+            stale_res,
+            Err(HandoffClaimError::GenerationMismatch { .. })
+        ));
 
         // Forced claim succeeds with active fleet and matching generation
-        let claim = state.try_claim_forced_handoff(active_gen).expect("claim forced handoff");
+        let claim = state
+            .try_claim_forced_handoff(active_gen)
+            .expect("claim forced handoff");
         assert!(claim.generation > active_gen);
         assert!(state.is_handoff_active());
 
@@ -2535,7 +2638,10 @@ mod fleet_state_tests {
 
         // New terminal creation is rejected
         let create_res = state.begin_create("t_another", 20);
-        assert!(matches!(create_res, Err(AppError::IdleSuspendHandoffInProgress(_))));
+        assert!(matches!(
+            create_res,
+            Err(AppError::IdleSuspendHandoffInProgress(_))
+        ));
 
         // Release handoff
         state.release_handoff();
@@ -2561,7 +2667,9 @@ mod fleet_state_tests {
         let manager = PtySessionManager::new(Arc::new(NoopEventSink));
         let gen = manager.fleet_snapshot().generation;
 
-        let claim = manager.try_claim_forced_handoff(gen).expect("claim forced handoff on manager");
+        let claim = manager
+            .try_claim_forced_handoff(gen)
+            .expect("claim forced handoff on manager");
         assert!(claim.generation > gen);
         assert!(manager.fleet_snapshot().handoff_active);
 
@@ -2579,7 +2687,9 @@ mod fleet_state_tests {
             restart_policy: crate::config::schema::RestartPolicy::Never,
             restart_max_retries: 0,
         };
-        let err = manager.create(create_opts).expect_err("create should fail during handoff");
+        let err = manager
+            .create(create_opts)
+            .expect_err("create should fail during handoff");
         assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
 
         manager.release_handoff();
@@ -2598,7 +2708,9 @@ mod agent_activity_claim_tests {
         ActivityClaimTicket, AgentActivityAdmission, MonitoredOutputFence,
     };
     use crate::idle_suspend::policy::IdleSuspendAutomaticPolicy;
-    use crate::pty::activity::{ProcessIdentity, RootQualification, TerminalIdentity, SATURATED_COUNTER_SENTINEL};
+    use crate::pty::activity::{
+        ProcessIdentity, RootQualification, TerminalIdentity, SATURATED_COUNTER_SENTINEL,
+    };
     use crate::pty::event_sink::NoopEventSink;
     use crate::pty::fleet_state::HandoffClaimError;
     use crate::pty::manager::{PtyCreateOpts, PtySessionManager};
@@ -2606,7 +2718,11 @@ mod agent_activity_claim_tests {
     fn create_test_session(
         manager: &PtySessionManager,
         id: &str,
-    ) -> (TerminalIdentity, ProcessIdentity, Arc<std::sync::atomic::AtomicU64>) {
+    ) -> (
+        TerminalIdentity,
+        ProcessIdentity,
+        Arc<std::sync::atomic::AtomicU64>,
+    ) {
         let opts = PtyCreateOpts {
             id: id.to_string(),
             project: None,
@@ -2622,16 +2738,23 @@ mod agent_activity_claim_tests {
         };
         let meta = manager.create(opts).expect("create test session");
         let snap = manager.capture_activity_snapshot();
-        let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+        let root = snap
+            .roots
+            .iter()
+            .find(|r| r.terminal.session_id == id)
+            .unwrap();
         let terminal = TerminalIdentity {
             session_id: id.to_string(),
             incarnation: meta.incarnation,
         };
         let pid = root.qualification.pid().unwrap_or(54321);
-        let identity = root.qualification.process_identity().unwrap_or(ProcessIdentity {
-            pid,
-            start_ticks: 200,
-        });
+        let identity = root
+            .qualification
+            .process_identity()
+            .unwrap_or(ProcessIdentity {
+                pid,
+                start_ticks: 200,
+            });
         // Ensure qualification has the exact process_identity
         manager.test_set_root_qualification(id, RootQualification::Qualified { identity });
         (terminal, identity, Arc::clone(&root.raw_output_sequence))
@@ -2804,7 +2927,13 @@ mod agent_activity_claim_tests {
         let now = Instant::now();
 
         // Deadline not expired
-        let mut ticket_unexpired = make_valid_ticket(&manager, terminal.clone(), identity, Arc::clone(&output_seq), now);
+        let mut ticket_unexpired = make_valid_ticket(
+            &manager,
+            terminal.clone(),
+            identity,
+            Arc::clone(&output_seq),
+            now,
+        );
         ticket_unexpired.eligibility_deadline = now + Duration::from_secs(10);
         let adm_unexpired = make_valid_admission(&ticket_unexpired, now);
         assert_eq!(
@@ -2859,11 +2988,25 @@ mod agent_activity_claim_tests {
         let id = "term:root-output";
         let (terminal, identity, output_seq) = create_test_session(&manager, id);
         let now = Instant::now();
-        let ticket = make_valid_ticket(&manager, terminal.clone(), identity, Arc::clone(&output_seq), now);
+        let ticket = make_valid_ticket(
+            &manager,
+            terminal.clone(),
+            identity,
+            Arc::clone(&output_seq),
+            now,
+        );
 
         // Root PID changed
-        let other_identity = ProcessIdentity { pid: 99999, start_ticks: 999 };
-        manager.test_set_root_qualification(id, RootQualification::Qualified { identity: other_identity });
+        let other_identity = ProcessIdentity {
+            pid: 99999,
+            start_ticks: 999,
+        };
+        manager.test_set_root_qualification(
+            id,
+            RootQualification::Qualified {
+                identity: other_identity,
+            },
+        );
         let adm_root = make_valid_admission(&ticket, now);
         assert_eq!(
             manager.try_claim_agent_activity_handoff(adm_root),
@@ -3024,10 +3167,14 @@ mod pty_activity_tests {
         manager.create(opts).expect("create session");
 
         let gen = manager.fleet_snapshot().generation;
-        let _claim = manager.try_claim_forced_handoff(gen).expect("claim handoff");
+        let _claim = manager
+            .try_claim_forced_handoff(gen)
+            .expect("claim handoff");
 
         // Write during handoff is rejected
-        let err = manager.write(id, b"test").expect_err("write must fail during handoff");
+        let err = manager
+            .write(id, b"test")
+            .expect_err("write must fail during handoff");
         assert!(matches!(err, AppError::IdleSuspendHandoffInProgress(_)));
         assert_eq!(manager.input_revision(), 0);
 
@@ -3035,7 +3182,9 @@ mod pty_activity_tests {
         manager.release_handoff();
 
         // Write now succeeds and increments input revision
-        manager.write(id, b"valid").expect("write after release succeeds");
+        manager
+            .write(id, b"valid")
+            .expect("write after release succeeds");
         assert_eq!(manager.input_revision(), 1);
 
         let _ = manager.kill(id);
@@ -3102,7 +3251,9 @@ mod pty_activity_tests {
         };
 
         let initial_buffer = Some((b"pre-existing scrollback\n".to_vec(), 24));
-        manager.create_with_buffer(opts, initial_buffer).expect("create with buffer");
+        manager
+            .create_with_buffer(opts, initial_buffer)
+            .expect("create with buffer");
 
         let snap = manager.capture_activity_snapshot();
         assert_eq!(snap.roots.len(), 1);
@@ -3112,13 +3263,25 @@ mod pty_activity_tests {
         // Resize the terminal
         manager.resize(id, 100, 50).expect("resize succeeds");
         let snap_after_resize = manager.capture_activity_snapshot();
-        assert_eq!(snap_after_resize.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            snap_after_resize.roots[0]
+                .raw_output_sequence
+                .load(Ordering::Relaxed),
+            0
+        );
 
         // Attach snapshot read does not increment raw output
-        let attach = manager.get_attach_snapshot(id, None).expect("attach snapshot");
+        let attach = manager
+            .get_attach_snapshot(id, None)
+            .expect("attach snapshot");
         assert!(attach.replay.data.contains("pre-existing scrollback"));
         let snap_after_attach = manager.capture_activity_snapshot();
-        assert_eq!(snap_after_attach.roots[0].raw_output_sequence.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            snap_after_attach.roots[0]
+                .raw_output_sequence
+                .load(Ordering::Relaxed),
+            0
+        );
 
         let _ = manager.kill(id);
     }
@@ -3151,25 +3314,39 @@ mod pty_activity_tests {
 
         #[cfg(target_os = "linux")]
         {
-            assert!(root.qualification.is_qualified(), "Root must be qualified on Linux");
+            assert!(
+                root.qualification.is_qualified(),
+                "Root must be qualified on Linux"
+            );
             let identity = root.qualification.process_identity().unwrap();
             assert!(identity.pid > 0);
             assert!(identity.start_ticks > 0);
         }
 
         // Send a command to produce raw PTY output
-        manager.write(id, b"echo __ACTIVE__\n").expect("write command");
+        manager
+            .write(id, b"echo __ACTIVE__\n")
+            .expect("write command");
         assert_eq!(manager.input_revision(), 1);
 
         // Wait for PTY reader to process chunk and increment counter
         let counter = root.raw_output_sequence.clone();
         let saw_output = tokio_wait_for(Duration::from_secs(3), || {
             counter.load(Ordering::Relaxed) > 0
-        }).await;
-        assert!(saw_output, "Raw output counter must increment after child emits output");
+        })
+        .await;
+        assert!(
+            saw_output,
+            "Raw output counter must increment after child emits output"
+        );
 
         let snap_after_output = manager.capture_activity_snapshot();
-        assert!(snap_after_output.roots[0].raw_output_sequence.load(Ordering::Relaxed) > 0);
+        assert!(
+            snap_after_output.roots[0]
+                .raw_output_sequence
+                .load(Ordering::Relaxed)
+                > 0
+        );
         assert!(snap_after_output.is_complete());
 
         let _ = manager.kill(id);
@@ -3223,7 +3400,10 @@ mod pty_activity_tests {
         assert!(!snap_uncertain.is_complete());
         assert!(matches!(
             snap_uncertain.incomplete_reason,
-            Some(ActivityIncompleteReason::RootUnqualified { pid: Some(99999), .. })
+            Some(ActivityIncompleteReason::RootUnqualified {
+                pid: Some(99999),
+                ..
+            })
         ));
 
         // 4. Revision saturated makes snapshot incomplete and rejects write
@@ -3234,7 +3414,9 @@ mod pty_activity_tests {
             snap_rev.incomplete_reason,
             Some(ActivityIncompleteReason::RevisionSaturated)
         ));
-        let write_err = manager.write(id, b"blocked").expect_err("write must fail when saturated");
+        let write_err = manager
+            .write(id, b"blocked")
+            .expect_err("write must fail when saturated");
         assert!(matches!(write_err, AppError::Unavailable(_)));
         let _ = manager.kill(id);
     }
@@ -3249,8 +3431,7 @@ mod agent_status_lifecycle_tests {
     use std::time::Duration;
 
     use crate::agent_status::{
-        AgentStatusAvailability, AgentStatusRuntime,
-        ENV_AGENT_STATUS_TOKEN, ENV_AGENT_STATUS_URL,
+        AgentStatusAvailability, AgentStatusRuntime, ENV_AGENT_STATUS_TOKEN, ENV_AGENT_STATUS_URL,
     };
     use crate::pty::event_sink::NoopEventSink;
     use crate::pty::manager::{
@@ -3262,8 +3443,12 @@ mod agent_status_lifecycle_tests {
     fn test_reserved_env_vars_stripped_from_parent_and_user_input() {
         assert!(is_reserved_agent_status_env_var(ENV_AGENT_STATUS_URL));
         assert!(is_reserved_agent_status_env_var(ENV_AGENT_STATUS_TOKEN));
-        assert!(is_reserved_agent_status_env_var("dam_hopper_agent_status_url"));
-        assert!(is_reserved_agent_status_env_var("Dam_Hopper_Agent_Status_Token"));
+        assert!(is_reserved_agent_status_env_var(
+            "dam_hopper_agent_status_url"
+        ));
+        assert!(is_reserved_agent_status_env_var(
+            "Dam_Hopper_Agent_Status_Token"
+        ));
         assert!(!is_reserved_agent_status_env_var("PATH"));
 
         let mut parent_env = HashMap::new();
@@ -3360,6 +3545,9 @@ mod agent_status_lifecycle_tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let snap = runtime.snapshot();
-        assert!(snap.terminals.is_empty(), "terminal removed from status runtime on kill");
+        assert!(
+            snap.terminals.is_empty(),
+            "terminal removed from status runtime on kill"
+        );
     }
 }

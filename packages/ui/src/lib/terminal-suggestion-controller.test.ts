@@ -258,6 +258,37 @@ describe("TerminalSuggestionController", () => {
     controller.handleComposition();
     expect(controller.snapshot.state).toBe("opaque");
   });
+  it("does not republish or bump revision on subsequent output while already opaque", () => {
+    const controller = createTerminalSuggestionController({
+      sessionId: "one",
+      project: "web",
+      search: () => [result("echo live")],
+    });
+    editing(controller);
+    const listener = vi.fn();
+    controller.subscribe(listener);
+
+    // First unexpected output transitions to opaque
+    controller.handleOutput("unexpected output 1\n");
+    expect(controller.snapshot.state).toBe("opaque");
+    const initialEpoch = controller.snapshot.promptEpoch;
+    const initialRevision = controller.snapshot.revision;
+    expect(listener).toHaveBeenCalledOnce();
+
+    // Subsequent output chunks while already opaque must NOT notify or bump revision
+    for (let i = 2; i <= 50; i++) {
+      controller.handleOutput(`unexpected output ${i}\n`);
+    }
+    expect(controller.snapshot.state).toBe("opaque");
+    expect(controller.snapshot.promptEpoch).toBe(initialEpoch);
+    expect(controller.snapshot.revision).toBe(initialRevision);
+    expect(listener).toHaveBeenCalledOnce();
+
+    // Redundant composition while opaque also does not republish
+    controller.handleComposition();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(controller.snapshot.revision).toBe(initialRevision);
+  });
 
   it("re-queries after Bash Backspace and its exact terminal echo", async () => {
     vi.useFakeTimers();
@@ -345,13 +376,29 @@ describe("TerminalSuggestionController", () => {
 
   it("records same-ID terminal submissions under their own profiles", () => {
     const a = createTerminalSuggestionController({
-      sessionId: "shared", project: "shared", profileId: "a", search: () => [],
+      sessionId: "shared",
+      project: "shared",
+      profileId: "a",
+      search: () => [],
     });
     const b = createTerminalSuggestionController({
-      sessionId: "shared", project: "shared", profileId: "b", search: () => [],
+      sessionId: "shared",
+      project: "shared",
+      profileId: "b",
+      search: () => [],
     });
-    a.handleLifecycle({ id: "shared", generation: 1, lifecycle: "submitted", command: "only-a" });
-    b.handleLifecycle({ id: "shared", generation: 1, lifecycle: "submitted", command: "only-b" });
+    a.handleLifecycle({
+      id: "shared",
+      generation: 1,
+      lifecycle: "submitted",
+      command: "only-a",
+    });
+    b.handleLifecycle({
+      id: "shared",
+      generation: 1,
+      lifecycle: "submitted",
+      command: "only-b",
+    });
     expect(getHistory("a").map((entry) => entry.command)).toEqual(["only-a"]);
     expect(getHistory("b").map((entry) => entry.command)).toEqual(["only-b"]);
     a.dispose();
