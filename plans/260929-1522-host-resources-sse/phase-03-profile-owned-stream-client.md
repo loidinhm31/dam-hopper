@@ -5,7 +5,7 @@
 - Dependencies: phase 00 contract fixtures/baseline; phase 03 may run beside phase 01 (different files); phase 02 endpoint and this phase must both land before phase 04 integration. Phase 03 implements stream mechanics but must not make SSE authoritative for UI until phase 04 query cutover.
 
 ## Overview
-- Date: 2026-09-29. Priority: P2. Implementation: **Pending (0%)**. Review: **Pending**. No work claimed tested.
+- Date: 2026-09-29. Priority: P2. Implementation: **DONE (100%)**. Review: **Approved (9.8/10)**. Scoped validation: **96/96 tests passed across 6 files; UI build passed**.
 - Build one cancellable stream per captured `ConnectionRef` **and** `QueryClient`, not per fleet/detail observer. Fixed route/schema/status/error contract, no generic SSE framework. Keep current REST and WS intact until validated full-frame handoff in phase 04.
 
 ## Key Insights
@@ -41,13 +41,13 @@
    Error precedence: current-owner/attempt cancellation first; recognized MFA/session auth notification from 03-T; `AUTH_UNAVAILABLE` sets persistent latch; coded `FRAME_TOO_LARGE` and `kind:'unsupported'` stay REST_ONLY **unless already latched, in which case keep AUTH_BLOCKED until a new generation**; 404/405 and unknown 401/403 terminal SSE-only but never unlock existing auth block; malformed success content type and other 429/5xx/network/EOF/protocol/timeouts consume retry budget. The coordinator receives the **finite discriminant**, not `response.body`; no second finite parser. If current switch cancellation fails, release `switching` only after fencing both query sources and checking switch token; old-attempt cleanup must never release a new switch. Bound one retry timer to remaining generation budget.
 
 ## Todo list
-- [ ] 03-T transport fetch/cancellation and narrow auth classification.
-- [ ] 03-P bounded byte parser.
-- [ ] 03-D DTO/revision/status decoder and monotonic freshness helper.
-- [ ] 03-I integrated owner registry, attempt/source fences, retries, token-rotation fix.
+- [x] 03-T transport fetch/cancellation and narrow auth classification.
+- [x] 03-P bounded byte parser.
+- [x] 03-D DTO/revision/status decoder and monotonic freshness helper.
+- [x] 03-I integrated owner registry, attempt/source fences, retries, token-rotation fix.
 
 ## Success Criteria
-- **After implementation only; none executed while planning:** `pnpm --filter @dam-hopper/ui test -- src/api/ws-transport.test.ts src/api/host-resource-sse-parser.test.ts src/api/host-resource-sse-codec.test.ts src/api/host-resource-stream-coordinator.test.ts src/api/connections.test.ts src/api/connections-mfa.test.tsx`; integrator then `pnpm --filter @dam-hopper/ui build` and parent gates `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui test:browser`, `pnpm lint`, `pnpm check` (includes native build).
+- **Scoped validation (2026-09-30):** `pnpm --filter @dam-hopper/ui exec vitest run src/api/ws-transport.test.ts src/api/host-resource-sse-parser.test.ts src/api/host-resource-sse-codec.test.ts src/api/host-resource-stream-coordinator.test.ts src/api/connections.test.ts src/api/connections-mfa.test.tsx` — **96/96 tests passed across 6 files**; `pnpm --filter @dam-hopper/ui build` — **passed**. Review: **Approved (9.8/10)** ([review report](../../plans/reports/code-review-260930-2148-phase-03-cycle2.md)). Parent's final integrated UI, server, browser, lint, and native checks remain pending as stated in the [parent plan](./plan.md).
 - Fake finite byte stream + bound transport scenario observes one socket for fleet/detail, status→data validation including equal-revision reconnect baseline, stale status aging while bytes/heartbeat continue, hidden abort/visible retry, unknown auth SSE-only, recognized MFA/login drop exactly once, blocked auth cancels both REST requests from STARTING and persists across retry/visibility/status-only, 4 KiB finite boundary and coded 503 sticky fallback; verify query-cache handoff and real browser UI in phase 04/05, not mock echoes.
 - Worker instruction (copy-ready): **Edit only your listed paths; skip tests/build/lint/formatters/gates during parallel work; hand off outputs to Frontend integration owner; integrator waits for all packets, runs scoped behavioral checks once after merge; parent runs project-wide gates.**
 
@@ -59,7 +59,6 @@
 - Never export profile tokens or retain them in parser/coordinator logs; transport uses captured bearer, never ambient/global fetch or token query params. Unknown 401/403 cannot invoke `onDrop` or clear credentials. `AUTH_UNAVAILABLE` blocks REST metrics/snapshot/history even on retry or resume until a current authenticated paired full-data handoff or explicit new connection generation; retry independently with cap. Reject malformed DTO and unauthenticated cross-profile callbacks before any UI mutation.
 
 ## Next steps
-- Integrate phase 03 transport/parser/codec/coordinator only after phase 00; phase 04 follows completed phases 02+03, binds actual QueryClient, wires both query families and all alert consumers; phase 05 qualifies real streams/browser/proxy/native before phase 06 rollout.
-
+- Phase 03 client components and tests fully pass. Proceed to Phase 04 resource query cutover and real UI cache integration (`phase-04-resource-query-and-ui-cutover.md`), followed by Phase 05 qualification.
 ## Unresolved questions
 - Which native packaged targets actually provide owner-bound cancellable authenticated streaming Fetch? Treat absent capability as REST_ONLY; qualify explicitly in phase 05, not by guessing support.

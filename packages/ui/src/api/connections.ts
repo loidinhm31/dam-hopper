@@ -56,12 +56,28 @@ import {
 } from "../hooks/use-sse.js";
 
 import { generateUUID } from "../lib/utils.js";
-let registryQueryClient: QueryClient | null = null;
+import {
+  cleanupCoordinatorsForOwner,
+  isQueryClientRegistered,
+  registerConnectionRegistryQueryClient,
+} from "./host-resource-stream-coordinator.js";
 
+export {
+  isQueryClientRegistered,
+  registerConnectionRegistryQueryClient,
+};
+
+let registryQueryClient: QueryClient | null = null;
+let legacyQueryClientDisposer: (() => void) | null = null;
 export function setConnectionRegistryQueryClient(
   queryClient: QueryClient | null,
 ): void {
   registryQueryClient = queryClient;
+  legacyQueryClientDisposer?.();
+  legacyQueryClientDisposer = null;
+  if (queryClient) {
+    legacyQueryClientDisposer = registerConnectionRegistryQueryClient(queryClient);
+  }
 }
 
 function createDeferred<T = void>(): {
@@ -133,9 +149,14 @@ function invalidateEntry(entry: ConnectionEntry): void {
     generation: entry.generation,
   });
   const callbacks = invalidationListeners.get(key);
-  if (!callbacks) return;
-  invalidationListeners.delete(key);
-  for (const callback of callbacks) callback();
+  if (callbacks) {
+    invalidationListeners.delete(key);
+    for (const callback of callbacks) callback();
+  }
+  cleanupCoordinatorsForOwner({
+    profileId: entry.profileId,
+    generation: entry.generation,
+  });
 }
 
 export function onConnectionInvalidated(
@@ -861,8 +882,9 @@ if (typeof window !== "undefined") {
               entry.status === "offline"
             ) {
               if (currentStoredToken) {
+                const wasIntent = entry.intent;
                 disconnectProfile(profile.id);
-                if (entry.intent) {
+                if (wasIntent) {
                   void connectProfile(profile.id);
                 }
               } else if (profile.authType === "basic") {
@@ -885,6 +907,7 @@ if (typeof window !== "undefined") {
 export function __setConnectionSnapshotForTests(
   profileId: ProfileId,
   snapshot: Partial<ConnectionSnapshot> | null,
+  transport?: Transport | null,
 ): void {
   if (snapshot === null) {
     entries.delete(profileId);
@@ -897,6 +920,9 @@ export function __setConnectionSnapshotForTests(
   }
   if (snapshot.status !== undefined) {
     entry.status = snapshot.status;
+  }
+  if (transport !== undefined) {
+    entry.transport = transport;
   }
   entry.snapshot = freezeSnapshot(entry);
   notifyListeners();

@@ -16,9 +16,28 @@ import type { Transport, TransportInvokeOptions } from "./transport.js";
 export interface WsTransportCloseInfo {
   code?: number;
   reason?: string;
-  source?: "ws" | "rest";
+  source?: "ws" | "rest" | "sse";
   authCode?: string;
 }
+
+export type HostResourceStreamResult =
+  | {
+      kind: "stream";
+      response: Response;
+      reader: ReadableStreamDefaultReader<Uint8Array>;
+      close(): void;
+    }
+  | {
+      kind: "finite";
+      status: number;
+      code: string | null;
+      retryAfter: string | null;
+      close(): void;
+    }
+  | {
+      kind: "unsupported";
+      close(): void;
+    };
 
 export interface WsTransportOptions {
   baseUrl?: string;
@@ -1583,6 +1602,7 @@ export class WsTransport implements Transport {
     info?: WsTransportCloseInfo,
   ) => void;
   private readonly activeAbortControllers = new Set<AbortController>();
+  private authDropNotified = false;
 
   private wsStatus: WsStatus = "connecting";
   private statusListeners = new Set<(status: WsStatus) => void>();
@@ -1860,6 +1880,223 @@ export class WsTransport implements Transport {
 
   getAuthToken(): string | null {
     return this.authToken ?? null;
+  }
+
+  supportsHostResourceStreaming(): boolean {
+    if (typeof fetch !== "function" || typeof ReadableStream !== "function") {
+      return false;
+    }
+    return true;
+  }
+
+  hasHostResourceStreamingCapability(): boolean {
+    return this.supportsHostResourceStreaming();
+  }
+
+  private notifyAuthDrop(info: WsTransportCloseInfo): void {
+    if (this.closed || this.authDropNotified) return;
+    this.authDropNotified = true;
+    this.onDrop?.(this, info);
+  }
+
+  async openHostResourceEvents(
+    signal?: AbortSignal,
+  ): Promise<HostResourceStreamResult> {
+    if (!this.supportsHostResourceStreaming() || this.closed) {
+      return { kind: "unsupported", close: () => {} };
+    }
+
+    const controller = new AbortController();
+    this.activeAbortControllers.add(controller);
+
+    let cleanedUp = false;
+    let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+    const close = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      this.activeAbortControllers.delete(controller);
+      if (signal) {
+        signal.removeEventListener("abort", onSignalAbort);
+      }
+      try {
+        controller.abort(new Error("Host-resource stream closed"));
+      } catch {
+        // ignore
+      }
+      if (currentReader) {
+        try {
+          void currentReader.cancel();
+        } catch {
+          // ignore
+        }
+        currentReader = null;
+      }
+    };
+
+    const onSignalAbort = () => {
+      close();
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        this.activeAbortControllers.delete(controller);
+        throw signal.reason || new Error("Aborted");
+      }
+      signal.addEventListener("abort", onSignalAbort, { once: true });
+    }
+
+    const url = `${this.baseUrl}/api/system/resources/v1/events`;
+    const headers: Record<string, string> = {
+      ...this.buildAuthHeaders(),
+      Accept: "text/event-stream",
+      "Cache-Control": "no-store",
+    };
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers,
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      });
+    } catch (err) {
+      close();
+      throw err;
+    }
+
+    if (response.status === 200) {
+      if (!response.body || typeof response.body.getReader !== "function") {
+        close();
+        return { kind: "unsupported", close: () => {} };
+      }
+      const reader = response.body.getReader();
+      currentReader = reader;
+      return {
+        kind: "stream",
+        response,
+        reader,
+        close,
+      };
+    }
+
+    // Finite response (status != 200)
+    let rawText = "";
+    if (response.body && typeof response.body.getReader === "function") {
+      try {
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let bytesRead = 0;
+        while (bytesRead < 4096) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          const take = Math.min(value.byteLength, 4096 - bytesRead);
+          chunks.push(value.subarray(0, take));
+          bytesRead += take;
+          if (bytesRead >= 4096) {
+            await reader.cancel().catch(() => {});
+            break;
+          }
+        }
+        const merged = new Uint8Array(bytesRead);
+        let offset = 0;
+        for (const c of chunks) {
+          merged.set(c, offset);
+          offset += c.byteLength;
+        }
+        rawText = new TextDecoder("utf-8").decode(merged);
+      } catch {
+        // Ignored reading error on finite response body
+      }
+    } else if (typeof response.text === "function") {
+      try {
+        const fullText = await response.text();
+        rawText = fullText.slice(0, 4096);
+      } catch {
+        // Ignored
+      }
+    }
+
+    close();
+
+    let code: string | null = null;
+    if (rawText) {
+      try {
+        const parsed = JSON.parse(rawText);
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof parsed.code === "string"
+        ) {
+          code = parsed.code;
+        }
+      } catch {
+        const match = rawText.match(/"code"\s*:\s*"([^"\\]+)"/);
+        if (match) {
+          code = match[1];
+        }
+      }
+    }
+
+    const retryAfter =
+      response.headers.get("retry-after") ??
+      response.headers.get("Retry-After");
+
+    if (response.status === 401) {
+      if (code === "MFA_REQUIRED") {
+        this.notifyAuthDrop({
+          code: 4403,
+          authCode: "MFA_REQUIRED",
+          reason: "MFA verification required (session step-up)",
+          source: "sse",
+        });
+      } else if (
+        code === "AUTH_REQUIRED" ||
+        code === "SESSION_EXPIRED" ||
+        code === "SESSION_REVOKED"
+      ) {
+        this.notifyAuthDrop({
+          code: 4401,
+          authCode: "AUTH_REQUIRED",
+          reason: "Session expired or revoked. Please log in again.",
+          source: "sse",
+        });
+      }
+    }
+
+    return {
+      kind: "finite",
+      status: response.status,
+      code,
+      retryAfter,
+      close: () => {},
+    };
+  }
+
+  reportHostResourceErrorControl(code: string): void {
+    if (this.closed) return;
+    if (code === "MFA_REQUIRED") {
+      this.notifyAuthDrop({
+        code: 4403,
+        authCode: "MFA_REQUIRED",
+        reason: "MFA verification required (session step-up)",
+        source: "sse",
+      });
+    } else if (
+      code === "AUTH_REQUIRED" ||
+      code === "SESSION_EXPIRED" ||
+      code === "SESSION_REVOKED"
+    ) {
+      this.notifyAuthDrop({
+        code: 4401,
+        authCode: "AUTH_REQUIRED",
+        reason: "Session expired or revoked. Please log in again.",
+        source: "sse",
+      });
+    }
   }
 
   onStatusChange(cb: (status: WsStatus) => void): () => void {
