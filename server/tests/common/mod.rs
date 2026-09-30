@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod auth_fixtures;
+pub mod host_resource_fixtures;
 #[cfg(target_os = "linux")]
 pub mod format2_fixtures;
 #[cfg(target_os = "linux")]
