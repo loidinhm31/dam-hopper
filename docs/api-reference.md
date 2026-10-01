@@ -1406,10 +1406,35 @@ Fields:
 
 **GET /api/git/{project}/log**
 
-Returns the existing `GitLogEntry[]` response. Query parameters, search
-semantics, response fields, transport and owner-scoped query rules, and the
-current validation edge are in the [Git history search architecture guide](./architecture/git-history-search.md).
+Returns `GitLogEntry[]` commit history for the specified project. Supports optional full-message commit filtering and pagination before offset:
 
+Query parameters:
+
+- `limit` (optional integer, default `100`): Maximum commits to return per page.
+- `offset` (optional integer, default `0`): Commits to skip; with `messageQuery`, skips matching commits.
+- `ref` (optional string, default `HEAD`): Branch name or canonical ref to traverse.
+- `worktreePath` (optional string): Target registered worktree path.
+- `root` (optional string): VCS root path for submodule or nested repository.
+- `messageQuery` (optional string): Case-insensitive literal string to match against full commit messages (subject and body). Applies before offset and limit pagination. Embedded CR, LF, and NUL in a trimmed term reject with HTTP `400 Bad Request`.
+
+Response format:
+
+```json
+[
+  {
+    "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
+    "parents": ["78be05fd4e2291fb9eb0b5f9e1cf560bc8e14f7d"],
+    "authorName": "Author Name",
+    "authorEmail": "author@example.com",
+    "timestamp": 1790000000,
+    "message": "Commit subject line",
+    "refs": ["HEAD -> main"],
+    "isPushed": true
+  }
+]
+```
+
+Note: `message` remains subject-only text even when a commit was matched on body content. Full details and query ownership rules are in the [Git history search architecture guide](./architecture/git-history-search.md).
 **POST /api/git/{project}/branches**
 
 Create a branch. Set `checkout` to switch to it after creation.
@@ -1916,6 +1941,55 @@ Status values: `"connecting"`, `"connected"`, `"disconnected"`, `"error"`
 Returns unsubscribe function.
 
 ## REST Endpoints
+
+### Global Configuration & Preferences
+
+**GET /api/global-config**
+Retrieve global server defaults and allowlisted UI preferences.
+
+Response:
+
+```json
+{
+  "defaults": null,
+  "workspaces": null,
+  "ui": {
+    "systemFontSize": 14,
+    "editorFontSize": 14,
+    "terminalFontSize": 17,
+    "cognitoModeShortcut": "Mod+Alt+KeyB",
+    "cognitoModeStyle": "heavy-blur"
+  }
+}
+```
+
+**POST /api/global-config/ui** (transport channel: `globalConfig:updateUi`)
+Update allowlisted UI preferences. Sparse UI objects merge into the existing
+configuration, preserving unspecified fields. The server writes TOML using
+`snake_case` keys. The default path is
+`~/.config/dam-hopper/config.toml`; `XDG_CONFIG_HOME` can override the config
+directory.
+
+Body:
+
+```json
+{
+  "ui": {
+    "cognitoModeShortcut": "Mod+Alt+KeyK",
+    "cognitoModeStyle": "black-screen"
+  }
+}
+```
+
+Fields:
+
+- `cognitoModeShortcut` (string): Configurable keyboard shortcut chord. Canonical default is `"Mod+Alt+KeyB"` (`Ctrl+Alt+B` on Linux/Windows, `Cmd+Option+B` on macOS).
+- `cognitoModeStyle` (string enum): Privacy screen mask style: `"heavy-blur"` (default frosted glass with 40px backdrop filter) or `"black-screen"` (opaque `#000000`). Unknown or invalid style variants return `400 Bad Request`.
+- Ephemeral mode activation (`active`) is not a `UiConfig` field; it remains
+  client-side and is not persisted or reset by this preference API.
+Cognito Mode is a visual UI mask, not an authentication, content-redaction, or
+OS screenshot-protection boundary. Heavy Blur is not guaranteed to conceal
+underlying content.
 
 ### Projects
 

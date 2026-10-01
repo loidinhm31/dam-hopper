@@ -152,13 +152,15 @@ the hook exposes `effectiveScopeKey` for parent reset boundaries.
 See the [Git-history search architecture](./architecture/git-history-search.md)
 for transport, query, and persistence details and the
 [Phase 04 plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
-Phase 05 Workspace integration is implemented and reviewed across the desktop
-IDE dock, terminal floating panel, and compact Git surface, using the shared
-controller and selected-target availability. Implementation/finalization are
-settled; durable phase closure and Phase 07 qualification remain pending.
-See [Workspace Git panel integration](./architecture/git-history-search.md#workspace-git-panel-integration-phase-05)
-and the [Phase 05 plan](../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md).
-Phase 06 Git-page integration remains ahead.
+Phase 05 Workspace integration is implemented across the desktop IDE dock,
+terminal floating panel, and compact Git surface, using the shared controller
+and selected-target availability. Phase 06 Standalone Git page integration
+persists qualified checkbox selections, fails closed on unavailable projects,
+and reuses the shared history controller for single-project view. Phase 07
+completes integrated qualification across both surfaces with live loopback server
+smoke, latency verification, and Chromium browser tests.
+See [Git-history search architecture](./architecture/git-history-search.md)
+and the [qualification plan](../plans/261001-2003-git-history-search-persistence/phase-07-qualification-documentation.md).
 
 ## Unified-profile Settings, Usage, and Host ownership (Phase 06)
 
@@ -226,6 +228,7 @@ The UI coordinates host resource streams across seven distinct operational modes
 7. **`HIDDEN`**: A hidden document pauses/disposes the stream, and closing the popover removes its interest. No resource REST polling runs while hidden; visible cached values retain their age and are not presented as live.
 
 **Key presentation behaviors:**
+
 - **Fresh equal-revision reconnect baseline:** A current new attempt may accept the same epoch/revision only with an immediately preceding matching status and complete paired frame. This re-establishes freshness metadata; it does not mean the host was sampled again.
 - **Per-section stale indicators:** A stalled/degraded sensor (for example, a process-scan timeout) marks its section stale/unavailable even while the SSE connection is live; never fabricate zero values or label carried-forward data as newly observed.
 - **WebSocket notifications without cache rollback:** WS alerts update profile/incident unread state and coalesce visible REST history refreshes at 30 s, but cannot overwrite the LIVE/switching SSE pair. The owner bridge's non-resource events (PTY, terminal, git, workspace) remain available across QueryClient changes.
@@ -256,6 +259,7 @@ placements (IDE dock, Terminal float, and compact overlay);
 `WorkspaceAdvisorHost.test.tsx` covers placement and lifecycle contracts.
 Standalone `/plugins/:installationId` routing has been removed, and bookmarked
 URLs fail closed without an unavailable screen.
+
 ## Unified-profile integration and qualification (Phase 09)
 
 The integrated shell keeps one explicit owner through project aggregation,

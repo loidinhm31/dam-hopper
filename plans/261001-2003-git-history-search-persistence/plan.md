@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Git history search and selection persistence
 
-Implementation remains in progress. Phases 01–04 are durably complete. Phases 05–06 implementation and finalization are settled, but durable completion is pending in explicit advice mode; do not mark them DONE. Phase 07 remains pending. Durable delivery: 4/7 phases (57%; 15/26h, 58%); implementation/finalization settled through Phase 06: 6/7 (86%; 22/26h, 85%).
+Implementation remains in progress. Phases 01–04 are durably complete. Phases 05–07 implementation, qualification, and review are settled, but durable completion is pending coordinator closeout in explicit advice mode; do not mark them DONE. Durable delivery: 4/7 phases (57%; 15/26h, 58%); implementation/review settled through Phase 07: 7/7 (100%; 26/26h, 100%).
 
 ## Deliverables
 
@@ -37,7 +37,7 @@ Implementation remains in progress. Phases 01–04 are durably complete. Phases 
 | 04 | [Shared history controller and controls](./phase-04-shared-history-view.md) | DONE / 100% (2026-10-02 00:16 +07:00) | 4h | 02, 03 |
 | 05 | [Workspace integration](./phase-05-workspace-git-integration.md) | Implementation/finalization settled; durable completion pending (explicit advice mode; not DONE) | 3h | 04 |
 | 06 | [Git page integration](./phase-06-git-page-integration.md) | Implementation/finalization settled; durable completion pending (explicit advice mode; not DONE) | 4h | 04 |
-| 07 | [End-to-end qualification and docs](./phase-07-qualification-documentation.md) | Pending / 0% | 4h | 01–06 |
+| 07 | [End-to-end qualification and docs](./phase-07-qualification-documentation.md) | Implementation/qualification settled; review complete (9.4/10 PASS) | 4h | 01–06 |
 
 ## Execution contract
 
@@ -52,6 +52,7 @@ Implementation remains in progress. Phases 01–04 are durably complete. Phases 
 - [Enhanced hard-planning brief](./research/planning-brief.md); [history research](./research/history-search-research.md); [persistence research](./research/selection-persistence-research.md).
 - [System architecture](../../docs/system-architecture.md) and [Git-history architecture guide](../../docs/architecture/git-history-search.md) document the shared feature architecture. Phases 01–04 are durably complete; Phases 05–06 implementation/finalization is settled but durable completion is pending in explicit advice mode; Phase 07 remains pending. Phase 05 scoped evidence: [test report](../reports/tester-261002-0051-phase-05-workspace-git-integration.md), [code review](../reports/code-review-261002-0051-phase-05-workspace-git-integration.md), [Docs Manager closeout](../reports/docs-manager-261002-0051-phase-05-workspace-git-integration.md), and [PM closeout](../reports/project-manager-261002-0051-phase-05-workspace-git-integration.md). See the [Phase 04 plan](./phase-04-shared-history-view.md) and [Phase 04 closeout](../reports/project-manager-261002-0016-phase-04-shared-history-view.md).
 - Phase 06 scoped evidence: [tester report](../reports/tester-261002-0145-phase-06-git-page-integration.md) records the focused Git page suite passing 9/9 and the UI suite passing 2,186/2,186; [code review](../reports/code-review-261002-0148-phase-06-git-page-integration.md) scored 9.5/10 PASS and reports clean TypeScript checking. Production build and integrated API/browser qualification were not run for this phase. [Project Manager closeout](../reports/project-manager-261002-0148-phase-06-git-page-integration.md). Phase 07 remains the durable completion gate.
+- Phase 07 scoped evidence: [qualification report](../reports/qualification-261002-0245-git-history-qualification.md), [tester report](../reports/tester-261002-0238-phase-07-qualification.md), and [code review](../reports/code-review-261002-0240-phase-07-qualification.md). Live Axum loopback smoke (10/10 scenarios passed), Chromium browser tests (17/17 passed), and sub-15ms search latency measured on disposable repository.
 - Current-tree Phase 03 focused store tests passed 26/26 after follow-up recovery/selection/canonical-ref fixes. The earlier UI package suite passed 2,102/2,102 before those fixes and was not rerun afterward; the initial review scored 8.5/10 PASS with recommendations, and no post-fix code review was recorded. See the [test report](../reports/tester-261001-2241-phase-03-persisted-history-selections.md) and [code review](../reports/code-review-261001-2245-phase-03-persisted-history-selections.md).
 - Read-only installed-Git filter smoke succeeded; no feature tests/builds/browser scenarios run during planning.
 - Workflow/skills loaded directly from global OMP files. Slash-dispatch tool unavailable; applied `/cmd-plan__hard` procedure directly. Activation helper ran, but missing `EVCRATE_SESSION_ID` prevents active-plan session persistence.
