@@ -1987,6 +1987,7 @@ Fields:
 - `cognitoModeStyle` (string enum): Privacy screen mask style: `"heavy-blur"` (default frosted glass with 40px backdrop filter) or `"black-screen"` (opaque `#000000`). Unknown or invalid style variants return `400 Bad Request`.
 - Ephemeral mode activation (`active`) is not a `UiConfig` field; it remains
   client-side and is not persisted or reset by this preference API.
+
 Cognito Mode is a visual UI mask, not an authentication, content-redaction, or
 OS screenshot-protection boundary. Heavy Blur is not guaranteed to conceal
 underlying content.

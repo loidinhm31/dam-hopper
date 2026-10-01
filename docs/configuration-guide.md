@@ -683,7 +683,20 @@ The API uses `camelCase` (`terminalAgentNotifications`, `agentSettingsPaths`, `c
 
 Agent Settings verifies paths through `GET /api/agent-status/paths` before enabling notification policies. OMP requires matching install/runtime paths and a current managed extension; Codex remains ineligible for notifications even when native status hooks are managed; Claude requires matching paths and ready native hooks. The API rechecks OMP/Claude eligibility on enabled-policy saves and rejects enabled Codex policies. Disabling remains possible when a target disappears. Dispatch follows the saved `enabled` policy without repeating filesystem readiness checks, so external path or hook changes do not themselves revoke a saved policy. Installation and readiness badges are separate. Browser permission is runtime-only and is requested only by explicit user action. Linux live hook qualification is limited to Codex CLI 0.158.0 and Claude Code 2.1.250; see the [Phase 06 report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
 
-Shortcuts are normalized by the client config layer. Terminal/IDE panel shortcuts can be captured and reset from Settings > Keyboard Shortcuts. Capture or reset the Cognito Mode shortcut there; its default is `Mod+Alt+KeyB`. The **Cognito Mode style** selector in Settings > Appearance offers **Heavy Blur** and **Black Screen**. Activation is ephemeral, and dismissal requires the same shortcut that activated the mask. Notifications and audio continue while masked. Git, Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE and Terminal modes; opening one closes the other target panels. The Project shortcut defaults to `Mod+Shift+KeyZ`.
+Shortcuts are normalized by the client config layer. Terminal/IDE panel
+shortcuts can be captured and reset from Settings > Keyboard Shortcuts. Capture
+or reset the Cognito Mode shortcut there; its default is `Mod+Alt+KeyB`. The
+**Cognito Mode style** selector in Settings > Appearance offers **Heavy Blur**
+and **Black Screen**. Activation is ephemeral, and dismissal requires the same
+chord that activated the mask. Toasts remain visible and the notification
+sound path is not disabled by Cognito; audible output depends on the saved
+notification policy and browser/device audio state. The mask is visual only:
+Heavy Blur is not redaction, OS/browser capture is outside its boundary, and
+the mask does not issue a PTY pause/stop request. Do not rely on it to suspend
+background work; real output continuity requires runtime qualification. Git,
+Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE
+and Terminal modes; opening one closes the other target panels. The Project
+shortcut defaults to `Mod+Shift+KeyZ`.
 
 #### Inline terminal suggestions
 

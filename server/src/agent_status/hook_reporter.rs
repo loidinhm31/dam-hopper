@@ -963,7 +963,26 @@ mod tests {
     #[tokio::test]
     async fn test_unmanaged_report_hook_does_not_read_open_stdin() {
         // A missing private environment returns before touching a reader that could stay open.
+        let saved_socket = std::env::var(ENV_AGENT_HOOKS_SOCKET).ok();
+        let saved_url = std::env::var(ENV_AGENT_STATUS_URL).ok();
+        let saved_token = std::env::var(ENV_AGENT_STATUS_TOKEN).ok();
+
+        std::env::remove_var(ENV_AGENT_HOOKS_SOCKET);
+        std::env::remove_var(ENV_AGENT_STATUS_URL);
+        std::env::remove_var(ENV_AGENT_STATUS_TOKEN);
+
         let result = execute_report_hook_internal(AgentKind::Codex, PanicOnRead).await;
+
+        if let Some(val) = saved_socket {
+            std::env::set_var(ENV_AGENT_HOOKS_SOCKET, val);
+        }
+        if let Some(val) = saved_url {
+            std::env::set_var(ENV_AGENT_STATUS_URL, val);
+        }
+        if let Some(val) = saved_token {
+            std::env::set_var(ENV_AGENT_STATUS_TOKEN, val);
+        }
+
         assert!(result.is_err());
     }
 }
