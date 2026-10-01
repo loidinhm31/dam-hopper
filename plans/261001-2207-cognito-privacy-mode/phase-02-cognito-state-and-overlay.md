@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: pending. Effort: 7h.
+- Date: 2026-10-02. Priority: P2. Status: DONE (2026-10-02). Effort: 7h.
 - Add ephemeral privacy state, immediate full-viewport visual mask and input/focus isolation without unmounting productive surfaces.
 
 ## Key Insights
@@ -98,11 +98,11 @@ Native adapter: derive `effectiveViewportVisible = props.isViewportVisible && !a
 
 ## Todo list
 
-- [ ] Implement nonpersisted state and freeze activation binding.
-- [ ] Implement two instant mask styles and accessible portal focus sink.
-- [ ] Implement input/focus isolation and complete lifecycle cleanup.
-- [ ] Preserve visible toasts/audio and hide native child via existing viewport contract.
-- [ ] Add lifecycle/input regressions; release interfaces to Phase 03.
+- [x] Implement nonpersisted state and freeze activation binding.
+- [x] Implement two instant mask styles and accessible portal focus sink.
+- [x] Implement input/focus isolation and complete lifecycle cleanup.
+- [x] Preserve visible toasts/audio and hide native child via existing viewport contract.
+- [x] Add lifecycle/input regressions; release interfaces to Phase 03.
 
 ## Success Criteria
 
@@ -115,13 +115,13 @@ Native adapter: derive `effectiveViewportVisible = props.isViewportVisible && !a
 
 ## Side-effect review checklist
 
-- [ ] No productive subtree unmount, editor model disposal, PTY detach/write/resize caused by masking.
-- [ ] No root CSS blur/filter, layout shift, app zoom reset, page scroll or terminal fit storm.
-- [ ] Toasts visibly continue and expire; sound/browser notification policy unchanged; toast buttons cannot navigate/dismiss while masked.
-- [ ] Body-portaled dialogs, menus, tooltips and suggestion overlays cannot appear above/bypass mask.
-- [ ] Focus scopes, programmatic refocus, IME/paste and an in-flight pointer gesture remain safe.
-- [ ] Native child visibility changes do not reset target, host generation or navigation.
-- [ ] Deactivation/unmount restores prior attributes/focus and removes owned capture listeners.
+- [x] No productive subtree unmount, editor model disposal, PTY detach/write/resize caused by masking.
+- [x] No root CSS blur/filter, layout shift, app zoom reset, page scroll or terminal fit storm.
+- [x] Toasts visibly continue and expire; sound/browser notification policy unchanged; toast buttons cannot navigate/dismiss while masked.
+- [x] Body-portaled dialogs, menus, tooltips and suggestion overlays cannot appear above/bypass mask.
+- [x] Focus scopes, programmatic refocus, IME/paste and an in-flight pointer gesture remain safe.
+- [x] Native child visibility changes do not reset target, host generation or navigation.
+- [x] Deactivation/unmount restores prior attributes/focus and removes owned capture listeners.
 
 ## Risk Assessment
 
@@ -140,4 +140,4 @@ Native adapter: derive `effectiveViewportVisible = props.isViewportVisible && !a
 
 ## Next steps
 
-[Phase 03](./phase-03-global-shortcuts-and-terminal-integration.md) installs the sole keyboard owner, app content boundary and terminal precedence. [Phase 05](./phase-05-qualification-and-smoke.md) proves actual visual/focus/native behavior.
+[Phase 03](./phase-03-global-shortcuts-and-terminal-integration.md) installs the sole keyboard owner, app content boundary and terminal precedence; its integration must re-check focus restoration after the inert content boundary is added because review flagged synchronous focus-restoration timing as a high-priority risk. [Phase 05](./phase-05-qualification-and-smoke.md) proves actual visual/focus/native behavior.

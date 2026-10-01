@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Cognito Mode — privacy / boss key screen mask
 
-Implementation in progress (1/5 phases; 20%; 4/28h planned effort). Phase 01 is DONE (2026-10-01); Phases 02–05 and runtime qualification remain pending.
+Implementation in progress (2/5 phases; 40%; 11/28h planned effort, 39%). Phase 01 is DONE (2026-10-01); Phase 02 is DONE (2026-10-02); Phases 03–05 and runtime qualification remain pending.
 
 ## Deliverables
 
@@ -36,7 +36,7 @@ Implementation in progress (1/5 phases; 20%; 4/28h planned effort). Phase 01 is 
 | # | Phase | Status / progress | Effort | Depends on |
 |---|---|---|---|---|
 | 01 | [Config and schema](./phase-01-config-and-schema.md) | DONE / 100% (2026-10-01) | 4h | Preflight |
-| 02 | [State and overlay](./phase-02-cognito-state-and-overlay.md) | Pending / 0% | 7h | 01 contract |
+| 02 | [State and overlay](./phase-02-cognito-state-and-overlay.md) | DONE / 100% (2026-10-02) | 7h | 01 contract |
 | 03 | [Global shortcuts and terminal integration](./phase-03-global-shortcuts-and-terminal-integration.md) | Pending / 0% | 6h | 01, 02 |
 | 04 | [Settings UI integration](./phase-04-settings-ui-integration.md) | Pending / 0% | 4h | 01, 03 capture contract |
 | 05 | [Qualification and smoke](./phase-05-qualification-and-smoke.md) | Pending / 0% | 7h | 01–04 |
@@ -60,10 +60,12 @@ Implementation in progress (1/5 phases; 20%; 4/28h planned effort). Phase 01 is 
 - Follow-up one-field patch preservation regressions passed: UI settings file 28/28; `update_global_ui_preserves_other_cognito_field_and_unrelated_settings_on_partial_patch` passed 1/1 (1,766 filtered).
 - Documentation updates and 42-file link validation are recorded in the Phase 01 completion evidence.
 
+- Phase 02 implementation is DONE (2026-10-02); scoped tests passed 28/28 across four UI files and targeted UI typecheck passed. Its five implementation todos and seven side-effect checklist items are complete. Code review scored 9/10 with no critical issues; it flagged a high-priority focus-restoration timing race against Phase 03's upcoming inert content boundary for integration follow-up. See [Phase 02 plan](./phase-02-cognito-state-and-overlay.md), [tester report](../reports/tester-261002-0010-phase-02-cognito-state-overlay.md), and [code review](../reports/code-review-261002-0013-phase-02-cognito-state-overlay.md).
+
 ## Validation summary
 
 - Confirmed requirements incorporated: default/reset shortcut, two styles, immediate same-key toggle, input blocking, notifications/audio continuity, TOML preferences and reload-safe ephemeral state.
-- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phase 01 implementation and scoped tests are complete; Phases 02–05 integration and browser/native feature qualification remain pending.
+- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phase 01 and Phase 02 implementation and scoped tests are complete; Phases 03–04 remain for integration and Settings UI work, while Phase 05 browser/native feature qualification remains pending.
 - Qualification commands, scenario matrix, platform limits and evidence requirements are specified in [Phase 05](./phase-05-qualification-and-smoke.md).
 
 ## Unresolved questions

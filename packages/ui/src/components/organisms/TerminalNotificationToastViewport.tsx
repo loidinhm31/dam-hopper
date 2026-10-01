@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Bell, X } from "lucide-react";
 import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import type { TerminalAgentNotification } from "@/lib/terminal-notification-signal-parser.js";
 
 interface TerminalNotificationToastProps {
@@ -78,6 +79,7 @@ export function TerminalNotificationToastViewport() {
   const notifications = useTerminalNotificationsStore(
     (state) => state.notifications,
   );
+  const isCognitoActive = useCognitoModeStore((state) => state.active);
   const toastIds = useTerminalNotificationsStore((state) => state.toasts);
   const visibleToasts = toastIds
     .slice(0, 3)
@@ -90,7 +92,8 @@ export function TerminalNotificationToastViewport() {
       aria-live="polite"
       aria-atomic="false"
       aria-relevant="additions"
-      className="pointer-events-none fixed right-[calc(var(--safe-area-right)_+_0.75rem)] top-[calc(var(--top-nav-height)_+_0.75rem)] z-[45] flex max-h-[calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_1.5rem)] w-[min(22rem,calc(var(--app-viewport-width)_-_1.5rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] flex-col gap-2 overflow-y-auto"
+      style={{ zIndex: isCognitoActive ? 10001 : 45 }}
+      className="pointer-events-none fixed right-[calc(var(--safe-area-right)_+_0.75rem)] top-[calc(var(--top-nav-height)_+_0.75rem)] flex max-h-[calc(var(--app-viewport-height)_-_var(--top-nav-height)_-_var(--safe-area-bottom)_-_1.5rem)] w-[min(22rem,calc(var(--app-viewport-width)_-_1.5rem_-_var(--safe-area-left)_-_var(--safe-area-right)))] flex-col gap-2 overflow-y-auto"
     >
       {visibleToasts.map(({ id, event }) => (
         <div key={id} className="pointer-events-auto">
