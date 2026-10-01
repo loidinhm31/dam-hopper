@@ -1470,6 +1470,7 @@ pub fn get_log(
     limit: usize,
     offset: usize,
     git_ref: Option<&str>,
+    message_query: Option<&str>,
 ) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
@@ -1478,6 +1479,18 @@ pub fn get_log(
         validate_revision(&repo, git_ref, "git ref")?;
     }
     let upstream = upstream_oid(&repo);
+
+    let normalized_query = match message_query.map(str::trim) {
+        Some(term) if !term.is_empty() => {
+            if term.contains(['\r', '\n', '\0']) {
+                return Err(AppError::InvalidInput(
+                    "Search query must not contain CR, LF, or NUL characters".into(),
+                ));
+            }
+            Some(term)
+        }
+        _ => None,
+    };
 
     let mut command = Command::new("git");
     command
@@ -1488,10 +1501,16 @@ pub fn get_log(
         .arg(format!("-n {}", limit))
         .arg("--format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%s%x00%D");
 
+    if let Some(term) = normalized_query {
+        command
+            .arg("--fixed-strings")
+            .arg("--regexp-ignore-case")
+            .arg(format!("--grep={}", term));
+    }
+
     if let Some(git_ref) = git_ref {
         command.arg(git_ref);
     }
-
     let output = command
         .output()
         .map_err(|e| AppError::Git(format!("Failed to execute git log: {}", e)))?;

@@ -5213,6 +5213,82 @@ async fn git_get_and_edit_commit_message_api() {
     assert_ne!(ok_json["newTargetOid"], head);
 }
 
+#[tokio::test]
+async fn git_log_api_supports_message_query_search_and_pagination() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    git(&["commit", "--allow-empty", "-m", "alpha topic commit 1\n\nfirst match"], tmp.path());
+    git(&["commit", "--allow-empty", "-m", "beta unrelated commit"], tmp.path());
+    git(&["commit", "--allow-empty", "-m", "gamma commit\n\ncontains alpha topic in body"], tmp.path());
+    git(&["commit", "--allow-empty", "-m", "alpha topic commit 2\n\nthird match"], tmp.path());
+
+    let state = make_state_with_project(&tmp);
+
+    // 1. Search matching both subject and body
+    let resp = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let entries: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let list = entries.as_array().unwrap();
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[0]["message"], "alpha topic commit 2");
+    assert_eq!(list[1]["message"], "gamma commit"); // body-only match, message stays subject
+    assert_eq!(list[2]["message"], "alpha topic commit 1");
+
+    // 2. Pagination on search results
+    let resp_page1 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=0").await;
+    assert_eq!(resp_page1.status(), StatusCode::OK);
+    let list1: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page1.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(list1.as_array().unwrap().len(), 2);
+    assert_eq!(list1[0]["message"], "alpha topic commit 2");
+    assert_eq!(list1[1]["message"], "gamma commit");
+
+    let resp_page2 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=2").await;
+    assert_eq!(resp_page2.status(), StatusCode::OK);
+    let list2: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page2.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(list2.as_array().unwrap().len(), 1);
+    assert_eq!(list2[0]["message"], "alpha topic commit 1");
+
+    let resp_page3 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=4").await;
+    assert_eq!(resp_page3.status(), StatusCode::OK);
+    let list3: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page3.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert!(list3.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn git_log_api_validation_and_error_handling() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    let state = make_state_with_project(&tmp);
+
+    // 1. Invalid CR/LF/NUL returns 400 Bad Request
+    let resp_lf = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%0Aworld").await;
+    assert_eq!(resp_lf.status(), StatusCode::BAD_REQUEST);
+
+    let resp_cr = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%0Dworld").await;
+    assert_eq!(resp_cr.status(), StatusCode::BAD_REQUEST);
+
+    let resp_nul = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%00world").await;
+    assert_eq!(resp_nul.status(), StatusCode::BAD_REQUEST);
+
+    // 2. Invalid git ref returns 400 Bad Request
+    let resp_ref = get(state.clone(), "/api/git/test-project/log?ref=invalid..ref").await;
+    assert_eq!(resp_ref.status(), StatusCode::BAD_REQUEST);
+
+    // 3. Unauthorized request returns 401 Unauthorized
+    let resp_unauth = get_without_auth(state.clone(), "/api/git/test-project/log?messageQuery=test").await;
+    assert_eq!(resp_unauth.status(), StatusCode::UNAUTHORIZED);
+
+    // 4. Non-git directory returns 409 Conflict with GIT_NOT_INITIALIZED
+    let non_git = tempfile::tempdir().unwrap();
+    let non_git_state = make_state_with_project(&non_git);
+    let resp_non_git = get(non_git_state, "/api/git/test-project/log").await;
+    assert_eq!(resp_non_git.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp_non_git.into_body(), usize::MAX).await.unwrap();
+    let err_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(err_json["code"], "GIT_NOT_INITIALIZED");
+}
+
 // ---------------------------------------------------------------------------
 // Purpose-bound video ticket API
 // ---------------------------------------------------------------------------

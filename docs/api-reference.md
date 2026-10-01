@@ -1402,7 +1402,43 @@ Fields:
 - `warnings` may include invalid `.gitmodules` or missing/uninitialized gitlink notes.
 - `status` reflects the root's own Git status snapshot.
 
+### Commit history
+
+**GET /api/git/{project}/log**
+
+Returns Git history as an array of `GitLogEntry` objects. The route uses the
+normal authenticated Git API and resolves the selected project/worktree and
+optional VCS root before reading history.
+
+Optional query parameters:
+
+| Parameter      | Default | Meaning |
+| -------------- | ------- | ------- |
+| `limit`        | `100`   | Page size. |
+| `offset`       | `0`     | Number of entries to skip; with `messageQuery`, skips matching entries. |
+| `ref`          | `HEAD`  | Optional revision to use as the history starting point. |
+| `worktreePath` | —       | Optional registered worktree target. |
+| `root`         | —       | Optional VCS root ID. |
+| `messageQuery` | —       | Optional commit-message filter. |
+
+`messageQuery` is trimmed. Missing or whitespace-only values leave history
+unfiltered. Otherwise, Git searches the full commit message, including subject
+and body, using literal, case-insensitive matching; the filter is applied
+before `offset` and `limit`, so pagination is over matching commits. ASCII
+case-insensitive matching is supported; Unicode normalization is not implied.
+Embedded CR/LF in the trimmed nonempty term and any NUL character return HTTP
+`400 Bad Request`. The current trim-before-validation order strips
+leading/trailing CR/LF, so a query containing only those characters is treated
+as an unfiltered request. This known edge is recorded in the [Phase 01 risk
+note](../plans/261001-2003-git-history-search-persistence/phase-01-server-message-search.md#risk-assessment).
+
+The response shape is unchanged. Each item contains `hash`, `parents`,
+`authorName`, `authorEmail`, `timestamp`, `message`, `refs`, and `isPushed`.
+`message` remains subject-only, including when a body-only match selected the
+commit.
+
 **POST /api/git/{project}/branches**
+
 Create a branch. Set `checkout` to switch to it after creation.
 
 ```json

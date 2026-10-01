@@ -183,6 +183,18 @@ Confirmation publishes the captured branch to that one destination only if
 the expected remote OID still matches. Stale state requires a new preview; an
 unknown outcome is not retried blindly.
 
+### Server-side history search
+
+`GET /api/git/{project}/log` accepts optional `messageQuery`. It matches
+ASCII-case-insensitive literal text against the full commit subject/body before
+pagination, while the existing response and subject-only `message` field stay
+unchanged. Whitespace-only input disables filtering. Embedded CR/LF and NUL are
+rejected; leading/trailing CR/LF is trimmed first, so a CR/LF-only query
+currently disables filtering. The [Phase 01 risk note](../plans/261001-2003-git-history-search-persistence/phase-01-server-message-search.md#risk-assessment) tracks this contract gap.
+
+The server contract is documented in the [API reference](./api-reference.md#commit-history).
+Client search and selection persistence remain in the [history search plan](../plans/261001-2003-git-history-search-persistence/plan.md).
+
 Git operations stay bound to the selected profile, project/worktree, and VCS
 root. Changing the target or root clears a pending lease preview; unavailable
 targets do not fall through to another profile or the project root. For fetch,
@@ -203,6 +215,7 @@ failure and reuses the approved snapshot.
 | Scoped explorer state and watcher | `packages/ui/src/stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts` |
 | CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` |
 | Search and replace | `hooks/use-file-search.ts`, `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` |
+| Git history search | `server/src/api/git.rs`, `server/src/git/repository.rs`; regressions in `server/src/api/tests.rs` and `server/src/git/tests.rs` |
 | Git edit and leased publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
 | Focused regressions | `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git history/dialog/panel tests |
 
