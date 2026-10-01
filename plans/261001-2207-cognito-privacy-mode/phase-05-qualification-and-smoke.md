@@ -9,8 +9,8 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: pending. Effort: 7h.
-- Coordinator-owned integrated verification. Close runtime, persistence, input isolation, notification and platform gates before marking the feature complete; update docs only against observed implementation.
+- Date: 2026-10-02. Priority: P2. Status: implementation/finalization settled (100% effort) in explicit advice mode; durable completion pending controller sealing (not DONE). Effort: 7h.
+- Automated regression results are recorded; feature documentation has been updated but its qualification claims still need reconciliation. The tester report states that actual-app C01–C16, supported native-shell/platform smoke and planned build gates were not run. Do not mark this phase DONE or represent those gates as passed until evidence is reconciled.
 
 ## Key Insights
 
@@ -136,11 +136,13 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 
 ## Todo list
 
-- [ ] Run integrated focused Rust/Vitest/browser regressions with nonzero counts.
-- [ ] Run one coordinator-owned full affected-project/build/lint pass.
-- [ ] Complete C01–C16 real app/native scenarios, distinguishing unit simulation from actual OS evidence.
-- [ ] Complete side-effect review and record screenshots, persistence and input/continuity observations.
-- [ ] Update docs/changelog, remove disposable proof scaffolding and close statuses against evidence.
+- [x] Run integrated focused Rust/Vitest/Chromium regressions with nonzero counts.
+- [x] Run full UI/backend test suites and lint; record actual counts and warnings.
+- [ ] Run the planned Rust/UI/web build gates; the tester report says these were not run.
+- [ ] Complete actual-app C01–C16 and supported native-shell/platform smoke; record unavailable platform evidence explicitly.
+- [ ] Record actual visual, persistence/reload, audio, PTY continuity and native observations; clean up smoke services and disposable fixtures.
+- [x] Complete code-side side-effect review; all 11 checklist items are recorded in the review.
+- [ ] Reconcile maintained docs, qualification evidence and statuses against observed behavior; durable controller sealing remains parent-owned.
 
 ## Success Criteria
 
@@ -153,17 +155,17 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 
 ## Side-effect review checklist
 
-- [ ] Server: partial patch, enum rejection, snake_case persistence, existing auth/merge/file-write safety unchanged.
-- [ ] Preferences: explicit source/generation/edit fencing, offline snapshot and rollback preserved; no activation persistence/network writes.
-- [ ] Keyboard: capture order, all xterm installations, suggestion/copy/find/font/pane handlers and Monaco shortcuts respect privacy first.
-- [ ] Input: clipboard/IME/composition/drag/touch/wheel/context menu and dismissal releases do not mutate underlying consumers.
-- [ ] Focus/accessibility: sink retains focus, inert/aria-hidden reversible, modal scopes safe, toasts' live region stays available.
-- [ ] Visual: both styles cover zoom/resizing/safe areas/body portals; no clear-content flash or visible blackout branding.
-- [ ] Notifications/media: audible chimes, visible toasts/expiry, browser notification policy and background media unchanged; toast input blocked.
-- [ ] Terminal/editor: same model/session/transport/host/dimensions, no mask-induced fits/reconnects/selection switches.
-- [ ] Native Browser Debug: hidden child cannot cover mask; visibility restores without navigation/target/generation changes.
-- [ ] Lifecycle: StrictMode/reload/unmount leave usable inactive root; every listener/attribute/proof service cleaned up.
-- [ ] Scope: no OS-wide accelerator, password/PIN, auto-timeout, new permissions/dependencies, foreign-frame shortcut protocol or unrelated refactor.
+- [x] Server: partial patch, enum rejection, snake_case persistence, existing auth/merge/file-write safety unchanged.
+- [x] Preferences: explicit source/generation/edit fencing, offline snapshot and rollback preserved; no activation persistence/network writes.
+- [x] Keyboard: capture order, all xterm installations, suggestion/copy/find/font/pane handlers and Monaco shortcuts respect privacy first.
+- [x] Input: clipboard/IME/composition/drag/touch/wheel/context menu and dismissal releases do not mutate underlying consumers.
+- [x] Focus/accessibility: sink retains focus, inert/aria-hidden reversible, modal scopes safe, toasts' live region stays available.
+- [x] Visual: both styles cover zoom/resizing/safe areas/body portals; no clear-content flash or visible blackout branding.
+- [x] Notifications/media: audible chimes, visible toasts/expiry, browser notification policy and background media unchanged; toast input blocked.
+- [x] Terminal/editor: same model/session/transport/host/dimensions, no mask-induced fits/reconnects/selection switches.
+- [x] Native Browser Debug: hidden child cannot cover mask; visibility restores without navigation/target/generation changes.
+- [x] Lifecycle: StrictMode/reload/unmount leave usable inactive root; every listener/attribute/proof service cleaned up.
+- [x] Scope: no OS-wide accelerator, password/PIN, auto-timeout, new permissions/dependencies, foreign-frame shortcut protocol or unrelated refactor.
 
 ## Risk Assessment
 
@@ -181,4 +183,4 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 
 ## Next steps
 
-After evidence and docs close, submit implementation results with plan/report paths, exercised command counts and actual platform coverage. No follow-up implementation stub or deferred mandatory behavior. Unresolved product questions: none; unavailable platform runtimes, if any, are explicit qualification prerequisites.
+Before controller sealing, reconcile the qualification report, run the planned builds and actual-app C01–C16 plus supported native-shell/platform smoke, or record exact unavailable runtime evidence. Keep this phase not DONE until applicable gates have evidence. Parent owns the durable `state complete` receipt; product questions: none.

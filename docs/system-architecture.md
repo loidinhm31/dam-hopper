@@ -512,8 +512,9 @@ boundary.
   `Mod+Alt+KeyB`) and `cognitoModeStyle` (`heavy-blur` or `black-screen`) use
   the existing UI-preference API and snake_case TOML keys. Heavy Blur is not a
   redaction guarantee. The mask does not protect OS/browser chrome or
-  screenshots/recordings, capture input from foreign iframes, or stop
-  background PTY work. See the [configuration guide](./configuration-guide.md#ui-configuration),
+  screenshots/recordings, or capture input from foreign iframes. It does not
+  issue a PTY pause/stop command; live output continuity and native-shell
+  visibility still require runtime qualification. See the [configuration guide](./configuration-guide.md#ui-configuration),
   [API reference](./api-reference.md#global-configuration-preferences), and
   [Phase 05 qualification report](../plans/261001-2207-cognito-privacy-mode/reports/qualification.md)
   for the distinct implementation and evidence boundaries.
