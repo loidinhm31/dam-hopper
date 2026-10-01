@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Cognito Mode — privacy / boss key screen mask
 
-Implementation in progress (2/5 phases; 40%; 11/28h planned effort, 39%). Phase 01 is DONE (2026-10-01); Phase 02 is DONE (2026-10-02); Phases 03–05 and runtime qualification remain pending.
+Implementation in progress: 3/5 phase scopes have implementation/finalization settled (60%). Durable completion remains in progress at 2/5 phases DONE (40%; 11/28h planned effort credited to DONE phases, 39%). Phases 01–02 are DONE; Phase 03 implementation/finalization are settled, but durable completion is pending Phase 05 integrated qualification (not DONE). Phases 04–05 remain open.
 
 ## Deliverables
 
@@ -37,7 +37,7 @@ Implementation in progress (2/5 phases; 40%; 11/28h planned effort, 39%). Phase 
 |---|---|---|---|---|
 | 01 | [Config and schema](./phase-01-config-and-schema.md) | DONE / 100% (2026-10-01) | 4h | Preflight |
 | 02 | [State and overlay](./phase-02-cognito-state-and-overlay.md) | DONE / 100% (2026-10-02) | 7h | 01 contract |
-| 03 | [Global shortcuts and terminal integration](./phase-03-global-shortcuts-and-terminal-integration.md) | Pending / 0% | 6h | 01, 02 |
+| 03 | [Global shortcuts and terminal integration](./phase-03-global-shortcuts-and-terminal-integration.md) | Implementation/finalization settled; durable completion pending Phase 05 (not DONE) | 6h | 01, 02 |
 | 04 | [Settings UI integration](./phase-04-settings-ui-integration.md) | Pending / 0% | 4h | 01, 03 capture contract |
 | 05 | [Qualification and smoke](./phase-05-qualification-and-smoke.md) | Pending / 0% | 7h | 01–04 |
 
@@ -62,10 +62,13 @@ Implementation in progress (2/5 phases; 40%; 11/28h planned effort, 39%). Phase 
 
 - Phase 02 implementation is DONE (2026-10-02); scoped tests passed 28/28 across four UI files and targeted UI typecheck passed. Its five implementation todos and seven side-effect checklist items are complete. Code review scored 9/10 with no critical issues; it flagged a high-priority focus-restoration timing race against Phase 03's upcoming inert content boundary for integration follow-up. See [Phase 02 plan](./phase-02-cognito-state-and-overlay.md), [tester report](../reports/tester-261002-0010-phase-02-cognito-state-overlay.md), and [code review](../reports/code-review-261002-0013-phase-02-cognito-state-overlay.md).
 
+- Phase 03 implementation and finalization are settled (2026-10-02): all five implementation todos and seven side-effect checks are checked off. Scoped UI validation passed 55/55 tests across four files; the full UI package report records 2,169/2,169 tests across 291 files, and targeted UI typecheck passed. Code review approved 9.5/10 with no critical issues or warnings; one medium defensive-default recommendation remains non-blocking. See [Phase 03 plan](./phase-03-global-shortcuts-and-terminal-integration.md), [tester report](../reports/tester-261002-0103-phase-03-global-shortcuts-terminal-integration.md), and [code review](../reports/code-review-261002-0105-phase-03-global-shortcuts-terminal-integration.md). Durable completion is held for Phase 05 integrated qualification; this does not mark Phase 03 DONE.
+
+
 ## Validation summary
 
 - Confirmed requirements incorporated: default/reset shortcut, two styles, immediate same-key toggle, input blocking, notifications/audio continuity, TOML preferences and reload-safe ephemeral state.
-- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phase 01 and Phase 02 implementation and scoped tests are complete; Phases 03–04 remain for integration and Settings UI work, while Phase 05 browser/native feature qualification remains pending.
+- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phase 01 and Phase 02 are DONE; Phase 03 implementation/finalization are settled but durable completion awaits Phase 05 integrated qualification. Phases 04 and 05 remain open.
 - Qualification commands, scenario matrix, platform limits and evidence requirements are specified in [Phase 05](./phase-05-qualification-and-smoke.md).
 
 ## Unresolved questions

@@ -8,8 +8,15 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: pending. Effort: 6h.
+- Date: 2026-10-01. Priority: P2. Status: implementation and finalization settled; durable completion pending Phase 05 qualification (not DONE). Effort: 6h.
 - Connect the root-level keyboard toggle/input isolation to every existing terminal layout; ensure no keystroke reaches a PTY/editor/action while masked.
+
+## Implementation and finalization status
+
+- Settled on 2026-10-02. All 5/5 implementation todos and 7/7 side-effect checklist items are complete.
+- Scoped validation passed 55/55 tests across four UI files; the full UI package report records 2,169/2,169 tests across 291 files, and the targeted UI typecheck passed.
+- Code review approved 9.5/10 with no critical issues or warnings; one medium defensive-default recommendation remains non-blocking. Evidence: [tester report](../reports/tester-261002-0103-phase-03-global-shortcuts-terminal-integration.md) and [code review](../reports/code-review-261002-0105-phase-03-global-shortcuts-terminal-integration.md).
+- Durable completion is intentionally pending Phase 05 integrated qualification, including actual browser/terminal behavior. Phase 04 Settings integration and Phase 05 qualification remain open; do not mark this phase DONE before those gates close.
 
 ## Key Insights
 
@@ -100,11 +107,11 @@ The global capture guard owns release tracking and toggling. Defensive xterm han
 
 ## Todo list
 
-- [ ] Implement sole capture-phase toggle and release tracking.
-- [ ] Integrate root overlay and inert content boundary without remounting work.
-- [ ] Add first-refusal terminal guard and migrate all callers.
-- [ ] Preserve pane composition and Settings capture exemption.
-- [ ] Add repeat/IME/focus/source-change/precedence regressions.
+- [x] Implement sole capture-phase toggle and release tracking.
+- [x] Integrate root overlay and inert content boundary without remounting work.
+- [x] Add first-refusal terminal guard and migrate all callers.
+- [x] Preserve pane composition and Settings capture exemption.
+- [x] Add repeat/IME/focus/source-change/precedence regressions.
 
 ## Success Criteria
 
@@ -117,13 +124,13 @@ The global capture guard owns release tracking and toggling. Defensive xterm han
 
 ## Side-effect review checklist
 
-- [ ] Capture order beats browser guard and existing window/document/Monaco handlers.
-- [ ] Exactly one toggle owner; no xterm callback double-toggle or `defaultPrevented` ambiguity.
-- [ ] Terminal early guard precedes Backspace, suggestion acceptance/history, copy and pane actions.
-- [ ] Root wrapper does not change content sizing, zoom, scrolling, suspense or error behavior.
-- [ ] No terminal attach/detach/write/resize, connection switch or editor disposal from toggling.
-- [ ] Same-key release and held repeats remain blocked after deactivation; fresh input resumes.
-- [ ] Cleanup removes all listeners/attributes and reset does not run on profile/route change.
+- [x] Capture order beats browser guard and existing window/document/Monaco handlers.
+- [x] Exactly one toggle owner; no xterm callback double-toggle or `defaultPrevented` ambiguity.
+- [x] Terminal early guard precedes Backspace, suggestion acceptance/history, copy and pane actions.
+- [x] Root wrapper does not change content sizing, zoom, scrolling, suspense or error behavior.
+- [x] No terminal attach/detach/write/resize, connection switch or editor disposal from toggling.
+- [x] Same-key release and held repeats remain blocked after deactivation; fresh input resumes.
+- [x] Cleanup removes all listeners/attributes and reset does not run on profile/route change.
 
 ## Risk Assessment
 
@@ -140,4 +147,4 @@ The global capture guard owns release tracking and toggling. Defensive xterm han
 
 ## Next steps
 
-[Phase 04](./phase-04-settings-ui-integration.md) completes capture/reset/appearance controls against this contract. [Phase 05](./phase-05-qualification-and-smoke.md) verifies real xterm/editor/browser precedence and platform coverage.
+- [Phase 04](./phase-04-settings-ui-integration.md) completes capture/reset/appearance controls against this contract. [Phase 05](./phase-05-qualification-and-smoke.md) verifies real xterm/editor/browser precedence and platform coverage. Phase 03 implementation/finalization are settled, but durable completion remains pending Phase 05 integrated qualification; do not mark this phase DONE prematurely.

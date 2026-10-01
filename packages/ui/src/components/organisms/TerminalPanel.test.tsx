@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { applyTerminalBufferReplay } from "@/lib/terminal-buffer-replay.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { TerminalPanel } from "./TerminalPanel.js";
 
 interface TestTerminal {
@@ -12,6 +13,7 @@ interface TestTerminal {
   resize: Set<(size: { cols: number; rows: number }) => void>;
   output: string;
   disposed: boolean;
+  customKeyEventHandler?: (e: KeyboardEvent) => boolean;
 }
 
 const state = vi.hoisted(() => ({
@@ -101,7 +103,10 @@ vi.mock("@xterm/xterm", () => ({
     onTitleChange() {
       return { dispose() {} };
     }
-    attachCustomKeyEventHandler() {}
+    customKeyEventHandler?: (e: KeyboardEvent) => boolean;
+    attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean) {
+      this.customKeyEventHandler = handler;
+    }
     write(data: string) {
       this.output += data;
     }
@@ -206,7 +211,14 @@ vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: Object.assign(
     (selector: (value: unknown) => unknown) =>
       selector({ terminalFontSize: 14 }),
-    { getState: () => ({}) },
+    {
+      getState: () => ({
+        terminalFontSize: 14,
+        terminalWorkspaceShortcut: "Mod+Shift+Backquote",
+        revealActiveFileShortcut: "Alt+F1",
+        cognitoModeShortcut: "Mod+Alt+KeyB",
+      }),
+    },
   ),
 }));
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({
@@ -804,5 +816,62 @@ describe("TerminalPanel owned connections", () => {
     // Stale A is completely gone, and B's replay + delta is visible exactly once!
     expect(term.output).not.toContain("replay-A");
     expect(term.output).toBe("replay-B-1delta-B-2");
+  });
+
+  it("suppresses all keys in baseKeyEventHandler when cognito mode is active or chord matches", async () => {
+    await connect("cognito-test", 1);
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "cognito-test",
+          sessionId: "shared",
+          project: "shared",
+          command: "bash",
+        }),
+      );
+    });
+    const term = state.terminals[state.terminals.length - 1]!;
+    expect(term.customKeyEventHandler).toBeDefined();
+
+    // 1. Inactive: normal key returns true (passed through)
+    const normalKey = new KeyboardEvent("keydown", { code: "KeyA", key: "a" });
+    expect(term.customKeyEventHandler!(normalKey)).toBe(true);
+
+    // 2. Inactive: matching cognito chord returns false (consumed defensively)
+    const chordKey = new KeyboardEvent("keydown", {
+      code: "KeyB",
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(term.customKeyEventHandler!(chordKey)).toBe(false);
+
+    // 3. Active: all keys return false (consumed defensively before suggestions/copy/shared)
+    act(() => {
+      useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
+    });
+
+    expect(term.customKeyEventHandler!(normalKey)).toBe(false);
+    expect(
+      term.customKeyEventHandler!(
+        new KeyboardEvent("keydown", { code: "Backspace", key: "Backspace" }),
+      ),
+    ).toBe(false);
+    expect(
+      term.customKeyEventHandler!(
+        new KeyboardEvent("keydown", { code: "KeyC", ctrlKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      term.customKeyEventHandler!(
+        new KeyboardEvent("keydown", { code: "Tab", key: "Tab" }),
+      ),
+    ).toBe(false);
+
+    // 4. Reset returns back to normal
+    act(() => {
+      useCognitoModeStore.getState().reset();
+    });
+    expect(term.customKeyEventHandler!(normalKey)).toBe(true);
   });
 });

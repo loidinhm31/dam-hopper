@@ -1,21 +1,59 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { BLOCKED_POINTER_EVENTS } from "@/lib/cognito-mode-events.js";
+import {
+  matchesKeyboardShortcut,
+  DEFAULT_COGNITO_MODE_SHORTCUT,
+  type ShortcutKeyEvent,
+} from "@/lib/shortcuts.js";
 
 const useClientLayoutEffect =
   typeof window === "undefined" ? useEffect : useLayoutEffect;
 
+function isInsideShortcutCapture(event: Event): boolean {
+  if (typeof event.composedPath === "function") {
+    for (const target of event.composedPath()) {
+      if (
+        target instanceof Element &&
+        target.getAttribute("data-shortcut-capture") === "true"
+      ) {
+        return true;
+      }
+    }
+  } else if (event.target instanceof Element) {
+    if (event.target.closest('[data-shortcut-capture="true"]')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function createSuppressionEvent(event: KeyboardEvent): ShortcutKeyEvent {
+  return {
+    type: event.type,
+    code: event.code,
+    key: event.key,
+    ctrlKey: Boolean(event.ctrlKey),
+    metaKey: Boolean(event.metaKey),
+    altKey: Boolean(event.altKey),
+    shiftKey: Boolean(event.shiftKey),
+    repeat: false,
+    isComposing: false,
+    keyCode: event.keyCode,
+  };
+}
+
 /**
  * Installs window-capture listeners to intercept and suppress pointer, mouse,
- * touch, wheel, drag, clipboard, input, and focus events while Cognito Privacy
- * Mode is active. Also tracks in-flight gestures so ending release/click sequences
- * are consumed if deactivation occurs before the gesture completes.
+ * touch, wheel, drag, clipboard, input, focus, and keyboard events while Cognito
+ * Privacy Mode is active or toggling.
  */
 export function useCognitoModeInputGuard(): void {
   const priorFocusedElementRef = useRef<HTMLElement | null>(null);
   const gestureInFlightRef = useRef<boolean>(false);
   const releaseTimerRef = useRef<number | null>(null);
-
+  const consumedPhysicalCodesRef = useRef<Set<string>>(new Set());
   useClientLayoutEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -81,6 +119,100 @@ export function useCognitoModeInputGuard(): void {
         }
       }
     };
+    const handleKeyEvent = (event: KeyboardEvent) => {
+      const { active, activationShortcut } = useCognitoModeStore.getState();
+      const code = event.code;
+
+      // 1. Consume pending releases/keypress/repeats from a key sequence already intercepted;
+      // no fresh toggle from held keys.
+      if (code && consumedPhysicalCodesRef.current.has(code)) {
+        if (event.type === "keyup") {
+          consumedPhysicalCodesRef.current.delete(code);
+        }
+        if (event.cancelable) event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+
+      // 2. If active, choose frozen activationShortcut; consume all keys.
+      // Toggle off only when it matches a fresh nonrepeat/noncomposing keydown,
+      // then retain dismissal sequence tracking until release.
+      if (active) {
+        const chord =
+          activationShortcut ??
+          useSettingsStore.getState().cognitoModeShortcut ??
+          DEFAULT_COGNITO_MODE_SHORTCUT;
+
+        const isComposing = Boolean(event.isComposing) || event.keyCode === 229;
+        if (
+          event.type === "keydown" &&
+          !event.repeat &&
+          !isComposing &&
+          matchesKeyboardShortcut(chord, event)
+        ) {
+          if (code) {
+            consumedPhysicalCodesRef.current.add(code);
+          }
+          useCognitoModeStore.getState().toggle(chord);
+          if (event.cancelable) event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+
+        // All keys during active mode are consumed
+        if (event.type === "keydown" && code) {
+          consumedPhysicalCodesRef.current.add(code);
+        } else if (event.type === "keyup" && code) {
+          consumedPhysicalCodesRef.current.delete(code);
+        }
+        if (event.cancelable) event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+
+      // 3. If inactive and target composedPath() includes [data-shortcut-capture="true"],
+      // pass through so Settings capture works; no global toggle. Marker is only an inactive exemption.
+      if (isInsideShortcutCapture(event)) {
+        return;
+      }
+
+      // 4. If inactive and matching the configured Cognito chord, synchronously activate;
+      // prevent default and stop immediate propagation. Eat composing/repeated variants of
+      // the matching physical chord without toggling.
+      const configuredShortcut =
+        useSettingsStore.getState().cognitoModeShortcut ??
+        DEFAULT_COGNITO_MODE_SHORTCUT;
+
+      if (event.type === "keydown") {
+        const isComposing = Boolean(event.isComposing) || event.keyCode === 229;
+        if (
+          !event.repeat &&
+          !isComposing &&
+          matchesKeyboardShortcut(configuredShortcut, event)
+        ) {
+          if (code) {
+            consumedPhysicalCodesRef.current.add(code);
+          }
+          useCognitoModeStore.getState().toggle(configuredShortcut);
+          if (event.cancelable) event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+
+        // Check if composing or repeated variant of the configured chord
+        const suppressionEvent = createSuppressionEvent(event);
+        if (matchesKeyboardShortcut(configuredShortcut, suppressionEvent)) {
+          if (code) {
+            consumedPhysicalCodesRef.current.add(code);
+          }
+          if (event.cancelable) event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+
+      // 5. Otherwise leave ordinary events unchanged. Browser guard and existing app handlers then own them.
+    };
 
     const handleFocusCapture = (event: FocusEvent) => {
       if (!useCognitoModeStore.getState().active) return;
@@ -102,6 +234,7 @@ export function useCognitoModeInputGuard(): void {
     const handleWindowBlur = () => {
       gestureInFlightRef.current = false;
       clearReleaseTimer();
+      consumedPhysicalCodesRef.current.clear();
     };
 
     const listenerOptions = { capture: true, passive: false };
@@ -109,10 +242,12 @@ export function useCognitoModeInputGuard(): void {
     for (const eventName of BLOCKED_POINTER_EVENTS) {
       window.addEventListener(eventName, handleBlockedEvent, listenerOptions);
     }
+    window.addEventListener("keydown", handleKeyEvent, listenerOptions);
+    window.addEventListener("keypress", handleKeyEvent, listenerOptions);
+    window.addEventListener("keyup", handleKeyEvent, listenerOptions);
     window.addEventListener("focus", handleFocusCapture, listenerOptions);
     window.addEventListener("focusin", handleFocusCapture, listenerOptions);
     window.addEventListener("blur", handleWindowBlur);
-
     const unsubscribe = useCognitoModeStore.subscribe((state, prevState) => {
       if (state.active && !prevState.active) {
         const current = document.activeElement;
@@ -143,6 +278,7 @@ export function useCognitoModeInputGuard(): void {
         restore();
         if (document.activeElement !== prior) {
           queueMicrotask(restore);
+          setTimeout(restore, 0);
         }
       }
     });
@@ -155,11 +291,15 @@ export function useCognitoModeInputGuard(): void {
           listenerOptions,
         );
       }
+      window.removeEventListener("keydown", handleKeyEvent, listenerOptions);
+      window.removeEventListener("keypress", handleKeyEvent, listenerOptions);
+      window.removeEventListener("keyup", handleKeyEvent, listenerOptions);
       window.removeEventListener("focus", handleFocusCapture, listenerOptions);
       window.removeEventListener("focusin", handleFocusCapture, listenerOptions);
       window.removeEventListener("blur", handleWindowBlur);
 
       clearReleaseTimer();
+      consumedPhysicalCodesRef.current.clear();
       gestureInFlightRef.current = false;
       priorFocusedElementRef.current = null;
       useCognitoModeStore.getState().reset();

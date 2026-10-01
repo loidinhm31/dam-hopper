@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   handleSharedTerminalKeyEvent,
   handleTerminalFontSizeShortcut,
+  shouldConsumeCognitoModeTerminalKey,
+  type SharedTerminalKeyOptions,
 } from "./terminal-keyboard-shortcuts.js";
 
 function key(overrides: Partial<KeyboardEvent> & { code: string }) {
@@ -17,6 +19,19 @@ function key(overrides: Partial<KeyboardEvent> & { code: string }) {
     preventDefault: vi.fn(),
     ...overrides,
   } as KeyboardEvent;
+}
+
+function shared(
+  overrides?: Partial<SharedTerminalKeyOptions>,
+): SharedTerminalKeyOptions {
+  return {
+    cognitoModeShortcut: "Mod+Alt+KeyB",
+    cognitoModeActive: false,
+    workspaceShortcut: "Mod+Shift+Backquote",
+    revealActiveFileShortcut: "Alt+F1",
+    onCopySelection: vi.fn(),
+    ...overrides,
+  };
 }
 
 describe("handleSharedTerminalKeyEvent", () => {
@@ -69,11 +84,7 @@ describe("handleSharedTerminalKeyEvent", () => {
     expect(
       handleSharedTerminalKeyEvent(
         key({ code: "KeyC", ctrlKey: true, shiftKey: true }),
-        {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
-          onCopySelection,
-        },
+        shared({ onCopySelection }),
       ),
     ).toBe(false);
     expect(onCopySelection).toHaveBeenCalledOnce();
@@ -81,56 +92,49 @@ describe("handleSharedTerminalKeyEvent", () => {
 
   it("suppresses workspace and panel shortcuts from xterm input", () => {
     expect(
-      handleSharedTerminalKeyEvent(key({ code: "Backquote", ctrlKey: true }), {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        panelShortcuts: ["Mod+Shift+KeyG", "Mod+Shift+KeyP", "Mod+Shift+KeyM"],
-        onCopySelection: vi.fn(),
-      }),
+      handleSharedTerminalKeyEvent(
+        key({ code: "Backquote", ctrlKey: true }),
+        shared({
+          panelShortcuts: ["Mod+Shift+KeyG", "Mod+Shift+KeyP", "Mod+Shift+KeyM"],
+        }),
+      ),
     ).toBe(false);
     expect(
       handleSharedTerminalKeyEvent(
         key({ code: "Backquote", ctrlKey: true, shiftKey: true }),
-        {
+        shared({
           workspaceShortcut: "Ctrl+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
           panelShortcuts: [
             "Ctrl+Shift+KeyG",
             "Ctrl+Shift+KeyP",
             "Ctrl+Shift+KeyM",
           ],
-          onCopySelection: vi.fn(),
-        },
+        }),
       ),
     ).toBe(false);
     expect(
       handleSharedTerminalKeyEvent(
         key({ code: "F1", key: "F1", altKey: true }),
-        {
+        shared({
           workspaceShortcut: "Ctrl+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
           panelShortcuts: [
             "Ctrl+Shift+KeyG",
             "Ctrl+Shift+KeyP",
             "Ctrl+Shift+KeyM",
           ],
-          onCopySelection: vi.fn(),
-        },
+        }),
       ),
     ).toBe(false);
     expect(
       handleSharedTerminalKeyEvent(
         key({ code: "KeyP", ctrlKey: true, shiftKey: true }),
-        {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
+        shared({
           panelShortcuts: [
             "Mod+Shift+KeyG",
             "Mod+Shift+KeyP",
             "Mod+Shift+KeyM",
           ],
-          onCopySelection: vi.fn(),
-        },
+        }),
       ),
     ).toBe(false);
   });
@@ -144,12 +148,7 @@ describe("handleSharedTerminalKeyEvent", () => {
     const event = key(shortcut);
 
     expect(
-      handleSharedTerminalKeyEvent(event, {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        onCopySelection: vi.fn(),
-        onFind,
-      }),
+      handleSharedTerminalKeyEvent(event, shared({ onFind })),
     ).toBe(false);
 
     expect(onFind).toHaveBeenCalledOnce();
@@ -166,12 +165,7 @@ describe("handleSharedTerminalKeyEvent", () => {
     const event = key(shortcut);
 
     expect(
-      handleSharedTerminalKeyEvent(event, {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        onCopySelection: vi.fn(),
-        onFind,
-      }),
+      handleSharedTerminalKeyEvent(event, shared({ onFind })),
     ).toBe(true);
 
     expect(onFind).not.toHaveBeenCalled();
@@ -188,12 +182,7 @@ describe("handleSharedTerminalKeyEvent", () => {
       const event = key(shortcut);
 
       expect(
-        handleSharedTerminalKeyEvent(event, {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
-          onCopySelection: vi.fn(),
-          onFind,
-        }),
+        handleSharedTerminalKeyEvent(event, shared({ onFind })),
       ).toBe(false);
 
       expect(onFind).not.toHaveBeenCalled();
@@ -207,12 +196,7 @@ describe("handleSharedTerminalKeyEvent", () => {
     expect(
       handleSharedTerminalKeyEvent(
         key({ code: "KeyF", key: "f", ctrlKey: true, shiftKey: true }),
-        {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
-          onCopySelection: vi.fn(),
-          onFind,
-        },
+        shared({ onFind }),
       ),
     ).toBe(true);
     expect(onFind).not.toHaveBeenCalled();
@@ -224,13 +208,10 @@ describe("handleSharedTerminalKeyEvent", () => {
       inactive: { open: vi.fn() },
     };
     const dispatch = (sessionId: keyof typeof controllers) =>
-      handleSharedTerminalKeyEvent(key({ code: "KeyF", ctrlKey: true }), {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        onCopySelection: vi.fn(),
-        onFind: () => controllers[sessionId].open(),
-      });
-
+      handleSharedTerminalKeyEvent(
+        key({ code: "KeyF", ctrlKey: true }),
+        shared({ onFind: () => controllers[sessionId].open() }),
+      );
     expect(dispatch("active")).toBe(false);
     expect(controllers.active.open).toHaveBeenCalledOnce();
     expect(controllers.inactive.open).not.toHaveBeenCalled();
@@ -239,12 +220,10 @@ describe("handleSharedTerminalKeyEvent", () => {
   it("prevents the terminal input path from receiving the find shortcut", () => {
     const onData = vi.fn();
     const event = key({ code: "KeyF", ctrlKey: true });
-    const handled = handleSharedTerminalKeyEvent(event, {
-      workspaceShortcut: "Mod+Shift+Backquote",
-      revealActiveFileShortcut: "Alt+F1",
-      onCopySelection: vi.fn(),
-      onFind: vi.fn(),
-    });
+    const handled = handleSharedTerminalKeyEvent(
+      event,
+      shared({ onFind: vi.fn() }),
+    );
 
     if (handled) onData();
 
@@ -276,17 +255,17 @@ describe("handleSharedTerminalKeyEvent", () => {
       const keyEvent = key(event);
 
       expect(
-        handleSharedTerminalKeyEvent(keyEvent, {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
-          terminalFontSizeIncreaseShortcut:
-            callback === "increase" ? shortcut : "Ctrl+Alt+Shift+Equal",
-          terminalFontSizeDecreaseShortcut:
-            callback === "decrease" ? shortcut : "Ctrl+Alt+Minus",
-          onCopySelection: vi.fn(),
-          onIncreaseTerminalFontSize,
-          onDecreaseTerminalFontSize,
-        }),
+        handleSharedTerminalKeyEvent(
+          keyEvent,
+          shared({
+            terminalFontSizeIncreaseShortcut:
+              callback === "increase" ? shortcut : "Ctrl+Alt+Shift+Equal",
+            terminalFontSizeDecreaseShortcut:
+              callback === "decrease" ? shortcut : "Ctrl+Alt+Minus",
+            onIncreaseTerminalFontSize,
+            onDecreaseTerminalFontSize,
+          }),
+        ),
       ).toBe(false);
 
       expect(keyEvent.preventDefault).toHaveBeenCalledOnce();
@@ -328,15 +307,15 @@ describe("handleSharedTerminalKeyEvent", () => {
       const onIncreaseTerminalFontSize = vi.fn();
       const onDecreaseTerminalFontSize = vi.fn();
       expect(
-        handleSharedTerminalKeyEvent(event, {
-          workspaceShortcut: "Mod+Shift+Backquote",
-          revealActiveFileShortcut: "Alt+F1",
-          terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
-          terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
-          onCopySelection: vi.fn(),
-          onIncreaseTerminalFontSize,
-          onDecreaseTerminalFontSize,
-        }),
+        handleSharedTerminalKeyEvent(
+          event,
+          shared({
+            terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+            terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
+            onIncreaseTerminalFontSize,
+            onDecreaseTerminalFontSize,
+          }),
+        ),
       ).toBe(false);
       expect(event.preventDefault).toHaveBeenCalledOnce();
       expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
@@ -349,13 +328,13 @@ describe("handleSharedTerminalKeyEvent", () => {
     const onIncreaseTerminalFontSize = vi.fn();
 
     expect(
-      handleSharedTerminalKeyEvent(event, {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
-        onCopySelection: vi.fn(),
-        onIncreaseTerminalFontSize,
-      }),
+      handleSharedTerminalKeyEvent(
+        event,
+        shared({
+          terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+          onIncreaseTerminalFontSize,
+        }),
+      ),
     ).toBe(true);
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
@@ -373,18 +352,140 @@ describe("handleSharedTerminalKeyEvent", () => {
     const onDecreaseTerminalFontSize = vi.fn();
 
     expect(
-      handleSharedTerminalKeyEvent(event, {
-        workspaceShortcut: "Mod+Shift+Backquote",
-        revealActiveFileShortcut: "Alt+F1",
-        terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
-        terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Shift+Equal",
-        onCopySelection: vi.fn(),
-        onIncreaseTerminalFontSize,
-        onDecreaseTerminalFontSize,
-      }),
+      handleSharedTerminalKeyEvent(
+        event,
+        shared({
+          terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
+          terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Shift+Equal",
+          onIncreaseTerminalFontSize,
+          onDecreaseTerminalFontSize,
+        }),
+      ),
     ).toBe(false);
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(onIncreaseTerminalFontSize).not.toHaveBeenCalled();
     expect(onDecreaseTerminalFontSize).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldConsumeCognitoModeTerminalKey", () => {
+  it("returns true for any key event while active", () => {
+    const event = key({ code: "KeyA", key: "a" });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(event, "Mod+Alt+KeyB", true),
+    ).toBe(true);
+  });
+
+  it("returns true for matching chord when inactive", () => {
+    const event = key({
+      code: "KeyB",
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(event, "Ctrl+Alt+KeyB", false),
+    ).toBe(true);
+  });
+
+  it("returns true for repeating/composing chord variant when inactive", () => {
+    const repeatEvent = key({
+      code: "KeyB",
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+      repeat: true,
+    });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(repeatEvent, "Ctrl+Alt+KeyB", false),
+    ).toBe(true);
+
+    const composingEvent = key({
+      code: "KeyB",
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+      keyCode: 229,
+    });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(composingEvent, "Ctrl+Alt+KeyB", false),
+    ).toBe(true);
+  });
+
+  it("returns false for non-matching key when inactive", () => {
+    const event = key({ code: "KeyA", key: "a" });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(event, "Ctrl+Alt+KeyB", false),
+    ).toBe(false);
+  });
+
+  it("returns false when shortcut is undefined", () => {
+    const event = key({ code: "KeyB", key: "b", ctrlKey: true, altKey: true });
+    expect(
+      shouldConsumeCognitoModeTerminalKey(event, undefined, false),
+    ).toBe(false);
+  });
+
+  it("works with nonenumerable keyboard properties", () => {
+    const event = Object.defineProperties(
+      {},
+      {
+        type: { value: "keydown" },
+        code: { value: "KeyB" },
+        key: { value: "b" },
+        ctrlKey: { value: true },
+        metaKey: { value: false },
+        altKey: { value: true },
+        shiftKey: { value: false },
+        repeat: { value: false },
+        isComposing: { value: false },
+        preventDefault: { value: vi.fn() },
+      },
+    ) as KeyboardEvent;
+
+    expect(
+      shouldConsumeCognitoModeTerminalKey(event, "Ctrl+Alt+KeyB", false),
+    ).toBe(true);
+  });
+});
+
+describe("handleSharedTerminalKeyEvent cognito integration", () => {
+  it("consumes and prevents default when cognitoModeActive is true", () => {
+    const event = key({ code: "KeyA", key: "a" });
+    const onCopySelection = vi.fn();
+    const onFind = vi.fn();
+
+    const result = handleSharedTerminalKeyEvent(
+      event,
+      shared({
+        cognitoModeActive: true,
+        onCopySelection,
+        onFind,
+      }),
+    );
+
+    expect(result).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(onCopySelection).not.toHaveBeenCalled();
+    expect(onFind).not.toHaveBeenCalled();
+  });
+
+  it("consumes and prevents default when cognito chord matches while inactive", () => {
+    const event = key({
+      code: "KeyB",
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const result = handleSharedTerminalKeyEvent(
+      event,
+      shared({
+        cognitoModeShortcut: "Ctrl+Alt+KeyB",
+        cognitoModeActive: false,
+      }),
+    );
+
+    expect(result).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
   });
 });

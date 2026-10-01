@@ -61,6 +61,7 @@ export function isMacPlatform(): boolean {
 }
 
 export function parseShortcut(shortcut: string): ParsedShortcut | null {
+  if (typeof shortcut !== "string") return null;
   const trimmed = shortcut.trim();
   if (trimmed.toLowerCase() === DOUBLE_SHIFT_SHORTCUT.toLowerCase()) {
     return { kind: "double-shift", ...emptyMods() };
