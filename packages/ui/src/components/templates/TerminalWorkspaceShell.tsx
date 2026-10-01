@@ -105,19 +105,22 @@ export function TerminalWorkspaceShell({
                 content:
                   typeof advisorContent === "function"
                     ? advisorContent({
-                        zIndex: resolveTerminalFloatingPanelZIndex(
-                          frontPanelId,
-                          "tool",
-                        ),
+                        zIndex:
+                          resolveTerminalFloatingPanelZIndex(
+                            frontPanelId,
+                            "tool",
+                          ) + 1,
                         onActivate: () => activateFloatingPanel("tool"),
                       })
                     : (advisorContent ?? (
                         <AdvisorPanelSlot
                           mode="terminal"
-                          zIndex={resolveTerminalFloatingPanelZIndex(
-                            frontPanelId,
-                            "tool",
-                          )}
+                          zIndex={
+                            resolveTerminalFloatingPanelZIndex(
+                              frontPanelId,
+                              "tool",
+                            ) + 1
+                          }
                           onActivate={() => activateFloatingPanel("tool")}
                         />
                       )),
