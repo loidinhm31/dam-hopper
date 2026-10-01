@@ -658,21 +658,25 @@ Provides file detection, presentation persistence, editor host routing, context 
     degradation in the iframe.
   - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
 
-## Cognito Privacy Mode (Phases 02–03)
+## Cognito Privacy Mode (Phases 02–04)
 
 **Locations:** `packages/ui/src/stores/cognito-mode.ts`,
 `components/organisms/CognitoModeOverlay.tsx`,
 `hooks/use-cognito-mode-input-guard.ts`, `lib/cognito-mode-events.ts`,
 `lib/shortcuts.ts`, `lib/terminal-keyboard-shortcuts.ts`,
 `components/organisms/TerminalPanel.tsx`, `embed/dam-hopper-app.tsx`,
-`index.css`, `TerminalNotificationToastViewport.tsx`, and
-`BrowserDebugKeepAliveHost.tsx`.
+`index.css`, `TerminalNotificationToastViewport.tsx`,
+`BrowserDebugKeepAliveHost.tsx`,
+`components/organisms/SettingsKeyboardShortcutsSection.tsx`, and
+`components/organisms/SettingsAppearanceSection.tsx`.
 
 `useCognitoModeStore` is memory-only UI state: it starts inactive, and
 `toggle(shortcut)` activates with that chord captured for dismissal. Toggling
 again clears the active state and chord; `reset()` is lifecycle cleanup, not a
 user dismissal control. The shortcut and style remain persisted preferences;
 activation state is never stored.
+
+In Settings > Appearance > Keyboard Shortcuts, capture/reset Cognito's shortcut; Settings > Appearance offers **Heavy Blur** and **Black Screen**. Preferences persist, but activation is memory-only and reload starts inactive. Only the same chord that activated the mask dismisses it; notifications and audio continue while masked.
 
 `CognitoModeOverlay` portals a focusable, labelled region to `document.body`
 only while active. Its full-viewport fixed layer uses the app viewport

@@ -9,7 +9,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: pending. Effort: 4h.
+- Date: 2026-10-01. Priority: P2. Status: implementation/finalization settled; durable completion pending Phase 05 qualification (not DONE). Effort: 4h.
 - Add discoverable, accessible preference controls using existing capture/reset and appearance patterns; no separate activation toggle button.
 
 ## Key Insights
@@ -95,11 +95,11 @@ Disabled/unavailable preference-source behavior follows the current settings arc
 
 ## Todo list
 
-- [ ] Add Cognito row using existing recorder/reset and per-control validator.
-- [ ] Add capture marker, repeat/IME protection and complete cancellation lifecycle.
-- [ ] Add accessible Heavy Blur / Black Screen selector with typed saves.
-- [ ] Add behavioral settings/guard/overlay tests and update fixtures.
-- [ ] Verify preference source semantics and privacy copy are accurate.
+- [x] Add Cognito row using existing recorder/reset and per-control validator.
+- [x] Add capture marker, repeat/IME protection and complete cancellation lifecycle.
+- [x] Add accessible Heavy Blur / Black Screen selector with typed saves.
+- [x] Add behavioral settings/guard/overlay tests and update fixtures.
+- [x] Verify preference source semantics and privacy copy are accurate.
 
 ## Success Criteria
 
@@ -112,13 +112,13 @@ Disabled/unavailable preference-source behavior follows the current settings arc
 
 ## Side-effect review checklist
 
-- [ ] Existing shortcut rows retain DoubleShift/reset/validation behavior; Cognito-only restrictions remain local.
-- [ ] Global guard does not consume recording input; active mask never honors the capture exemption.
-- [ ] Error/cancel/blur/success/unmount clear recording marker and detector.
-- [ ] Repeat and composition do not commit unusable chords or trigger mask while recording.
-- [ ] Appearance Select portal layering returns to normal when inactive; style save does not activate mask.
-- [ ] Save path uses bound preference source, safe snapshot and existing debounce/rollback—not administrative Settings target.
-- [ ] No extra activation button, preview flow, direct API request or persisted active state.
+- [x] Existing shortcut rows retain DoubleShift/reset/validation behavior; Cognito-only restrictions remain local.
+- [x] Global guard does not consume recording input; active mask never honors the capture exemption.
+- [x] Error/cancel/blur/success/unmount clear recording marker and detector.
+- [x] Repeat and composition do not commit unusable chords or trigger mask while recording.
+- [x] Appearance Select portal layering returns to normal when inactive; style save does not activate mask.
+- [x] Save path uses bound preference source, safe snapshot and existing debounce/rollback—not administrative Settings target.
+- [x] No extra activation button, preview flow, direct API request or persisted active state.
 
 ## Risk Assessment
 
@@ -136,3 +136,9 @@ Disabled/unavailable preference-source behavior follows the current settings arc
 ## Next steps
 
 Deliver integrated controls to [Phase 05](./phase-05-qualification-and-smoke.md) for disk/reload, real browser/xterm, visual and platform qualification. Implementation docs/changelog are updated only after that smoke evidence.
+
+### Status Update (2026-10-02)
+- Implementation and finalization are settled; durable completion remains pending Phase 05 qualification (not DONE).
+- All 16 unit tests in SettingsKeyboardShortcutsSection and SettingsAppearanceSection passed (16/16).
+- All 79 integrated Cognito test suite tests passed across seven files; this includes the scoped Settings tests (not additive).
+- UI package TypeScript build passed; code review approved with a 10/10 score and no critical, high, or medium findings. All five implementation todos and seven side-effect checks remain checked. Proceed to Phase 05 qualification and smoke.
