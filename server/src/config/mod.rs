@@ -24,10 +24,10 @@ pub use resolve::{resolve_startup_config, ConfigResolution, ConfigResolutionInpu
 pub use schema::{
     default_idle_suspend_agent_executables, default_idle_suspend_automatic_policy,
     is_generic_interpreter, validate_agent_executable_entry, validate_agent_executables,
-    AgentAssignment, AgentStoreConfig, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
+    AgentAssignment, AgentStoreConfig, CognitoModeStyle, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
     IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig, KnownWorkspace,
     ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig, ServiceConfig,
-    TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, WorkspaceInfo,
+    TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, UiConfig, WorkspaceInfo,
     DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     DEFAULT_RESTART_MAX_RETRIES, MAX_IDLE_SUSPEND_AGENT_EXECUTABLES,
     MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES, MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,

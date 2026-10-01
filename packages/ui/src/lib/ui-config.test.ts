@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { withUiConfigDefaults } from "./ui-config.js";
+import {
+  DEFAULT_UI_CONFIG,
+  isCognitoModeStyle,
+  normalizeCognitoModeStyle,
+  withUiConfigDefaults,
+} from "./ui-config.js";
 
 describe("withUiConfigDefaults", () => {
   it("hydrates new shortcut defaults when ui config is absent", () => {
@@ -11,6 +16,8 @@ describe("withUiConfigDefaults", () => {
     expect(ui.projectPanelShortcut).toBe("Mod+Shift+KeyZ");
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
     expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");
+    expect(ui.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(ui.cognitoModeStyle).toBe("heavy-blur");
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
     expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
     expect(ui.terminalFontSize).toBe(13);
@@ -341,5 +348,34 @@ describe("withUiConfigDefaults", () => {
       }).explorerLanguageFilter,
     ).toBe("all");
     expect(withUiConfigDefaults().explorerLanguageFilter).toBe("all");
+  });
+
+  it("normalizes Cognito mode shortcut and style preferences", () => {
+    expect(isCognitoModeStyle("heavy-blur")).toBe(true);
+    expect(isCognitoModeStyle("black-screen")).toBe(true);
+    expect(isCognitoModeStyle("invalid")).toBe(false);
+    expect(isCognitoModeStyle(null)).toBe(false);
+
+    expect(normalizeCognitoModeStyle("black-screen")).toBe("black-screen");
+    expect(normalizeCognitoModeStyle("heavy-blur")).toBe("heavy-blur");
+    expect(normalizeCognitoModeStyle("unknown")).toBe("heavy-blur");
+    expect(normalizeCognitoModeStyle(undefined)).toBe("heavy-blur");
+
+    expect(DEFAULT_UI_CONFIG.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(DEFAULT_UI_CONFIG.cognitoModeStyle).toBe("heavy-blur");
+
+    const custom = withUiConfigDefaults({
+      cognitoModeShortcut: "ctrl+alt+k",
+      cognitoModeStyle: "black-screen",
+    });
+    expect(custom.cognitoModeShortcut).toBe("Ctrl+Alt+KeyK");
+    expect(custom.cognitoModeStyle).toBe("black-screen");
+
+    const invalid = withUiConfigDefaults({
+      cognitoModeShortcut: "invalid-shortcut" as never,
+      cognitoModeStyle: "rainbow-glitch" as never,
+    });
+    expect(invalid.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(invalid.cognitoModeStyle).toBe("heavy-blur");
   });
 });

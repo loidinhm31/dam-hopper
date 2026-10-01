@@ -1,4 +1,5 @@
 import type {
+  CognitoModeStyle,
   UiConfig,
   TerminalAgentNotificationPolicy,
   TerminalAgentNotifications,
@@ -6,6 +7,7 @@ import type {
 } from "@/api/client.js";
 import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import {
+  DEFAULT_COGNITO_MODE_SHORTCUT,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
@@ -18,6 +20,7 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
   formatShortcut,
+  normalizeCognitoModeShortcut,
 } from "@/lib/shortcuts.js";
 
 const DEFAULT_AGENT_POLICY: TerminalAgentNotificationPolicy = {
@@ -170,6 +173,8 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
     DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   terminalFontSizeDecreaseShortcut:
     DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+  cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
+  cognitoModeStyle: "heavy-blur",
 };
 
 export function isExplorerLanguageFilter(
@@ -187,6 +192,14 @@ export function normalizeExplorerLanguageFilter(
   value: unknown,
 ): ExplorerLanguageFilter {
   return isExplorerLanguageFilter(value) ? value : "all";
+}
+
+export function isCognitoModeStyle(value: unknown): value is CognitoModeStyle {
+  return value === "heavy-blur" || value === "black-screen";
+}
+
+export function normalizeCognitoModeStyle(value: unknown): CognitoModeStyle {
+  return isCognitoModeStyle(value) ? value : "heavy-blur";
 }
 
 export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
@@ -267,6 +280,14 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     terminalFontSizeDecreaseShortcut: formatShortcut(
       ui?.terminalFontSizeDecreaseShortcut ??
         DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+    ),
+    cognitoModeShortcut: normalizeCognitoModeShortcut(
+      (ui as { cognitoModeShortcut?: unknown } | null | undefined)
+        ?.cognitoModeShortcut,
+    ),
+    cognitoModeStyle: normalizeCognitoModeStyle(
+      (ui as { cognitoModeStyle?: unknown } | null | undefined)
+        ?.cognitoModeStyle,
     ),
   };
 }

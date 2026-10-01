@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-01 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,207,213 bytes; 2,528 files packed, six security-scan exclusions).
+**Generated:** 2026-10-01 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,262,687 bytes; 2,528 files packed, six security-scan exclusions).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -274,7 +274,7 @@ remain local to their owning profile.
 
 | Boundary                | Source modules                                                                                                            | Contract                                                                                                                                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Preference source       | `stores/settings.ts`, `stores/workbench-selections.ts`                                                                    | Allowlisted UI state hydrates through captured `{ profileId, generation }`; debounced writes bind the original client/source/edit revision; unavailable or removed sources keep a safe snapshot.               |
+| Preference source       | `server/src/config/{schema,global}.rs`, `api/client.ts`, `lib/{ui-config,shortcuts}.ts`, `stores/settings.ts`, `stores/workbench-selections.ts` | Allowlisted UI state hydrates through captured `{ profileId, generation }`; Cognito preferences persist `cognitoModeShortcut` (`Mod+Alt+KeyB`) and `cognitoModeStyle` (`heavy-blur`/`black-screen`) through the same owner/edit-revision-fenced path. |
 | Settings target         | `components/pages/SettingsPage.tsx`, `settings-page/*`, `GlobalConfigEditor.tsx`, `ConfigEditor.tsx`                      | Global/workspace config, maintenance, import/export, usage setup, and idle-suspend timing receive explicit target owner; import rejects target/generation drift before dispatch.                               |
 | Owner-qualified queries | `api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts`                                                                     | Usage, host metrics/snapshots/alerts, idle-suspend, config, and invalidation keys use `profileQueryKey(owner, ...)`; events patch only the event owner's cache.                                                |
 | Usage surface           | `components/pages/UsagePage.tsx`, `components/usage/*`                                                                    | URL `profileId` selects the owner; summary/session/health/setup/delete operations remain profile-local; visible session views poll at 15 seconds.                                                              |

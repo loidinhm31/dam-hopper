@@ -9,7 +9,7 @@ use super::{
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
-        CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
+        CognitoModeStyle, CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
         RestartPolicy, TerminalAgentNotificationSoundPattern, UiConfig,
         MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES,
     },
@@ -1436,6 +1436,8 @@ fn ui_config_defaults() {
     assert_eq!(ui.mobile_custom_keyboard_font_size, 11);
     assert_eq!(ui.mobile_custom_keyboard_padding, 6);
     assert_eq!(ui.mobile_custom_keyboard_row_gap, 4);
+    assert_eq!(ui.cognito_mode_shortcut, "Mod+Alt+KeyB");
+    assert_eq!(ui.cognito_mode_style, CognitoModeStyle::HeavyBlur);
 }
 
 #[test]
@@ -1502,6 +1504,8 @@ fn ui_config_serde_roundtrip() {
             terminal_scroll_buttons_enabled: false,
             terminal_commit_status_enabled: true,
             terminal_scroll_step: 3,
+            cognito_mode_shortcut: "Mod+Alt+KeyB".to_string(),
+            cognito_mode_style: CognitoModeStyle::HeavyBlur,
         }),
         server: crate::config::ServerConfig::default(),
     };
@@ -1535,6 +1539,16 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(json["terminalCommitStatusEnabled"], true);
     assert_eq!(json["terminalAutoSwitchProjectEnabled"], true);
     assert!(json.get("terminal_auto_switch_project_enabled").is_none());
+    assert_eq!(
+        json["cognitoModeShortcut"],
+        serde_json::json!("Mod+Alt+KeyB")
+    );
+    assert_eq!(
+        json["cognitoModeStyle"],
+        serde_json::json!("heavy-blur")
+    );
+    assert!(json.get("cognito_mode_shortcut").is_none());
+    assert!(json.get("cognito_mode_style").is_none());
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
     let written = std::fs::read_to_string(&cfg_path).unwrap();
@@ -1548,6 +1562,10 @@ fn ui_config_serde_roundtrip() {
     assert!(!written.contains("terminalAutoSwitchProjectEnabled"));
     assert!(written.contains("explorer_language_filter = \"javascript-typescript\""));
     assert!(!written.contains("explorerLanguageFilter"));
+    assert!(written.contains("cognito_mode_shortcut = \"Mod+Alt+KeyB\""));
+    assert!(written.contains("cognito_mode_style = \"heavy-blur\""));
+    assert!(!written.contains("cognitoModeShortcut"));
+    assert!(!written.contains("cognitoModeStyle"));
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.system_font_size, 16);
@@ -1586,6 +1604,8 @@ fn ui_config_serde_roundtrip() {
         ui.explorer_language_filter,
         ExplorerLanguageFilter::JavascriptTypescript
     );
+    assert_eq!(ui.cognito_mode_shortcut, "Mod+Alt+KeyB");
+    assert_eq!(ui.cognito_mode_style, CognitoModeStyle::HeavyBlur);
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 13);
     assert_eq!(ui.mobile_custom_keyboard_padding, 8);
@@ -2044,6 +2064,60 @@ fn ui_config_serde_aliases_explorer_language_filter() {
         "explorerLanguageFilter": "python"
     }));
     assert!(invalid.is_err());
+}
+
+#[test]
+fn ui_config_serde_aliases_cognito_mode() {
+    for key in ["cognito_mode_shortcut", "cognitoModeShortcut"] {
+        let toml = format!("[ui]\n{key} = \"Ctrl+Alt+KeyK\"\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            loaded.ui.unwrap().cognito_mode_shortcut,
+            "Ctrl+Alt+KeyK"
+        );
+    }
+
+    for key in ["cognito_mode_style", "cognitoModeStyle"] {
+        let toml = format!("[ui]\n{key} = \"black-screen\"\n");
+        let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            loaded.ui.unwrap().cognito_mode_style,
+            CognitoModeStyle::BlackScreen
+        );
+    }
+
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "cognitoModeShortcut": "Cmd+Alt+KeyB",
+        "cognitoModeStyle": "black-screen",
+    }))
+    .unwrap();
+    assert_eq!(json.cognito_mode_shortcut, "Cmd+Alt+KeyB");
+    assert_eq!(json.cognito_mode_style, CognitoModeStyle::BlackScreen);
+
+    let snake_json = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "cognito_mode_shortcut": "Cmd+Alt+KeyB",
+        "cognito_mode_style": "heavy-blur",
+    }))
+    .unwrap();
+    assert_eq!(snake_json.cognito_mode_shortcut, "Cmd+Alt+KeyB");
+    assert_eq!(snake_json.cognito_mode_style, CognitoModeStyle::HeavyBlur);
+
+    let invalid = serde_json::from_value::<UiConfig>(serde_json::json!({
+        "cognitoModeStyle": "rainbow-glitch"
+    }));
+    assert!(invalid.is_err());
+}
+
+#[test]
+fn ui_config_missing_cognito_mode_defaults() {
+    let json = serde_json::from_value::<UiConfig>(serde_json::json!({})).unwrap();
+    assert_eq!(json.cognito_mode_shortcut, "Mod+Alt+KeyB");
+    assert_eq!(json.cognito_mode_style, CognitoModeStyle::HeavyBlur);
+
+    let toml: GlobalConfig = toml::from_str("[ui]\n").unwrap();
+    let ui = toml.ui.unwrap();
+    assert_eq!(ui.cognito_mode_shortcut, "Mod+Alt+KeyB");
+    assert_eq!(ui.cognito_mode_style, CognitoModeStyle::HeavyBlur);
 }
 
 #[test]

@@ -619,7 +619,7 @@ server share a filesystem; remote/container agents need a future resource API.
 
 ### UI Configuration
 
-The global UI config includes terminal workspace/panel shortcuts, inline terminal suggestions, version-2 Codex/OMP/Claude notification policies, server-profile Agent Store paths, terminal project switching, and the host-resource storage presentation preference.
+The global UI config (stored in `~/.config/dam-hopper/config.toml` by default) includes terminal workspace/panel shortcuts, inline terminal suggestions, version-2 Codex/OMP/Claude notification policies, server-profile Agent Store paths, terminal project switching, host-resource storage presentation, and Cognito Mode shortcut/style preferences.
 
 | Field                                | Type             | Default                        | Notes                                                                                                                    |
 | ------------------------------------ | ---------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
@@ -634,6 +634,8 @@ The global UI config includes terminal workspace/panel shortcuts, inline termina
 | terminal_agent_notifications         | table            | version 2; all agents disabled | Per-agent `codex`, `omp`, and `claude` policies; channel preferences default to enabled, volume `100`, pattern `default` |
 | agent_settings_paths                 | table or omitted | omitted                        | Optional server-profile paths: `omp_agent_dir`, `codex_dir`, and `claude_dir`; set in Agent Settings                     |
 | host_resource_pinned_mount           | string or null   | `null`                         | Optional exact mount point for the host-resource storage row; UTF-8 length 1–4096 bytes                                  |
+| cognito_mode_shortcut                | string           | `Mod+Alt+KeyB`               | Keyboard-only chord; malformed values received by the UI normalize to this default |
+| cognito_mode_style                   | string enum      | `heavy-blur`                 | `heavy-blur` or `black-screen`; invalid UI snapshots default safely, invalid server writes are rejected |
 
 Example:
 
@@ -644,6 +646,8 @@ git_panel_shortcut = "Mod+Shift+KeyG"
 project_panel_shortcut = "Mod+Shift+KeyZ"
 ports_panel_shortcut = "Mod+Shift+KeyP"
 fleet_terminal_shortcut = "Mod+Shift+KeyM"
+cognito_mode_shortcut = "Mod+Alt+KeyB"
+cognito_mode_style = "heavy-blur"
 terminal_suggestions_enabled = true
 terminal_scroll_buttons_enabled = false
 terminal_auto_switch_project_enabled = true
@@ -673,7 +677,7 @@ step up/down (using the configured terminal scroll step), and jump-to-bottom.
 The menu closes on outside click or `Escape`; the preference is UI-only and does
 not affect retained server scrollback.
 
-The API uses `camelCase` (`terminalAgentNotifications`, `agentSettingsPaths`); TOML uses `snake_case` (`terminal_agent_notifications`, `agent_settings_paths`). Policies use version 2; version-1 and legacy Codex settings migrate to the canonical shape, preserving Codex/OMP channel values and adding Claude disabled. All three paths are managed under Agent Store > Agent Settings, replacing the former Integrations and Appearance notification panels. Codex hooks are status-only, Claude alerts are attention-only, and DamHopper no longer parses or delivers Codex OSC 9 notifications or synchronizes Codex TUI notification settings.
+The API uses `camelCase` (`terminalAgentNotifications`, `agentSettingsPaths`, `cognitoModeShortcut`, `cognitoModeStyle`); TOML uses `snake_case` (`terminal_agent_notifications`, `agent_settings_paths`, `cognito_mode_shortcut`, `cognito_mode_style`). `cognito_mode_style` accepts exactly `heavy-blur` or `black-screen`; missing fields in older config use `Mod+Alt+KeyB` and `heavy-blur`. These are persisted preferences only: activation state is not stored in `[ui]`.
 
 `terminalAutoSwitchProjectEnabled` is a global preference and defaults to `true` so terminal selection follows the requested project context immediately. In Settings > Appearance, the **Switch project on terminal selection** switch uses the copy: “Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.” When enabled, selecting a project-assigned terminal or an already-open project terminal tab changes the active project before the tab or panel renders; when disabled, selection opens the terminal without changing the active project. Free terminals, unowned terminals with blank project metadata, and unknown sessions (including unrecognized session-ID prefixes) never switch the active project; free terminals remain excluded even if incidental metadata contains a project. The top-bar project switcher and project-scoped panels (Explorer, Search, Git, Commit, Project Info, and editor) all consume the resulting active project. This uses the existing global UI-config persistence path and requires no new endpoint or migration.
 

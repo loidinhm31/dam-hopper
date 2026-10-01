@@ -216,6 +216,8 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalScrollButtonsEnabled" => "terminal_scroll_buttons_enabled",
             "terminalCommitStatusEnabled" => "terminal_commit_status_enabled",
             "terminalScrollStep" => "terminal_scroll_step",
+            "cognitoModeShortcut" | "cognito_mode_shortcut" => "cognito_mode_shortcut",
+            "cognitoModeStyle" | "cognito_mode_style" => "cognito_mode_style",
             other => other,
         };
         ui.insert(toml_key.to_string(), value);

@@ -91,6 +91,8 @@ function resetSettingsStore() {
     mobileCustomKeyboardFontSize: 11,
     mobileCustomKeyboardPadding: 6,
     mobileCustomKeyboardRowGap: 4,
+    cognitoModeShortcut: "Mod+Alt+KeyB",
+    cognitoModeStyle: "heavy-blur",
     hydrated: false,
   });
   __resetSettingsStoreTestState();
@@ -747,5 +749,103 @@ describe("settings store terminal agent notification fields", () => {
     expect(getGlobalConfig).not.toHaveBeenCalled();
     expect(useSettingsStore.getState().systemFontSize).toBe(22);
     expect(useSettingsStore.getState().editorFontSize).toBe(18);
+  });
+
+  it("hydrates Cognito mode preferences from global config and falls back to defaults", async () => {
+    getGlobalConfig.mockResolvedValueOnce({
+      ui: {
+        cognitoModeShortcut: "Ctrl+Alt+KeyK",
+        cognitoModeStyle: "black-screen",
+      },
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Ctrl+Alt+KeyK");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("black-screen");
+
+    // Now hydrate with empty ui config -> should resolve to defaults
+    getGlobalConfig.mockResolvedValueOnce({ ui: {} });
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("heavy-blur");
+  });
+
+  it("persists Cognito mode changes via saveDebounced", async () => {
+    updateUi.mockResolvedValueOnce({ updated: true });
+
+    useSettingsStore.getState().saveDebounced({
+      cognitoModeShortcut: "ctrl+alt+k",
+      cognitoModeStyle: "black-screen",
+    });
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Ctrl+Alt+KeyK");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("black-screen");
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cognitoModeShortcut: "Ctrl+Alt+KeyK",
+        cognitoModeStyle: "black-screen",
+      }),
+    );
+  });
+
+  it("preserves other Cognito and UI preferences when saving one Cognito field", async () => {
+    getGlobalConfig.mockResolvedValueOnce({
+      ui: {
+        cognitoModeShortcut: "Ctrl+Alt+KeyK",
+        cognitoModeStyle: "heavy-blur",
+        systemFontSize: 17,
+      },
+    });
+    updateUi.mockResolvedValueOnce({ updated: true });
+
+    await useSettingsStore.getState().hydrate();
+    useSettingsStore.getState().saveDebounced({
+      cognitoModeStyle: "black-screen",
+    });
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Ctrl+Alt+KeyK");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("black-screen");
+    expect(useSettingsStore.getState().systemFontSize).toBe(17);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenCalledWith({
+      cognitoModeStyle: "black-screen",
+    });
+    expect(
+      useWorkbenchSelectionsStore.getState().preferencesSnapshot,
+    ).toMatchObject({
+      cognitoModeShortcut: "Ctrl+Alt+KeyK",
+      cognitoModeStyle: "black-screen",
+      systemFontSize: 17,
+    });
+  });
+
+  it("normalizes malformed Cognito preferences in snapshots and set()", async () => {
+    useSettingsStore.getState().set({
+      cognitoModeShortcut: "invalid-shortcut",
+      cognitoModeStyle: "invalid-style" as never,
+    });
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("heavy-blur");
+
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId(null);
+    useWorkbenchSelectionsStore.getState().updatePreferencesSnapshot({
+      cognitoModeShortcut: "DoubleShift",
+      cognitoModeStyle: "unknown-style",
+    });
+
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+    expect(useSettingsStore.getState().cognitoModeStyle).toBe("heavy-blur");
   });
 });
