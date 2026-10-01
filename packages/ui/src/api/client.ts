@@ -1663,6 +1663,8 @@ export interface AgentSettingsPaths {
   claudeDir?: string;
 }
 
+export type CognitoModeStyle = "heavy-blur" | "black-screen";
+
 export interface UiConfig {
   hostResourcePinnedMount?: string | null;
   systemFontSize: number;
@@ -1698,6 +1700,8 @@ export interface UiConfig {
   runtimeGroupOrder?: string[];
   runtimeItemOrder?: Record<string, string[]>;
   agentSettingsPaths?: AgentSettingsPaths;
+  cognitoModeShortcut?: string;
+  cognitoModeStyle?: CognitoModeStyle;
 }
 
 export interface GlobalConfig {

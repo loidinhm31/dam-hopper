@@ -12,6 +12,7 @@ export const DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT =
   "Ctrl+Alt+Shift+Equal";
 export const DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT = "Ctrl+Alt+Minus";
 export const EDITOR_ZOOM_WHEEL_SHORTCUT = "Mod+Wheel";
+export const DEFAULT_COGNITO_MODE_SHORTCUT = "Mod+Alt+KeyB";
 
 const DOUBLE_SHIFT_MS = 450;
 
@@ -100,6 +101,95 @@ export function validateShortcut(shortcut: string): string | null {
     return "Wheel shortcut requires a modifier";
   }
   return null;
+}
+
+const MODIFIER_KEY_CODES: Record<string, true> = {
+  ShiftLeft: true,
+  ShiftRight: true,
+  ControlLeft: true,
+  ControlRight: true,
+  AltLeft: true,
+  AltRight: true,
+  MetaLeft: true,
+  MetaRight: true,
+  OSLeft: true,
+  OSRight: true,
+  shift: true,
+  control: true,
+  ctrl: true,
+  alt: true,
+  meta: true,
+  cmd: true,
+  command: true,
+  option: true,
+  mod: true,
+};
+
+const NAMED_KEY_CODES: Record<string, true> = {
+  Backquote: true,
+  Minus: true,
+  Equal: true,
+  BracketLeft: true,
+  BracketRight: true,
+  Backslash: true,
+  Semicolon: true,
+  Quote: true,
+  Comma: true,
+  Period: true,
+  Slash: true,
+  Space: true,
+  Enter: true,
+  Escape: true,
+  Tab: true,
+  Backspace: true,
+  Delete: true,
+  Insert: true,
+  Home: true,
+  End: true,
+  PageUp: true,
+  PageDown: true,
+  ArrowUp: true,
+  ArrowDown: true,
+  ArrowLeft: true,
+  ArrowRight: true,
+  CapsLock: true,
+  ScrollLock: true,
+  NumLock: true,
+  PrintScreen: true,
+  Pause: true,
+};
+
+function isUsableKeyCode(code: string): boolean {
+  if (MODIFIER_KEY_CODES[code] || MODIFIER_KEY_CODES[code.toLowerCase()]) {
+    return false;
+  }
+  if (/^Key[A-Z]$/.test(code)) return true;
+  if (/^Digit[0-9]$/.test(code)) return true;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return true;
+  if (/^Numpad[A-Za-z0-9]+$/.test(code)) return true;
+  return NAMED_KEY_CODES[code] === true;
+}
+export function validateCognitoModeShortcut(shortcut: string): string | null {
+  const genericError = validateShortcut(shortcut);
+  if (genericError) return genericError;
+  const parsed = parseShortcut(shortcut);
+  if (!parsed || parsed.kind !== "keyboard") {
+    return "Cognito mode requires a keyboard shortcut";
+  }
+  if (!parsed.code || !isUsableKeyCode(parsed.code)) {
+    return "Missing key";
+  }
+  return null;
+}
+
+export function normalizeCognitoModeShortcut(value: unknown): string {
+  if (typeof value !== "string") {
+    return DEFAULT_COGNITO_MODE_SHORTCUT;
+  }
+  if (validateCognitoModeShortcut(value) !== null) {
+    return DEFAULT_COGNITO_MODE_SHORTCUT;
+  }
+  return formatShortcut(value);
 }
 
 export function formatShortcut(shortcut: string): string {

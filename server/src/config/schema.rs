@@ -822,6 +822,10 @@ fn default_terminal_font_size_decrease_shortcut() -> String {
     "Ctrl+Alt+Minus".to_string()
 }
 
+fn default_cognito_mode_shortcut() -> String {
+    "Mod+Alt+KeyB".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminalAgentNotificationSoundPattern {
@@ -1037,6 +1041,14 @@ pub enum ExplorerLanguageFilter {
     Java,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CognitoModeStyle {
+    #[default]
+    HeavyBlur,
+    BlackScreen,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
@@ -1179,6 +1191,13 @@ pub struct UiConfig {
         alias = "terminalScrollStep"
     )]
     pub terminal_scroll_step: u16,
+    #[serde(
+        default = "default_cognito_mode_shortcut",
+        alias = "cognito_mode_shortcut"
+    )]
+    pub cognito_mode_shortcut: String,
+    #[serde(default, alias = "cognito_mode_style")]
+    pub cognito_mode_style: CognitoModeStyle,
 }
 
 pub const MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES: usize = 4096;
@@ -1228,6 +1247,8 @@ impl Default for UiConfig {
             terminal_scroll_buttons_enabled: false,
             terminal_commit_status_enabled: false,
             terminal_scroll_step: default_terminal_scroll_step(),
+            cognito_mode_shortcut: default_cognito_mode_shortcut(),
+            cognito_mode_style: CognitoModeStyle::default(),
         }
     }
 }

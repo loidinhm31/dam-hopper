@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { api, type ApiClient } from "@/api/client.js";
 import type {
   AgentSettingsPaths,
+  CognitoModeStyle,
   TerminalAgentNotifications,
   TerminalAgentNotificationPolicy,
 } from "@/api/client.js";
@@ -24,8 +25,11 @@ import {
   isExplorerLanguageFilter,
   withUiConfigDefaults,
   normalizeTerminalAgentNotifications,
+  normalizeCognitoModeStyle,
 } from "@/lib/ui-config.js";
 import {
+  DEFAULT_COGNITO_MODE_SHORTCUT,
+  normalizeCognitoModeShortcut,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
@@ -102,6 +106,8 @@ interface PersistedSettingsState {
   mobileCustomKeyboardPadding: number;
   mobileCustomKeyboardRowGap: number;
   agentSettingsPaths?: AgentSettingsPaths;
+  cognitoModeShortcut: string;
+  cognitoModeStyle: CognitoModeStyle;
 }
 
 interface SettingsState extends PersistedSettingsState {
@@ -247,6 +253,14 @@ function applySnapshotToStore(
     );
   if (snapshot.agentSettingsPaths !== undefined)
     clamped.agentSettingsPaths = snapshot.agentSettingsPaths ?? undefined;
+  if (snapshot.cognitoModeShortcut !== undefined)
+    clamped.cognitoModeShortcut = normalizeCognitoModeShortcut(
+      snapshot.cognitoModeShortcut,
+    );
+  if (snapshot.cognitoModeStyle !== undefined)
+    clamped.cognitoModeStyle = normalizeCognitoModeStyle(
+      snapshot.cognitoModeStyle,
+    );
   set(clamped);
 }
 function pickPersistedSettings(
@@ -281,6 +295,8 @@ function pickPersistedSettings(
     mobileCustomKeyboardPadding: state.mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap: state.mobileCustomKeyboardRowGap,
     agentSettingsPaths: state.agentSettingsPaths,
+    cognitoModeShortcut: state.cognitoModeShortcut,
+    cognitoModeStyle: state.cognitoModeStyle,
   };
 }
 
@@ -330,6 +346,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   mobileCustomKeyboardPadding: 6,
   mobileCustomKeyboardRowGap: 4,
   agentSettingsPaths: undefined,
+  cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
+  cognitoModeStyle: "heavy-blur",
   hydrated: false,
   sourceUnset: true,
 
@@ -422,6 +440,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         mobileCustomKeyboardPadding: ui.mobileCustomKeyboardPadding ?? 6,
         mobileCustomKeyboardRowGap: ui.mobileCustomKeyboardRowGap ?? 4,
         agentSettingsPaths: ui.agentSettingsPaths,
+        cognitoModeShortcut: ui.cognitoModeShortcut,
+        cognitoModeStyle: ui.cognitoModeStyle,
         hydrated: true,
         sourceUnset: false,
       });
@@ -526,6 +546,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       );
     if (partial.agentSettingsPaths !== undefined)
       clamped.agentSettingsPaths = partial.agentSettingsPaths;
+    if (partial.cognitoModeShortcut !== undefined)
+      clamped.cognitoModeShortcut = normalizeCognitoModeShortcut(
+        partial.cognitoModeShortcut,
+      );
+    if (partial.cognitoModeStyle !== undefined)
+      clamped.cognitoModeStyle = normalizeCognitoModeStyle(
+        partial.cognitoModeStyle,
+      );
     set(clamped);
   },
 

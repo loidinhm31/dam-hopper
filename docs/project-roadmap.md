@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Cognito Mode privacy screen mask (2026-10-01)
+
+- **Plan status: IN PROGRESS (1/5 phases; 20% by phase count; 4/28h planned phase effort complete, 14% of estimate; updated 2026-10-01).** Phase 01 is complete; Phases 02–05 remain pending.
+- **Phase 01 — Config and schema — DONE (2026-10-01; 100%).** Added the optional UI wire fields, defaulted Rust schema and snake_case TOML mapping, Cognito shortcut/style normalization, and preference-store hydration/persistence.
+- **Scoped validation:** Rust filtered runs passed 4/4 (`cognito`), 18/18 (`ui_config`) and 146/146 (`config`); focused UI tests passed 47/47; the full UI package passed 2,110/2,110. Rust filters overlap; focused UI files are included in the full run. Browser/native mask qualification remains in Phase 05.
+- See the [parent plan](../plans/261001-2207-cognito-privacy-mode/plan.md), [Phase 01 plan](../plans/261001-2207-cognito-privacy-mode/phase-01-config-and-schema.md), and [test report](../plans/reports/tester-261001-2316-phase-01-config-schema-tests.md).
+
 ### Host-resource SSE delivery (2026-09-30–2026-10-01)
 
 - **Plan status: COMPLETED (7/7 scoped phases; 100%; Phase 06 closeout 2026-10-01 02:53:43 +07:00).** Phases 00–06 are DONE as implementation, scoped qualification support, and documentation; this is not a Linux-web/proxy rollout qualification or release GO. The user-approved intended first scope is Linux web behind its actual deployed proxy; reference/weak hosts and proxy configuration still need to be identified and qualified. Matched authenticated release-PID CPU/RSS, 30-minute soak, live Chromium/browser, deployed-proxy verification, active auth revocation and active HTTP/WS shutdown remain pending/blocked; C42 is pending for native-only release qualification.

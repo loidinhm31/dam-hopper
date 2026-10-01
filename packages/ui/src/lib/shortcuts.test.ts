@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_COGNITO_MODE_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
   formatShortcut,
   matchesKeyboardShortcut,
   matchesNewTerminalShortcut,
   matchesWheelShortcut,
+  normalizeCognitoModeShortcut,
   parseShortcut,
   shortcutFromKeyboardEvent,
+  validateCognitoModeShortcut,
   validateShortcut,
   type ShortcutKeyEvent,
 } from "./shortcuts.js";
@@ -163,5 +166,41 @@ describe("shortcuts", () => {
         key({ code: "KeyP", key: "p", ctrlKey: true, shiftKey: true }),
       ),
     ).toBe("Ctrl+Shift+KeyP");
+  });
+
+  it("validates and normalizes Cognito mode shortcuts", () => {
+    expect(validateCognitoModeShortcut("Mod+Alt+KeyB")).toBeNull();
+    expect(validateCognitoModeShortcut("Ctrl+Alt+KeyB")).toBeNull();
+    expect(validateCognitoModeShortcut("Alt+KeyB")).toBeNull();
+    expect(validateCognitoModeShortcut("Mod+Shift+KeyB")).toBeNull();
+
+    expect(validateCognitoModeShortcut("")).toBe("Invalid shortcut");
+    expect(validateCognitoModeShortcut("   ")).toBe("Invalid shortcut");
+    expect(validateCognitoModeShortcut("DoubleShift")).toBe(
+      "Cognito mode requires a keyboard shortcut",
+    );
+    expect(validateCognitoModeShortcut("Mod+Wheel")).toBe(
+      "Cognito mode requires a keyboard shortcut",
+    );
+    expect(validateCognitoModeShortcut("Ctrl+Shift")).toBe("Invalid shortcut");
+    expect(validateCognitoModeShortcut("ShiftLeft")).toBe("Missing key");
+    expect(validateCognitoModeShortcut("Ctrl+Alt+ShiftLeft")).toBe("Missing key");
+
+    expect(normalizeCognitoModeShortcut("Mod+Alt+KeyB")).toBe("Mod+Alt+KeyB");
+    expect(normalizeCognitoModeShortcut("mod+alt+b")).toBe("Mod+Alt+KeyB");
+    expect(normalizeCognitoModeShortcut("ctrl+shift+k")).toBe("Ctrl+Shift+KeyK");
+    expect(normalizeCognitoModeShortcut(undefined)).toBe(DEFAULT_COGNITO_MODE_SHORTCUT);
+    expect(normalizeCognitoModeShortcut(null)).toBe(DEFAULT_COGNITO_MODE_SHORTCUT);
+    expect(normalizeCognitoModeShortcut(123)).toBe(DEFAULT_COGNITO_MODE_SHORTCUT);
+    expect(normalizeCognitoModeShortcut("")).toBe(DEFAULT_COGNITO_MODE_SHORTCUT);
+    expect(normalizeCognitoModeShortcut("DoubleShift")).toBe(
+      DEFAULT_COGNITO_MODE_SHORTCUT,
+    );
+    expect(normalizeCognitoModeShortcut("Mod+Wheel")).toBe(
+      DEFAULT_COGNITO_MODE_SHORTCUT,
+    );
+    expect(normalizeCognitoModeShortcut("ShiftLeft")).toBe(
+      DEFAULT_COGNITO_MODE_SHORTCUT,
+    );
   });
 });

@@ -3319,6 +3319,19 @@ fn merge_global_ui_config_rejects_invalid_explorer_language_filter() {
 }
 
 #[test]
+fn merge_global_ui_config_rejects_invalid_cognito_mode_style() {
+    let err = crate::api::config::merge_global_ui_config(
+        Some(crate::config::schema::UiConfig::default()),
+        &serde_json::json!({
+            "cognitoModeStyle": "rainbow-glitch",
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
 fn merge_global_ui_config_accepts_and_rejects_host_resource_pinned_mount() {
     let accepted = crate::api::config::merge_global_ui_config(
         Some(crate::config::schema::UiConfig::default()),
@@ -3416,6 +3429,113 @@ async fn update_global_ui_at_path_persists_agent_settings_paths() {
     assert_eq!(paths.omp_agent_dir.as_deref(), Some("/custom/omp/agent"));
     assert_eq!(paths.codex_dir.as_deref(), Some("/custom/codex"));
     assert_eq!(paths.claude_dir.as_deref(), Some("/custom/claude"));
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_persists_cognito_mode_preferences() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "cognitoModeShortcut": "Cmd+Alt+KeyK",
+            "cognitoModeStyle": "black-screen"
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("cognito_mode_shortcut = \"Cmd+Alt+KeyK\""));
+    assert!(written.contains("cognito_mode_style = \"black-screen\""));
+
+    let persisted = crate::config::read_global_config_at(&gc_path)
+        .unwrap()
+        .unwrap();
+    let ui = persisted.ui.unwrap();
+    assert_eq!(ui.cognito_mode_shortcut, "Cmd+Alt+KeyK");
+    assert_eq!(
+        ui.cognito_mode_style,
+        crate::config::schema::CognitoModeStyle::BlackScreen
+    );
+}
+
+#[tokio::test]
+async fn update_global_ui_preserves_other_cognito_field_and_unrelated_settings_on_partial_patch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "systemFontSize": 18,
+            "cognitoModeShortcut": "Cmd+Alt+KeyK",
+            "cognitoModeStyle": "black-screen"
+        })),
+    )
+    .await
+    .unwrap();
+
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "cognitoModeStyle": "heavy-blur"
+        })),
+    )
+    .await
+    .unwrap();
+
+    let persisted = crate::config::read_global_config_at(&gc_path)
+        .unwrap()
+        .unwrap();
+    let ui = persisted.ui.unwrap();
+    assert_eq!(ui.system_font_size, 18, "unrelated settings preserved");
+    assert_eq!(ui.cognito_mode_shortcut, "Cmd+Alt+KeyK", "other cognito field preserved");
+    assert_eq!(
+        ui.cognito_mode_style,
+        crate::config::schema::CognitoModeStyle::HeavyBlur,
+        "patched field updated"
+    );
+}
+
+#[tokio::test]
+async fn update_global_ui_at_path_preserves_cognito_and_other_settings_on_one_field_patch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+    std::fs::create_dir_all(gc_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &gc_path,
+        "[ui]\ncognito_mode_shortcut = \"Ctrl+Alt+KeyK\"\ncognito_mode_style = \"heavy-blur\"\nsystem_font_size = 17\n",
+    )
+    .unwrap();
+
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "cognitoModeStyle": "black-screen"
+        })),
+    )
+    .await
+    .unwrap();
+
+    let persisted = crate::config::read_global_config_at(&gc_path)
+        .unwrap()
+        .unwrap();
+    let ui = persisted.ui.unwrap();
+    assert_eq!(ui.cognito_mode_shortcut, "Ctrl+Alt+KeyK");
+    assert_eq!(
+        ui.cognito_mode_style,
+        crate::config::schema::CognitoModeStyle::BlackScreen
+    );
+    assert_eq!(ui.system_font_size, 17);
 }
 
 #[tokio::test]
