@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-02 from Repomix v1.18.0 compaction (25,385,423-byte XML output; 2,563 files processed; six security-scan exclusions; temporary output not retained).
+**Generated:** 2026-10-02 from Repomix v1.18.0 compaction (25,478,103-byte XML output; 2,572 files processed; six security-scan exclusions).
 
 This summary is derived from a read-only compaction; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -151,7 +151,7 @@ captured connection owner. Root and registered worktree targets remain distinct.
 | Bounded previews          | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients                                                                                                                    | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                                                                                                                                                    |
 | Federated search          | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`                                                                                                                        | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500.                                                                                                                               |
 | Search replace            | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`                                                                                                                         | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.                                                                                                                                         |
-| Git history, edits, and publication | `api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `stores/git-history.ts`, `lib/git-branch-ref.ts`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `server/src/api/git.rs`, `server/src/git/repository.rs`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs` | `/api/git/{project}/log` filters full messages before pagination; query identity includes owner/generation, target, root, revision, page, and term. Persisted preferences distinguish uninitialized, explicit-all, and qualified selections; root/branch intent is profile/target/root scoped, with canonical refs separating local and remote names. Rewrites use branch+HEAD CAS; publication uses a live one-ref exact-OID lease. |
+| Git history, edits, and publication | `api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `stores/git-history.ts`, `lib/git-branch-ref.ts`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `server/src/api/git.rs`, `server/src/git/repository.rs`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `components/pages/GitPage.tsx`, `components/organisms/ProjectInfoHelpers.ts` | `/api/git/{project}/log` filters full messages before pagination; query identity includes owner/generation, target, root, revision, page, and term. Persisted preferences distinguish uninitialized, explicit-all, and qualified selections; root/branch intent is profile/target/root scoped, with canonical refs separating local and remote names. The standalone Git page persists selection independently from Workspace focus, keeps unavailable identities explicit and blocks bulk operations, and uses shared root/branch/search/paging history for one available target. Rewrites use branch+HEAD CAS; publication uses a live one-ref exact-OID lease. |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
 Clean editor tabs reload after external/Git mutations; dirty tabs preserve local
@@ -165,8 +165,8 @@ may make the result incomplete. `Replace Next` and `Replace All` re-read and
 mtime-check before writing, skip dirty files without overwriting them, and
 reload only clean open tabs.
 
-Phases 03–04 add persisted Git-history state and the shared controller; Phase 05 integrates them across Workspace's desktop, terminal-floating, and compact Git surfaces, with target-availability gating and scope-aware history actions.
-Evidence: 71/71 tests, clean typecheck, 9.8/10 review. Implementation/finalization are settled; durable completion and Phase 07 qualification remain pending; Phase 06 Git-page integration is ahead.
+Phases 03–04 add persisted Git-history state and the shared controller. Phase 05 integrates Workspace mounts (71/71 tests, clean typecheck, 9.8/10 review); Phase 06 integrates GitPage with independent persisted selection, fail-closed unavailable bulk targets, and shared history for one usable target (2,186 UI tests including 9 GitPage tests, clean scoped typecheck, 9.5/10 review).
+Both phases' implementation/finalization are settled; durable completion remains pending in explicit advice mode, with Phase 07 end-to-end qualification open.
 
 ### Transport-safe FS subscription follow-up (Phase 01, 2026-09-20)
 

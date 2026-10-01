@@ -28,6 +28,12 @@ export function describeProjectInfoRoot(root: VcsRoot) {
   return root.kind === "submodule" ? "Submodule" : "Nested repo";
 }
 
+export function projectRelativePathForRoot(root: string, path: string) {
+  if (!path || root === DEFAULT_GIT_ROOT_ID) return path;
+  if (path === root || path.startsWith(`${root}/`)) return path;
+  return `${root}/${path}`;
+}
+
 export function buildProjectInfoPushTarget(
   project: string,
   rootId: string,

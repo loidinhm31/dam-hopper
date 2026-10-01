@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-01. Priority: P2. Implementation and finalization settled (2026-10-02); durable completion pending in explicit advice mode (not DONE). Review: 9.5/10 PASS.
 - Restore Git page selections and give its single-project history branch/search/paging parity without redesigning bulk operations.
 
 ## Key Insights
@@ -64,12 +64,12 @@ Read/reuse:
 
 ## Todo list
 
-- [ ] Persist selected project checkbox set with null/[] distinction.
-- [ ] Decouple multi/Clear from Workspace focus.
-- [ ] Keep unavailable selection visible and bulk fail-closed.
-- [ ] Shared branch/root/search/paging and target-scoped details/actions.
-- [ ] Preserve local changes and bulk credential/publication behavior.
-- [ ] Add consumer-visible selection/owner/action regressions.
+- [x] Persist selected project checkbox set with null/[] distinction.
+- [x] Decouple multi/Clear from Workspace focus.
+- [x] Keep unavailable selection visible and bulk fail-closed.
+- [x] Shared branch/root/search/paging and target-scoped details/actions.
+- [x] Preserve local changes and bulk credential/publication behavior.
+- [x] Add consumer-visible selection/owner/action regressions.
 
 ## Success Criteria
 
@@ -91,4 +91,4 @@ Do not dispatch to unknown/removed profile from parsed storage key. Full target/
 
 ## Next steps
 
-Coordinator integrates Phase 05 + 06 and runs Phase 07 real scenarios. Unresolved questions: none.
+Phase 05–06 implementation and finalization are settled. Durable completion remains pending in explicit advice mode; do not mark Phase 06 DONE. Proceed to Phase 07 for integrated qualification and documentation across both Git surfaces. See the [tester report](../reports/tester-261002-0145-phase-06-git-page-integration.md), [code review](../reports/code-review-261002-0148-phase-06-git-page-integration.md), and [Project Manager closeout](../reports/project-manager-261002-0148-phase-06-git-page-integration.md). Unresolved question: the source of two non-failing JSDOM navigation errors in the aggregate UI suite is unidentified in its report.
