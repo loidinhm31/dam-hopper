@@ -410,6 +410,7 @@ mod tests {
         let response = ListPluginsResponse {
             plugins: vec![PluginMetadataItem {
                 id: "install-1".to_string(),
+                plugin_id: None,
                 version: "1.0.0".to_string(),
                 publisher: "publisher".to_string(),
                 capabilities: vec![],

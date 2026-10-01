@@ -188,8 +188,17 @@ impl PluginApiService {
         let plugins = self.runner_client.list_plugins(true).await?.plugins;
         let active_plugin = plugins
             .into_iter()
-            .find(|plugin| plugin.id == installation_id && plugin.enabled)
+            .find(|plugin| {
+                (plugin.id == installation_id
+                    || (installation_id == "evcrate.advisor"
+                        && (plugin.plugin_id.as_deref() == Some("evcrate.advisor")
+                            || plugin.plugin_id.as_deref() == Some("evcrate-advisor")
+                            || plugin.publisher == "evcrate")))
+                    && plugin.enabled
+            })
             .ok_or_else(|| PluginError::forbidden("Plugin is unavailable or disabled"))?;
+
+        let installation_id = &active_plugin.id;
 
         if let Some(source) = &active_plugin.owner_history_source {
             self.auth_service

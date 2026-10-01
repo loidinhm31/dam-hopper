@@ -14,12 +14,14 @@ import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import type {
   AdminInstallationDto,
+  AdvisorHistoryProbeResult,
   AuthStatusResponse,
   InitialGrant,
   OwnerHistorySource,
   StageReviewDto,
 } from "@/api/plugin-types.js";
-import { PluginAccessModal } from "./PluginAccessModal.js";
+import { PluginAccessModal, computeSha256Hex } from "./PluginAccessModal.js";
+export { computeSha256Hex } from "./PluginAccessModal.js";
 
 interface PluginManagementSectionProps {
   profileId?: string | null;
@@ -55,6 +57,8 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
   const [stageHistoryPath, setStageHistoryPath] = useState<string>("");
   const [stageHistoryId, setStageHistoryId] = useState<string>("");
   const [stageHistoryAllAuth, setStageHistoryAllAuth] = useState<boolean>(false);
+  const [stageProbeResult, setStageProbeResult] = useState<AdvisorHistoryProbeResult | null>(null);
+  const [stageHashing, setStageHashing] = useState<boolean>(false);
 
   // Destructive confirmations & modals
   const [rollbackTarget, setRollbackTarget] = useState<AdminInstallationDto | null>(null);
@@ -96,6 +100,7 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
     setError(null);
     setStageBoundProjects([]);
     setStageActor("");
+    setStageProbeResult(null);
   }, [effectiveProfileId]);
   // Load auth status for selected profile
   useEffect(() => {
@@ -215,6 +220,34 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
       unsub();
     };
   }, [resolvedClient, loadInstallations]);
+  // Probe advisor history when stageEnableHistory is checked
+  useEffect(() => {
+    if (!stageEnableHistory || !resolvedClient?.plugins?.probeAdvisorHistory) return;
+    if (stageProbeResult !== null) return;
+
+    let cancelled = false;
+    resolvedClient.plugins
+      .probeAdvisorHistory()
+      .then((res) => {
+        if (!cancelled) {
+          setStageProbeResult(res);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to probe advisor history:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [stageEnableHistory, resolvedClient, stageProbeResult]);
+
+  useEffect(() => {
+    if (!stageReview) {
+      setStageProbeResult(null);
+    }
+  }, [stageReview]);
+
 
   const handleStageUpload = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -781,37 +814,84 @@ export function PluginManagementSection({ profileId, client: clientProp }: Plugi
                   </label>
 
                   {stageEnableHistory && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs pt-1">
-                      <div>
-                        <input
-                          type="text"
-                          placeholder="Absolute host path (e.g. ~/.evcrate/advisor-history)"
-                          value={stageHistoryPath}
-                          onChange={(e) => setStageHistoryPath(e.target.value)}
-                          className="w-full text-xs font-mono px-2 py-1 rounded border border-border bg-background"
-                          data-testid="stage-history-path"
-                        />
-                      </div>
-                      <div>
-                        <input
-                          type="text"
-                          placeholder="64-char lowercase hex root identity"
-                          value={stageHistoryId}
-                          onChange={(e) => setStageHistoryId(e.target.value)}
-                          className="w-full text-xs font-mono px-2 py-1 rounded border border-border bg-background"
-                          data-testid="stage-history-id"
-                        />
-                      </div>
-                      <div className="md:col-span-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <input
-                          type="checkbox"
-                          id="stage-history-all-auth"
-                          checked={stageHistoryAllAuth}
-                          onChange={(e) => setStageHistoryAllAuth(e.target.checked)}
-                        />
-                        <label htmlFor="stage-history-all-auth">
-                          Allow all authenticated users to read history root
-                        </label>
+                    <div className="space-y-2 text-xs pt-1">
+                      {stageProbeResult?.available && stageProbeResult?.path && (
+                        <div className="p-2 rounded bg-primary/10 border border-primary/20 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-foreground">
+                            Server history folder detected:{" "}
+                            <code className="font-mono bg-background/60 px-1 py-0.5 rounded text-[11px]">
+                              {stageProbeResult.path}
+                            </code>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStageHistoryPath(stageProbeResult.path!);
+                              setStageHistoryId(stageProbeResult.rootIdentity || "");
+                            }}
+                            className="text-xs px-2.5 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 font-medium whitespace-nowrap transition-colors"
+                            data-testid="stage-use-server-history-path-btn"
+                          >
+                            Use server path
+                          </button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div>
+                          <input
+                            type="text"
+                            placeholder="Absolute host path (e.g. /home/.../.evcrate/advisor-history)"
+                            value={stageHistoryPath}
+                            onChange={(e) => setStageHistoryPath(e.target.value)}
+                            className="w-full text-xs font-mono px-2 py-1 rounded border border-border bg-background"
+                            data-testid="stage-history-path"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="64-char lowercase hex root identity"
+                            value={stageHistoryId}
+                            onChange={(e) => setStageHistoryId(e.target.value)}
+                            className="flex-1 text-xs font-mono px-2 py-1 rounded border border-border bg-background"
+                            data-testid="stage-history-id"
+                          />
+                          <button
+                            type="button"
+                            disabled={!stageHistoryPath || stageHashing}
+                            onClick={async () => {
+                              if (!stageHistoryPath) return;
+                              try {
+                                setStageHashing(true);
+                                const hash = await computeSha256Hex(stageHistoryPath.trim());
+                                setStageHistoryId(hash);
+                              } catch (err: unknown) {
+                                setStageError(
+                                  `Failed to compute SHA-256: ${
+                                    err instanceof Error ? err.message : String(err)
+                                  }`,
+                                );
+                              } finally {
+                                setStageHashing(false);
+                              }
+                            }}
+                            className="text-xs px-2.5 py-1 rounded bg-secondary hover:bg-secondary/80 font-medium whitespace-nowrap disabled:opacity-50 transition-colors"
+                            data-testid="stage-generate-history-sha256-btn"
+                          >
+                            {stageHashing ? "Generating..." : "Generate SHA-256"}
+                          </button>
+                        </div>
+                        <div className="md:col-span-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            id="stage-history-all-auth"
+                            checked={stageHistoryAllAuth}
+                            onChange={(e) => setStageHistoryAllAuth(e.target.checked)}
+                          />
+                          <label htmlFor="stage-history-all-auth">
+                            Allow all authenticated users to read history root
+                          </label>
+                        </div>
                       </div>
                     </div>
                   )}

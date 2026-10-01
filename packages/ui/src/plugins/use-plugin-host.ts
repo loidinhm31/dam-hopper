@@ -28,7 +28,7 @@ import {
   buildVerifiedPluginDocument,
   type VerifiedPluginDocument,
 } from "./plugin-document.js";
-import { parsePluginMetadata } from "./use-plugin-navigation.js";
+import { parsePluginMetadata } from "./plugin-metadata.js";
 import type { PluginUnavailableReason } from "@/components/PluginUnavailableState.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;

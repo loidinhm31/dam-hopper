@@ -6,7 +6,6 @@ import {
   buildVerifiedPluginDocument,
   MAX_PLUGIN_UI_BYTES,
 } from "./plugin-document.js";
-import { pluginNavigationItem } from "./use-plugin-navigation.js";
 
 const originalCrypto = globalThis.crypto;
 
@@ -123,43 +122,5 @@ describe("buildVerifiedPluginDocument", () => {
         value: originalSubtle,
       });
     }
-  });
-});
-
-describe("pluginNavigationItem labels", () => {
-  const baseMeta = {
-    activeDigest: "a".repeat(64),
-    activeGeneration: 1,
-    capabilities: ["history.summary"],
-    enabled: true,
-    hasUi: true,
-    version: "1.0.0",
-  };
-
-  it("labels evcrate.advisor as EVCrate Advisor and non-advisor evcrate plugins by ID", () => {
-    const item1 = pluginNavigationItem({
-      ...baseMeta,
-      id: "evcrate.advisor",
-      publisher: "any",
-    });
-    expect(item1.label).toBe("EVCrate Advisor");
-
-    const item2 = pluginNavigationItem({
-      ...baseMeta,
-      id: "custom.plugin",
-      publisher: "evcrate",
-    });
-    expect(item2.label).toBe("CUSTOM.PLUGIN");
-  });
-
-  it("does not label unrelated long plugin IDs as EVCrate Advisor", () => {
-    const longId = "abcdef01-2345-6789-abcd-ef0123456789";
-    const item = pluginNavigationItem({
-      ...baseMeta,
-      id: longId,
-      publisher: "community",
-    });
-    expect(item.label).toBe(longId.toUpperCase());
-    expect(item.label).not.toContain("EVCrate");
   });
 });

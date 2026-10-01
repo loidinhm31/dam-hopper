@@ -154,6 +154,12 @@ export interface OwnerHistorySource {
   allAuthenticatedHistoryRead: boolean;
 }
 
+export interface AdvisorHistoryProbeResult {
+  available: boolean;
+  path?: string | null;
+  rootIdentity?: string | null;
+}
+
 export interface StageReviewDto {
   stageId: string;
   transactionId: string;

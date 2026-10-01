@@ -1340,5 +1340,33 @@ async fn test_describe_view_api_behavioral() {
     let auth_key_b = view_ctx_b["authorityKey"].as_str().unwrap();
     assert_eq!(auth_key_a, auth_key_b);
 
+    // Case 7: Alias "evcrate.advisor" succeeds and produces matching view context
+    let describe_alias_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/plugins/view-context")
+        .header(header::AUTHORIZATION, format!("Bearer {bob_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&serde_json::json!({
+            "installationId": "evcrate.advisor",
+            "target": { "project": "test-proj" }
+        })).unwrap()))
+        .unwrap();
+    let describe_alias_resp = router.clone().oneshot(describe_alias_req).await.unwrap();
+    assert_eq!(describe_alias_resp.status(), StatusCode::OK);
+    let alias_bytes = axum::body::to_bytes(describe_alias_resp.into_body(), 64 * 1024).await.unwrap();
+    let view_ctx_alias: serde_json::Value = serde_json::from_slice(&alias_bytes).unwrap();
+    assert_eq!(view_ctx_alias["authorityKey"], auth_key_a);
+    assert_eq!(view_ctx_alias["metadata"]["id"], harness.installation_id);
+
+    // Case 8: Advisor history probe endpoint returns OK
+    let probe_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/plugins/admin/advisor-history-probe")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let probe_resp = router.clone().oneshot(probe_req).await.unwrap();
+    assert_eq!(probe_resp.status(), StatusCode::OK);
+
     let _ = harness.shutdown_tx.send(true);
 }

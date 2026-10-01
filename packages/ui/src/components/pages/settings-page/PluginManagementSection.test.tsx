@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PluginManagementSection } from "./PluginManagementSection.js";
+import { PluginManagementSection, computeSha256Hex } from "./PluginManagementSection.js";
 import { ApiRequestError, type ApiClient } from "@/api/client.js";
 import type {
   AdminInstallationDto,
@@ -732,5 +732,11 @@ describe("PluginManagementSection", () => {
     });
 
     expect(adminRemove).toHaveBeenCalledWith("inst-1", 1);
+  });
+
+  it("computes lowercase SHA-256 hex digest for given path", async () => {
+    const hash = await computeSha256Hex("/home/user/.evcrate/advisor-history");
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash).toBe("e3b61ebb402e0f514947fe62ef62e0e4f4518e7d0fb2ab015ebf3b4083247888");
   });
 });
