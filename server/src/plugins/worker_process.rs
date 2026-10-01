@@ -71,14 +71,14 @@ impl WorkerProcess {
 
         // Restrict environment to runtime paths; never forward credentials or service settings.
         cmd.env_clear();
-        for variable in ["PATH", "HOME"] {
+        for variable in ["PATH", "Path", "HOME", "SystemRoot", "WINDIR", "USERPROFILE", "TEMP", "TMP"] {
             if let Ok(value) = std::env::var(variable) {
                 cmd.env(variable, value);
             }
         }
         cmd.env("NODE_ENV", "production");
+        #[cfg(unix)]
         cmd.env("TMPDIR", "/tmp");
-
         #[cfg(unix)]
         {
             cmd.process_group(0);

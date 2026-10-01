@@ -138,5 +138,41 @@ describe("workspace-advisor-placement", () => {
       expect(geo?.zIndex).toBe(42);
       document.body.removeChild(el);
     });
+
+    it("reserves slot padding in measured geometry (e.g. terminal mode pb-8 pr-8)", () => {
+      const el = document.createElement("div");
+      el.style.paddingBottom = "32px";
+      el.style.paddingRight = "32px";
+      document.body.appendChild(el);
+      el.getBoundingClientRect = () =>
+        ({
+          top: 50,
+          left: 100,
+          width: 720,
+          height: 600,
+          right: 820,
+          bottom: 650,
+          x: 100,
+          y: 50,
+          toJSON: () => {},
+        }) as DOMRect;
+
+      const geo = measureAdvisorSlotGeometry({
+        id: "term-slot",
+        mode: "terminal",
+        element: el,
+        visible: true,
+      });
+
+      expect(geo).toEqual({
+        top: 50,
+        left: 100,
+        width: 688,
+        height: 568,
+        zIndex: ADVISOR_DEFAULT_Z_INDEX.terminal,
+        mode: "terminal",
+      });
+      document.body.removeChild(el);
+    });
   });
 });
