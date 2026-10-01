@@ -198,7 +198,7 @@ async fn test_origin_admission_allowed_and_denied() {
 
 #[tokio::test]
 async fn test_cors_preflight_configured_vs_empty() {
-    let allowed = "http://localhost:4801";
+    let allowed = "http://100.91.26.60:4802";
 
     // 1. With configured allowed_origins: OPTIONS returns 200 with CORS headers
     {
@@ -212,6 +212,10 @@ async fn test_cors_preflight_configured_vs_empty() {
             .uri("/api/system/resources/v1/events")
             .header(header::ORIGIN, allowed)
             .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization, cache-control, pragma",
+            )
             .body(Body::empty())
             .unwrap();
 
@@ -221,6 +225,30 @@ async fn test_cors_preflight_configured_vs_empty() {
             resp.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
             allowed
         );
+        let allow_methods = resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .expect("Access-Control-Allow-Methods present")
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|m| m.trim().to_ascii_uppercase())
+            .collect::<Vec<_>>();
+        assert!(allow_methods.contains(&"GET".to_string()));
+
+        let allow_headers = resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .expect("Access-Control-Allow-Headers present")
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        assert!(allow_headers.contains(&"authorization".to_string()));
+        assert!(allow_headers.contains(&"cache-control".to_string()));
+        assert!(allow_headers.contains(&"pragma".to_string()));
+
         // Ensure no permit was consumed
         assert_eq!(state.host_resource_events.admission().active_global_permits(), 0);
     }
@@ -236,6 +264,10 @@ async fn test_cors_preflight_configured_vs_empty() {
             .uri("/api/system/resources/v1/events")
             .header(header::ORIGIN, allowed)
             .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization, cache-control, pragma",
+            )
             .body(Body::empty())
             .unwrap();
 

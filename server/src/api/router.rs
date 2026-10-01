@@ -4,7 +4,7 @@ use axum::http::{
     header::{
         HeaderName, ACCEPT, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION,
         CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH,
-        IF_RANGE, LAST_MODIFIED, RANGE,
+        IF_RANGE, LAST_MODIFIED, PRAGMA, RANGE,
     },
     HeaderValue, Method, StatusCode, Uri,
 };
@@ -779,6 +779,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         IF_RANGE,
         IF_NONE_MATCH,
         IF_MODIFIED_SINCE,
+        CACHE_CONTROL,
+        PRAGMA,
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
     ];
