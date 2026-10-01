@@ -560,6 +560,10 @@ pub fn build_router_with_web_dir_and_origins(
             get(plugin_admin_api::list_admin_installations_handler),
         )
         .route(
+            "/api/plugins/admin/advisor-history-probe",
+            get(plugin_admin_api::advisor_history_probe_handler),
+        )
+        .route(
             "/api/plugins/admin/installations/{id}",
             get(plugin_admin_api::get_admin_installation_handler)
                 .delete(plugin_admin_api::remove_installation_handler),

@@ -1,10 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ApiClient } from "@/api/client.js";
 import type {
   AdminInstallationDto,
+  AdvisorHistoryProbeResult,
   GrantKey,
   OwnerHistorySource,
 } from "@/api/plugin-types.js";
+
+export async function computeSha256Hex(text: string): Promise<string> {
+  const buffer = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 export interface PluginAccessModalProps {
   open: boolean;
@@ -54,6 +63,33 @@ export function PluginAccessModal({
   const [newBindingName, setNewBindingName] = useState("");
   const [newBindingPath, setNewBindingPath] = useState("");
 
+  const [probeResult, setProbeResult] = useState<AdvisorHistoryProbeResult | null>(null);
+  const [hashing, setHashing] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setProbeResult(null);
+      return;
+    }
+    if (!client?.plugins?.probeAdvisorHistory) return;
+    if (probeResult !== null) return;
+
+    let cancelled = false;
+    client.plugins
+      .probeAdvisorHistory()
+      .then((res) => {
+        if (!cancelled) {
+          setProbeResult(res);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to probe advisor history:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, enableHistory, client, probeResult]);
   if (!open) return null;
 
   const handleAddGrant = () => {
@@ -383,6 +419,31 @@ export function PluginAccessModal({
 
           {enableHistory && (
             <div className="p-3 rounded bg-muted/20 border border-border/40 space-y-2 text-xs">
+              {probeResult?.available && probeResult?.path && (
+                <div className="p-2.5 rounded bg-primary/10 border border-primary/20 flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-foreground">
+                    Server history folder detected:{" "}
+                    <code className="font-mono bg-background/60 px-1 py-0.5 rounded text-[11px]">
+                      {probeResult.path}
+                    </code>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setHistorySource({
+                        ...historySource,
+                        rootPath: probeResult.path!,
+                        rootIdentity:
+                          probeResult.rootIdentity || historySource.rootIdentity,
+                      })
+                    }
+                    className="text-xs px-2.5 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 font-medium whitespace-nowrap transition-colors"
+                    data-testid="use-server-history-path-btn"
+                  >
+                    Use server path
+                  </button>
+                </div>
+              )}
               <div>
                 <label className="block text-[11px] text-muted-foreground mb-1">
                   Absolute Host History Path:
@@ -402,16 +463,45 @@ export function PluginAccessModal({
                 <label className="block text-[11px] text-muted-foreground mb-1">
                   Root Identity (SHA-256):
                 </label>
-                <input
-                  type="text"
-                  placeholder="64-character lowercase hex digest"
-                  value={historySource.rootIdentity}
-                  onChange={(e) =>
-                    setHistorySource({ ...historySource, rootIdentity: e.target.value.trim() })
-                  }
-                  className="w-full text-xs font-mono px-2.5 py-1.5 rounded border border-border bg-background"
-                  data-testid="history-identity-input"
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="64-character lowercase hex digest"
+                    value={historySource.rootIdentity}
+                    onChange={(e) =>
+                      setHistorySource({ ...historySource, rootIdentity: e.target.value.trim() })
+                    }
+                    className="flex-1 text-xs font-mono px-2.5 py-1.5 rounded border border-border bg-background"
+                    data-testid="history-identity-input"
+                  />
+                  <button
+                    type="button"
+                    disabled={!historySource.rootPath || hashing}
+                    onClick={async () => {
+                      if (!historySource.rootPath) return;
+                      try {
+                        setHashing(true);
+                        const hash = await computeSha256Hex(historySource.rootPath.trim());
+                        setHistorySource((prev) => ({
+                          ...prev,
+                          rootIdentity: hash,
+                        }));
+                      } catch (err: unknown) {
+                        setError(
+                          `Failed to compute SHA-256: ${
+                            err instanceof Error ? err.message : String(err)
+                          }`,
+                        );
+                      } finally {
+                        setHashing(false);
+                      }
+                    }}
+                    className="text-xs px-2.5 py-1.5 rounded bg-secondary hover:bg-secondary/80 font-medium whitespace-nowrap disabled:opacity-50 transition-colors"
+                    data-testid="generate-history-sha256-btn"
+                  >
+                    {hashing ? "Generating..." : "Generate SHA-256"}
+                  </button>
+                </div>
               </div>
               <div className="flex items-center gap-1.5 pt-1">
                 <input

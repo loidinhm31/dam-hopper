@@ -1575,6 +1575,8 @@ function channelToEndpoint(
         body,
       };
     }
+    case "plugins:probeAdvisorHistory":
+      return { method: "GET", url: "/api/plugins/admin/advisor-history-probe" };
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

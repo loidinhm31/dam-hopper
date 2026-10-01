@@ -485,3 +485,72 @@ pub async fn replace_owner_history_source_handler(
         Err(e) => plugin_error_response(e),
     }
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvisorHistoryProbeResponse {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_identity: Option<String>,
+}
+
+/// GET /api/plugins/admin/advisor-history-probe — detect default advisor-history directory on host
+pub async fn advisor_history_probe_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+) -> Response {
+    if let Err(res) = check_no_auth(state.no_auth) {
+        return res;
+    }
+
+    use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
+
+    let mut candidates = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".evcrate/advisor-history"));
+    }
+    if let Ok(entries) = std::fs::read_dir("/home") {
+        for entry in entries.flatten() {
+            candidates.push(entry.path().join(".evcrate/advisor-history"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.is_dir() {
+            if let Ok(meta) = std::fs::symlink_metadata(&candidate) {
+                if !meta.file_type().is_symlink() {
+                    if let Ok(canonical) = candidate.canonicalize() {
+                        if canonical == candidate {
+                            let path_str = canonical.display().to_string();
+                            let mut hasher = Sha256::new();
+                            hasher.update(path_str.as_bytes());
+                            let root_id = hex::encode(hasher.finalize());
+                            return (
+                                StatusCode::OK,
+                                Json(AdvisorHistoryProbeResponse {
+                                    available: true,
+                                    path: Some(path_str),
+                                    root_identity: Some(root_id),
+                                }),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(AdvisorHistoryProbeResponse {
+            available: false,
+            path: None,
+            root_identity: None,
+        }),
+    )
+        .into_response()
+}

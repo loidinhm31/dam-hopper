@@ -70,6 +70,7 @@ export type {
 };
 import type {
   AdminInstallationDto,
+  AdvisorHistoryProbeResult,
   ContextScopeKind,
   DescribeViewRequest,
   HistoryScopeKind,
@@ -104,6 +105,7 @@ import type {
 } from "./plugin-types.js";
 export type {
   AdminInstallationDto,
+  AdvisorHistoryProbeResult,
   ContextScopeKind,
   DescribeViewRequest,
   HistoryScopeKind,
@@ -3089,6 +3091,8 @@ export function createApiClient(
             body: req,
           },
         ),
+      probeAdvisorHistory: () =>
+        transport.invoke<AdvisorHistoryProbeResult>("plugins:probeAdvisorHistory"),
       onLifecycleRevision: (
         listener: (event: PluginLifecycleRevisionEvent) => void,
       ) =>
@@ -3636,6 +3640,7 @@ export interface ApiClient {
       id: string,
       req: ReplaceOwnerHistorySourceRequest,
     ) => Promise<AdminInstallationDto>;
+    probeAdvisorHistory: () => Promise<AdvisorHistoryProbeResult>;
     onLifecycleRevision: (
       listener: (event: PluginLifecycleRevisionEvent) => void,
     ) => () => void;

@@ -110,6 +110,8 @@ pub struct PluginListParams {
 #[serde(rename_all = "camelCase")]
 pub struct PluginMetadataItem {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
     pub version: String,
     pub publisher: String,
     pub capabilities: Vec<String>,

@@ -189,8 +189,7 @@ only a project owned by that profile. Generic plugin hosts use the selected
 workspace project when available, otherwise a project under the Settings/active
 profile.
 
-`usePluginNavigation` queries the Settings target for Advisor metadata and the
-workspace project owner for generic plugin metadata.
+`plugin-metadata.ts` validates plugin metadata for host lifecycle verification.
 
 `usePluginHost` captures the API owner/target and fences changes. An owner
 generation change revokes the old session. For Advisor, a same-authority project

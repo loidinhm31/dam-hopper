@@ -211,7 +211,13 @@ impl LifecycleCoordinator {
         let installation_id = existing_inst
             .as_ref()
             .map(|i| i.installation_id.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .unwrap_or_else(|| {
+                if review.plugin_id == "evcrate.advisor" {
+                    "evcrate.advisor".to_string()
+                } else {
+                    Uuid::new_v4().to_string()
+                }
+            });
         let is_update = existing_inst.is_some();
         let effective_final_bindings = if is_update && initial_bindings.is_empty() {
             existing_inst.as_ref().map(|i| i.bindings.clone()).unwrap_or_default()

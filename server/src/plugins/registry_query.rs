@@ -57,6 +57,7 @@ impl PluginRegistry {
             if let Some(pkg) = state.packages.get(&pkg_key) {
                 items.push(PluginMetadataItem {
                     id: inst.installation_id.clone(),
+                    plugin_id: Some(inst.plugin_id.clone()),
                     version: inst.active_version.clone(),
                     publisher: pkg.publisher.clone(),
                     capabilities: pkg.capabilities.clone(),
