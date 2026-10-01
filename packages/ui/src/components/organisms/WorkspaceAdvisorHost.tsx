@@ -130,6 +130,7 @@ export function WorkspaceAdvisorHost({
       ref={containerRef}
       data-testid="workspace-advisor-host"
       data-advisor-visible={isVisible ? "true" : "false"}
+      data-advisor-mode={geometry?.mode}
       inert={!isVisible}
       aria-hidden={!isVisible}
       onKeyDownCapture={handleKeyDownCapture}

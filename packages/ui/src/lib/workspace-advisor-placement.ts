@@ -45,11 +45,26 @@ export function measureAdvisorSlotGeometry(
 
   const resolvedZIndex = zIndex ?? ADVISOR_DEFAULT_Z_INDEX[mode];
 
+  const computed =
+    typeof window !== "undefined" && typeof window.getComputedStyle === "function"
+      ? window.getComputedStyle(element)
+      : null;
+  const paddingRight = computed ? parseFloat(computed.paddingRight) || 0 : 0;
+  const paddingBottom = computed ? parseFloat(computed.paddingBottom) || 0 : 0;
+  const paddingTop = computed ? parseFloat(computed.paddingTop) || 0 : 0;
+  const paddingLeft = computed ? parseFloat(computed.paddingLeft) || 0 : 0;
+
+  const width = Math.max(0, Math.round(rect.width - paddingLeft - paddingRight));
+  const height = Math.max(0, Math.round(rect.height - paddingTop - paddingBottom));
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
   return {
-    top: Math.round(rect.top),
-    left: Math.round(rect.left),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
+    top: Math.round(rect.top + paddingTop),
+    left: Math.round(rect.left + paddingLeft),
+    width,
+    height,
     zIndex: resolvedZIndex,
     mode,
   };

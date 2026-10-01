@@ -566,6 +566,11 @@
   flex-direction: column;
 }
 
+.workspace-advisor-host-container[data-advisor-mode="terminal"] {
+  border-bottom-left-radius: 1rem;
+  border-bottom-right-radius: 1rem;
+}
+
 .workspace-advisor-host-content.plugin-host-page {
   min-height: 0 !important;
   height: 100% !important;
@@ -587,6 +592,24 @@
   border: 0;
 }
 
+.workspace-advisor-host-content .plugin-unavailable-state,
+.workspace-advisor-host-content .plugin-host-loading {
+  min-height: 0 !important;
+  height: 100% !important;
+  width: 100% !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 1.5rem !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-direction: column !important;
+  text-align: center !important;
+}
+
+.workspace-advisor-host-content .plugin-unavailable-state .plugin-unavailable-icon {
+  margin-bottom: 0.5rem;
+}
 @media (max-width: 639px) {
   .plugin-host-page {
     height: max(
