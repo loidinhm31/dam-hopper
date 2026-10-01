@@ -197,7 +197,9 @@ search architecture guide](./architecture/git-history-search.md). Phase 03 adds
 the persisted selection store described below. Phase 04 adds the shared
 `useGitHistoryView` controller and `GitHistoryToolbar`, canonical-ref,
 no-checkout `GitBranchControl` view mode, and graph/list `GitLogTree`.
-Workspace/Git-page integration remains in Phases 05–06; qualification is Phase 07.
+Phase 05 Workspace integration is implemented and reviewed; durable completion
+remains pending in explicit advice mode. Git-page integration is Phase 06 and
+end-to-end qualification is Phase 07. See the [Phase 05 plan](../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md).
 
 ### Persisted Git history selection (Phase 03; 2026-10-01)
 
