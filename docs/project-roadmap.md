@@ -6,8 +6,9 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 
 - **Plan status: IN PROGRESS (1/5 phases; 20% by phase count; 4/28h planned phase effort complete, 14% of estimate; updated 2026-10-01).** Phase 01 is complete; Phases 02–05 remain pending.
 - **Phase 01 — Config and schema — DONE (2026-10-01; 100%).** Added the optional UI wire fields, defaulted Rust schema and snake_case TOML mapping, Cognito shortcut/style normalization, and preference-store hydration/persistence.
-- **Scoped validation:** Rust filtered runs passed 4/4 (`cognito`), 18/18 (`ui_config`) and 146/146 (`config`); focused UI tests passed 47/47; the full UI package passed 2,110/2,110. Rust filters overlap; focused UI files are included in the full run. Browser/native mask qualification remains in Phase 05.
+- **Scoped validation:** The linked tester report records Rust filtered runs of 4/4 (`cognito`), 18/18 (`ui_config`) and 146/146 (`config`), focused UI tests 47/47, and full UI package 2,110/2,110. Follow-up one-field patch regressions passed on the current tree: settings file 28/28; API test 1/1 (1,766 filtered). The full UI package was not rerun after this test-only addition. Browser/native mask qualification remains in Phase 05.
 - See the [parent plan](../plans/261001-2207-cognito-privacy-mode/plan.md), [Phase 01 plan](../plans/261001-2207-cognito-privacy-mode/phase-01-config-and-schema.md), and [test report](../plans/reports/tester-261001-2316-phase-01-config-schema-tests.md).
+- **Documentation:** Updated the [configuration guide](./configuration-guide.md) and [codebase source map](./codebase-summary.md) with persisted names/defaults and the activation non-persistence boundary. Validation checked 42 files: all 867 internal links passed; aggregate code-reference and config-key warnings remain (1,451 and 361).
 
 ### Host-resource SSE delivery (2026-09-30–2026-10-01)
 

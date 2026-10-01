@@ -93,6 +93,8 @@ Cognito-specific normalization treats absent/non-string/unparseable/non-keyboard
 - UI coverage verified keyboard-only shortcut normalization, malformed-value defaults, preference hydration and debounced persistence.
 - Scoped results: Rust filtered runs passed 4/4 (`cognito`), 18/18 (`ui_config`) and 146/146 (`config`); focused UI tests passed 47/47; the full UI package passed 2,110/2,110. Rust filters overlap; focused UI files are included in the full UI run.
 - Full command details: [Phase 01 tester report](../reports/tester-261001-2316-phase-01-config-schema-tests.md).
+- Follow-up current-tree tests for one-field patch preservation passed after the regression additions: UI settings file 28/28; `update_global_ui_preserves_other_cognito_field_and_unrelated_settings_on_partial_patch` passed 1/1 (1,766 filtered). The full UI package was not rerun after this test-only addition.
+- Documentation updated the [configuration guide](../../docs/configuration-guide.md) and [codebase source map](../../docs/codebase-summary.md). Validation covered 42 files: all 867 internal links passed; the validator also reports 1,451 code-reference and 361 config-key warnings across the docs set.
 
 ## Success Criteria
 
