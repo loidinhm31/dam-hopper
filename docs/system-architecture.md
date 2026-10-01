@@ -200,16 +200,15 @@ Ownership invariants:
   retains successful initial results, retries only authentication-failed
   targets after owner validation, and cancels on generation change.
 
-#### Git history search and selection persistence (2026-10-01; Phases 01–02 implemented)
+#### Git history search and selection persistence (2026-10-01; Phases 01–03 implemented)
 
-The design contract is recorded in the Git history search plan at
-`plans/261001-2003-git-history-search-persistence/plan.md`. Phase 01 provides
-server-side message filtering; Phase 02 adds the existing REST transport and
-profile/generation-qualified history query builder. The [Git history search
-architecture guide](./architecture/git-history-search.md) documents the API,
-query identity, shared refresh options, and known server validation edge.
-Search controls, persisted selections, and integrated qualification remain in
-later plan phases.
+The [plan](../plans/261001-2003-git-history-search-persistence/plan.md)
+covers server filtering, query ownership, persisted selections, and planned UI
+integration. Phases 01–03 are implemented; Phases 04–07 own the shared
+controller, Workspace/Git-page consumers, and qualification. The
+[architecture guide](./architecture/git-history-search.md) documents the API,
+query and persistence contracts plus a known server-validation edge; persisted
+state delivery does not mean search controls or cross-surface behavior are done.
 
 
 Large files use bounded 64 KiB range reads in a read-only viewer. Image/video

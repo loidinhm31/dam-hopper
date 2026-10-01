@@ -2396,8 +2396,8 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 ### Git history search queries
 
 See the [Git history search architecture guide](./architecture/git-history-search.md)
-for the fixed-string server filter, input-validation caveat, and owner/generation-
-qualified client query and invalidation rules.
+for fixed-string filter/input rules, owner/generation query and invalidation
+invariants, persisted selection semantics, and canonical local/remote branch refs.
 
 
 ## Build Artifacts

@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-01 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,052,910 bytes; 2,528 files packed, six security-scan exclusions).
+**Generated:** 2026-10-01 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,207,213 bytes; 2,528 files packed, six security-scan exclusions).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -151,7 +151,7 @@ captured connection owner. Root and registered worktree targets remain distinct.
 | Bounded previews          | `components/organisms/LargeFileViewer.tsx`, image/video ticket clients                                                                                                                    | Large files use read-only 64 KiB range reads; media previews use scoped capabilities.                                                                                                                                                    |
 | Federated search          | `hooks/use-file-search.ts`, `components/organisms/SearchPanel.tsx`                                                                                                                        | Project-target and all-connected-profile scopes preserve origin metadata and cap aggregate results at 500.                                                                                                                               |
 | Search replace            | `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts`                                                                                                                         | Replacement captures the match target; dirty tabs are isolated by profile/project/worktree/path.                                                                                                                                         |
-| Git history, edits, and publication | `api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `server/src/api/git.rs`, `server/src/git/repository.rs`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs` | `/api/git/{project}/log` accepts optional full-message `messageQuery` filtering before pagination; response stays subject-only. `gitLogQueryOptions` centralizes normalized owner/generation-, target-, root-, revision-, page-, and term-qualified cache identity for `useGitLog` and future refresh consumers; transport uses encoded REST parameters and omits browser `profileId`. Message edits use branch+HEAD CAS; publishing uses a separate live one-ref exact-OID lease. |
+| Git history, edits, and publication | `api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `stores/git-history.ts`, `lib/git-branch-ref.ts`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `server/src/api/git.rs`, `server/src/git/repository.rs`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs` | `/api/git/{project}/log` filters full messages before pagination; query identity includes owner/generation, target, root, revision, page, and term. Persisted preferences distinguish uninitialized, explicit-all, and qualified selections; root/branch intent is profile/target/root scoped, with canonical refs separating local and remote names. Rewrites use branch+HEAD CAS; publication uses a live one-ref exact-OID lease. |
 
 Filesystem `fs:event` handling updates or refetches only the matching target.
 Clean editor tabs reload after external/Git mutations; dirty tabs preserve local
@@ -165,9 +165,10 @@ may make the result incomplete. `Replace Next` and `Replace All` re-read and
 mtime-check before writing, skip dirty files without overwriting them, and
 reload only clean open tabs.
 
-Phase 02 coverage is in `server/src/git/tests.rs`, `server/src/api/tests.rs`,
-`packages/ui/src/api/ws-transport.test.ts` and `queries.test.ts`, the leased-push
-hook, and Git panel/dialog tests. Targeted tests/builds passed; broad qualification remains Phase 03.
+Phase 03 persists Git-page selection, per-target roots, and root-scoped branch
+intent in `stores/git-history.ts`; `lib/git-branch-ref.ts` derives canonical
+local/remote refs. Controller/surface integration and qualification remain in
+Phases 04–07.
 
 ### Transport-safe FS subscription follow-up (Phase 01, 2026-09-20)
 
