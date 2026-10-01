@@ -10,10 +10,10 @@ Date: 2026-10-02
 
 ## Changes Made
 
-- Updated the configuration guide: Cognito shortcut capture/reset is under **Settings > Appearance > Keyboard Shortcuts** (default `Mod+Alt+KeyB`); the Appearance selector offers **Heavy Blur** and **Black Screen**. Clarified that activation is ephemeral and reload starts inactive, dismissal needs the activation shortcut, and notifications/audio continue while masked.
-- Updated the frontend component guide with both Settings components and the same user-facing behavior.
+- Updated the configuration guide: Cognito shortcut capture/reset is under **Settings > Keyboard Shortcuts** (default `Mod+Alt+KeyB`); the style selector in **Settings > Appearance** offers **Heavy Blur** and **Black Screen**. Clarified that activation is ephemeral and reload starts inactive, dismissal needs the activation shortcut, and notifications/audio continue while masked.
+- Updated the frontend component guide with both Settings components, their distinct Settings paths, and the same user-facing behavior.
 - Refreshed the codebase summary's preference-source map with `SettingsKeyboardShortcutsSection.tsx` and `SettingsAppearanceSection.tsx`.
-- Generated `repomix-output.xml` with Repomix v1.18.0 (`--compress`): 2,570 files / 3,902,048 tokens; its security scan excluded six files.
+- Generated `repomix-output.xml` with Repomix v1.18.0 (`--compress`) as the codebase-summary source (2,570 files / 3,902,048 tokens; six files security-filtered), then removed the temporary compaction.
 
 ## Validation
 

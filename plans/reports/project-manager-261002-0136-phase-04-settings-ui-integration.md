@@ -9,12 +9,14 @@
 - Updated the Phase 04 plan status and evidence. All **5/5 implementation todos** and **7/7 side-effect checklist items** remain checked.
 - Updated the Cognito Mode roadmap summary and added a Phase 04 entry, preserving the distinction between settled implementation and durable completion.
 - Phase 04 evidence: targeted Settings tests **16/16**; integrated Cognito suite **79/79 across seven files** (includes the targeted tests; counts are not additive); UI package TypeScript build passed; code review **10/10**, with no critical, high, or medium findings. These results are recorded in the [tester report](tester-261002-0136-phase-04-settings-ui-integration.md) and [code review](code-reviewer-261002-0136-phase-04-settings-ui-integration.md).
+- Docs Manager updated the configuration guide, frontend component guide, and codebase summary with the Cognito Settings paths and behavior: Heavy Blur / Black Screen, ephemeral activation and reload reset, same-shortcut dismissal, and continuing notifications/audio. See the [Docs Manager report](docs-manager-261002-0136-phase-04-settings-ui-integration.md).
 
 ## Updated Records
 
 - [Cognito Mode parent plan](../261001-2207-cognito-privacy-mode/plan.md)
 - [Phase 04 plan](../261001-2207-cognito-privacy-mode/phase-04-settings-ui-integration.md)
 - [Project roadmap](../../docs/project-roadmap.md)
+- [Docs Manager report](docs-manager-261002-0136-phase-04-settings-ui-integration.md)
 
 ## Testing Requirements / Quality Gates
 
