@@ -15,6 +15,7 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 01 Auth State, Cryptography, and Policy](./phase-01-auth-state-cryptography-and-policy.md)** — MongoDB-backed auth state, MFA cryptography, and session-policy primitives
 - **[Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md)** — Manage profile-scoped server connections and storage
 - **[Phase 03 Files, Editor, Search, and Git](./phase-03-files-editor-search-git.md)** — Profile-qualified IDE resources, federated search/replace, previews, and target-aware Git
+- **[Git History Search: Transport and Query Ownership](./architecture/git-history-search.md)** — Existing full-message REST filter, encoded `messageQuery` transport, and profile/generation-qualified query identity.
 - **[Phase 04 Terminal Continuity, Workflow, and Owner Navigation](./phase-04-terminal-continuity-workflow-navigation.md)** — Owner-qualified terminal identity, persistence, workflow reveal, notifications, and diagnostics
 - **[Agent status architecture (OMP-first and native Codex/Claude; Phase 06 Linux-qualified)](./architecture/agent-status.md)** — OMP C01–C19 and native Codex 0.158.0 / Claude Code 2.1.250 N01–N32; Codex status-only, Claude attention-only
   CLI: `dam-hopper-server integration omp {install|status|uninstall} --agent-dir <absolute-agent-dir>` (run as the OMP user on the server host).

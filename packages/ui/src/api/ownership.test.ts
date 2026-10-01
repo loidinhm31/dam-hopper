@@ -217,3 +217,38 @@ describe("createApiClient workflow target wire projection", () => {
     ).toThrowError(ConnectionOwnerError);
   });
 });
+
+describe("createApiClient git target wire projection", () => {
+  it("projects git log target to server wire target without profileId and passes messageQuery", async () => {
+    const invokeMock = vi.fn().mockResolvedValue([]);
+    const mockTransport: Transport = {
+      invoke: invokeMock,
+      onEvent: vi.fn(),
+      offEvent: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const client = createApiClient(
+      { profileId: "prof-1", generation: 1 },
+      mockTransport,
+    );
+
+    await client.git.log(
+      { profileId: "prof-1", project: "demo", worktreePath: "/tmp/wt" },
+      200,
+      0,
+      "refs/heads/main",
+      "root",
+      "test-query",
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith("git:log", {
+      project: "demo",
+      worktreePath: "/tmp/wt",
+      limit: 200,
+      offset: 0,
+      ref: "refs/heads/main",
+      root: "root",
+      messageQuery: "test-query",
+    });
+  });
+});

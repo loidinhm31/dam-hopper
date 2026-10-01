@@ -398,6 +398,63 @@ describe("WsTransport commit message endpoints", () => {
     transport.destroy();
   });
 });
+describe("WsTransport git:log endpoint", () => {
+  it("serializes log options and encodes query parameters safely", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // 1. With all options and search query containing special characters
+    await transport.invoke("git:log", {
+      project: "my-project",
+      worktreePath: "/tmp/worktree",
+      limit: 200,
+      offset: 0,
+      ref: "refs/heads/main",
+      root: "sub/root",
+      messageQuery: " fix(auth): bug #123 & + % ? ",
+    });
+
+    const url1 = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url1.pathname).toBe("/api/git/my-project/log");
+    expect(url1.searchParams.get("limit")).toBe("200");
+    expect(url1.searchParams.get("offset")).toBe("0");
+    expect(url1.searchParams.get("ref")).toBe("refs/heads/main");
+    expect(url1.searchParams.get("worktreePath")).toBe("/tmp/worktree");
+    expect(url1.searchParams.get("root")).toBe("sub/root");
+    expect(url1.searchParams.get("messageQuery")).toBe("fix(auth): bug #123 & + % ?");
+
+    // 2. Omits empty or whitespace-only messageQuery
+    await transport.invoke("git:log", {
+      project: "my-project",
+      limit: 100,
+      messageQuery: "   ",
+    });
+    const url2 = new URL(fetchMock.mock.calls[1][0] as string);
+    expect(url2.pathname).toBe("/api/git/my-project/log");
+    expect(url2.searchParams.get("limit")).toBe("100");
+    expect(url2.searchParams.has("messageQuery")).toBe(false);
+
+    // 3. Omits undefined messageQuery
+    await transport.invoke("git:log", {
+      project: "my-project",
+    });
+    const url3 = new URL(fetchMock.mock.calls[2][0] as string);
+    expect(url3.pathname).toBe("/api/git/my-project/log");
+    expect(url3.searchParams.has("messageQuery")).toBe(false);
+
+    transport.destroy();
+  });
+});
+
 
 describe("WsTransport typed API errors", () => {
   it("preserves status and code from a JSON error response", async () => {
