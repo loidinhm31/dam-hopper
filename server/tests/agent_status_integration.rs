@@ -274,10 +274,18 @@ fn test_codex_hooks_json_lifecycle() {
     let initial_user_json = serde_json::json!({
         "hooks": {
             "SessionStart": [
-                { "command": "/usr/local/bin/user-session-hook" }
+                {
+                    "hooks": [
+                        { "type": "command", "command": "/usr/local/bin/user-session-hook" }
+                    ]
+                }
             ],
             "CustomUserEvent": [
-                { "command": "/usr/local/bin/custom-event-hook" }
+                {
+                    "hooks": [
+                        { "type": "command", "command": "/usr/local/bin/custom-event-hook" }
+                    ]
+                }
             ]
         }
     });
@@ -312,7 +320,12 @@ fn test_codex_hooks_json_lifecycle() {
     assert!(hooks_map.contains_key("CustomUserEvent"), "custom user event must be preserved");
     let session_start_arr = hooks_map.get("SessionStart").unwrap().as_array().unwrap();
     assert!(
-        session_start_arr.iter().any(|h| h.get("command").and_then(|c| c.as_str()) == Some("/usr/local/bin/user-session-hook")),
+        session_start_arr.iter().any(|group| {
+            group.get("hooks")
+                .and_then(|h| h.as_array())
+                .map(|arr| arr.iter().any(|entry| entry.get("command").and_then(|c| c.as_str()) == Some("/usr/local/bin/user-session-hook")))
+                .unwrap_or(false)
+        }),
         "user session start hook must be preserved"
     );
 
@@ -333,7 +346,12 @@ fn test_codex_hooks_json_lifecycle() {
     let re_session_start_arr = re_installed_json["hooks"]["SessionStart"].as_array().unwrap();
     let managed_count = re_session_start_arr
         .iter()
-        .filter(|h| h["command"].as_str() == Some(install_report.launcher_path.to_str().unwrap()))
+        .filter(|group| {
+            group.get("hooks")
+                .and_then(|h| h.as_array())
+                .map(|arr| arr.iter().any(|entry| entry.get("command").and_then(|c| c.as_str()) == Some(install_report.launcher_path.to_str().unwrap())))
+                .unwrap_or(false)
+        })
         .count();
     assert_eq!(managed_count, 1, "managed command must not be duplicated");
 
@@ -351,7 +369,7 @@ fn test_codex_hooks_json_lifecycle() {
     assert!(after_hooks.contains_key("CustomUserEvent"), "user hook must remain");
     let remaining_session_start = after_hooks.get("SessionStart").unwrap().as_array().unwrap();
     assert_eq!(remaining_session_start.len(), 1);
-    assert_eq!(remaining_session_start[0]["command"], "/usr/local/bin/user-session-hook");
+    assert_eq!(remaining_session_start[0]["hooks"][0]["command"], "/usr/local/bin/user-session-hook");
 
     // Managed events that only had dam-hopper should be cleaned up
     assert!(!after_hooks.contains_key("PreToolUse"));
@@ -460,7 +478,7 @@ fn test_claude_settings_json_lifecycle() {
     // 2. Install Claude hooks
     let install_report = install_claude(&agent_dir).expect("install claude");
     assert_eq!(install_report.status, ManagedInstallationStatus::Current);
-    assert_eq!(install_report.readiness, ManagedReadinessStatus::Unverified);
+    assert_eq!(install_report.readiness, ManagedReadinessStatus::Ready);
     assert!(install_report.launcher_path.is_file());
     assert!(install_report.manifest_path.is_file());
 
