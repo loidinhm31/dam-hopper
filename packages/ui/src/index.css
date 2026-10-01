@@ -376,6 +376,11 @@
 }
 
 /* ── Scrollbar ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(51, 65, 85, 0.7) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -384,13 +389,19 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.8);
-  border-radius: 3px;
+  background: rgba(51, 65, 85, 0.6);
+  border-radius: 9999px;
+  transition: background-color 0.15s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(71, 85, 105, 1);
+  background: rgba(100, 116, 139, 0.9);
 }
-
+::-webkit-scrollbar-thumb:active {
+  background: rgba(148, 163, 184, 1);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 /* ── Log containers ── */
 .log-container {
   font-family: var(--font-mono);
@@ -569,6 +580,13 @@
 .workspace-advisor-host-container[data-advisor-mode="terminal"] {
   border-bottom-left-radius: 1rem;
   border-bottom-right-radius: 1rem;
+}
+
+.workspace-advisor-host-container,
+.workspace-advisor-host-content,
+[data-testid="terminal-floating-tool-panel"] {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(51, 65, 85, 0.7) transparent;
 }
 
 .workspace-advisor-host-content.plugin-host-page {
