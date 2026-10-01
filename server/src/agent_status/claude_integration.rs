@@ -244,11 +244,11 @@ pub fn check_claude_status(agent_dir: &Path) -> Result<NativeIntegrationStatusRe
         }
     }
 
-    // Installed and current; readiness is Unverified until live qualified reporting occurs
+    // Installed and current; readiness is Ready when all verification checks pass
     Ok(NativeIntegrationStatusReport {
         agent_kind: AgentKind::Claude,
         status: ManagedInstallationStatus::Current,
-        readiness: ManagedReadinessStatus::Unverified,
+        readiness: ManagedReadinessStatus::Ready,
         target_path: launcher_path.clone(),
         launcher_path,
         manifest_path,

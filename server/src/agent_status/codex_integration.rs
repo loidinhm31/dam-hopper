@@ -465,6 +465,17 @@ fn check_hooks_registered(
                                     return Ok(true);
                                 }
                             }
+                            if let Some(hooks_arr) = tbl.get("hooks").and_then(|h| h.as_array()) {
+                                for h in hooks_arr.iter() {
+                                    if let Some(h_tbl) = h.as_inline_table() {
+                                        if let Some(cmd) = h_tbl.get("command").and_then(|c| c.as_str()) {
+                                            if cmd == launcher_str.as_ref() {
+                                                return Ok(true);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -487,6 +498,15 @@ fn check_hooks_registered(
                     if let Some(cmd) = item.get("command").and_then(|c| c.as_str()) {
                         if cmd == launcher_str.as_ref() {
                             return Ok(true);
+                        }
+                    }
+                    if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
+                        for h in hooks {
+                            if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                                if cmd == launcher_str.as_ref() {
+                                    return Ok(true);
+                                }
+                            }
                         }
                     }
                 }
@@ -519,10 +539,22 @@ fn check_all_hooks_registered(
         for event in CODEX_MANAGED_EVENTS {
             let registered = hooks_table.get(*event).and_then(|item| item.as_array()).map(|arr| {
                 arr.iter().any(|v| {
-                    v.as_inline_table()
-                        .and_then(|t| t.get("command"))
-                        .and_then(|c| c.as_str())
-                        == Some(launcher_str.as_ref())
+                    if let Some(tbl) = v.as_inline_table() {
+                        if let Some(cmd) = tbl.get("command").and_then(|c| c.as_str()) {
+                            if cmd == launcher_str.as_ref() {
+                                return true;
+                            }
+                        }
+                        if let Some(hooks_arr) = tbl.get("hooks").and_then(|h| h.as_array()) {
+                            return hooks_arr.iter().any(|h| {
+                                h.as_inline_table()
+                                    .and_then(|t| t.get("command"))
+                                    .and_then(|c| c.as_str())
+                                    == Some(launcher_str.as_ref())
+                            });
+                        }
+                    }
+                    false
                 })
             }).unwrap_or(false);
             if !registered {
@@ -543,7 +575,18 @@ fn check_all_hooks_registered(
         for event in CODEX_MANAGED_EVENTS {
             let registered = hooks_obj.get(*event).and_then(|entry| entry.as_array()).map(|arr| {
                 arr.iter().any(|item| {
-                    item.get("command").and_then(|c| c.as_str()) == Some(launcher_str.as_ref())
+                    if let Some(cmd) = item.get("command").and_then(|c| c.as_str()) {
+                        if cmd == launcher_str.as_ref() {
+                            return true;
+                        }
+                    }
+                    if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
+                        hooks.iter().any(|h| {
+                            h.get("command").and_then(|c| c.as_str()) == Some(launcher_str.as_ref())
+                        })
+                    } else {
+                        false
+                    }
                 })
             }).unwrap_or(false);
             if !registered {
@@ -593,14 +636,31 @@ fn register_hooks_in_hooks_json(
                 ))
             })?;
 
+        // Clean up any legacy flat entries
+        arr.retain(|item| {
+            item.get("command").and_then(|c| c.as_str()) != Some(&launcher_str)
+        });
+
         let exists = arr.iter().any(|item| {
-            item.get("command").and_then(|c| c.as_str()) == Some(&launcher_str)
+            if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
+                hooks.iter().any(|h| {
+                    h.get("command").and_then(|c| c.as_str()) == Some(&launcher_str)
+                })
+            } else {
+                false
+            }
         });
         if !exists {
-            arr.push(json!({ "command": launcher_str }));
+            arr.push(json!({
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": launcher_str
+                    }
+                ]
+            }));
         }
     }
-
     let serialized = serde_json::to_vec_pretty(&root)
         .map_err(|e| IntegrationError::ConfigurationError(e.to_string()))?;
     atomic_write_file(config_path, &serialized, None)?;
@@ -629,11 +689,31 @@ fn deregister_hooks_in_hooks_json(
 
     for (event, val) in hooks_map.iter_mut() {
         if let Some(arr) = val.as_array_mut() {
+            // 1. Remove legacy flat entries
             arr.retain(|item| {
                 item.get("command")
                     .and_then(|c| c.as_str())
                     .map(|cmd| cmd != launcher_str.as_ref())
                     .unwrap_or(true)
+            });
+            // 2. Remove matching hook handlers from inside MatcherGroups
+            for group in arr.iter_mut() {
+                if let Some(hooks) = group.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                    hooks.retain(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|cmd| cmd != launcher_str.as_ref())
+                            .unwrap_or(true)
+                    });
+                }
+            }
+            // 3. Remove MatcherGroups whose hooks array is now empty
+            arr.retain(|group| {
+                if let Some(hooks) = group.get("hooks").and_then(|h| h.as_array()) {
+                    !hooks.is_empty()
+                } else {
+                    true
+                }
             });
             if arr.is_empty() && CODEX_MANAGED_EVENTS.contains(&event.as_str()) {
                 keys_to_remove.push(event.clone());
@@ -697,20 +777,51 @@ fn register_hooks_in_config_toml(
             ))
         })?;
 
+        // Clean up any legacy flat entries
+        let mut idx = 0;
+        while idx < arr.len() {
+            let is_legacy = arr.get(idx).and_then(|v| {
+                v.as_inline_table()
+                    .and_then(|t| t.get("command"))
+                    .and_then(|c| c.as_str())
+                    .map(|cmd| cmd == launcher_str.as_str())
+            }).unwrap_or(false);
+            if is_legacy {
+                arr.remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
+
         let exists = arr.iter().any(|val| {
-            val.as_inline_table()
-                .and_then(|t| t.get("command"))
-                .and_then(|c| c.as_str())
-                == Some(&launcher_str)
+            if let Some(tbl) = val.as_inline_table() {
+                if let Some(hooks_arr) = tbl.get("hooks").and_then(|h| h.as_array()) {
+                    hooks_arr.iter().any(|h| {
+                        h.as_inline_table()
+                            .and_then(|t| t.get("command"))
+                            .and_then(|c| c.as_str())
+                            == Some(launcher_str.as_str())
+                    })
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
         });
 
         if !exists {
-            let mut inline = InlineTable::new();
-            inline.insert("command", launcher_str.clone().into());
-            arr.push(Value::InlineTable(inline));
+            let mut handler = InlineTable::new();
+            handler.insert("type", "command".into());
+            handler.insert("command", launcher_str.clone().into());
+            let mut handler_arr = Array::new();
+            handler_arr.push(Value::InlineTable(handler));
+
+            let mut group = InlineTable::new();
+            group.insert("hooks", Value::Array(handler_arr));
+            arr.push(Value::InlineTable(group));
         }
     }
-
     let serialized = doc.to_string();
     atomic_write_file(config_path, serialized.as_bytes(), None)?;
     Ok(())
@@ -737,14 +848,31 @@ fn deregister_hooks_in_config_toml(
         if let Some(arr) = val.as_array_mut() {
             let mut i = 0;
             while i < arr.len() {
-                let matches = arr.get(i).and_then(|v| {
-                    v.as_inline_table()
-                        .and_then(|t| t.get("command"))
-                        .and_then(|c| c.as_str())
-                        .map(|cmd| cmd == launcher_str.as_ref())
-                }).unwrap_or(false);
-
-                if matches {
+                let mut should_remove_group = false;
+                if let Some(tbl) = arr.get_mut(i).and_then(|v| v.as_inline_table_mut()) {
+                    if tbl.get("command").and_then(|c| c.as_str()) == Some(launcher_str.as_ref()) {
+                        should_remove_group = true;
+                    } else if let Some(hooks_arr) = tbl.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                        let mut j = 0;
+                        while j < hooks_arr.len() {
+                            let match_cmd = hooks_arr.get(j).and_then(|h| {
+                                h.as_inline_table()
+                                    .and_then(|t| t.get("command"))
+                                    .and_then(|c| c.as_str())
+                                    .map(|cmd| cmd == launcher_str.as_ref())
+                            }).unwrap_or(false);
+                            if match_cmd {
+                                hooks_arr.remove(j);
+                            } else {
+                                j += 1;
+                            }
+                        }
+                        if hooks_arr.is_empty() {
+                            should_remove_group = true;
+                        }
+                    }
+                }
+                if should_remove_group {
                     arr.remove(i);
                 } else {
                     i += 1;
