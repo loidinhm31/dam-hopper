@@ -676,7 +676,7 @@ again clears the active state and chord; `reset()` is lifecycle cleanup, not a
 user dismissal control. The shortcut and style remain persisted preferences;
 activation state is never stored.
 
-In Settings > Appearance > Keyboard Shortcuts, capture/reset Cognito's shortcut; Settings > Appearance offers **Heavy Blur** and **Black Screen**. Preferences persist, but activation is memory-only and reload starts inactive. Only the same chord that activated the mask dismisses it; notifications and audio continue while masked.
+In Settings > Keyboard Shortcuts, capture/reset Cognito's shortcut; Settings > Appearance offers **Heavy Blur** and **Black Screen**. Preferences persist, but activation is memory-only and reload starts inactive. Only the same chord that activated the mask dismisses it; notifications and audio continue while masked.
 
 `CognitoModeOverlay` portals a focusable, labelled region to `document.body`
 only while active. Its full-viewport fixed layer uses the app viewport
