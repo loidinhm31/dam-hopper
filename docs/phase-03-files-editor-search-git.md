@@ -193,9 +193,27 @@ rejected; leading/trailing CR/LF is trimmed first, so a CR/LF-only query
 currently disables filtering. The [Phase 01 risk note](../plans/261001-2003-git-history-search-persistence/phase-01-server-message-search.md#risk-assessment) tracks this contract gap.
 
 The server and Phase 02 client contracts are documented in the [Git history
-search architecture guide](./architecture/git-history-search.md). Phase 02
-completes transport and shared owned-query options; search controls, selection
-persistence, and integrated qualification remain in later plan phases.
+search architecture guide](./architecture/git-history-search.md). Phase 03 adds
+the persisted selection store described below. Search controls, the shared
+history controller, cross-surface integration, and end-to-end qualification
+remain in Phases 04–07.
+
+### Persisted Git history selection (Phase 03; 2026-10-01)
+
+`useGitHistoryStore` keeps Git-page checkbox state separate from Workspace
+focus: `null` is uninitialized, `[]` is explicit all, and nonempty qualified
+project keys remain selected even while unavailable. Recovery state prevents
+corrupt/unknown-version preferences from silently becoming bulk-all.
+
+Root choice is scoped by profile/project/worktree. Branch preference is scoped
+by that target and VCS root: absent means follow the currently checked-out
+branch, while every explicit choice pins a canonical `refs/heads/...` or
+`refs/remotes/...` identity independent of checkout. Local and remote branches
+with the same display name remain distinct; a missing pin does not fall back.
+The store does not checkout branches or persist commit tips.
+
+See [Git history search and selection persistence](./architecture/git-history-search.md)
+for validation, hydration, denied-storage, and profile-deletion details.
 
 Git operations stay bound to the selected profile, project/worktree, and VCS
 root. Changing the target or root clears a pending lease preview; unavailable
@@ -217,8 +235,8 @@ failure and reuses the approved snapshot.
 | Scoped explorer state and watcher | `packages/ui/src/stores/explorer-tree.ts`, `hooks/use-fs-subscription.ts` |
 | CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` |
 | Search and replace | `hooks/use-file-search.ts`, `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` |
-| Git history search | `server/src/api/git.rs`, `server/src/git/repository.rs`, `api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`; regressions in `server/src/api/tests.rs`, `server/src/git/tests.rs`, `api/ws-transport.test.ts`, `api/queries.test.ts`, and `api/ownership.test.ts` |
+| Git history search and selection persistence | `server/src/api/git.rs`, `server/src/git/repository.rs`, `packages/ui/src/api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `packages/ui/src/stores/git-history.ts`, `packages/ui/src/lib/git-branch-ref.ts` | Full-message filtering and owner/generation-qualified query identity share the existing REST route. Versioned UI preferences keep Git-page selection, target roots, and root-scoped branch intent isolated by profile; canonical refs distinguish local from remote names. |
 | Git edit and leased publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
-| Focused regressions | `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git history/dialog/panel tests |
+| Focused regressions | `packages/ui/src/stores/git-history.test.ts`, `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git panel/dialog tests |
 
 Related contracts: [API Reference](./api-reference.md), [System Architecture](./system-architecture.md), [Code Standards](./code-standards.md), and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).

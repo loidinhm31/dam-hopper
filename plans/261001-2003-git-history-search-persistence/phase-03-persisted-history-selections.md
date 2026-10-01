@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-01. Priority: P2. Implementation: DONE 100% (2026-10-01 22:59:53 +07:00). Initial review: PASS, 8.5/10; follow-up findings addressed in current source/tests, with no post-fix review rerun recorded.
 - Add only missing Git preferences; reuse persisted Workspace project focus and in-memory target selection.
 
 ## Key Insights
@@ -36,10 +36,11 @@ Hydration readiness is transient; failed storage completes readiness in memory. 
 
 ## Related code files
 
-Create:
+Implemented:
 
-- `packages/ui/src/stores/git-history.ts`: typed persisted state/actions, branch/scope helpers if small, hydration readiness, profile deletion subscription.
-- `packages/ui/src/stores/git-history.test.ts`: isolated storage/schema/selection behavior.
+- `packages/ui/src/stores/git-history.ts`: typed persisted state/actions, scope helpers, hydration readiness, profile deletion subscription.
+- `packages/ui/src/lib/git-branch-ref.ts`: pure canonical ref construction, validation, and branch resolution helpers.
+- `packages/ui/src/stores/git-history.test.ts`: isolated persistence/schema/selection behavior regressions.
 
 Read/reuse; intentionally unchanged unless minimal correction necessary and coordinator approves:
 
@@ -54,21 +55,21 @@ Read/reuse; intentionally unchanged unless minimal correction necessary and coor
 1. Read persisted store patterns, ownership helpers, safe-storage precedent, profile notifications and reset classification. Avoid adding a new generic storage utility when existing safe wrapper fits.
 2. Implement typed state/actions from design. Require qualified nonempty profile/project keys. Serialize selected keys as sorted/deduplicated array while preserving null versus []; record maps must not accept unowned keys.
 3. Store root per `projectTargetKey`; branch per JSON tuple including normalized target/root. Absence means default '.'/follow-active; avoid writes just to persist defaults on every render.
-4. Implement branch canonical-ref construction and resolution helper using Branch.name + isRemote; ensure local `origin/main` differs from remote `origin/main`. Do not assume name prefix alone identifies remote.
+4. Implement branch canonical-ref construction and resolution in `lib/git-branch-ref.ts`, using `Branch.name` and `isRemote`; ensure local/remote `origin/main` differs. Do not assume name prefix alone identifies remote.
 5. Add `persist` name/version/partialize and checked merge. Validate record shapes/discriminants/canonical prefixes and qualified tuple structure. Drop malformed root/branch entries individually. For corrupt/unknown-version present selection or invalid selected keys, set persisted `selectionRecoveryRequired=true`: bulk operations and null first-use seeding blocked until explicit valid selection/Clear resets it, never convert corruption to all even after another preference write/reload. No nonexistent legacy Git migration.
 6. Expose hydration readiness via store or Zustand persist lifecycle subscription; no initialization write until ready. Storage parse/access/write errors leave usable in-memory state and settle readiness rather than permanent spinner.
 7. Subscribe to actual profile `deleted` notification once using existing module convention. Clear that profile's root/branch maps; retain selected project keys as unavailable tombstones. Never turn last selected removed project into []/all. Profile endpoint data edits keep logical intent pending fresh discovery; do not clear on every dataChanged event.
 8. Create deterministic tests with isolated memory Storage and reset singleton state between cases: hydrate selected projects, explicit [], root/branch scopes, pinned/follow-active intent, local/remote collision, malformed records individually dropped, corrupt/unknown-version selection requires explicit recovery, unavailable storage, deletion isolation. Tests verify restored behavioral state and subsequent updates, not storage key text/serialization copies.
 9. Controller integration, missing-branch reconciliation, and Git-page changes are Phase 04/06 ownership; do not edit those files here.
-10. Report action names, typed store surface, hydration contract and test cases; no worker checks mid-flight.
+10. Record the typed store/helper surface, hydration and recovery contract, and current-tree test evidence below.
 
 ## Todo list
 
-- [ ] Create only missing Git selection state with qualified keys.
-- [ ] Implement validated hydration and denied-storage in-memory fallback.
-- [ ] Disambiguate branch identity and preserve follow-active intent.
-- [ ] Handle profile deletion without broadening bulk selection.
-- [ ] Add isolated persistence/identity behavior regressions.
+- [x] Create only missing Git selection state with qualified keys.
+- [x] Implement validated hydration and denied-storage in-memory fallback.
+- [x] Disambiguate branch identity and preserve follow-active intent.
+- [x] Handle profile deletion without broadening bulk selection.
+- [x] Add isolated persistence/identity behavior regressions.
 
 ## Success Criteria
 
@@ -90,6 +91,12 @@ Read/reuse; intentionally unchanged unless minimal correction necessary and coor
 
 Browser preferences contain identity and branch intent only; no credentials/commit contents/generation. Validate untrusted storage. Persist only explicitly qualified keys; profile deletion touches only its own preferences.
 
-## Next steps
+## Completion Record
 
-Phase 04 consumes frozen store; Phase 06 consumes selected checkbox set. Unresolved questions: none; endpoint edit follows existing logical-profile identity and revalidation rules.
+- **Completed:** 2026-10-01 22:59:53 +07:00; 100%.
+- **Persisted API:** Version 1 contains `gitPageSelection`, `rootByTarget`, `branchByScope`, and `selectionRecoveryRequired`; transient `isHydrated` is observed by `useGitHistoryHydrated()`. Actions: `setGitPageSelection`, `clearGitPageSelection`, `setRootForTarget`/`getRootForTarget`, `setBranchPreference`/`getBranchPreference`/`clearBranchPreference`, `handleProfileRemoved`, `markHydrated`, and `resetSelectionRecoveryRequired`. Branch helpers: `toBranchCanonicalRef`, `isBranchCanonicalRef`, and `resolveHistoryBranch`.
+- **Behavior:** `null` Git-page selection is uninitialized; `[]` means explicit all; nonempty values are qualified project keys. Root and branch preferences are scoped by profile/project/worktree and branch preferences additionally by root. Defaults are absent entries (`.` root and `follow-active`). Explicit branch choice stays pinned even if it is checked out; follow-active resolves the currently marked branch. A missing pinned branch remains not-found without fallback.
+- **Review:** The initial [code review](../reports/code-review-261001-2245-phase-03-persisted-history-selections.md) passed at 8.5/10 with no critical blockers and recorded recommendations. The current source/tests address recovery-flag preservation across version migration, invalid-only selection recovery (never `[]`), invalid setter rejection, canonical-ref suffix validation, target-string trimming, and a valid-key unknown-version regression. No post-fix code review is recorded.
+- **Validation:** The [tester report](../reports/tester-261001-2241-phase-03-persisted-history-selections.md) records the initial 23/23 focused and 2,102/2,102 UI package passes, then a current-tree focused rerun at 2026-10-01 22:59:53 +07:00: 26/26 passed, 0 failed, 0 skipped. The package-wide suite was not rerun after follow-up fixes. Coverage was not collected; the initial package run emitted two non-failing jsdom navigation diagnostics of unidentified source. The initial review recorded a successful UI build/typecheck; no post-fix build is recorded.
+
+Unresolved questions: none. Shared controller/surface integration and end-to-end qualification remain assigned to Phases 04–07.
