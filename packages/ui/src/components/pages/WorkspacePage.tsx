@@ -1952,6 +1952,7 @@ export default function WorkspacePage() {
             key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
             project={projectName}
             target={projectTarget?.target}
+            available={projectTarget?.available}
           />
         </Suspense>
       ) : (
@@ -2093,6 +2094,7 @@ export default function WorkspacePage() {
               key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
               project={projectName}
               target={projectTarget?.target}
+              available={projectTarget?.available}
             />
           </Suspense>
         ) : (
@@ -2159,6 +2161,7 @@ export default function WorkspacePage() {
             key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
             project={projectName}
             target={projectTarget?.target}
+            available={projectTarget?.available}
           />
         </Suspense>
       ) : (

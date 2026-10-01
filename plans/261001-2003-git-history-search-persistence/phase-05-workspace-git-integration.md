@@ -8,8 +8,8 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
-- Integrate search and restored branch/root selection into every existing Workspace Git mount without changing project switcher or push workflows.
+- Date: 2026-10-01. Priority: P2. Implementation and finalization: settled (2026-10-02). Durable completion: pending in explicit advice mode; status intentionally not DONE. Code review: 9.8/10, approved by user.
+- Integrated search and restored branch/root selection into every existing Workspace Git mount without changing the project switcher or push workflows.
 
 ## Key Insights
 
@@ -57,10 +57,10 @@ Read/verify, intentionally unchanged:
 
 ## Todo list
 
-- [ ] Integrate controller and toolbar across Workspace mounts.
-- [ ] Keep scoped details/diffs and mutation guards intact.
-- [ ] Preserve root-scoped push/lease/SSH behavior.
-- [ ] Remove obsolete local history state/refresh helpers and migrate behavioral coverage.
+- [x] Integrate controller and toolbar across Workspace mounts.
+- [x] Keep scoped details/diffs and mutation guards intact.
+- [x] Preserve root-scoped push/lease/SSH behavior.
+- [x] Remove obsolete local history state/refresh helpers and migrate behavioral coverage.
 
 ## Success Criteria
 
@@ -82,4 +82,4 @@ Owner/root-qualified requests and details; no ambient refresh. Current branch/si
 
 ## Next steps
 
-Integrate beside Phase 06; Phase 07 exercises all actual Workspace surfaces. Unresolved questions: none.
+Implementation and finalization are settled; durable completion remains pending in explicit advice mode, so do not mark Phase 05 DONE. Phase 06 Git page integration may proceed; Phase 07 performs end-to-end qualification and documentation. Unresolved questions: none.

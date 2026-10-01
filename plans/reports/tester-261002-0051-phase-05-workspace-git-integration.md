@@ -1,0 +1,24 @@
+# Phase 05 — Workspace Git panel integration test report
+
+- **Test status:** PASS — 5/5 files, 71/71 tests passed (100%); 0 failed, 0 skipped.
+  - `src/components/organisms/WorkspaceGitPanel.test.ts`: 15 passed.
+  - Related suites (`use-git-history-view.test.tsx`, `git-history.test.ts`, `GitLogTree.test.tsx`, `GitBranchControl.test.tsx`): 56 passed across 4 files.
+- **Commands:**
+  - `pnpm --filter @dam-hopper/ui test src/components/organisms/WorkspaceGitPanel.test.ts` — PASS.
+  - `pnpm --filter @dam-hopper/ui test src/hooks/use-git-history-view.test.tsx src/stores/git-history.test.ts src/components/organisms/GitLogTree.test.tsx src/components/organisms/GitBranchControl.test.tsx` — PASS.
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit` — PASS (exit 0, no diagnostics).
+- **Type check:** PASS — completed in 7.56s wall time.
+- **Test duration:** 2.089s summed Vitest-reported durations (0.829s + 1.26s).
+- **Edge cases covered:**
+  - Root selector primary-root fallback, labels/mapping state, root-relative paths, avoiding duplicate root prefixes.
+  - Search debounce/clear; applied-query page and selected-commit reset; filtered list presentation; scope-switch transient-state reset.
+  - Follow-active and pinned branch selection, discovery pending, checkout independence, missing pinned-branch reconciliation, canonical refs and local/remote name collisions.
+  - Explicit empty selection vs uninitialized default; deduped/sorted selection; per-target root and branch preferences; profile deletion; malformed persisted state recovery and unknown-version migration.
+  - Non-active branch is read-only for rewrite actions; unavailable Git suppresses mutations; unavailable, uninitialized, and ordinary error display paths.
+  - Pushed-commit drop restriction, HEAD-only undo, graph/list rendering, empty log messages; branch-menu dismissal, checked-out branch deletion restriction, view mode without checkout, and remote-branch refs.
+  - Commit details selection, selected commit clearing after drop/undo, and double-click diff path mapping from nested Git roots.
+- **Coverage metrics:** Not instrumented; line, branch, and function percentages unavailable from requested commands.
+- **Build status:** TypeScript check passed; production/package build not run.
+- **Failures / critical issues:** None.
+- **Recommendations / next steps:** None for the requested validation gate. Run coverage-enabled targeted tests if percentage metrics are required.
+- **Unresolved questions:** None.

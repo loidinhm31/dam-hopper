@@ -200,15 +200,21 @@ Ownership invariants:
   retains successful initial results, retries only authentication-failed
   targets after owner validation, and cancels on generation change.
 
-#### Git history search and selection persistence (2026-10-01; Phases 01–03 implemented)
+#### Git history search and selection persistence (2026-10-01–02)
 
-Phase 04 completed on 2026-10-02. Its [plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md) records the shared
-controller `useGitHistoryView`, controlled `GitHistoryToolbar`, and canonical-ref/
-no-checkout `GitBranchControl` view mode with graph/list presentation in
-`GitLogTree`. Phases 05–06 integrate Workspace and Git-page consumers; Phase 07
-owns qualification. The [architecture guide](./architecture/git-history-search.md)
-covers transport, query, persistence, and shared-view contracts plus the
-known server-validation edge.
+Phase 04 adds the shared `useGitHistoryView` controller and presentation
+components; see the [Phase 04 plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
+
+Phase 05 integrates the controller into all three Workspace Git surfaces
+(desktop IDE, terminal floating, compact) with target-availability gating,
+persisted root/branch selection, scope-bound details/actions, and root-scoped
+push/lease safeguards. Implementation and finalization are settled; review is
+user-approved at 9.8/10 and validation is 71/71 with a clean typecheck.
+Durable completion remains pending in explicit advice mode; Phase 06 adds the
+Git-page consumer and Phase 07 owns end-to-end qualification. The
+[Git-history architecture guide](./architecture/git-history-search.md) covers
+the transport, query, persistence, Workspace contracts, and known
+server-validation edge.
 
 
 Large files use bounded 64 KiB range reads in a read-only viewer. Image/video

@@ -1,6 +1,6 @@
 # Git History Search: Transport, Query Ownership, and Selection Persistence
 
-**Status:** Phases 01–04 implement server-side message filtering, shared client transport/query ownership, persisted history selections, and the shared view controller/presentation. Workspace/Git-page integration and end-to-end qualification remain in Phases 05–07. This guide covers the API, query, persistence, and shared UI contracts, not completed page integration.
+**Status:** Phases 01–05 implement server-side message filtering, shared client transport/query ownership, persisted history selections, the shared view, and Workspace panel integration. Git-page integration and end-to-end qualification remain in Phases 06–07. This guide covers their API, query, persistence, shared UI, and Workspace integration contracts.
 
 ## REST API contract
 
@@ -85,10 +85,17 @@ mode skips ancestry lane construction and graph SVGs while preserving the
 same commit rows, selection, keyboard interaction, and context-menu actions.
 `emptyMessage` allows a surface to supply its empty-state text.
 
-The shared UI components live in the
-[frontend component architecture](../frontend-components.md); page-level
-adoption and qualification remain later plan phases.
-The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md); shared-controller and view contracts are in [Phase 04](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
+## Workspace Git panel integration (Phase 05)
+
+`WorkspacePage` mounts `WorkspaceGitPanel` in the desktop IDE Git tool, terminal floating panel, and compact Git surface. Each mount receives the selected project target and its availability. The panel passes the qualified target and availability to `useGitHistoryView`, so a missing or prunable worktree stays unavailable instead of falling back to the project root.
+
+The shared controller supplies persisted VCS-root and history-branch choices plus search, paging, selected commit, and refresh state. Target/root/branch/generation changes reset transient history state; the panel also resets pending mutation dialogs at the effective-scope boundary. Choosing a history branch is view-only and never checks it out.
+
+Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Rewrite actions remain unavailable while viewing a non-active branch; cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
+
+The implementation and review are settled; scoped validation recorded 71/71 tests, a clean typecheck, and user-approved 9.8/10 review. Durable Phase 05 closure and Phase 07 qualification remain pending; Phase 06 integrates the Git-page consumer.
+
+The shared UI components live in the [frontend component architecture](../frontend-components.md). The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md), the shared-controller contract in [Phase 04](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md), and Workspace integration in [Phase 05](../../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md). End-to-end qualification remains Phase 07.
 
 ## Source map
 
@@ -103,5 +110,8 @@ The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-g
 - `packages/ui/src/components/organisms/GitLogTree.tsx` — graph/list commit presentation.
 - Focused UI regressions: `packages/ui/src/stores/git-history.test.ts`, `packages/ui/src/api/ws-transport.test.ts`, `packages/ui/src/api/queries.test.ts`, and `packages/ui/src/api/ownership.test.ts`.
 - Server route/filter: `server/src/api/git.rs` and the Git repository log implementation.
+- `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/components/pages/WorkspacePage.tsx` — Workspace mounts, availability, history presentation, and target/root-scoped actions.
+- Workspace integration regression coverage: `packages/ui/src/components/organisms/WorkspaceGitPanel.test.ts`.
+- Workspace integration plan: `../../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md`.
 
 See the [API Reference: Commit history](../api-reference.md#commit-history), [Git history search standards](../code-standards.md#git-history-search-queries), and the Phase 03 plan at `plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md`.
