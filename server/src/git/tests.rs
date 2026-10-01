@@ -3155,7 +3155,7 @@ fn get_log_shows_current_branch_history_only() {
     git(&["add", "main.txt"], path);
     git(&["commit", "-m", "main only"], path);
 
-    let messages: Vec<_> = get_log(path, 10, 0, None)
+    let messages: Vec<_> = get_log(path, 10, 0, None, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -3179,12 +3179,12 @@ fn get_log_supports_offset_pagination() {
         git(&["commit", "-m", &message], path);
     }
 
-    let first_page: Vec<_> = get_log(path, 2, 0, None)
+    let first_page: Vec<_> = get_log(path, 2, 0, None, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
         .collect();
-    let second_page: Vec<_> = get_log(path, 2, 2, None)
+    let second_page: Vec<_> = get_log(path, 2, 2, None, None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -3209,7 +3209,7 @@ fn get_log_can_read_an_explicit_branch_without_checkout() {
     git(&["add", "main.txt"], path);
     git(&["commit", "-m", "main only"], path);
 
-    let messages: Vec<_> = get_log(path, 10, 0, Some("feature"))
+    let messages: Vec<_> = get_log(path, 10, 0, Some("feature"), None)
         .unwrap()
         .into_iter()
         .map(|entry| entry.message)
@@ -3226,4 +3226,174 @@ fn update_branch_invalid_name_rejected() {
     let err = update_branch(repo.path(), "bad branch", "origin").unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
+}
+
+#[test]
+fn get_log_search_case_insensitivity_and_body_matching() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["commit", "--allow-empty", "-m", "Feature ALPHA\n\nimplemented core logic"], path);
+    git(&["commit", "--allow-empty", "-m", "Fix bug in parsing\n\nDetailed context mentioning feature alpha in body"], path);
+    git(&["commit", "--allow-empty", "-m", "Unrelated update\n\nnothing special"], path);
+
+    let head_before = git_output(&["rev-parse", "HEAD"], path);
+
+    // Search for "alpha" lowercase: matches both "Feature ALPHA" (subject) and "Fix bug in parsing" (body)
+    let entries = get_log(path, 10, 0, None, Some("alpha")).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].message, "Fix bug in parsing");
+    assert_eq!(entries[1].message, "Feature ALPHA");
+
+    // Verify HEAD and working directory are completely untouched
+    let head_after = git_output(&["rev-parse", "HEAD"], path);
+    assert_eq!(head_before, head_after);
+    assert_eq!(git_output(&["status", "--porcelain"], path), "");
+}
+
+#[test]
+fn get_log_search_literal_special_characters() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["commit", "--allow-empty", "-m", "chore: bump [release-1.0]"], path);
+    git(&["commit", "--allow-empty", "-m", "feat: add .* regex support"], path);
+    git(&["commit", "--allow-empty", "-m", "docs: document --dry-run option"], path);
+    git(&["commit", "--allow-empty", "-m", "plain commit without symbols"], path);
+
+    // ".*" must be treated as literal fixed string, NOT matching all commits
+    let dot_star_entries = get_log(path, 10, 0, None, Some(".*")).unwrap();
+    assert_eq!(dot_star_entries.len(), 1);
+    assert_eq!(dot_star_entries[0].message, "feat: add .* regex support");
+
+    // "[release-1.0]" must be matched literally, not as character class
+    let bracket_entries = get_log(path, 10, 0, None, Some("[release-1.0]")).unwrap();
+    assert_eq!(bracket_entries.len(), 1);
+    assert_eq!(bracket_entries[0].message, "chore: bump [release-1.0]");
+
+    // "--dry-run" must be matched literally, not parsed as CLI option
+    let dash_entries = get_log(path, 10, 0, None, Some("--dry-run")).unwrap();
+    assert_eq!(dash_entries.len(), 1);
+    assert_eq!(dash_entries[0].message, "docs: document --dry-run option");
+}
+
+#[test]
+fn get_log_search_unicode_literal_and_whitespace() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["commit", "--allow-empty", "-m", "feat: hỗ trợ tiếng Việt 🚀"], path);
+    git(&["commit", "--allow-empty", "-m", "docs: english documentation"], path);
+
+    // Literal unicode matching
+    let unicode_entries = get_log(path, 10, 0, None, Some("tiếng Việt")).unwrap();
+    assert_eq!(unicode_entries.len(), 1);
+    assert_eq!(unicode_entries[0].message, "feat: hỗ trợ tiếng Việt 🚀");
+
+    // Query with surrounding whitespace should be trimmed
+    let trimmed_entries = get_log(path, 10, 0, None, Some("  tiếng Việt   ")).unwrap();
+    assert_eq!(trimmed_entries.len(), 1);
+    assert_eq!(trimmed_entries[0].message, "feat: hỗ trợ tiếng Việt 🚀");
+
+    // Whitespace-only query is treated as no query (returns all commits)
+    let all_entries = get_log(path, 10, 0, None, Some("   \t  ")).unwrap();
+    assert_eq!(all_entries.len(), 3); // init + 2 commits
+}
+
+#[test]
+fn get_log_search_matching_pagination() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    // Commit order (oldest to newest): init, match 1, filler A, match 2, filler B, match 3, match 4
+    git(&["commit", "--allow-empty", "-m", "target match 1"], path);
+    git(&["commit", "--allow-empty", "-m", "filler A"], path);
+    git(&["commit", "--allow-empty", "-m", "target match 2"], path);
+    git(&["commit", "--allow-empty", "-m", "filler B"], path);
+    git(&["commit", "--allow-empty", "-m", "target match 3"], path);
+    git(&["commit", "--allow-empty", "-m", "target match 4"], path);
+
+    // First page of matches: limit 2, offset 0 -> newest matches: 4 and 3
+    let page1 = get_log(path, 2, 0, None, Some("target match")).unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0].message, "target match 4");
+    assert_eq!(page1[1].message, "target match 3");
+
+    // Second page of matches: limit 2, offset 2 -> next matches: 2 and 1
+    let page2 = get_log(path, 2, 2, None, Some("target match")).unwrap();
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2[0].message, "target match 2");
+    assert_eq!(page2[1].message, "target match 1");
+
+    // Third page of matches: limit 2, offset 4 -> empty
+    let page3 = get_log(path, 2, 4, None, Some("target match")).unwrap();
+    assert!(page3.is_empty());
+}
+
+#[test]
+fn get_log_search_beyond_default_page_boundary() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    // Old commit before 205 filler commits
+    git(&["commit", "--allow-empty", "-m", "needle in haystack old commit"], path);
+
+    for idx in 1..=205 {
+        git(&["commit", "--allow-empty", "-m", &format!("filler commit {idx}")], path);
+    }
+
+    // Default limit is 100 or 200; with limit 100, finding the needle proves search selects before pagination
+    let entries = get_log(path, 100, 0, None, Some("needle in haystack")).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].message, "needle in haystack old commit");
+}
+
+#[test]
+fn get_log_search_branch_isolation_and_explicit_ref() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature"], path);
+    git(&["commit", "--allow-empty", "-m", "feature secret_marker commit"], path);
+
+    git(&["checkout", "main"], path);
+    git(&["commit", "--allow-empty", "-m", "main secret_marker commit"], path);
+
+    // On main, default ref searches current branch
+    let main_entries = get_log(path, 10, 0, None, Some("secret_marker")).unwrap();
+    assert_eq!(main_entries.len(), 1);
+    assert_eq!(main_entries[0].message, "main secret_marker commit");
+
+    // Explicit ref "feature" searches feature branch without checkout
+    let feat_entries = get_log(path, 10, 0, Some("feature"), Some("secret_marker")).unwrap();
+    assert_eq!(feat_entries.len(), 1);
+    assert_eq!(feat_entries[0].message, "feature secret_marker commit");
+}
+
+#[test]
+fn get_log_search_invalid_control_characters_rejected() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    assert!(matches!(
+        get_log(path, 10, 0, None, Some("test\nquery")).unwrap_err(),
+        crate::error::AppError::InvalidInput(_)
+    ));
+    assert!(matches!(
+        get_log(path, 10, 0, None, Some("test\rquery")).unwrap_err(),
+        crate::error::AppError::InvalidInput(_)
+    ));
+    assert!(matches!(
+        get_log(path, 10, 0, None, Some("test\0query")).unwrap_err(),
+        crate::error::AppError::InvalidInput(_)
+    ));
+}
+
+#[test]
+fn get_log_search_no_match_returns_empty() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    let entries = get_log(path, 10, 0, None, Some("completely_nonexistent_term_42")).unwrap();
+    assert!(entries.is_empty());
 }

@@ -633,6 +633,7 @@ pub struct GetLogQuery {
     pub r#ref: Option<String>,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
+    pub message_query: Option<String>,
 }
 
 pub async fn get_log_route(
@@ -645,8 +646,25 @@ pub async fn get_log_route(
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
     let limit = query.limit.unwrap_or(100);
     let offset = query.offset.unwrap_or(0);
-    let log = get_log(&root.root_path, limit, offset, query.r#ref.as_deref())
-        .map_err(ApiError::from_app)?;
+    let message_query = match query.message_query.as_deref().map(str::trim) {
+        Some(term) if !term.is_empty() => {
+            if term.contains(['\r', '\n', '\0']) {
+                return Err(ApiError::from_app(AppError::InvalidInput(
+                    "Search query must not contain CR, LF, or NUL characters".into(),
+                )));
+            }
+            Some(term)
+        }
+        _ => None,
+    };
+    let log = get_log(
+        &root.root_path,
+        limit,
+        offset,
+        query.r#ref.as_deref(),
+        message_query,
+    )
+    .map_err(ApiError::from_app)?;
     Ok(Json(log))
 }
 

@@ -88,6 +88,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - Support SSH key loading for authentication
 - Let push select the active VCS root in the UI so submodules and nested repos can push independently
 - Retry SSH-auth failures through the shared passphrase flow without duplicating result-shape handling
+- Search commit history using optional `messageQuery` text, with literal ASCII-case-insensitive matching across complete commit subjects and bodies before pagination; no Unicode normalization is promised.
 
 **Acceptance Criteria:**
 
@@ -100,6 +101,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Retry hook normalizes single-result and array Git responses before auth checks
 - ✓ Fetch/pull/push share one backend credential order and push reports missing-upstream configuration clearly
 - ✓ Force-publish is a separately confirmed exact-OID lease; normal Push stays fast-forward-only and local message edits never publish automatically
+- `messageQuery` filtering preserves the existing `GitLogEntry` array and subject-only `message` field; CR/LF/NUL search values return HTTP 400.
 
 **Technical Constraints:**
 
