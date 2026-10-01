@@ -57,6 +57,8 @@ Implementation in progress (1/5 phases; 20%; 4/28h planned effort). Phase 01 is 
 - Global planning/frontend skills read directly; local `.omp/skills` and `docs/development-rules.md` absent. Current repo conventions override generic skill framework suggestions. Architecture changes intentionally deferred to Phase 05 implementation docs.
 - Global activation helper executed successfully, but `EVCRATE_SESSION_ID` is unset; active-plan session persistence is unavailable. Requested plan files exist independently of that helper.
 - Phase 01 implementation is complete, with scoped Rust/UI validation recorded in the [phase plan](./phase-01-config-and-schema.md) and [test report](../reports/tester-261001-2316-phase-01-config-schema-tests.md).
+- Follow-up one-field patch preservation regressions passed: UI settings file 28/28; `update_global_ui_preserves_other_cognito_field_and_unrelated_settings_on_partial_patch` passed 1/1 (1,766 filtered).
+- Documentation updates and 42-file link validation are recorded in the Phase 01 completion evidence.
 
 ## Validation summary
 
