@@ -2395,14 +2395,9 @@ Types: feat, fix, refactor, test, docs, perf, ci, chore.
 
 ### Git history search queries
 
-- Pass search text as a single fixed-string Git argument; never interpolate it
-  into a shell command or allow leading option-like text to become Git options.
-- Validate raw CR/LF/NUL before trimming optional message queries; only then
-  map empty/whitespace-only values to no filter. Include control characters at
-  the leading/trailing boundaries in regressions.
-
-- Apply message filtering before pagination and preserve the existing log DTO;
-  its `message` field remains subject-only even for body matches.
+See the [Git history search architecture guide](./architecture/git-history-search.md)
+for the fixed-string server filter, input-validation caveat, and owner/generation-
+qualified client query and invalidation rules.
 
 
 ## Build Artifacts

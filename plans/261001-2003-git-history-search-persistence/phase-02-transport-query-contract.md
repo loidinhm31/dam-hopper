@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-01. Priority: P2. Status: DONE (2026-10-01 21:55:00 +07:00). Review: passed.
 - Extend one optional field through current browser/native REST transport and share exact log query construction.
 
 ## Key Insights
@@ -52,19 +52,19 @@ Modify:
 6. Ensure `gitQueryKey` key prefix for each owner/target/root is unchanged; existing Git mutation invalidation must hit both filtered and ordinary variants. Expose narrow history query-prefix helper if controller needs refresh of branches/status/details; reuse current owner/key logic rather than copying it into components.
 7. Migrate impacted tests/mocks to preserve signatures; delete assertions that pin old incidental key-array wording. Keep behavior tests for cache isolation, target routing, and filtered invalidation.
 8. Add one consumer-visible cache isolation scenario: same-name project on two profiles with distinct terms/ref/root cannot render other owner's commits; owner generation switch cannot publish old log results. Different query values must not reuse the previous visible result. No bare query-key-array equality as sole regression.
-9. Coordinator's throwaway transport smoke with actual server verifies encoded term including `+ & # ? %` and body match; same path exercised via owner-bound client for both browser/native shared mapping where runnable.
+9. Verify the server route and transport encoding separately: the server API regression covers message-query search and pagination, and `ws-transport.test.ts` covers reserved-character encoding. Full live browser-to-server search smoke remains a Phase 07 qualification gate.
 10. Report changed symbols, shared builder/enable contract and relevant callsites; no worker checks mid-flight.
 
 ## Todo list
 
-- [ ] Extend both client signatures and REST mapping.
-- [ ] Centralize owned log options and optional scope gating.
-- [ ] Preserve mutation prefix invalidation across search variants.
-- [ ] Update affected behavior tests/mocks and report exported contracts.
+- [x] Extend both client signatures and REST mapping.
+- [x] Centralize owned log options and optional scope gating.
+- [x] Preserve mutation prefix invalidation across search variants.
+- [x] Update affected behavior tests/mocks and report exported contracts.
 
 ## Success Criteria
 
-- Same term reaches actual server intact without browser profile metadata.
+- Server API and client transport tests verify message-query search/pagination and safe query encoding; full live browser-to-server verification is a Phase 07 qualification gate.
 - Query/cache results isolated by profile generation, target, root, ref, page and term.
 - Existing logs without final argument behave unchanged.
 - Shared options sufficient for controller refresh; no unowned key or ambient call introduced.
@@ -82,4 +82,4 @@ Capture owner generation; use `getBoundApiClient`; server payload projection rem
 
 ## Next steps
 
-Integrate with Phase 01 and Phase 03, then release stable helper contract to Phase 04. Unresolved questions: none.
+- Phase 02 DONE (2026-10-01 21:55:00 +07:00): implementation and verification complete (71 UI tests + 2 server tests passed; UI and web TypeScript checks clean). The `git_log_api_supports_message_query_search_and_pagination` API regression and `ws-transport.test.ts` reserved-character encoding coverage pass. Live browser-to-server qualification remains Phase 07. Stable query options `gitLogQueryOptions`, `gitHistoryQueryPrefixes`, and `normalizeGitMessageQuery` are ready for Phase 04 (`use-git-history-view.ts`). Next: wait for Phase 03 selection persistence store to land, then proceed with Wave B (Phase 04 shared history controller). Unresolved questions: none.

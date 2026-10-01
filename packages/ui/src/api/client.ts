@@ -2187,6 +2187,7 @@ export function createApiClient(
         offset?: number,
         ref?: string,
         root?: string,
+        messageQuery?: string | null,
       ) =>
         transport.invoke<GitLogEntry[]>("git:log", {
           ...toWireTarget(target),
@@ -2194,6 +2195,7 @@ export function createApiClient(
           offset,
           ref,
           root,
+          messageQuery,
         }),
       diff: (target: ProjectTargetInput, root?: string) =>
         transport.invoke<DiffResponse>("git:diff", {
@@ -3195,6 +3197,7 @@ export interface ApiClient {
       offset?: number,
       ref?: string,
       root?: string,
+      messageQuery?: string | null,
     ) => Promise<GitLogEntry[]>;
     diff: (target: ProjectTargetInput, root?: string) => Promise<DiffResponse>;
     untrackedFiles: (

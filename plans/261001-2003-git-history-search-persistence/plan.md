@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Git history search and selection persistence
 
-Implementation in progress. Phase 01 is complete; remaining phases and final qualification are pending. Paths relative to repository root `/home/loidinh/WS/dam-hopper`; phase ownership assumes that root.
+Implementation in progress. Phases 01 and 02 are complete; Phases 03–07 remain pending. Paths relative to repository root `/home/loidinh/WS/dam-hopper`; phase ownership assumes that root.
 
 ## Deliverables
 
@@ -32,7 +32,7 @@ Implementation in progress. Phase 01 is complete; remaining phases and final qua
 | # | Phase | Status / progress | Effort | Depends on |
 |---|---|---|---|---|
 | 01 | [Server message filtering](./phase-01-server-message-search.md) | DONE / 100% (2026-10-01 21:12:48 +07:00) | 4h | Contract |
-| 02 | [Transport and owned queries](./phase-02-transport-query-contract.md) | Pending / 0% | 3h | 01 contract |
+| 02 | [Transport and owned queries](./phase-02-transport-query-contract.md) | DONE / 100% (2026-10-01 21:55:00 +07:00) | 3h | 01 contract |
 | 03 | [Persisted selection store](./phase-03-persisted-history-selections.md) | Pending / 0% | 4h | Contract |
 | 04 | [Shared history controller and controls](./phase-04-shared-history-view.md) | Pending / 0% | 4h | 02, 03 |
 | 05 | [Workspace integration](./phase-05-workspace-git-integration.md) | Pending / 0% | 3h | 04 |
@@ -50,7 +50,7 @@ Implementation in progress. Phase 01 is complete; remaining phases and final qua
 ## Evidence
 
 - [Enhanced hard-planning brief](./research/planning-brief.md); [history research](./research/history-search-research.md); [persistence research](./research/selection-persistence-research.md).
-- [Architecture overview](../../docs/system-architecture.md#git-history-search-and-selection-persistence-2026-10-01-phase-01-server-implementation): Phase 01 server implementation; remaining client/persistence work and integrated qualification pending.
+- [Architecture overview](../../docs/system-architecture.md#git-history-search-and-selection-persistence-2026-10-01-phase-01-server-implementation): Phase 01 server implementation and Phase 02 client transport/owned-query contract are complete; persisted selection and integrated qualification remain pending.
 - Read-only installed-Git filter smoke succeeded; no feature tests/builds/browser scenarios run during planning.
 - Workflow/skills loaded directly from global OMP files. Slash-dispatch tool unavailable; applied `/cmd-plan__hard` procedure directly. Activation helper ran, but missing `EVCRATE_SESSION_ID` prevents active-plan session persistence.
 

@@ -16,10 +16,10 @@ This document outlines the high-level roadmap for DamHopper development, trackin
 ### Git history message search and selection persistence (2026-10-01)
 
 - **Phase 01 — Server-side message search: implementation and review complete.** The existing Git log route accepts optional `messageQuery` filtering over full commit messages before pagination; the array response and subject-only `message` field remain unchanged.
-- Follow-on client query transport, search UI, persisted selections, and integrated qualification remain tracked in later plan phases.
+- **Phase 02 — Transport and owned queries: implementation complete (2026-10-01).** The shared REST transport carries `messageQuery`; one owner-bound query-options builder normalizes the term and keys cache identity by owner/generation, target, root, revision, page, and term.
 - Known validation gap: the current trim-before-check order treats leading/trailing CR/LF as whitespace, so CR/LF-only input becomes an unfiltered request. The Phase 01 risk note tracks resolution against the frozen rejection contract.
 
-- See the [Phase 01 plan](../plans/261001-2003-git-history-search-persistence/phase-01-server-message-search.md), [parent plan](../plans/261001-2003-git-history-search-persistence/plan.md), and [API reference](./api-reference.md#commit-history).
+- See the [Phase 01 plan](../plans/261001-2003-git-history-search-persistence/phase-01-server-message-search.md), [Phase 02 plan](../plans/261001-2003-git-history-search-persistence/phase-02-transport-query-contract.md), [parent plan](../plans/261001-2003-git-history-search-persistence/plan.md), [API reference](./api-reference.md#commit-history), and [transport/query architecture](./architecture/git-history-search.md).
 
 ### Object-only commit-message rewrite (2026-09-30)
 

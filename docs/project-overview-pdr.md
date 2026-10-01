@@ -101,7 +101,7 @@ Target users: Developers managing monorepos or multi-project workspaces who want
 - ✓ Retry hook normalizes single-result and array Git responses before auth checks
 - ✓ Fetch/pull/push share one backend credential order and push reports missing-upstream configuration clearly
 - ✓ Force-publish is a separately confirmed exact-OID lease; normal Push stays fast-forward-only and local message edits never publish automatically
-- `messageQuery` filtering preserves the existing `GitLogEntry` array and subject-only `message` field; CR/LF/NUL search values return HTTP 400.
+- `messageQuery` preserves the existing `GitLogEntry[]`/subject-only `message` response; embedded CR/LF and NUL are rejected, and client cache identity includes owner/generation, target, root, ref, page, and normalized term.
 
 **Technical Constraints:**
 

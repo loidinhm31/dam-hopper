@@ -200,45 +200,17 @@ Ownership invariants:
   retains successful initial results, retries only authentication-failed
   targets after owner validation, and cancels on generation change.
 
-#### Git history search and selection persistence (2026-10-01; Phase 01 server implementation)
+#### Git history search and selection persistence (2026-10-01; Phases 01–02 implemented)
 
-Design contract for the
-[Git history search and persistence plan](../plans/261001-2003-git-history-search-persistence/plan.md).
-Phase 01 implements server-side message filtering. The remaining client query,
-search UI, and selection-persistence behavior below are planned work; integrated
-qualification is tracked by the plan's final phase.
+The design contract is recorded in the Git history search plan at
+`plans/261001-2003-git-history-search-persistence/plan.md`. Phase 01 provides
+server-side message filtering; Phase 02 adds the existing REST transport and
+profile/generation-qualified history query builder. The [Git history search
+architecture guide](./architecture/git-history-search.md) documents the API,
+query identity, shared refresh options, and known server validation edge.
+Search controls, persisted selections, and integrated qualification remain in
+later plan phases.
 
-- `GET /api/git/{project}/log` accepts optional `messageQuery`. The API trims
-  and validates the term; Git applies literal, ASCII-case-insensitive
-  full-message matching before pagination. Empty terms preserve ordinary
-  history, and the existing `GitLogEntry[]` response remains unchanged with
-  subject-only `message` values. Current trim-before-validation handling strips
-  leading/trailing CR/LF before checking controls, so those inputs can disable
-  filtering; the Phase 01 risk note tracks the discrepancy.
-
-
-- Query identity includes connection owner/generation, project/worktree, VCS
-  root, revision, page size, matching-result offset, and normalized message query.
-  Refresh uses the same query construction and owner-bound client as initial load.
-- `workspace.ts` remains the canonical persisted project focus. A small persisted
-  Git-history store keeps Git page's bulk selection separately from project focus
-  and history branch intent per qualified target/root. Explicit empty bulk
-  selection retains its existing “all projects” meaning; unavailable saved
-  selections must never silently become “all”.
-- History intent distinguishes default/opt-in follow-checked-out-branch from an
-  explicit pinned branch ref. Every explicit selection pins, including the
-  currently checked-out branch; checkout changes elsewhere do not change that
-  history view. Selection/restoration never checks out a branch or invokes
-  mutation recovery. Root/worktree/profile scopes never share preferences or
-  response state.
-- Hydration precedes preference writes. Loading, offline profiles, and discovery
-  failures do not erase saved state. An authoritatively missing pinned branch
-  resets to follow-active with a visible notice; an unavailable worktree remains
-  fail-closed under the existing target contract.
-- Search text, page, selected commit, mutation dialogs, credentials, and connection
-  generation remain transient. Filtered matches render as a commit list, without
-  graph edges implying adjacency across omitted ancestors. Existing rewrite
-  restrictions, signature consent, CAS fencing, and leased publication stay intact.
 
 Large files use bounded 64 KiB range reads in a read-only viewer. Image/video
 previews use session-bound opaque capabilities; credentials are never embedded

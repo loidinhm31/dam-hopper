@@ -522,6 +522,7 @@ function channelToEndpoint(
         offset?: number;
         ref?: string;
         root?: string;
+        messageQuery?: string | null;
       };
       const params = new URLSearchParams();
       if (d.limit !== undefined) params.set("limit", String(d.limit));
@@ -529,6 +530,9 @@ function channelToEndpoint(
       if (d.ref !== undefined) params.set("ref", d.ref);
       setWorktreePath(params, d);
       if (d.root !== undefined) params.set("root", d.root);
+      if (typeof d.messageQuery === "string" && d.messageQuery.trim().length > 0) {
+        params.set("messageQuery", d.messageQuery.trim());
+      }
       const qs = params.toString();
       return {
         method: "GET",

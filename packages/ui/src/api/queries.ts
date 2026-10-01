@@ -117,10 +117,7 @@ export function getBoundApiClient(owner?: ConnectionRef): ApiClient {
   if (!owner) return api;
   return getApi(owner);
 }
-type QueryInvalidator = Pick<
-  ReturnType<typeof useQueryClient>,
-  "invalidateQueries"
->;
+export type QueryInvalidator = Pick<QueryClient, "invalidateQueries">;
 
 const DEFAULT_GIT_ROOT_ID = ".";
 
@@ -783,17 +780,25 @@ export function useBranches(target: ProjectTargetInput, root?: string) {
   });
 }
 
-export function useGitLog(
+export function normalizeGitMessageQuery(query?: string | null): string | undefined {
+  if (query == null) return undefined;
+  const trimmed = query.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function gitLogQueryOptions(
   target: ProjectTargetInput,
   limit?: number,
   offset?: number,
   ref?: string,
   root?: string,
+  messageQuery?: string | null,
 ) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
-  return useQuery({
+  const normalizedQuery = normalizeGitMessageQuery(messageQuery);
+  return {
     queryKey: gitQueryKey(
       "git-log",
       normalized,
@@ -801,10 +806,75 @@ export function useGitLog(
       limit,
       offset,
       ref ?? null,
+      normalizedQuery || null,
     ),
-    queryFn: () => getBoundApiClient(owner).git.log(normalized, limit, offset, ref, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.log(
+        normalized,
+        limit,
+        offset,
+        ref,
+        root,
+        normalizedQuery,
+      ),
     enabled: !!normalized.project,
-  });
+  };
+}
+
+/**
+ * Query key prefixes used by the shared git history view controller (Phase 04).
+ * Provides owner-qualified prefixes for branches, project status, log queries,
+ * and commit detail queries (files, message, file-diff) without exposing unowned legacy keys.
+ */
+export function gitHistoryQueryPrefixes(target: ProjectTargetInput, root?: string) {
+  const normalized = normalizeProjectTarget(target);
+  const rootKey = gitRootKey(root);
+  return {
+    branches: gitQueryKey("branches", normalized, rootKey),
+    projectStatus: projectStatusQueryKey(normalized),
+    log: gitQueryKey("git-log", normalized, rootKey),
+    /** Returns tuple of query keys for commit details; use `invalidateGitHistoryDetails` for batch invalidation */
+    details: (hash?: string) =>
+      hash
+        ? [
+            gitQueryKey("git-commit-files", normalized, rootKey, hash),
+            gitQueryKey("git-commit-message", normalized, rootKey, hash),
+            gitQueryKey("git-commit-file-diff", normalized, rootKey, hash),
+          ]
+        : [
+            gitQueryKey("git-commit-files", normalized, rootKey),
+            gitQueryKey("git-commit-message", normalized, rootKey),
+            gitQueryKey("git-commit-file-diff", normalized, rootKey),
+          ],
+  };
+}
+
+/**
+ * Invalidate commit details (commit-files, commit-message, and commit-file-diff)
+ * for a specific commit hash or all commits under the target root.
+ */
+export async function invalidateGitHistoryDetails(
+  qc: QueryInvalidator,
+  target: ProjectTargetInput,
+  root?: string,
+  hash?: string,
+): Promise<void> {
+  const prefixes = gitHistoryQueryPrefixes(target, root);
+  const keys = prefixes.details(hash);
+  await Promise.all(keys.map((queryKey) => qc.invalidateQueries({ queryKey })));
+}
+
+export function useGitLog(
+  target: ProjectTargetInput,
+  limit?: number,
+  offset?: number,
+  ref?: string,
+  root?: string,
+  messageQuery?: string | null,
+) {
+  return useQuery(
+    gitLogQueryOptions(target, limit, offset, ref, root, messageQuery),
+  );
 }
 
 export function useConfig(options?: OwnerInput) {
