@@ -152,8 +152,13 @@ the hook exposes `effectiveScopeKey` for parent reset boundaries.
 See the [Git-history search architecture](./architecture/git-history-search.md)
 for transport, query, and persistence details and the
 [Phase 04 plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
-Phase 05 Workspace, Phase 06 Git-page integration, and Phase 07 qualification
-remain downstream work.
+Phase 05 Workspace integration is implemented and reviewed across the desktop
+IDE dock, terminal floating panel, and compact Git surface, using the shared
+controller and selected-target availability. Implementation/finalization are
+settled; durable phase closure and Phase 07 qualification remain pending.
+See [Workspace Git panel integration](./architecture/git-history-search.md#workspace-git-panel-integration-phase-05)
+and the [Phase 05 plan](../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md).
+Phase 06 Git-page integration remains ahead.
 
 ## Unified-profile Settings, Usage, and Host ownership (Phase 06)
 
@@ -653,19 +658,21 @@ Provides file detection, presentation persistence, editor host routing, context 
     degradation in the iframe.
   - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
 
-## Cognito Privacy Mode (Phase 02)
+## Cognito Privacy Mode (Phases 02–03)
 
 **Locations:** `packages/ui/src/stores/cognito-mode.ts`,
 `components/organisms/CognitoModeOverlay.tsx`,
 `hooks/use-cognito-mode-input-guard.ts`, `lib/cognito-mode-events.ts`,
+`lib/shortcuts.ts`, `lib/terminal-keyboard-shortcuts.ts`,
+`components/organisms/TerminalPanel.tsx`, `embed/dam-hopper-app.tsx`,
 `index.css`, `TerminalNotificationToastViewport.tsx`, and
 `BrowserDebugKeepAliveHost.tsx`.
 
 `useCognitoModeStore` is memory-only UI state: it starts inactive, and
 `toggle(shortcut)` activates with that chord captured for dismissal. Toggling
 again clears the active state and chord; `reset()` is lifecycle cleanup, not a
-user dismissal control. The persisted shortcut and visual style remain in
-Settings rather than this activation store.
+user dismissal control. The shortcut and style remain persisted preferences;
+activation state is never stored.
 
 `CognitoModeOverlay` portals a focusable, labelled region to `document.body`
 only while active. Its full-viewport fixed layer uses the app viewport
@@ -674,31 +681,46 @@ uses a 40px backdrop blur and dark tint, with an opaque-black fallback when
 backdrop filtering is unsupported. The accessible description includes the
 captured dismissal chord, and activation moves focus to the overlay.
 
-`useCognitoModeInputGuard` provides the Phase 02 non-keyboard input/focus
-boundary. It registers non-passive window-capture listeners for pointer,
-mouse, touch, click/context, wheel, drag, clipboard, input, and composition
-events, plus focus/focusin. While active it cancels cancelable events and
-stops immediate propagation; gesture tracking also consumes a trailing
-release/click after dismissal. It redirects focus to the overlay and restores
-the previous target only if it remains connected and non-inert. The
-event list is defined in `cognito-mode-events.ts`; keyboard event handling and
-shortcut precedence belong to Phase 03.
+`useCognitoModeInputGuard` owns window-capture input isolation. It registers
+non-passive capture listeners for pointer, mouse, touch, click/context, wheel,
+drag, clipboard, input, composition, focus, and keyboard events. While active it
+cancels cancelable input and stops immediate propagation; gesture tracking also
+consumes a trailing release/click after dismissal. It redirects focus to the
+overlay and restores the previous target only if it remains connected and
+non-inert. The pointer-event list is defined in `cognito-mode-events.ts`.
 
-Phase 02 supplies the overlay and guard modules but does not mount them at the
-app root. Phase 03 owns root placement, the inert/assistive-technology content
-boundary, and keyboard integration; do not treat the hook as globally active
-before that cutover.
+`DamHopperApp` mounts this guard first, before the browser shortcut and context
+menu guards. A fresh, matching nonrepeat/noncomposing keydown toggles the mask;
+IME input (including legacy key code `229`) and repeats never toggle it. While
+active, only a fresh keydown matching the frozen activation chord dismisses;
+all keyboard events are consumed, including repeats and the physical key
+sequence through release. The guard tracks intercepted physical keys and clears
+that tracking on window blur without dismissing the mask. The
+`data-shortcut-capture="true"` path passes through only while inactive.
 
-The terminal toast viewport remains visible above the mask: its z-index rises
-from `45` to `10001` only while Cognito mode is active. When Phase 03 mounts
-the input guard, its capture listeners also suppress pointer interaction on
-raised toasts; toast lifetime and other notification delivery are unchanged.
+`TerminalPanel` performs a defensive Cognito check before Backspace handling,
+suggestion acceptance/history, or selection copying. Its shared shortcut helper
+checks again before font, find, panel, and new-terminal actions. These terminal
+checks only consume input; the root capture guard is the sole toggle owner.
+Ordinary terminal behavior resumes after dismissal; PTY write/transport APIs
+are unchanged.
 
-Browser Debug has a separate host surface. While active,
-`BrowserDebugKeepAliveHost` treats the requested viewport as hidden, sends a
-null viewport to the native host, and passes `false` visibility to the iframe
-fallback. Dismissal restores the measured viewport without replacing the
-Browser target or host.
+The app root mounts the overlay outside the routed content and keeps global
+shortcut services and the notification viewport mounted. A neutral content
+wrapper receives `inert` and `aria-hidden` while masked rather than unmounting
+productive routes. The terminal toast viewport remains visible above the mask
+(z-index `10001` while active), but capture listeners prevent pointer
+interaction; toast lifetime and other notification delivery are unchanged.
+`BrowserDebugKeepAliveHost` separately hides the requested viewport: native
+hosts receive a null viewport and the iframe fallback receives
+`isViewportVisible={false}`. Dismissal restores the measured viewport without
+replacing the Browser target or host.
+
+The shortcut is scoped to events in DamHopper's app document; this is not an
+OS-wide hotkey and does not capture keys from foreign iframes or native child
+surfaces. Phase 05 still owns real-browser, xterm, visual, and native-shell
+qualification; component and unit coverage alone do not prove those runtime
+boundaries.
 
 ## Terminal Agent Notifications
 

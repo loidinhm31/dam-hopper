@@ -5,7 +5,9 @@ import {
 } from "@/lib/shortcuts.js";
 import { matchesTerminalCopyShortcut } from "@/lib/browser-shortcut-guard.js";
 
-interface SharedTerminalKeyOptions {
+export interface SharedTerminalKeyOptions {
+  cognitoModeShortcut: string;
+  cognitoModeActive: boolean;
   workspaceShortcut: string;
   revealActiveFileShortcut: string;
   panelShortcuts?: string[];
@@ -16,6 +18,34 @@ interface SharedTerminalKeyOptions {
   onNewTerminal?: () => void;
   onIncreaseTerminalFontSize?: () => void;
   onDecreaseTerminalFontSize?: () => void;
+}
+
+export function shouldConsumeCognitoModeTerminalKey(
+  event: ShortcutKeyEvent,
+  shortcut: string | undefined,
+  active: boolean,
+): boolean {
+  if (active) return true;
+  if (!shortcut) return false;
+
+  if (matchesKeyboardShortcut(shortcut, event)) {
+    return true;
+  }
+
+  const suppressionEvent: ShortcutKeyEvent = {
+    type: event.type,
+    code: event.code,
+    key: event.key,
+    ctrlKey: Boolean(event.ctrlKey),
+    metaKey: Boolean(event.metaKey),
+    altKey: Boolean(event.altKey),
+    shiftKey: Boolean(event.shiftKey),
+    repeat: false,
+    isComposing: false,
+    keyCode: event.keyCode,
+  };
+
+  return matchesKeyboardShortcut(shortcut, suppressionEvent);
 }
 
 function matchesTerminalFontShortcut(
@@ -83,6 +113,8 @@ function matchesTerminalFindShortcut(event: ShortcutKeyEvent): boolean {
 export function handleSharedTerminalKeyEvent(
   event: ShortcutKeyEvent,
   {
+    cognitoModeShortcut,
+    cognitoModeActive,
     workspaceShortcut,
     revealActiveFileShortcut,
     panelShortcuts = [],
@@ -95,6 +127,16 @@ export function handleSharedTerminalKeyEvent(
     onDecreaseTerminalFontSize,
   }: SharedTerminalKeyOptions,
 ) {
+  if (
+    shouldConsumeCognitoModeTerminalKey(
+      event,
+      cognitoModeShortcut,
+      cognitoModeActive,
+    )
+  ) {
+    event.preventDefault?.();
+    return false;
+  }
   if (
     !handleTerminalFontSizeShortcut(event, {
       increaseShortcut: terminalFontSizeIncreaseShortcut,

@@ -37,6 +37,9 @@ import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputP
 import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
+import { useCognitoModeInputGuard } from "@/hooks/use-cognito-mode-input-guard.js";
+import { CognitoModeOverlay } from "@/components/organisms/CognitoModeOverlay.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
@@ -246,8 +249,10 @@ function LegacyDeepLinkNotice() {
 }
 
 export function DamHopperApp() {
+  useCognitoModeInputGuard();
   useBrowserShortcutGuard();
   useBrowserContextMenuSuppression();
+  const cognitoActive = useCognitoModeStore((state) => state.active);
   const qc = useQueryClient();
   const activeProfile = useServerProfile();
   const { host: sshForwardHost, environment: sshForwardEnvironment } =
@@ -345,16 +350,23 @@ export function DamHopperApp() {
       <EncryptProvider>
         <AndroidChromeInputPolicyProvider>
           <BrowserRouter basename={routerBasename}>
-            <AndroidChromeKeyboardNotice />
+            <CognitoModeOverlay />
             <GlobalShortcuts />
             <GlobalTerminalFontSizeShortcuts />
             <TerminalNotificationToastViewport />
             <AgentStatusBridge />
             <RouteDiagnostics />
-            <PassphrasePrompt />
-            <FreshResetBanner />
-            <LegacyDeepLinkNotice />
-            <Routes>
+            <div
+              data-cognito-mode-content=""
+              inert={cognitoActive ? true : undefined}
+              aria-hidden={cognitoActive ? "true" : undefined}
+              className="contents"
+            >
+              <AndroidChromeKeyboardNotice />
+              <PassphrasePrompt />
+              <FreshResetBanner />
+              <LegacyDeepLinkNotice />
+              <Routes>
               <Route
                 path="/"
                 element={
@@ -434,6 +446,7 @@ export function DamHopperApp() {
                 />
               ) : null}
             </Routes>
+            </div>
           </BrowserRouter>
         </AndroidChromeInputPolicyProvider>
       </EncryptProvider>

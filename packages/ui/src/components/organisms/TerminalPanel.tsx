@@ -42,7 +42,11 @@ import {
   createTerminalRendererController,
   type TerminalRendererController,
 } from "@/lib/terminal-renderer.js";
-import { handleSharedTerminalKeyEvent } from "@/lib/terminal-keyboard-shortcuts.js";
+import {
+  handleSharedTerminalKeyEvent,
+  shouldConsumeCognitoModeTerminalKey,
+} from "@/lib/terminal-keyboard-shortcuts.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { handleTerminalSuggestionKeyEvent } from "@/lib/terminal-suggestion-key-handler.js";
 import { getTerminalSuggestionSuffix } from "@/lib/terminal-suggestion-acceptance.js";
 import {
@@ -839,6 +843,20 @@ export function TerminalPanel({
       // 7. One composed keyboard handler: an acceptance only wins after the
       // controller invalidates its current ghost and yields a suffix.
       const baseKeyEventHandler = (e: KeyboardEvent) => {
+        const cognitoActive = useCognitoModeStore.getState().active;
+        const cognitoShortcut =
+          useCognitoModeStore.getState().activationShortcut ??
+          useSettingsStore.getState().cognitoModeShortcut;
+        if (
+          shouldConsumeCognitoModeTerminalKey(
+            e,
+            cognitoShortcut,
+            cognitoActive,
+          )
+        ) {
+          return false;
+        }
+
         if (
           e.type === "keydown" &&
           e.key === "Backspace" &&
@@ -876,6 +894,8 @@ export function TerminalPanel({
         }
         const settings = useSettingsStore.getState();
         return handleSharedTerminalKeyEvent(e, {
+          cognitoModeShortcut: cognitoShortcut,
+          cognitoModeActive: cognitoActive,
           workspaceShortcut: settings.terminalWorkspaceShortcut,
           revealActiveFileShortcut: settings.revealActiveFileShortcut,
           panelShortcuts: [
