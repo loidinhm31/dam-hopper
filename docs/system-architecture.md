@@ -208,14 +208,15 @@ components; see the [Phase 04 plan](../plans/261001-2003-git-history-search-pers
 Phase 05 integrates the controller into all three Workspace Git surfaces
 (desktop IDE, terminal floating, compact) with target-availability gating,
 persisted root/branch selection, scope-bound details/actions, and root-scoped
-push/lease safeguards. Implementation and finalization are settled; review is
-user-approved at 9.8/10 and validation is 71/71 with a clean typecheck.
-Durable completion remains pending in explicit advice mode; Phase 06 adds the
-Git-page consumer and Phase 07 owns end-to-end qualification. The
+push/lease safeguards. Phase 06 integrates the controller into the standalone
+Git page with independent qualified project checkbox persistence, fail-closed
+unavailable selection behavior, and single-project history viewing. Phase 07
+completes end-to-end qualification: live loopback server API verification
+(older-than-200 body match, pagination offsets, literal flags/regex, branch ref
+isolation, CR/LF/NUL validation, and HEAD immutability), Playwright Chromium browser
+tests, and sub-15ms sparse/no-match search latency measurements. The
 [Git-history architecture guide](./architecture/git-history-search.md) covers
-the transport, query, persistence, Workspace contracts, and known
-server-validation edge.
-
+the transport, query, persistence, Workspace, and Git page contracts.
 
 Large files use bounded 64 KiB range reads in a read-only viewer. Image/video
 previews use session-bound opaque capabilities; credentials are never embedded
@@ -478,6 +479,44 @@ profile ConnectionRef
 
 The complete source map and privacy/safety limits are in the
 [Phase 06 Preferences, Settings, Usage, and Host Resources guide](./phase-06-preferences-settings-usage-and-host.md).
+
+### Cognito Privacy Mode (2026-10-02)
+
+Cognito Mode is an in-app visual mask with keyboard-only activation and
+dismissal. It is not authentication, content redaction, or an OS-wide privacy
+boundary.
+
+- **Ephemeral runtime state:** `useCognitoModeStore` holds `active` and the
+  captured `activationShortcut` in client memory. Neither is persisted or
+  synchronized to the server; the store starts inactive after reload. Freezing
+  the activation chord prevents preference changes from locking out dismissal.
+- **Input and focus owner:** `useCognitoModeInputGuard` installs window-capture
+  listeners in `DamHopperApp` before browser guards. While active, it
+  suppresses pointer, mouse, touch, wheel, drag, clipboard, input, and keyboard
+  events, consumes trailing release/repeat events, and redirects focus to the
+  overlay sink (`[data-cognito-mode-overlay]`).
+- **DOM and portals:** `DamHopperApp` keeps routed content mounted inside the
+  `data-cognito-mode-content` inert/`aria-hidden` boundary. `CognitoModeOverlay`
+  portals a full-viewport mask to `document.body` at `z-index: 10000`, above
+  body-portaled dialogs and menus.
+- **Notification exception:** The terminal toast viewport is layered at
+  `z-index: 10001`; toast content remains visible while pointer interaction is
+  suppressed. Cognito does not disable the app-side chime path; audible output
+  still depends on notification policy and browser/device audio state.
+- **Browser Debug visibility:** `BrowserDebugKeepAliveHost` derives effective
+  visibility from Cognito state. An active mask sends a null viewport to the
+  native host or marks the iframe host hidden; dismissal restores the viewport
+  without replacing the target. The native-shell visual behavior is a separate
+  runtime qualification gate, not established by the host-component test.
+- **Preferences and limits:** `cognitoModeShortcut` (default
+  `Mod+Alt+KeyB`) and `cognitoModeStyle` (`heavy-blur` or `black-screen`) use
+  the existing UI-preference API and snake_case TOML keys. Heavy Blur is not a
+  redaction guarantee. The mask does not protect OS/browser chrome or
+  screenshots/recordings, capture input from foreign iframes, or stop
+  background PTY work. See the [configuration guide](./configuration-guide.md#ui-configuration),
+  [API reference](./api-reference.md#global-configuration-preferences), and
+  [Phase 05 qualification report](../plans/261001-2207-cognito-privacy-mode/reports/qualification.md)
+  for the distinct implementation and evidence boundaries.
 
 ### Fleet Deck & Drilldown Popover (Phase 03, 2026-09-20)
 

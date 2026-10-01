@@ -16,6 +16,7 @@ import {
   type Transport,
 } from "@/api/transport.js";
 import "@/index.css";
+import { useGitHistoryStore } from "@/stores/git-history.js";
 
 const testState = vi.hoisted(() => ({
   project: {
@@ -255,7 +256,6 @@ vi.mock("@/api/queries.js", () => ({
     isPending: false,
     mutateAsync: vi.fn(),
   })),
-  useGitHistoryActions: () => ({}),
   useGitCommitFiles: () => ({ data: [], isLoading: false }),
   useGitCherryPick: () => ({ mutateAsync: vi.fn() }),
   useGitCherryPickCommitFiles: () => ({ mutateAsync: vi.fn() }),
@@ -277,8 +277,25 @@ vi.mock("@/api/queries.js", () => ({
     (options?.profileId
       ? { profileId: options.profileId, generation: 1 }
       : undefined),
+  getBoundApiClient: () => ({
+    ...testState.api,
+    git: {
+      log: vi.fn().mockResolvedValue([]),
+      roots: vi.fn().mockResolvedValue([]),
+      branches: vi.fn().mockResolvedValue([]),
+    },
+  }),
+  gitHistoryQueryPrefixes: () => [],
+  gitLogQueryOptions: (target: unknown) => {
+    testState.captures.gitLog.push(target);
+    return {
+      queryKey: ["git-log", target],
+      queryFn: vi.fn().mockResolvedValue([]),
+    };
+  },
+  normalizeGitMessageQuery: (term: unknown) =>
+    typeof term === "string" ? term.trim() || undefined : undefined,
 }));
-
 vi.mock("@/api/client.js", () => ({
   api: testState.api,
   createApiClient: () => testState.api,
@@ -662,7 +679,36 @@ vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
   GitRevertCommitDialog: () => null,
   GitResetDialog: () => null,
   GitUndoLastCommitDialog: () => null,
-  useGitHistoryActions: () => ({}),
+  useGitHistoryActions: () => ({
+    status: null,
+    resetScope: vi.fn(),
+    handleCherryPick: vi.fn(),
+    setRevertCommit: vi.fn(),
+    setUndoLastCommit: vi.fn(),
+    setDropCommit: vi.fn(),
+    setEditCommit: vi.fn(),
+    setResetCommit: vi.fn(),
+    handleDropCommit: vi.fn(),
+    handleEditCommitMessage: vi.fn(),
+    handleRevertCommit: vi.fn(),
+    handleUndoLastCommit: vi.fn(),
+    handleCherryPickFiles: vi.fn(),
+    handleRevertFiles: vi.fn(),
+    handleDropFiles: vi.fn(),
+    resetCommit: null,
+    dropCommit: null,
+    editCommit: null,
+    editCommitMessage: undefined,
+    editCommitMessageLoading: false,
+    editCommitMessageError: undefined,
+    revertCommit: null,
+    undoLastCommit: null,
+    isDropCommitPending: false,
+    isEditCommitMessagePending: false,
+    isRevertCommitPending: false,
+    isUndoLastCommitPending: false,
+    handleReset: vi.fn(),
+  }),
 }));
 vi.mock("@/components/organisms/WorktreeAddForm.js", () => ({
   WorktreeAddForm: () => null,
@@ -676,6 +722,7 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
     container = document.createElement("div");
     document.body.append(container);
     useProjectTargetStore.getState().resetTarget(PROJECT);
+    useGitHistoryStore.getState().markHydrated();
     for (const capture of Object.values(testState.captures)) capture.length = 0;
     editorState.tabs = [];
     editorState.activeKeys = {};

@@ -8,9 +8,8 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
-- Prove actual API + visible Git behavior; update documentation only after implementation matches proposal.
-
+- Date: 2026-10-01. Priority: P2. Implementation: complete (2026-10-02). Review: complete (2026-10-02; score 9.4/10 PASS).
+- Proved actual API + visible Git behavior across real throwaway repository and Playwright Chromium browser tests; documentation and architecture updated to match implementation. See the [qualification report](../reports/qualification-261002-0245-git-history-qualification.md), [tester report](../reports/tester-261002-0238-phase-07-qualification.md), and [code review](../reports/code-review-261002-0240-phase-07-qualification.md).
 ## Key Insights
 
 - Existing Rust tests use real temp repositories; UI uses Vitest plus existing Chromium browser harness. Reuse them, no new test framework/dependencies.
@@ -62,11 +61,11 @@ Modify where necessary:
 
 ## Todo list
 
-- [ ] Qualify real message search/API target and pagination behavior.
-- [ ] Qualify both actual UI surfaces and restored selections.
-- [ ] Qualify unavailable/race/action-safety boundaries.
-- [ ] Run focused and integrated verification; record actual outcomes.
-- [ ] Update API/frontend/architecture/changelog to shipped behavior.
+- [x] Qualify real message search/API target and pagination behavior.
+- [x] Qualify both actual UI surfaces and restored selections.
+- [x] Qualify unavailable/race/action-safety boundaries.
+- [x] Run focused and integrated verification; record actual outcomes.
+- [x] Update API/frontend/architecture/changelog to shipped behavior.
 
 ## Success Criteria
 
@@ -110,5 +109,4 @@ Coordinator selects actual new Git/API test name filter (must cover added tests,
 Disposable repos/config only; redact credentials. No actual force publish/checkout/rewrites in user repos. Observe owner generation/current target before state writes; browser preferences never contain tokens or commit message contents.
 
 ## Next steps
-
-Deliver feature only after all named scenarios and docs satisfy contract. Planning request itself authorizes no implementation. Unresolved questions: none; external native platform qualification, if unavailable, is an explicit verification limit rather than claimed success.
+Phase 07 implementation, end-to-end qualification, documentation, and code review (score 9.4/10 PASS) are complete. Next steps: Coordinator integrated qualification closeout, whole-tree validation, and release readiness. Unresolved questions: none; external native platform qualification, if unavailable, is an explicit verification limit rather than claimed success.
