@@ -12,7 +12,7 @@ import type {
   BrowserDebugHost,
   BrowserDebugHostEvent,
 } from "@/lib/browser-debug-host.js";
-
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 const target = {
   url: "http://localhost:3000",
   origin: "http://localhost:3000",
@@ -420,5 +420,74 @@ describe("BrowserDebugKeepAliveHost", () => {
     second.emit({ type: "status", status: "loading", generation: 0 });
     second.emit({ type: "ready", capabilities: ["picker"], generation: 0 });
     expect(browser.setBridgeStatus).toHaveBeenLastCalledWith("ready");
+  });
+
+  it("sets native viewport to null when Cognito mode activates and restores frame on dismissal", async () => {
+    useCognitoModeStore.getState().reset();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    const viewport = document.createElement("div");
+    viewport.getBoundingClientRect = () =>
+      ({
+        left: 10,
+        top: 20,
+        right: 410,
+        bottom: 320,
+        width: 400,
+        height: 300,
+        x: 10,
+        y: 20,
+        toJSON: () => {},
+      }) as DOMRect;
+    document.body.appendChild(viewport);
+    const viewportRef = { current: viewport };
+    root = createRoot(container);
+    const browser = controller();
+    const { host } = nativeHost();
+
+    await act(async () => {
+      root?.render(
+        <BrowserDebugHostProvider
+          host={host}
+          environment={{ kind: "native", platform: "linux" }}
+        >
+          <BrowserDebugKeepAliveHost
+            browser={browser}
+            viewportRef={viewportRef}
+            viewportVersion={0}
+            isViewportVisible
+          />
+        </BrowserDebugHostProvider>,
+      );
+    });
+
+    expect(host.setViewport).toHaveBeenCalledWith({
+      left: 10,
+      top: 20,
+      width: 400,
+      height: 300,
+    });
+
+    await act(async () => {
+      useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
+    });
+
+    expect(host.setViewport).toHaveBeenLastCalledWith(null);
+    expect(host.setTarget).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
+    });
+
+    expect(host.setViewport).toHaveBeenLastCalledWith({
+      left: 10,
+      top: 20,
+      width: 400,
+      height: 300,
+    });
+    expect(host.setTarget).toHaveBeenCalledTimes(1);
+
+    viewport.remove();
+    useCognitoModeStore.getState().reset();
   });
 });

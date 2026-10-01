@@ -107,6 +107,54 @@ See the [Phase 04 plan](../plans/260926-2157-token-rotation-mfa/phase-04-profile
 and the [component detail index](./frontend-components/index.md) for the
 implementation boundary and adjacent UI guides.
 
+## Shared Git-history view (search plan Phase 04)
+
+**Locations:** `packages/ui/src/hooks/use-git-history-view.ts`,
+`packages/ui/src/components/molecules/GitHistoryToolbar.tsx`,
+`packages/ui/src/components/organisms/GitBranchControl.tsx`, and
+`packages/ui/src/components/organisms/GitLogTree.tsx`.
+
+`useGitHistoryView(target: ProjectTargetRef, options?)` is the shared history
+controller. It combines persisted root/branch preferences and discovery with
+owner-scoped log queries, draft/applied message search, 200-entry paging,
+selected-commit state, availability/status, and guarded refresh. Its effective
+scope includes profile, project/worktree, root, branch preference, and
+connection generation; scope changes clear transient search, page, and
+selection state. History queries wait for preference hydration. Missing saved
+roots or pins are reconciled only after successful, completed, nonempty
+discovery, so loading or offline results do not erase persisted intent.
+Follow-active tracks the checked-out branch; every explicit branch choice
+pins a canonical local or remote ref. Only **Follow checked-out branch**
+resumes tracking.
+
+Search remains responsive while a 300 ms debounce applies the normalized
+server query. IME composition defers application; CR/LF/NUL are removed, and
+clear or Escape applies an empty query immediately. Query changes reset page
+and selected commit. Refresh invalidates matching branch/status/log/detail
+queries, resolves the refreshed branch before fetching the current page, and
+ignores stale-scope completions when updating selection or notices.
+
+`GitHistoryToolbar` is controlled: it renders labeled search, clear, paging,
+displayed-range count, refresh, follow-active, and dismissible notice controls
+from parent values and callbacks. It does not read the history store or call
+the server. `GitBranchControl` keeps checkout mode as the default. In
+`mode="view"`, `selectedBranchRef` and `onSelectedBranchRefChange` use
+canonical `refs/heads/...` versus `refs/remotes/...` values, so same-name local
+and remote branches remain distinct and choosing a history branch does not
+check it out.
+
+`GitLogTree` defaults to `presentation="graph"`; `presentation="list"` skips
+ancestry-lane/SVG construction while preserving the same ref/message/author/
+date/hash rows, keyboard selection, and commit context-menu actions. Surfaces
+can supply `emptyMessage`. History mutations and dialogs remain surface-owned;
+the hook exposes `effectiveScopeKey` for parent reset boundaries.
+
+See the [Git-history search architecture](./architecture/git-history-search.md)
+for transport, query, and persistence details and the
+[Phase 04 plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
+Phase 05 Workspace, Phase 06 Git-page integration, and Phase 07 qualification
+remain downstream work.
+
 ## Unified-profile Settings, Usage, and Host ownership (Phase 06)
 
 Phase 06 keeps browser preference state separate from server-targeted work. The
@@ -604,6 +652,53 @@ Provides file detection, presentation persistence, editor host routing, context 
     non-HTML files omit the preview item to avoid memory and performance
     degradation in the iframe.
   - **Action Flow:** Clicking "Preview" calls `saveHtmlViewMode("preview")`, which emits `HTML_VIEW_MODE_CHANGED_EVENT` and invokes `onFileOpen(node)`, opening the document directly into Preview mode or live-switching an existing active tab.
+
+## Cognito Privacy Mode (Phase 02)
+
+**Locations:** `packages/ui/src/stores/cognito-mode.ts`,
+`components/organisms/CognitoModeOverlay.tsx`,
+`hooks/use-cognito-mode-input-guard.ts`, `lib/cognito-mode-events.ts`,
+`index.css`, `TerminalNotificationToastViewport.tsx`, and
+`BrowserDebugKeepAliveHost.tsx`.
+
+`useCognitoModeStore` is memory-only UI state: it starts inactive, and
+`toggle(shortcut)` activates with that chord captured for dismissal. Toggling
+again clears the active state and chord; `reset()` is lifecycle cleanup, not a
+user dismissal control. The persisted shortcut and visual style remain in
+Settings rather than this activation store.
+
+`CognitoModeOverlay` portals a focusable, labelled region to `document.body`
+only while active. Its full-viewport fixed layer uses the app viewport
+dimensions and `z-index: 10000`. `black-screen` is opaque black; `heavy-blur`
+uses a 40px backdrop blur and dark tint, with an opaque-black fallback when
+backdrop filtering is unsupported. The accessible description includes the
+captured dismissal chord, and activation moves focus to the overlay.
+
+`useCognitoModeInputGuard` provides the Phase 02 non-keyboard input/focus
+boundary. It registers non-passive window-capture listeners for pointer,
+mouse, touch, click/context, wheel, drag, clipboard, input, and composition
+events, plus focus/focusin. While active it cancels cancelable events and
+stops immediate propagation; gesture tracking also consumes a trailing
+release/click after dismissal. It redirects focus to the overlay and restores
+the previous target only if it remains connected and non-inert. The
+event list is defined in `cognito-mode-events.ts`; keyboard event handling and
+shortcut precedence belong to Phase 03.
+
+Phase 02 supplies the overlay and guard modules but does not mount them at the
+app root. Phase 03 owns root placement, the inert/assistive-technology content
+boundary, and keyboard integration; do not treat the hook as globally active
+before that cutover.
+
+The terminal toast viewport remains visible above the mask: its z-index rises
+from `45` to `10001` only while Cognito mode is active. When Phase 03 mounts
+the input guard, its capture listeners also suppress pointer interaction on
+raised toasts; toast lifetime and other notification delivery are unchanged.
+
+Browser Debug has a separate host surface. While active,
+`BrowserDebugKeepAliveHost` treats the requested viewport as hidden, sends a
+null viewport to the native host, and passes `false` visibility to the iframe
+fallback. Dismissal restores the measured viewport without replacing the
+Browser target or host.
 
 ## Terminal Agent Notifications
 

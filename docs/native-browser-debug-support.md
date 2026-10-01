@@ -56,6 +56,15 @@ Tauri's child-WebView commands are desktop-only, so the same persisted
 responsive/custom controls remain available without claiming a native child
 WebView there. Keyboard shortcuts are not used for viewport resizing.
 
+### Cognito Privacy Mode viewport behavior
+
+`BrowserDebugKeepAliveHost` treats the Browser viewport as hidden while Cognito
+mode is active. Native hosts receive a null viewport; the iframe fallback
+receives `isViewportVisible={false}` and follows its existing off-screen path.
+Dismissal restores the current measured viewport without replacing the Browser
+target or host generation. This visibility gate is separate from the DOM
+overlay, which cannot blur a native child surface.
+
 ## Windows gate
 
 Install dependencies, then run:

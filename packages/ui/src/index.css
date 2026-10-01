@@ -648,3 +648,35 @@
     animation: none;
   }
 }
+
+/* ── Cognito Privacy Mode Overlay ── */
+.cognito-mode-overlay {
+  position: fixed;
+  inset: 0;
+  width: var(--app-viewport-width, 100vw);
+  height: var(--app-viewport-height, 100dvh);
+  z-index: 10000;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  transition: none;
+  animation: none;
+  outline: none;
+}
+
+.cognito-mode-overlay--black-screen {
+  background-color: #000000;
+}
+
+/* Fail-opaque fallback when backdrop-filter is unsupported */
+.cognito-mode-overlay--heavy-blur {
+  background-color: #000000;
+}
+
+@supports ((-webkit-backdrop-filter: blur(40px)) or (backdrop-filter: blur(40px))) {
+  .cognito-mode-overlay--heavy-blur {
+    background-color: rgba(13, 17, 23, 0.82);
+    -webkit-backdrop-filter: blur(40px);
+    backdrop-filter: blur(40px);
+  }
+}

@@ -16,6 +16,7 @@ import {
 import { getBrowserDebugNativeViewportFrame } from "@/lib/browser-debug-keep-alive.js";
 import { APP_ZOOM_CHANGE_EVENT, getAppZoomFactor } from "@/lib/app-zoom.js";
 import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
   BrowserDebugIframeHost,
   type BrowserDebugIframeHostHandle,
@@ -52,6 +53,8 @@ export const BrowserDebugKeepAliveHost = forwardRef<
   } = browser;
   const iframeRef = useRef<BrowserDebugIframeHostHandle>(null);
   const generationRef = useRef<number | null>(null);
+  const isCognitoActive = useCognitoModeStore((state) => state.active);
+  const effectiveViewportVisible = props.isViewportVisible && !isCognitoActive;
   const onHostEvent = useCallback(
     (event: BrowserDebugHostEvent) => {
       const generation = acceptBrowserDebugHostEventGeneration(
@@ -102,7 +105,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     const stage = props.viewportStageRef?.current;
     const updateFrame = () => {
       suppliedHost.setZoom?.(getAppZoomFactor());
-      const frame = props.isViewportVisible
+      const frame = effectiveViewportVisible
         ? getBrowserDebugNativeViewportFrame(
             props.viewportRef.current,
             props.viewportStageRef?.current,
@@ -130,7 +133,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       suppliedHost.setViewport(null);
     };
   }, [
-    props.isViewportVisible,
+    effectiveViewportVisible,
     props.viewportRef,
     props.viewportStageRef,
     props.viewportVersion,
@@ -164,7 +167,7 @@ export const BrowserDebugKeepAliveHost = forwardRef<
       profileId={props.profileId}
       viewportStageRef={props.viewportStageRef}
       viewportVersion={props.viewportVersion}
-      isViewportVisible={props.isViewportVisible}
+      isViewportVisible={effectiveViewportVisible}
       onHostEvent={onHostEvent}
     />
   );
