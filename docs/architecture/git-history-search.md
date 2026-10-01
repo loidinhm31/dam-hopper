@@ -1,6 +1,6 @@
 # Git History Search: Transport, Query Ownership, and Selection Persistence
 
-**Status:** Phases 01–05 implement server-side message filtering, shared client transport/query ownership, persisted history selections, the shared view, and Workspace panel integration. Git-page integration and end-to-end qualification remain in Phases 06–07. This guide covers their API, query, persistence, shared UI, and Workspace integration contracts.
+**Status:** Phases 01–06 implement server-side message filtering, shared client transport/query ownership, persisted history selections, the shared view, Workspace panel integration, and Git-page integration. End-to-end qualification remains Phase 07. This guide covers their API, query, persistence, shared UI, and integration contracts.
 
 ## REST API contract
 
@@ -93,7 +93,24 @@ The shared controller supplies persisted VCS-root and history-branch choices plu
 
 Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Rewrite actions remain unavailable while viewing a non-active branch; cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
 
-The implementation and review are settled; scoped validation recorded 71/71 tests, a clean typecheck, and user-approved 9.8/10 review. Durable Phase 05 closure and Phase 07 qualification remain pending; Phase 06 integrates the Git-page consumer.
+The implementation and review are settled; scoped validation recorded 71/71 tests, a clean typecheck, and user-approved 9.8/10 review. Durable Phase 05 closure remains pending in explicit advice mode; Phase 06 Git-page integration is described below, and Phase 07 owns end-to-end qualification.
+
+## Standalone Git page integration (Phase 06)
+
+`GitPage` stores its qualified checkbox selection in `useGitHistoryStore`, independently of Workspace focus. Only an uninitialized `null` selection is seeded after Git-history and Workspace hydration: it takes the Workspace project when present, otherwise it writes explicit `[]` (all projects). Reloading `[]` does not reseed. Selecting exactly one available project updates Workspace focus; multi-select and Clear leave focus unchanged.
+
+Selections remain intent, not authority. Missing/offline selected identities stay visible with an explicit deselect control. While any selected identity is unavailable, bulk fetch, pull, push, and publication are disabled rather than widened to all or run against a partial subset. Corrupt selection recovery likewise blocks bulk work until the user makes a valid selection or clears it.
+
+The shared history controller is available only for exactly one available selected project with an available target. Empty/all, multi-select, and unavailable states make no history request. For a usable selection, the page reuses the persisted VCS-root and branch preferences, search, paging, refresh, and commit selection from `useGitHistoryView`; the canonical-ref branch control is view-only and never checks out a branch. Viewing a non-active branch disables rewrite actions while safe cherry-pick/revert actions remain directed at the checked-out branch with an explanatory notice.
+
+History details, file diffs, and actions use the selected VCS root; `projectRelativePathForRoot()` maps history file paths for editor diffs. The Local Changes sidebar remains scoped to the project root. Bulk push keeps its independent root selector and existing SSH retry and leased-publication flows.
+
+Phase 06 implementation and finalization are settled. The focused Git-page test passed 9/9 and the UI suite passed 2,186 tests across 291 files; the scoped typecheck was clean and review scored 9.5/10. The full-suite report notes two non-failing JSDOM navigation messages whose source was not identified. Durable completion remains pending in explicit advice mode; this is not Phase 07 end-to-end qualification.
+
+The [Phase 06 plan](../../plans/261001-2003-git-history-search-persistence/phase-06-git-page-integration.md), [test report](../../plans/reports/tester-261002-0145-phase-06-git-page-integration.md), and [review](../../plans/reports/code-review-261002-0148-phase-06-git-page-integration.md) record implementation evidence. End-to-end qualification remains Phase 07.
+
+The standalone page and its focused tests live in `packages/ui/src/components/pages/GitPage.tsx` and `GitPage.test.tsx`; root-relative history diff paths use `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
+
 
 The shared UI components live in the [frontend component architecture](../frontend-components.md). The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md), the shared-controller contract in [Phase 04](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md), and Workspace integration in [Phase 05](../../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md). End-to-end qualification remains Phase 07.
 
@@ -113,5 +130,7 @@ The shared UI components live in the [frontend component architecture](../fronte
 - `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/components/pages/WorkspacePage.tsx` — Workspace mounts, availability, history presentation, and target/root-scoped actions.
 - Workspace integration regression coverage: `packages/ui/src/components/organisms/WorkspaceGitPanel.test.ts`.
 - Workspace integration plan: `../../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md`.
+- Git-page integration and regression coverage: `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/pages/GitPage.test.tsx`, and `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
+- Git-page integration plan: `../../plans/261001-2003-git-history-search-persistence/phase-06-git-page-integration.md`.
 
 See the [API Reference: Commit history](../api-reference.md#commit-history), [Git history search standards](../code-standards.md#git-history-search-queries), and the Phase 03 plan at `plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md`.

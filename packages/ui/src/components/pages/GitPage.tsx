@@ -1,5 +1,11 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef } from "react";
-import { GitCommit, GitBranch, History, Upload } from "lucide-react";
+import {
+  GitCommit,
+  GitBranch,
+  History,
+  Upload,
+  AlertCircle,
+} from "lucide-react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
@@ -11,13 +17,11 @@ import {
   useGitFetch,
   useGitPull,
   useGitPush,
-  useGitLog,
   useGitRoots,
   useProjectStatus,
 } from "@/api/queries.js";
 import type {
   GitOpResult,
-  GitLogEntry,
   DiffFileEntry,
   ProjectTargetInput,
 } from "@/api/client.js";
@@ -33,12 +37,20 @@ import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
+import {
+  useGitHistoryStore,
+  useGitHistoryHydrated,
+} from "@/stores/git-history.js";
+import { useGitHistoryView } from "@/hooks/use-git-history-view.js";
+import { GitHistoryToolbar } from "@/components/molecules/GitHistoryToolbar.js";
+import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { cn } from "@/lib/utils.js";
 import {
   buildProjectInfoPushTarget,
   describeProjectInfoRoot,
   formatProjectInfoRootLabel,
   projectInfoRootOptions,
+  projectRelativePathForRoot,
 } from "@/components/organisms/ProjectInfoPanel.js";
 import { useLeasedGitPush } from "@/hooks/use-leased-git-push.js";
 import {
@@ -51,7 +63,6 @@ import {
   GitUndoLastCommitDialog,
   useGitHistoryActions,
 } from "@/components/organisms/GitHistoryActions.js";
-
 const GitLogTree = lazy(() =>
   import("@/components/organisms/GitLogTree.js").then((m) => ({
     default: m.GitLogTree,
@@ -112,6 +123,7 @@ interface BulkGitOperationsProps {
   selectedRefs: ProjectRef[] | undefined;
   allProjectRefs: ProjectRef[];
   selectedRef: ProjectRef | null;
+  bulkDisabledReason?: string | null;
   setFetchResults: (results: GitOpResult[] | null) => void;
   setPullResults: (results: GitOpResult[] | null) => void;
   setPushResults: (results: GitOpResult[] | null) => void;
@@ -121,6 +133,7 @@ function BulkGitOperations({
   selectedRefs,
   allProjectRefs,
   selectedRef,
+  bulkDisabledReason,
   setFetchResults,
   setPullResults,
   setPushResults,
@@ -162,6 +175,12 @@ function BulkGitOperations({
   );
 
   const targetProjects = selectedRefs ?? allProjectRefs;
+  const isBulkDisabled =
+    isFetching ||
+    isPulling ||
+    targetProjects.length === 0 ||
+    Boolean(bulkDisabledReason);
+
   const operationTargets: ProjectTargetInput[] = targetProjects.map((ref) =>
     selectedRef &&
     ref.profileId === selectedRef.profileId &&
@@ -169,25 +188,26 @@ function BulkGitOperations({
       ? targetRef
       : ref,
   );
-  const pushDisabledReason = selectedRef
-    ? null
-    : "Select exactly one project to push. Bulk push is deferred in this phase.";
-
+  const pushDisabledReason =
+    bulkDisabledReason ??
+    (selectedRef
+      ? null
+      : "Select exactly one project to push. Bulk push is deferred in this phase.");
   async function handleBulkFetch() {
     setFetchResults(null);
     setIsFetching(true);
-    const byProfile = new Map<string, ProjectTargetInput[]>();
+    const byProfile: Record<string, ProjectTargetInput[]> = {};
     for (const target of operationTargets) {
       const norm = normalizeProjectTarget(target);
       const pId = norm.profileId || "";
-      const group = byProfile.get(pId) ?? [];
+      const group = byProfile[pId] ?? [];
       group.push(target);
-      byProfile.set(pId, group);
+      byProfile[pId] = group;
     }
 
     const allResults: GitOpResult[] = [];
     try {
-      for (const [, profileTargets] of byProfile) {
+      for (const profileTargets of Object.values(byProfile)) {
         try {
           const res = await executeWithRetry({ operation: "fetch" }, () =>
             gitFetch.mutateAsync(profileTargets),
@@ -210,18 +230,18 @@ function BulkGitOperations({
   async function handleBulkPull() {
     setPullResults(null);
     setIsPulling(true);
-    const byProfile = new Map<string, ProjectTargetInput[]>();
+    const byProfile: Record<string, ProjectTargetInput[]> = {};
     for (const target of operationTargets) {
       const norm = normalizeProjectTarget(target);
       const pId = norm.profileId || "";
-      const group = byProfile.get(pId) ?? [];
+      const group = byProfile[pId] ?? [];
       group.push(target);
-      byProfile.set(pId, group);
+      byProfile[pId] = group;
     }
 
     const allResults: GitOpResult[] = [];
     try {
-      for (const [, profileTargets] of byProfile) {
+      for (const profileTargets of Object.values(byProfile)) {
         try {
           const res = await executeWithRetry({ operation: "pull" }, () =>
             gitPull.mutateAsync(profileTargets),
@@ -257,6 +277,11 @@ function BulkGitOperations({
         onPublish={() => void leasedPush.publish()}
         onClose={leasedPush.close}
       />
+      {bulkDisabledReason ? (
+        <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+          {bulkDisabledReason}
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="space-y-3">
           <div className="flex items-center justify-between">
@@ -267,7 +292,7 @@ function BulkGitOperations({
               variant="primary"
               size="sm"
               loading={isFetching || gitFetch.isPending}
-              disabled={isFetching || isPulling || targetProjects.length === 0}
+              disabled={isBulkDisabled}
               onClick={() => void handleBulkFetch()}
             >
               Start Fetch
@@ -289,7 +314,7 @@ function BulkGitOperations({
               variant="primary"
               size="sm"
               loading={isPulling || gitPull.isPending}
-              disabled={isFetching || isPulling || targetProjects.length === 0}
+              disabled={isBulkDisabled}
               onClick={() => void handleBulkPull()}
             >
               Start Pull
@@ -406,56 +431,150 @@ export function GitPage() {
   const setSelectedProject = useWorkspaceStore(
     (state) => state.setSelectedProject,
   );
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectedCommit, setSelectedCommit] = useState<GitLogEntry | null>(
-    null,
+
+  const gitPageSelection = useGitHistoryStore((s) => s.gitPageSelection);
+  const selectionRecoveryRequired = useGitHistoryStore(
+    (s) => s.selectionRecoveryRequired,
   );
+  const setGitPageSelection = useGitHistoryStore(
+    (s) => s.setGitPageSelection,
+  );
+  const clearGitPageSelection = useGitHistoryStore(
+    (s) => s.clearGitPageSelection,
+  );
+  const resetSelectionRecoveryRequired = useGitHistoryStore(
+    (s) => s.resetSelectionRecoveryRequired,
+  );
+  const isGitHistoryHydrated = useGitHistoryHydrated();
 
   const [fetchResults, setFetchResults] = useState<GitOpResult[] | null>(null);
   const [pullResults, setPullResults] = useState<GitOpResult[] | null>(null);
   const [pushResults, setPushResults] = useState<GitOpResult[] | null>(null);
 
-  const availableProjectMap = useMemo(() => {
-    const map = new Map<string, ProjectRef>();
+  const availableProjectByKey = useMemo(() => {
+    const byKey: Record<string, ProjectRef> = {};
     for (const item of allProjects) {
-      map.set(projectKey(item.ref), item.ref);
+      byKey[projectKey(item.ref)] = item.ref;
     }
-    return map;
+    return byKey;
   }, [allProjects]);
 
-  // Seed initial selection from workspaceStore on mount or hydration
-  const hasInitializedRef = useRef(false);
+  // Seed initial selection once both git-history and workspace stores are hydrated
+  const hasSeededRef = useRef(false);
   useEffect(() => {
-    if (hasInitializedRef.current || allProjects.length === 0) return;
-    hasInitializedRef.current = true;
-    if (workspaceProject) {
-      const key = projectKey(workspaceProject);
-      if (availableProjectMap.has(key)) {
-        setSelected(new Set([key]));
-      }
+    if (hasSeededRef.current) return;
+    if (!isGitHistoryHydrated) return;
+    const isWorkspaceHydrated =
+      typeof useWorkspaceStore.persist?.hasHydrated === "function"
+        ? useWorkspaceStore.persist.hasHydrated()
+        : true;
+    if (!isWorkspaceHydrated) return;
+
+    if (gitPageSelection !== null || selectionRecoveryRequired) {
+      hasSeededRef.current = true;
+      return;
     }
-  }, [allProjects.length, availableProjectMap, workspaceProject]);
+
+    hasSeededRef.current = true;
+    if (workspaceProject) {
+      setGitPageSelection([projectKey(workspaceProject)]);
+    } else {
+      setGitPageSelection([]);
+    }
+  }, [
+    isGitHistoryHydrated,
+    gitPageSelection,
+    selectionRecoveryRequired,
+    workspaceProject,
+    setGitPageSelection,
+  ]);
 
   const allProjectRefs = useMemo(
     () => allProjects.map((item) => item.ref),
     [allProjects],
   );
 
-  const selectedRefs = useMemo(() => {
-    if (selected.size === 0) return undefined;
+  const selectedKeys = useMemo(
+    () => gitPageSelection ?? [],
+    [gitPageSelection],
+  );
+  const checkedKeyMap = useMemo(() => {
+    const map: Record<string, true> = {};
+    for (const key of selectedKeys) {
+      map[key] = true;
+    }
+    return map;
+  }, [selectedKeys]);
+
+  const { availableSelectedKeys, unavailableSelectedKeys } = useMemo(() => {
+    const available: string[] = [];
+    const unavailable: string[] = [];
+    for (const key of selectedKeys) {
+      if (availableProjectByKey[key]) {
+        available.push(key);
+      } else {
+        unavailable.push(key);
+      }
+    }
+    return {
+      availableSelectedKeys: available,
+      unavailableSelectedKeys: unavailable,
+    };
+  }, [selectedKeys, availableProjectByKey]);
+
+  // Determine bulk target projects and disable state
+  const { bulkTargetRefs, bulkDisabledReason } = useMemo(() => {
+    if (selectionRecoveryRequired) {
+      return {
+        bulkTargetRefs: allProjectRefs,
+        bulkDisabledReason:
+          "Saved project selection requires recovery. Please select a valid project or click Clear.",
+      };
+    }
+    if (unavailableSelectedKeys.length > 0) {
+      const names = unavailableSelectedKeys
+        .map((k) => parseProjectKey(k)?.project ?? k)
+        .join(", ");
+      return {
+        bulkTargetRefs: allProjectRefs,
+        bulkDisabledReason: `${unavailableSelectedKeys.length} selected project(s) (${names}) are offline or unavailable. Bulk operations are disabled to prevent unintended targets.`,
+      };
+    }
+    if (selectedKeys.length === 0) {
+      // Empty selection means all projects
+      return {
+        bulkTargetRefs: undefined,
+        bulkDisabledReason: null,
+      };
+    }
+    // Specific available projects selected
     const list: ProjectRef[] = [];
-    for (const key of selected) {
-      const ref = availableProjectMap.get(key) ?? parseProjectKey(key);
+    for (const key of availableSelectedKeys) {
+      const ref = availableProjectByKey[key];
       if (ref) list.push(ref);
     }
-    return list;
-  }, [availableProjectMap, selected]);
+    return {
+      bulkTargetRefs: list,
+      bulkDisabledReason: null,
+    };
+  }, [
+    selectionRecoveryRequired,
+    unavailableSelectedKeys,
+    selectedKeys.length,
+    availableSelectedKeys,
+    availableProjectByKey,
+    allProjectRefs,
+  ]);
+
+  const isSingleAvailableSelected =
+    selectedKeys.length === 1 &&
+    unavailableSelectedKeys.length === 0 &&
+    availableSelectedKeys.length === 1;
 
   const selectedRef = useMemo<ProjectRef | null>(() => {
-    if (selected.size !== 1) return null;
-    const singleKey = [...selected][0];
-    return availableProjectMap.get(singleKey) ?? parseProjectKey(singleKey);
-  }, [availableProjectMap, selected]);
+    if (!isSingleAvailableSelected) return null;
+    return availableProjectByKey[availableSelectedKeys[0]] ?? null;
+  }, [isSingleAvailableSelected, availableProjectByKey, availableSelectedKeys]);
 
   const selectedProjectName = selectedRef?.project ?? null;
   const selectedProfileName = useMemo(() => {
@@ -471,52 +590,83 @@ export function GitPage() {
   const selectedTarget = useProjectTarget(selectedRef);
   const targetRef = selectedTarget?.target ?? selectedRef ?? "";
 
-  const { data: logs = [], isLoading: isGitLogLoading } = useGitLog(
-    targetRef,
-    200,
-    0,
+  const historyView = useGitHistoryView(
+    normalizeProjectTarget(targetRef || { project: "" }),
+    { available: isSingleAvailableSelected },
+  );
+  const historyActions = useGitHistoryActions(
+    targetRef || "",
+    historyView.rootId,
   );
   const openDiff = useEditorStore((s) => s.openDiff);
-  const historyActions = useGitHistoryActions(targetRef);
-  const { data: projectStatus } = useProjectStatus(targetRef);
+  const { data: projectStatus } = useProjectStatus(
+    targetRef || "",
+    Boolean(selectedRef),
+  );
 
-  function resetHistoryView() {
-    setSelectedCommit(null);
+  // Reset history mutation dialogs whenever effective scope changes
+  useEffect(() => {
     historyActions.resetScope();
-  }
+  }, [historyView.effectiveScopeKey, historyActions.resetScope]);
 
-  function toggleProject(ref: ProjectRef) {
-    resetHistoryView();
+  function handleToggleProject(ref: ProjectRef) {
+    const key = projectKey(ref);
+    const isCurrentlyChecked = Boolean(checkedKeyMap[key]);
+    const nextKeys = isCurrentlyChecked
+      ? selectedKeys.filter((k) => k !== key)
+      : [...selectedKeys, key];
+
+    if (selectionRecoveryRequired) {
+      resetSelectionRecoveryRequired();
+    }
+    setGitPageSelection(nextKeys);
     setFetchResults(null);
     setPullResults(null);
     setPushResults(null);
-    const key = projectKey(ref);
-    const next = new Set(selected);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
+
+    if (nextKeys.length === 1) {
+      const singleKey = nextKeys[0];
+      const nextRef = availableProjectByKey[singleKey];
+      if (nextRef) {
+        setSelectedProject(nextRef);
+      }
     }
-    setSelected(next);
-    if (next.size === 1) {
-      const singleKey = [...next][0];
-      const nextRef =
-        availableProjectMap.get(singleKey) ?? parseProjectKey(singleKey);
-      if (nextRef) setSelectedProject(nextRef);
-    } else {
-      setSelectedProject(null);
+  }
+
+  function handleClearSelection() {
+    clearGitPageSelection();
+    setFetchResults(null);
+    setPullResults(null);
+    setPushResults(null);
+  }
+
+  function handleDeselectUnavailableKey(key: string) {
+    const nextKeys = selectedKeys.filter((k) => k !== key);
+    if (selectionRecoveryRequired) {
+      resetSelectionRecoveryRequired();
+    }
+    setGitPageSelection(nextKeys);
+    setFetchResults(null);
+    setPullResults(null);
+    setPushResults(null);
+    if (nextKeys.length === 1) {
+      const singleKey = nextKeys[0];
+      const nextRef = availableProjectByKey[singleKey];
+      if (nextRef) {
+        setSelectedProject(nextRef);
+      }
     }
   }
 
   function handleFileDoubleClick(file: DiffFileEntry) {
-    if (selectedRef && selectedCommit) {
+    if (selectedRef && historyView.selectedCommit) {
       openDiff(
         selectedTarget?.target ?? selectedRef,
-        file.path,
+        projectRelativePathForRoot(historyView.rootId, file.path),
         file.status,
         file.additions,
         file.deletions,
-        selectedCommit.hash,
+        historyView.selectedCommit.hash,
       );
     }
   }
@@ -524,9 +674,9 @@ export function GitPage() {
   async function handleDropCommitConfirm() {
     const droppedHash = await historyActions.handleDropCommit();
     if (!droppedHash) return;
-    setSelectedCommit((current) =>
-      current?.hash === droppedHash ? null : current,
-    );
+    if (historyView.selectedCommit?.hash === droppedHash) {
+      historyView.clearSelectedCommit();
+    }
   }
 
   async function handleEditCommitMessageConfirm(
@@ -538,18 +688,22 @@ export function GitPage() {
       allowSignatureRemoval,
     );
     if (!editedHash) return;
-    setSelectedCommit((current) =>
-      current?.hash === editedHash ? null : current,
-    );
+    if (historyView.selectedCommit?.hash === editedHash) {
+      historyView.clearSelectedCommit();
+    }
   }
 
   async function handleUndoLastCommitConfirm() {
     const undoneHash = await historyActions.handleUndoLastCommit();
     if (!undoneHash) return;
-    setSelectedCommit((current) =>
-      current?.hash === undoneHash ? null : current,
-    );
+    if (historyView.selectedCommit?.hash === undoneHash) {
+      historyView.clearSelectedCommit();
+    }
   }
+
+  const selectedRoot =
+    historyView.rootOptions.find((root) => root.rootId === historyView.rootId) ??
+    historyView.rootOptions[0];
 
   const hasMultipleProfiles = useMemo(() => {
     if (allProjects.length <= 1) return false;
@@ -579,6 +733,21 @@ export function GitPage() {
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">
           Select projects (empty = all)
         </p>
+
+        {selectionRecoveryRequired && (
+          <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-300 flex items-center justify-between">
+            <span>
+              Saved project selection was corrupted or invalid. Please select a valid project or click Clear to reset.
+            </span>
+            <button
+              onClick={handleClearSelection}
+              className="underline font-semibold ml-2 hover:text-amber-200"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2">
           {allProjects.map((item) => {
             const key = projectKey(item.ref);
@@ -589,8 +758,8 @@ export function GitPage() {
               >
                 <input
                   type="checkbox"
-                  checked={selected.has(key)}
-                  onChange={() => toggleProject(item.ref)}
+                  checked={Boolean(checkedKeyMap[key])}
+                  onChange={() => handleToggleProject(item.ref)}
                 />
                 <span className="font-medium text-[var(--color-text)]">
                   {item.project.name}
@@ -603,17 +772,49 @@ export function GitPage() {
               </label>
             );
           })}
+
+          {unavailableSelectedKeys.map((key) => {
+            const parsed = parseProjectKey(key);
+            const name = parsed?.project ?? key;
+            const profile = parsed?.profileId;
+            return (
+              <span
+                key={key}
+                className="inline-flex items-center gap-1.5 text-sm px-2 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300"
+              >
+                <input
+                  type="checkbox"
+                  checked={true}
+                  onChange={() => handleDeselectUnavailableKey(key)}
+                />
+                <span className="font-medium">{name}</span>
+                {profile && (
+                  <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-amber-500/20 text-amber-200">
+                    {profile}
+                  </span>
+                )}
+                <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">
+                  (offline)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleDeselectUnavailableKey(key)}
+                  title="Deselect unavailable project"
+                  className="ml-1 text-amber-400 hover:text-amber-200"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
         </div>
-        {selected.size > 0 && (
+
+        {selectedKeys.length > 0 && (
           <div className="mt-2 flex items-center gap-2">
-            <Badge variant="primary">{selected.size} selected</Badge>
+            <Badge variant="primary">{selectedKeys.length} selected</Badge>
             <button
               className="text-xs text-[var(--color-text-muted)] hover:underline"
-              onClick={() => {
-                resetHistoryView();
-                setSelected(new Set());
-                setSelectedProject(null);
-              }}
+              onClick={handleClearSelection}
             >
               Clear
             </button>
@@ -623,9 +824,10 @@ export function GitPage() {
 
       <BulkGitOperations
         key={selectedRef ? projectKey(selectedRef) : "__all__"}
-        selectedRefs={selectedRefs}
+        selectedRefs={bulkTargetRefs}
         allProjectRefs={allProjectRefs}
         selectedRef={selectedRef}
+        bulkDisabledReason={bulkDisabledReason}
         setFetchResults={setFetchResults}
         setPullResults={setPullResults}
         setPushResults={setPushResults}
@@ -634,36 +836,93 @@ export function GitPage() {
       {pullResults && <ResultsSummary results={pullResults} />}
       {pushResults && <ResultsSummary results={pushResults} />}
 
-      {/* Git Graph View */}
-      {selectedProjectName ? (
+      {/* Git Graph / History View */}
+      {isSingleAvailableSelected && selectedProjectName ? (
         <div className="mt-8 space-y-4">
-          <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
-            Git Repository: {selectedProjectName}
-            {selectedProfileName && (
-              <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text-muted)]">
-                {selectedProfileName}
-              </span>
-            )}
-            {projectStatus?.branch && (
-              <Badge
-                variant="primary"
-                className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20"
-              >
-                <GitBranch className="w-3 h-3 mr-1" />
-                {projectStatus.branch}
-              </Badge>
-            )}
-          </h2>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
+              Git Repository: {selectedProjectName}
+              {selectedProfileName && (
+                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text-muted)]">
+                  {selectedProfileName}
+                </span>
+              )}
+              {projectStatus?.branch && (
+                <Badge
+                  variant="primary"
+                  className="ml-1 text-[var(--color-primary)] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20"
+                >
+                  <GitBranch className="w-3 h-3 mr-1" />
+                  {projectStatus.branch}
+                </Badge>
+              )}
+            </h2>
+
+            {/* VCS Root and History Branch controls */}
+            <div className="grid gap-3 sm:grid-cols-2 mt-2 pt-3 border-t border-[var(--color-border)]">
+              <label className="min-w-0">
+                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  VCS Root
+                </span>
+                <select
+                  value={historyView.rootId}
+                  onChange={(event) => {
+                    historyView.setRootId(event.target.value);
+                    historyActions.resetScope();
+                  }}
+                  className={cn(inputClass, "pr-8")}
+                >
+                  {historyView.rootOptions.map((root) => (
+                    <option key={root.rootId} value={root.rootId}>
+                      {formatProjectInfoRootLabel(root)} - {describeProjectInfoRoot(root)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="min-w-0">
+                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  History Branch
+                </span>
+                <GitBranchControl
+                  project={selectedProjectName}
+                  target={selectedTarget?.target ?? (selectedRef || undefined)}
+                  root={historyView.rootId}
+                  mode="view"
+                  selectedBranchRef={historyView.branchRef}
+                  onSelectedBranchRefChange={historyView.selectBranchRef}
+                  selectedBranch={historyView.branchLabel}
+                  onSelectedBranchChange={historyView.selectBranchRef}
+                  className="w-full px-0"
+                />
+              </div>
+            </div>
+          </div>
+
+          {selectedRoot?.warnings?.length ? (
+            <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300">
+              {selectedRoot.warnings.join(" ")}
+            </div>
+          ) : null}
+
+          {!historyView.isViewingActiveBranch && historyView.activeBranch ? (
+            <div className="rounded border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-300">
+              Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick and revert
+              apply to checked-out branch <strong>{historyView.activeBranch}</strong>.
+              Rewrite actions stay on the active branch.
+            </div>
+          ) : null}
+
           <GitHistoryStatusBanner
             className="rounded-lg px-3 py-2 text-sm"
             status={historyActions.status}
           />
+
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[700px]">
             {/* Sidebar: Commit / Local Changes */}
             <div className="lg:col-span-1 flex flex-col h-full overflow-hidden">
               <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2">
                 <GitCommit className="w-3.5 h-3.5" />
-                Local Changes
+                Local Changes (Project root)
               </div>
               <Suspense fallback={GIT_PANEL_FALLBACK}>
                 <GitLocalChanges
@@ -678,50 +937,123 @@ export function GitPage() {
               <div
                 className={cn(
                   "flex flex-col min-w-0 flex-1",
-                  selectedCommit ? "w-[65%]" : "w-full",
+                  historyView.selectedCommit ? "w-[65%]" : "w-full",
                 )}
               >
                 <div className="shrink-0 mb-0 px-4 py-2 border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2 bg-[var(--color-background)]">
                   <History className="w-3.5 h-3.5" />
                   Commits
                 </div>
+
+                <GitHistoryToolbar
+                  searchText={historyView.searchText}
+                  onSearchChange={historyView.setSearchText}
+                  onClearSearch={historyView.clearSearch}
+                  onCompositionStart={historyView.onCompositionStart}
+                  onCompositionEnd={historyView.onCompositionEnd}
+                  isFiltered={historyView.isFiltered}
+                  page={historyView.page}
+                  offset={historyView.offset}
+                  logsCount={historyView.logs.length}
+                  hasPreviousPage={historyView.hasPreviousPage}
+                  hasNextPage={historyView.hasNextPage}
+                  onPreviousPage={historyView.previousPage}
+                  onNextPage={historyView.nextPage}
+                  onRefresh={() => void historyView.refresh()}
+                  isRefreshing={historyView.isRefreshing}
+                  isLoading={historyView.isLoading}
+                  disabled={!historyView.availability.isAvailable}
+                  followActive={historyView.followActive}
+                  isViewingActiveBranch={historyView.isViewingActiveBranch}
+                  branchLabel={historyView.branchLabel}
+                  onFollowCheckedOutBranch={historyView.followCheckedOutBranch}
+                  notice={historyView.notice}
+                  onDismissNotice={historyView.dismissNotice}
+                  className="px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                />
+
+                {historyView.error ? (
+                  <div className="m-3 flex items-center justify-between gap-2 rounded border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-300">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+                      <span className="truncate">
+                        Failed to load git history: {historyView.error.message}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void historyView.refresh()}
+                      disabled={historyView.isRefreshing}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : null}
+
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <GitLogTree
-                      logs={logs}
-                      isLoading={isGitLogLoading}
-                      selectedHash={selectedCommit?.hash}
-                      onSelectCommit={setSelectedCommit}
+                      logs={historyView.logs}
+                      isLoading={historyView.isLoading}
+                      presentation={historyView.isFiltered ? "list" : "graph"}
+                      emptyMessage={
+                        historyView.isFiltered
+                          ? "No matching commits found."
+                          : "No commits found in this branch history."
+                      }
+                      selectedHash={historyView.selectedCommit?.hash}
+                      onSelectCommit={historyView.selectCommit}
                       onCherryPick={(entry) =>
                         void historyActions.handleCherryPick(entry)
                       }
                       onRevertCommit={historyActions.setRevertCommit}
-                      onUndoLastCommit={historyActions.setUndoLastCommit}
-                      onDropCommit={historyActions.setDropCommit}
-                      onEditCommitMessage={historyActions.setEditCommit}
-                      onReset={historyActions.setResetCommit}
+                      onUndoLastCommit={
+                        historyView.isViewingActiveBranch
+                          ? historyActions.setUndoLastCommit
+                          : undefined
+                      }
+                      onDropCommit={
+                        historyView.isViewingActiveBranch
+                          ? historyActions.setDropCommit
+                          : undefined
+                      }
+                      onEditCommitMessage={
+                        historyView.isViewingActiveBranch
+                          ? historyActions.setEditCommit
+                          : undefined
+                      }
+                      onReset={
+                        historyView.isViewingActiveBranch
+                          ? historyActions.setResetCommit
+                          : undefined
+                      }
                     />
                   </Suspense>
                 </div>
               </div>
 
-              {selectedCommit && (
+              {historyView.selectedCommit && (
                 <div className="w-[35%] h-full shrink-0">
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <CommitDetailsPanel
                       project={selectedProjectName}
                       target={selectedTarget?.target}
-                      commit={selectedCommit}
-                      onClose={() => setSelectedCommit(null)}
+                      root={historyView.rootId}
+                      commit={historyView.selectedCommit}
+                      onClose={historyView.clearSelectedCommit}
                       onFileDoubleClick={handleFileDoubleClick}
                       onCherryPickSelectedChanges={(commit, files) =>
                         void historyActions.handleCherryPickFiles(commit, files)
                       }
-                      onRevertSelectedChanges={
-                        historyActions.requestRevertFiles
+                      onRevertSelectedChanges={(commit, files) =>
+                        void historyActions.handleRevertFiles(commit, files)
                       }
-                      onDropSelectedChanges={(commit, files) =>
-                        historyActions.requestDropFiles(commit, files)
+                      onDropSelectedChanges={
+                        historyView.isViewingActiveBranch
+                          ? (commit, files) =>
+                              void historyActions.handleDropFiles(commit, files)
+                          : undefined
                       }
                     />
                   </Suspense>
@@ -729,6 +1061,30 @@ export function GitPage() {
               )}
             </div>
           </div>
+        </div>
+      ) : selectedKeys.length === 1 && unavailableSelectedKeys.length === 1 ? (
+        <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-amber-500/30 rounded-lg bg-amber-500/5">
+          <AlertCircle className="w-12 h-12 text-amber-400 mb-3" />
+          <h3 className="font-medium text-[var(--color-text)]">
+            Selected Project Offline or Unavailable
+          </h3>
+          <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+            The selected project &ldquo;
+            {parseProjectKey(unavailableSelectedKeys[0])?.project ??
+              unavailableSelectedKeys[0]}
+            &rdquo; is not currently reachable. Its history will be available once
+            reconnected.
+          </p>
+        </div>
+      ) : selectedKeys.length > 1 ? (
+        <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-[var(--color-border)] rounded-lg bg-[var(--color-surface)]/50">
+          <GitBranch className="w-12 h-12 text-[var(--color-text-muted)] mb-3" />
+          <h3 className="font-medium text-[var(--color-text)]">
+            Multiple Projects Selected ({selectedKeys.length})
+          </h3>
+          <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+            Select exactly one project above to view its Git history graph.
+          </p>
         </div>
       ) : (
         <div className="mt-8 p-8 flex flex-col items-center justify-center text-center border-2 border-dashed border-[var(--color-border)] rounded-lg bg-[var(--color-surface)]/50">

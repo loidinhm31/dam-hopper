@@ -197,9 +197,10 @@ search architecture guide](./architecture/git-history-search.md). Phase 03 adds
 the persisted selection store described below. Phase 04 adds the shared
 `useGitHistoryView` controller and `GitHistoryToolbar`, canonical-ref,
 no-checkout `GitBranchControl` view mode, and graph/list `GitLogTree`.
-Phase 05 Workspace integration is implemented and reviewed; durable completion
-remains pending in explicit advice mode. Git-page integration is Phase 06 and
-end-to-end qualification is Phase 07. See the [Phase 05 plan](../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md).
+Phase 05 integrates Workspace Git surfaces; Phase 06 integrates the standalone
+Git page. Implementation and finalization are settled for Phases 05 and 06,
+while durable completion remains pending in explicit advice mode and Phase 07
+end-to-end qualification remains open. See the [Phase 05 plan](../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md) and [Phase 06 plan](../plans/261001-2003-git-history-search-persistence/phase-06-git-page-integration.md).
 
 ### Persisted Git history selection (Phase 03; 2026-10-01)
 
@@ -240,7 +241,8 @@ failure and reuses the approved snapshot.
 | Search and replace | `hooks/use-file-search.ts`, `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` |
 | Git history search and selection persistence | `server/src/api/git.rs`, `server/src/git/repository.rs`, `packages/ui/src/api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `packages/ui/src/stores/git-history.ts`, `packages/ui/src/lib/git-branch-ref.ts` | Full-message filtering and owner/generation-qualified query identity share the existing REST route. Versioned UI preferences keep Git-page selection, target roots, and root-scoped branch intent isolated by profile; canonical refs distinguish local from remote names. |
 | Shared history view (Phase 04) | `packages/ui/src/hooks/use-git-history-view.ts`, `packages/ui/src/components/molecules/GitHistoryToolbar.tsx`, `packages/ui/src/components/organisms/GitBranchControl.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx` | Shared history scope/search/paging/refresh, canonical-ref view mode, and graph/list presentation. |
+| Git-page history integration (Phase 06) | `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/ProjectInfoHelpers.ts` | Persisted selection is separate from Workspace focus; unavailable selected identities remain explicit and block bulk operations. The shared history view is enabled only for one available target; root-relative diff paths use the shared helper. |
 | Git edit and leased publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
-| Focused regressions | `packages/ui/src/stores/git-history.test.ts`, `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git panel/dialog tests |
+| Focused regressions | `packages/ui/src/stores/git-history.test.ts`, `packages/ui/src/api/ws-transport.test.ts`, `packages/ui/src/api/queries.test.ts`, `packages/ui/src/components/pages/GitPage.test.tsx`, `packages/ui/src/components/organisms/WorkspaceGitPanel.test.ts`, server Git tests |
 
 Related contracts: [API Reference](./api-reference.md), [System Architecture](./system-architecture.md), [Code Standards](./code-standards.md), and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).
