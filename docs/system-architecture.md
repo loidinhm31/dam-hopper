@@ -202,13 +202,13 @@ Ownership invariants:
 
 #### Git history search and selection persistence (2026-10-01; Phases 01–03 implemented)
 
-The [plan](../plans/261001-2003-git-history-search-persistence/plan.md)
-covers server filtering, query ownership, persisted selections, and planned UI
-integration. Phases 01–03 are implemented; Phases 04–07 own the shared
-controller, Workspace/Git-page consumers, and qualification. The
-[architecture guide](./architecture/git-history-search.md) documents the API,
-query and persistence contracts plus a known server-validation edge; persisted
-state delivery does not mean search controls or cross-surface behavior are done.
+Phase 04 completed on 2026-10-02. Its [plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md) records the shared
+controller `useGitHistoryView`, controlled `GitHistoryToolbar`, and canonical-ref/
+no-checkout `GitBranchControl` view mode with graph/list presentation in
+`GitLogTree`. Phases 05–06 integrate Workspace and Git-page consumers; Phase 07
+owns qualification. The [architecture guide](./architecture/git-history-search.md)
+covers transport, query, persistence, and shared-view contracts plus the
+known server-validation edge.
 
 
 Large files use bounded 64 KiB range reads in a read-only viewer. Image/video

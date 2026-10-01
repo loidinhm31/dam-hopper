@@ -484,7 +484,7 @@ interface TerminalPanelProps {
 
 **Location:** `packages/ui/src/components/organisms/GitBranchControl.tsx`
 
-**Purpose:** Handles branch-focused actions such as checkout, create, and update flows.
+**Purpose:** Handles branch checkout, creation, and deletion flows.
 
 **Visible consumers:**
 
@@ -503,14 +503,16 @@ interface TerminalPanelProps {
 - Detects `ApiRequestError` with code `GIT_NOT_INITIALIZED` from root or branch
   queries and renders an unavailable state with `git init` guidance instead of
   showing empty branch controls.
+- The default `mode="checkout"` retains branch-name checkout behavior. History views use `mode="view"` with `selectedBranchRef` and `onSelectedBranchRefChange`; canonical local/remote refs remain distinct and selection does not check out a branch.
 
-**Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create/checkout/update dialogs.
+**Dialogs:** `GitBranchControlDialogs.tsx` contains the supporting create, delete, and dirty-checkout dialogs.
 
 ### GitLogTree
 
 **Location:** `packages/ui/src/components/organisms/GitLogTree.tsx`
 
 **Purpose:** Renders the commit history tree and anchors history actions.
+**Presentation:** `presentation="graph"` (default) draws parent lanes; `presentation="list"` skips ancestry layout while preserving the same refs, messages, author/date/hash rows, keyboard selection, and context-menu actions. `emptyMessage` supplies surface-specific empty-state text.
 
 ### GitHistoryActions
 

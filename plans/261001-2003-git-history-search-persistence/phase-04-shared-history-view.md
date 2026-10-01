@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-01. Priority: P2. Implementation: DONE (2026-10-02 00:16 +07:00). Review: Cycle 2 passed (9.4/10, no critical issues); its refresh-state warning was fixed after review and validated with the hook suite (8/8) and `tsc --noEmit` (0 diagnostics). See [Cycle 2 review](../reports/code-review-261002-0012-phase-04-shared-history-view-cycle2.md) and [closeout](../reports/project-manager-261002-0016-phase-04-shared-history-view.md).
 - One reusable history-state controller and small toolbar; existing mutation/dialog hook remains separate.
 
 ## Key Insights
@@ -75,12 +75,12 @@ Modify:
 
 ## Todo list
 
-- [ ] Shared qualified history controller and discovery reconciliation.
-- [ ] Transient IME-aware debounced query/paging/selection transitions.
-- [ ] Owned current-scope refresh and stale completion fence.
-- [ ] Canonical view-mode branch identity without checkout changes.
-- [ ] Accessible controls and filtered list presentation.
-- [ ] Consumer-visible race/identity regressions and frozen page-worker interface.
+- [x] Shared qualified history controller and discovery reconciliation.
+- [x] Transient IME-aware debounced query/paging/selection transitions.
+- [x] Owned current-scope refresh and stale completion fence.
+- [x] Canonical view-mode branch identity without checkout changes.
+- [x] Accessible controls and filtered list presentation.
+- [x] Consumer-visible race/identity regressions and frozen page-worker interface.
 
 ## Success Criteria
 
@@ -103,4 +103,4 @@ Requests owner-bound; generations transient. Hydrated preferences are untrusted 
 
 ## Next steps
 
-Freeze controller and toolbar signatures, then start Phase 05 + Phase 06 independently. Unresolved questions: none.
+Phase 04 is DONE (2026-10-02 00:16 +07:00). The controller, toolbar, canonical-ref branch view, and filtered-list presentation are frozen for Phases 05–06. Cycle 2 scoped validation passed 66/66 tests, UI build, and web typecheck; the post-review refresh-state fix passed the hook tests (8/8) and `tsc --noEmit` (0 diagnostics). Review scored 9.4/10 with no critical issues. See the [Cycle 2 tester report](../reports/tester-261002-0006-phase-04-shared-history-view-cycle2.md), [review](../reports/code-review-261002-0012-phase-04-shared-history-view-cycle2.md), and [closeout](../reports/project-manager-261002-0016-phase-04-shared-history-view.md). Unresolved questions: none.

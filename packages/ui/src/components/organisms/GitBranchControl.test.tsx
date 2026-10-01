@@ -66,7 +66,7 @@ async function openSelect(branchName = "feature/demo") {
   const option = await vi.waitFor(() => {
     const next = [
       ...document.querySelectorAll<HTMLElement>("[role=option]"),
-    ].find((element) => element.textContent === branchName);
+    ].find((element) => element.textContent?.includes(branchName));
     expect(next).toBeDefined();
     return next!;
   });
@@ -297,5 +297,119 @@ describe("GitBranchControl unavailable state", () => {
     );
     expect(document.body.textContent).not.toContain("New Branch");
     expect(document.querySelector("[role=combobox]")).toBeNull();
+  });
+});
+
+describe("GitBranchControl view mode and canonical refs", () => {
+  it("renders in view mode without New Branch button", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(<GitBranchControl project="demo" mode="view" />),
+    );
+
+    expect(document.body.textContent).not.toContain("New Branch");
+    expect(document.querySelector("[role=combobox]")).not.toBeNull();
+  });
+
+  it("emits canonical ref on branch selection in view mode and never checks out", async () => {
+    const onSelectedBranchRefChange = vi.fn();
+    const onSelectedBranchChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <GitBranchControl
+          project="demo"
+          mode="view"
+          selectedBranchRef="refs/heads/main"
+          onSelectedBranchRefChange={onSelectedBranchRefChange}
+          onSelectedBranchChange={onSelectedBranchChange}
+        />,
+      ),
+    );
+
+    const { option } = await openSelect("feature/demo");
+    await act(async () => option.click());
+
+    expect(onSelectedBranchRefChange).toHaveBeenCalledWith(
+      "refs/heads/feature/demo",
+    );
+    expect(onSelectedBranchChange).toHaveBeenCalledWith("feature/demo");
+    expect(checkoutBranch).not.toHaveBeenCalled();
+  });
+
+  it("resolves remote branch canonical ref to refs/remotes/ in view mode", async () => {
+    queryState.branches = [
+      ...loadedBranches,
+      { name: "origin/staging", isCurrent: false, isRemote: true },
+    ];
+    const onSelectedBranchRefChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <GitBranchControl
+          project="demo"
+          mode="view"
+          selectedBranchRef="refs/heads/main"
+          onSelectedBranchRefChange={onSelectedBranchRefChange}
+        />,
+      ),
+    );
+
+    const { option } = await openSelect("origin/staging");
+    await act(async () => option.click());
+
+    expect(onSelectedBranchRefChange).toHaveBeenCalledWith(
+      "refs/remotes/origin/staging",
+    );
+    expect(checkoutBranch).not.toHaveBeenCalled();
+  });
+
+  it("calls onSelectedBranchDeleted when viewed branch is deleted without synthetic branch pick", async () => {
+    deleteBranch.mockResolvedValueOnce({
+      ok: true,
+      message: "Deleted branch feature/demo",
+    });
+    const onSelectedBranchDeleted = vi.fn();
+    const onSelectedBranchRefChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <GitBranchControl
+          project="demo"
+          mode="view"
+          selectedBranchRef="refs/heads/feature/demo"
+          onSelectedBranchDeleted={onSelectedBranchDeleted}
+          onSelectedBranchRefChange={onSelectedBranchRefChange}
+        />,
+      ),
+    );
+
+    await openBranchMenu("feature/demo");
+    const deleteAction = document.querySelector<HTMLElement>("[role=menuitem]");
+    expect(deleteAction).not.toBeNull();
+    await dispatchEvent(
+      deleteAction!,
+      new MouseEvent("click", { bubbles: true }),
+    );
+
+    const confirmButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((btn) => btn.textContent?.toLowerCase() === "delete branch");
+    expect(confirmButton).toBeDefined();
+    await act(async () => confirmButton?.click());
+
+    expect(deleteBranch).toHaveBeenCalledWith({ name: "feature/demo" });
+    expect(onSelectedBranchDeleted).toHaveBeenCalledTimes(1);
+    // Crucial requirement: must NOT synthesize a branch pick that pins the fallback!
+    expect(onSelectedBranchRefChange).not.toHaveBeenCalled();
+    expect(checkoutBranch).not.toHaveBeenCalled();
   });
 });

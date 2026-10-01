@@ -1,6 +1,6 @@
 # Git History Search: Transport, Query Ownership, and Selection Persistence
 
-**Status:** Phases 01–03 implement server-side message filtering, shared client transport/query ownership, and persisted history selections. Search controls/surfaces and integrated qualification remain in Phases 04–07. This guide documents the API, query, and persistence contracts, not a completed search UI.
+**Status:** Phases 01–04 implement server-side message filtering, shared client transport/query ownership, persisted history selections, and the shared view controller/presentation. Workspace/Git-page integration and end-to-end qualification remain in Phases 05–07. This guide covers the API, query, persistence, and shared UI contracts, not completed page integration.
 
 ## REST API contract
 
@@ -54,7 +54,41 @@ The query's existing `enabled` guard is based on the normalized project name. A 
 
 Hydration validates persisted shapes, qualified tuple keys, selection keys, preference discriminants, and canonical refs. Malformed root/branch records are dropped individually; invalid or unknown-version selection remains in recovery rather than becoming all-projects. Corrupt JSON also requires recovery. If browser storage is unavailable or denies reads/writes, the store remains usable in memory and hydration readiness settles. A `deleted` profile notification clears only that profile's root/branch records while preserving Git-page selection tombstones. Workspace focus and worktree availability remain owned by their existing stores.
 
-The store contract and phase boundary are recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md); search controls and consumers are implemented in later phases.
+## Shared history controller and presentation (Phase 04)
+
+`useGitHistoryView(target, options?)` accepts a `ProjectTargetRef` and optional
+availability gate. It combines persisted root/branch preferences with root and
+branch discovery, owner-scoped log queries, search, 200-entry paging,
+selection, availability, and guarded refresh. Its effective scope includes
+profile, project/worktree, VCS root, branch preference, and connection
+generation; scope changes reset transient search, page, and selection state.
+History queries wait for preference hydration, and missing persisted roots or
+pins are reconciled only after successful completed discovery.
+
+The controller keeps search draft separate from the normalized applied query.
+Typing applies after 300 ms; IME composition defers the debounce, while clear
+and Escape clear immediately. Query changes reset the page and selected
+commit. Refresh invalidates the owner/root-qualified branch, status, log, and
+detail queries, resolves the refreshed branch before fetching the current page,
+and ignores stale-scope results for selection and notice updates.
+
+`GitHistoryToolbar` is a controlled presentation component for search,
+clear/Escape, paging and displayed-range counts, refresh, follow-active, and
+dismissible notices; it does not own store or API access. `GitBranchControl`
+defaults to `mode="checkout"`. In `mode="view"`, `selectedBranchRef` and
+`onSelectedBranchRefChange` use canonical `refs/heads/...` and
+`refs/remotes/...` values, keeping local/remote name collisions distinct;
+selecting a history ref does not check out a branch.
+
+`GitLogTree` defaults to `presentation="graph"`. Its `presentation="list"`
+mode skips ancestry lane construction and graph SVGs while preserving the
+same commit rows, selection, keyboard interaction, and context-menu actions.
+`emptyMessage` allows a surface to supply its empty-state text.
+
+The shared UI components live in the
+[frontend component architecture](../frontend-components.md); page-level
+adoption and qualification remain later plan phases.
+The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md); shared-controller and view contracts are in [Phase 04](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
 
 ## Source map
 
@@ -63,6 +97,10 @@ The store contract and phase boundary are recorded in [Phase 03](../../plans/261
 - `packages/ui/src/api/queries.ts` — query normalization, shared options, owner/root prefixes, and `useGitLog` delegation.
 - `packages/ui/src/stores/git-history.ts` — versioned, validated persisted selection/root/branch preferences and hydration lifecycle.
 - `packages/ui/src/lib/git-branch-ref.ts` — branch ref identity, validation, and pinned/follow-active resolution.
+- `packages/ui/src/hooks/use-git-history-view.ts` — shared history scope, discovery, query, paging, selection, and refresh controller.
+- `packages/ui/src/components/molecules/GitHistoryToolbar.tsx` — controlled history search, paging, refresh, and follow-active toolbar.
+- `packages/ui/src/components/organisms/GitBranchControl.tsx` — checkout versus canonical-ref view mode.
+- `packages/ui/src/components/organisms/GitLogTree.tsx` — graph/list commit presentation.
 - Focused UI regressions: `packages/ui/src/stores/git-history.test.ts`, `packages/ui/src/api/ws-transport.test.ts`, `packages/ui/src/api/queries.test.ts`, and `packages/ui/src/api/ownership.test.ts`.
 - Server route/filter: `server/src/api/git.rs` and the Git repository log implementation.
 

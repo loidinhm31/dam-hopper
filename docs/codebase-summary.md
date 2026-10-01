@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-02 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,346,963 bytes; 2,558 files packed, six security-scan exclusions).
+**Generated:** 2026-10-02 from Repomix v1.18.0 XML compaction (`repomix-output.xml`, 25,347,115 bytes; 2,558 files packed, six security-scan exclusions).
 
 The compaction is a read-only analysis aid; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix

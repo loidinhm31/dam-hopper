@@ -30,6 +30,8 @@ interface GitLogTreeProps {
   onEditCommitMessage?: (entry: GitLogEntry) => void;
   onReset?: (entry: GitLogEntry) => void;
   onDropCommit?: (entry: GitLogEntry) => void;
+  presentation?: "graph" | "list";
+  emptyMessage?: string;
 }
 
 interface RenderNode {
@@ -195,8 +197,13 @@ export function GitLogTree({
   onEditCommitMessage,
   onReset,
   onDropCommit,
+  presentation = "graph",
+  emptyMessage = "No commits found.",
 }: GitLogTreeProps) {
   const parsedGraph = useMemo(() => {
+    if (presentation === "list") {
+      return [];
+    }
     const tracks: string[] = []; // the hash expected at each track index
     const renderNodes: RenderNode[] = [];
 
@@ -239,6 +246,22 @@ export function GitLogTree({
     return renderNodes;
   }, [logs]);
 
+  const rowsToRender = useMemo(() => {
+    if (presentation === "list") {
+      return logs.map((entry) => ({ entry, node: null, graphWidth: 0 }));
+    }
+    return parsedGraph.map((node) => {
+      const maxTracks = Math.max(
+        node.prevTracks.length,
+        node.nextTracks.length,
+        node.trackIndex + 1,
+      );
+      const graphWidth =
+        Math.max(1, maxTracks) * GRAPH_CELL_WIDTH + SVG_PADDING * 2;
+      return { entry: node.entry, node, graphWidth };
+    });
+  }, [logs, parsedGraph, presentation]);
+
   function formatRelativeDate(timestamp: number) {
     return new Date(timestamp * 1000).toLocaleString();
   }
@@ -254,7 +277,7 @@ export function GitLogTree({
   if (logs.length === 0) {
     return (
       <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
-        No commits found.
+        {emptyMessage}
       </div>
     );
   }
@@ -273,37 +296,32 @@ export function GitLogTree({
           </tr>
         </thead>
         <tbody>
-          {parsedGraph.map((node) => {
-            const maxTracks = Math.max(
-              node.prevTracks.length,
-              node.nextTracks.length,
-              node.trackIndex + 1,
-            );
-            const graphWidth =
-              Math.max(1, maxTracks) * GRAPH_CELL_WIDTH + SVG_PADDING * 2;
-            const isSelected = selectedHash === node.entry.hash;
+          {rowsToRender.map((row) => {
+            const entry = row.entry;
+            const node = row.node;
+            const isSelected = selectedHash === entry.hash;
 
             return (
               <HistoryContextMenu
-                key={node.entry.hash}
-                entry={node.entry}
-                isHead={isHeadCommit(node.entry)}
+                key={entry.hash}
+                entry={entry}
+                isHead={isHeadCommit(entry)}
                 onCherryPick={onCherryPick}
                 onRevertCommit={onRevertCommit}
                 onUndoLastCommit={onUndoLastCommit}
                 onEditCommitMessage={onEditCommitMessage}
                 onReset={onReset}
                 onDropCommit={onDropCommit}
-                onOpen={() => onSelectCommit?.(node.entry)}
+                onOpen={() => onSelectCommit?.(entry)}
               >
                 <tr
                   tabIndex={0}
                   aria-haspopup="menu"
-                  onClick={() => onSelectCommit?.(node.entry)}
+                  onClick={() => onSelectCommit?.(entry)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      onSelectCommit?.(node.entry);
+                      onSelectCommit?.(entry);
                     }
                   }}
                   className={cn(
@@ -321,52 +339,82 @@ export function GitLogTree({
                         : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]",
                     )}
                   >
-                    <div
-                      className="relative shrink-0 flex items-center justify-center"
-                      style={{ width: graphWidth, height: ROW_HEIGHT }}
-                    >
-                      <svg
-                        className="absolute inset-0"
-                        width={graphWidth}
-                        height={ROW_HEIGHT}
+                    {node ? (
+                      <div
+                        className="relative shrink-0 flex items-center justify-center"
+                        style={{ width: row.graphWidth, height: ROW_HEIGHT }}
                       >
-                        {/* Draw lines from previous row */}
-                        {node.prevTracks.map((hash: string, tIdx: number) => {
-                          if (!hash) return null;
-                          const color = COLORS[tIdx % COLORS.length];
-                          const startX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
-                          let endX = startX;
-                          // If this track flows into the current node's track
-                          if (hash === node.entry.hash) {
-                            endX =
-                              SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
-                          }
+                        <svg
+                          className="absolute inset-0"
+                          width={row.graphWidth}
+                          height={ROW_HEIGHT}
+                        >
+                          {/* Draw lines from previous row */}
+                          {node.prevTracks.map((hash: string, tIdx: number) => {
+                            if (!hash) return null;
+                            const color = COLORS[tIdx % COLORS.length];
+                            const startX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
+                            let endX = startX;
+                            // If this track flows into the current node's track
+                            if (hash === node.entry.hash) {
+                              endX =
+                                SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
+                            }
 
-                          return (
-                            <path
-                              key={`prev-${tIdx}`}
-                              d={`M ${startX} 0 C ${startX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT}`}
-                              fill="none"
-                              stroke={color}
-                              strokeWidth={2}
-                            />
-                          );
-                        })}
-                        {/* Draw commit dot */}
-                        <circle
-                          cx={SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH}
-                          cy={ROW_HEIGHT / 2}
-                          r={RADIUS}
-                          fill={COLORS[node.trackIndex % COLORS.length]}
-                          stroke="var(--color-surface)"
-                          strokeWidth={1}
-                          className="z-10 relative"
-                        />
-                      </svg>
-                    </div>
+                            return (
+                              <path
+                                key={`prev-${tIdx}`}
+                                d={`M ${startX} 0 C ${startX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT / 2}, ${endX} ${ROW_HEIGHT}`}
+                                fill="none"
+                                stroke={color}
+                                strokeWidth={2}
+                              />
+                            );
+                          })}
+
+                          {/* Draw lines to next row */}
+                          {node.nextTracks.map((hash: string, tIdx: number) => {
+                            if (!hash) return null;
+                            const color = COLORS[tIdx % COLORS.length];
+                            let startX =
+                              SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
+                            const endX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
+
+                            // If this is a continuing pass-through line from above
+                            if (
+                              node.prevTracks[tIdx] === hash &&
+                              hash !== node.entry.hash
+                            ) {
+                              startX = endX;
+                            }
+
+                            return (
+                              <path
+                                key={`next-${tIdx}`}
+                                d={`M ${startX} ${ROW_HEIGHT / 2} C ${startX} ${ROW_HEIGHT * 0.75}, ${endX} ${ROW_HEIGHT * 0.75}, ${endX} ${ROW_HEIGHT}`}
+                                fill="none"
+                                stroke={color}
+                                strokeWidth={2}
+                              />
+                            );
+                          })}
+
+                          {/* Draw commit dot */}
+                          <circle
+                            cx={SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH}
+                            cy={ROW_HEIGHT / 2}
+                            r={RADIUS}
+                            fill={COLORS[node.trackIndex % COLORS.length]}
+                            stroke="var(--color-surface)"
+                            strokeWidth={1}
+                            className="z-10 relative"
+                          />
+                        </svg>
+                      </div>
+                    ) : null}
 
                     <div className="flex-1 min-w-0 pr-4 flex items-center gap-2">
-                      {node.entry.refs.map((ref: string) => {
+                      {entry.refs.map((ref: string) => {
                         const isHead = ref.includes("HEAD");
                         const isRemote = ref.startsWith("origin/");
                         return (
@@ -386,21 +434,21 @@ export function GitLogTree({
                         );
                       })}
                       <span className="truncate text-[var(--color-text)] font-medium">
-                        {node.entry.message}
+                        {entry.message}
                       </span>
                     </div>
                   </td>
                   <td
                     className="px-4 py-1 text-[var(--color-text-muted)] truncate max-w-[120px]"
-                    title={node.entry.authorEmail}
+                    title={entry.authorEmail}
                   >
-                    {node.entry.authorName}
+                    {entry.authorName}
                   </td>
                   <td className="px-4 py-1 text-[var(--color-text-muted)]">
-                    {formatRelativeDate(node.entry.timestamp)}
+                    {formatRelativeDate(entry.timestamp)}
                   </td>
                   <td className="px-4 py-1 font-mono text-[var(--color-text-muted)] opacity-60">
-                    {node.entry.hash.substring(0, 7)}
+                    {entry.hash.substring(0, 7)}
                   </td>
                 </tr>
               </HistoryContextMenu>

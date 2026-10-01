@@ -194,9 +194,10 @@ currently disables filtering. The [Phase 01 risk note](../plans/261001-2003-git-
 
 The server and Phase 02 client contracts are documented in the [Git history
 search architecture guide](./architecture/git-history-search.md). Phase 03 adds
-the persisted selection store described below. Search controls, the shared
-history controller, cross-surface integration, and end-to-end qualification
-remain in Phases 04–07.
+the persisted selection store described below. Phase 04 adds the shared
+`useGitHistoryView` controller and `GitHistoryToolbar`, canonical-ref,
+no-checkout `GitBranchControl` view mode, and graph/list `GitLogTree`.
+Workspace/Git-page integration remains in Phases 05–06; qualification is Phase 07.
 
 ### Persisted Git history selection (Phase 03; 2026-10-01)
 
@@ -236,6 +237,7 @@ failure and reuses the approved snapshot.
 | CRUD/upload | `hooks/use-fs-ops.ts`, `hooks/use-fs-upload.ts`, `api/ws-transport.ts` |
 | Search and replace | `hooks/use-file-search.ts`, `hooks/use-search-panel-replace.ts`, `lib/search-replace-next.ts` |
 | Git history search and selection persistence | `server/src/api/git.rs`, `server/src/git/repository.rs`, `packages/ui/src/api/client.ts`, `api/ws-transport.ts`, `api/queries.ts`, `packages/ui/src/stores/git-history.ts`, `packages/ui/src/lib/git-branch-ref.ts` | Full-message filtering and owner/generation-qualified query identity share the existing REST route. Versioned UI preferences keep Git-page selection, target roots, and root-scoped branch intent isolated by profile; canonical refs distinguish local from remote names. |
+| Shared history view (Phase 04) | `packages/ui/src/hooks/use-git-history-view.ts`, `packages/ui/src/components/molecules/GitHistoryToolbar.tsx`, `packages/ui/src/components/organisms/GitBranchControl.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx` | Shared history scope/search/paging/refresh, canonical-ref view mode, and graph/list presentation. |
 | Git edit and leased publication | `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
 | Focused regressions | `packages/ui/src/stores/git-history.test.ts`, `server/src/git/tests.rs`, `server/src/api/tests.rs`, `packages/ui/src/api/ws-transport.test.ts`, `api/queries.test.ts`, `hooks/use-leased-git-push.test.tsx`, Git panel/dialog tests |
 
