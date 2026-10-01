@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Git history search and selection persistence
 
-Implementation in progress. Phases 01–03 are complete; Phases 04–07 remain pending.
+Implementation remains in progress. Phases 01–04 are complete (4/7; 57% by phase count; 15/26h, 58% of estimated phase effort). Phase 05 is next; Phases 06–07 remain pending.
 
 ## Deliverables
 
@@ -34,8 +34,8 @@ Implementation in progress. Phases 01–03 are complete; Phases 04–07 remain p
 | 01 | [Server message filtering](./phase-01-server-message-search.md) | DONE / 100% (2026-10-01 21:12:48 +07:00) | 4h | Contract |
 | 02 | [Transport and owned queries](./phase-02-transport-query-contract.md) | DONE / 100% (2026-10-01 21:55:00 +07:00) | 3h | 01 contract |
 | 03 | [Persisted selection store](./phase-03-persisted-history-selections.md) | DONE / 100% (2026-10-01 22:59:53 +07:00) | 4h | Contract |
-| 04 | [Shared history controller and controls](./phase-04-shared-history-view.md) | Pending / 0% | 4h | 02, 03 |
-| 05 | [Workspace integration](./phase-05-workspace-git-integration.md) | Pending / 0% | 3h | 04 |
+| 04 | [Shared history controller and controls](./phase-04-shared-history-view.md) | DONE / 100% (2026-10-02 00:16 +07:00) | 4h | 02, 03 |
+| 05 | [Workspace integration](./phase-05-workspace-git-integration.md) | NEXT: Pending / 0% | 3h | 04 |
 | 06 | [Git page integration](./phase-06-git-page-integration.md) | Pending / 0% | 4h | 04 |
 | 07 | [End-to-end qualification and docs](./phase-07-qualification-documentation.md) | Pending / 0% | 4h | 01–06 |
 
@@ -50,7 +50,7 @@ Implementation in progress. Phases 01–03 are complete; Phases 04–07 remain p
 ## Evidence
 
 - [Enhanced hard-planning brief](./research/planning-brief.md); [history research](./research/history-search-research.md); [persistence research](./research/selection-persistence-research.md).
-- [Architecture overview](../../docs/system-architecture.md#git-history-search-and-selection-persistence-2026-10-01-phases-01-03-implemented): Phase 01 server implementation, Phase 02 client transport/owned-query contract, and Phase 03 persisted selection store are complete; shared history controller, surface integration, and end-to-end qualification remain pending.
+- [Architecture overview](../../docs/system-architecture.md#git-history-search-and-selection-persistence-2026-10-01-phases-01-03-implemented): records the Phase 01–03 implementation baseline. Phase 04 is complete; Workspace and Git-page integration (05–06) and end-to-end qualification (07) remain. See the [Phase 04 plan](./phase-04-shared-history-view.md) and [Phase 04 closeout](../reports/project-manager-261002-0016-phase-04-shared-history-view.md).
 - Current-tree Phase 03 focused store tests passed 26/26 after follow-up recovery/selection/canonical-ref fixes. The earlier UI package suite passed 2,102/2,102 before those fixes and was not rerun afterward; the initial review scored 8.5/10 PASS with recommendations, and no post-fix code review was recorded. See the [test report](../reports/tester-261001-2241-phase-03-persisted-history-selections.md) and [code review](../reports/code-review-261001-2245-phase-03-persisted-history-selections.md).
 - Read-only installed-Git filter smoke succeeded; no feature tests/builds/browser scenarios run during planning.
 - Workflow/skills loaded directly from global OMP files. Slash-dispatch tool unavailable; applied `/cmd-plan__hard` procedure directly. Activation helper ran, but missing `EVCRATE_SESSION_ID` prevents active-plan session persistence.

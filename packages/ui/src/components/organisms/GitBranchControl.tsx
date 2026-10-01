@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/Select.js";
 import { cn } from "@/lib/utils.js";
+import { toBranchCanonicalRef } from "@/lib/git-branch-ref.js";
 import { GitBranchContextMenu } from "@/components/organisms/GitBranchContextMenu.js";
 import {
   GitBranchCreateDialog,
@@ -38,8 +39,11 @@ interface GitBranchControlProps {
   className?: string;
   showFeedback?: boolean;
   mode?: "checkout" | "view";
+  selectedBranchRef?: string;
+  onSelectedBranchRefChange?: (ref: string) => void;
   selectedBranch?: string;
   onSelectedBranchChange?: (branch: string) => void;
+  onSelectedBranchDeleted?: () => void;
 }
 
 interface BranchContextMenuState {
@@ -88,8 +92,11 @@ export function GitBranchControl({
   className,
   showFeedback = true,
   mode = "checkout",
+  selectedBranchRef,
+  onSelectedBranchRefChange,
   selectedBranch,
   onSelectedBranchChange,
+  onSelectedBranchDeleted,
 }: GitBranchControlProps) {
   const targetRef = normalizeProjectTarget(target ?? project);
   const compactTextClass = "text-[length:calc(var(--app-font-size)*0.75)]";
@@ -116,11 +123,29 @@ export function GitBranchControl({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const activeBranchObj =
+    branches.find((branch) => branch.isCurrent && !branch.isRemote) ??
+    branches.find((branch) => branch.isCurrent);
   const currentBranch =
-    branches.find((branch) => branch.isCurrent)?.name ??
+    activeBranchObj?.name ??
     (root && root !== "." ? "" : (projectStatus?.branch ?? ""));
+  const currentBranchCanonicalRef = activeBranchObj
+    ? toBranchCanonicalRef(activeBranchObj)
+    : currentBranch
+      ? toBranchCanonicalRef({ name: currentBranch, isRemote: false })
+      : "";
   const branchValue =
-    mode === "view" ? selectedBranch || currentBranch : currentBranch;
+    mode === "view"
+      ? selectedBranchRef ||
+        (selectedBranch
+          ? (() => {
+              const matching = branches.find((b) => b.name === selectedBranch);
+              return matching
+                ? toBranchCanonicalRef(matching)
+                : toBranchCanonicalRef({ name: selectedBranch, isRemote: false });
+            })()
+          : currentBranchCanonicalRef)
+      : currentBranch;
   const defaultStartPoint = useMemo(() => {
     const localBranches = branches.filter((branch) => !branch.isRemote);
     return currentBranch || localBranches[0]?.name || branches[0]?.name || "";
@@ -225,12 +250,14 @@ export function GitBranchControl({
       const result = await deleteBranch.mutateAsync({ name: deleteTarget });
       setDeleteTarget(null);
       if (result.ok) {
-        if (
-          mode === "view" &&
-          selectedBranch === deleteTarget &&
-          currentBranch
-        ) {
-          onSelectedBranchChange?.(currentBranch);
+        if (mode === "view") {
+          const deletedCanonicalRef = `refs/heads/${deleteTarget}`;
+          const isSelectedDeleted =
+            (selectedBranchRef && selectedBranchRef === deletedCanonicalRef) ||
+            (selectedBranch && selectedBranch === deleteTarget);
+          if (isSelectedDeleted) {
+            onSelectedBranchDeleted?.();
+          }
         }
         setMessage(result.message ?? `Deleted branch ${deleteTarget}`);
         return;
@@ -282,11 +309,19 @@ export function GitBranchControl({
           disabled={isMutating}
           onOpenChange={setSelectOpen}
           onValueChange={(value) => {
-            if (!value || value === branchValue) return;
+            if (!value) return;
             if (mode === "view") {
-              onSelectedBranchChange?.(value);
+              onSelectedBranchRefChange?.(value);
+              const matching = branches.find(
+                (b) => toBranchCanonicalRef(b) === value,
+              );
+              const branchName = matching
+                ? matching.name
+                : value.replace(/^refs\/(heads|remotes)\//, "");
+              onSelectedBranchChange?.(branchName);
               return;
             }
+            if (value === branchValue) return;
             void runCheckout(value);
           }}
         >
@@ -308,10 +343,21 @@ export function GitBranchControl({
                 <SelectLabel className="text-[10px] uppercase tracking-wider opacity-50 px-2 py-1">
                   Local Branches
                 </SelectLabel>
-                {localBranches.map((branch) => (
-                  <SelectItem
-                    key={branch.name}
-                    value={branch.name}
+                {localBranches.map((branch) => {
+                  const itemValue =
+                    mode === "view"
+                      ? toBranchCanonicalRef(branch)
+                      : branch.name;
+                  return (
+                    <SelectItem
+                      key={itemValue}
+                      value={itemValue}
+                      onClick={() => {
+                        if (mode === "view") {
+                          onSelectedBranchRefChange?.(itemValue);
+                          onSelectedBranchChange?.(branch.name);
+                        }
+                      }}
                     onPointerDown={(event) => {
                       if (event.button === 2) event.preventDefault();
                     }}
@@ -353,7 +399,8 @@ export function GitBranchControl({
                   >
                     {branch.name}
                   </SelectItem>
-                ))}
+                  );
+                })}
               </SelectGroup>
             )}
             {remoteBranches.length > 0 && (
@@ -361,16 +408,31 @@ export function GitBranchControl({
                 <SelectLabel className="text-[10px] uppercase tracking-wider opacity-50 px-2 py-1">
                   Remote Branches
                 </SelectLabel>
-                {remoteBranches.map((branch) => (
-                  <SelectItem key={branch.name} value={branch.name}>
-                    <span className="flex items-center gap-2">
-                      <span className="truncate">{branch.name}</span>
-                      <span className="text-[9px] opacity-40 px-1 border border-current rounded-[2px]">
-                        REMOTE
+                {remoteBranches.map((branch) => {
+                  const itemValue =
+                    mode === "view"
+                      ? toBranchCanonicalRef(branch)
+                      : branch.name;
+                  return (
+                    <SelectItem
+                      key={itemValue}
+                      value={itemValue}
+                      onClick={() => {
+                        if (mode === "view") {
+                          onSelectedBranchRefChange?.(itemValue);
+                          onSelectedBranchChange?.(branch.name);
+                        }
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="truncate">{branch.name}</span>
+                        <span className="text-[9px] opacity-40 px-1 border border-current rounded-[2px]">
+                          REMOTE
+                        </span>
                       </span>
-                    </span>
-                  </SelectItem>
-                ))}
+                    </SelectItem>
+                  );
+                })}
               </SelectGroup>
             )}
           </SelectContent>
