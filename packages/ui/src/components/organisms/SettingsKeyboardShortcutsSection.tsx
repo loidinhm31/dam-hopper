@@ -1,8 +1,9 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
+  DEFAULT_COGNITO_MODE_SHORTCUT,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
@@ -18,6 +19,7 @@ import {
   displayShortcut,
   shortcutFromKeyboardEvent,
   validateShortcut,
+  validateCognitoModeShortcut,
   type ShortcutKeyEvent,
 } from "@/lib/shortcuts.js";
 import { cn } from "@/lib/utils.js";
@@ -27,6 +29,7 @@ interface ShortcutCaptureProps {
   defaultValue: string;
   label?: string;
   onChange: (value: string) => void;
+  validate?: (value: string) => string | null;
 }
 
 function ShortcutCapture({
@@ -34,17 +37,37 @@ function ShortcutCapture({
   defaultValue,
   label,
   onChange,
+  validate = validateShortcut,
 }: ShortcutCaptureProps) {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const detectorRef = useRef(new DoubleShiftDetector());
 
+  useEffect(() => {
+    return () => {
+      detectorRef.current.reset();
+    };
+  }, []);
+
+  function cancelCapture() {
+    setCapturing(false);
+    setError(null);
+    detectorRef.current.reset();
+  }
+
+  function handleBlur() {
+    if (capturing) {
+      cancelCapture();
+    }
+  }
+
   function commit(next: string) {
-    const validation = validateShortcut(next);
+    const validation = validate(next);
     setError(validation);
+    detectorRef.current.reset();
+    setCapturing(false);
     if (!validation) {
       onChange(next);
-      setCapturing(false);
     }
   }
 
@@ -54,9 +77,17 @@ function ShortcutCapture({
     event.stopPropagation();
 
     if (event.key === "Escape") {
-      setCapturing(false);
-      setError(null);
-      detectorRef.current.reset();
+      cancelCapture();
+      return;
+    }
+
+    if (
+      event.repeat ||
+      event.nativeEvent.isComposing ||
+      event.keyCode === 229 ||
+      event.which === 229 ||
+      event.key === "Process"
+    ) {
       return;
     }
 
@@ -74,12 +105,14 @@ function ShortcutCapture({
       <div className="flex items-center gap-2">
         <button
           type="button"
+          data-shortcut-capture={capturing ? "true" : undefined}
           onClick={() => {
             setCapturing(true);
             setError(null);
             detectorRef.current.reset();
           }}
           onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
           aria-label={
             label ? `Set shortcut for ${label}` : "Set keyboard shortcut"
           }
@@ -129,6 +162,7 @@ export function SettingsKeyboardShortcutsSection() {
     portsPanelShortcut,
     projectPanelShortcut,
     fleetTerminalShortcut,
+    cognitoModeShortcut,
     saveDebounced,
   } = useSettingsStore();
 
@@ -290,6 +324,23 @@ export function SettingsKeyboardShortcutsSection() {
           defaultValue={DEFAULT_FLEET_TERMINAL_SHORTCUT}
           onChange={(shortcut) =>
             saveDebounced({ fleetTerminalShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Cognito Mode"
+        description="Toggle privacy screen mask on or off. Requires the same keyboard shortcut to dismiss."
+      >
+        <ShortcutCapture
+          value={cognitoModeShortcut}
+          defaultValue={DEFAULT_COGNITO_MODE_SHORTCUT}
+          label="Cognito Mode"
+          validate={validateCognitoModeShortcut}
+          onChange={(shortcut) =>
+            saveDebounced({ cognitoModeShortcut: shortcut })
           }
         />
       </SettingRow>

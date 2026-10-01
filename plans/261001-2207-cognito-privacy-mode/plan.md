@@ -11,7 +11,7 @@ created: 2026-10-01
 
 # Cognito Mode — privacy / boss key screen mask
 
-Implementation in progress: 3/5 phase scopes have implementation/finalization settled (60%). Durable completion remains in progress at 2/5 phases DONE (40%; 11/28h planned effort credited to DONE phases, 39%). Phases 01–02 are DONE; Phase 03 implementation/finalization are settled, but durable completion is pending Phase 05 integrated qualification (not DONE). Phases 04–05 remain open.
+Implementation and finalization are settled for 4/5 phase scopes (80%). Durable completion remains in progress at 2/5 phases DONE (40%; 11/28h planned effort credited to DONE phases, 39%). Phases 01–02 are DONE; Phases 03–04 implementation/finalization are settled, with durable completion pending Phase 05 integrated qualification (not DONE). Phase 05 remains open.
 
 ## Deliverables
 
@@ -38,7 +38,7 @@ Implementation in progress: 3/5 phase scopes have implementation/finalization se
 | 01 | [Config and schema](./phase-01-config-and-schema.md) | DONE / 100% (2026-10-01) | 4h | Preflight |
 | 02 | [State and overlay](./phase-02-cognito-state-and-overlay.md) | DONE / 100% (2026-10-02) | 7h | 01 contract |
 | 03 | [Global shortcuts and terminal integration](./phase-03-global-shortcuts-and-terminal-integration.md) | Implementation/finalization settled; durable completion pending Phase 05 (not DONE) | 6h | 01, 02 |
-| 04 | [Settings UI integration](./phase-04-settings-ui-integration.md) | Pending / 0% | 4h | 01, 03 capture contract |
+| 04 | [Settings UI integration](./phase-04-settings-ui-integration.md) | Implementation/finalization settled; durable completion pending Phase 05 qualification (not DONE) | 4h | 01, 03 capture contract |
 | 05 | [Qualification and smoke](./phase-05-qualification-and-smoke.md) | Pending / 0% | 7h | 01–04 |
 
 ## Execution contract
@@ -64,11 +64,13 @@ Implementation in progress: 3/5 phase scopes have implementation/finalization se
 
 - Phase 03 implementation and finalization are settled (2026-10-02): all five implementation todos and seven side-effect checks are checked off. Scoped UI validation passed 55/55 tests across four files; the full UI package report records 2,169/2,169 tests across 291 files, and targeted UI typecheck passed. Code review approved 9.5/10 with no critical issues or warnings; one medium defensive-default recommendation remains non-blocking. See [Phase 03 plan](./phase-03-global-shortcuts-and-terminal-integration.md), [tester report](../reports/tester-261002-0103-phase-03-global-shortcuts-terminal-integration.md), and [code review](../reports/code-review-261002-0105-phase-03-global-shortcuts-terminal-integration.md). Durable completion is held for Phase 05 integrated qualification; this does not mark Phase 03 DONE.
 
+- Phase 04 implementation and finalization are settled (2026-10-02; not DONE): all five implementation todos and seven side-effect checks are checked. Scoped Settings tests passed 16/16; the integrated Cognito suite passed 79/79 across seven files (includes the scoped Settings tests; not additive), and the UI package TypeScript build passed. Code review approved 10/10 with no critical, high, or medium findings. Durable completion awaits Phase 05 qualification. See [Phase 04 plan](./phase-04-settings-ui-integration.md), [tester report](../reports/tester-261002-0136-phase-04-settings-ui-integration.md), and [code review](../reports/code-reviewer-261002-0136-phase-04-settings-ui-integration.md).
+
 
 ## Validation summary
 
 - Confirmed requirements incorporated: default/reset shortcut, two styles, immediate same-key toggle, input blocking, notifications/audio continuity, TOML preferences and reload-safe ephemeral state.
-- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phase 01 and Phase 02 are DONE; Phase 03 implementation/finalization are settled but durable completion awaits Phase 05 integrated qualification. Phases 04 and 05 remain open.
+- Planning validation passed: all six files, required frontmatter/sections, local Markdown links, overview length and 28h effort sum. Phases 01–02 are DONE; Phases 03–04 implementation/finalization are settled, while durable completion awaits Phase 05 integrated qualification. Phase 05 remains open.
 - Qualification commands, scenario matrix, platform limits and evidence requirements are specified in [Phase 05](./phase-05-qualification-and-smoke.md).
 
 ## Unresolved questions

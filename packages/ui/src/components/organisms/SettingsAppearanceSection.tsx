@@ -2,6 +2,13 @@ import { useState } from "react";
 import { NumberStepper } from "@/components/atoms/NumberStepper.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
@@ -9,7 +16,7 @@ import {
   isHistoryEnabled,
   setHistoryEnabled,
 } from "@/lib/command-history.js";
-
+import { isCognitoModeStyle } from "@/lib/ui-config.js";
 export function SettingsAppearanceSection() {
   const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
   const { isAndroidChromeNativeInputSuppressed } =
@@ -29,6 +36,7 @@ export function SettingsAppearanceSection() {
     mobileCustomKeyboardFontSize,
     mobileCustomKeyboardPadding,
     mobileCustomKeyboardRowGap,
+    cognitoModeStyle,
     saveDebounced,
   } = useSettingsStore();
 
@@ -266,6 +274,30 @@ export function SettingsAppearanceSection() {
             saveDebounced({ mobileCustomKeyboardRowGap: value })
           }
         />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Cognito Mode style"
+        description="Choose the visual privacy mask appearance. Background work, notifications, and audio continue while masked."
+      >
+        <Select
+          value={cognitoModeStyle}
+          onValueChange={(value) => {
+            if (isCognitoModeStyle(value)) {
+              saveDebounced({ cognitoModeStyle: value });
+            }
+          }}
+        >
+          <SelectTrigger aria-label="Cognito Mode style" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="heavy-blur">Heavy Blur</SelectItem>
+            <SelectItem value="black-screen">Black Screen</SelectItem>
+          </SelectContent>
+        </Select>
       </SettingRow>
     </section>
   );
