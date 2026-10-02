@@ -422,6 +422,160 @@ UserPromptSubmit = [{ command = "/usr/bin/user-prompt-tracer" }]
     assert!(!cleaned_toml.contains("dam-hopper-agent-status"));
 }
 
+
+#[test]
+fn test_codex_legacy_flat_hooks_report_outdated_and_migrate() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Install a current managed launcher/manifest first.
+    let install_report = install_codex(&agent_dir).expect("initial install");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+
+    // Rewrite only the managed registrations into the legacy flat shape that
+    // pre-schema-fix DamHopper emitted. Preserve an unrelated user hook.
+    let hooks_json_path = agent_dir.join("hooks.json");
+    let launcher = install_report.launcher_path.to_string_lossy().into_owned();
+    let mut hooks = serde_json::Map::new();
+    for event in CODEX_MANAGED_EVENTS {
+        hooks.insert(
+            (*event).to_string(),
+            serde_json::json!([{ "command": launcher }]),
+        );
+    }
+    hooks.insert(
+        "CustomUserEvent".to_string(),
+        serde_json::json!([
+            {
+                "hooks": [
+                    { "type": "command", "command": "/usr/local/bin/custom-user-hook" }
+                ]
+            }
+        ]),
+    );
+    let legacy = serde_json::json!({ "hooks": hooks });
+    std::fs::write(
+        &hooks_json_path,
+        serde_json::to_string_pretty(&legacy).unwrap(),
+    )
+    .expect("write legacy hooks.json");
+
+    // Legacy flat entries must no longer be considered current, otherwise
+    // install_codex() would return early and never reach the migration writer.
+    let legacy_status = check_codex_status(&agent_dir).expect("legacy status");
+    assert_eq!(legacy_status.status, ManagedInstallationStatus::Outdated);
+    assert_eq!(legacy_status.readiness, ManagedReadinessStatus::RestartRequired);
+
+    let migrated = install_codex(&agent_dir).expect("migrate legacy hooks");
+    assert_eq!(migrated.status, ManagedInstallationStatus::Current);
+
+    let migrated_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_json_path).unwrap()).unwrap();
+    let hooks = migrated_json["hooks"].as_object().unwrap();
+
+    for event in CODEX_MANAGED_EVENTS {
+        let groups = hooks[*event].as_array().unwrap();
+        assert!(
+            groups.iter().any(|group| {
+                group["hooks"].as_array().map(|handlers| {
+                    handlers.iter().any(|handler| {
+                        handler["type"] == "command"
+                            && handler["command"] == migrated.launcher_path.to_string_lossy().as_ref()
+                    })
+                }).unwrap_or(false)
+            }),
+            "managed event {event} should be rewritten as a valid MatcherGroup"
+        );
+        assert!(
+            groups.iter().all(|group| group.get("command").is_none()),
+            "managed event {event} must not retain legacy flat entries"
+        );
+    }
+
+    assert_eq!(
+        hooks["CustomUserEvent"][0]["hooks"][0]["command"],
+        "/usr/local/bin/custom-user-hook"
+    );
+}
+
+#[test]
+fn test_codex_legacy_flat_toml_hooks_report_outdated_and_migrate() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+    let config_toml_path = agent_dir.join("config.toml");
+
+    // Seed an inline hooks table so Codex installation targets config.toml.
+    std::fs::write(
+        &config_toml_path,
+        "[features]\nhooks = true\n\n[hooks]\nUserPromptSubmit = [{ hooks = [{ type = \"command\", command = \"/usr/bin/user-hook\" }] }]\n",
+    )
+    .expect("seed config.toml");
+
+    let install_report = install_codex(&agent_dir).expect("initial install");
+    assert_eq!(install_report.status, ManagedInstallationStatus::Current);
+
+    // Replace managed groups with the legacy flat inline-table form.
+    let launcher = install_report.launcher_path.to_string_lossy();
+    let mut content = String::from("[features]\nhooks = true\n\n[hooks]\n");
+    content.push_str(
+        "UserPromptSubmit = [{ hooks = [{ type = \"command\", command = \"/usr/bin/user-hook\" }] }",
+    );
+    content.push_str(&format!(", {{ command = {:?} }}]\n", launcher.as_ref()));
+    for event in CODEX_MANAGED_EVENTS {
+        if *event == "UserPromptSubmit" {
+            continue;
+        }
+        content.push_str(&format!("{event} = [{{ command = {:?} }}]\n", launcher.as_ref()));
+    }
+    std::fs::write(&config_toml_path, content).expect("write legacy config.toml");
+
+    let legacy_status = check_codex_status(&agent_dir).expect("legacy status");
+    assert_eq!(legacy_status.status, ManagedInstallationStatus::Outdated);
+    assert_eq!(legacy_status.readiness, ManagedReadinessStatus::RestartRequired);
+
+    let migrated = install_codex(&agent_dir).expect("migrate legacy toml hooks");
+    assert_eq!(migrated.status, ManagedInstallationStatus::Current);
+
+    let migrated_toml = std::fs::read_to_string(&config_toml_path).expect("read migrated toml");
+    let parsed: toml::Value = migrated_toml.parse().expect("parse migrated toml");
+    let hooks = parsed["hooks"].as_table().unwrap();
+
+    for event in CODEX_MANAGED_EVENTS {
+        let groups = hooks[*event].as_array().unwrap();
+        assert!(
+            groups.iter().any(|group| {
+                group.get("hooks").and_then(|v| v.as_array()).map(|handlers| {
+                    handlers.iter().any(|handler| {
+                        handler.get("type").and_then(|v| v.as_str()) == Some("command")
+                            && handler.get("command").and_then(|v| v.as_str())
+                                == Some(migrated.launcher_path.to_string_lossy().as_ref())
+                    })
+                }).unwrap_or(false)
+            }),
+            "managed event {event} should be rewritten as a valid TOML MatcherGroup"
+        );
+        assert!(
+            groups.iter().all(|group| group.get("command").is_none()),
+            "managed event {event} must not retain legacy flat TOML entries"
+        );
+    }
+
+    assert!(
+        hooks["UserPromptSubmit"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| {
+                group.get("hooks").and_then(|v| v.as_array()).map(|handlers| {
+                    handlers.iter().any(|handler| {
+                        handler.get("command").and_then(|v| v.as_str()) == Some("/usr/bin/user-hook")
+                    })
+                }).unwrap_or(false)
+            }),
+        "unrelated user hook must be preserved"
+    );
+}
+
 #[test]
 fn test_codex_refuse_overwrite_or_delete_modified() {
     let tmp = tempdir().expect("tempdir");
