@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "advisor": {
+    "backend": "claude",
+    "model": "claude-3-5-sonnet-20241022",
+    "effort": "high",
+    "timeout_ms": 120000
+  }
+}

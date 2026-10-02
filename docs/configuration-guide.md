@@ -227,7 +227,7 @@ the corresponding platform-specific symlink API.
 
 ### Feature Flags
 
-All features are enabled by default.
+Feature defaults are feature-specific. The native Advisor is off by default; see the [Advisor configuration](./configuration/advisor.md).
 
 ## Host Resource Monitoring (Read-only)
 

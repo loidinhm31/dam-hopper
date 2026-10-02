@@ -1033,6 +1033,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             workflow_deleted_note_retention_days: 7,
             workflow_stale_after_hours: 24,
             idle_suspend: Default::default(),
+            advisor: Default::default(),
         },
     };
 
@@ -2282,4 +2283,61 @@ fn validate_host_resource_pinned_mount_checks_utf8_byte_bounds() {
         ..UiConfig::default()
     };
     assert!(oversized.validate_host_resource_pinned_mount().is_err());
+}
+
+#[test]
+fn advisor_config_default_and_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    // Default toml without [server.advisor]
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "advisor-test"
+"#,
+    )
+    .unwrap();
+
+    let mut cfg = read_config(&config_path).unwrap();
+    assert!(!cfg.server.advisor.enabled);
+
+    // Enabling advisor and writing to disk
+    cfg.server.advisor.enabled = true;
+    write_config(&config_path, &cfg).unwrap();
+
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("[server.advisor]"));
+    assert!(written.contains("enabled = true"));
+
+    let reloaded = read_config(&config_path).unwrap();
+    assert!(reloaded.server.advisor.enabled);
+
+    // Disabling advisor and writing to disk
+    cfg.server.advisor.enabled = false;
+    write_config(&config_path, &cfg).unwrap();
+    let written_disabled = std::fs::read_to_string(&config_path).unwrap();
+    assert!(!written_disabled.contains("[server.advisor]"));
+}
+
+#[test]
+fn advisor_config_protected_replacement() {
+    let current = super::schema::DamHopperConfig {
+        workspace: super::schema::WorkspaceInfo {
+            name: "test".into(),
+            root: ".".into(),
+        },
+        agent_store: None,
+        server: super::schema::ServerConfig::default(),
+        projects: vec![],
+        features: super::schema::FeaturesConfig::default(),
+        config_path: std::path::PathBuf::from("/test/dam-hopper.toml"),
+    };
+    let mut candidate = current.clone();
+    assert!(super::replacement::validate_protected_config_replacement(&current, &candidate).is_ok());
+
+    candidate.server.advisor.enabled = true;
+    let err = super::replacement::validate_protected_config_replacement(&current, &candidate).unwrap_err();
+    assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
 }

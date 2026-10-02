@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "consultation_id": "00000000-0000-4000-8000-000000000011",
+  "task_run_id": "00000000-0000-4000-8000-000000000001",
+  "project_id": "fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998",
+  "disposition": {
+    "action": "accept",
+    "rationale": "Accepted advice and passed tests"
+  },
+  "evidence_revision": 1,
+  "actual_changed_paths": [
+    "src/index.ts"
+  ],
+  "validation": {
+    "suite": "test",
+    "command": "pnpm test",
+    "status": "passed",
+    "passed": 5,
+    "failed": 0,
+    "details": null
+  },
+  "outcome": "resolved",
+  "correction_number": 1,
+  "recorded_at": 1773800105000
+}

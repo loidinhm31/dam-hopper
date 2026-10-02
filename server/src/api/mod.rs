@@ -1,3 +1,4 @@
+pub mod advisor;
 pub mod agent_import;
 pub mod agent_status;
 pub mod agent_memory;

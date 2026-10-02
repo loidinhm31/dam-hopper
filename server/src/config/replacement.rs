@@ -17,5 +17,11 @@ pub fn validate_protected_config_replacement(
         ));
     }
 
+    if candidate.server.advisor != current.server.advisor {
+        return Err(AppError::InvalidInput(
+            "Update advisor through /api/advisor/settings".to_string(),
+        ));
+    }
+
     Ok(())
 }

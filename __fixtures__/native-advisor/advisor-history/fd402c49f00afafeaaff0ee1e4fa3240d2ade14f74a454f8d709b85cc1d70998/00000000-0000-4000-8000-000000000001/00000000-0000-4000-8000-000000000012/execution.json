@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "consultation_id": "00000000-0000-4000-8000-000000000012",
+  "task_run_id": "00000000-0000-4000-8000-000000000001",
+  "project_id": "fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998",
+  "checkpoint_digest": "08852f70e3ff0ae3bcfc3a9dd25ee7825234393b53f988c9c32fa3d1454cd601",
+  "checkpoint": {
+    "protocol": "evcrate-advisor-checkpoint",
+    "version": 2,
+    "task_run_id": "00000000-0000-4000-8000-000000000001",
+    "checkpoint_id": "chk-002",
+    "phase_id": "phase-01",
+    "task_revision": 1,
+    "evidence_revision": 1,
+    "checkpoint": "review:step-4",
+    "kind": "review",
+    "question": "Is this implementation ready for approval?",
+    "task": {
+      "goal": "Implement native advisor parity",
+      "non_goals": [
+        "Unrelated changes"
+      ],
+      "authorized_paths": [
+        "src/index.ts"
+      ],
+      "scope_rationale": "Phase 01 scope",
+      "invariants": [
+        "Preserve backwards compatibility"
+      ],
+      "success_criteria": [
+        "100% tests passing"
+      ]
+    },
+    "proposal": {
+      "next_action": "Advance to next phase",
+      "rationale": "Review completed successfully",
+      "intended_changed_paths": [
+        "src/index.ts"
+      ]
+    },
+    "evidence": {
+      "summary": "All automated tests passed",
+      "files": [
+        {
+          "path": "src/index.ts",
+          "excerpt": "export const nativeAdvisor = true;",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "validation_results": [
+        {
+          "suite": "test",
+          "command": "pnpm test",
+          "status": "passed",
+          "passed": 5,
+          "failed": 0,
+          "details": null
+        }
+      ],
+      "artifacts": []
+    },
+    "prior": {
+      "prior_consultation_id": null,
+      "prior_counsel": null,
+      "prior_disposition": null,
+      "observed_outcome": null
+    }
+  },
+  "route": {
+    "backend": "codex",
+    "model": "gpt-5.6-sol",
+    "effort": "high"
+  },
+  "receipt": null,
+  "prompt_identity": "prompt-v2",
+  "build_identity": "build-v1",
+  "attempts": [],
+  "status": "started",
+  "result": null,
+  "error": null,
+  "started_at": 1773800200000,
+  "completed_at": null
+}

@@ -458,6 +458,11 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
         }
         config.insert("idle_suspend".to_string(), Value::Table(table));
     }
+    if server.advisor != Default::default() {
+        let mut table = toml::map::Map::new();
+        table.insert("enabled".to_string(), Value::Boolean(server.advisor.enabled));
+        config.insert("advisor".to_string(), Value::Table(table));
+    }
     Value::Table(config)
 }
 
