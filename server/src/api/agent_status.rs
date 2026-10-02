@@ -73,7 +73,7 @@ pub(crate) fn resolve_effective_home() -> Option<PathBuf> {
     {
         if let Ok(host_toml_content) = std::fs::read_to_string("/etc/dam-hopper/host.toml") {
             if let Ok(table) = host_toml_content.parse::<toml::Table>() {
-                if let Some(user_val) = table.get("service_user").or_else(|| table.get("plugin_owner_user")) {
+                if let Some(user_val) = table.get("service_user") {
                     if let Some(username) = user_val.as_str() {
                         if let Some(home) = resolve_user_home_by_name(username) {
                             return Some(home);

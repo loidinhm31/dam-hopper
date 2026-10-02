@@ -722,7 +722,6 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
             if let Some(store) = state.auth_service.store() {
                 let _ = store.revoke_session(&claims.sid, now).await;
             }
-            state.plugin_service.revoke_actor(&claims.sub).await;
             state
                 .media_tickets
                 .revoke_by_actor_or_session(&claims.sub, Some(&claims.sid));

@@ -1,6 +1,5 @@
 node_modules/
 dist/
-!packages/plugin-sdk/fixtures/opaque-ui/dist/
 apps/web/public/browser-debug-extension/
 .env
 *.local

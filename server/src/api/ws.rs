@@ -153,8 +153,8 @@ pub async fn ws_handler(
             axum::Json(serde_json::json!({ "error": "Origin not allowed" })),
         ));
     }
-    let (actor, epoch_id) = if state.no_auth {
-        (crate::api::auth::AuthenticatedActor::dev_user(), 0)
+    let actor = if state.no_auth {
+        crate::api::auth::AuthenticatedActor::dev_user()
     } else {
         let Some(t) = token else {
             return axum::response::IntoResponse::into_response((
@@ -189,13 +189,7 @@ pub async fn ws_handler(
                     effective_deadline,
                     user.role,
                 );
-                let exp_secs = Some(effective_deadline.timestamp() as u64);
-                let epoch_id = state
-                    .plugin_service
-                    .auth_service()
-                    .epoch_registry()
-                    .issue_epoch(&actor.subject, exp_secs);
-                (actor, epoch_id)
+                actor
             }
             crate::auth::model::AuthDecision::MfaRequired { .. } => {
                 return axum::response::IntoResponse::into_response((
@@ -239,7 +233,7 @@ pub async fn ws_handler(
         }
     };
 
-    upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, epoch_id))
+    upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor))
 }
 
 fn websocket_origin_allowed(
@@ -272,7 +266,6 @@ async fn handle_socket(
     socket: WebSocket,
     state: AppState,
     actor: crate::api::auth::AuthenticatedActor,
-    epoch_id: u64,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -1648,17 +1641,6 @@ async fn handle_socket(
                     debug!(session_id, "auth:session_remove — key evicted");
                 }
             }
-            ClientMsg::PluginGetEpoch { req_id } => {
-                let msg = ServerMsg::PluginEpoch {
-                    req_id: Some(req_id),
-                    epoch: epoch_id,
-                    actor: actor.subject.clone(),
-                    expires_at: actor.exp.map(|e| e as u64),
-                };
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = pty_tx.send(WireMsg::Text(json)).await;
-                }
-            }
 
             // -----------------------------------------------------------
             // FS — encrypted put (Phase 04 implementation)
@@ -1949,9 +1931,6 @@ async fn handle_socket(
     agent_status_pump.abort();
     // Allow writer up to 500ms to flush pending close frames before aborting
     let _ = tokio::time::timeout(std::time::Duration::from_millis(500), writer).await;
-    if epoch_id != 0 {
-        state.plugin_service.revoke_epoch(epoch_id).await;
-    }
 }
 
 // ---------------------------------------------------------------------------

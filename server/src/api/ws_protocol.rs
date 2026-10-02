@@ -200,9 +200,6 @@ pub enum ClientMsg {
     #[serde(rename = "auth:session_remove")]
     AuthSessionRemove { session_id: String },
 
-    // Plugin — query current connection epoch
-    #[serde(rename = "plugin:get_epoch")]
-    PluginGetEpoch { req_id: u64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -526,18 +523,6 @@ pub enum ServerMsg {
         incarnation: u64,
     },
 
-    // Plugin — epoch and status events
-    #[serde(rename = "plugin:epoch")]
-    PluginEpoch {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        req_id: Option<u64>,
-        epoch: u64,
-        actor: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        expires_at: Option<u64>,
-    },
-    #[serde(rename = "plugin:revoked")]
-    PluginRevoked { context_id: String, reason: String },
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.

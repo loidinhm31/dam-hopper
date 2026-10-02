@@ -20,7 +20,6 @@ pub mod linux_release;
 pub mod http_shutdown;
 pub mod idle_suspend;
 pub mod persistence;
-pub mod plugins;
 pub mod port_forward;
 pub mod pty;
 pub mod ssh;
