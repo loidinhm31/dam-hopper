@@ -7,14 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { UiIntent } from "@/plugins/bridge-validators.js";
+export type NativeAdvisorUiIntent = "activate" | "dismiss";
 import type { AdvisorSlotDescriptor } from "@/lib/workspace-advisor-placement.js";
 
 export interface WorkspaceAdvisorPlacementContextValue {
   activeSlot: AdvisorSlotDescriptor | null;
   registerSlot: (slot: AdvisorSlotDescriptor) => () => void;
   updateSlot: (slot: Partial<AdvisorSlotDescriptor> & { id: string }) => void;
-  onUiIntent?: (intent: UiIntent) => void;
+  onUiIntent?: (intent: NativeAdvisorUiIntent | string) => void;
   onClose?: () => void;
   launcherRef: React.RefObject<HTMLElement | null>;
   setLauncherElement: (element: HTMLElement | null) => void;
@@ -25,7 +25,7 @@ const WorkspaceAdvisorPlacementContext =
 
 export interface WorkspaceAdvisorPlacementProviderProps {
   children: ReactNode;
-  onUiIntent?: (intent: UiIntent) => void;
+  onUiIntent?: (intent: NativeAdvisorUiIntent | string) => void;
   onClose?: () => void;
   launcherRef?: React.RefObject<HTMLElement | null>;
 }

@@ -180,6 +180,22 @@ vi.mock("@/components/organisms/WorkflowContextSurface.js", () => ({
 vi.mock("@/hooks/use-server-profile.js", () => ({
   useServerProfile: () => mockServerProfile,
 }));
+let mockAdvisorVisible = false;
+vi.mock("@/hooks/use-advisor.js", () => ({
+  useAdvisorVisibility: () => ({
+    isVisible: mockAdvisorVisible,
+    isConnected: mockAdvisorVisible,
+    isAdmin: mockAdvisorVisible,
+    isEnabled: mockAdvisorVisible,
+    isAvailable: mockAdvisorVisible,
+    path: mockAdvisorVisible ? "/home/test/.evcrate/advisor-history" : null,
+    sourceError: null,
+    status: undefined,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
 vi.mock("@/components/organisms/TopNav.js", () => ({
   TopNav: ({ children }: { children?: ReactNode }) => (
     <div data-testid="top-nav">{children}</div>
@@ -387,6 +403,7 @@ describe("WorkspacePage", () => {
     lastIdeShellProps = null;
     lastTerminalWorkspaceShellProps = null;
     mockServerProfile = { id: "profile-default", name: "Default Profile" };
+    mockAdvisorVisible = false;
   });
 
   afterEach(() => {
@@ -936,6 +953,30 @@ describe("WorkspacePage", () => {
       mockWorkspaceMode = "terminal";
       stubMatchMedia(false);
       expect(() => renderToStaticMarkup(<WorkspacePage />)).not.toThrow();
+    });
+  });
+
+  describe("Advisor surface gating", () => {
+    it("omits advisor from rightTools when isAdvisorVisible is false", () => {
+      mockWorkspaceMode = "ide";
+      mockAdvisorVisible = false;
+      stubMatchMedia(false);
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      const rightTools = lastIdeShellProps?.rightTools as Array<{ id: string }>;
+      expect(rightTools.some((t) => t.id === "advisor")).toBe(false);
+    });
+
+    it("includes advisor in rightTools when isAdvisorVisible is true", () => {
+      mockWorkspaceMode = "ide";
+      mockAdvisorVisible = true;
+      stubMatchMedia(false);
+
+      renderToStaticMarkup(<WorkspacePage />);
+
+      const rightTools = lastIdeShellProps?.rightTools as Array<{ id: string }>;
+      expect(rightTools.some((t) => t.id === "advisor")).toBe(true);
     });
   });
 });

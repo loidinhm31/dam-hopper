@@ -25,7 +25,7 @@ import {
   SettingsGlobalConfigPanel,
   SettingsWorkspaceConfigPanel,
 } from "@/components/pages/settings-page/SettingsConfigPanels.js";
-import { PluginManagementSection } from "@/components/pages/settings-page/PluginManagementSection.js";
+import { AdvisorSettingsSection } from "@/components/pages/settings-page/AdvisorSettingsSection.js";
 const SETTINGS_DIAGNOSTICS_SCOPE = {
   page: "settings",
   route: "/settings",
@@ -405,10 +405,10 @@ export function SettingsPage() {
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion
-          title="Plugin Platform"
-          description="Manage installed plugins, stage packages with integrity verification, and supervise lifecycle."
+          title="Native Advisor"
+          description="Configure server-side Evcrate Advisor integration and inspect history directory status."
         >
-          <PluginManagementSection profileId={settingsProfileId} />
+          <AdvisorSettingsSection profileId={settingsProfileId} />
         </SettingsSectionAccordion>
       </div>
       <ConfirmDialog

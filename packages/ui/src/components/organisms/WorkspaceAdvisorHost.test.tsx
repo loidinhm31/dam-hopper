@@ -12,21 +12,16 @@ type GlobalWithAct = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 const actGlobal: GlobalWithAct = globalThis;
 actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("@/components/PluginHost.js", () => ({
-  PluginHost: ({
-    visible = true,
+vi.mock("@/advisor/AdvisorPanel.js", () => ({
+  AdvisorPanel: ({
+    className,
   }: {
-    visible?: boolean;
-    installationId: string;
-    project?: unknown;
-    projectTarget?: unknown;
     connection?: unknown;
-    onUiIntent?: unknown;
-    titleOverride?: string;
+    projectTarget?: unknown;
     className?: string;
   }) => (
-    <div data-testid="mock-plugin-host" data-visible={String(visible)}>
-      Mock Plugin Host
+    <div data-testid="mock-advisor-panel" className={className}>
+      Mock Advisor Panel
     </div>
   ),
 }));
@@ -259,7 +254,7 @@ describe("WorkspaceAdvisorHost", () => {
 
     // Simulate focus inside host (such as inside iframe/plugin host)
     const inner = host?.querySelector<HTMLElement>(
-      '[data-testid="mock-plugin-host"]',
+      '[data-testid="mock-advisor-panel"]',
     );
     expect(inner).not.toBeNull();
     inner!.tabIndex = -1;

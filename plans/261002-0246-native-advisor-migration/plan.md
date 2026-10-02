@@ -15,7 +15,7 @@ created: 2026-10-02
 
 Native Rust/Axum Advisor APIs + reused React viewer inside Workspace. Admin-only, one per-server enable/disable toggle, default off. Discover only a real directory at server `$HOME/.evcrate/advisor-history`; no hashing UI, registration, grants, bindings or hash prerequisite. User confirmed complete Dam-Hopper plugin-platform retirement, including Linux service.
 
-Phases 01–04 implementation and finalization are settled; durable completion remains pending for all four (none is DONE). Phase 04 native UI/provider/client work and scoped tests are complete; live browser qualification is handed to Phases 05/09. Phases 05–09 remain pending.
+Phases 01–05 implementation and finalization are settled; durable completion remains pending for all five (none is DONE). Phase 04 native UI/provider/client work and scoped tests are complete; live browser qualification was handed to Phases 05/09. Phase 05 scoped implementation and automated validation are settled; the full live operator smoke and G1 browser/API parity across eight operations and four views remain pending with Phases 05/09. Phases 06–09 remain pending.
 
 ## Design and evidence
 
@@ -34,7 +34,7 @@ Phases 01–04 implementation and finalization are settled; durable completion r
 | 02 | [Port history domain, status, admin guard and native API](./phase-02-native-history-domain-and-api.md) | Implementation/finalization settled; durable completion pending (not DONE) | 12h |
 | 03 | [Port current policy and evaluation discovery/read/compare](./phase-03-policy-and-evaluation-domain.md) | Implementation/finalization settled; durable completion pending (not DONE) | 10h |
 | 04 | [Reuse Advisor UI and replace plugin provider](./phase-04-reuse-native-advisor-ui.md) | Implementation/finalization settled; durable completion pending (not DONE) | 10h |
-| 05 | [Wire per-server toggle and all Workspace surfaces](./phase-05-settings-and-workspace-cutover.md) | Pending / 0% | 6h |
+| 05 | [Wire per-server toggle and all Workspace surfaces](./phase-05-settings-and-workspace-cutover.md) | Implementation/finalization settled; durable completion pending (not DONE); live G1 qualification pending | 6h |
 | 06 | [Delete Dam-Hopper plugin runtime, SDK and bridge](./phase-06-remove-dam-hopper-plugin-platform.md) | Pending / 0% | 6h |
 | 07 | [Retire Linux runner and deliver safe manual uninstall](./phase-07-linux-deployment-and-manual-uninstall.md) | Pending / 0% | 10h |
 | 08 | [Remove Evcrate plugin integration and release assets](./phase-08-evcrate-plugin-and-release-removal.md) | Pending / 0% | 5h |
@@ -61,9 +61,11 @@ Workers skip checks/formatters mid-flight; integration/verification owner runs f
 
 ## Validation and execution status
 
-**Plan status: IN PROGRESS (0/9 phases durably complete; 0%; implementation/finalization settled through Phase 04: 4/9 phases, 44%; 36/70h, 51%).** Durable completion for Phases 01–04 remains pending (none is DONE).
+**Plan status: IN PROGRESS (0/9 phases durably complete; 0%; implementation/finalization settled through Phase 05: 5/9 phases, 56%; 42/70h, 60%).** Durable completion for Phases 01–05 remains pending (none is DONE).
+
+Phase 05 scoped validation passed 133/133 tests (98 UI unit/component, 2 Chromium browser, 33 server Advisor) plus two typecheck passes; the integrator reports all review findings fixed and verified. Advisor consultation 478675ad returned ADVICE_READY with no must-fix items; user approved. These automated results settle implementation/finalization only: live operator smoke and G1 browser/API parity across eight operations and four views remain pending with Phases 05/09.
 Phase 01 froze the contract/golden fixtures; review reports 16/16 parity checks, 9.5/10, no critical findings. Phase 02 review scored 9.6/10 with no critical/high findings; scoped validation passed 8/8 API integration, 23/23 Advisor unit, and 16/16 parity tests, with zero compile errors or Advisor warnings. Phase 03 review scored 9.7/10 with no critical findings; scoped validation passed 4/4 policy/evaluation API integration, 23/23 Advisor unit, and 8/8 history API tests. Phase 04 implementation/finalization settled; scoped validation passed 52/52, code review scored 9.5/10 and was user-approved. Live browser qualification is handed to Phases 05/09, not claimed here. See the [Phase 04 plan](./phase-04-reuse-native-advisor-ui.md) and [review](../reports/code-review-261002-1131-phase-04-reuse-native-advisor-ui.md).
-Phases 05–09 remain pending; Workspace cutover, plugin/source removal, deployment cleanup, and integrated end-to-end qualification are not claimed.
+Phases 06–09 remain pending. Phase 05's scoped implementation/finalization is settled, but live G1 qualification is not claimed; plugin/source removal, deployment cleanup, and integrated end-to-end qualification remain outstanding.
 
 Final implementation requires actual authenticated server/browser smoke, source-domain parity, real disposable systemd cleanup/install/migration/rollback, release asset checks in both repos and core Evcrate producer smoke. Default no-auth dev server is not valid Advisor admin proof.
 ## Validation Summary

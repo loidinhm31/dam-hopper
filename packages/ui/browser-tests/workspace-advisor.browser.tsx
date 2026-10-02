@@ -37,23 +37,18 @@ vi.mock("react-router-dom", () => ({
   ),
 }));
 
-// Provide a stable mocked PluginHost to isolate DOM frame placement in browser testing
-vi.mock("@/components/PluginHost.js", () => ({
-  PluginHost: ({
-    visible = true,
-    titleOverride = "EVCrate Advisor",
+// Provide a stable mocked AdvisorPanel to isolate native DOM panel placement in browser testing
+vi.mock("@/advisor/AdvisorPanel.js", () => ({
+  AdvisorPanel: ({
+    className,
   }: {
-    visible?: boolean;
-    titleOverride?: string;
+    connection?: unknown;
+    projectTarget?: unknown;
+    className?: string;
   }) => {
     return (
-      <div className="plugin-host-page h-full w-full">
-        <iframe
-          title={titleOverride}
-          className="plugin-frame h-full w-full border-0"
-          data-testid="mock-advisor-iframe"
-          data-visible={String(visible)}
-        />
+      <div className={className} data-testid="native-advisor-panel">
+        <span data-testid="native-advisor-title">EVCrate Advisor</span>
       </div>
     );
   },
@@ -216,7 +211,7 @@ function CrossModeHarness({
 }
 
 describe("G5 persistent Workspace Advisor placement in Chromium", () => {
-  it("preserves identical iframe DOM element across IDE → TERMINAL → compact → IDE switches", async () => {
+  it("preserves identical native panel DOM element across IDE → TERMINAL → compact → IDE switches", async () => {
     await act(async () => {
       root?.render(<CrossModeHarness initialMode="ide" initialAdvisorOpen={true} />);
     });
@@ -227,10 +222,14 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
     expect(host).not.toBeNull();
 
     // 1. Initial IDE mode check
-    const iframesInitial = container!.querySelectorAll("iframe");
-    expect(iframesInitial.length).toBe(1);
-    const initialIframe = iframesInitial[0]!;
-    expect(initialIframe.getAttribute("title")).toBe("EVCrate Advisor");
+    const panelsInitial = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsInitial.length).toBe(1);
+    const initialPanel = panelsInitial[0]!;
+    expect(
+      initialPanel.querySelector('[data-testid="native-advisor-title"]')?.textContent,
+    ).toBe("EVCrate Advisor");
 
     // 2. Switch to Terminal mode
     await act(async () => {
@@ -240,10 +239,12 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
       btn?.click();
     });
 
-    // Verify still exactly 1 iframe and strictly the exact same DOM node reference
-    const iframesInTerminal = container!.querySelectorAll("iframe");
-    expect(iframesInTerminal.length).toBe(1);
-    expect(iframesInTerminal[0]).toBe(initialIframe);
+    // Verify still exactly 1 panel and strictly the exact same DOM node reference
+    const panelsInTerminal = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsInTerminal.length).toBe(1);
+    expect(panelsInTerminal[0]).toBe(initialPanel);
 
     // 3. Switch to Compact mode
     await act(async () => {
@@ -253,9 +254,11 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
       btn?.click();
     });
 
-    const iframesInCompact = container!.querySelectorAll("iframe");
-    expect(iframesInCompact.length).toBe(1);
-    expect(iframesInCompact[0]).toBe(initialIframe);
+    const panelsInCompact = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsInCompact.length).toBe(1);
+    expect(panelsInCompact[0]).toBe(initialPanel);
 
     // 4. Switch back to IDE mode
     await act(async () => {
@@ -265,19 +268,23 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
       btn?.click();
     });
 
-    const iframesFinal = container!.querySelectorAll("iframe");
-    expect(iframesFinal.length).toBe(1);
-    expect(iframesFinal[0]).toBe(initialIframe);
+    const panelsFinal = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsFinal.length).toBe(1);
+    expect(panelsFinal[0]).toBe(initialPanel);
   });
 
-  it("preserves iframe DOM element and sets host inert when hidden, restoring on reopen", async () => {
+  it("preserves native panel DOM element and sets host inert when hidden, restoring on reopen", async () => {
     await act(async () => {
       root?.render(<CrossModeHarness initialMode="ide" initialAdvisorOpen={true} />);
     });
 
-    const iframes = container!.querySelectorAll("iframe");
-    expect(iframes.length).toBe(1);
-    const initialIframe = iframes[0]!;
+    const panels = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panels.length).toBe(1);
+    const initialPanel = panels[0]!;
 
     const host = container!.querySelector<HTMLDivElement>(
       '[data-testid="workspace-advisor-host"]',
@@ -292,10 +299,12 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
       toggleBtn?.click();
     });
 
-    // Frame must NOT be unmounted or recreated
-    const iframesAfterHide = container!.querySelectorAll("iframe");
-    expect(iframesAfterHide.length).toBe(1);
-    expect(iframesAfterHide[0]).toBe(initialIframe);
+    // Panel must NOT be unmounted or recreated during toggle
+    const panelsAfterHide = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsAfterHide.length).toBe(1);
+    expect(panelsAfterHide[0]).toBe(initialPanel);
 
     // Host must be inert and hidden
     expect(host?.getAttribute("data-advisor-visible")).toBe("false");
@@ -311,9 +320,11 @@ describe("G5 persistent Workspace Advisor placement in Chromium", () => {
       toggleBtn?.click();
     });
 
-    // Frame must still be identical
-    const iframesAfterReopen = container!.querySelectorAll("iframe");
-    expect(iframesAfterReopen.length).toBe(1);
-    expect(iframesAfterReopen[0]).toBe(initialIframe);
+    // Panel must still be identical
+    const panelsAfterReopen = container!.querySelectorAll(
+      '[data-testid="native-advisor-panel"]',
+    );
+    expect(panelsAfterReopen.length).toBe(1);
+    expect(panelsAfterReopen[0]).toBe(initialPanel);
   });
 });

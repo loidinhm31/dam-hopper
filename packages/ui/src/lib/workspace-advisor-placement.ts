@@ -1,5 +1,3 @@
-import type { UiIntent } from "@/plugins/bridge-validators.js";
-
 export type AdvisorSlotPlacementMode = "ide" | "terminal" | "compact";
 
 export interface AdvisorSlotDescriptor {
