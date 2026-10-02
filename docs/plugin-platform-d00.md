@@ -1,4 +1,5 @@
 # Trusted Plugin Platform — Phase D00
+> **HISTORICAL (retired 2026-10-02):** This candidate contract was superseded by the native-only cutover. The plugin platform was retired; this page is preserved as migration evidence, not as a current contract.
 
 **Status:** Candidate ready for G0 joint pin (2026-09-20). This document records
 contracts and feasibility evidence; it does not claim that the runtime loader,

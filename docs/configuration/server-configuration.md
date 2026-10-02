@@ -309,11 +309,10 @@ db.users.updateOne(
 3. WebSockets/live streams poll state every 5s with a 2s DB cap (≤7s; smoke timeout 8s); restart/disconnect instances for immediate containment.
 4. Next password login requires fresh TOTP enrollment. Do not change `passwordHash`, `isEnabled`, `role`, signing keys/settings, or install an unencrypted factor/bypass.
 
-## Plugin Management Administrator Allowlist
+## Historical: Retired Plugin Management Administrator Allowlist
 
-Plugin management uses a host-seeded administrator allowlist; it is separate
-from the project TOML and MongoDB roles. The runner checks the authenticated
-JWT subject against this list for every management RPC.
+The plugin-runner allowlist and its configuration precedence below describe the removed plugin platform; they are not current Dam-Hopper server configuration.
+Historically, the allowlist was separate from project TOML/MongoDB roles; the runner checked JWT subjects per management RPC.
 
 The runner chooses the first available source:
 

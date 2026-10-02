@@ -706,17 +706,15 @@ claim that concurrent workspaces or profiles have shipped.
 - Implementation and release require the plan's multi-server isolation,
   migration/failure, live browser, and supported-native verification gates.
 
-## Trusted plugin platform — D00 contracts through D05 management/lifecycle (2026-09-22; joint G1 pending)
+## Trusted plugin platform — D00 contracts through D05 management/lifecycle (RETIRED / HISTORICAL)
 
-[Phase D00](../plans/260920-1603-plugin-platform/phase-00-contracts-and-feasibility.md)
-freezes the candidate contracts and feasibility evidence. D01 delivers the
-runner-owned registry, D02 the owner-account runner/worker boundary, D03 the
-authenticated REST/WebSocket façade with actor grants and connection-bound
-contexts, and D05 the bearer-only management API plus transactional lifecycle
-coordinator. The implementation plan is
-[DamHopper plugin platform](../plans/260920-1603-plugin-platform/plan.md).
-The companion evcrate plan owns the cross-repository consumer. D04 isolated UI
-integration and D06 Linux qualification remain separate gates.
+> **Retirement Notice (2026-10-02):** The Dam-Hopper plugin platform, runner daemon (`dam-hopper-plugin-runner`), SDK (`@dam-hopper/plugin-sdk`), and related APIs have been fully retired and deleted. In-process native integrations (such as Native Evcrate Advisor, see [Native Advisor architecture](./architecture/native-advisor.md)) replace the plugin platform without external runners or IPC overhead.
+
+The material below is retained as historical D00–D06 design and implementation
+evidence; it is not a current implementation guide. D04 UI integration and D06
+runner qualification are no longer pending gates. The current native-only
+contract is in the [Native Advisor architecture](./architecture/native-advisor.md);
+the old plugin-era paired qualification applies only to its historical candidate.
 
 ### G0 candidate artifact set
 
@@ -1012,7 +1010,7 @@ Source map and phase evidence are maintained in the [D05 architecture page](./ar
 │  │  ├─ auth_token: Arc<String>                            │
 │  ├─ opaque_server_setup: Arc<ServerSetup<...>>            │
 │  ├─ opaque_registrations: OpaqueRegistrations (in-mem)   │
-│  │  ├─ plugin_service: PluginApiService                 │
+│  │  ├─ advisor_state: Option<AdvisorState>                   │
 │  ├─ Router                                                 │
 │  │  ├─ /api/projects → ProjectList handler                │
 │  │  ├─ /api/pty/* → PTY spawn/send/kill                   │
@@ -1028,7 +1026,7 @@ Source map and phase evidence are maintained in the [D05 architecture page](./ar
 │  │  ├─ /api/system/idle-suspend/v1/* → Status/timing pair │
 │  │  ├─ /api/settings/export/workspace.toml → Raw TOML     │
 │  │  ├─ /api/settings/import/workspace.toml → Import/backup│
-│  │  ├─ /api/plugins/* → Authorized plugin API           │
+│  │  ├─ /api/advisor/* → Native Evcrate Advisor API           │
 │  │  └─ /ws → WebSocket upgrade                            │
 │  └─ Services                                               │
 │     ├─ PtySessionManager (Arc<Mutex<Map<uuid, ...>>>)     │
@@ -1036,7 +1034,7 @@ Source map and phase evidence are maintained in the [D05 architecture page](./ar
 │     │     (`sync_channel(256)`, non-blocking PTY handoff)   │
 │     ├─ TelemetryStore/Worker (opt-in, separate SQLite)     │
 │     ├─ BrowserDebugArtifactManager (ephemeral, TTL/sweep)  │
-│     ├─ PluginApiService (grants, epochs, contexts, runner) │
+│     ├─ AdvisorService (native history/policy/evaluations)  │
 │     ├─ FsSubsystem (Arc<Mutex<ProjectSandbox>>)           │
 │     ├─ AgentStoreService (symlink distribution)           │
 │     ├─ WorkflowService → WorkflowStore + startup reconcile │
@@ -5417,7 +5415,7 @@ Test boundary: JSDOM wrapper and consumer tests verify the shared contract, port
   `authVersion`/`credentialVersion` (2s DB cap; ≤7s bound); no per-frame reads.
 - Media issue routes use protected auth; tickets/sessions bind session ID, auth/credential versions, and effective deadline; absolute capability TTL is clamped to it.
 - HEAD/GET admissions revalidate current session state; active bodies check the deadline and poll revocation every five seconds with a two-second lookup timeout.
-- Plugin epochs expire at the effective auth deadline; role/grant checks remain additive, and PTY processes survive reauthentication.
+- Historical note: Plugin epochs were retired with the plugin platform; auth sessions continue to govern all native REST and WebSocket endpoints.
 - `~/.config/dam-hopper/server-token` is the JWT signing secret, not a user bearer token.
 - The step-up handler accepts Bearer or cookie credentials although the security contract requires Bearer-only use; see the [Authentication API](./authentication-api.md).
 - MFA key provisioning, encrypted factor state, replay protection, and operator-only MongoDB recovery are in the [Phase 01 auth guide](./phase-01-auth-state-cryptography-and-policy.md).

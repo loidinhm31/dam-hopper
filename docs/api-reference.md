@@ -84,114 +84,33 @@ Revokes the supplied session when valid and clears the auth cookie; stale MFA do
 
 Auth challenge/session responses use `Cache-Control: no-store`. Authentication errors use `{ "error": "...", "code": "...", "retryAfter"?: number }`.
 
-## Trusted Plugin API (Phases D03 and D05)
+## Native Evcrate Advisor API
 
-The public plugin façade is protected by the normal `/api/*` auth middleware.
-It requires a valid `AuthenticatedActor`; context open/close, invoke, and
-cancel also require a matching live WebSocket connection epoch. Listing uses
-actor visibility only. Every public plugin route is denied with `403`
-(`NoAuthForbidden`) when `--no-auth` is active. See the [D03 architecture](./architecture/plugin-platform-d03.md).
+Native Advisor provides built-in Evcrate Advisor history, current account policy, and evaluation comparison inside Workspace. Routes are mounted under `/api/advisor/*` and require an authenticated administrator. `--no-auth` requests are denied with HTTP 403 (`NoAuthForbidden`). Status and settings remain available while the feature is disabled; history, policy, and evaluation data routes require `server.advisor.enabled`.
 
-### Public endpoints
+The history source is `$HOME/.evcrate/advisor-history` in the server process environment. The final path component must be a real directory; symlinks are rejected as unavailable (`History root must be a real directory; symlink rejected`).
 
-| Method and path                    | Body/query                                                                          | Result                                                                           |
-| ---------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `GET /api/plugins`                 | Query: required `project`; optional `worktreePath`                                  | `{ plugins: PluginMetadataItem[] }` visible to actor/target                      |
-| `POST /api/plugins/view-context`   | `{ installationId, target }`                                                        | Server-derived `PluginViewContext` for the authenticated actor and target        |
-| `POST /api/plugins/contexts/open`  | `{ epoch, installationId, target, allowedOperations?, allowCurrentAccountPolicy? }` | `{ contextId, bindingRevision, grantRevision, activationGeneration, expiresAt }` |
-| `POST /api/plugins/contexts/close` | `{ epoch, contextId }`                                                              | `{ closed }`; idempotent                                                         |
-| `POST /api/plugins/invoke`         | `{ epoch, contextId, operation, payload, deadlineMs? }`                             | `{ result }`                                                                     |
-| `POST /api/plugins/cancel`         | `{ epoch, contextId, requestId }`                                                   | `{ outcome }`                                                                    |
+### Advisor endpoints
 
-`target` is `{ project, worktreePath? }`; browser `profileId`, connection
-generation, filesystem roots, grant claims, and history hashes are not accepted
-server inputs. The server resolves registered project/worktree targets before
-opening a context. `payload` is bounded opaque JSON; the host does not parse
-plugin-domain evaluation data.
+| Method and path | Request | Success result | Notes |
+| --- | --- | --- | --- |
+| `GET /api/advisor/status` | none | `{ enabled, available, path?, sourceError? }` | Available while disabled; a final-component history-root symlink is reported unavailable. |
+| `PATCH /api/advisor/settings` | `{ enabled: boolean }` | `{ enabled: boolean }` | Persists `server.advisor.enabled`; disabling clears active snapshots. |
+| `POST /api/advisor/history/refresh` | Optional `{ projectId? }` | `{ state, snapshotId?, observedAt, scan, staleReason?, inventory? }` | Scans the history root; creates a user-owned snapshot when available. |
+| `POST /api/advisor/history/summary` | `{ snapshotId, query? }` | `{ state, snapshotId, metrics, inventory }` | Filtered aggregate metrics and project inventory. |
+| `POST /api/advisor/history/page` | `{ snapshotId, query?, sort?, cursor?, limit? }` | `{ state, snapshotId, entries, nextCursor, returnedBytes }` | Page size defaults to 100 and is capped at 500; continuation cursor is HMAC-signed. |
+| `POST /api/advisor/history/detail` | `{ snapshotId, recordRef }` | `{ status, snapshotId, recordRef, detailRevision?, observedRevision?, execution?, outcome? }` | Rechecks captured file integrity; status is `ready`, `changed`, or `missing`. |
+| `POST /api/advisor/policy/current` | Optional `{}` | `{ status, scope, temporal, observedAt, revision, policy?, issueCode? }` | Reads current account policy from `$HOME/.evcrate/advisor-routing.json`. |
+| `POST /api/advisor/evaluations/list` | Optional `{ target?, cursor?, limit? }` | `{ status, observedAt, bindingRevision, items, nextCursor? }` | Discovers available evaluation runs from project and global locations. |
+| `POST /api/advisor/evaluations/read` | `{ evaluationRef, target?, expectedRevision? }` | `{ status, descriptor?, document?, evaluationRef?, observedRevision? }` | Status is `ready`, `changed`, or `missing`; revision is checked when supplied. |
+| `POST /api/advisor/evaluations/compare` | `{ items: [{ evaluationRef, expectedRevision }], target?, cursor?, limit? }` | `{ status, sourceRevisions, groups, nextCursor?, returnedBytes?, evaluationRef?, observedRevision? }` | Requires 1–32 items; groups compatible evaluation documents. |
+### Query filters and pagination
 
-`view-context` resolves the server target, checks enabled-installation
-visibility for the authenticated actor, and returns `metadata`,
-`workspaceProject` (`projectId`, `label`), `historyScope`, `contextScope`,
-`allowedOperations`, `allowCurrentAccountPolicy`, and `authorityKey`. Its
-request rejects unknown fields; project identity and authority are
-server-derived, and raw owner-history source paths are omitted from metadata.
-This read-only description route does not require a WebSocket epoch.
+`query.filters` supports arrays `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, and `buildIdentities`, plus numeric `startedAtFrom` / `startedAtTo` bounds. All Advisor JSON routes have a 64 KiB request-body limit.
 
-### Public authorization and lifecycle
+When the Advisor feature is disabled via `PATCH /api/advisor/settings` or server configuration (`[server.advisor] enabled = false`), data routes return HTTP 403 (`code: "AdvisorDisabled"`, `error: "ADVISOR_DISABLED"`).
 
-`context.open` checks the authenticated actor, epoch, installation, target, and
-explicit grant. A grant contains `actorSubject`, `installationId`,
-`configuredProjectTarget` (exact project or `*`), `allowedOperations` (explicit
-operations or `*`), and `allowCurrentAccountPolicy`. Missing grants are
-default-deny. `plugin.invoke` repeats the epoch, context ownership, current
-grant, operation, and concurrency checks; opening a context is not a durable
-authorization lease.
-
-The context is idle-expiring (15 minutes), capped at 16 contexts per worker and
-four in-flight operations per context. Worker-wide admission is 16 operations,
-one declared long-running operation, and 10-second ordinary/30-second scan
-deadlines. `request.cancel` is scoped to the same actor/epoch/context/request and
-returns `accepted`, `alreadySettled`, or `unknown`.
-
-The current `invoke` response contains only `{ result }`; it does not return a
-request ID. Callers that need to cancel an in-flight request must retain the
-runner request ID used by their integration path. Public request-ID allocation
-for the REST client remains an open D03 follow-up.
-
-Errors use `{ error, code }` with bounded messages. Current HTTP mapping is:
-`401` unauthorized/invalid epoch, `403` grant denial, `400` invalid input or
-target, `404` missing installation/source, `410` revoked/expired context,
-`429` overload, `504` deadline, `409` cancellation, and `503` worker/runner
-unavailable.
-
-## Trusted Plugin Management API (Phase D05)
-
-D05 adds the administrator-only management façade. Routes are mounted under
-`/api/plugins/admin*` and run through `require_auth` followed by
-`require_bearer_auth`. Cookie-only credentials return `403` with
-`code: "BearerRequired"`; `--no-auth` returns `403` with
-`code: "NoAuthForbidden"`. A valid bearer subject must also be in the
-runner's root-seeded administrator allowlist or the runner returns
-`UNAUTHORIZED`.
-
-### Management endpoints
-
-All fields use camelCase. Lifecycle and authority mutations carry
-`expectedSecurityRevision`, a compare-and-swap fence read from
-`GET /api/plugins/admin`; stale values are rejected rather than merged.
-
-| Method and path                                       | Request                                                                                        | Success result                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `GET /api/plugins/admin`                              | none                                                                                           | `AdminInstallationListResult` (`installations`, `securityRevision`) |
-| `GET /api/plugins/admin/installations/{id}`           | none                                                                                           | `AdminInstallationDto`                                              |
-| `POST /api/plugins/admin/stages`                      | streaming `application/gzip`/`application/octet-stream`; `Content-Length`, `X-Expected-SHA256` | `201 StageReviewDto`                                                |
-| `POST /api/plugins/admin/stages/{stageId}/approve`    | `{ expectedSha256, expectedSecurityRevision, initialBindings?, initialGrants? }`               | `AdminInstallationDto`                                              |
-| `POST /api/plugins/admin/installations/{id}/rollback` | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
-| `POST /api/plugins/admin/installations/{id}/enable`   | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
-| `POST /api/plugins/admin/installations/{id}/disable`  | `{ expectedSecurityRevision }`                                                                 | `AdminInstallationDto`                                              |
-| `DELETE /api/plugins/admin/installations/{id}`        | query `expectedSecurityRevision`, or `X-Expected-Security-Revision` header                     | `AdminRemoveResult`                                                 |
-| `PUT /api/plugins/admin/installations/{id}/grants`    | `{ expectedSecurityRevision, grants }`                                                         | `AdminInstallationDto`                                              |
-| `PUT /api/plugins/admin/installations/{id}/bindings`  | `{ expectedSecurityRevision, bindings }`                                                       | `AdminInstallationDto`                                              |
-
-Stage upload requires a non-zero declared length, a 64-character hexadecimal
-`X-Expected-SHA256`, and a body within the 32 MiB compressed package limit. The
-handler streams bounded chunks with backpressure to the owner runner. Finish
-verifies the digest and returns an expiring immutable `StageReviewDto`.
-Approval rechecks administrator membership, digest, review expiry, and security
-revision before the lifecycle coordinator starts.
-
-`AdminInstallationDto` includes installation/plugin/version, active digest,
-activation generation, enabled intent, bindings, grants, UI presence, worker
-status, optional previous-package snapshot, rollback availability, security
-revision, and timestamps. Remove returns the installation ID, `removed`, and
-unreferenced package digests cleaned from disk.
-
-The lifecycle coordinator journals install/update/rollback/enable/disable/remove
-transactions, activates and health-checks candidates before durable publication,
-preserves current security intent during rollback, and uses per-installation
-locks plus revision fences. Grant/binding replacement advances security and
-registry revisions and invalidates affected D03 contexts. See the [D05
-architecture](./architecture/plugin-platform-d05.md).
+> **Historical Notice (Retired Plugin APIs):** The former `/api/plugins/*` and `/api/plugins/admin*` endpoints have been deleted as part of the complete plugin-platform retirement (2026-10-02).
 
 ## Workflow Tracking Service and REST API (Phase 03)
 

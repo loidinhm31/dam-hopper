@@ -22,7 +22,9 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
   onClose,
 }) => {
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     const previousFocus =

@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-02 from a Repomix v1.18.0 XML compaction. Binary files, ignored files, and security-scan exclusions may be omitted.
+**Generated:** 2026-10-02 from Repomix v1.18.0 XML compaction (`repomix-output.xml`): 2,610 files, 6,075,895 tokens, and 25,578,477 characters. Binary/ignored files and six files excluded by the security scan are not represented in full.
 
 This summary is derived from a read-only compaction; source files and focused tests are
 authoritative. Binary files, ignored files, and files excluded by Repomix
@@ -9,7 +9,7 @@ security scanning are not represented in full.
 ## Repository shape
 
 - `server/` — Rust/Axum backend, workspace/file APIs, PTY management, workflow
-  persistence, telemetry, idle suspend, Linux release management, plugins, and
+  persistence, telemetry, idle suspend, Linux release management, native Advisor, and
   tests.
 - `apps/web/` — browser Vite host.
 - `apps/native/` — Tauri host, native capability bridges, and platform smoke
@@ -17,8 +17,6 @@ security scanning are not represented in full.
 - `apps/browser-extension/` — optional browser-extension host.
 - `packages/ui/` — shared React components, stores, API/WS clients, terminal
   surfaces, Settings, and browser tests.
-- `packages/plugin-sdk/` — candidate dependency-light plugin contracts, schemas,
-  fixtures, and packed SDK artifact.
 - `packages/shared/` — dependency-light shared runtime utilities.
 - `deploy/` — release scripts, systemd templates, installer assets, and role
   staging support.
@@ -26,12 +24,14 @@ security scanning are not represented in full.
 - `docs/` — operator, API, architecture, standards, and product-requirement
   documentation.
 
-## Trusted plugin platform (Phases D00–D06)
+## Native Evcrate Advisor and retired plugin platform
 
-The candidate SDK is `@dam-hopper/plugin-sdk` `0.1.0`; schemas, fixtures, and
-the packed artifact live under `packages/plugin-sdk/`. D00 Rust mirrors and
-strict four-byte big-endian JSON-RPC framing live in `server/src/plugins/`.
+The historical plugin platform (Phases D00–D06), runner daemon (`dam-hopper-plugin-runner`), and `@dam-hopper/plugin-sdk` were completely retired in October 2026. Native Evcrate Advisor replaces it with an in-process Rust service in `server/src/advisor/` and a direct React component subtree in `packages/ui/src/advisor/`.
 
+### Retired plugin platform (Historical)
+
+The former SDK was `@dam-hopper/plugin-sdk` `0.1.0`. D00 Rust mirrors and
+strict four-byte big-endian JSON-RPC framing were in `server/src/plugins/`.
 - D00 caps payloads at 16 MiB, aggregate buffered frames at 64 MiB, and
   defines a 64 KiB control budget; string IDs, strict params, and no batches
   fail closed.
@@ -66,21 +66,13 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   `server/tests/plugin_lifecycle.rs`, and `PluginManagementSection.test.tsx`;
   detailed boundaries and startup/event questions are in
   [D05 architecture](./architecture/plugin-platform-d05.md).
-- D06 integrates Linux release assets: the owner runner unit, server-role
-  tmpfiles configuration, explicit owner/admin deployment inputs, and manager
-  state v2 retention of runner/host/plugin digests across rollback and recovery.
-  The source map spans `server/src/linux_release/`, `deploy/systemd/`,
-  `deploy/tmpfiles.d/`, and `deploy/release/`.
-- Linux archive assembly fails closed unless the runner binary, unit, and
-  tmpfiles input are present, then packages them unconditionally. The release
-  inventory gate requires their `server`-role paths. Published v0.5.0 omitted
-  the binary for `server`/`both`; the v0.5.1 checklist is in the
-  [publisher guide](./linux-release-publisher-bootstrap.md).
-- D06 qualification recorded 173/173 Linux-release tests, 9/9 deployment
-  journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
-  history records. Physical separate-machine LAN and exact pinned Node
-  selection remain external deployment inputs.
-- Phase 04 adds `packages/ui/src/advisor/AdvisorPanel.tsx` with Overview, History, Configuration, and Evaluations, an owner-bound `NativeAdvisorProvider`, abortable requests, local tabs, and `.native-advisor` CSS. Phase 05 adds owner-bound auth/status/toggle hooks, an admin Settings toggle with detected real-directory status, and one connected + admin + enabled visibility predicate across IDE, Terminal, and compact surfaces. `WorkspaceAdvisorHost` now mounts the native panel with focus/Escape callbacks; Chromium coverage checks persistent placement across modes. History/status/API remain default-off and admin-only. See the [native Advisor architecture](./architecture/native-advisor.md).
+### Current Linux release boundary
+
+Linux release bundles contain the manager, server, web host/assets, idle-suspend helper, and current API/web/recovery/helper service templates. Plugin runner, bundled Node worker, runner unit/tmpfiles, and plugin-admin inputs are retired and are not current release requirements. See the [Linux release manifest](./linux-release-manifest.md) and [publisher guide](./linux-release-publisher-bootstrap.md); v0.5.0 runner incident details remain historical.
+
+### Native Advisor
+
+`packages/ui/src/advisor/AdvisorPanel.tsx` provides Overview, History, Configuration, and Evaluations with an owner-bound `NativeAdvisorProvider`, abortable requests, local tabs, and `.native-advisor` CSS. Settings and Workspace use owner-bound status/toggle hooks and one connected + admin + enabled visibility predicate across IDE, Terminal, and compact surfaces. `WorkspaceAdvisorHost` mounts the native panel with focus/Escape callbacks. History/status/API remain default-off and admin-only. Implementation and Phase 09 qualification evidence are recorded; durable completion receipt publication for Phases 01–05 remains parent-coordinated. See the [native Advisor architecture](./architecture/native-advisor.md).
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

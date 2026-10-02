@@ -1,4 +1,5 @@
 # Code Standards
+Trusted plugin D00–D05 implementation guidance below is historical and non-normative: the plugin SDK, runner, and host integration have been retired. Follow current source and the [Native Advisor architecture](./architecture/native-advisor.md) for the replacement.
 
 ## Rust Backend (server/)
 

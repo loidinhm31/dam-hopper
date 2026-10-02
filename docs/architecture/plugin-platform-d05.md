@@ -1,4 +1,5 @@
 # Trusted Plugin Platform — Phase D05
+> **HISTORICAL (retired 2026-10-02):** Plugin-management routes and lifecycle transactions described here were removed; this page is not current API or operator guidance.
 
 **Status:** DONE — 2026-09-22 (100%; review approved 9.8/10).
 

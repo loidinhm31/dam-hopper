@@ -23,7 +23,7 @@ export const EvaluationDescriptorCard: FC<EvaluationDescriptorCardProps> = ({
   const candidateCount = d.candidateCount ?? (typeof raw.candidate_count === 'number' ? raw.candidate_count : 0);
   const caseCount = d.caseCount ?? (typeof raw.case_count === 'number' ? raw.case_count : 0);
   const observationCount = d.observationCount ?? (typeof raw.observation_count === 'number' ? raw.observation_count : 0);
-  const createdAt = d.createdAt ?? (typeof raw.created_at === 'number' ? raw.created_at : Date.now());
+  const createdAt = d.createdAt ?? (typeof raw.created_at === 'number' ? raw.created_at : 0);
   return (
     <div className="descriptor-card">
       <div className="descriptor-card-header">
@@ -63,7 +63,7 @@ export const EvaluationDescriptorCard: FC<EvaluationDescriptorCardProps> = ({
         <div className="card-field">
           <span className="field-label">Created:</span>
           <span className="text-muted stat-sub">
-            {new Date(createdAt).toLocaleString()}
+            {createdAt > 0 ? new Date(createdAt).toLocaleString() : '—'}
           </span>
         </div>
       </div>
