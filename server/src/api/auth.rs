@@ -399,7 +399,7 @@ pub async fn get_user_role(db: Option<&mongodb::Database>, username: &str) -> Op
 
 /// Middleware that enforces the MongoDB administrator role on protected routes.
 /// Denies --no-auth mode and accounts without the admin role.
-pub async fn require_plugin_admin(
+pub async fn require_admin(
     State(state): State<AppState>,
     request: Request,
     next: Next,
@@ -408,7 +408,7 @@ pub async fn require_plugin_admin(
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
-                "error": "Plugin management operations are strictly denied in --no-auth mode",
+                "error": "Admin operations are strictly denied in --no-auth mode",
                 "code": "NoAuthForbidden",
             })),
         )
@@ -420,12 +420,21 @@ pub async fn require_plugin_admin(
         return unauthorized();
     };
 
-    match get_user_role(state.db.as_ref(), &actor.subject).await {
+    let role = match get_user_role(state.db.as_ref(), &actor.subject).await {
+        Some(r) => Some(r),
+        None => state
+            .auth_service
+            .mock_user()
+            .filter(|u| u.username == actor.subject && u.is_enabled)
+            .map(|u| u.role),
+    };
+
+    match role {
         Some(UserRole::Admin) => next.run(request).await,
         _ => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
-                "error": "Administrator role required for plugin management operations",
+                "error": "Administrator role required",
                 "code": "AdminRoleRequired",
             })),
         )

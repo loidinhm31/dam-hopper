@@ -2,6 +2,13 @@
 
 This document outlines the high-level roadmap for DamHopper development, tracking progress across major phases and milestones.
 
+### Native Advisor migration (2026-10-02)
+
+- **Plan status: IN PROGRESS (0/9 phases durably complete; 0%; implementation/finalization settled through Phase 02: 2/9 phases, 22%; 16/70h, 23%).** Phases 01–02 durable completion remains pending; neither is DONE. Phases 03–09 remain pending.
+- **Phase 01 — Contract and parity baseline — implementation/finalization settled; durable completion pending (not DONE).** Frozen the native contract and synthetic source-parity baseline. Code review reports 16/16 parity checks, 9.5/10, and no critical findings. Phase 02 review also records 16/16 parity tests; the existing harness still imports Evcrate's plugin backend and must be replaced before Phase 08 removes that backend. See the [Phase 01 plan](../plans/261002-0246-native-advisor-migration/phase-01-contract-and-parity-baseline.md), [parity baseline](../plans/261002-0246-native-advisor-migration/reports/native-contract-and-parity.md), and [review](../plans/reports/code-review-261002-0735-phase-01-native-contract-parity.md).
+- **Phase 02 — Native history domain and API — implementation/finalization settled; durable completion pending (explicit advice mode; not DONE).** Ported bounded history scanning/snapshots/metrics, status, admin guard, default-off per-server setting, and protected history endpoints. Review scored **9.6/10** with no critical/high findings; scoped validation passed **8/8 API integration, 23/23 Advisor unit, and 16/16 parity tests**, plus compilation/Clippy with **0 errors and 0 Advisor warnings**. Two medium recommendations are recorded: split oversized router/test files and diagnose unreadable outcome files; reviewer reported no unresolved questions. See the [Phase 02 plan](../plans/261002-0246-native-advisor-migration/phase-02-native-history-domain-and-api.md) and [code review](../plans/reports/code-review-261002-0845-phase-02-native-history-domain-and-api.md).
+
+
 ### Cognito Mode privacy screen mask (2026-10-01–02)
 
 - **Plan status: DONE / 100% (5/5 phases; 28/28h; completed 2026-10-02).** Phases 01–05 are durably complete. Phase 05's 3/3 build gates, 191 focused tests, and live interactive Linux Chromium smoke are recorded; macOS/Windows native runtime behavior is not claimed as physically tested.

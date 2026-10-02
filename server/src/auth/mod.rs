@@ -103,6 +103,9 @@ impl AuthService {
         self.store.as_ref()
     }
 
+    pub fn mock_user(&self) -> Option<&UserRecord> {
+        self.mock_session.as_ref().map(|m| &m.user)
+    }
     pub fn mfa_key(&self) -> Option<&MfaEncryptionKey> {
         self.mfa_key.as_ref()
     }

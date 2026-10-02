@@ -80,7 +80,7 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
-- Workspace Advisor integration (Phases 00–09) hosts the EVCrate Advisor plugin directly within the Workspace (IDE dock, Terminal float, compact overlay) with selected-project admission, single persistent frame preservation, and complete removal of standalone `/plugins/:installationId` routing; paired qualification passed 11/11 browser scenarios on 2026-09-30.
+- Workspace Advisor remains hosted through the EVCrate plugin in Workspace (IDE dock, Terminal float, compact overlay); Phase 02 adds a native Rust history domain (`server/src/advisor/`), `/api/advisor/*` routes, a default-off server toggle, and `require_admin` authorization with final-root symlink rejection. UI cutover, plugin retirement, and production qualification remain later phases; see the [native Advisor architecture/API](./architecture/native-advisor.md).
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

@@ -26,7 +26,7 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_status,
+    advisor as advisor_api, agent_status,
     agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
     diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
     media_session, plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
@@ -610,7 +610,7 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            auth::require_plugin_admin,
+            auth::require_admin,
         ))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -650,6 +650,42 @@ pub fn build_router_with_web_dir_and_origins(
             resource_events::global_admission_layer,
         ));
 
+    let advisor_routes = Router::new()
+        .route("/api/advisor/status", get(advisor_api::advisor_status_handler))
+        .route(
+            "/api/advisor/settings",
+            patch(advisor_api::advisor_settings_update_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/history/refresh",
+            post(advisor_api::history_refresh_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/history/summary",
+            post(advisor_api::history_summary_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/history/page",
+            post(advisor_api::history_page_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/history/detail",
+            post(advisor_api::history_detail_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_admin,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
     let router = Router::new()
         .merge(public)
         .merge(protected)
@@ -658,7 +694,8 @@ pub fn build_router_with_web_dir_and_origins(
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream)
-        .merge(host_resource_stream_routes);
+        .merge(host_resource_stream_routes)
+        .merge(advisor_routes);
     let router = match web_dir {
         Some(dir) => router
             // Preserve API 404 semantics; the SPA fallback is only for browser paths.
