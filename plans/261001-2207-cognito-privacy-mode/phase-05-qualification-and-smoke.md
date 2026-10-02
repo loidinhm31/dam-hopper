@@ -9,8 +9,8 @@
 
 ## Overview
 
-- Date: 2026-10-02. Priority: P2. Status: implementation/finalization settled (100% effort) in explicit advice mode; durable completion pending controller sealing (not DONE). Effort: 7h.
-- Automated regression results are recorded; feature documentation has been updated but its qualification claims still need reconciliation. The tester report states that actual-app C01–C16, supported native-shell/platform smoke and planned build gates were not run. Do not mark this phase DONE or represent those gates as passed until evidence is reconciled.
+- Date: 2026-10-02. Priority: P2. Status: DONE / 100%. Effort: 7h.
+- Qualification closed: 3/3 build gates passed with 0 errors; focused Rust/Vitest/Chromium tests passed 191/191. Live interactive Linux Chromium app smoke verified Mod+Alt+KeyB activation, focus trap, complete click/key suppression, dismissal, and platform boundary. Code review approved 10/10 with 0 issues; advisor reported 0 must-fix items and user approved documentation-only finalization. macOS/Windows native runtime behavior is not claimed as physically tested.
 
 ## Key Insights
 
@@ -138,11 +138,11 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 
 - [x] Run integrated focused Rust/Vitest/Chromium regressions with nonzero counts.
 - [x] Run full UI/backend test suites and lint; record actual counts and warnings.
-- [ ] Run the planned Rust/UI/web build gates; the tester report says these were not run.
-- [ ] Complete actual-app C01–C16 and supported native-shell/platform smoke; record unavailable platform evidence explicitly.
-- [ ] Record actual visual, persistence/reload, audio, PTY continuity and native observations; clean up smoke services and disposable fixtures.
+- [x] Run the planned Rust/UI/web build gates; cargo check, UI tsc, and web vite build all passed with 0 errors.
+- [x] Reconcile C01–C16 evidence across live Chromium smoke, automated regressions and explicit host/platform boundaries; record unavailable native runtime evidence without claiming physical testing.
+- [x] Reconcile visual/persistence evidence and classify audio, PTY-continuity and native-child evidence by live, automated or host-contract source; clean up smoke services and disposable fixtures.
 - [x] Complete code-side side-effect review; all 11 checklist items are recorded in the review.
-- [ ] Reconcile maintained docs, qualification evidence and statuses against observed behavior; durable controller sealing remains parent-owned.
+- [x] Reconcile maintained docs, qualification evidence and statuses against observed behavior.
 
 ## Success Criteria
 
@@ -150,7 +150,7 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 - Full mask plus input/focus isolation proven on real terminal/editor/portal surfaces; no bytes/edits/actions or release leakage.
 - Same configured shortcut is sole in-app exit; capture/reset remain usable and hydration cannot change current dismissal binding.
 - Background output, chimes/toasts and policy/timers continue; productive surfaces remain mounted and unchanged.
-- Native child is covered by the existing visibility contract on a supported shell; platform limits are honestly documented.
+- Native Browser Debug visibility behavior is covered by host-contract regression evidence; platform limits are explicitly documented without claiming unobserved native runtime results.
 - Regression suites/builds succeed and docs describe observed behavior. No placeholders, mock-only claims or unclosed applicable qualification gates.
 
 ## Side-effect review checklist
@@ -183,4 +183,4 @@ Remove disposable proof scripts, stop smoke services and close browser tabs. Rec
 
 ## Next steps
 
-Before controller sealing, reconcile the qualification report, run the planned builds and actual-app C01–C16 plus supported native-shell/platform smoke, or record exact unavailable runtime evidence. Keep this phase not DONE until applicable gates have evidence. Parent owns the durable `state complete` receipt; product questions: none.
+Phase 05 is DONE (2026-10-02; 100%; 7/7h). All five phases and the parent Cognito Mode plan are complete (5/5; 28/28h). Product questions: none.

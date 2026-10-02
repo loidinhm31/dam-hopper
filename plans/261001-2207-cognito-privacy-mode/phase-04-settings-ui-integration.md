@@ -9,7 +9,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: implementation/finalization settled; durable completion pending Phase 05 qualification (not DONE). Effort: 4h.
+- Date: 2026-10-01. Priority: P2. Status: DONE / 100% (2026-10-02). Effort: 4h.
 - Add discoverable, accessible preference controls using existing capture/reset and appearance patterns; no separate activation toggle button.
 
 ## Key Insights
@@ -135,10 +135,10 @@ Disabled/unavailable preference-source behavior follows the current settings arc
 
 ## Next steps
 
-Deliver integrated controls to [Phase 05](./phase-05-qualification-and-smoke.md) for disk/reload, real browser/xterm, visual and platform qualification. Implementation docs/changelog are updated only after that smoke evidence.
+Phase 05 integrated qualification is complete; its evidence and platform boundaries are recorded in [Phase 05](./phase-05-qualification-and-smoke.md).
 
 ### Status Update (2026-10-02)
-- Implementation and finalization are settled; durable completion remains pending Phase 05 qualification (not DONE).
+- Phase 04 is DONE (2026-10-02; 100%) following completion of Phase 05 integrated qualification.
 - All 16 unit tests in SettingsKeyboardShortcutsSection and SettingsAppearanceSection passed (16/16).
 - All 79 integrated Cognito test suite tests passed across seven files; this includes the scoped Settings tests (not additive).
-- UI package TypeScript build passed; code review approved with a 10/10 score and no critical, high, or medium findings. All five implementation todos and seven side-effect checks remain checked. Proceed to Phase 05 qualification and smoke.
+- UI package TypeScript build passed; code review approved with a 10/10 score and no critical, high, or medium findings. All five implementation todos and seven side-effect checks are complete. Phase 04 closeout is complete.

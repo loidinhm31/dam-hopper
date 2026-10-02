@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-01. Priority: P2. Status: implementation and finalization settled; durable completion pending Phase 05 qualification (not DONE). Effort: 6h.
+- Date: 2026-10-01. Priority: P2. Status: DONE / 100% (2026-10-02). Effort: 6h.
 - Connect the root-level keyboard toggle/input isolation to every existing terminal layout; ensure no keystroke reaches a PTY/editor/action while masked.
 
 ## Implementation and finalization status
@@ -16,7 +16,7 @@
 - Settled on 2026-10-02. All 5/5 implementation todos and 7/7 side-effect checklist items are complete.
 - Scoped validation passed 55/55 tests across four UI files; the full UI package report records 2,169/2,169 tests across 291 files, and the targeted UI typecheck passed.
 - Code review approved 9.5/10 with no critical issues or warnings; one medium defensive-default recommendation remains non-blocking. Evidence: [tester report](../reports/tester-261002-0103-phase-03-global-shortcuts-terminal-integration.md) and [code review](../reports/code-review-261002-0105-phase-03-global-shortcuts-terminal-integration.md).
-- Durable completion is intentionally pending Phase 05 integrated qualification, including actual browser/terminal behavior. Phase 04 Settings integration and Phase 05 qualification remain open; do not mark this phase DONE before those gates close.
+- Phase 03 is DONE after Phase 05 integrated qualification closed; its five implementation todos and seven side-effect checks are complete. See the qualification evidence in [Phase 05](./phase-05-qualification-and-smoke.md).
 
 ## Key Insights
 
@@ -147,4 +147,4 @@ The global capture guard owns release tracking and toggling. Defensive xterm han
 
 ## Next steps
 
-- [Phase 04](./phase-04-settings-ui-integration.md) completes capture/reset/appearance controls against this contract. [Phase 05](./phase-05-qualification-and-smoke.md) verifies real xterm/editor/browser precedence and platform coverage. Phase 03 implementation/finalization are settled, but durable completion remains pending Phase 05 integrated qualification; do not mark this phase DONE prematurely.
+- Phase 04 and Phase 05 are complete; Phase 03 is DONE (2026-10-02; 100%). Qualification and platform boundaries are recorded in [Phase 05](./phase-05-qualification-and-smoke.md).
