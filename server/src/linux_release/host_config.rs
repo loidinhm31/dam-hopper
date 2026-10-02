@@ -67,8 +67,6 @@ pub struct HostConfig {
     /// Dedicated system user for the API service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_user: Option<String>,
-    /// Dedicated system user for the owner plugin runner.
-    pub plugin_owner_user: Option<String>,
 }
 
 impl HostConfig {
@@ -79,22 +77,12 @@ impl HostConfig {
             role,
             allowed_web_origins: validated_origins,
             service_user: None,
-            plugin_owner_user: None,
         })
     }
 
     /// Set service user for this host config.
     pub fn with_service_user(mut self, service_user: Option<String>) -> Self {
         self.service_user = service_user;
-        self
-    }
-
-    /// Set plugin configuration for this host config.
-    pub fn with_plugin_config(
-        mut self,
-        plugin_owner_user: Option<String>,
-    ) -> Self {
-        self.plugin_owner_user = plugin_owner_user;
         self
     }
 }
@@ -118,8 +106,14 @@ pub fn load_host_config(path: &Path) -> Result<Option<HostConfig>, ReleaseError>
             path.display()
         ))
     })?;
-    if let toml::Value::Table(ref mut table) = toml_val {
-        table.remove("plugin_admin_subjects");
+    let mut modified = false;
+    if let toml::Value::Table(table) = &mut toml_val {
+        if table.remove("plugin_admin_subjects").is_some() {
+            modified = true;
+        }
+        if table.remove("plugin_owner_user").is_some() {
+            modified = true;
+        }
     }
     let config: HostConfig = toml_val.try_into().map_err(|e| {
         ReleaseError::Config(format!(
@@ -128,6 +122,9 @@ pub fn load_host_config(path: &Path) -> Result<Option<HostConfig>, ReleaseError>
         ))
     })?;
     validate_web_origins(&config.allowed_web_origins)?;
+    if modified {
+        let _ = save_host_config(path, &config);
+    }
     Ok(Some(config))
 }
 

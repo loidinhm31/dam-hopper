@@ -1,6 +1,6 @@
 //! Staging and isolated verification of candidate systemd units and public host config.
 
-use super::constants::{HELPER_SERVICE_UNIT, RUNNER_SERVICE_UNIT, RUNNER_TMPFILES_CONF};
+use super::constants::{HELPER_SERVICE_UNIT, RUNTIME_TMPFILES_CONF};
 use super::durable_fs::atomic_write_file;
 use super::error::ReleaseError;
 use super::host_config::{
@@ -11,7 +11,7 @@ use super::layout::Layout;
 use super::manifest::ReleaseManifest;
 use super::systemd::systemd_analyze_verify;
 use super::unit::{
-    render_api_unit, render_helper_unit, render_recovery_unit, render_runner_unit, render_unit,
+    render_api_unit, render_helper_unit, render_recovery_unit, render_unit,
     render_web_unit, UnitRenderContext,
 };
 use std::fs;
@@ -211,37 +211,6 @@ fn stage_candidate_units_inner(
             super::constants::API_SERVICE_HOME.to_string(),
         )?;
         server_ctx.api_uid = user_info.uid.to_string();
-        let selected_owner = host_config.and_then(|config| config.plugin_owner_user.as_deref());
-        let owner_info = if layout == &Layout::new() {
-            Some(super::account::ensure_plugin_runner_account(
-                selected_owner,
-                &service_user,
-            )?)
-        } else if let Some(owner) = selected_owner {
-            Some(super::account::verify_plugin_owner_account(
-                owner,
-                Some(&service_user),
-            )?)
-        } else {
-            None
-        };
-        if let Some(owner_info) = owner_info {
-            let owner = selected_owner.unwrap_or("dam-hopper-plugin-runner");
-            let owner_group =
-                super::account::get_group_by_gid(owner_info.gid).ok_or_else(|| {
-                    ReleaseError::Config(format!(
-                        "primary group for plugin owner '{owner}' does not resolve"
-                    ))
-                })?;
-            server_ctx = server_ctx.with_plugin_runner_identity(
-                owner.to_string(),
-                owner_group,
-                owner_info.home,
-                user_info.uid,
-                None,
-                None,
-            )?;
-        }
         server_ctx
     } else {
         base_ctx
@@ -259,16 +228,6 @@ fn stage_candidate_units_inner(
     staged_unit_paths.push(recovery_unit_path);
 
     if role.includes_server() {
-        let node_path = target_dir.join("bin/node");
-        let node_meta = fs::symlink_metadata(&node_path).map_err(|error| ReleaseError::Io {
-            action: "inspect bundled plugin worker runtime",
-            details: format!("{}: {error}", node_path.display()),
-        })?;
-        if !node_meta.is_file() || node_meta.permissions().mode() & 0o111 == 0 {
-            return Err(ReleaseError::Config(
-                "bundled plugin worker runtime must be a regular executable".into(),
-            ));
-        }
         let template = load_release_template(
             target_dir,
             "systemd/dam-hopper-api.service.in",
@@ -291,31 +250,20 @@ fn stage_candidate_units_inner(
         write_file_with_mode(&helper_unit_path, rendered_helper.as_bytes(), 0o644)?;
         staged_unit_paths.push(helper_unit_path);
 
-        let runner_template = load_release_template(
-            target_dir,
-            "systemd/dam-hopper-plugin-runner.service.in",
-            "systemd/dam-hopper-plugin-runner.service",
-            allow_checked_in_fallback,
-        )?;
-        let rendered_runner = render_runner_unit(&runner_template, &ctx)?;
-        let runner_unit_path = pending_units_dir.join(RUNNER_SERVICE_UNIT);
-        write_file_with_mode(&runner_unit_path, rendered_runner.as_bytes(), 0o644)?;
-        staged_unit_paths.push(runner_unit_path);
-
         let tmpfiles_template = load_template(
             target_dir,
-            "tmpfiles.d/dam-hopper-plugin-runner.conf.in",
+            "tmpfiles.d/dam-hopper-runtime.conf.in",
             allow_checked_in_fallback,
         )
         .or_else(|_| {
             load_template(
                 target_dir,
-                "tmpfiles.d/dam-hopper-plugin-runner.conf",
+                "tmpfiles.d/dam-hopper-runtime.conf",
                 allow_checked_in_fallback,
             )
         })?;
         let rendered_tmpfiles = render_unit(&tmpfiles_template, &ctx)?;
-        let tmpfiles_dest = pending_units_dir.join(RUNNER_TMPFILES_CONF);
+        let tmpfiles_dest = pending_units_dir.join(RUNTIME_TMPFILES_CONF);
         write_file_with_mode(&tmpfiles_dest, rendered_tmpfiles.as_bytes(), 0o644)?;
     }
 
@@ -460,11 +408,8 @@ fn load_template(
             p if p.contains("dam-hopper-idle-suspend-helper") => {
                 include_str!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in")
             }
-            p if p.contains("dam-hopper-plugin-runner.service") => {
-                include_str!("../../../deploy/systemd/dam-hopper-plugin-runner.service.in")
-            }
-            p if p.contains("dam-hopper-plugin-runner.conf") => {
-                include_str!("../../../deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in")
+            p if p.contains("dam-hopper-runtime.conf") => {
+                include_str!("../../../deploy/tmpfiles.d/dam-hopper-runtime.conf.in")
             }
             _ => "",
         };

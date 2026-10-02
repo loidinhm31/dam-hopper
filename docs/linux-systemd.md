@@ -37,17 +37,15 @@ exclude environment files, tokens, passwords, databases, and host-local state.
 
 ## 3. Host Architecture and Service Roles
 
-DamHopper provides role-scoped API, helper, runner, and web services
+DamHopper provides role-scoped API, helper, and web services
 coordinated by a root-only recovery unit:
 
-| Unit                                     | Process Binary                   | User / Group                                        | Listener                             | Sandboxing & Capabilities                                                                            |
-| ---------------------------------------- | -------------------------------- | --------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                                         | None                                 | Oneshot pre-boot gate before application units                                                       |
-| `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:dam-hopper` (rendered API group)              | `/run/dam-hopper/idle-suspend.sock`  | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
-| `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                       | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
-| `dam-hopper-plugin-runner.service`       | `dam-hopper-plugin-runner`       | `@ADVISOR_OWNER_USER@:@ADVISOR_OWNER_GROUP@`        | `/run/dam-hopper/plugin-runner.sock` | `NoNewPrivileges=true`, `ProtectSystem=strict`, `PrivateTmp=true`, `MemoryMax=1G`, `TasksMax=64`     |
-| `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`                     | `0.0.0.0:4802`                       | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
-
+| Unit                                     | Process Binary                   | User / Group                                        | Listener                            | Sandboxing & Capabilities                                                                            |
+| ---------------------------------------- | -------------------------------- | --------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `dam-hopper-recovery.service`            | `dam-hopper recover --boot`      | `root:root`                                         | None                                | Oneshot pre-boot gate before application units                                                       |
+| `dam-hopper-idle-suspend-helper.service` | `dam-hopper-idle-suspend-helper` | `root:<API group>` (default `root:dam-hopper`) | `/run/dam-hopper/idle-suspend.sock` | `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `CAP_WAKE_ALARM` |
+| `dam-hopper-api.service`                 | `dam-hopper-server`              | `dam-hopper:dam-hopper` (default rendered identity) | `0.0.0.0:4801`                      | Dedicated PTY/auth/file operations; `NoNewPrivileges=false`                                          |
+| `dam-hopper-web.service`                 | `dam-hopper-web`                 | `dam-hopper-web:dam-hopper-web`                     | `0.0.0.0:4802`                      | Read-only static host; `ProtectSystem=strict`, `NoNewPrivileges=true`                                |
 > **API identity and command contract:** The checked-in API unit and the
 > default release-manager render run `dam-hopper-api.service` as the
 > unprivileged `dam-hopper:dam-hopper` account. Custom identities must remain
@@ -83,24 +81,16 @@ for current verification behavior and its limits.
 
 ### Deployment Roles
 
-- `server`: Deploys helper, `dam-hopper-plugin-runner.service`, and
+- `server`: Deploys `dam-hopper-idle-suspend-helper.service` and
   `dam-hopper-api.service` (API listens on `0.0.0.0:4801`).
 - `web`: Deploys only `dam-hopper-web.service` (listening on `0.0.0.0:4802`).
 - `both`: Deploys server and web units in lockstep.
 
-`dam-hopper-plugin-runner.service` runs as the automatically provisioned default
-account, or a validated existing `--plugin-owner-user` account. Explicit
-`--plugin-admin-subject SUBJECT` values seed administration; omitted plugin
-arguments independently inherit `/etc/dam-hopper/host.toml`.
-The sole runtime-directory owner is tmpfiles:
-`d /run/dam-hopper 3770 root @PLUGIN_SHARED_GROUP@ -`.
-All three services run privileged tmpfiles prestarts and use the shared group;
-none declares `RuntimeDirectory` for that path.
-
-The recovery unit is staged for every role. Helper and runner are server-role
-companions started before the API. Runner provisioning/start/enable failures
-block activation, and its socket is checked after HTTP stabilization. The
-optional idle-suspend helper retains warning-only startup behavior.
+The native release manager manages four unit types: recovery on every role,
+helper and API on server roles, and web on web roles. The helper uses the
+rendered API group for `/run/dam-hopper/idle-suspend.sock`.
+`dam-hopper-runtime.conf` creates `/run/dam-hopper` at mode `3770`, owned by
+`root:<API group>`; the API and helper unit prestarts apply this configuration.
 
 ---
 
@@ -138,10 +128,9 @@ DamHopper enforces strict separation between immutable release assets, durable m
 /etc/systemd/system/
 ├── dam-hopper-recovery.service
 ├── dam-hopper-idle-suspend-helper.service # Present only if role is 'server' or 'both'
-├── dam-hopper-plugin-runner.service       # Present only if role is 'server' or 'both'
-├── dam-hopper-api.service   # Present only if role is 'server' or 'both'
-└── dam-hopper-web.service   # Present only if role is 'web' or 'both'
-/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf # Runtime socket directories
+├── dam-hopper-api.service                # Present only if role is 'server' or 'both'
+└── dam-hopper-web.service                # Present only if role is 'web' or 'both'
+/etc/dam-hopper/tmpfiles.d/dam-hopper-runtime.conf # Shared API/helper runtime directory
 The helper service opens `/run/dam-hopper/idle-suspend.sock` from its fixed
 `ExecStart` arguments. The optional socket-unit template is an archive asset;
 the release manager's managed lifecycle list covers the helper service itself.
@@ -169,8 +158,7 @@ the release manager's managed lifecycle list covers the helper service itself.
 
    ```bash
    # Install API server role
-   ./dam-hopper-install.sh --latest --role server \
-     --plugin-owner-user advisor-owner --plugin-admin-subject admin@example.test
+   ./dam-hopper-install.sh --latest --role server
 
    # Install dedicated web host role
    ./dam-hopper-install.sh --latest --role web
@@ -225,13 +213,15 @@ The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lo
 1. Quiesces existing services and verifies cgroups, listeners (4801/4802), and SQLite file holders are completely released.
 2. Backs up active systemd units and configuration to `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
 3. Installs concrete units to `/etc/systemd/system/` and runs `systemctl daemon-reload`.
-4. For a server role, starts helper, then runner, then API; helper/runner start failures emit warnings and do not block API startup.
+4. For a server role, starts the helper, then API; helper startup failure is
+   warning-only and does not block API startup.
 5. Starts the selected web unit when the role includes `web`, then enters state `PROBING`.
 6. **Health Stability Gate:**
    - API/web units must report active within a **20-second startup deadline**.
    - API/web units must then satisfy **20 consecutive successful probes spaced at 500 ms** (10 seconds of uninterrupted stability).
    - Probes verify: expected MainPID, executable path, process UID/GID, exact listener, and valid JSON response (`status: "ok"`, `schemaVersion: 1`, expected `version` and `role`).
-7. On success, API/web units are enabled, helper/runner enablement is best-effort; `current` symlink is updated, and state advances to `COMMITTED`.
+7. On success, API/web units are enabled, helper enablement is best-effort;
+   `current` is updated and state advances to `COMMITTED`.
 
 ### 5.3 Upgrading to a New Release
 
@@ -318,15 +308,15 @@ _Note:_ On a fresh install, `apiUrl` is omitted. A new web UI starts in the stan
 If candidate API/web units fail to start within 20 seconds, crash during
 probing, or fail any of the 20 consecutive health checks:
 
-1. Candidate units, including helper and runner for a server role, are stopped
-   and disabled.
+1. Candidate units, including the helper for a server role, are stopped and
+   disabled.
 2. Previous concrete units and configuration are restored from
    `/var/lib/dam-hopper-manager/backups/<tx_id>/`.
-3. `systemctl daemon-reload` runs; on a previous server role, helper then runner
-   start before the API and failures are warning-only.
+3. `systemctl daemon-reload` runs; on a previous server role, the helper starts
+   before the API and helper failure is warning-only.
 4. Previous API/web units are verified against the 10-second health gate.
 5. On a clean first install with no previous release, all managed units
-   (including helper and runner) are stopped and disabled.
+   (including the helper) are stopped and disabled.
 
 Manual `sudo dam-hopper rollback` promotes the recorded `previous` release
 through the same activation path, so the helper stop/start ordering and
@@ -348,11 +338,11 @@ The manager executes the rollback transaction using the recorded backup artifact
 At boot:
 
 - Reconciles any interrupted transaction in `/var/lib/dam-hopper-manager/state.json`.
-- Disables helper/runner/API/web units while a `PENDING` candidate is retained.
-- Restores backups, including helper and runner, if a crash occurred during
+- Disables helper/API/web units while a `PENDING` candidate is retained.
+- Restores backups, including the helper, if a crash occurred during
   `QUIESCED`, `SWITCHED`, or `PROBING`.
 - Repairs `current` and systemd enablement for `COMMITTED` releases;
-  helper/runner enablement is best-effort for server roles and disabled for
+  helper enablement is best-effort for server roles and disabled for
   non-server roles.
 - Fails closed, stops/disables all managed units, and blocks application startup if state is corrupted, marking status as `RECOVERY_REQUIRED`.
 
@@ -512,7 +502,7 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
   - `ProtectHome=yes`
   - `PrivateTmp=yes`
   - `CapabilityBoundingSet=CAP_WAKE_ALARM`
-- **Socket permissions**: Tmpfiles owns the shared directory (`root:dam-hopper-plugins`, `3770`); the helper binds its socket with mode `0660`. The API PID file is API-owned, shared-group-readable (`0640`), and enrollment pins the actual API UID as well as the PID.
+- **Socket permissions**: Tmpfiles owns the shared directory (`root:<API group>`, `3770`); the helper binds its socket with mode `0660`. The API PID file is API-owned and API-group-readable (`0640`), and enrollment pins the actual API UID as well as the PID.
 - **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The Phase 03 release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: The single `/var/log/dam-hopper/idle-suspend-helper.jsonl`
@@ -853,3 +843,91 @@ To completely remove helper units and restore pristine host configuration, use t
 sudo ./deploy/reset-linux-production.sh --dry-run
 sudo ./deploy/reset-linux-production.sh
 ```
+
+---
+
+## 12. Operator Runbook: Native Advisor Migration & Plugin Platform Retirement
+
+With Native Advisor integrated directly into Dam-Hopper, the plugin runner service, worker Node, and plugin platform are retired.
+
+### Sequence of Operations
+
+#### Step 1: Deploy Native Release and Migrate Manager State
+
+Download the native release bundle directory containing `release-manifest.json` and its archive. The release manager automatically migrates committed manager-state v1/v2 to schema3 under deployment lock, backing up the prior state to `/var/lib/dam-hopper-manager/state.v2.bak`:
+
+```bash
+# Stage native release
+sudo dam-hopper install --bundle /path/to/release-bundle-directory --role both
+
+# Activate native services (API, helper, web, recovery)
+sudo dam-hopper start
+```
+
+#### Step 2: Verify Native Advisor and Core Runtime
+
+Verify that the API server and Native Advisor endpoint respond:
+Use the session token returned by normal MFA sign-in; `server-token` is the
+server signing secret, not a bearer credential. See the
+[Authentication API](./authentication-api.md).
+
+```bash
+# Health probe
+curl -s http://127.0.0.1:4801/api/health
+
+# Prompt for a session token returned after normal MFA sign-in
+read -rsp 'MFA-issued session token: ' SESSION_TOKEN
+printf '\n'
+curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" \
+  http://127.0.0.1:4801/api/advisor/status
+unset SESSION_TOKEN
+```
+
+#### Step 3: Inspect Retired Plugin Platform (Dry-Run)
+
+Run the safe removal script in default read-only dry-run mode to inspect what will be stopped, disabled, and removed:
+
+```bash
+# Inspect system-level plugin platform components
+bash deploy/remove-plugin-platform.sh --scope system
+```
+
+For each installed API and helper unit, the script refuses to proceed while the unit references the retired plugin tmpfiles configuration or group.
+
+#### Step 4: Apply Safe Removal
+
+Once verified, apply the removal under root privileges:
+
+```bash
+# Apply removal of plugin runner unit, socket, and registry
+sudo bash deploy/remove-plugin-platform.sh --scope system --apply
+
+# Optional: If no other system consumers require the dedicated account:
+sudo bash deploy/remove-plugin-platform.sh --scope system --apply --purge-account
+```
+
+#### Step 5: Verify Absence and Preservation Invariants
+
+Verify that the runner unit is inactive and no unit file remains listed. If Advisor history existed before cleanup, confirm its existing server- and user-owned data remains:
+
+```bash
+# Check both the service state and systemd's registered unit files.
+systemctl is-active dam-hopper-plugin-runner.service || true
+systemctl list-unit-files dam-hopper-plugin-runner.service
+
+# Existing Advisor history is outside the removal allowlist.
+for history in /var/lib/dam-hopper/.evcrate/advisor-history "$HOME/.evcrate/advisor-history"; do
+  if [[ -d "$history" ]]; then
+    ls -la "$history"
+  else
+    printf 'No history directory at %s\n' "$history"
+  fi
+done
+
+# The runtime directory remains; the socket exists only while the helper is active.
+ls -ld /run/dam-hopper
+if systemctl is-active --quiet dam-hopper-idle-suspend-helper.service; then
+  test -S /run/dam-hopper/idle-suspend.sock
+fi
+```
+

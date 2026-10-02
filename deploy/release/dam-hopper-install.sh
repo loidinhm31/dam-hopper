@@ -35,7 +35,6 @@ Options:
   --allow-web-origin <url> Allowed web origin for CORS (may be specified multiple times)
   --service-user <user>   Dedicated non-root user to run the API service
   --verify-attestation    Verify GitHub artifact attestations using the 'gh' CLI
-  --plugin-owner-user <user> Dedicated non-root user to run the plugin runner
   -h, --help              Show this help message
 EOF
     exit 1
@@ -76,7 +75,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --plugin-owner-user)
-            PLUGIN_OWNER_USER="$2"
+            echo "Notice: Plugin platform is retired; ignoring deprecated option '$1'." >&2
             shift 2
             ;;
         -h|--help)
@@ -114,20 +113,6 @@ if [[ -n "${BUNDLE_PATH}" && ${LATEST} -eq 1 ]]; then
     usage
 fi
 
-# Identity check & warning
-if [[ ("${ROLE}" == "server" || "${ROLE}" == "both") && -n "${PLUGIN_OWNER_USER}" ]]; then
-    CURRENT_USER="$(id -un 2>/dev/null || true)"
-    if [[ -z "${SERVICE_USER}" && "${PLUGIN_OWNER_USER}" == "${CURRENT_USER}" ]]; then
-        echo "Warning: --plugin-owner-user '${PLUGIN_OWNER_USER}' matches current user while --service-user is unset." >&2
-        echo "  If the API service runs under your user account (or recorded in /etc/dam-hopper/host.toml)," >&2
-        echo "  the installer will reject identical API and plugin runner identities." >&2
-        echo "  To avoid this conflict, specify a distinct dedicated service user, for example:" >&2
-        echo "    $0 ... --service-user dam-hopper --plugin-owner-user \"${PLUGIN_OWNER_USER}\"" >&2
-    elif [[ -n "${SERVICE_USER}" && "${SERVICE_USER}" == "${PLUGIN_OWNER_USER}" ]]; then
-        echo "Warning: --service-user and --plugin-owner-user both specify '${SERVICE_USER}'." >&2
-        echo "  The release manager requires distinct API and plugin runner identities." >&2
-    fi
-fi
 
 # Dependency check
 REQUIRED_CMDS=(sha256sum tar)
@@ -333,9 +318,6 @@ done
 if [[ -n "${SERVICE_USER}" ]]; then
     INSTALL_CMD+=("--service-user" "${SERVICE_USER}")
 fi
-if [[ -n "${PLUGIN_OWNER_USER}" ]]; then
-    INSTALL_CMD+=("--plugin-owner-user" "${PLUGIN_OWNER_USER}")
-fi
 if [[ -d "/opt/dam-hopper/releases/${TAG}/${ROLE}" && ${REINSTALL} -eq 0 ]]; then
     echo "Release ${TAG} for role '${ROLE}' is already installed at /opt/dam-hopper/releases/${TAG}/${ROLE}."
     REINSTALL_CONFIRMED=""
@@ -355,7 +337,7 @@ fi
 if [[ ${REINSTALL} -eq 1 ]]; then
     INSTALL_CMD+=("--reinstall")
     echo "Stopping existing services and clearing old release directory for clean reinstall..."
-    systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery dam-hopper-plugin-runner dam-hopper-idle-suspend-helper dam-hopper-idle-suspend-helper.socket 2>/dev/null || sudo systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery dam-hopper-plugin-runner dam-hopper-idle-suspend-helper dam-hopper-idle-suspend-helper.socket 2>/dev/null || true
+    systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery dam-hopper-idle-suspend-helper dam-hopper-idle-suspend-helper.socket 2>/dev/null || sudo systemctl stop dam-hopper-api dam-hopper-web dam-hopper-recovery dam-hopper-idle-suspend-helper dam-hopper-idle-suspend-helper.socket 2>/dev/null || true
     systemctl disable dam-hopper-idle-suspend-helper.socket 2>/dev/null || sudo systemctl disable dam-hopper-idle-suspend-helper.socket 2>/dev/null || true
     pkill -f "dam-hopper-server" 2>/dev/null || sudo pkill -f "dam-hopper-server" 2>/dev/null || true
     pkill -f "dam-hopper-web" 2>/dev/null || sudo pkill -f "dam-hopper-web" 2>/dev/null || true

@@ -132,23 +132,6 @@ if [[ ! -f "${WEB_BIN}" ]]; then
     echo "Error: 'dam-hopper-web' binary not found in '${TARGET_DIR}'" >&2
     exit 1
 fi
-RUNNER_BIN="${TARGET_DIR}/dam-hopper-plugin-runner"
-if [[ ! -f "${RUNNER_BIN}" ]]; then
-    echo "Error: 'dam-hopper-plugin-runner' binary not found in '${TARGET_DIR}'" >&2
-    exit 1
-fi
-
-# Ship the worker runtime; service accounts must not depend on an operator's PATH.
-NODE_BIN="${NODE_BIN:-$(command -v node)}"
-NODE_BIN="$(readlink -f "${NODE_BIN}")"
-NODE_LICENSE="${NODE_LICENSE:-$(dirname "$(dirname "${NODE_BIN}")")/LICENSE}"
-if [[ ! -x "${NODE_BIN}" || ! -f "${NODE_LICENSE}" ]]; then
-    echo "Error: Node distribution executable and LICENSE are required (NODE_BIN/NODE_LICENSE)" >&2
-    exit 1
-fi
-"${NODE_BIN}" -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (process.platform !== "linux" || process.arch !== "x64" || major < 22 || (major === 22 && minor < 19)) process.exit(1)'
-
-
 if [[ ! -d "${WEB_DIST}" || ! -f "${WEB_DIST}/index.html" ]]; then
     echo "Error: Web dist directory '${WEB_DIST}' does not exist or lacks index.html" >&2
     exit 1
@@ -160,11 +143,10 @@ RECOVERY_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-recovery.service.in"
 SYSUSERS_CONF="${REPO_ROOT}/deploy/sysusers.d/dam-hopper-web.conf"
 LICENSE_FILE="${REPO_ROOT}/LICENSE"
 HELPER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-idle-suspend-helper.service.in"
-RUNNER_SERVICE_IN="${REPO_ROOT}/deploy/systemd/dam-hopper-plugin-runner.service.in"
-RUNNER_TMPFILES_IN="${REPO_ROOT}/deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in"
+RUNTIME_TMPFILES_IN="${REPO_ROOT}/deploy/tmpfiles.d/dam-hopper-runtime.conf.in"
 
 for req_file in "${API_SERVICE_IN}" "${WEB_SERVICE_IN}" "${RECOVERY_SERVICE_IN}" \
-    "${HELPER_SERVICE_IN}" "${RUNNER_SERVICE_IN}" "${RUNNER_TMPFILES_IN}" \
+    "${HELPER_SERVICE_IN}" "${RUNTIME_TMPFILES_IN}" \
     "${SYSUSERS_CONF}" "${LICENSE_FILE}"; do
     if [[ ! -f "${req_file}" ]]; then
         echo "Error: Required asset file '${req_file}' not found" >&2
@@ -199,13 +181,6 @@ chmod 0755 "${TMP_STAGE}/bin/dam-hopper-web"
 cp -p "${HELPER_BIN}" "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 chmod 0755 "${TMP_STAGE}/bin/dam-hopper-idle-suspend-helper"
 
-cp -p "${RUNNER_BIN}" "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
-chmod 0755 "${TMP_STAGE}/bin/dam-hopper-plugin-runner"
-
-cp -p "${NODE_BIN}" "${TMP_STAGE}/bin/node"
-chmod 0755 "${TMP_STAGE}/bin/node"
-cp -p "${NODE_LICENSE}" "${TMP_STAGE}/NOTICES"
-chmod 0644 "${TMP_STAGE}/NOTICES"
 # Copy systemd units and sysusers
 cp -p "${API_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-api.service"
 chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-api.service"
@@ -222,12 +197,8 @@ chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-idle-suspend-helper.service"
 cp -p "${SYSUSERS_CONF}" "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 chmod 0644 "${TMP_STAGE}/sysusers.d/dam-hopper-web.conf"
 
-cp -p "${RUNNER_SERVICE_IN}" "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
-chmod 0644 "${TMP_STAGE}/systemd/dam-hopper-plugin-runner.service"
-
-cp -p "${RUNNER_TMPFILES_IN}" "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
-chmod 0644 "${TMP_STAGE}/tmpfiles.d/dam-hopper-plugin-runner.conf"
-
+cp -p "${RUNTIME_TMPFILES_IN}" "${TMP_STAGE}/tmpfiles.d/dam-hopper-runtime.conf"
+chmod 0644 "${TMP_STAGE}/tmpfiles.d/dam-hopper-runtime.conf"
 
 # Copy LICENSE
 cp -p "${LICENSE_FILE}" "${TMP_STAGE}/LICENSE"

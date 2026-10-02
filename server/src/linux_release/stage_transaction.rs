@@ -11,7 +11,7 @@ use super::layout::Layout;
 use super::lock::DeploymentLock;
 use super::manifest::ReleaseManifest;
 use super::stage::PendingState;
-use super::stage::{determine_host_role_with_plugins, persist_host_role};
+use super::stage::{determine_host_role, persist_host_role};
 use super::stage_units::stage_candidate_units_for_release_with_host_config;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -38,11 +38,10 @@ pub fn stage_release_bundle(
         verify_attestation,
         is_role_set,
         reinstall,
-        None,
     )
 }
 
-/// Stage a release bundle with optional plugin deployment configuration.
+/// Stage a release bundle with deployment options.
 pub fn stage_release_bundle_with_options(
     layout: &Layout,
     bundle_dir: &Path,
@@ -51,7 +50,6 @@ pub fn stage_release_bundle_with_options(
     verify_attestation: bool,
     is_role_set: bool,
     reinstall: bool,
-    plugin_owner_user: Option<String>,
 ) -> Result<PendingState, ReleaseError> {
     let _lock = DeploymentLock::acquire(&layout.deploy_lock_path())?;
 
@@ -88,6 +86,18 @@ pub fn stage_release_bundle_with_options(
         })?;
 
     let manifest = ReleaseManifest::parse_and_validate(&manifest_bytes)?;
+    if manifest.components.runner.is_some()
+        || manifest.services.runner.is_some()
+        || manifest
+            .inventory
+            .iter()
+            .any(|e| e.path.contains("plugin-runner") || e.path == "bin/node")
+    {
+        return Err(ReleaseError::InvalidBundle {
+            path: bundle_dir.display().to_string(),
+            reason: "staging plugin-bearing release candidate is rejected by native manager".into(),
+        });
+    }
     let archive_path = bundle_dir.join(&manifest.archive.name);
     let archive_meta =
         fs::symlink_metadata(&archive_path).map_err(|e| ReleaseError::InvalidBundle {
@@ -121,12 +131,11 @@ pub fn stage_release_bundle_with_options(
     verify_existing_install_root(&layout)?;
 
     let previous_host_config = load_host_config(&layout.host_config_path())?;
-    let (role, host_config) = determine_host_role_with_plugins(
+    let (role, host_config) = determine_host_role(
         layout,
         requested_role,
         allow_origins,
         is_role_set,
-        plugin_owner_user,
     )?;
 
     let tx_id = uuid::Uuid::new_v4().to_string();
@@ -238,18 +247,12 @@ pub fn stage_release_bundle_with_options(
         let web_unit_sha256 =
             hash_optional_file(&pending_units_dir.join(super::constants::WEB_SERVICE_UNIT))?;
         let helper_unit_sha256 = hash_optional_file(&pending_units_dir.join(HELPER_SERVICE_UNIT))?;
-        let runner_unit_sha256 =
-            hash_optional_file(&pending_units_dir.join(super::constants::RUNNER_SERVICE_UNIT))?;
-        let runner_tmpfiles_sha256 =
-            hash_optional_file(&pending_units_dir.join(super::constants::RUNNER_TMPFILES_CONF))?;
         let host_config_sha256 = hash_file(&pending_host_config_path)?;
         Ok::<_, ReleaseError>((
             manifest_sha256,
             api_unit_sha256,
             web_unit_sha256,
             helper_unit_sha256,
-            runner_unit_sha256,
-            runner_tmpfiles_sha256,
             host_config_sha256,
         ))
     })();
@@ -258,8 +261,6 @@ pub fn stage_release_bundle_with_options(
         api_unit_sha256,
         web_unit_sha256,
         helper_unit_sha256,
-        runner_unit_sha256,
-        runner_tmpfiles_sha256,
         host_config_sha256,
     ) = match digests {
         Ok(digests) => digests,
@@ -287,20 +288,8 @@ pub fn stage_release_bundle_with_options(
         pending_host_config_path: Some(pending_host_config_path.display().to_string()),
         api_unit_sha256,
         web_unit_sha256,
-        helper_unit_sha256,
-        runner_unit_sha256,
-        runner_tmpfiles_sha256,
         host_config_sha256: Some(host_config_sha256),
-        plugin_owner_user: host_config.plugin_owner_user.clone(),
-        plugin_owner_uid: None,
-        plugin_admin_config_sha256: None,
-        plugin_runtime_node_version: None,
-        plugin_runtime_node_sha256: None,
-        plugin_platform_enabled: if host_config.plugin_owner_user.is_some() {
-            Some(true)
-        } else {
-            None
-        },
+        helper_unit_sha256,
     };
     let mut mgr_state = match super::state::load_or_init_manager_state(&layout.manager_state_path())
     {

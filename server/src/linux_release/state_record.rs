@@ -25,22 +25,6 @@ pub struct ReleaseRecord {
     pub host_config_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_unit_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_unit_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_tmpfiles_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_owner_user: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_owner_uid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_admin_config_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_runtime_node_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_runtime_node_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_platform_enabled: Option<bool>,
 }
 
 impl ReleaseRecord {
@@ -60,18 +44,6 @@ impl ReleaseRecord {
             validate_sha256_hex(h)?;
         }
         if let Some(h) = &self.helper_unit_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.runner_unit_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.runner_tmpfiles_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.plugin_admin_config_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.plugin_runtime_node_sha256 {
             validate_sha256_hex(h)?;
         }
         Ok(())
@@ -100,22 +72,6 @@ pub struct PendingCandidateRecord {
     pub host_config_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_unit_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_unit_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_tmpfiles_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_owner_user: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_owner_uid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_admin_config_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_runtime_node_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_runtime_node_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_platform_enabled: Option<bool>,
 }
 
 impl PendingCandidateRecord {
@@ -133,18 +89,6 @@ impl PendingCandidateRecord {
             validate_sha256_hex(h)?;
         }
         if let Some(h) = &self.helper_unit_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.runner_unit_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.runner_tmpfiles_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.plugin_admin_config_sha256 {
-            validate_sha256_hex(h)?;
-        }
-        if let Some(h) = &self.plugin_runtime_node_sha256 {
             validate_sha256_hex(h)?;
         }
         Ok(())

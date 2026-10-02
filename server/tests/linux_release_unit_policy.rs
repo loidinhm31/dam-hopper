@@ -12,12 +12,11 @@ const HELPER_TEMPLATE: &str =
     include_str!("../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
 
 #[test]
-fn shared_runtime_policy_rejects_service_directory_ownership_and_group_loss() {
+fn shared_runtime_policy_rejects_service_directory_ownership_and_supplementary_groups() {
     let ctx = create_valid_context();
-    let runner = include_str!("../../deploy/systemd/dam-hopper-plugin-runner.service.in");
-    let renderers: [fn(&str, &UnitRenderContext) -> Result<String, ReleaseError>; 3] =
-        [render_api_unit, render_helper_unit, render_runner_unit];
-    for (template, render) in [API_TEMPLATE, HELPER_TEMPLATE, runner]
+    let renderers: [fn(&str, &UnitRenderContext) -> Result<String, ReleaseError>; 2] =
+        [render_api_unit, render_helper_unit];
+    for (template, render) in [API_TEMPLATE, HELPER_TEMPLATE]
         .into_iter()
         .zip(renderers)
     {
@@ -32,23 +31,9 @@ fn shared_runtime_policy_rejects_service_directory_ownership_and_group_loss() {
                 Err(ReleaseError::UnitPolicyViolation { .. })
             ));
         }
-        let inaccessible = template.replace("SupplementaryGroups=@PLUGIN_SHARED_GROUP@", "");
+        let with_supp = template.replace("[Service]", "[Service]\nSupplementaryGroups=dam-hopper-plugins");
         assert!(matches!(
-            render(&inaccessible, &ctx),
-            Err(ReleaseError::UnitPolicyViolation { .. })
-        ));
-    }
-}
-
-#[test]
-fn runner_policy_rejects_missing_or_wrong_api_peer_identity() {
-    let mut ctx = create_valid_context();
-    ctx.api_uid = "65534".into();
-    let template = include_str!("../../deploy/systemd/dam-hopper-plugin-runner.service.in");
-    for replacement in ["", "--expected-api-uid 1000"] {
-        let unsafe_template = template.replace("--expected-api-uid @API_UID@", replacement);
-        assert!(matches!(
-            render_runner_unit(&unsafe_template, &ctx),
+            render(&with_supp, &ctx),
             Err(ReleaseError::UnitPolicyViolation { .. })
         ));
     }
@@ -444,18 +429,12 @@ fn test_stage_candidate_units_roles() {
     std::fs::write(&cli_bin, "cli").unwrap();
     let helper_bin = target_dir.join("bin/dam-hopper-idle-suspend-helper");
     std::fs::write(&helper_bin, "helper").unwrap();
-    let runner_bin = target_dir.join("bin/dam-hopper-plugin-runner");
-    std::fs::write(&runner_bin, "runner").unwrap();
-    let node_bin = target_dir.join("bin/node");
-    std::fs::write(&node_bin, "node").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&server_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&web_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&mgr_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&cli_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&helper_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::set_permissions(&runner_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::set_permissions(&node_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Create dummy manifest
     let manifest = ReleaseManifest {
         schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
@@ -522,17 +501,6 @@ fn test_stage_candidate_units_roles() {
     let mut host_config = HostConfig::new(TargetRole::Server, origins.clone()).unwrap();
     host_config.service_user = Some("nobody".to_string());
     save_host_config(&layout.host_config_path(), &host_config).unwrap();
-    std::fs::remove_file(&node_bin).unwrap();
-    assert!(stage_candidate_units(
-        &layout,
-        &target_dir,
-        &manifest,
-        TargetRole::Server,
-        &origins,
-    )
-    .is_err());
-    std::fs::write(&node_bin, "node").unwrap();
-    std::fs::set_permissions(&node_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     stage_candidate_units(
         &layout,
         &target_dir,
@@ -549,6 +517,9 @@ fn test_stage_candidate_units_roles() {
         .join("dam-hopper-idle-suspend-helper.service")
         .exists());
     assert!(pending_units
+        .join("dam-hopper-runtime.conf")
+        .exists());
+    assert!(!pending_units
         .join("dam-hopper-plugin-runner.service")
         .exists());
     assert!(!pending_units.join("dam-hopper-web.service").exists());
