@@ -80,7 +80,7 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
-- Workspace Advisor remains hosted through the EVCrate plugin in Workspace (IDE dock, Terminal float, compact overlay); Phase 02 adds a native Rust history domain (`server/src/advisor/`), `/api/advisor/*` routes, a default-off server toggle, and `require_admin` authorization with final-root symlink rejection. UI cutover, plugin retirement, and production qualification remain later phases; see the [native Advisor architecture/API](./architecture/native-advisor.md).
+- Phase 04 adds `packages/ui/src/advisor/AdvisorPanel.tsx` with Overview, History, Configuration, and Evaluations views, owner-bound `NativeAdvisorProvider` calls, abortable requests, local tabs, and `.native-advisor` CSS. Its Advisor path has 0 iframe/srcdoc, MessagePort/plugin bridge, or nested React root; `WorkspaceAdvisorHost` still wraps `PluginHost` pending Phase 05. The native Rust history/status/API remains default-off and admin-only. See the [native Advisor architecture](./architecture/native-advisor.md).
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

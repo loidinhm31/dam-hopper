@@ -1,5 +1,43 @@
 // Transport-agnostic API client — supports explicit owner-bound createApiClient and legacy ambient delegation.
-import { getTransport, type Transport } from "./transport.js";
+import { getTransport, type Transport, type TransportInvokeOptions } from "./transport.js";
+import type {
+  AdvisorStatusDto,
+  AdvisorSettingsDto,
+  AdvisorSettingsUpdateDto,
+  HistoryRefreshResultDto,
+  HistorySummaryParamsDto,
+  HistorySummaryResultDto,
+  HistoryPageParamsDto,
+  HistoryPageResultDto,
+  HistoryDetailParamsDto,
+  HistoryDetailResultDto,
+  PolicyReadCurrentResultDto,
+  EvaluationsListParamsDto,
+  EvaluationsListResultDto,
+  EvaluationsReadParamsDto,
+  EvaluationsReadResultDto,
+  EvaluationsCompareParamsDto,
+  EvaluationsCompareResultDto,
+} from "../advisor/advisor-types.js";
+export type {
+  AdvisorStatusDto,
+  AdvisorSettingsDto,
+  AdvisorSettingsUpdateDto,
+  HistoryRefreshResultDto,
+  HistorySummaryParamsDto,
+  HistorySummaryResultDto,
+  HistoryPageParamsDto,
+  HistoryPageResultDto,
+  HistoryDetailParamsDto,
+  HistoryDetailResultDto,
+  PolicyReadCurrentResultDto,
+  EvaluationsListParamsDto,
+  EvaluationsListResultDto,
+  EvaluationsReadParamsDto,
+  EvaluationsReadResultDto,
+  EvaluationsCompareParamsDto,
+  EvaluationsCompareResultDto,
+};
 import type {
   ExplorerLanguageFilter,
   FsEventDto,
@@ -3115,6 +3153,91 @@ export function createApiClient(
           });
         }),
     },
+    advisor: {
+      status: (options?: TransportInvokeOptions) =>
+        transport.invoke<AdvisorStatusDto>("advisor:status", undefined, options),
+      updateSettings: (
+        body: AdvisorSettingsUpdateDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<AdvisorSettingsDto>(
+          "advisor:settings:update",
+          body,
+          options,
+        ),
+      refreshHistory: (
+        body?: { projectId?: string | null },
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<HistoryRefreshResultDto>(
+          "advisor:history:refresh",
+          body,
+          options,
+        ),
+      historySummary: (
+        body: HistorySummaryParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<HistorySummaryResultDto>(
+          "advisor:history:summary",
+          body,
+          options,
+        ),
+      historyPage: (
+        body: HistoryPageParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<HistoryPageResultDto>(
+          "advisor:history:page",
+          body,
+          options,
+        ),
+      historyDetail: (
+        body: HistoryDetailParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<HistoryDetailResultDto>(
+          "advisor:history:detail",
+          body,
+          options,
+        ),
+      policyCurrent: (
+        body?: unknown,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<PolicyReadCurrentResultDto>(
+          "advisor:policy:current",
+          body,
+          options,
+        ),
+      evaluationsList: (
+        body?: EvaluationsListParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<EvaluationsListResultDto>(
+          "advisor:evaluations:list",
+          body,
+          options,
+        ),
+      evaluationsRead: (
+        body: EvaluationsReadParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<EvaluationsReadResultDto>(
+          "advisor:evaluations:read",
+          body,
+          options,
+        ),
+      evaluationsCompare: (
+        body: EvaluationsCompareParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<EvaluationsCompareResultDto>(
+          "advisor:evaluations:compare",
+          body,
+          options,
+        ),
+    },
   };
 }
 
@@ -3651,6 +3774,45 @@ export interface ApiClient {
     onLifecycleRevision: (
       listener: (event: PluginLifecycleRevisionEvent) => void,
     ) => () => void;
+  };
+  advisor: {
+    status: (options?: TransportInvokeOptions) => Promise<AdvisorStatusDto>;
+    updateSettings: (
+      body: AdvisorSettingsUpdateDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<AdvisorSettingsDto>;
+    refreshHistory: (
+      body?: { projectId?: string | null },
+      options?: TransportInvokeOptions,
+    ) => Promise<HistoryRefreshResultDto>;
+    historySummary: (
+      body: HistorySummaryParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<HistorySummaryResultDto>;
+    historyPage: (
+      body: HistoryPageParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<HistoryPageResultDto>;
+    historyDetail: (
+      body: HistoryDetailParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<HistoryDetailResultDto>;
+    policyCurrent: (
+      body?: unknown,
+      options?: TransportInvokeOptions,
+    ) => Promise<PolicyReadCurrentResultDto>;
+    evaluationsList: (
+      body?: EvaluationsListParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<EvaluationsListResultDto>;
+    evaluationsRead: (
+      body: EvaluationsReadParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<EvaluationsReadResultDto>;
+    evaluationsCompare: (
+      body: EvaluationsCompareParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<EvaluationsCompareResultDto>;
   };
 }
 
