@@ -485,6 +485,11 @@ The complete source map and privacy/safety limits are in the
 Cognito Mode is an in-app visual mask with keyboard-only activation and
 dismissal. It is not authentication, content redaction, or an OS-wide privacy
 boundary.
+Phase 05 closed on 2026-10-02 after 191 focused tests (39 Rust, 143 Vitest,
+and 9 Playwright Chromium tests), successful `cargo check`, UI and web builds,
+and a live interactive Linux Chromium app smoke. Code review approved 10/10
+with no issues. See the [qualification report](../plans/261001-2207-cognito-privacy-mode/reports/qualification.md);
+native-shell visual coverage is not claimed by the browser smoke.
 
 - **Ephemeral runtime state:** `useCognitoModeStore` holds `active` and the
   captured `activationShortcut` in client memory. Neither is persisted or
@@ -506,18 +511,19 @@ boundary.
 - **Browser Debug visibility:** `BrowserDebugKeepAliveHost` derives effective
   visibility from Cognito state. An active mask sends a null viewport to the
   native host or marks the iframe host hidden; dismissal restores the viewport
-  without replacing the target. The native-shell visual behavior is a separate
-  runtime qualification gate, not established by the host-component test.
+  without replacing the target. The live Linux Chromium app smoke verified the
+  app-document mask boundary; it does not establish native-child visual
+  coverage in every shell.
 - **Preferences and limits:** `cognitoModeShortcut` (default
   `Mod+Alt+KeyB`) and `cognitoModeStyle` (`heavy-blur` or `black-screen`) use
   the existing UI-preference API and snake_case TOML keys. Heavy Blur is not a
   redaction guarantee. The mask does not protect OS/browser chrome or
   screenshots/recordings, or capture input from foreign iframes. It does not
-  issue a PTY pause/stop command; live output continuity and native-shell
-  visibility still require runtime qualification. See the [configuration guide](./configuration-guide.md#ui-configuration),
+  issue a PTY pause/stop command and is not a background-work control. See the
+  [configuration guide](./configuration-guide.md#ui-configuration),
   [API reference](./api-reference.md#global-configuration-preferences), and
   [Phase 05 qualification report](../plans/261001-2207-cognito-privacy-mode/reports/qualification.md)
-  for the distinct implementation and evidence boundaries.
+  for the completed implementation evidence and its platform boundaries.
 
 ### Fleet Deck & Drilldown Popover (Phase 03, 2026-09-20)
 

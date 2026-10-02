@@ -1,85 +1,54 @@
 # Phase 05 Qualification and Smoke — Test Report
 
 **Date:** 2026-10-02  
-**Scope:** Requested focused regressions, browser test, lint, and complete UI/backend test commands.  
-**Result:** **Automated test outcome is green:** all final successful test invocations passed (100% of executed, non-ignored tests; six ignored), and the latest lint run exited 0. The full UI suite passed; post-fix backend, browser, and lint reruns are green. Phase 05 is not fully qualified because interactive actual-app C01–C16 and supported native-shell/platform smoke were not run.
+**Scope:** Requested Phase 05 build, focused Rust/Vitest, browser, and lint recheck.  
+**Result:** **All 10 requested commands passed (100%).** The focused tests passed **191/191** (39 Rust + 143 Vitest + 9 browser test instances), with **0 failures**. All 3 build gates completed successfully; lint exited 0 with **0 errors**. This confirms the requested automated gates, not the still-unrun interactive app/native qualification.
 
-## Test results overview
+## Recheck results
 
-Counts below are per command invocation. Rust filtered totals aggregate Cargo test targets; overlapping focused filters and the full suites mean these are not unique test-case counts.
+| Command | Result | Evidence |
+|---|---|---|
+| `cargo check --manifest-path server/Cargo.toml` | Pass | Cargo finished the `dev` profile successfully; 0 errors. |
+| `pnpm --filter @dam-hopper/ui build` | Pass | `tsc -p tsconfig.json` completed with 0 TypeScript errors. |
+| `pnpm build` | Pass | Browser extension Vite build: 7 modules; web Vite build: 6,074 modules, `vite v6.4.1`, completed in 32.20s. |
+| `cargo test --manifest-path server/Cargo.toml cognito` | Pass | 6 passed, 0 failed; 1,761 filtered. |
+| `cargo test --manifest-path server/Cargo.toml ui_config` | Pass | 18 passed, 0 failed; 1,749 filtered. |
+| `cargo test --manifest-path server/Cargo.toml merge_global_ui_config` | Pass | 5 passed, 0 failed; 1,762 filtered. |
+| `cargo test --manifest-path server/Cargo.toml update_global_ui_at_path` | Pass | 10 passed, 0 failed; 1,757 filtered. |
+| Focused 12-file Vitest command (below) | Pass | 143 passed, 0 failed; 12 test files. |
+| `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/cognito-mode.browser.tsx` | Pass | 9 passed, 0 failed; 1 browser test file. |
+| `pnpm lint` | Pass | ESLint exited 0: **0 errors, 157 warnings**. |
 
-| Command | Result | Passed | Failed | Skipped / ignored | Filtered |
-|---|---:|---:|---:|---:|---:|
-| `cargo test --manifest-path server/Cargo.toml cognito` | Pass | 6 | 0 | 0 | 1,761 |
-| `cargo test --manifest-path server/Cargo.toml ui_config` | Pass | 18 | 0 | 0 | 1,749 |
-| `cargo test --manifest-path server/Cargo.toml merge_global_ui_config` | Pass | 5 | 0 | 0 | 1,762 |
-| `cargo test --manifest-path server/Cargo.toml update_global_ui_at_path` | Pass | 10 | 0 | 0 | 1,757 |
-| Focused Vitest command (12 files) | Pass | 143 | 0 | 0 | Not reported by Vitest |
-| Cognito browser Vitest command (1 file) | Pass | 9 | 0 | 0 | Not reported by Vitest |
-| Cognito browser Vitest command (post-fix rerun) | Pass | 9 | 0 | 0 | Not reported by Vitest |
-| `pnpm --filter @dam-hopper/ui test` (full UI) | Pass | 2,186 | 0 | 0 | 0 (no test filter used) |
-| `cargo test --manifest-path server/Cargo.toml` (post-fix full rerun) | Pass | 1,761 | 0 | 6 | 0 |
-| `pnpm lint` (post-fix rerun) | Pass | N/A | N/A | N/A | N/A |
-| `cargo test --manifest-path server/Cargo.toml test_unmanaged_report_hook_does_not_read_open_stdin` | Pass | 1 | 0 | 0 | 1,766 |
+Focused Vitest command:
 
-Across successful invocations, **4,148 test instances passed, 0 failed, 6 were ignored, and 8,795 were filtered by Rust commands**. These are run-level counts with intentional overlap between focused and full suites, not unique test cases. Vitest does not report filtered counts. The initial pre-fix backend and lint failures were resolved by post-fix reruns; details follow.
-
-Vitest reported selected-file/test totals but no separate filtered counter for focused/browser selections. No coverage command/report was run; coverage percentages are unavailable.
-
-## Command results and resolved initial failures
-
-### Focused Rust regressions
-
-All four commands exited successfully. Their command-level counts and filtered totals are listed above. Cargo emitted compile warnings for unused imports and dead code, including unused `chrono::Utc`, `EncodingKey`/`Header`/`encode`, `atomic::Ordering`, and `TestClaims`; warnings did not fail these runs.
-
-### Focused Vitest and browser regression
-
-- The 12 requested UI files passed: **143 tests**, **12 files**.
-- `browser-tests/cognito-mode.browser.tsx` passed in the configured Playwright Chromium browser run: **9 tests**, **1 file**.
-
-### Lint — passed after fix
-
-The latest `pnpm lint` run exited successfully: **0 errors, 157 warnings**. The two `react-hooks/refs` errors reported by the initial pre-fix run in `packages/ui/browser-tests/cognito-mode.browser.tsx` (render-time ref assignments at lines 50 and 52) no longer appear. The initial lint run exited 1; the post-fix run is green.
-
-### Full UI suite — passed with non-fatal jsdom output
-
-`pnpm --filter @dam-hopper/ui test` passed: **2,186 tests**, **291 test files**, no failures or skips reported. The run printed two jsdom messages, `Error: Not implemented: navigation (except hash changes)`, from hyperlink navigation. They were non-fatal; Vitest completed successfully in **14.81s**.
-
-### Full backend suite — passed after fix
-
-The initial pre-fix `cargo test --manifest-path server/Cargo.toml` run failed at the lib target: `1290 passed; 1 failed; 2 ignored; 0 filtered out`. The failed test was:
-
-```text
-agent_status::hook_reporter::tests::test_unmanaged_report_hook_does_not_read_open_stdin
-panicked at src/agent_status/hook_reporter.rs:959:13:
-unmanaged report hook must not read stdin
+```bash
+pnpm --filter @dam-hopper/ui exec vitest run src/lib/shortcuts.test.ts src/lib/ui-config.test.ts src/lib/terminal-keyboard-shortcuts.test.ts src/stores/settings.test.ts src/stores/cognito-mode.test.ts src/hooks/use-cognito-mode-input-guard.test.tsx src/components/organisms/CognitoModeOverlay.test.tsx src/components/organisms/SettingsKeyboardShortcutsSection.test.tsx src/components/organisms/SettingsAppearanceSection.test.tsx src/components/organisms/TerminalPanel.test.tsx src/components/organisms/PaneContainer.test.tsx src/components/organisms/BrowserDebugKeepAliveHost.test.tsx
 ```
 
-After the fix, the focused command `cargo test --manifest-path server/Cargo.toml test_unmanaged_report_hook_does_not_read_open_stdin` passed **1/1** (1,766 filtered across 63 suites). The complete backend rerun passed **1,761; 0 failed; 6 ignored; 0 filtered** across **64 suites**. No test target failed. Its lib target reported 1,291 passed and 2 ignored; command wall time was **131.32s**.
+The Rust focused commands totaled **39 passed, 0 failed**, with **7,029 filtered** across the four invocations. Combined with Vitest and browser runs, the requested test commands report **191 passed, 0 failed**. Counts are per invocation and are not a claim of unique tests across any other suite. Vitest reported 12/12 and 1/1 files; no coverage run was requested, so coverage percentages are unavailable.
 
-### Post-fix Cognito browser rerun
+## Build output and performance
 
-After the browser test source change, the Cognito browser test passed again: **9 tests, 1 file** (Vitest duration **1.92s**). One intervening launch attempt failed before tests started because **port 15173 was already in use** (`Test Files: no tests; Tests: no tests; Errors: 1`). The port was subsequently free and the rerun passed; this was a browser harness startup failure, not a test failure.
+- `cargo check`: successful `dev` profile, Cargo target build reported **0.27s**.
+- UI package build: `tsc -p tsconfig.json` exited successfully; command wall time **7.60s**.
+- Root build: browser-debug extension bundle was produced (`7` modules) and staged at `apps/web/public/browser-debug-extension/dam-hopper-browser-debug.zip`; web production bundle emitted `apps/web/dist/index.html` and assets after transforming **6,074 modules**. Vite reported **32.20s** for the web build; command wall time **34.12s**. No build errors were reported.
+- Focused Vitest duration: **1.17s**; browser Vitest duration: **1.90s**.
+- `pnpm lint` command wall time: **18.60s**.
+- No benchmark or coverage command was run.
 
-## Performance and build status
+## Prior full-suite evidence
 
-- Focused Vitest: **1.15s**; post-fix browser test: **1.92s**.
-- Full UI Vitest: **14.81s**.
-- Post-fix full backend: **131.32s** command wall time; lib target test execution **16.24s**.
-- Post-fix `pnpm lint`: **19.24s** command wall time.
-- No build, benchmark, or coverage command was requested/run. Build status and coverage metrics are therefore **not measured**.
-
+The earlier version of this report recorded separate full-suite runs; they were **not rerun as part of this recheck**. That evidence recorded the full UI suite at **2,186 passed across 291 files, 0 failed**, and the full backend suite at **1,761 passed, 0 failed, 6 ignored**. Those historical runs are not included in the **191** current-recheck total above.
 
 ## Qualification boundaries
 
-This evidence covers automated focused tests, one real-browser test file, lint, and the named full suites. It does **not** prove the phase plan's interactive actual-app scenarios (C01–C16), OS-specific shortcut delivery, audible notification behavior, native Browser Debug child visibility, or platform smoke. No actual server/UI interactive smoke or supported native-shell smoke was run; no claim is made for those gates.
+The requested build, focused tests, browser test, and lint gates are now verified. This evidence does **not** prove the phase plan's interactive actual-app scenarios (C01–C16), OS-specific shortcut delivery, audible notification behavior, native Browser Debug child visibility, or supported native-shell/platform smoke. No actual server/UI interactive smoke or supported native-shell smoke was run; Phase 05 is therefore **not fully qualified**.
 
 ## Recommendations / next steps
 
-1. Complete the planned interactive app scenarios C01–C16 and supported native-shell/platform smoke; record unavailable platform evidence explicitly.
-2. Run the planned affected-project build gates (`pnpm --filter @dam-hopper/ui build` and `pnpm build`) in the coordinator's final validation pass.
-3. Track the 157 lint warnings separately; they did not block lint or test success.
+1. Complete interactive C01–C16 and supported native-shell/platform smoke; record unavailable platform evidence explicitly.
+2. Track the **157 lint warnings** separately; they did not block lint or the requested gate pass.
 
 ## Unresolved questions
 
-No unresolved product questions. Interactive/native qualification and planned build gates remain unverified, so Phase 05 is not complete.
+No unresolved product questions. Interactive/native qualification remains unverified, so the phase is not complete.

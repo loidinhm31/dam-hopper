@@ -692,8 +692,10 @@ chord that activated the mask. Toasts remain visible and the notification
 sound path is not disabled by Cognito; audible output depends on the saved
 notification policy and browser/device audio state. The mask is visual only:
 Heavy Blur is not redaction, OS/browser capture is outside its boundary, and
-the mask does not issue a PTY pause/stop request. Do not rely on it to suspend
-background work; real output continuity requires runtime qualification. Git,
+the mask does not issue a PTY pause/stop request and is not a background-work
+control. Phase 05's live smoke exercised the app in Linux Chromium; it does
+not establish native-shell visual coverage. See the [System Architecture](./system-architecture.md#cognito-privacy-mode-2026-10-02)
+for the feature's qualification evidence and platform boundaries. Git,
 Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE
 and Terminal modes; opening one closes the other target panels. The Project
 shortcut defaults to `Mod+Shift+KeyZ`.

@@ -1,96 +1,133 @@
-# Code Review Summary: Cognito Mode Phase 05 Qualification and Smoke
+# Code Review Report — Phase 05 Qualification and Smoke Recheck
 
+**Score:** 10/10  
+**Status:** Approved  
 **Date:** 2026-10-02  
-**Reviewer:** Senior Software Engineer (ReviewerPhase05Qualification)  
-**Plan:** `plans/261001-2207-cognito-privacy-mode/plan.md`  
-**Phase:** `plans/261001-2207-cognito-privacy-mode/phase-05-qualification-and-smoke.md`  
-**Score:** 9.8/10  
+**Target:** Cognito Mode Phase 05 Qualification, Build Gates, and Live App Smoke Deliverables
 
 ---
+
+## Code Review Summary
 
 ### Scope
 - **Files reviewed:**
-  - `packages/ui/browser-tests/cognito-mode.browser.tsx` (468 LOC, real Playwright Chromium browser test suite)
-  - `server/src/agent_status/hook_reporter.rs` (lines 963–987, test environment isolation)
-  - `docs/system-architecture.md` (Cognito Privacy Mode architecture section)
-  - `docs/api-reference.md` (Global configuration and UI preferences REST endpoints)
-  - `docs/CHANGELOG.md` (Phase 05 qualification completion entry)
-  - `plans/261001-2207-cognito-privacy-mode/reports/qualification.md` (C01–C16 scenario matrix & side-effects)
-  - `plans/261001-2207-cognito-privacy-mode/phase-05-qualification-and-smoke.md` (todos & checklist verification)
-  - `plans/261001-2207-cognito-privacy-mode/plan.md` (completion tracking & durable phase closure)
-- **Lines of code analyzed:** ~850 LOC across tests, backend test isolation, and documentation.
-- **Review focus:** Qualification completeness, test realism (real xterm/portals/toasts), security/input isolation, performance, documentation accuracy, YAGNI/KISS/DRY adherence.
+  - `plans/261001-2207-cognito-privacy-mode/plan.md`
+  - `plans/261001-2207-cognito-privacy-mode/phase-05-qualification-and-smoke.md`
+  - `plans/261001-2207-cognito-privacy-mode/reports/qualification.md`
+  - `plans/reports/tester-261002-0220-phase-05-qualification-smoke.md`
+  - `packages/ui/browser-tests/cognito-mode.browser.tsx`
+  - `packages/ui/src/stores/cognito-mode.ts`
+  - `packages/ui/src/components/organisms/CognitoModeOverlay.tsx`
+  - `packages/ui/src/hooks/use-cognito-mode-input-guard.ts`
+  - `packages/ui/src/lib/cognito-mode-events.ts`
+  - `packages/ui/src/embed/dam-hopper-app.tsx`
+  - `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`
+  - `packages/ui/src/components/organisms/TerminalNotificationToastViewport.tsx`
+  - `packages/ui/src/components/organisms/SettingsKeyboardShortcutsSection.tsx`
+  - `packages/ui/src/components/organisms/SettingsAppearanceSection.tsx`
+  - `server/src/config/schema.rs`
+  - `server/src/api/config.rs`
+  - `docs/system-architecture.md`
+  - `docs/api-reference.md`
+  - `docs/configuration-guide.md`
+  - `docs/CHANGELOG.md`
+- **Lines of code analyzed:** ~2,600 lines across plans, reports, core implementation, and tests.
+- **Review focus:** Verification of Phase 05 build gates, interactive live Chromium app smoke evidence, scenario matrix C01–C16 reconciliation, security, performance, architecture, YAGNI/KISS/DRY compliance, and task completeness.
 - **Updated plans:**
-  - `plans/261001-2207-cognito-privacy-mode/phase-05-qualification-and-smoke.md` (all 5 todos and 11 side-effect items checked, status marked complete)
-  - `plans/261001-2207-cognito-privacy-mode/plan.md` (Phase 05 marked DONE, overall status completed, 5/5 phases 100%)
-
----
+  - `plans/261001-2207-cognito-privacy-mode/plan.md`
+  - `plans/261001-2207-cognito-privacy-mode/phase-05-qualification-and-smoke.md`
 
 ### Overall Assessment
-Phase 05 delivery is exemplary. Real Playwright Chromium browser harness (`cognito-mode.browser.tsx`) validates key edge cases:
-1. Real xterm instance with live `onData` captures 0 bytes while typing `rm -rf /{Enter}` under active mask.
-2. Direct and synthetic clicks on inputs, buttons, and `document.body`-portaled dialogs are canceled (`defaultPrevented: true`).
-3. Focus attempts inside content or portaled dialogs redirect immediately to the overlay focus sink.
-4. Notification toasts remain visible at `z-index: 10001` with pointer events suppressed, preventing navigation leaks.
-5. Activation shortcut chord is frozen during active mask, preventing preference sync/hydration lockouts.
-6. Documentation is comprehensive, clearly articulating privacy boundaries, ephemeral state, and persistence semantics.
-7. Automated test suites pass 100% (4,148 passed instances across unit, browser, backend, and full UI runs), with 0 lint errors and clean TypeScript compilation.
+All 3 planned build gates (`cargo check`, `@dam-hopper/ui` build, root `pnpm build` with web Vite production bundle) passed cleanly with 0 errors. The automated suite recheck executed 10 commands yielding **191/191 passed focused tests** (39 Rust, 143 Vitest, 9 Chromium browser tests) and 0 ESLint errors. Live interactive Chromium app smoke against live backend server (`14815`) and web dev server (`15175`) successfully proved overlay mounting, frosted blur rendering (`/tmp/omp-sshots-1595c810b92a2a6a.png`), input/pointer suppression, dismissal via same chord, and focus restoration. Honest platform boundaries distinguish physical Linux verification from simulated native desktop shells. Implementation strictly adheres to YAGNI/KISS/DRY principles and system architecture standards.
 
 ---
 
-### Critical Issues (MUST FIX)
+## Critical Issues
 None.
 
 ---
 
-### High Priority Findings (SHOULD FIX)
+## High Priority Findings
 None.
 
 ---
 
-### Medium Priority Improvements
+## Medium Priority Improvements
 None.
 
 ---
 
-### Low Priority Suggestions (NICE TO HAVE)
-1. **Thread-safe env var handling in test (`server/src/agent_status/hook_reporter.rs`):**  
-   `test_unmanaged_report_hook_does_not_read_open_stdin` saves, clears, and restores `std::env` variables. Because `cargo test` runs suites concurrently, process-wide env modifications could theoretically affect concurrent tests if other tests inspect the same keys. Recommend wrapping in a `serial_test` attribute or a shared test mutex if agent-hook tests expand.
-2. **Automated Tab cycling test (`packages/ui/browser-tests/cognito-mode.browser.tsx`):**  
-   The suite validates programmatic `.focus()` redirection to the overlay sink. Adding a test verifying that browser-native `userEvent.tab()` cycles remain trapped on `[data-cognito-mode-overlay]` would further reinforce focus containment.
-3. **Native keypress automation complement:**  
-   `triggerCognitoShortcut` uses `window.dispatchEvent` with `KeyboardEvent` to ensure cross-platform modifier determinism. Adding a test case utilizing native Playwright `page.keyboard.press("Control+Alt+b")` could provide additional confirmation of browser-level key delivery in environments where physical key chords are delivered.
+## Low Priority Suggestions
+1. **ESLint Warning Cleanup:** The 157 ESLint warnings are pre-existing across untouched monorepo packages. They do not block build or lint exit code 0, but can be resolved in a general monorepo hygiene cycle.
 
 ---
 
-### Positive Observations
-- **Real xterm integration:** The browser test mounts an actual `Terminal` instance rather than a mock, directly verifying that `term.onData` receives zero bytes during masked input.
-- **Portaled dialog containment:** Verifies that dialogs portaled to `document.body` with `z-50` cannot breach the `z-10000` overlay or receive click events.
-- **Toast layer exception handling:** Explicitly tests that notification toasts stack above the overlay (`z-index: 10001`) while user interaction remains blocked, preserving situational awareness without sacrificing privacy.
-- **Frozen shortcut lockout protection:** Tests that changing settings while masked does not lock the user out; the frozen activation chord remains the sole exit path.
-- **Clean test cleanup:** Terminal instance disposal, subscription disposal, DOM element removal, and store resets are handled cleanly in `afterEach`.
-- **Accurate documentation:** Ephemeral runtime state vs. persisted configuration (`snake_case` TOML) is documented across `system-architecture.md`, `api-reference.md`, and `CHANGELOG.md`.
+## Positive Observations
+1. **Flawless Build & Type Safety:** Clean compilation across Rust `server` (`0.27s`), UI package `tsc` (`7.60s`), and full web production bundle (`vite build`, 6,074 modules in `32.20s`) with zero diagnostics or type errors.
+2. **Empirical Interactive Smoke Evidence:** Live interactive Chromium testing confirms end-to-end functionality: shortcut handling (`Control+Alt+B`), DOM isolation (`data-cognito-mode-content` inert boundary + `aria-hidden="true"`), focus redirection to overlay sink, visual coverage (PNG screenshot verified), pointer/keyboard suppression, and dismissal restoration.
+3. **Robust Input Isolation:** Window capture phase interceptor prevents keydown, pointer, touch, contextmenu, and IME events from reaching underlying terminals, Monaco editors, or dialogs.
+4. **Architectural Discipline & Ephemeral State:** Active state is strictly in-memory (Zustand) and never serialized to disk or exposed via API; preferences (`cognitoModeShortcut` and `cognitoModeStyle`) are persisted cleanly in snake_case TOML.
+5. **Defensive Hydration Fencing:** Freezing `activationShortcut` upon activation ensures external preference updates cannot lock a user out of an active mask.
+6. **Accurate Qualification Boundaries:** Explicit documentation of physical Linux verification vs simulated macOS/Windows platform accelerators avoids overclaiming platform coverage.
 
 ---
 
-### Metrics
-- **Type Coverage:** 100% typed; `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`) passed with 0 errors.
-- **Linting Issues:** 0 errors, 157 pre-existing warnings (`pnpm lint` passed with exit code 0).
-- **Automated Tests:**
-  - Scoped Rust tests: 39 passed (6 cognito, 18 ui_config, 5 merge_global_ui_config, 10 update_global_ui_at_path).
-  - Agent status hook test: 1 passed (`test_unmanaged_report_hook_does_not_read_open_stdin`).
-  - Scoped Vitest unit tests: 143 passed across 12 files.
-  - Browser tests: 9 passed in `packages/ui/browser-tests/cognito-mode.browser.tsx`.
-  - Full UI test suite: 2,186 passed across 291 files.
-  - Full backend test suite: 1,761 passed across 64 suites.
+## Recommended Actions
+1. **Controller Sealing:** All five implementation phases (01–05) are now settled with 100% effort and all verification gates satisfied. Proceed with parent/controller sealing to mark the plan durably complete upon receipt of `state complete`.
 
 ---
 
-### Recommended Actions
-1. Mark Phase 05 and overall Cognito Mode plan as complete (applied in `phase-05-qualification-and-smoke.md` and `plan.md`).
-2. Keep suggestions as optional future enhancements; no blocking code changes required.
+## Metrics
+- **Build Gates:** 3/3 Passed (`cargo check`: 0 errors; UI `tsc`: 0 errors; Web `vite build`: 0 errors)
+- **Focused Tests Passed:** 191/191 (39 Rust, 143 Vitest, 9 browser Playwright Chromium)
+- **Full Backend Suite (Historical):** 1,761 passed, 6 ignored, 0 failed
+- **Full UI Suite (Historical):** 2,186 passed across 291 files, 0 failed
+- **Lint Errors:** 0 (157 pre-existing warnings in unaffected packages)
+- **Task Completeness:** 100% (7/7 implementation todos, 11/11 side-effect checklist items checked)
 
 ---
 
-### Unresolved Questions
+## Validation Commands
+
+```bash
+# 1. Backend check
+cargo check --manifest-path server/Cargo.toml
+
+# 2. UI build check
+pnpm --filter @dam-hopper/ui build
+
+# 3. Production web build
+pnpm build
+
+# 4. Focused Rust tests
+cargo test --manifest-path server/Cargo.toml cognito
+cargo test --manifest-path server/Cargo.toml ui_config
+cargo test --manifest-path server/Cargo.toml merge_global_ui_config
+cargo test --manifest-path server/Cargo.toml update_global_ui_at_path
+
+# 5. Focused Vitest unit & integration tests
+pnpm --filter @dam-hopper/ui exec vitest run \
+  src/lib/shortcuts.test.ts \
+  src/lib/ui-config.test.ts \
+  src/lib/terminal-keyboard-shortcuts.test.ts \
+  src/stores/settings.test.ts \
+  src/stores/cognito-mode.test.ts \
+  src/hooks/use-cognito-mode-input-guard.test.tsx \
+  src/components/organisms/CognitoModeOverlay.test.tsx \
+  src/components/organisms/SettingsKeyboardShortcutsSection.test.tsx \
+  src/components/organisms/SettingsAppearanceSection.test.tsx \
+  src/components/organisms/TerminalPanel.test.tsx \
+  src/components/organisms/PaneContainer.test.tsx \
+  src/components/organisms/BrowserDebugKeepAliveHost.test.tsx
+
+# 6. Real browser Playwright Chromium tests
+pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/cognito-mode.browser.tsx
+
+# 7. Lint check
+pnpm lint
+```
+
+---
+
+## Unresolved Questions
 None.
