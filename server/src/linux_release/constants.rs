@@ -6,8 +6,10 @@ pub const RELEASE_MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const RELEASE_MANIFEST_SCHEMA_VERSION_LEGACY: u32 = 1;
 
 /// Schema version for persisted manager state.
-pub const MANAGER_STATE_SCHEMA_VERSION: u32 = 2;
-/// Legacy schema version for persisted manager state (strict n-1 migration).
+pub const MANAGER_STATE_SCHEMA_VERSION: u32 = 3;
+/// Legacy schema version 2 for persisted manager state.
+pub const MANAGER_STATE_SCHEMA_VERSION_LEGACY_V2: u32 = 2;
+/// Legacy schema version 1 for persisted manager state (strict n-1/n-2 migration).
 pub const MANAGER_STATE_SCHEMA_VERSION_LEGACY: u32 = 1;
 /// Target profile identifier.
 pub const PROFILE_ID: &str = "linux-x86_64-systemd";
@@ -62,6 +64,8 @@ pub const HELPER_SOCKET_UNIT: &str = "dam-hopper-idle-suspend-helper.socket";
 pub const RUNNER_SERVICE_UNIT: &str = "dam-hopper-plugin-runner.service";
 /// Template and installed name for the plugin runner tmpfiles configuration.
 pub const RUNNER_TMPFILES_CONF: &str = "dam-hopper-plugin-runner.conf";
+/// Template and installed name for the runtime tmpfiles configuration.
+pub const RUNTIME_TMPFILES_CONF: &str = "dam-hopper-runtime.conf";
 /// Canonical runtime socket path for the plugin runner.
 pub const DEFAULT_RUNNER_SOCKET_PATH: &str = "/run/dam-hopper/plugin-runner.sock";
 /// Canonical state directory for the owner plugin runner.
@@ -75,7 +79,6 @@ pub const ALL_SERVICE_UNITS: &[&str] = &[
     WEB_SERVICE_UNIT,
     RECOVERY_SERVICE_UNIT,
     HELPER_SERVICE_UNIT,
-    RUNNER_SERVICE_UNIT,
 ];
 
 /// Standard rollback declaration compatibility flag.

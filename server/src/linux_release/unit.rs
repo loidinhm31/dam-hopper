@@ -5,8 +5,7 @@ use super::error::ReleaseError;
 use super::origin::validate_web_origins;
 use super::unit_parser::ParsedUnit;
 use super::unit_policy::{
-    validate_api_unit_policy, validate_helper_unit_policy, validate_runner_unit_policy,
-    validate_web_unit_policy,
+    validate_api_unit_policy, validate_helper_unit_policy, validate_web_unit_policy,
 };
 use super::version::validate_version;
 use std::path::{Path, PathBuf};
@@ -18,13 +17,7 @@ pub const TOKEN_API_ORIGINS: &str = "@API_ORIGINS@";
 pub const TOKEN_API_USER: &str = "@API_USER@";
 pub const TOKEN_API_GROUP: &str = "@API_GROUP@";
 pub const TOKEN_API_HOME: &str = "@API_HOME@";
-pub const TOKEN_ADVISOR_OWNER_USER: &str = "@ADVISOR_OWNER_USER@";
-pub const TOKEN_ADVISOR_OWNER_GROUP: &str = "@ADVISOR_OWNER_GROUP@";
-pub const TOKEN_ADVISOR_OWNER_HOME: &str = "@ADVISOR_OWNER_HOME@";
-pub const TOKEN_DAM_HOPPER_STATE_DIR: &str = "@DAM_HOPPER_STATE_DIR@";
-pub const TOKEN_NODE_BIN: &str = "@NODE_BIN@";
 pub const TOKEN_API_UID: &str = "@API_UID@";
-pub const TOKEN_PLUGIN_SHARED_GROUP: &str = "@PLUGIN_SHARED_GROUP@";
 
 pub const ALLOWED_TOKENS: &[&str] = &[
     TOKEN_RELEASE_ROOT,
@@ -34,13 +27,7 @@ pub const ALLOWED_TOKENS: &[&str] = &[
     TOKEN_API_USER,
     TOKEN_API_GROUP,
     TOKEN_API_HOME,
-    TOKEN_ADVISOR_OWNER_USER,
-    TOKEN_ADVISOR_OWNER_GROUP,
-    TOKEN_ADVISOR_OWNER_HOME,
-    TOKEN_DAM_HOPPER_STATE_DIR,
-    TOKEN_NODE_BIN,
     TOKEN_API_UID,
-    TOKEN_PLUGIN_SHARED_GROUP,
 ];
 
 /// Execution context required to render candidate unit files.
@@ -53,13 +40,7 @@ pub struct UnitRenderContext {
     pub api_user: String,
     pub api_group: String,
     pub api_home: String,
-    pub advisor_owner_user: String,
-    pub advisor_owner_group: String,
-    pub advisor_owner_home: String,
-    pub dam_hopper_state_dir: String,
-    pub node_bin: String,
     pub api_uid: String,
-    pub plugin_shared_group: String,
 }
 impl UnitRenderContext {
     pub fn new(
@@ -73,7 +54,6 @@ impl UnitRenderContext {
         validate_version(&release_version)?;
         let validated_origins = validate_web_origins(&api_origins)?;
 
-        let node_bin = release_root.join("bin/node").display().to_string();
         Ok(Self {
             release_root,
             release_version,
@@ -82,13 +62,7 @@ impl UnitRenderContext {
             api_user: String::new(),
             api_group: String::new(),
             api_home: API_SERVICE_HOME.to_string(),
-            advisor_owner_user: "dam-hopper-plugin-runner".to_string(),
-            advisor_owner_group: super::constants::PLUGIN_SHARED_GROUP.to_string(),
-            advisor_owner_home: "/var/lib/dam-hopper-plugin-runner".to_string(),
-            dam_hopper_state_dir: super::constants::DEFAULT_RUNNER_STATE_DIR.to_string(),
-            node_bin,
             api_uid: "1000".to_string(),
-            plugin_shared_group: super::constants::PLUGIN_SHARED_GROUP.to_string(),
         })
     }
 
@@ -120,29 +94,6 @@ impl UnitRenderContext {
         Ok(self)
     }
 
-    pub fn with_plugin_runner_identity(
-        mut self,
-        user: String,
-        group: String,
-        home: String,
-        api_uid: u32,
-        node_bin: Option<String>,
-        state_dir: Option<String>,
-    ) -> Result<Self, ReleaseError> {
-        validate_ident_param("advisor_owner_user", &user)?;
-        validate_ident_param("advisor_owner_group", &group)?;
-        self.advisor_owner_user = user;
-        self.advisor_owner_group = group;
-        self.advisor_owner_home = home;
-        self.api_uid = api_uid.to_string();
-        if let Some(nb) = node_bin {
-            self.node_bin = nb;
-        }
-        if let Some(sd) = state_dir {
-            self.dam_hopper_state_dir = sd;
-        }
-        Ok(self)
-    }
 }
 
 fn validate_path_param(name: &'static str, path: &Path) -> Result<(), ReleaseError> {
@@ -215,13 +166,7 @@ pub fn render_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, Re
     rendered = rendered.replace(TOKEN_API_USER, &ctx.api_user);
     rendered = rendered.replace(TOKEN_API_GROUP, &ctx.api_group);
     rendered = rendered.replace(TOKEN_API_HOME, &ctx.api_home);
-    rendered = rendered.replace(TOKEN_ADVISOR_OWNER_USER, &ctx.advisor_owner_user);
-    rendered = rendered.replace(TOKEN_ADVISOR_OWNER_GROUP, &ctx.advisor_owner_group);
-    rendered = rendered.replace(TOKEN_ADVISOR_OWNER_HOME, &ctx.advisor_owner_home);
-    rendered = rendered.replace(TOKEN_DAM_HOPPER_STATE_DIR, &ctx.dam_hopper_state_dir);
-    rendered = rendered.replace(TOKEN_NODE_BIN, &ctx.node_bin);
     rendered = rendered.replace(TOKEN_API_UID, &ctx.api_uid);
-    rendered = rendered.replace(TOKEN_PLUGIN_SHARED_GROUP, &ctx.plugin_shared_group);
     // Ensure no unresolved @TOKEN@ placeholders remain
     for line in rendered.lines() {
         let mut rest = line;
@@ -271,13 +216,6 @@ pub fn render_helper_unit(template: &str, ctx: &UnitRenderContext) -> Result<Str
     Ok(rendered)
 }
 
-/// Render plugin runner service unit and validate its strict systemd policy.
-pub fn render_runner_unit(template: &str, ctx: &UnitRenderContext) -> Result<String, ReleaseError> {
-    let rendered = render_unit(template, ctx)?;
-    let parsed = ParsedUnit::parse(&rendered)?;
-    validate_runner_unit_policy(&parsed, ctx)?;
-    Ok(rendered)
-}
 
 /// Render recovery service unit and validate its strict systemd policy.
 pub fn render_recovery_unit(

@@ -213,6 +213,12 @@ impl Layout {
     pub fn tmpfiles_dir(&self) -> PathBuf {
         self.etc_dir.join("tmpfiles.d")
     }
+    /// Runtime tmpfiles configuration file:
+    /// `/etc/dam-hopper/tmpfiles.d/dam-hopper-runtime.conf`
+    pub fn runtime_tmpfiles_conf_path(&self) -> PathBuf {
+        self.tmpfiles_dir().join(super::constants::RUNTIME_TMPFILES_CONF)
+    }
+
 
     /// Plugin runner tmpfiles configuration file:
     /// `/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf`

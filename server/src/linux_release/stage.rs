@@ -52,30 +52,7 @@ pub fn determine_host_role(
     allow_origins: &[String],
     is_role_set: bool,
 ) -> Result<(TargetRole, HostConfig), ReleaseError> {
-    determine_host_role_with_plugins(
-        layout,
-        requested_role,
-        allow_origins,
-        is_role_set,
-        None,
-    )
-}
-
-/// Resolve requested role and plugin configuration without mutating host configuration.
-pub fn determine_host_role_with_plugins(
-    layout: &Layout,
-    requested_role: Option<TargetRole>,
-    allow_origins: &[String],
-    is_role_set: bool,
-    plugin_owner_user: Option<String>,
-) -> Result<(TargetRole, HostConfig), ReleaseError> {
     let existing_config = load_host_config(&layout.host_config_path())?;
-
-    let owner = plugin_owner_user.or_else(|| {
-        existing_config
-            .as_ref()
-            .and_then(|config| config.plugin_owner_user.clone())
-    });
 
     if is_role_set {
         let role = requested_role.ok_or(ReleaseError::MissingRole)?;
@@ -92,8 +69,7 @@ pub fn determine_host_role_with_plugins(
         return Ok((
             role,
             HostConfig::new(role, origins)?
-                .with_service_user(existing_service_user)
-                .with_plugin_config(owner),
+                .with_service_user(existing_service_user),
         ));
     }
 
@@ -117,15 +93,14 @@ pub fn determine_host_role_with_plugins(
             Ok((
                 role,
                 HostConfig::new(role, origins)?
-                    .with_service_user(existing_service_user)
-                    .with_plugin_config(owner),
+                    .with_service_user(existing_service_user),
             ))
         }
         None => {
             let role = requested_role.ok_or(ReleaseError::MissingRole)?;
             Ok((
                 role,
-                HostConfig::new(role, allow_origins.to_vec())?.with_plugin_config(owner),
+                HostConfig::new(role, allow_origins.to_vec())?,
             ))
         }
     }
@@ -153,27 +128,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_options_preserve_independently_omitted_host_settings() {
+    fn host_role_preserves_independently_omitted_host_settings() {
         let root = tempfile::tempdir().unwrap();
         let layout = Layout::with_root(root.path());
-        let original = HostConfig::new(TargetRole::Server, vec![])
-            .unwrap()
-            .with_plugin_config(Some("existing-owner".into()));
+        let original = HostConfig::new(TargetRole::Server, vec![]).unwrap();
         save_host_config(&layout.host_config_path(), &original).unwrap();
 
         for role_set in [false, true] {
-            let (_, changed_owner) = determine_host_role_with_plugins(
+            let (role, _) = determine_host_role(
                 &layout,
                 Some(TargetRole::Server),
                 &[],
                 role_set,
-                Some("new-owner".into()),
             )
             .unwrap();
-            assert_eq!(
-                changed_owner.plugin_owner_user.as_deref(),
-                Some("new-owner")
-            );
+            assert_eq!(role, TargetRole::Server);
         }
         assert_eq!(
             load_host_config(&layout.host_config_path())

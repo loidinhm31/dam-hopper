@@ -59,7 +59,7 @@ pub mod unit_policy;
 pub mod version;
 pub use account::{
     get_group_by_gid, get_group_gid_by_name, get_user_by_name, resolve_api_runtime_identity,
-    resolve_service_user, verify_api_service_account, verify_plugin_owner_account,
+    resolve_service_user, verify_api_service_account,
     verify_web_sysuser_account, ApiRuntimeIdentity, UserInfo,
 };
 pub use api_runtime::{provision_and_start_api_with, provision_api_runtime, provision_installed_api_runtime};
@@ -87,7 +87,7 @@ pub use durable_fs::{
 };
 pub use error::ReleaseError;
 pub use health::{
-    probe_http_endpoint, probe_runner_health, wait_for_health_stability, HealthProbeTarget,
+    probe_http_endpoint, wait_for_health_stability, HealthProbeTarget,
     HttpProbeOutcome, DEFAULT_PROBE_INTERVAL, DEFAULT_REQUIRED_CONSECUTIVE,
     DEFAULT_STARTUP_DEADLINE,
 };
@@ -151,14 +151,13 @@ pub use systemd_backup::{
 pub use transaction::ActivationTransaction;
 pub use unit::render_recovery_unit;
 pub use unit::{
-    render_api_unit, render_helper_unit, render_runner_unit, render_unit, render_web_unit,
+    render_api_unit, render_helper_unit, render_unit, render_web_unit,
     UnitRenderContext, TOKEN_API_GROUP, TOKEN_API_HOME, TOKEN_API_ORIGINS, TOKEN_API_USER,
     TOKEN_PUBLIC_CONFIG, TOKEN_RELEASE_ROOT, TOKEN_RELEASE_VERSION,
 };
 pub use unit_parser::ParsedUnit;
 pub use unit_policy::{
-    validate_api_unit_policy, validate_helper_unit_policy, validate_runner_unit_policy,
-    validate_web_unit_policy,
+    validate_api_unit_policy, validate_helper_unit_policy, validate_web_unit_policy,
 };
 pub use version::{
     validate_commit_sha, validate_release_tag, validate_sha256_hex, validate_version,

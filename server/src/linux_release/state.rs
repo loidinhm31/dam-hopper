@@ -4,8 +4,10 @@
 //! Monotonic generation increments with every durable commit or boundary.
 
 use super::constants::{
-    MANAGER_STATE_SCHEMA_VERSION, MANAGER_STATE_SCHEMA_VERSION_LEGACY, MAX_STATE_BYTES,
+    MANAGER_STATE_SCHEMA_VERSION, MANAGER_STATE_SCHEMA_VERSION_LEGACY,
+    MANAGER_STATE_SCHEMA_VERSION_LEGACY_V2, MAX_STATE_BYTES,
 };
+use super::lock::DeploymentLock;
 use super::durable_fs::{atomic_write_json, copy_file_durable};
 use super::error::ReleaseError;
 use super::journal::DeploymentState;
@@ -59,13 +61,10 @@ impl ManagerState {
     }
 
     pub fn validate(&self) -> Result<(), ReleaseError> {
-        if self.schema_version != MANAGER_STATE_SCHEMA_VERSION
-            && self.schema_version != MANAGER_STATE_SCHEMA_VERSION_LEGACY
-        {
+        if self.schema_version != MANAGER_STATE_SCHEMA_VERSION {
             return Err(ReleaseError::Config(format!(
-                "unsupported state schema version {}, expected {} or {}",
+                "unsupported state schema version {}, expected {}",
                 self.schema_version,
-                MANAGER_STATE_SCHEMA_VERSION_LEGACY,
                 MANAGER_STATE_SCHEMA_VERSION
             )));
         }
@@ -183,19 +182,165 @@ pub fn load_or_init_manager_state(path: &Path) -> Result<ManagerState, ReleaseEr
         )));
     }
 
-    let mut state: ManagerState = serde_json::from_slice(&content).map_err(|e| {
+    let raw_val: serde_json::Value = serde_json::from_slice(&content).map_err(|e| {
         ReleaseError::Config(format!(
             "failed to parse authoritative state file {}: {e}",
             path.display()
         ))
     })?;
-    state.validate()?;
-    if state.schema_version == MANAGER_STATE_SCHEMA_VERSION_LEGACY {
-        state.schema_version = MANAGER_STATE_SCHEMA_VERSION;
+
+    let schema_ver = raw_val
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            ReleaseError::Config(format!(
+                "authoritative state file {} is missing valid schemaVersion",
+                path.display()
+            ))
+        })? as u32;
+
+    if schema_ver == MANAGER_STATE_SCHEMA_VERSION {
+        let state: ManagerState = serde_json::from_value(raw_val).map_err(|e| {
+            ReleaseError::Config(format!(
+                "failed to parse authoritative state file {}: {e}",
+                path.display()
+            ))
+        })?;
+        state.validate()?;
+        Ok(state)
+    } else if schema_ver == MANAGER_STATE_SCHEMA_VERSION_LEGACY
+        || schema_ver == MANAGER_STATE_SCHEMA_VERSION_LEGACY_V2
+    {
+        migrate_legacy_manager_state(path, &content)
+    } else {
+        Err(ReleaseError::Config(format!(
+            "unsupported state schema version {schema_ver}, expected {MANAGER_STATE_SCHEMA_VERSION}"
+        )))
     }
-    Ok(state)
 }
 
+const OBSOLETE_PLUGIN_FIELDS: &[&str] = &[
+    "runnerUnitSha256",
+    "runnerTmpfilesSha256",
+    "pluginOwnerUser",
+    "pluginOwnerUid",
+    "pluginAdminConfigSha256",
+    "pluginRuntimeNodeVersion",
+    "pluginRuntimeNodeSha256",
+    "pluginPlatformEnabled",
+];
+
+const ALLOWED_TOP_LEVEL_KEYS: &[&str] = &[
+    "schemaVersion",
+    "generation",
+    "updatedAt",
+    "active",
+    "previous",
+    "pending",
+    "transaction",
+    "latestFailure",
+];
+
+fn strip_obsolete_plugin_fields(val: &mut serde_json::Value) {
+    if let serde_json::Value::Object(map) = val {
+        for field in OBSOLETE_PLUGIN_FIELDS {
+            map.remove(*field);
+        }
+    }
+}
+
+/// Migrate a legacy manager state envelope (v1 or v2) to native schema version 3.
+/// Validates strict legacy envelope, backs up original, strips obsolete plugin fields,
+/// bumps generation once, and durably persists the migrated state.
+pub fn migrate_legacy_manager_state(
+    path: &Path,
+    content: &[u8],
+) -> Result<ManagerState, ReleaseError> {
+    let mut raw_val: serde_json::Value = serde_json::from_slice(content).map_err(|e| {
+        ReleaseError::Config(format!(
+            "failed to parse authoritative state file {}: {e}",
+            path.display()
+        ))
+    })?;
+
+    let obj = raw_val.as_object_mut().ok_or_else(|| {
+        ReleaseError::Config("authoritative state must be a JSON object".into())
+    })?;
+
+    for key in obj.keys() {
+        if !ALLOWED_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            return Err(ReleaseError::Config(format!(
+                "refusing manager state migration: unknown top-level field '{key}' in {}",
+                path.display()
+            )));
+        }
+    }
+
+    let schema_ver = obj
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            ReleaseError::Config(format!(
+                "authoritative state file {} is missing valid schemaVersion",
+                path.display()
+            ))
+        })? as u32;
+
+    if schema_ver != MANAGER_STATE_SCHEMA_VERSION_LEGACY
+        && schema_ver != MANAGER_STATE_SCHEMA_VERSION_LEGACY_V2
+    {
+        return Err(ReleaseError::Config(format!(
+            "cannot migrate state with schema version {schema_ver}, expected legacy v1 or v2"
+        )));
+    }
+
+    if let Some(tx) = obj.get("transaction") {
+        if !tx.is_null() {
+            return Err(ReleaseError::Config(
+                "refusing manager state migration: unfinished live transaction in flight".into(),
+            ));
+        }
+    }
+
+    let old_generation = obj
+        .get("generation")
+        .and_then(|g| g.as_u64())
+        .filter(|&g| g > 0)
+        .ok_or_else(|| {
+            ReleaseError::Config("refusing manager state migration: invalid generation".into())
+        })?;
+
+    let lock_path = path.with_file_name("deploy.lock");
+    let _lock = DeploymentLock::acquire(&lock_path)?;
+
+    let backup_path = path.with_extension(format!("v{schema_ver}.bak"));
+    copy_file_durable(path, &backup_path, Some(0o644))?;
+
+    if let Some(active) = obj.get_mut("active") {
+        strip_obsolete_plugin_fields(active);
+    }
+    if let Some(previous) = obj.get_mut("previous") {
+        strip_obsolete_plugin_fields(previous);
+    }
+    if let Some(pending) = obj.get_mut("pending") {
+        strip_obsolete_plugin_fields(pending);
+    }
+
+    let new_generation = old_generation.saturating_add(1);
+    obj.insert("schemaVersion".to_string(), serde_json::json!(MANAGER_STATE_SCHEMA_VERSION));
+    obj.insert("generation".to_string(), serde_json::json!(new_generation));
+    obj.insert("updatedAt".to_string(), serde_json::json!(Utc::now().to_rfc3339()));
+
+    let state: ManagerState = serde_json::from_value(raw_val).map_err(|e| {
+        ReleaseError::Config(format!(
+            "failed to deserialize migrated authoritative state: {e}"
+        ))
+    })?;
+    state.validate()?;
+
+    atomic_write_json(path, &state, Some(0o644))?;
+    Ok(state)
+}
 /// Durably persist the authoritative manager state envelope with mode 0644.
 pub fn save_manager_state(path: &Path, state: &mut ManagerState) -> Result<(), ReleaseError> {
     state.generation = state.generation.saturating_add(1);

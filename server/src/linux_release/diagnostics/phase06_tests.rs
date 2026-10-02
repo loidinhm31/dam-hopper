@@ -204,7 +204,6 @@ fn test_privilege_mutating_commands_still_require_root() {
         allow_web_origins: vec![],
         verify_attestation: false,
         service_user: None,
-        plugin_owner_user: None,
         reinstall: false,
     });
     assert!(verify_privileges(&install_cmd, 0).is_ok());

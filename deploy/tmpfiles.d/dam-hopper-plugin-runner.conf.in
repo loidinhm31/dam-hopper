@@ -1,3 +1,0 @@
-# Systemd tmpfiles.d configuration for DamHopper Plugin Runner
-# Type Path Mode User Group Age Argument
-d /run/dam-hopper 3770 root @PLUGIN_SHARED_GROUP@ -

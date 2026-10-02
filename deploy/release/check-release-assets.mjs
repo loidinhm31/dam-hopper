@@ -57,18 +57,15 @@ const REQUIRED_INVENTORY_PATHS = Object.freeze([
   "bin/dam-hopper-manager",
   "bin/dam-hopper-server",
   "bin/dam-hopper-idle-suspend-helper",
-  "bin/dam-hopper-plugin-runner",
-  "bin/node",
   "NOTICES",
   "bin/dam-hopper-web",
   "web",
   "systemd/dam-hopper-api.service",
   "systemd/dam-hopper-idle-suspend-helper.service",
-  "systemd/dam-hopper-plugin-runner.service",
   "systemd/dam-hopper-web.service",
   "systemd/dam-hopper-recovery.service",
   "sysusers.d/dam-hopper-web.conf",
-  "tmpfiles.d/dam-hopper-plugin-runner.conf",
+  "tmpfiles.d/dam-hopper-runtime.conf",
 ]);
 
 const DISALLOWED_INVENTORY_NAMES = new Set([
@@ -264,8 +261,7 @@ function validateInventory(inventory, label) {
         break;
       case "bin/dam-hopper-server":
       case "bin/dam-hopper-idle-suspend-helper":
-      case "bin/dam-hopper-plugin-runner":
-      case "bin/node":
+
         if (!isFile) failMigration(`${entryLabel} must be a file`);
         requires("server", true);
         break;
@@ -275,8 +271,7 @@ function validateInventory(inventory, label) {
         break;
       case "systemd/dam-hopper-api.service":
       case "systemd/dam-hopper-idle-suspend-helper.service":
-      case "systemd/dam-hopper-plugin-runner.service":
-      case "tmpfiles.d/dam-hopper-plugin-runner.conf":
+      case "tmpfiles.d/dam-hopper-runtime.conf":
         if (!isFile) failMigration(`${entryLabel} must be a file`);
         requires("server");
         break;

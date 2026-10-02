@@ -1,7 +1,7 @@
 //! Release service status inspection and reporting.
 
 use super::constants::{
-    API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT, RUNNER_SERVICE_UNIT,
+    API_SERVICE_UNIT, HELPER_SERVICE_UNIT, RECOVERY_SERVICE_UNIT,
     WEB_SERVICE_UNIT,
 };
 use super::process::inspect_service_process;
@@ -42,7 +42,6 @@ pub fn collect_all_services_status() -> Vec<ServiceStatus> {
     vec![
         inspect_unit_status(API_SERVICE_UNIT, "server"),
         inspect_unit_status(HELPER_SERVICE_UNIT, "server"),
-        inspect_unit_status(RUNNER_SERVICE_UNIT, "server"),
         inspect_unit_status(WEB_SERVICE_UNIT, "web"),
         inspect_unit_status(RECOVERY_SERVICE_UNIT, "recovery"),
     ]
@@ -55,16 +54,13 @@ mod tests {
     #[test]
     fn test_collect_all_services_status_structure() {
         let statuses = collect_all_services_status();
-        assert_eq!(statuses.len(), 5);
+        assert_eq!(statuses.len(), 4);
         assert!(statuses
             .iter()
             .any(|s| s.unit_name == API_SERVICE_UNIT && s.role == "server"));
         assert!(statuses
             .iter()
             .any(|s| s.unit_name == HELPER_SERVICE_UNIT && s.role == "server"));
-        assert!(statuses
-            .iter()
-            .any(|s| s.unit_name == RUNNER_SERVICE_UNIT && s.role == "server"));
         assert!(statuses
             .iter()
             .any(|s| s.unit_name == WEB_SERVICE_UNIT && s.role == "web"));

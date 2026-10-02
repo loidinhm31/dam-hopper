@@ -119,17 +119,14 @@ function resolveCommitSha(providedSha) {
 function assignRoles(relPath) {
   if (relPath === "bin/dam-hopper-manager") return ["common"];
   if (relPath === "bin/dam-hopper-server") return ["server"];
-  if (relPath === "bin/dam-hopper-plugin-runner") return ["server"];
-  if (relPath === "bin/node") return ["server"];
   if (relPath === "bin/dam-hopper-web") return ["web"];
   if (relPath === "bin/dam-hopper-idle-suspend-helper") return ["server"];
   if (relPath === "systemd/dam-hopper-api.service") return ["server"];
-  if (relPath === "systemd/dam-hopper-plugin-runner.service") return ["server"];
   if (relPath === "systemd/dam-hopper-web.service") return ["web"];
   if (relPath === "systemd/dam-hopper-recovery.service") return ["common"];
   if (relPath === "systemd/dam-hopper-idle-suspend-helper.service") return ["server"];
   if (relPath === "sysusers.d/dam-hopper-web.conf") return ["web"];
-  if (relPath === "tmpfiles.d/dam-hopper-plugin-runner.conf") return ["server"];
+  if (relPath === "tmpfiles.d/dam-hopper-runtime.conf") return ["server"];
   if (relPath === "LICENSE" || relPath === "NOTICES") return ["common"];
   if (relPath === "web" || relPath.startsWith("web/")) return ["web"];
   throw new Error(
@@ -295,7 +292,6 @@ function main() {
         api: { version },
         webHost: { version },
         webAssets: { version },
-        runner: { version },
       },
       inventory,
       services: {
@@ -311,10 +307,6 @@ function main() {
           bindHost: "0.0.0.0",
           port: 4802,
           healthPath: "/__dam-hopper/health",
-        },
-        runner: {
-          unitName: "dam-hopper-plugin-runner.service",
-          socketPath: "/run/dam-hopper/plugin-runner.sock",
         },
       },
       rollback: {

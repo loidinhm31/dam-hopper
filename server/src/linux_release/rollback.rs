@@ -5,7 +5,7 @@ use super::activate_preflight::{build_candidate_health_targets, validate_active_
 use super::api_runtime::provision_and_start_api;
 use super::constants::{
     ALL_SERVICE_UNITS, API_SERVICE_HEALTH_PATH, API_SERVICE_UNIT, HELPER_SERVICE_UNIT,
-    RECOVERY_SERVICE_UNIT, RUNNER_SERVICE_UNIT, WEB_SERVICE_UNIT,
+    RECOVERY_SERVICE_UNIT, WEB_SERVICE_UNIT,
 };
 use super::durable_fs::{atomic_symlink, copy_file_durable};
 use super::error::ReleaseError;
@@ -64,14 +64,6 @@ fn release_to_candidate(r: &ReleaseRecord) -> PendingCandidateRecord {
         web_unit_sha256: r.web_unit_sha256.clone(),
         host_config_sha256: r.host_config_sha256.clone(),
         helper_unit_sha256: r.helper_unit_sha256.clone(),
-        runner_unit_sha256: r.runner_unit_sha256.clone(),
-        runner_tmpfiles_sha256: r.runner_tmpfiles_sha256.clone(),
-        plugin_owner_user: r.plugin_owner_user.clone(),
-        plugin_owner_uid: r.plugin_owner_uid,
-        plugin_admin_config_sha256: r.plugin_admin_config_sha256.clone(),
-        plugin_runtime_node_version: r.plugin_runtime_node_version.clone(),
-        plugin_runtime_node_sha256: r.plugin_runtime_node_sha256.clone(),
-        plugin_platform_enabled: r.plugin_platform_enabled,
     }
 }
 fn stage_previous_release_candidate(
@@ -104,6 +96,18 @@ fn stage_previous_release_candidate(
             expected: release.archive_sha256.clone(),
             got: manifest.archive.sha256.clone(),
         });
+    }
+
+    if manifest.components.runner.is_some()
+        || manifest.services.runner.is_some()
+        || manifest
+            .inventory
+            .iter()
+            .any(|e| e.path.contains("plugin-runner") || e.path == "bin/node")
+    {
+        return Err(ReleaseError::Config(
+            "automatic rollback to plugin-bearing release is not supported by native manager; use explicit manual legacy recovery".into(),
+        ));
     }
 
     let allow_origins = load_host_public_config(&layout.host_config_json_path())?
@@ -171,14 +175,6 @@ fn stage_previous_release_candidate(
         web_unit_sha256,
         host_config_sha256: Some(host_config_sha256),
         helper_unit_sha256,
-        runner_unit_sha256: release.runner_unit_sha256.clone(),
-        runner_tmpfiles_sha256: release.runner_tmpfiles_sha256.clone(),
-        plugin_owner_user: release.plugin_owner_user.clone(),
-        plugin_owner_uid: release.plugin_owner_uid,
-        plugin_admin_config_sha256: release.plugin_admin_config_sha256.clone(),
-        plugin_runtime_node_version: release.plugin_runtime_node_version.clone(),
-        plugin_runtime_node_sha256: release.plugin_runtime_node_sha256.clone(),
-        plugin_platform_enabled: release.plugin_platform_enabled,
     })
 }
 
@@ -662,10 +658,6 @@ pub async fn rollback_activation_failure(
     systemctl_enable(RECOVERY_SERVICE_UNIT)?;
 
     if active.role.includes_server() {
-        super::activate::provision_plugin_runtime(layout)?;
-        if layout.systemd_unit_dir.join(RUNNER_SERVICE_UNIT).exists() {
-            systemctl_start(RUNNER_SERVICE_UNIT)?;
-        }
         if let Err(e) = systemctl_start(HELPER_SERVICE_UNIT) {
             tracing::warn!("idle-suspend helper service startup failed on rollback: {e}");
         }
@@ -687,9 +679,6 @@ pub async fn rollback_activation_failure(
             DEFAULT_PROBE_INTERVAL,
         )
         .await?;
-        if active.role.includes_server() {
-            super::activate::verify_started_plugin_runner(layout).await?;
-        }
         Ok::<(), ReleaseError>(())
     }
     .await;

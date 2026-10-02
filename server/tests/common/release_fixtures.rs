@@ -43,10 +43,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
     let f10_data =
         include_bytes!("../../../deploy/systemd/dam-hopper-idle-suspend-helper.service.in");
     let f11_data = b"helper binary content";
-    let f12_data = b"runner binary content";
-    let f13_data = include_bytes!("../../../deploy/systemd/dam-hopper-plugin-runner.service.in");
-    let f14_data = include_bytes!("../../../deploy/tmpfiles.d/dam-hopper-plugin-runner.conf.in");
-    let node_data = b"node runtime content";
+    let f14_data = include_bytes!("../../../deploy/tmpfiles.d/dam-hopper-runtime.conf.in");
 
     let entries = vec![
         ("bin/dam-hopper-manager", false, &f1_data[..], 0o755),
@@ -58,8 +55,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             &f11_data[..],
             0o755,
         ),
-        ("bin/dam-hopper-plugin-runner", false, &f12_data[..], 0o755),
-        ("bin/node", false, &node_data[..], 0o755),
+
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
         (
@@ -75,13 +71,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             0o644,
         ),
         (
-            "systemd/dam-hopper-plugin-runner.service",
-            false,
-            &f13_data[..],
-            0o644,
-        ),
-        (
-            "tmpfiles.d/dam-hopper-plugin-runner.conf",
+            "tmpfiles.d/dam-hopper-runtime.conf",
             false,
             &f14_data[..],
             0o644,
@@ -122,22 +112,6 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             sha256: Some(hex::encode(Sha256::digest(f11_data))),
         },
         InventoryEntry {
-            path: "bin/dam-hopper-plugin-runner".to_string(),
-            kind: EntryKind::File,
-            roles: vec![ReleaseRole::Server],
-            mode: 0o755,
-            size: Some(f12_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(f12_data))),
-        },
-        InventoryEntry {
-            path: "bin/node".to_string(),
-            kind: EntryKind::File,
-            roles: vec![ReleaseRole::Server],
-            mode: 0o755,
-            size: Some(node_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(node_data))),
-        },
-        InventoryEntry {
             path: "bin/dam-hopper-web".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Web],
@@ -162,15 +136,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             sha256: Some(hex::encode(Sha256::digest(f10_data))),
         },
         InventoryEntry {
-            path: "systemd/dam-hopper-plugin-runner.service".to_string(),
-            kind: EntryKind::File,
-            roles: vec![ReleaseRole::Server],
-            mode: 0o644,
-            size: Some(f13_data.len() as u64),
-            sha256: Some(hex::encode(Sha256::digest(f13_data))),
-        },
-        InventoryEntry {
-            path: "tmpfiles.d/dam-hopper-plugin-runner.conf".to_string(),
+            path: "tmpfiles.d/dam-hopper-runtime.conf".to_string(),
             kind: EntryKind::File,
             roles: vec![ReleaseRole::Server],
             mode: 0o644,
@@ -269,9 +235,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             web_assets: ComponentVersion {
                 version: "0.2.0".to_string(),
             },
-            runner: Some(ComponentVersion {
-                version: "0.2.0".to_string(),
-            }),
+            runner: None,
         },
         inventory,
         services: ServicesMeta {
@@ -289,10 +253,7 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
                 port: WEB_SERVICE_PORT,
                 health_path: WEB_SERVICE_HEALTH_PATH.to_string(),
             },
-            runner: Some(RunnerServiceContract {
-                unit_name: RUNNER_SERVICE_UNIT.to_string(),
-                socket_path: DEFAULT_RUNNER_SOCKET_PATH.to_string(),
-            }),
+            runner: None,
         },
         rollback: RollbackMeta {
             previous_release_compatible: ROLLBACK_PREVIOUS_COMPATIBLE,

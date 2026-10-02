@@ -5,12 +5,12 @@ use super::unit::UnitRenderContext;
 use super::unit_parser::ParsedUnit;
 
 const RUNTIME_TMPFILES_PRE: &str =
-    "+/usr/bin/systemd-tmpfiles --create /etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf";
+    "+/usr/bin/systemd-tmpfiles --create /etc/dam-hopper/tmpfiles.d/dam-hopper-runtime.conf";
 
 fn validate_shared_runtime(
     unit: &ParsedUnit,
     name: &str,
-    ctx: &UnitRenderContext,
+    _ctx: &UnitRenderContext,
 ) -> Result<(), ReleaseError> {
     for key in [
         "RuntimeDirectory",
@@ -26,13 +26,13 @@ fn validate_shared_runtime(
             });
         }
     }
-    assert_eq_prop(
-        unit,
-        name,
-        "Service",
-        "SupplementaryGroups",
-        &ctx.plugin_shared_group,
-    )
+    if !unit.get_all_values("Service", "SupplementaryGroups").is_empty() {
+        return Err(ReleaseError::UnitPolicyViolation {
+            unit: name.into(),
+            reason: "Unit must not declare SupplementaryGroups in native runtime".into(),
+        });
+    }
+    Ok(())
 }
 
 /// Validate rendered API unit strictly matches the Phase 04 contract.
@@ -288,77 +288,6 @@ pub fn validate_web_unit_policy(
     Ok(())
 }
 
-/// Validate rendered Plugin Runner unit strictly matches security and containment invariants.
-pub fn validate_runner_unit_policy(
-    unit: &ParsedUnit,
-    ctx: &UnitRenderContext,
-) -> Result<(), ReleaseError> {
-    let name = "dam-hopper-plugin-runner.service";
-    assert_eq_prop(unit, name, "Service", "Type", "simple")?;
-    assert_eq_prop(unit, name, "Service", "User", &ctx.advisor_owner_user)?;
-    assert_eq_prop(unit, name, "Service", "Group", &ctx.advisor_owner_group)?;
-    assert_eq_prop(
-        unit,
-        name,
-        "Service",
-        "WorkingDirectory",
-        &ctx.advisor_owner_home,
-    )?;
-    validate_shared_runtime(unit, name, ctx)?;
-    assert_eq_prop(unit, name, "Service", "ExecStartPre", RUNTIME_TMPFILES_PRE)?;
-    if !unit
-        .get_all_values("Service", "ReadWritePaths")
-        .contains(&"/run/dam-hopper")
-    {
-        return Err(ReleaseError::UnitPolicyViolation {
-            unit: name.into(),
-            reason: "runner requires writable shared runtime directory".into(),
-        });
-    }
-    assert_eq_prop(unit, name, "Service", "Restart", "on-failure")?;
-    assert_eq_prop(unit, name, "Service", "RestartSec", "3s")?;
-    assert_eq_prop(unit, name, "Service", "KillSignal", "SIGTERM")?;
-    assert_eq_prop(unit, name, "Service", "KillMode", "mixed")?;
-    assert_eq_prop(unit, name, "Service", "TimeoutStopSec", "15s")?;
-    assert_eq_prop(unit, name, "Service", "UMask", "0027")?;
-    assert_eq_prop(unit, name, "Service", "MemoryMax", "1G")?;
-    assert_eq_prop(unit, name, "Service", "TasksMax", "64")?;
-    assert_eq_prop(unit, name, "Service", "NoNewPrivileges", "true")?;
-    assert_eq_prop(unit, name, "Service", "ProtectSystem", "strict")?;
-    assert_eq_prop(unit, name, "Service", "ProtectHome", "read-only")?;
-    assert_eq_prop(unit, name, "Service", "PrivateTmp", "true")?;
-    assert_eq_prop(
-        unit,
-        name,
-        "Service",
-        "RestrictAddressFamilies",
-        "AF_UNIX AF_INET AF_INET6",
-    )?;
-    assert_eq_prop(unit, name, "Service", "RestrictRealtime", "true")?;
-    assert_eq_prop(unit, name, "Service", "RestrictSUIDSGID", "true")?;
-    assert_eq_prop(
-        unit,
-        name,
-        "Service",
-        "SyslogIdentifier",
-        "dam-hopper-plugin-runner",
-    )?;
-
-    let expected_exec = format!(
-        "{}/bin/dam-hopper-plugin-runner --socket-path /run/dam-hopper/plugin-runner.sock --registry-dir {}/plugins --node-bin {} --expected-api-uid {}",
-        ctx.release_root.display(), ctx.dam_hopper_state_dir, ctx.node_bin, ctx.api_uid
-    );
-    if unit.get_all_values("Service", "ExecStart") != vec![expected_exec.as_str()] {
-        return Err(ReleaseError::UnitPolicyViolation {
-            unit: name.into(),
-            reason: "runner requires the fixed socket, registry, Node and expected API UID command"
-                .into(),
-        });
-    }
-
-    assert_eq_prop(unit, name, "Install", "WantedBy", "multi-user.target")?;
-    Ok(())
-}
 
 fn assert_eq_prop(
     unit: &ParsedUnit,
