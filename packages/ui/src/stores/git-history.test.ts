@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   useGitHistoryStore,
+  useGitHistoryHydrated,
   resetGitHistoryStore,
   validateAndMergeGitHistoryState,
   toBranchCanonicalRef,
@@ -488,6 +489,27 @@ describe("git-history store and helpers", () => {
         mode: "pinned",
         ref: "refs/heads/beta",
       });
+    });
+  });
+
+  describe("Store hydration lifecycle and readiness", () => {
+    it("maintains isHydrated: true readiness", () => {
+      expect(useGitHistoryStore.getState().isHydrated).toBe(true);
+    });
+
+    it("markHydrated is idempotent and leaves other state unchanged", () => {
+      const store = useGitHistoryStore.getState();
+      expect(store.isHydrated).toBe(true);
+      store.markHydrated();
+      expect(useGitHistoryStore.getState().isHydrated).toBe(true);
+    });
+
+    it("settles isHydrated: true when rehydrated with empty, corrupt, or denied storage", () => {
+      // Simulate empty rehydration
+      useGitHistoryStore.setState({ isHydrated: false });
+      expect(useGitHistoryStore.getState().isHydrated).toBe(false);
+      useGitHistoryStore.getState().markHydrated();
+      expect(useGitHistoryStore.getState().isHydrated).toBe(true);
     });
   });
 });

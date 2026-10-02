@@ -323,4 +323,21 @@ describe("useGitHistoryView", () => {
     expect(currentHook?.selectedCommit).toBeNull();
     expect(currentHook?.page).toBe(0);
   });
+
+  it("gates availability on hydration readiness and transitions cleanly when hydrated", async () => {
+    act(() => {
+      useGitHistoryStore.setState({ isHydrated: false });
+    });
+
+    await mount(defaultTarget);
+    expect(currentHook?.availability.isAvailable).toBe(false);
+    expect(currentHook?.availability.reason).toBe("Restoring history preferences...");
+
+    act(() => {
+      useGitHistoryStore.getState().markHydrated();
+    });
+
+    expect(currentHook?.availability.isAvailable).toBe(true);
+    expect(currentHook?.availability.reason).toBeUndefined();
+  });
 });
