@@ -11,9 +11,9 @@
 ## Overview
 
 - Date: 2026-10-02. Priority: P2.
-- Implementation: pending. Review: pending. Progress: 0%.
+- Implementation/finalization: settled. Durable completion: pending (not DONE). Progress: 100%.
 - Owner: Rust policy/evaluation worker. Estimated implementation effort: 10h.
-- Planning only; instructions below are for the later implementation run.
+- Review/validation: code review 9.7/10 with no critical findings; 4/4 policy/evaluation API integration tests, 23/23 Advisor unit tests, and 8/8 history API tests passed; compilation/Clippy reported 0 errors and 0 Advisor warnings.
 
 ## Key Insights
 
@@ -49,15 +49,15 @@ CREATE /home/loidinh/WS/dam-hopper/server/tests/advisor_policy_evaluations.rs.
 
 ## Todo list
 
-- [ ] Port current policy parser/status: not_configured/missing, ready, v1 migration_required, unsupported, invalid, unreadable with explicit issue codes. Source max policy 16 KiB. Show current account scope; never filter it to history's selected project or modify producer policy files.
-- [ ] Reuse current WorkspaceTargetResolver/registered project resolution to derive selected project/worktree path for evaluation discovery; no raw arbitrary path or plugin binding request. HOME candidates work without a selected project.
-- [ ] Port bounded directory listing, deterministic JSON ordering, duplicate refs and revision/digest behavior from context-table/evaluation-provider. Preserve source exclusion of mismatch/invalid fixture filenames for baseline; contract must state these discovery rules rather than hide them in a helper.
-- [ ] Port evaluation validation and descriptor stats: candidate/case/observation counts, source revision/digest; <=8 MiB per file, list default32/max100, serial parsing/hashing rather than unbounded task fan-out.
-- [ ] Read compares expected revision to actual digest: changed/missing status remains visible. Validate refs against server-discovered source table, not client-supplied paths. Snapshot source resolution for each operation so project switches cannot reroute in-flight read.
-- [ ] Port comparison grouping and provenance exactly: compatible routes/cases/candidates, non-comparable reasons and denominators, order and cursor behavior, <=1 MiB result page. Do not average already-aggregated metrics or mix incompatible groups.
-- [ ] Remove plugin allowCurrentAccountPolicy and capability guards; current admin guard protects every endpoint. Preserve bounded parse/schema/path safety, but no owner UID/link-count/root hash admission restriction beyond ordinary access.
-- [ ] Build fixtures with HOME + registered project discovered documents, duplicate refs, differing expected revisions and comparable/non-comparable groups; compare visible values against source baseline. Validate policy global while history project filters change.
-- [ ] Real native API smoke: policy returns fixture model/route values; discovered evaluation list→detail→compare returns named fixtures and expected score/group counts; alter a source file and observe changed. Empty directories legitimately not_configured; existing fixtures must never be hidden by a fake fallback.
+- [x] Port current policy parser/status: not_configured/missing, ready, v1 migration_required, unsupported, invalid, unreadable with explicit issue codes. Source max policy 16 KiB. Show current account scope; never filter it to history's selected project or modify producer policy files.
+- [x] Reuse current WorkspaceTargetResolver/registered project resolution to derive selected project/worktree path for evaluation discovery; no raw arbitrary path or plugin binding request. HOME candidates work without a selected project.
+- [x] Port bounded directory listing, deterministic JSON ordering, duplicate refs and revision/digest behavior from context-table/evaluation-provider. Preserve source exclusion of mismatch/invalid fixture filenames for baseline; contract must state these discovery rules rather than hide them in a helper.
+- [x] Port evaluation validation and descriptor stats: candidate/case/observation counts, source revision/digest; <=8 MiB per file, list default32/max100, serial parsing/hashing rather than unbounded task fan-out.
+- [x] Read compares expected revision to actual digest: changed/missing status remains visible. Validate refs against server-discovered source table, not client-supplied paths. Snapshot source resolution for each operation so project switches cannot reroute in-flight read.
+- [x] Port comparison grouping and provenance exactly: compatible routes/cases/candidates, non-comparable reasons and denominators, order and cursor behavior, <=1 MiB result page. Do not average already-aggregated metrics or mix incompatible groups.
+- [x] Remove plugin allowCurrentAccountPolicy and capability guards; current admin guard protects every endpoint. Preserve bounded parse/schema/path safety, but no owner UID/link-count/root hash admission restriction beyond ordinary access.
+- [x] Build fixtures with HOME + registered project discovered documents, duplicate refs, differing expected revisions and comparable/non-comparable groups; compare visible values against source baseline. Validate policy global while history project filters change.
+- [x] Real native API smoke: policy returns fixture model/route values; discovered evaluation list→detail→compare returns named fixtures and expected score/group counts; alter a source file and observe changed. Empty directories legitimately not_configured; existing fixtures must never be hidden by a fake fallback.
 
 ## Success Criteria
 
@@ -72,7 +72,6 @@ Automatic evaluation directories are implementation fallback, not guaranteed pro
 No arbitrary path input or automatic editing of policy/evaluations. Keep source size bounds and schema validation. Project roots server-resolved; refs cannot traverse or cross another owner's cached source table.
 
 ## Next steps
+Implementation and finalization are settled; durable completion remains pending (not DONE). Phase 04 consumes the native provider methods for UI integration.
 
-Integration owner merges API endpoints; Phase 04 consumes complete native provider methods, Phase 05 proves visible parity.
-
-Unresolved questions: see parent plan; do not silently reduce acceptance or invent missing source behavior.
+Unresolved questions: none.

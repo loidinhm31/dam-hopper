@@ -15,7 +15,7 @@ created: 2026-10-02
 
 Native Rust/Axum Advisor APIs + reused React viewer inside Workspace. Admin-only, one per-server enable/disable toggle, default off. Discover only a real directory at server `$HOME/.evcrate/advisor-history`; no hashing UI, registration, grants, bindings or hash prerequisite. User confirmed complete Dam-Hopper plugin-platform retirement, including Linux service.
 
-Phase 01 contract/parity and Phase 02 history/status/admin/native API implementation and finalization are settled; durable completion remains pending for both (not DONE). Policy/evaluation API and UI cutover, plugin retirement, and deployment cutover remain unimplemented.
+Phase 01 contract/parity, Phase 02 history/status/admin/native API, and Phase 03 policy/evaluation read/compare implementation and finalization are settled; durable completion remains pending for all three (none is DONE). Phase 04 UI cutover, plugin-platform retirement, and deployment cutover remain unimplemented.
 
 ## Design and evidence
 
@@ -32,7 +32,7 @@ Phase 01 contract/parity and Phase 02 history/status/admin/native API implementa
 |---|---|---|---|
 | 01 | [Freeze native contract and source parity baseline](./phase-01-contract-and-parity-baseline.md) | Implementation/finalization settled; durable completion pending (not DONE) | 4h |
 | 02 | [Port history domain, status, admin guard and native API](./phase-02-native-history-domain-and-api.md) | Implementation/finalization settled; durable completion pending (not DONE) | 12h |
-| 03 | [Port current policy and evaluation discovery/read/compare](./phase-03-policy-and-evaluation-domain.md) | Pending / 0% | 10h |
+| 03 | [Port current policy and evaluation discovery/read/compare](./phase-03-policy-and-evaluation-domain.md) | Implementation/finalization settled; durable completion pending (not DONE) | 10h |
 | 04 | [Reuse Advisor UI and replace plugin provider](./phase-04-reuse-native-advisor-ui.md) | Pending / 0% | 10h |
 | 05 | [Wire per-server toggle and all Workspace surfaces](./phase-05-settings-and-workspace-cutover.md) | Pending / 0% | 6h |
 | 06 | [Delete Dam-Hopper plugin runtime, SDK and bridge](./phase-06-remove-dam-hopper-plugin-platform.md) | Pending / 0% | 6h |
@@ -61,7 +61,7 @@ Workers skip checks/formatters mid-flight; integration/verification owner runs f
 
 ## Validation and execution status
 
-**Plan status: IN PROGRESS (0/9 phases durably complete; 0%; implementation/finalization settled through Phase 02: 2/9 phases, 22%; 16/70h, 23%).** Durable completion for Phases 01–02 remains pending (neither is DONE). Phase 01 review reports frozen contract/golden fixtures, 16/16 parity checks, 9.5/10, and no critical findings. Phase 02 review scored 9.6/10 with no critical/high findings; scoped validation passed 8/8 API integration tests, 23/23 Advisor unit tests, and 16/16 parity tests, with zero compile errors or Advisor warnings. Phases 03–09 remain pending; native UI cutover, plugin/source removal, deployment cleanup, and integrated end-to-end qualification are not claimed.
+**Plan status: IN PROGRESS (0/9 phases durably complete; 0%; implementation/finalization settled through Phase 03: 3/9 phases, 33%; 26/70h, 37%).** Durable completion for Phases 01–03 remains pending (none is DONE). Phase 01 review reports frozen contract/golden fixtures, 16/16 parity checks, 9.5/10, and no critical findings. Phase 02 review scored 9.6/10 with no critical/high findings; scoped validation passed 8/8 API integration tests, 23/23 Advisor unit tests, and 16/16 parity tests, with zero compile errors or Advisor warnings. Phase 03 review scored 9.7/10 with no critical findings; passed 4/4 policy/evaluation API integration tests, 23/23 Advisor unit tests, and 8/8 history API tests. Phases 04–09 remain pending; native UI cutover, plugin/source removal, deployment cleanup, and integrated end-to-end qualification are not claimed.
 
 Final implementation requires actual authenticated server/browser smoke, source-domain parity, real disposable systemd cleanup/install/migration/rollback, release asset checks in both repos and core Evcrate producer smoke. Default no-auth dev server is not valid Advisor admin proof.
 ## Validation Summary
