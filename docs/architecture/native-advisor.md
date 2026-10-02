@@ -1,7 +1,7 @@
 # Native Advisor — frozen contract and migration architecture
 
-Status: **Phases 01–04 implementation/finalization settled; durable completion pending (none is DONE).** (2026-10-02).
-Phase 04 added the reusable native panel/provider; Phase 05 Settings/Workspace cutover, Phase 06 platform removal, Phase 07 Linux deployment migration, Phase 08 Evcrate integration/release retirement, and Phase 09 end-to-end qualification remain pending. See the [Phase 04 plan](../../plans/261002-0246-native-advisor-migration/phase-04-reuse-native-advisor-ui.md), [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), and [Phase 01 parity baseline](../../plans/261002-0246-native-advisor-migration/reports/native-contract-and-parity.md).
+Status: **Phases 01–05 implementation/finalization settled; durable completion pending (none is DONE).** (2026-10-02).
+Phase 05 Settings/Workspace cutover is implemented; Phases 06–09 platform/source/deployment retirement and end-to-end qualification remain pending. See the [Phase 05 plan](../../plans/261002-0246-native-advisor-migration/phase-05-settings-and-workspace-cutover.md), [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), and [Phase 01 parity baseline](../../plans/261002-0246-native-advisor-migration/reports/native-contract-and-parity.md).
 
 ## Frozen decisions
 
@@ -42,13 +42,13 @@ Native read-only routes expose current account policy (`POST /api/advisor/policy
 
 Advisor selectors, reset rules, variables, and theme fallbacks stay under `.native-advisor`; animation keyframes use Advisor-specific names. The panel path has **0 iframe/srcdoc, 0 MessagePort/plugin bridge, 0 plugin SDK, and 0 nested React root**. It imports no sibling Evcrate checkout code.
 
-The `AdvisorPanel` module/provider are implemented; scoped tests passed **52/52**, review approved **9.5/10**, and advisor advice is ready. This is not yet Workspace cutover: `WorkspaceAdvisorHost` still wraps `PluginHost` pending Phase 05. Authenticated browser/API parity and production qualification remain Phase 05/09 gates; Phase 04 is not durably DONE.
+The panel/provider are implemented; Phase 05 now wires them into Settings and persistent Workspace placement. `packages/ui/browser-tests/workspace-advisor.browser.tsx` covers DOM placement, not the full authenticated API/domain-parity or production-qualification gates. Phases 04 and 05 are not durably DONE.
 
 ## Pre-migration source evidence
 
-- `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx`: persistent workspace placement currently wraps `PluginHost`.
-- `packages/ui/src/components/pages/SettingsPage.tsx`: Plugin Platform registration section.
-- `packages/ui/src/components/pages/settings-page/PluginAccessModal.tsx`: current path SHA-256 generation.
+- Before Phase 05, `WorkspaceAdvisorHost.tsx` wrapped `PluginHost`; Phase 05 replaces it with the native panel.
+- Before Phase 05, `SettingsPage.tsx` exposed Plugin Platform registration; it now mounts `AdvisorSettingsSection` in the Native Advisor accordion.
+- The former `PluginAccessModal.tsx` generated the path SHA-256 that native Settings removes.
 - `server/src/api/plugin_admin.rs::advisor_history_probe_handler`: HOME plus `/home` scan and canonical/symlink admission.
 - `server/src/api/auth.rs::require_plugin_admin`: the pre-migration live enabled-user admin check; Phase 02 generalizes it as `require_admin` for native Advisor routes.
 - Evcrate `plugin/ui/plugin-main.tsx`: imports `viewer/src/app.tsx`, port provider, global CSS.
@@ -64,12 +64,12 @@ The `AdvisorPanel` module/provider are implemented; scoped tests passed **52/52*
 4. Native status returns configured `enabled`, real-directory `available`, admin-only detected path and explicit source errors; no hash fields.
 5. Native typed client → `/api/advisor/*` → current auth/admin guard → native service → HOME-root history, HOME account policy and current reader evaluation discovery.
 6. Phase 04's native React panel reuses Advisor views, selectors, reducer, and domain formatting through an owner-bound `ApiClient.advisor` adapter with abortable requests.
-7. Phase 05 replaces the current `PluginHost` child with that panel in the persistent IDE, Terminal float, and compact placements; no iframe or nested React root is needed.
-8. Phase 05 must clear inaccessible state and stop requests on disable, role loss, disconnect, or owner replacement; late responses must not resurrect prior-owner data.
+7. Phase 05 replaces the persistent host's former `PluginHost` child with `AdvisorPanel` in IDE, Terminal float, and compact placements; it does not use an iframe or nested React root.
+8. Workspace surfaces and launchers use one current-owner connected + admin + enabled predicate. Owner/profile/generation-qualified queries isolate status and Advisor data. When the predicate is false, launchers/surfaces and the conditional host are removed; an inactive placement keeps the mounted host inert.
 
 ## API and authorization invariants
 
-Phase 02 implements status, toggle, and the four history operations (refresh, summary, page, detail). Phase 03 adds read-only current-policy and evaluation list/read/compare routes. Phase 04's native provider consumes these APIs; Workspace and Settings cutover remains Phase 05.
+Phases 02–03 implement status, settings, and data routes; Phase 04's native provider consumes these APIs, and Phase 05 connects it to Settings/Workspace without changing server-side authorization.
 
 - Native status/settings routes work for admins even when disabled or history missing; enable toggle never requires folder creation or plugin registration.
 - Data routes require enabled feature and current admin authorization. Status conveys availability; missing source is explicit empty/not-configured state where source contract defines it.
@@ -96,14 +96,20 @@ The current native API uses camelCase JSON. Every route requires a normal valida
 
 `query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents the default and source-discovery boundary.
 
-## Phase 05 Settings and Workspace cutover invariants (pending)
+## Phase 05 Settings and Workspace cutover (implementation/finalization settled; durable completion pending)
 
-- Replace plugin registration UI with one per-server admin toggle and detected history-directory status. No hashing field/button, registration, grant editor, or project-binding modal.
-- Apply one enabled/admin/connected visibility predicate across Workspace launchers and tool arrays, including terminal shortcuts and restored compact/right-tool state.
-- Keep the Settings target profile independent from the Workspace project/connection owner; without a project, require an explicitly selected connected profile.
-- Preserve one mounted native panel across IDE, Terminal float, and compact placement; retain same-owner view/filter/detail state.
-- Replace plugin activate/dismiss bridge events with direct callbacks; preserve Escape and focus-return behavior.
-- The native Advisor module has no sibling Evcrate runtime import or build-time dependency.
+The Settings target remains independent of the Workspace project/connection owner. The implemented UI and state wiring are:
+
+| File | Contract |
+| --- | --- |
+| `packages/ui/src/hooks/use-advisor.ts` | `useAdvisorAuth` checks the selected profile only when connected; `useAdvisorStatus` requires a current `ConnectionRef`; `useAdvisorVisibility` combines connected + admin + enabled (directory availability does not gate visibility); `useAdvisorToggle` captures owner/value and invalidates only that owner's keys. Status/data cache keys include profile and connection generation. |
+| `packages/ui/src/components/pages/settings-page/AdvisorSettingsSection.tsx` | Admins toggle the Settings target server and refresh status. UI shows detected path, real-directory availability, and source errors, including the final-root symlink rejection notice. No root editor, registration, hash UI, grants, or bindings. |
+| `packages/ui/src/components/pages/SettingsPage.tsx` | Replaces the Plugin Platform accordion with Native Advisor backed by the selected Settings target profile. |
+| `packages/ui/src/components/pages/WorkspacePage.tsx` | Workspace owner comes from the selected project's profile/connection; with no project, only the explicitly selected active profile is used, and only while connected. One predicate gates IDE right tools, Terminal tools/shortcut, compact surface, and host. Compact selection normalizes to the editor/terminal default when Advisor is unavailable. |
+| `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx` | Replaces `PluginHost` with one direct `AdvisorPanel`; a single host measures the active slot across modes. Focus capture activates the slot, Escape closes it, and hiding restores focus to a live launcher or blurs. |
+| `packages/ui/browser-tests/workspace-advisor.browser.tsx` | Chromium harness mocks the panel and asserts the same panel DOM node across IDE → Terminal → compact → IDE, plus an inert/hidden/`aria-hidden` host while the slot is closed. |
+
+The placement test does not establish all eight domain operations or authenticated real-server parity; G1 and Phase 09 qualification remain separately tracked.
 
 ## Plugin/deployment cutover
 
@@ -126,4 +132,4 @@ The current native API uses camelCase JSON. Every route requires a normal valida
 
 ## Unresolved questions
 
-No open user scope decisions. Evaluation-writer convention remains unverified. Phase 05 Workspace/Settings cutover, Phase 06–08 platform/deployment/source retirement, and Phase 09 full production qualification remain open.
+No open user scope decisions. Phase 05 Settings/Workspace code cutover is implemented/finalized but not durably DONE; Phase 06–08 platform/source/deployment retirement and Phase 09 production qualification remain open. Evaluation-writer convention remains unverified.

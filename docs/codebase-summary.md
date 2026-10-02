@@ -80,7 +80,7 @@ runner_client,runner_server}.rs`, `server/src/api/{auth,plugin_admin,router}.rs`
   journeys, owner/rollback smokes, and 5/5 synthetic LAN budgets over 10,000
   history records. Physical separate-machine LAN and exact pinned Node
   selection remain external deployment inputs.
-- Phase 04 adds `packages/ui/src/advisor/AdvisorPanel.tsx` with Overview, History, Configuration, and Evaluations views, owner-bound `NativeAdvisorProvider` calls, abortable requests, local tabs, and `.native-advisor` CSS. Its Advisor path has 0 iframe/srcdoc, MessagePort/plugin bridge, or nested React root; `WorkspaceAdvisorHost` still wraps `PluginHost` pending Phase 05. The native Rust history/status/API remains default-off and admin-only. See the [native Advisor architecture](./architecture/native-advisor.md).
+- Phase 04 adds `packages/ui/src/advisor/AdvisorPanel.tsx` with Overview, History, Configuration, and Evaluations, an owner-bound `NativeAdvisorProvider`, abortable requests, local tabs, and `.native-advisor` CSS. Phase 05 adds owner-bound auth/status/toggle hooks, an admin Settings toggle with detected real-directory status, and one connected + admin + enabled visibility predicate across IDE, Terminal, and compact surfaces. `WorkspaceAdvisorHost` now mounts the native panel with focus/Escape callbacks; Chromium coverage checks persistent placement across modes. History/status/API remain default-off and admin-only. See the [native Advisor architecture](./architecture/native-advisor.md).
 
 ## Unified-profile workbench frontend (Phases 00–02)
 

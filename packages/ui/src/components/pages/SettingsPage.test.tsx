@@ -104,8 +104,8 @@ vi.mock("@/components/pages/settings-page/SettingsConfigPanels.js", () => ({
   SettingsGlobalConfigPanel: () => <div>GlobalConfigPanel</div>,
   SettingsWorkspaceConfigPanel: () => <div>WorkspaceConfigPanel</div>,
 }));
-vi.mock("@/components/pages/settings-page/PluginManagementSection.js", () => ({
-  PluginManagementSection: () => <div>PluginManagementSection</div>,
+vi.mock("@/components/pages/settings-page/AdvisorSettingsSection.js", () => ({
+  AdvisorSettingsSection: () => <div>AdvisorSettingsSection</div>,
 }));
 
 describe("SettingsPage Import / Export integration", () => {

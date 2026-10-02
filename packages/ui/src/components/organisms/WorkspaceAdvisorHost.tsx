@@ -15,9 +15,7 @@ import {
   type AdvisorSlotGeometry,
 } from "@/lib/workspace-advisor-placement.js";
 import { useWorkspaceAdvisorPlacement } from "@/contexts/WorkspaceAdvisorContext.js";
-import { PluginHost } from "@/components/PluginHost.js";
-import type { UiIntent } from "@/plugins/bridge-validators.js";
-
+import { AdvisorPanel } from "@/advisor/AdvisorPanel.js";
 export interface WorkspaceAdvisorHostProps {
   project?: ProjectRef | null;
   projectTarget?: ProjectTargetSnapshot | null;
@@ -26,7 +24,7 @@ export interface WorkspaceAdvisorHostProps {
 }
 
 export function WorkspaceAdvisorHost({
-  project = null,
+  project: _project = null,
   projectTarget = null,
   connection = null,
   className,
@@ -39,7 +37,7 @@ export function WorkspaceAdvisorHost({
 
   useLayoutEffect(() => {
     if (!activeSlot || !activeSlot.element || !activeSlot.visible) {
-      setGeometry(null);
+      setGeometry((prev) => (prev !== null ? null : prev));
       return;
     }
 
@@ -117,13 +115,9 @@ export function WorkspaceAdvisorHost({
       placement?.onClose?.();
     }
   };
-  const handleUiIntent = (intent: UiIntent) => {
-    if (intent === "activate") {
-      activeSlot?.onActivate?.();
-    }
-    placement?.onUiIntent?.(intent);
+  const handleFocusCapture = () => {
+    activeSlot?.onActivate?.();
   };
-
 
   return (
     <div
@@ -134,6 +128,7 @@ export function WorkspaceAdvisorHost({
       inert={!isVisible}
       aria-hidden={!isVisible}
       onKeyDownCapture={handleKeyDownCapture}
+      onFocusCapture={handleFocusCapture}
       style={{
         position: "fixed",
         visibility: isVisible ? "visible" : "hidden",
@@ -147,14 +142,9 @@ export function WorkspaceAdvisorHost({
       }}
       className={cn("workspace-advisor-host-container", className)}
     >
-      <PluginHost
-        installationId="evcrate.advisor"
-        project={project}
-        projectTarget={project ? projectTarget : null}
-        connection={project ? connection : null}
-        visible={isVisible}
-        onUiIntent={handleUiIntent}
-        titleOverride="EVCrate Advisor"
+      <AdvisorPanel
+        connection={connection}
+        projectTarget={projectTarget}
         className="workspace-advisor-host-content h-full w-full min-h-0 flex-1 overflow-hidden"
       />
     </div>
