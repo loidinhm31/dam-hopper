@@ -677,6 +677,26 @@ pub fn build_router_with_web_dir_and_origins(
             post(advisor_api::history_detail_handler)
                 .layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
+        .route(
+            "/api/advisor/policy/current",
+            post(advisor_api::policy_current_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/evaluations/list",
+            post(advisor_api::evaluations_list_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/evaluations/read",
+            post(advisor_api::evaluations_read_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
+        .route(
+            "/api/advisor/evaluations/compare",
+            post(advisor_api::evaluations_compare_handler)
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_admin,

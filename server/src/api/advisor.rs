@@ -6,9 +6,11 @@ use serde::Deserialize;
 
 use crate::advisor::{
     AdvisorError, AdvisorSettingsDto, AdvisorSettingsUpdateDto, AdvisorStatusDto,
+    EvaluationsCompareParamsDto, EvaluationsCompareResultDto, EvaluationsListParamsDto,
+    EvaluationsListResultDto, EvaluationsReadParamsDto, EvaluationsReadResultDto,
     HistoryDetailParamsDto, HistoryDetailResultDto, HistoryPageParamsDto,
     HistoryPageResultDto, HistoryRefreshResultDto, HistorySummaryParamsDto,
-    HistorySummaryResultDto,
+    HistorySummaryResultDto, PolicyReadCurrentResultDto,
 };
 use crate::api::auth::AuthenticatedActor;
 use crate::config::write_config;
@@ -110,5 +112,68 @@ pub async fn history_detail_handler(
 ) -> Result<Json<HistoryDetailResultDto>, AdvisorError> {
     check_advisor_enabled(&state).await?;
     let res = state.advisor_service.detail(&actor.subject, body).await?;
+    Ok(Json(res))
+}
+
+async fn resolve_target_project_root(state: &AppState, target: Option<&str>) -> Option<std::path::PathBuf> {
+    let target = target?;
+    let config = state.config.read().await;
+    config
+        .projects
+        .iter()
+        .find(|p| p.name == target || p.path == target)
+        .map(|p| std::path::PathBuf::from(&p.path))
+}
+
+/// POST /api/advisor/policy/current — returns current account routing policy.
+pub async fn policy_current_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+) -> Result<Json<PolicyReadCurrentResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+    let res = state.advisor_service.read_current_policy();
+    Ok(Json(res))
+}
+
+/// POST /api/advisor/evaluations/list — lists discovered evaluation descriptors.
+pub async fn evaluations_list_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+    body: Option<Json<EvaluationsListParamsDto>>,
+) -> Result<Json<EvaluationsListResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+    let params = body.map(|b| b.0).unwrap_or_default();
+    let project_root = resolve_target_project_root(&state, params.target.as_deref()).await;
+    let res = state
+        .advisor_service
+        .list_evaluations(project_root.as_deref(), params);
+    Ok(Json(res))
+}
+
+/// POST /api/advisor/evaluations/read — reads a single evaluation document with revision check.
+pub async fn evaluations_read_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+    Json(body): Json<EvaluationsReadParamsDto>,
+) -> Result<Json<EvaluationsReadResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+    let project_root = resolve_target_project_root(&state, body.target.as_deref()).await;
+    let res = state
+        .advisor_service
+        .read_evaluation(project_root.as_deref(), body);
+    Ok(Json(res))
+}
+
+/// POST /api/advisor/evaluations/compare — compares multiple evaluation documents by rubric/input groups.
+pub async fn evaluations_compare_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+    Json(body): Json<EvaluationsCompareParamsDto>,
+) -> Result<Json<EvaluationsCompareResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+    let project_root = resolve_target_project_root(&state, body.target.as_deref()).await;
+    let res = state
+        .advisor_service
+        .compare_evaluations(project_root.as_deref(), body)?;
     Ok(Json(res))
 }

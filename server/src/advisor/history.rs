@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-#[cfg(test)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use crate::advisor::evaluations::*;
+use crate::advisor::policy::*;
 use tokio::sync::Mutex;
 use sha2::{Digest, Sha256};
 
@@ -38,6 +38,33 @@ impl AdvisorService {
 
     pub fn status(&self, enabled: bool) -> AdvisorStatusDto {
         inspect_history_root(enabled, self.home_dir.as_deref())
+    }
+    pub fn read_current_policy(&self) -> PolicyReadCurrentResultDto {
+        crate::advisor::policy::read_current_policy(self.home_dir.as_deref())
+    }
+
+    pub fn list_evaluations(
+        &self,
+        project_root: Option<&Path>,
+        params: EvaluationsListParamsDto,
+    ) -> EvaluationsListResultDto {
+        crate::advisor::evaluations::list_evaluations(self.home_dir.as_deref(), project_root, params)
+    }
+
+    pub fn read_evaluation(
+        &self,
+        project_root: Option<&Path>,
+        params: EvaluationsReadParamsDto,
+    ) -> EvaluationsReadResultDto {
+        crate::advisor::evaluations::read_evaluation(self.home_dir.as_deref(), project_root, params)
+    }
+
+    pub fn compare_evaluations(
+        &self,
+        project_root: Option<&Path>,
+        params: EvaluationsCompareParamsDto,
+    ) -> Result<EvaluationsCompareResultDto, AdvisorError> {
+        crate::advisor::evaluations::compare_evaluations(self.home_dir.as_deref(), project_root, params)
     }
 
     pub async fn clear_snapshots(&self) {
