@@ -11,9 +11,9 @@
 ## Overview
 
 - Date: 2026-10-02. Priority: P2.
-- Implementation: pending. Review: pending. Progress: 0%.
-- Owner: Evcrate retirement worker. Estimated implementation effort: 5h.
-- Planning only; instructions below are for the later implementation run.
+- Implementation: complete. Review: complete (9.6/10). Progress: 100%.
+- Owner: Evcrate retirement worker & review agent. Estimated implementation effort: 5h.
+- Scope complete; validation confirmed 2,627 tests passing across Dam-Hopper and Evcrate.
 
 ## Key Insights
 
@@ -53,15 +53,15 @@ KEEP /home/loidinh/WS/evcrate/.evcrate/source/.evcrate/bin/{evcrate-advisor,lib/
 
 ## Todo list
 
-- [ ] Verify G1 and Dam-Hopper source closure is self-contained; native build must not read sibling Evcrate checkout. Capture removal inventory before deleting generated folder.
-- [ ] Delete plugin directory, plugin-only scripts/SDK dependency and path-hash utility code; preserve producer project partition, checkpoint, revision and cursor hashes. Walk all inbound imports using available LSP references before exported-symbol cleanup; if no server configured, explicit import/dependency inventory.
-- [ ] Remove port provider/bridge contract and plugin-mode construction from standalone viewer. Preserve only currently supported non-plugin entry/logic if any; do not invent or restore a historical local/file picker. If the remaining viewer build is solely the plugin entry, retire that build target while retaining domain code required by core producer. Remove frame/capability/registration-only state/actions/text.
-- [ ] Rename shared plugin-named data contract to neutral Advisor module only if retained consumers need it; migrate every caller, validator generator, test and docs import. No alias exports or deprecated plugin option.
-- [ ] Keep general prepare-release-assets.cjs, verify-private-linux-release.cjs and scripts/release/**; edit only proven plugin branches. Remove separate dist/advisor-plugin/ CI staging/archive/digests/gates, not public asset logic. Preserve all seven public assets: Linux archive+SHA256, Windows archive+SHA256, release JSON, install.sh and install.ps1, plus unrelated npm/CLI/web products and checksum tooling.
-- [ ] Remove .github/workflows/release.yml plugin build/archive/verify, npm ci --prefix plugin and plugin artifact upload/download steps; remove package build:all plugin UI step and plugin-only package commands/build settings/lockfile dependencies. Published historical GitHub assets remain unless remote deletion is explicitly requested; new builds no longer produce/request plugin products.
-- [ ] Migrate meaningful producer/standalone domain assertions before deleting plugin-only tests. Replace Dam-Hopper's `scripts/test-native-advisor-parity.mjs` (which imports the Evcrate plugin backend) with permanent native Rust parity coverage from Phases 02/03, then remove the script before deleting that backend. Remove current docs telling users to register/install plugin; keep core Advisor operational docs.
-- [ ] After integration finish, run source repository's actual build/test/release verification commands from its current manifests. Produce release assets in scratch output and assert expected retained products present, plugin archive absent.
-- [ ] Smoke core Advisor history writer in temporary HOME using existing deterministic fixture mode; exercise any retained supported non-plugin viewer behavior, then native Dam-Hopper on the same documents. No plugin SDK/worker/iframe path may be necessary.
+- [x] Verify G1 and Dam-Hopper source closure is self-contained; native build must not read sibling Evcrate checkout. Capture removal inventory before deleting generated folder.
+- [x] Delete plugin directory, plugin-only scripts/SDK dependency and path-hash utility code; preserve producer project partition, checkpoint, revision and cursor hashes. Walk all inbound imports using available LSP references before exported-symbol cleanup; if no server configured, explicit import/dependency inventory.
+- [x] Remove port provider/bridge contract and plugin-mode construction from standalone viewer. Preserve only currently supported non-plugin entry/logic if any; do not invent or restore a historical local/file picker. If the remaining viewer build is solely the plugin entry, retire that build target while retaining domain code required by core producer. Remove frame/capability/registration-only state/actions/text.
+- [x] Rename shared plugin-named data contract to neutral Advisor module only if retained consumers need it; migrate every caller, validator generator, test and docs import. No alias exports or deprecated plugin option.
+- [x] Keep general prepare-release-assets.cjs, verify-private-linux-release.cjs and scripts/release/**; edit only proven plugin branches. Remove separate dist/advisor-plugin/ CI staging/archive/digests/gates, not public asset logic. Preserve all seven public assets: Linux archive+SHA256, Windows archive+SHA256, release JSON, install.sh and install.ps1, plus unrelated npm/CLI/web products and checksum tooling.
+- [x] Remove .github/workflows/release.yml plugin build/archive/verify, npm ci --prefix plugin and plugin artifact upload/download steps; remove package build:all plugin UI step and plugin-only package commands/build settings/lockfile dependencies. Published historical GitHub assets remain unless remote deletion is explicitly requested; new builds no longer produce/request plugin products.
+- [x] Migrate meaningful producer/standalone domain assertions before deleting plugin-only tests. Replace Dam-Hopper's `scripts/test-native-advisor-parity.mjs` (which imports the Evcrate plugin backend) with permanent native Rust parity coverage from Phases 02/03, then remove the script before deleting that backend. Remove current docs telling users to register/install plugin; keep core Advisor operational docs.
+- [x] After integration finish, run source repository's actual build/test/release verification commands from its current manifests. Produce release assets in scratch output and assert expected retained products present, plugin archive absent.
+- [x] Smoke core Advisor history writer in temporary HOME using existing deterministic fixture mode; exercise any retained supported non-plugin viewer behavior, then native Dam-Hopper on the same documents. No plugin SDK/worker/iframe path may be necessary.
 
 ## Success Criteria
 
