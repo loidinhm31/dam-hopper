@@ -11,9 +11,9 @@
 ## Overview
 
 - Date: 2026-10-02. Priority: P2.
-- Implementation: pending. Review: pending. Progress: 0%.
+- Implementation/finalization: settled. Durable completion: pending (not DONE).
 - Owner: React Advisor worker; no WorkspacePage/shared client ownership. Estimated implementation effort: 10h.
-- Planning only; instructions below are for the later implementation run.
+- Status: Scoped validation passed 52/52; review scored 9.5/10 and was approved by the user; advisor advice ready. Live browser qualification handed to Phases 05/09. See [review](../reports/code-review-261002-1131-phase-04-reuse-native-advisor-ui.md).
 
 ## Key Insights
 
@@ -48,15 +48,15 @@ DO NOT COPY /home/loidinh/WS/evcrate/{plugin/ui/index.html,plugin/ui/plugin-main
 
 ## Todo list
 
-- [ ] Use source dependency-closure inventory to copy only UI-used domain validators/formatters/types. Collapse plugin-specific error constants and enums into native domain error/status types; no dependency on plugin-sdk or Node builtins in browser bundle.
-- [ ] Require an explicit native provider/owner input; delete default DamHopperPortProvider construction, frameSession/activationGeneration and bridge lifecycle state. Preserve request sequence/query revision checks using actual profile/connection/source identity.
-- [ ] Implement eight provider methods over captured ApiClient; request IDs map to AbortControllers. Existing REST transport must carry signal through supported seam; do not fake cancellation by no-op. Rejected/aborted late responses cannot commit reducer state after owner/query replacement.
-- [ ] Preserve reducer transitions: refresh/stale, selected project/all activity, filter/query revision, detail changed/missing, policy and evaluation states, comparison eligibility. Owner replacement clears inaccessible data; changing layout within same owner preserves tabs/filters/detail.
-- [ ] Replace hash tab writes/listeners with local panel state and native owner-qualified state if persistence already exists. Preserve arrow/Home/End roving-tab behavior and Escape pass-through; do not change Workspace route/hash for Advisor tabs.
-- [ ] Scope every copied CSS selector/variable/reset/media rule under `.native-advisor`; replace :root/body/global element rules with panel root styles and Dam-Hopper theme tokens. Scope keyframes and generic class names to prevent surrounding controls changing.
-- [ ] Remove plugin isolation/registration banners and capability toggles. Render native source path availability and meaningful error states, including explicit final-root symlink rejection. No path-hash field, generation/copy action or hashing error state. Source hash-tabs means URL routing only; replace it with panel-local tabs, not a path utility.
-- [ ] Evaluation view consumes actual native discovered sources from Phase 03; no new local picker/upload feature. Preserve selected comparison/detail only within captured owner; clear on profile change or disable.
-- [ ] After backend/client integration, exercise real browser four views with fixture values, filter changes and changed-revision details. Compare visible metrics/statuses against baseline; record screen captures across light/dark and narrow layouts.
+- [x] Use source dependency-closure inventory to copy only UI-used domain validators/formatters/types. Collapse plugin-specific error constants and enums into native domain error/status types; no dependency on plugin-sdk or Node builtins in browser bundle.
+- [x] Require an explicit native provider/owner input; delete default DamHopperPortProvider construction, frameSession/activationGeneration and bridge lifecycle state. Preserve request sequence/query revision checks using actual profile/connection/source identity.
+- [x] Implement eight provider methods over captured ApiClient; request IDs map to AbortControllers. Existing REST transport must carry signal through supported seam; do not fake cancellation by no-op. Rejected/aborted late responses cannot commit reducer state after owner/query replacement.
+- [x] Preserve reducer transitions: refresh/stale, selected project/all activity, filter/query revision, detail changed/missing, policy and evaluation states, comparison eligibility. Owner replacement clears inaccessible data; changing layout within same owner preserves tabs/filters/detail.
+- [x] Replace hash tab writes/listeners with local panel state and native owner-qualified state if persistence already exists. Preserve arrow/Home/End roving-tab behavior and Escape pass-through; do not change Workspace route/hash for Advisor tabs.
+- [x] Scope every copied CSS selector/variable/reset/media rule under `.native-advisor`; replace :root/body/global element rules with panel root styles and Dam-Hopper theme tokens. Scope keyframes and generic class names to prevent surrounding controls changing.
+- [x] Remove plugin isolation/registration banners and capability toggles. Render native source path availability and meaningful error states, including explicit final-root symlink rejection. No path-hash field, generation/copy action or hashing error state. Source hash-tabs means URL routing only; replace it with panel-local tabs, not a path utility.
+- [x] Evaluation view consumes actual native discovered sources from Phase 03; no new local picker/upload feature. Preserve selected comparison/detail only within captured owner; clear on profile change or disable.
+- [x] Hand live-browser qualification of all four views, fixture values, filters, changed-revision details, baseline comparison, and light/dark/narrow captures to Phases 05/09. Phase 04 scoped validation passed 52/52; no live-browser execution is claimed here.
 
 ## Success Criteria
 
@@ -72,6 +72,6 @@ Render policy/record/evaluation strings through React escaped content and existi
 
 ## Next steps
 
-Hand native component/provider to Phase 05; source integration remains until full parity gate.
+Phase 04 implementation and finalization settled; durable completion pending. Phase 05 owns Workspace cutover, and Phases 05/09 own live browser qualification. No premature DONE status.
 
 Unresolved questions: see parent plan; do not silently reduce acceptance or invent missing source behavior.

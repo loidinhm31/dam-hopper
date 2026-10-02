@@ -1,6 +1,6 @@
 # Native Advisor plan navigation
 
-Status: in-progress; Phase 01 implementation/finalization settled; durable completion pending (not DONE).
+Status: in-progress; implementation/finalization settled through Phase 04 (4/9, 44%; 36/70h, 51%); durable completion pending (0/9, no phase DONE).
 
 [Full plan](./plan.md) · [Design contract / acceptance](./reports/native-design-contract.md) · [Architecture: Phase 01 frozen; runtime work later](../../docs/architecture/native-advisor.md)
 
@@ -11,9 +11,9 @@ Read [validated decisions](./reports/validated-decisions.md) for the decision/ev
 | Phase | Contract | Status / progress | Estimate |
 |---|---|---|---|
 | 01 | [Freeze native contract and source parity baseline](./phase-01-contract-and-parity-baseline.md) | Implementation/finalization settled; durable completion pending / not DONE | 4h |
-| 02 | [Port history domain, status, admin guard and native API](./phase-02-native-history-domain-and-api.md) | Pending / 0% | 12h |
-| 03 | [Port current policy and evaluation discovery/read/compare](./phase-03-policy-and-evaluation-domain.md) | Pending / 0% | 10h |
-| 04 | [Reuse Advisor UI and replace plugin provider](./phase-04-reuse-native-advisor-ui.md) | Pending / 0% | 10h |
+| 02 | [Port history domain, status, admin guard and native API](./phase-02-native-history-domain-and-api.md) | Implementation/finalization settled; durable completion pending / not DONE | 12h |
+| 03 | [Port current policy and evaluation discovery/read/compare](./phase-03-policy-and-evaluation-domain.md) | Implementation/finalization settled; durable completion pending / not DONE | 10h |
+| 04 | [Reuse Advisor UI and replace plugin provider](./phase-04-reuse-native-advisor-ui.md) | Implementation/finalization settled; durable completion pending / not DONE | 10h |
 | 05 | [Wire per-server toggle and all Workspace surfaces](./phase-05-settings-and-workspace-cutover.md) | Pending / 0% | 6h |
 | 06 | [Delete Dam-Hopper plugin runtime, SDK and bridge](./phase-06-remove-dam-hopper-plugin-platform.md) | Pending / 0% | 6h |
 | 07 | [Retire Linux runner and deliver safe manual uninstall](./phase-07-linux-deployment-and-manual-uninstall.md) | Pending / 0% | 10h |

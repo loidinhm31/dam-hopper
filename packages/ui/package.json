@@ -13,7 +13,9 @@
     "./styles": "./src/index.css",
     "./api/*": "./src/api/*.ts",
     "./lib/*": "./src/lib/*.ts",
-    "./diagnostics-client": "./src/lib/diagnostics-client.ts"
+    "./diagnostics-client": "./src/lib/diagnostics-client.ts",
+    "./advisor": "./src/advisor/index.ts",
+    "./advisor/*": "./src/advisor/*.ts"
   },
   "dependencies": {
     "@dam-hopper/browser-bridge": "workspace:*",

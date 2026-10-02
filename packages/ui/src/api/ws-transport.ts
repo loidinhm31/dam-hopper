@@ -1581,6 +1581,27 @@ function channelToEndpoint(
     }
     case "plugins:probeAdvisorHistory":
       return { method: "GET", url: "/api/plugins/admin/advisor-history-probe" };
+    // Native Advisor endpoints
+    case "advisor:status":
+      return { method: "GET", url: "/api/advisor/status" };
+    case "advisor:settings:update":
+      return { method: "PATCH", url: "/api/advisor/settings", body: data };
+    case "advisor:history:refresh":
+      return { method: "POST", url: "/api/advisor/history/refresh", body: data ?? {} };
+    case "advisor:history:summary":
+      return { method: "POST", url: "/api/advisor/history/summary", body: data };
+    case "advisor:history:page":
+      return { method: "POST", url: "/api/advisor/history/page", body: data };
+    case "advisor:history:detail":
+      return { method: "POST", url: "/api/advisor/history/detail", body: data };
+    case "advisor:policy:current":
+      return { method: "POST", url: "/api/advisor/policy/current", body: data ?? {} };
+    case "advisor:evaluations:list":
+      return { method: "POST", url: "/api/advisor/evaluations/list", body: data ?? {} };
+    case "advisor:evaluations:read":
+      return { method: "POST", url: "/api/advisor/evaluations/read", body: data };
+    case "advisor:evaluations:compare":
+      return { method: "POST", url: "/api/advisor/evaluations/compare", body: data };
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }
