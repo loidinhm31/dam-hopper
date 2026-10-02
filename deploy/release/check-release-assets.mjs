@@ -57,7 +57,6 @@ const REQUIRED_INVENTORY_PATHS = Object.freeze([
   "bin/dam-hopper-manager",
   "bin/dam-hopper-server",
   "bin/dam-hopper-idle-suspend-helper",
-  "NOTICES",
   "bin/dam-hopper-web",
   "web",
   "systemd/dam-hopper-api.service",
