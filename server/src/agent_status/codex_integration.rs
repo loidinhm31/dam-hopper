@@ -537,26 +537,32 @@ fn check_all_hooks_registered(
             None => return Ok(false),
         };
         for event in CODEX_MANAGED_EVENTS {
-            let registered = hooks_table.get(*event).and_then(|item| item.as_array()).map(|arr| {
-                arr.iter().any(|v| {
-                    if let Some(tbl) = v.as_inline_table() {
-                        if let Some(cmd) = tbl.get("command").and_then(|c| c.as_str()) {
-                            if cmd == launcher_str.as_ref() {
-                                return true;
-                            }
-                        }
-                        if let Some(hooks_arr) = tbl.get("hooks").and_then(|h| h.as_array()) {
-                            return hooks_arr.iter().any(|h| {
-                                h.as_inline_table()
-                                    .and_then(|t| t.get("command"))
-                                    .and_then(|c| c.as_str())
-                                    == Some(launcher_str.as_ref())
-                            });
-                        }
-                    }
-                    false
+            let registered = hooks_table
+                .get(*event)
+                .and_then(|item| item.as_array())
+                .map(|arr| {
+                    arr.iter().any(|v| {
+                        v.as_inline_table()
+                            .and_then(|group| group.get("hooks"))
+                            .and_then(|hooks| hooks.as_array())
+                            .map(|hooks| {
+                                hooks.iter().any(|hook| {
+                                    hook.as_inline_table()
+                                        .map(|handler| {
+                                            handler.get("type").and_then(|v| v.as_str())
+                                                == Some("command")
+                                                && handler
+                                                    .get("command")
+                                                    .and_then(|v| v.as_str())
+                                                    == Some(launcher_str.as_ref())
+                                        })
+                                        .unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false)
+                    })
                 })
-            }).unwrap_or(false);
+                .unwrap_or(false);
             if !registered {
                 return Ok(false);
             }
@@ -573,22 +579,26 @@ fn check_all_hooks_registered(
             },
         };
         for event in CODEX_MANAGED_EVENTS {
-            let registered = hooks_obj.get(*event).and_then(|entry| entry.as_array()).map(|arr| {
-                arr.iter().any(|item| {
-                    if let Some(cmd) = item.get("command").and_then(|c| c.as_str()) {
-                        if cmd == launcher_str.as_ref() {
-                            return true;
-                        }
-                    }
-                    if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
-                        hooks.iter().any(|h| {
-                            h.get("command").and_then(|c| c.as_str()) == Some(launcher_str.as_ref())
-                        })
-                    } else {
-                        false
-                    }
+            let registered = hooks_obj
+                .get(*event)
+                .and_then(|entry| entry.as_array())
+                .map(|arr| {
+                    arr.iter().any(|group| {
+                        group
+                            .get("hooks")
+                            .and_then(|hooks| hooks.as_array())
+                            .map(|hooks| {
+                                hooks.iter().any(|handler| {
+                                    handler.get("type").and_then(|v| v.as_str())
+                                        == Some("command")
+                                        && handler.get("command").and_then(|v| v.as_str())
+                                            == Some(launcher_str.as_ref())
+                                })
+                            })
+                            .unwrap_or(false)
+                    })
                 })
-            }).unwrap_or(false);
+                .unwrap_or(false);
             if !registered {
                 return Ok(false);
             }
