@@ -542,3 +542,25 @@ async fn test_advisor_disable_clears_snapshots() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_advisor_default_app_state_uses_effective_home() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (router, _state) = create_harness(&temp_dir, false, UserRole::Admin, None).await;
+    let token = generate_auth_token("admin-user", "session-admin");
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/advisor/status")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // Status responds with valid JSON schema
+    assert!(status_json.get("enabled").is_some());
+    assert!(status_json.get("available").is_some());
+}

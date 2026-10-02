@@ -429,7 +429,9 @@ impl AppState {
             fallback_warning_onset_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
             auth_service,
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
-            advisor_service: Arc::new(crate::advisor::AdvisorService::new(dirs::home_dir())),
+            advisor_service: Arc::new(crate::advisor::AdvisorService::new(
+                crate::api::agent_status::resolve_effective_home(),
+            )),
             advisor_settings_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
