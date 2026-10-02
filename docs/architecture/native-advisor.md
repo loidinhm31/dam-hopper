@@ -1,8 +1,7 @@
 # Native Advisor — frozen contract and migration architecture
 
-Status: **Phases 01–05 implementation/finalization settled; durable completion pending (none is DONE).** (2026-10-02).
-Phase 05 Settings/Workspace cutover is implemented; Phases 06–09 platform/source/deployment retirement and end-to-end qualification remain pending. See the [Phase 05 plan](../../plans/261002-0246-native-advisor-migration/phase-05-settings-and-workspace-cutover.md), [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), and [Phase 01 parity baseline](../../plans/261002-0246-native-advisor-migration/reports/native-contract-and-parity.md).
-
+Status: **Native implementation and Phase 09 qualification evidence recorded.** Durable completion receipts for Phases 01–05 remain parent-coordinated; Phases 06–08 have published receipts. (2026-10-02).
+The native Advisor domain service, UI panel/provider, and settings toggle are integrated into Workspace; the plugin platform, runner daemon, SDK, and Evcrate plugin release assets are retired. See the [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md), and [qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md).
 ## Frozen decisions
 
 - User confirmed entire Dam-Hopper plugin platform retirement, not merely Advisor extraction.
@@ -42,7 +41,7 @@ Native read-only routes expose current account policy (`POST /api/advisor/policy
 
 Advisor selectors, reset rules, variables, and theme fallbacks stay under `.native-advisor`; animation keyframes use Advisor-specific names. The panel path has **0 iframe/srcdoc, 0 MessagePort/plugin bridge, 0 plugin SDK, and 0 nested React root**. It imports no sibling Evcrate checkout code.
 
-The panel/provider are implemented; Phase 05 now wires them into Settings and persistent Workspace placement. `packages/ui/browser-tests/workspace-advisor.browser.tsx` covers DOM placement, not the full authenticated API/domain-parity or production-qualification gates. Phases 04 and 05 are not durably DONE.
+The panel/provider are implemented; Phase 05 wires them into Settings and persistent Workspace placement. `packages/ui/browser-tests/workspace-advisor.browser.tsx` covers DOM placement, not the full authenticated API/domain-parity or production-qualification gates. Implementation evidence is documented; durable completion receipt publication for Phases 04–05 remains parent-coordinated.
 
 ## Pre-migration source evidence
 
@@ -109,7 +108,7 @@ The Settings target remains independent of the Workspace project/connection owne
 | `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx` | Replaces `PluginHost` with one direct `AdvisorPanel`; a single host measures the active slot across modes. Focus capture activates the slot, Escape closes it, and hiding restores focus to a live launcher or blurs. |
 | `packages/ui/browser-tests/workspace-advisor.browser.tsx` | Chromium harness mocks the panel and asserts the same panel DOM node across IDE → Terminal → compact → IDE, plus an inert/hidden/`aria-hidden` host while the slot is closed. |
 
-The placement test does not establish all eight domain operations or authenticated real-server parity; G1 and Phase 09 qualification remain separately tracked.
+The placement test does not establish all eight domain operations or authenticated real-server parity. Broader integration qualification is recorded separately in the Phase 09 qualification report; durable completion receipts for Phases 01–05 remain parent-coordinated.
 
 ## Plugin/deployment cutover
 
@@ -130,6 +129,11 @@ The placement test does not establish all eight domain operations or authenticat
 - Fresh install, upgrade from plugin-bearing manager state, repeated uninstall, rollback and crash recovery; API/PTYS/filesystem/idle-suspend still work without runner or bundled Node.
 - Release assembly and inventories succeed in both repositories without plugin assets; core Evcrate Advisor still produces history readable by native viewer.
 
-## Unresolved questions
+## Implementation and retirement status
 
-No open user scope decisions. Phase 05 Settings/Workspace code cutover is implemented/finalized but not durably DONE; Phase 06–08 platform/source/deployment retirement and Phase 09 production qualification remain open. Evaluation-writer convention remains unverified.
+Implementation and migration qualification evidence is recorded, but durable completion receipt status is not uniform:
+- **Phases 01–05:** Contract, native history and policy/evaluation domains, React panel/provider, Settings toggle, and Workspace surfaces are implemented. Durable completion receipts remain parent-coordinated and must not be inferred from this architecture summary.
+- **Phase 06:** Dam-Hopper plugin runtime, SDK, and bridge deleted; completion receipt published.
+- **Phase 07:** Linux runner service retired, manager state schema 3 migrated, and safe manual uninstall script delivered (`deploy/remove-plugin-platform.sh`); completion receipt published.
+- **Phase 08:** Evcrate plugin integration and CI release assets removed; core CLI/controller and shared viewer source remain; completion receipt published.
+- **Phase 09:** Native-only cutover qualification and documentation reconciliation are recorded; parent coordinates final project status and receipt publication.

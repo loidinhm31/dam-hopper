@@ -1,4 +1,5 @@
 # Trusted Plugin Platform — Phase D03
+> **HISTORICAL (retired 2026-10-02):** The authenticated plugin REST/WebSocket façade and grant/context API described here were removed; retain this page for prior design/evidence only.
 
 **Status:** DONE — 2026-09-22 (100%; re-review approved 9.2/10).
 D03 adds the authenticated REST façade, WebSocket connection epochs, explicit

@@ -1,4 +1,5 @@
 # Trusted Plugin Platform — Phase D02
+> **HISTORICAL (retired 2026-10-02):** The owner runner, Unix-socket API, and Node worker described here were removed; this page is not current deployment guidance.
 
 **Status:** Implemented 2026-09-21. D02 supplies the owner-account runner,
 Unix-socket API boundary, real Node worker process, per-installation

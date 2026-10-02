@@ -1476,7 +1476,6 @@ function channelToEndpoint(
     case "workflow:purgeHistory":
       return { method: "DELETE", url: "/api/workflow/history", body: data };
 
-    // Plugins
     // Native Advisor endpoints
     case "advisor:status":
       return { method: "GET", url: "/api/advisor/status" };

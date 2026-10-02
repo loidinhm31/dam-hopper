@@ -1,4 +1,5 @@
 # DamHopper Trusted Plugin Platform — Linux Deployment & Qualification
+> **RETIRED (2026-10-02):** This Linux guide describes the removed plugin runner, socket, tmpfiles, and owner/admin provisioning. Treat all procedures below as historical; the current Linux manager and services are documented in [Linux Release Manager](./linux-release-manager.md) and [Linux systemd](./linux-systemd.md).
 
 This document describes the operator configuration, security constraints, systemd service units, lifecycle transactions, and qualification procedures for running the DamHopper plugin platform on Linux.
 

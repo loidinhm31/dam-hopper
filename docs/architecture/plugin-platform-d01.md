@@ -1,4 +1,5 @@
 # Trusted Plugin Platform — Phase D01
+> **HISTORICAL (retired 2026-10-02):** The plugin registry and trust-staging implementation described here was removed; retain this page for migration history only.
 
 **Status:** Completed 2026-09-21. Targeted registry/archive/trust tests are green;
 D01 is a runner-owned package registry and trust-staging boundary, not a

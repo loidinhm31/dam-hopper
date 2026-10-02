@@ -12,21 +12,13 @@ release tooling refuses unsafe path ownership or symlink substitutions rather
 than repairing them. The helper remains root-owned and uses a restricted Unix
 socket with peer credentials.
 
-### Linux runner packaging invariant and v0.5.1 release
+### Retired plugin-runner packaging (Historical)
 
-Published Linux archives require `bin/dam-hopper-plugin-runner`, bundled
-`bin/node`, the runner service, and its tmpfiles rule. `NOTICES` carries the
-Node distribution license. The builder and asset gate reject missing inputs;
-Node/runner executables are server-role entries excluded from web-only installs.
-The runner uses an absolute Node path inside the immutable release.
-
-The original v0.5.0 archive omitted the runner binary. Subsequent retagged
-builds included it, but version alone cannot distinguish their contents:
-inspect `release.commitSha` in the installed manifest. Production review found
-commit `93e29cc4` still installed after the `673c7535` release build succeeded.
-The newer runtime/provisioning fixes remain unpublished; prefer a new immutable
-release tag rather than replacing v0.5.0 again.
-
+The former Linux package required a plugin runner, bundled Node runtime, runner
+service, and runner tmpfiles rule. That platform is retired; these paths and the
+v0.5.0/v0.5.1 runner incident are historical, not current release requirements.
+Current packages contain the manager, server, web host/assets, idle-suspend
+helper, and current service/runtime templates. See the [Linux release manifest](./linux-release-manifest.md).
 ### Phase 01–02 Windows direct-server release and installer
 
 `deploy/release/build-windows-release-archive.mjs` emits a deterministic

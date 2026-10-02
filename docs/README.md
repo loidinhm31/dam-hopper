@@ -23,14 +23,14 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 - **[Phase 06 Preferences, Settings, Usage, and Host Resources](./phase-06-preferences-settings-usage-and-host.md)** — Separate preference source and Settings target, owner-qualified usage, host-resource alerts, and revision-fenced suspend actions
 - **[Multi-profile Host Resources verification](../plans/260920-0137-multi-profile-host-resources/phase-04-verification-and-testing.md)** — Completed focused unit/component and Chromium gate: 102/102 tests covering navigation, focus, polling tiers, unread isolation, responsive accessibility, and security negatives
 - **[Host-resource SSE architecture](./architecture/host-resource-sse.md)** — Phases 01–06 delivery and rollback design for the intended Linux-web-first scope; target-specific browser, release-PID/soak, auth/shutdown, proxy, and native C42 gates remain pending.
-- **[Native Advisor architecture and REST API](./architecture/native-advisor.md)** — Native APIs, Phase 04 React panel/provider, and implemented Phase 05 Settings/Workspace cutover; platform retirement and end-to-end qualification remain pending.
+- **[Native Advisor architecture and REST API](./architecture/native-advisor.md)** — Native implementation and Phase 09 qualification evidence; durable completion receipt publication for Phases 01–05 remains parent-coordinated.
 - **[Phase 07 Media Isolation and Encryption](./phase-07-media-isolation-and-encryption.md)** — UUIDv4-namespaced media sessions, ticket-bound native streams, narrow remote cleanup, and owner-qualified encrypted writes
 - **[Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)** — Concurrent Windows native SSH scopes, lifecycle fences, per-scope teardown, and explicit Browser target ownership
 - **[Phase 09 Integration and Qualification](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)** — Dual-server harness, reconciled test ledger, web/native release gates, and rollback boundaries
-- **[Trusted Plugin Platform D05](./architecture/plugin-platform-d05.md)** — Bearer-only management API, root-seeded admin allowlist, and transactional lifecycle coordinator
-- **[Trusted Plugin Platform D03](./architecture/plugin-platform-d03.md)** — Authenticated plugin REST API, grant model, connection epochs, and context lifecycle
-- **[Trusted Plugin Platform D02](./architecture/plugin-platform-d02.md)** — Owner-account runner, authenticated Unix RPC, Node worker isolation, supervision, and restart budget
-- **[Trusted Plugin Platform D01](./architecture/plugin-platform-d01.md)** — Runner-owned package registry, streaming trust staging, archive invariants, and CAS API
+- **[Trusted Plugin Platform D05](./architecture/plugin-platform-d05.md)** — Historical, retired plugin platform: bearer-only management API and transactional lifecycle.
+- **[Trusted Plugin Platform D03](./architecture/plugin-platform-d03.md)** — Historical, retired plugin platform: REST API, grants, and context lifecycle.
+- **[Trusted Plugin Platform D02](./architecture/plugin-platform-d02.md)** — Historical, retired plugin platform: owner-account runner and Node worker.
+- **[Trusted Plugin Platform D01](./architecture/plugin-platform-d01.md)** — Historical, retired plugin platform: package registry and staging contract.
 - **[Frontend Components](./frontend-components.md)** — Shared React component architecture and host lifecycle
 - **[Workflow Context Surface](./workflow-context-surface.md)** — Responsive Plan/item details, notes, and inline editing
 - **[Native Browser Debug Support](./native-browser-debug-support.md)** — Windows v1 gate, Linux qualification, fallback and security boundaries
@@ -61,10 +61,10 @@ Complete guide to the DamHopper workspace manager and IDE integration system.
 
 - **[Project and UI Configuration](./configuration-guide.md)** — TOML registry, terminal environment, UI preferences, and Agent Settings
 - **[Server Configuration](./configuration/server-configuration.md)** — Server runtime, environment variables, deployment, troubleshooting, and the Phase 06 SSE proxy/rollout/rollback runbook.
-- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Cross-platform Release CI, required Linux runner packaging invariant, v0.5.1 operator checklist, and Linux bootstrap ownership
-- **[Linux Release Manifest v2](./linux-release-manifest.md)** — Linux-only manifest contract and Windows asset boundary
-- **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801
-- **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, Phase 06 diagnostics, helper service lifecycle, activation, rollback, and recovery
+- **[Linux Release Publisher and Bootstrap](./linux-release-publisher-bootstrap.md)** — Core Linux release assets, v0.5.1 incident history, and bootstrap ownership.
+- **[Linux Release Manifest v2](./linux-release-manifest.md)** — Current Linux manifest contract; retired runner fields are compatibility-only.
+- **[Linux systemd](./linux-systemd.md)** — Current backend-only production service on port 4801; includes legacy runner cleanup guidance.
+- **[Linux Release Manager](./linux-release-manager.md)** — Manager commands, helper lifecycle, activation, rollback, and recovery.
 - **[Linux API Runtime Provisioning](./linux-release-runtime-provisioning.md)** — Canonical API config/audit state, copy-once legacy migration, and descriptor-relative refusal boundaries
 - **[Linux nohup](./linux-nohup.md)** — Legacy/recovery server on loopback port 4800
 - **[Windows Release Asset Packaging and Bootstrap Installer](./windows-release-packaging.md)** — Phases 01–03 deterministic archive, PowerShell installer, CI publication, profile gates, and direct-server boundaries

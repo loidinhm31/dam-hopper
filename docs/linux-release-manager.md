@@ -1,15 +1,18 @@
-# Linux Release Manager (Manifest v2; manager state v2)
+# Linux Release Manager (Manifest v2; manager state v3)
 
-Status: Manifest v2 and manager-state v2 are current. Phase D06 adds the
-owner-runner release assets, explicit plugin identities, tmpfiles provisioning,
-matched host/plugin rollback, recovery, and LAN qualification.
+Status: Manifest v2 is the current release contract; manager state schema v3
+is current and migrates installed schema v1/v2 records. Plugin runner assets,
+owner/admin arguments, and runtime allowlisting are retired, not current
+deployment options.
 
 The manager provides unprivileged acquisition, root-only staging, durable
-activation, exact health gating, rollback, crash recovery, and the one-time
-format-2 migration from the retired checkout runner.
+activation, exact health gating, rollback, and crash recovery for the current
+API, web, recovery, and idle-suspend helper services.
 
 This guide covers a downloaded bundle through committed release. Release
-assembly and the v0.5.0/v0.5.1 advisory are in [Publisher and Bootstrap](./linux-release-publisher-bootstrap.md); manifest fields are in [Linux Release Manifest v2](./linux-release-manifest.md).
+assembly and the historical v0.5.0/v0.5.1 advisory are in
+[Publisher and Bootstrap](./linux-release-publisher-bootstrap.md); manifest
+fields are in [Linux Release Manifest v2](./linux-release-manifest.md).
 
 ## Prerequisites and trust boundary
 
@@ -42,15 +45,10 @@ Acquisition and installation have intentionally different privilege boundaries:
   authority. The manager rejects root and requires `Group=` to be the user's
   primary group; it does not infer identity from the manifest, host selection,
   `SUDO_USER`, or a username-as-group fallback.
-Plugin deployment is explicit: `--plugin-owner-user USER` selects the dedicated
-non-root runner account and repeatable `--plugin-admin-subject SUBJECT` records
-the subjects allowed to manage plugins. The owner must exist, have a valid
-non-root primary group and safe home, and differ from the API/web identities.
-On upgrades and role changes, omitted plugin arguments inherit `/etc/dam-hopper/host.toml`.
-
 The one-time format-2 migration is part of this manager. It accepts only the
 verified legacy layout described in [Linux systemd](./linux-systemd.md), stages
-the new root beside `/opt/dam-hopper`, and retires the old runner after commit.
+the new root beside `/opt/dam-hopper`, and does not restart a retired plugin
+runner. Plugin-bearing legacy rollback content is rejected before mutation.
 
 ### API runtime reconciliation
 
@@ -164,13 +162,12 @@ and stopped helper units before restarting the API.
 ## Bootstrap handoff (Phase 06)
 
 The published `dam-hopper-install.sh` is a non-root wrapper around this
-manager. It accepts `--version vX.Y.Z` or `--latest`, requires
-`--role server|web|both`, and forwards optional `--service-user`,
-`--plugin-owner-user`, repeatable `--plugin-admin-subject`, and
-`--allow-web-origin` values to `install`; `--verify-attestation` adds
-GitHub checks. It downloads and verifies the manifest/archive before using
-`sudo`, extracts only `bin/dam-hopper-manager`, and leaves state at `PENDING`
-without starting or activating services.
+manager. It requires `--role server|web|both` and accepts `--version vX.Y.Z`,
+`--latest`, or `--bundle DIR`, plus optional `--service-user`,
+repeatable `--allow-web-origin`, and `--verify-attestation`. It downloads and
+verifies the manifest/archive before using `sudo`, extracts only
+`bin/dam-hopper-manager`, and leaves state at `PENDING` without activating
+services.
 
 ```bash
 bash dam-hopper-install.sh --version v0.2.0 --role server
@@ -195,12 +192,10 @@ cargo run --manifest-path server/Cargo.toml --bin dam-hopper -- ...
 ```text
 dam-hopper fetch (--version vX.Y.Z | --latest) --output DIR [--verify-attestation]
 sudo dam-hopper install --bundle DIR [--role server|web|both]
-    [--service-user USER] [--plugin-owner-user USER]
-    [--plugin-admin-subject SUBJECT ...] [--allow-web-origin ORIGIN ...]
+    [--service-user USER] [--allow-web-origin ORIGIN ...] [--verify-attestation]
 sudo dam-hopper role set ROLE --bundle DIR
-    [--service-user USER] [--plugin-owner-user USER]
-    [--plugin-admin-subject SUBJECT ...] [--allow-web-origin ORIGIN ...]
-sudo dam-hopper start
+    [--service-user USER] [--allow-web-origin ORIGIN ...] [--verify-attestation]
+sudo dam-hopper start [--service-user USER] [--non-interactive]
 dam-hopper status [--json]
 sudo dam-hopper rollback
 sudo dam-hopper recover
@@ -271,14 +266,12 @@ manifest/archive SHA-256 comparison is mandatory.
 ### Install and role set
 
 ```bash
-# First install: role and explicit API/runner identities
+# First install: select the role and API service identity
 sudo dam-hopper install --bundle "$HOME/.cache/dam-hopper/v0.2.0" \
   --role server \
-  --service-user dam-hopper \
-  --plugin-owner-user advisor-owner \
-  --plugin-admin-subject admin@example.test
+  --service-user dam-hopper
 
-# Change the recorded role and retain the configured plugin identities
+# Change the recorded role
 sudo dam-hopper role set both --bundle /var/tmp/dam-hopper-bundle
 ```
 
@@ -319,108 +312,19 @@ The binary defaults to `0.0.0.0:4802`, serves GET/HEAD static requests, and
 reports web-role health at `/__dam-hopper/health`. The machine-local
 runtime-config file supplies the exact API origin; it is not packaged.
 
-## Helper service lifecycle (Production CLI Phase 03)
+## Current service lifecycle
 
-`dam-hopper-idle-suspend-helper.service` is a managed `server`-role unit
-alongside `dam-hopper-plugin-runner.service` and `dam-hopper-api.service`.
-The helper name is the `HELPER_SERVICE_UNIT` constant; helper and runner are
-included in `ALL_SERVICE_UNITS` when rendered. Server-role staging renders both
-into the transaction's `pending-units-<tx-id>` directory; staging never starts
-or enables services.
+The manager's current managed service set is API, helper, web, and recovery.
+Server-role activation starts the idle-suspend helper on a best-effort basis,
+then provisions the API runtime and starts the API; web-role activation starts
+the web service. API/web health gates determine candidate commit. Rollback and
+recovery operate on these current units and transaction-owned backups.
 
-### Start order and non-fatal fallback
-
-`sudo dam-hopper start` uses the same ordering for an ordinary start of a
-committed release and for activation of a pending candidate:
-
-1. When activating a candidate, install the rendered units and run
-   `systemctl daemon-reload`.
-2. If the selected role includes `server`, attempt the helper start; warning
-   on failure and continue.
-3. If the runner unit was rendered, attempt it after the helper; warning on
-   failure and continue, then start `dam-hopper-api.service`.
-4. If the selected role includes `web`, start
-   `dam-hopper-web.service`.
-5. Run the API/web health-stability gate. The helper has no HTTP probe target.
-
-Helper and runner start failures are intentionally non-fatal. Hosts without
-required suspend or plugin capability retain ordinary API operations;
-idle-suspend requests or plugin operations fail closed until their companion
-is available. Candidate activation still fails if API/web startup or health
-verification fails. After a successful health gate, helper/runner enablement
-is best-effort and warns without blocking API enablement or the commit.
-
-### Stop, rollback, and recovery behavior
-
-- Candidate activation first stops every unit in `ALL_SERVICE_UNITS`, including
-  helper and the optional runner, and backs up installed units before replacing them.
-- `sudo dam-hopper stop` iterates the same managed-unit list. A stop error is
-  printed as a warning for that unit; the command continues stopping other
-  units. `--clean` additionally removes the active view/state selected by the
-  CLI, but does not broaden cleanup to unrelated paths.
-- Automatic activation rollback stops helper/runner with the other managed units,
-  restores transaction-owned unit/configuration backups, reloads systemd, and
-  starts helper, runner, then API for a restored server role. Startup/enablement
-  failures remain warnings; API/web restoration and health verification decide recovery.
-- Manual rollback promotes the recorded `previous` release through the same
-  activation transaction. The special imported format-2 path stops, disables,
-  and removes all current managed v1 units, including helper/runner, before
-  restoring the legacy unit.
-- Boot recovery disables helper/runner with the API/web units while a `PENDING`
-  candidate is retained. For an interrupted `QUIESCED`, `SWITCHED`, or `PROBING`
-  transaction it invokes the backup restoration path.
-- For a committed server role it repairs helper/runner enablement; an inconsistent
-  state stops and disables every managed unit and returns `RECOVERY_REQUIRED`.
-
-### Status inspection
-
-`collect_all_services_status()` reports five managed units: API, helper, and
-the optional runner under `role: "server"`, web under `role: "web"`, and
-recovery under `role: "recovery"`. Each record contains the systemd active
-result plus best-effort `pid` and `uid` process evidence.
-
-```bash
-dam-hopper status --json
-systemctl status dam-hopper-plugin-runner.service
-journalctl -u dam-hopper-plugin-runner.service --no-tail
-test -S /run/dam-hopper/plugin-runner.sock
-```
-
-Runner socket inspection is separate evidence: status reports unit/process
-state, while the health helper rejects missing, symlinked, non-socket, or
-world-writable endpoints.
-
-### Owner plugin runner and tmpfiles (Phase D06)
-
-For a server or both role, staging renders `dam-hopper-plugin-runner.service`.
-The unit runs the owner account with its primary group/home, passes the
-immutable release root, `/run/dam-hopper/plugin-runner.sock`,
-`@DAM_HOPPER_STATE_DIR@/plugins`, `@NODE_BIN@`, expected API UID, and the
-hardening policy in [Linux systemd](./linux-systemd.md).
-An omitted owner provisions the dedicated default account automatically.
-`--plugin-owner-user` selects an existing account and rejects root/API/web
-identities, missing accounts, zero primary GID, and unsafe homes.
-Repeatable explicit `--plugin-admin-subject` values persist in
-`/etc/dam-hopper/host.toml`; activation atomically synchronizes
-`/etc/dam-hopper/plugin-admins.json`, including an empty deny-all policy.
-Do not override the runner's admin-config path unless managing that policy
-separately. Omitted owner/admin options independently retain recorded values.
-
-Server staging writes the rendered `dam-hopper-plugin-runner.conf` beside
-pending units. Activation installs the unit at `/etc/systemd/system/` and the
-tmpfiles file at `/etc/dam-hopper/tmpfiles.d/`, then invokes
-`systemd-tmpfiles --create` for that file:
-
-```text
-d /run/dam-hopper 3770 root @PLUGIN_SHARED_GROUP@ -
-```
-
-Each API/helper/runner unit invokes the installed tmpfiles file before startup.
-No service manages this shared path with `RuntimeDirectory`, avoiding recursive
-ownership changes and sibling socket removal. Activation starts helper and
-runner before API. Runner provisioning/start/enable failures block activation;
-runner unit and socket checks follow HTTP stabilization. Automatic rollback
-also restarts and checks the runner. Web-only roles disable the runner.
+The plugin runner, its socket, bundled Node worker, plugin-specific tmpfiles,
+and owner/admin configuration are retired. Historical runner deployment
+instructions do not apply to current releases. The [Linux systemd guide](./linux-systemd.md)
+retains the explicit dry-run/apply cleanup procedure for installations that
+still have legacy plugin artifacts.
 
 ## Verification and end-to-end coverage
 
@@ -783,16 +687,12 @@ staging cleanup is transaction-scoped. Migration failures retain the transaction
 record until rollback or recovery completes; no candidate handoff is committed
 unless `pending` records the staged release.
 
-## Verification evidence
-
-Run focused release checks from `server/` and the repository root:
+Run the current static release checks from the repository root:
 
 ```bash
-cargo test -p dam-hopper-server --test linux_release_plugin_runner
-pnpm release:verify && pnpm test:deploy
+pnpm release:verify
 ```
 
-D06 recorded 173/173 Linux-release tests, 9/9 deployment scripts, owner/rollback
-smokes, and 5/5 synthetic LAN budgets over 10,000 history records. Physical
-separate-machine HTTPS/LAN evidence and exact Node runtime selection remain
-G0/G4 deployment inputs.
+The D06 runner-service, owner/admin, and synthetic LAN results below older
+manager documentation are historical evidence. They are not current managed
+services or release qualification gates.

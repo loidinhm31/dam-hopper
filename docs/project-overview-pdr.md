@@ -657,9 +657,7 @@ and [code review](../plans/reports/code-review-260920-1710-phase02-test-harness-
 
 ### PR-022: Trusted plugin platform contracts (Phase D00)
 
-**Status:** Candidate ready for the G0 joint pin as of 2026-09-20. D00 freezes
-cross-repository contracts and feasibility evidence; it does not claim a
-production loader, registry, runner service, or plugin route.
+**Status:** RETIRED (2026-10-02) — Plugin platform retired in favor of PR-027 Native Evcrate Advisor.
 
 **Functional requirements:**
 
@@ -695,11 +693,7 @@ are allowed. E00 must consume these candidates, select an immutable Node
 
 ### PR-023: Trusted plugin owner runner and worker supervision (Phase D02)
 
-**Status:** Core implementation complete 2026-09-21; D04 isolated UI
-integration and D06 Linux qualification remain required. D05 management and
-lifecycle is complete in [the D05 architecture](./architecture/plugin-platform-d05.md).
-The detailed runner interface is [Phase D02 runner architecture](./architecture/plugin-platform-d02.md);
-the delivered authorization boundary is [Phase D03 architecture](./architecture/plugin-platform-d03.md).
+**Status:** RETIRED (2026-10-02) — Plugin platform retired in favor of PR-027 Native Evcrate Advisor.
 
 **Functional requirements:**
 
@@ -755,10 +749,7 @@ standardize `PluginErrorCode` in JSON-RPC `error.data`.
 
 ### PR-024: Authorized plugin API and connection-bound contexts (Phase D03)
 
-**Status:** DONE — 2026-09-22 (100%; re-review approved 9.2/10). D03
-completes DamHopper's authenticated API-to-owner-worker authorization slice.
-Joint G1 remains pending E01/E02 cross-repository installed-worker approval;
-this phase is not lifecycle, isolated-UI, or Linux release completion.
+**Status:** RETIRED (2026-10-02) — Plugin platform retired in favor of PR-027 Native Evcrate Advisor.
 
 **Functional requirements:**
 
@@ -818,10 +809,7 @@ swept; and which canonical `EVCRATE_ROOT` lookup standalone packaging uses.
 
 ### PR-025: Plugin management API and transactional lifecycle (Phase D05)
 
-**Status:** DONE — 2026-09-22 (100%; review approved 9.8/10). D05 completes
-the management side of the trusted plugin G1 slice. It does not claim a
-malicious-code sandbox, Linux deployment qualification, or the cross-repository
-installed-worker gate.
+**Status:** RETIRED (2026-10-02) — Plugin platform retired in favor of PR-027 Native Evcrate Advisor.
 
 **Functional requirements:**
 
@@ -882,6 +870,19 @@ the server emission path for the UI's optional `plugin:lifecycle_revision`
 event also needs a qualification decision. Deployment ownership/rotation for
 the host allowlist remains a D06/operator input.
 
+
+### PR-027: Native Evcrate Advisor (Phases 01–09)
+**Status:** Native implementation and Phase 09 qualification evidence recorded (2026-10-02). Durable completion receipt publication for Phases 01–05 remains parent-coordinated; do not infer receipts from this PDR.
+
+**Functional requirements:**
+
+- Integrate Evcrate Advisor natively into Workspace as an in-process Rust domain service and React component subtree without external plugin runners, iframes, MessagePort bridges, or path-hash configuration.
+- Read history from the server process `$HOME/.evcrate/advisor-history` directory, strictly rejecting symlinks at the final path component.
+- Provide per-server admin toggle (`server.advisor.enabled`) defaulting to false.
+- Restrict all `/api/advisor/*` endpoints to authenticated administrators (`require_admin`); explicitly deny in `--no-auth` mode (`NoAuthForbidden`).
+- Host the Advisor panel across IDE dock, Terminal floating panel, and compact views with four views: Overview, History Records, Configuration, and Evaluations.
+- Support history pagination, signed cursor resumption, filtering, detail reads, current policy inspection, and evaluation comparisons.
+- Completely retire the former plugin runner (`dam-hopper-plugin-runner`), plugin platform, and SDK artifacts.
 ### PR-026: Native Agent Status and Notification Ownership (Phases 01–06)
 
 **Status:** Phase 05 implementation completed on 2026-09-29 (recorded 2,383

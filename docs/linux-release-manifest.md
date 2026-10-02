@@ -72,13 +72,13 @@ The root object uses camelCase JSON names and has exactly these required fields:
 
 | Field           | Contents                                                    |
 | --------------- | ----------------------------------------------------------- |
-| `schemaVersion` | Integer `2`                                                 |
+| `schemaVersion` | Current publisher emits `2`; schema accepts `2` or `3` |
 | `release`       | Tag, stable version, and commit SHA                         |
 | `profile`       | Target operating-system and service profile                 |
 | `archive`       | Archive filename, positive byte size, and lowercase SHA-256 |
 | `components`    | Lockstep versions for CLI, API, web host, and web assets    |
 | `inventory`     | Every packaged directory and regular file                   |
-| `services`      | API, web, and plugin-runner systemd contracts              |
+| `services`      | API/web systemd contracts; optional legacy runner fields |
 | `rollback`      | Previous-release and state compatibility declaration        |
 
 All objects reject unknown fields. Required fields are not optional. Duplicate
@@ -152,11 +152,6 @@ execute bit.
 | ------------------------------------------------ | --------- | ------------- | ----------------------------------------- |
 | `bin/dam-hopper-manager`                         | file      | `common`      | executable                                |
 | `bin/dam-hopper-server`                          | file      | `server`      | executable                                |
-| `bin/dam-hopper-plugin-runner`                   | file      | `server`      | executable; mode `0755`                  |
-| `bin/node`                                      | file      | `server`      | bundled Linux x64 worker runtime; `0755` |
-| `NOTICES`                                       | file      | `common`      | Node distribution license; publisher requires it |
-| `systemd/dam-hopper-plugin-runner.service`      | file      | `server`      | unit template; mode `0644`                |
-| `tmpfiles.d/dam-hopper-plugin-runner.conf`      | file      | `server`      | tmpfiles input; mode `0644`                |
 | `bin/dam-hopper-web`                             | file      | `web`         | executable                                |
 | `systemd/dam-hopper-recovery.service`            | file      | `common`      | boot recovery unit template when packaged |
 | `systemd/dam-hopper-api.service`                 | file      | `server`      | unit template                             |
@@ -170,34 +165,6 @@ The helper socket unit is a separate optional server-role archive asset. The
 release manager directly manages the helper service and must not enable both
 direct-binding service mode and socket activation for the same socket path.
 
-### Plugin runner release invariant
-
-Every published Linux release archive MUST include the three runner paths in
-the required-path table above, regardless of the deployment role selected
-later. They have the `server` inventory role, so `server` and `both` projections
-include them while the `web` projection excludes them at installation.
-
-`build-release-archive.sh` preflights the runner executable and both templates
-before staging, then copies all three unconditionally. The binary is archived
-as mode `0755`; the unit and tmpfiles input as `0644`. The release asset gate
-requires all three inventory paths, their `server` role and regular-file kind,
-and an execute bit on the binary.
-
-The release generator emits `components.runner` and `services.runner` for
-published archives. Rust manifest fields remain optional for local/test
-fixtures; that compatibility does not make the three archive assets optional.
-When present, `services.runner` has the fixed contract
-`unitName: "dam-hopper-plugin-runner.service"` and
-`socketPath: "/run/dam-hopper/plugin-runner.sock"`. The manager installs the
-unit under `/etc/systemd/system/`, installs tmpfiles under
-`/etc/dam-hopper/tmpfiles.d/`, and invokes `systemd-tmpfiles --create`.
-
-The runner account and administrator subjects are deployment inputs, not
-manifest identity fields. `install` and `role set` accept
-`--plugin-owner-user USER` and repeatable `--plugin-admin-subject SUBJECT`;
-omitted values inherit `/etc/dam-hopper/host.toml`. The owner is validated as
-a dedicated non-root account with a safe home. Runtime admin allowlisting still
-uses the D05 `--admin-config` / `DAM_HOPPER_PLUGIN_ADMINS_FILE` precedence.
 
 The publisher must compute exact inventory set equality for each projection; a
 prefix check is not sufficient. Runtime/configuration material is forbidden,
@@ -294,7 +261,7 @@ replaces an existing same-tag/same-role destination before a repeated final
 rename. Phase 05 activates only the validated immutable view and records the
 result in the manager's authoritative state envelope.
 
-## Manager consumption (Manifest v2; manager state v2)
+## Manager consumption (Manifest v2; manager state v3)
 
 The Rust manager is the runtime consumer of Manifest v2:
 
@@ -305,14 +272,9 @@ The Rust manager is the runtime consumer of Manifest v2:
   extract only `common` plus the selected role (`both` includes all entries).
 - Staging persists the pending candidate in
   `/var/lib/dam-hopper-manager/state.json` only after the role view is renamed
-  into the release directory. Manager state is schema v2; installed legacy
-  records are migrated or dual-read only at the documented compatibility gate.
-- For a server role, staging renders the runner unit and tmpfiles input;
-  activation installs both, provisions `/run/dam-hopper`, and starts helper,
-  runner, then API. Runner start/enable failures are warning-only.
-- Explicit `--plugin-owner-user` and repeatable `--plugin-admin-subject` values
-  are persisted in host configuration; omitted values inherit existing host
-  configuration. They are not manifest identity fields.
+  into the release directory. Manager state is schema v3; installed schema v1/v2
+  records are migrated through the versioned compatibility path.
+- Current server-role releases stage the helper and API services; web-role releases stage the web service. Runner unit/tmpfiles provisioning and plugin-owner/admin arguments are retired.
 - `start` reparses the final API unit, provisions its fixed runtime paths, and
   commits only after exact API/web health remains stable for 20 consecutive
   500 ms probes.
@@ -334,11 +296,11 @@ atomic exchange, and rollback semantics specified in [Linux systemd](./linux-sys
 Format 1 and unknown layouts fail closed. The format-2 verifier is not a
 publisher input and must not be treated as a v2 archive or manifest.
 
-After a successful migration, the checkout-built runner, fixed legacy unit, and
-their package aliases are retired. The owner-runner release asset described
-above is distinct and remains managed by Manifest v2. An `imported-format-2`
-record may be kept as the previous rollback source, but it is not a
-release-manifest compatibility channel.
+After a successful legacy format-2 migration, the checkout-built runner and its
+fixed legacy unit are retired. Current bundles do not include a runner binary,
+Node runtime, runner unit, or runner tmpfiles input. Manager compatibility
+validation rejects plugin-bearing legacy rollback content before mutation;
+`imported-format-2` is a state compatibility record, not a runner release path.
 
 ## Verification
 
@@ -361,15 +323,11 @@ cargo test -p dam-hopper-server \
   idle_suspend::tests::test_helper_protocol_suspend_roundtrip
 ```
 
-The D06 qualification covers the manifest/archive contract, rendered runner
-unit and tmpfiles inputs, explicit owner/admin persistence, matched host/plugin
-rollback, and LAN deployment budgets. Focused Linux-release tests recorded
-173/173 passing; `pnpm release:verify` passed; `pnpm test:deploy` passed all
-9/9 deployment journeys, including owner and rollback smokes. The synthetic
-LAN qualification passed 5/5 bounded-budget scenarios over 10,000 history
-records. Physical separate-machine HTTPS/LAN evidence and exact pinned Node
-runtime selection remain G0/G4 deployment inputs, not claims of this manifest
-schema.
+Historical D06 qualification documented the former runner unit/tmpfiles,
+plugin-owner/admin persistence, host/plugin rollback, and synthetic LAN
+scenarios. Those records do not describe current Linux release requirements.
+Current bundles do not require plugin runner, bundled Node, runner tmpfiles, or
+G0/G4 runner qualification.
 
 The root release verification command checks version alignment, shell syntax,
 and Node syntax:

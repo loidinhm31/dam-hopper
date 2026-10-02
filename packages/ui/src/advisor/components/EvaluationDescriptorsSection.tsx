@@ -41,8 +41,8 @@ export const EvaluationDescriptorsSection: FC<EvaluationDescriptorsSectionProps>
       </div>
 
       <div className="descriptors-cards-list" aria-label="Available descriptors">
-        {paginatedDescriptors.map((d) => {
-          const key = d.evaluationRef || (d as unknown as Record<string, unknown>).evaluation_ref as string || String(Math.random());
+        {paginatedDescriptors.map((d, index) => {
+          const key = d.evaluationRef || (d as unknown as Record<string, unknown>).evaluation_ref as string || `descriptor-${index}`;
           return (
             <EvaluationDescriptorCard
               key={key}

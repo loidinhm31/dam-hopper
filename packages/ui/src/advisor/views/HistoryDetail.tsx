@@ -165,7 +165,7 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
   const status = (typeof exec?.status === 'string' ? exec.status : null) ?? record?.status ?? 'started';
   const projectId = (typeof exec?.project_id === 'string' ? exec.project_id : null) ?? record?.projectId ?? '';
   const taskRunId = (typeof exec?.task_run_id === 'string' ? exec.task_run_id : null) ?? record?.taskRunId ?? '';
-  const startedAt = (typeof exec?.started_at === 'number' ? exec.started_at : null) ?? record?.startedAt ?? Date.now();
+  const startedAt = (typeof exec?.started_at === 'number' ? exec.started_at : null) ?? record?.startedAt ?? 0;
   const receiptObj = exec?.receipt as Record<string, unknown> | undefined;
   const elapsedMs = (typeof receiptObj?.elapsed_ms === 'number' ? receiptObj.elapsed_ms : null) ?? record?.receiptElapsedMs ?? null;
   const checkpointDigest = (typeof exec?.checkpoint_digest === 'string' ? exec.checkpoint_digest : null) ?? record?.checkpointDigest ?? '';
@@ -240,7 +240,7 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
               <code className="id-text">{taskRunId}</code>
             </dd>
             <dt>Started:</dt>
-            <dd>{new Date(startedAt).toLocaleString()}</dd>
+            <dd>{startedAt > 0 ? new Date(startedAt).toLocaleString() : '—'}</dd>
             <dt>Elapsed:</dt>
             <dd>{elapsedMs !== null ? `${elapsedMs} ms` : '—'}</dd>
             <dt>Checkpoint Digest:</dt>
