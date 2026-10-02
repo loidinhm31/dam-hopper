@@ -670,8 +670,8 @@ export const useGitHistoryStore = create<GitHistoryStore>()(
           selectionRecoveryRequired: merged.selectionRecoveryRequired,
         };
       },
-      onRehydrateStorage: () => () => {
-        useGitHistoryStore.getState().markHydrated();
+      onRehydrateStorage: () => (state) => {
+        state?.markHydrated();
       },
     },
   ),
