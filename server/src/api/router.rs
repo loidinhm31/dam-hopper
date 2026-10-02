@@ -29,8 +29,7 @@ use super::{
     advisor as advisor_api, agent_status,
     agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
     diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
-    media_session, plugin_admin as plugin_admin_api, plugin_assets, plugins as plugins_api,
-    port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel, usage,
+    media_session, port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel, usage,
     usage_sessions, workflow, workspace, ws,
 };
 
@@ -104,15 +103,6 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/workflow/notes/{id}", delete(workflow::note::delete))
         .layer(RequestBodyLimitLayer::new(32 * 1024));
 
-    let plugin_asset_routes = Router::new()
-        .route(
-            "/api/plugins/{installationId}/ui",
-            get(plugin_assets::plugin_ui_asset_handler),
-        )
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            plugin_assets::require_inert_asset_auth,
-        ));
     // Protected routes — auth middleware checks damhopper-auth cookie
     let protected = Router::new()
         // Workspace
@@ -474,34 +464,6 @@ pub fn build_router_with_web_dir_and_origins(
             post(settings::import_workspace_settings)
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(1024 * 1024)),
         )
-        // Plugins
-        .route("/api/plugins", get(plugins_api::list_plugins_handler))
-        .route(
-            "/api/plugins/view-context",
-            post(plugins_api::describe_view_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/plugins/contexts/open",
-            post(plugins_api::open_context_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/plugins/contexts/close",
-            post(plugins_api::close_context_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/plugins/invoke",
-            post(plugins_api::invoke_handler).layer(tower_http::limit::RequestBodyLimitLayer::new(
-                16 * 1024 * 1024,
-            )),
-        )
-        .route(
-            "/api/plugins/cancel",
-            post(plugins_api::cancel_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
         .merge(workflow_routes)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -553,72 +515,6 @@ pub fn build_router_with_web_dir_and_origins(
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             mark_allowed_media_origin,
-        ));
-    let plugin_admin_routes = Router::new()
-        .route(
-            "/api/plugins/admin",
-            get(plugin_admin_api::list_admin_installations_handler),
-        )
-        .route(
-            "/api/plugins/admin/advisor-history-probe",
-            get(plugin_admin_api::advisor_history_probe_handler),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}",
-            get(plugin_admin_api::get_admin_installation_handler)
-                .delete(plugin_admin_api::remove_installation_handler),
-        )
-        .route(
-            "/api/plugins/admin/stages",
-            post(plugin_admin_api::stage_package_upload_handler)
-                .layer(DefaultBodyLimit::max(crate::plugins::MAX_PACKAGE_COMPRESSED_BYTES as usize + 64 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/stages/{stageId}/approve",
-            post(plugin_admin_api::approve_stage_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/rollback",
-            post(plugin_admin_api::rollback_installation_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/enable",
-            post(plugin_admin_api::enable_installation_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/disable",
-            post(plugin_admin_api::disable_installation_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/grants",
-            put(plugin_admin_api::replace_grants_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/bindings",
-            put(plugin_admin_api::replace_bindings_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/plugins/admin/installations/{id}/owner-history-source",
-            put(plugin_admin_api::replace_owner_history_source_handler)
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_admin,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_bearer_auth,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
         ));
 
 
@@ -709,8 +605,6 @@ pub fn build_router_with_web_dir_and_origins(
     let router = Router::new()
         .merge(public)
         .merge(protected)
-        .merge(plugin_admin_routes)
-        .merge(plugin_asset_routes)
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream)
@@ -830,7 +724,6 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
     const X_EXPECTED_SHA256: HeaderName = HeaderName::from_static("x-expected-sha256");
     const X_EXPECTED_SECURITY_REVISION: HeaderName =
         HeaderName::from_static("x-expected-security-revision");
-    const X_PLUGIN_UI_SHA256: HeaderName = HeaderName::from_static("x-plugin-ui-sha256");
     const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
     let headers = [
         AUTHORIZATION,
@@ -855,7 +748,6 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         CACHE_CONTROL,
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
-        X_PLUGIN_UI_SHA256,
         X_CONTENT_TYPE_OPTIONS,
     ];
     CorsLayer::new()
@@ -979,60 +871,4 @@ mod tests {
             .is_none());
     }
 
-    #[tokio::test]
-    async fn cors_allows_plugin_admin_custom_headers_in_preflight() {
-        let router = Router::new()
-            .route("/api/plugins/admin/stages", post(|| async { "ok" }))
-            .layer(build_cors(&[HeaderValue::from_static(
-                "https://trusted.example",
-            )]));
-        let preflight = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::OPTIONS)
-                    .uri("/api/plugins/admin/stages")
-                    .header("Origin", "https://trusted.example")
-                    .header("Access-Control-Request-Method", "POST")
-                    .header(
-                        "Access-Control-Request-Headers",
-                        "authorization, content-type, x-expected-sha256, x-expected-security-revision",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(preflight.status(), StatusCode::OK);
-        assert_eq!(
-            preflight.headers()["access-control-allow-origin"],
-            "https://trusted.example"
-        );
-        let allow_headers = preflight.headers()["access-control-allow-headers"]
-            .to_str()
-            .unwrap();
-        assert!(allow_headers.contains("x-expected-sha256"));
-        assert!(allow_headers.contains("x-expected-security-revision"));
-    }
-
-    #[tokio::test]
-    async fn cors_exposes_plugin_ui_headers() {
-        let router = Router::new()
-            .route("/test", get(|| async { "ok" }))
-            .layer(build_cors(&[HeaderValue::from_static("https://trusted.example")]));
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri("/test")
-                    .header("Origin", "https://trusted.example")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let expose = resp.headers()["access-control-expose-headers"].to_str().unwrap();
-        assert!(expose.contains("x-plugin-ui-sha256"));
-        assert!(expose.contains("x-content-type-options"));
-    }
 }

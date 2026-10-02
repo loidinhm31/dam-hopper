@@ -17,8 +17,6 @@
     "dev:server": "cd server && cargo run --bin dam-hopper-server -- --host 0.0.0.0 --port 4803 --no-auth --cors-origins http://127.0.0.1:5173,http://localhost:5173",
     "dev:server:watch": "cd server && cargo watch -x \"run -- --host 127.0.0.1 --port 4801\"",
     "build:server": "cd server && cargo build --release",
-    "plugin:test-server": "cargo run --manifest-path server/Cargo.toml --bin dam-hopper-plugin-test-server --",
-    "plugin:test-client": "pnpm --filter @dam-hopper/ui exec node scripts/plugin-test-client.mjs",
     "serve": "cd server && cargo run --release",
     "lint": "eslint apps/ packages/",
     "format": "prettier --write .",
