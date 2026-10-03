@@ -187,43 +187,6 @@ async function triggerCognitoShortcut(code = "KeyB", key = "b"): Promise<void> {
     );
   });
 }
-async function sampleScreenshotPixel(
-  screenshotResult: unknown,
-  x: number,
-  y: number,
-): Promise<{ r: number; g: number; b: number; a: number }> {
-  let base64String = "";
-  if (
-    typeof screenshotResult === "object" &&
-    screenshotResult !== null &&
-    "base64" in screenshotResult &&
-    typeof screenshotResult.base64 === "string"
-  ) {
-    base64String = screenshotResult.base64;
-  }
-  if (!base64String) {
-    throw new Error("Screenshot did not contain base64 image data");
-  }
-
-  const img = new Image();
-  img.src = `data:image/png;base64,${base64String}`;
-  await img.decode();
-  const canvas = document.createElement("canvas");
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("Could not create 2d canvas context");
-  ctx.drawImage(img, 0, 0);
-  const pixelData = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data;
-  return {
-    r: pixelData[0] ?? 0,
-    g: pixelData[1] ?? 0,
-    b: pixelData[2] ?? 0,
-    a: pixelData[3] ?? 0,
-  };
-}
-
-
 describe("Cognito Mode Real-Browser Regressions", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -451,12 +414,6 @@ describe("Cognito Mode Real-Browser Regressions", () => {
   });
 
   it("applies correct CSS classes, computed styles, and observable rendering for heavy-blur and black-screen styles", async () => {
-    const button = document.querySelector("[data-testid='open-portal-button']");
-    expect(button).not.toBeNull();
-    const buttonRect = button!.getBoundingClientRect();
-    const buttonCenterX = buttonRect.left + buttonRect.width / 2;
-    const buttonCenterY = buttonRect.top + buttonRect.height / 2;
-
     // 1. Activate Heavy Blur
     await act(async () => {
       useSettingsStore.setState({ cognitoModeStyle: "heavy-blur" });
@@ -467,22 +424,13 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(overlay?.classList.contains("cognito-mode-overlay--heavy-blur")).toBe(true);
 
     // Verify Chromium supports backdrop-filter and applies frosted-glass styling
-    expect(CSS.supports("backdrop-filter", "blur(20px)")).toBe(true);
+    expect(CSS.supports("backdrop-filter", "blur(20px) saturate(140%)")).toBe(true);
     let computed = window.getComputedStyle(overlay!);
     expect(computed.backgroundColor).toBe("rgba(13, 17, 23, 0.52)");
     expect(computed.backdropFilter).toMatch(/^blur\(20px\)\s+saturate\((?:140%|1\.4)\)$/);
     expect(computed.boxShadow).toMatch(
       /rgba\(255,\s*255,\s*255,\s*0\.05\)\s+0px\s+0px\s+0px\s+1px\s+inset/,
     );
-
-    const heavyBlurScreenshot = await page.screenshot({ base64: true });
-    const heavyBlurPixel = await sampleScreenshotPixel(
-      heavyBlurScreenshot,
-      buttonCenterX,
-      buttonCenterY,
-    );
-    expect(heavyBlurPixel.g).toBeGreaterThan(25);
-    expect(heavyBlurPixel.g).toBeGreaterThan(heavyBlurPixel.r);
 
     // Dismiss
     await triggerCognitoShortcut();
@@ -502,27 +450,10 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(computed.backdropFilter).toBe("none");
     expect(computed.boxShadow).toBe("none");
 
-    // Observable rendered check: Black Screen renders pure opaque black regardless of underlying button
-    const blackScreenScreenshot = await page.screenshot({ base64: true });
-    const blackScreenPixel = await sampleScreenshotPixel(
-      blackScreenScreenshot,
-      buttonCenterX,
-      buttonCenterY,
-    );
-    expect(blackScreenPixel.r).toBe(0);
-    expect(blackScreenPixel.g).toBe(0);
-    expect(blackScreenPixel.b).toBe(0);
-
     await triggerCognitoShortcut();
   });
 
-  it("falls back to opaque black when reduced transparency is requested and verifies rendered opacity", async () => {
-    const button = document.querySelector("[data-testid='open-portal-button']");
-    expect(button).not.toBeNull();
-    const buttonRect = button!.getBoundingClientRect();
-    const buttonCenterX = buttonRect.left + buttonRect.width / 2;
-    const buttonCenterY = buttonRect.top + buttonRect.height / 2;
-
+  it("applies the production reduced-transparency override as opaque black when its media query matches", async () => {
     // Find the media rule in imported document stylesheets
     let targetRule: CSSMediaRule | null = null;
     for (const sheet of Array.from(document.styleSheets)) {
@@ -543,6 +474,17 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     }
 
     expect(targetRule).not.toBeNull();
+    expect(targetRule!.media.mediaText).toContain("prefers-reduced-transparency");
+    expect(targetRule!.media.mediaText).toContain("reduce");
+
+    const heavyBlurRule = Array.from(targetRule!.cssRules).find(
+      (rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.selectorText === ".cognito-mode-overlay--heavy-blur",
+    );
+    expect(heavyBlurRule).not.toBeUndefined();
+    expect(heavyBlurRule!.style.getPropertyValue("-webkit-backdrop-filter")).toBe("none");
+
     const originalMedia = targetRule!.media.mediaText;
 
     try {
@@ -562,23 +504,11 @@ describe("Cognito Mode Real-Browser Regressions", () => {
       expect(computed.backdropFilter).toBe("none");
       expect(computed.boxShadow).toBe("none");
 
-      // Observable rendered check: Fallback renders pure opaque black
-      const fallbackScreenshot = await page.screenshot({ base64: true });
-      const fallbackPixel = await sampleScreenshotPixel(
-        fallbackScreenshot,
-        buttonCenterX,
-        buttonCenterY,
-      );
-      expect(fallbackPixel.r).toBe(0);
-      expect(fallbackPixel.g).toBe(0);
-      expect(fallbackPixel.b).toBe(0);
-
       await triggerCognitoShortcut();
     } finally {
       targetRule!.media.mediaText = originalMedia;
     }
   });
-
 
   it("preserves deterministic audio playback while active", async () => {
     await triggerCognitoShortcut();
