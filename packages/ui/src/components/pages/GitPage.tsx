@@ -42,6 +42,7 @@ import {
   useGitHistoryHydrated,
 } from "@/stores/git-history.js";
 import { useGitHistoryView } from "@/hooks/use-git-history-view.js";
+import { GitSquashFlow } from "@/components/organisms/GitSquashFlow.js";
 import { GitHistoryToolbar } from "@/components/molecules/GitHistoryToolbar.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { cn } from "@/lib/utils.js";
@@ -418,7 +419,9 @@ function BulkGitOperations({
             </div>
           )}
 
-          <SshRetryStatusMessage message={statusMessage || leasedPush.sshStatus} />
+          <SshRetryStatusMessage
+            message={statusMessage || leasedPush.sshStatus}
+          />
         </section>
       </div>
     </>
@@ -436,9 +439,7 @@ export function GitPage() {
   const selectionRecoveryRequired = useGitHistoryStore(
     (s) => s.selectionRecoveryRequired,
   );
-  const setGitPageSelection = useGitHistoryStore(
-    (s) => s.setGitPageSelection,
-  );
+  const setGitPageSelection = useGitHistoryStore((s) => s.setGitPageSelection);
   const clearGitPageSelection = useGitHistoryStore(
     (s) => s.clearGitPageSelection,
   );
@@ -597,6 +598,7 @@ export function GitPage() {
   const historyActions = useGitHistoryActions(
     targetRef || "",
     historyView.rootId,
+    historyView,
   );
   const openDiff = useEditorStore((s) => s.openDiff);
   const { data: projectStatus } = useProjectStatus(
@@ -702,8 +704,9 @@ export function GitPage() {
   }
 
   const selectedRoot =
-    historyView.rootOptions.find((root) => root.rootId === historyView.rootId) ??
-    historyView.rootOptions[0];
+    historyView.rootOptions.find(
+      (root) => root.rootId === historyView.rootId,
+    ) ?? historyView.rootOptions[0];
 
   const hasMultipleProfiles = useMemo(() => {
     if (allProjects.length <= 1) return false;
@@ -737,7 +740,8 @@ export function GitPage() {
         {selectionRecoveryRequired && (
           <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-300 flex items-center justify-between">
             <span>
-              Saved project selection was corrupted or invalid. Please select a valid project or click Clear to reset.
+              Saved project selection was corrupted or invalid. Please select a
+              valid project or click Clear to reset.
             </span>
             <button
               onClick={handleClearSelection}
@@ -874,7 +878,8 @@ export function GitPage() {
                 >
                   {historyView.rootOptions.map((root) => (
                     <option key={root.rootId} value={root.rootId}>
-                      {formatProjectInfoRootLabel(root)} - {describeProjectInfoRoot(root)}
+                      {formatProjectInfoRootLabel(root)} -{" "}
+                      {describeProjectInfoRoot(root)}
                     </option>
                   ))}
                 </select>
@@ -906,9 +911,10 @@ export function GitPage() {
 
           {!historyView.isViewingActiveBranch && historyView.activeBranch ? (
             <div className="rounded border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-300">
-              Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick and revert
-              apply to checked-out branch <strong>{historyView.activeBranch}</strong>.
-              Rewrite actions stay on the active branch.
+              Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick
+              and revert apply to checked-out branch{" "}
+              <strong>{historyView.activeBranch}</strong>. Rewrite actions stay
+              on the active branch.
             </div>
           ) : null}
 
@@ -933,11 +939,11 @@ export function GitPage() {
             </div>
 
             {/* Main: Git Log Graph + Details */}
-            <div className="lg:col-span-3 flex h-full overflow-hidden border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
+            <div className="lg:col-span-3 flex flex-col md:flex-row h-full overflow-hidden border border-[var(--color-border)] rounded-md bg-[var(--color-surface)]">
               <div
                 className={cn(
-                  "flex flex-col min-w-0 flex-1",
-                  historyView.selectedCommit ? "w-[65%]" : "w-full",
+                  "flex flex-col min-h-0 min-w-0 flex-1",
+                  historyView.selectedCommit ? "w-full md:w-[65%]" : "w-full",
                 )}
               >
                 <div className="shrink-0 mb-0 px-4 py-2 border-b border-[var(--color-border)] text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] flex items-center gap-2 bg-[var(--color-background)]">
@@ -947,6 +953,18 @@ export function GitPage() {
 
                 <GitHistoryToolbar
                   searchText={historyView.searchText}
+                  squashCount={historyView.squashSelection.count}
+                  squashDisabledReason={
+                    historyView.squashUnavailableReason ||
+                    historyView.squashSelection.disabledReason
+                  }
+                  squashBusy={
+                    historyActions.squash.open ||
+                    historyActions.squash.publication.state !== "closed"
+                  }
+                  onSquash={historyActions.squash.begin}
+                  onClearSquashSelection={historyView.clearSquashSelection}
+                  focusRef={historyActions.squash.toolbarRef}
                   onSearchChange={historyView.setSearchText}
                   onClearSearch={historyView.clearSearch}
                   onCompositionStart={historyView.onCompositionStart}
@@ -971,6 +989,7 @@ export function GitPage() {
                   onDismissNotice={historyView.dismissNotice}
                   className="px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
                 />
+                <GitSquashFlow squash={historyActions.squash} />
 
                 {historyView.error ? (
                   <div className="m-3 flex items-center justify-between gap-2 rounded border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-300">
@@ -994,6 +1013,13 @@ export function GitPage() {
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <GitLogTree
+                      squashSelectedHashes={historyView.squashSelectedHashes}
+                      onToggleSquashCommit={historyView.toggleSquashCommit}
+                      squashSelectionDisabled={
+                        !historyView.squashAvailable ||
+                        historyActions.squash.open ||
+                        historyActions.squash.publication.state !== "closed"
+                      }
                       logs={historyView.logs}
                       isLoading={historyView.isLoading}
                       presentation={historyView.isFiltered ? "list" : "graph"}
@@ -1034,7 +1060,7 @@ export function GitPage() {
               </div>
 
               {historyView.selectedCommit && (
-                <div className="w-[35%] h-full shrink-0">
+                <div className="w-full md:w-[35%] h-[45%] md:h-full min-h-0 shrink-0">
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <CommitDetailsPanel
                       project={selectedProjectName}
@@ -1072,8 +1098,8 @@ export function GitPage() {
             The selected project &ldquo;
             {parseProjectKey(unavailableSelectedKeys[0])?.project ??
               unavailableSelectedKeys[0]}
-            &rdquo; is not currently reachable. Its history will be available once
-            reconnected.
+            &rdquo; is not currently reachable. Its history will be available
+            once reconnected.
           </p>
         </div>
       ) : selectedKeys.length > 1 ? (

@@ -21,6 +21,11 @@ import type {
 import { normalizeProjectTarget, projectTargetCacheKey } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
 import { Button } from "@/components/atoms/Button.js";
+import { normalizeCommitMessage } from "@/lib/git-squash-selection.js";
+import {
+  useGitSquashActions,
+  type GitSquashContext,
+} from "@/hooks/use-git-squash.js";
 import {
   Dialog,
   DialogContent,
@@ -253,10 +258,6 @@ export function GitDropCommitDialog({
   );
 }
 
-export function normalizeCommitMessage(message: string): string {
-  return message.endsWith("\n") ? message : `${message}\n`;
-}
-
 export function canSubmitEditedCommitMessage(
   message: string,
   originalMessage: string | undefined,
@@ -356,7 +357,8 @@ function GitEditCommitMessageForm({
       {signatureConsentRequired && (
         <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-500/15 p-2.5 text-xs text-amber-200">
           <span>
-            This commit or its descendants contain signatures that will be invalidated and removed by rewriting history.
+            This commit or its descendants contain signatures that will be
+            invalidated and removed by rewriting history.
           </span>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
@@ -558,9 +560,11 @@ export interface GitSelectedChangesOperation {
 
 export function useGitHistoryActions(
   target: ProjectTargetInput,
-  root?: string,
+  root: string | undefined,
+  squashContext: GitSquashContext,
 ) {
   const targetRef = normalizeProjectTarget(target);
+  const squash = useGitSquashActions(target, root, squashContext);
   const project = targetRef.project;
   const scope = `${project}\0${projectTargetCacheKey(targetRef)}\0${root ?? "."}`;
   const [resetCommitState, setResetCommitState] = useState<{
@@ -620,7 +624,8 @@ export function useGitHistoryActions(
     editCommit?.hash ?? "",
     root,
   );
-  const [signatureConsentRequired, setSignatureConsentRequired] = useState(false);
+  const [signatureConsentRequired, setSignatureConsentRequired] =
+    useState(false);
   const [frozenSnapshot, setFrozenSnapshot] = useState<{
     hash: string;
     message: string;
@@ -629,6 +634,27 @@ export function useGitHistoryActions(
     scope: string;
   } | null>(null);
 
+  useEffect(() => {
+    if (
+      resetCommit ||
+      dropCommit ||
+      editCommit ||
+      revertCommit ||
+      undoLastCommit ||
+      selectedChangesOperation ||
+      status
+    ) {
+      squash.revokePublication();
+    }
+  }, [
+    resetCommit,
+    dropCommit,
+    editCommit,
+    revertCommit,
+    undoLastCommit,
+    selectedChangesOperation,
+    status,
+  ]);
   useEffect(() => {
     if (!editCommit) {
       setFrozenSnapshot(null);
@@ -644,7 +670,12 @@ export function useGitHistoryActions(
         scope,
       });
     }
-  }, [editCommit, commitMessageQuery.data, commitMessageQuery.isLoading, scope]);
+  }, [
+    editCommit,
+    commitMessageQuery.data,
+    commitMessageQuery.isLoading,
+    scope,
+  ]);
 
   function setStatus(value: GitHistoryActionStatus | null) {
     setStatusState({ project: scope, value });
@@ -996,6 +1027,7 @@ export function useGitHistoryActions(
   }, [clearStatus]);
 
   return {
+    squash,
     dropCommit,
     isDropCommitPending: dropCommitMutation.isPending,
     editCommit,

@@ -493,10 +493,12 @@ vi.mock("@/hooks/use-encrypted-write.js", () => ({
     resetError: vi.fn(),
   }),
 }));
+const cancelSshRetry = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
   useGitWithSshRetry: () => ({
     passphraseDialogProps: { open: false },
     statusMessage: undefined,
+    cancel: cancelSshRetry,
     executeWithRetry: async (_options: unknown, fn: () => Promise<unknown>) =>
       fn(),
   }),
@@ -672,6 +674,9 @@ vi.mock("@/components/organisms/GitLogTree.js", () => ({
 vi.mock("@/components/organisms/CommitDetailsPanel.js", () => ({
   CommitDetailsPanel: () => null,
 }));
+vi.mock("@/components/organisms/GitSquashFlow.js", () => ({
+  GitSquashFlow: () => null,
+}));
 vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
   GitDropCommitDialog: () => null,
   GitEditCommitMessageDialog: () => null,
@@ -680,6 +685,12 @@ vi.mock("@/components/organisms/GitHistoryActions.js", () => ({
   GitResetDialog: () => null,
   GitUndoLastCommitDialog: () => null,
   useGitHistoryActions: () => ({
+    squash: {
+      open: false,
+      publication: { state: "closed" },
+      toolbarRef: { current: null },
+      begin: vi.fn(),
+    },
     status: null,
     resetScope: vi.fn(),
     handleCherryPick: vi.fn(),

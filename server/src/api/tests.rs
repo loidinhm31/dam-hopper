@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use tower::ServiceExt;
 
@@ -14,7 +14,7 @@ use crate::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
-    diagnostics::{now_ms, DiagnosticEvent, DiagnosticStore},
+    diagnostics::{DiagnosticEvent, DiagnosticStore, now_ms},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -23,10 +23,10 @@ use crate::{
         ResourceAlertState, ResourceAlertSummary,
     },
     telemetry::{
+        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality,
+        TELEMETRY_SCHEMA_VERSION, TelemetryCmd, TelemetryKeyRing, TelemetryStore,
+        TokenCounterSemantic, TokenQuality,
         worker::{TelemetryControl, TelemetryHandle},
-        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
-        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
-        TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
     workspace_target::ProjectTargetRef,
@@ -449,10 +449,12 @@ async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist()
         .unwrap();
     let origin_response = router.clone().oneshot(origin_request).await.unwrap();
     assert_eq!(origin_response.status(), StatusCode::OK);
-    assert!(origin_response
-        .headers()
-        .keys()
-        .all(|name| !name.as_str().starts_with("access-control-")));
+    assert!(
+        origin_response
+            .headers()
+            .keys()
+            .all(|name| !name.as_str().starts_with("access-control-"))
+    );
 
     let preflight = Request::builder()
         .method("OPTIONS")
@@ -1032,15 +1034,21 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
         Some(backend_events.len() as u64)
     );
     assert_eq!(json["manifest"]["terminalSessionCount"], 1);
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.a"));
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "global"));
-    assert!(!backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.b"));
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.a")
+    );
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "global")
+    );
+    assert!(
+        !backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.b")
+    );
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], "shell:diag-a");
 
@@ -1063,12 +1071,16 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
     assert_eq!(json["scope"]["terminalIds"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["sessions"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["tails"].as_array().unwrap().len(), 0);
-    assert!(backend_events
-        .iter()
-        .any(|event| event["message"] == "global"));
-    assert!(!backend_events
-        .iter()
-        .any(|event| event["message"] == "terminal.a"));
+    assert!(
+        backend_events
+            .iter()
+            .any(|event| event["message"] == "global")
+    );
+    assert!(
+        !backend_events
+            .iter()
+            .any(|event| event["message"] == "terminal.a")
+    );
 
     state.pty_manager.kill("shell:diag-a").unwrap();
     state.pty_manager.kill("shell:diag-b").unwrap();
@@ -2018,9 +2030,11 @@ async fn language_files_returns_normalized_contract_and_enforces_project_boundar
     assert_eq!(json["files"][0]["language"], "rust");
     assert!(json["files"][0]["size"].is_u64());
     assert!(json["files"][0]["mtime"].is_i64());
-    assert!(!bytes
-        .windows(alpha.to_string_lossy().len())
-        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
+    assert!(
+        !bytes
+            .windows(alpha.to_string_lossy().len())
+            .any(|window| { window == alpha.to_string_lossy().as_bytes() })
+    );
 
     let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
     assert_eq!(empty.status(), StatusCode::OK);
@@ -2272,14 +2286,18 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         "gpt-5.6-sol"
     );
     assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("lineage"));
+    assert!(
+        !list_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("terminals")
+    );
+    assert!(
+        !list_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("lineage")
+    );
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -2376,10 +2394,12 @@ async fn usage_session_cursor_preserves_active_null_end() {
     let first_sessions = first_value["sessions"].as_array().unwrap();
     assert_eq!(first_sessions.len(), 2);
     assert_eq!(first_sessions[1]["id"], "b".repeat(64));
-    assert!(first_sessions[1]
-        .as_object()
-        .unwrap()
-        .contains_key("endedAtUtcMs"));
+    assert!(
+        first_sessions[1]
+            .as_object()
+            .unwrap()
+            .contains_key("endedAtUtcMs")
+    );
     assert!(first_sessions[1]["endedAtUtcMs"].is_null());
     let cursor = first_value["nextCursor"].as_str().unwrap();
 
@@ -2457,12 +2477,14 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
         .unwrap();
     let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!first_ids.contains(
-        &second_value["sessions"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    ));
+    assert!(
+        !first_ids.contains(
+            &second_value["sessions"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        )
+    );
     let changed_scope = get(
         state.clone(),
         &format!(
@@ -2676,10 +2698,12 @@ async fn usage_session_detail_is_flat_and_caps_model_summaries() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!filtered_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
+    assert!(
+        !filtered_value["sessions"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("terminals")
+    );
 }
 
 #[tokio::test]
@@ -2748,9 +2772,11 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
     assert_eq!(updated.status(), StatusCode::OK);
     let telemetry = state.telemetry.read().unwrap().clone();
     assert!(!telemetry.control.is_enabled());
-    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
-        .unwrap()
-        .contains("paused = true"));
+    assert!(
+        std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+            .unwrap()
+            .contains("paused = true")
+    );
 
     let rejected = delete_json(
         state.clone(),
@@ -3496,7 +3522,10 @@ async fn update_global_ui_preserves_other_cognito_field_and_unrelated_settings_o
         .unwrap();
     let ui = persisted.ui.unwrap();
     assert_eq!(ui.system_font_size, 18, "unrelated settings preserved");
-    assert_eq!(ui.cognito_mode_shortcut, "Cmd+Alt+KeyK", "other cognito field preserved");
+    assert_eq!(
+        ui.cognito_mode_shortcut, "Cmd+Alt+KeyK",
+        "other cognito field preserved"
+    );
     assert_eq!(
         ui.cognito_mode_style,
         crate::config::schema::CognitoModeStyle::HeavyBlur,
@@ -3595,6 +3624,9 @@ async fn update_global_ui_rejects_enablement_when_requirements_not_met() {
                 "agents": {
                     "claude": { "enabled": true }
                 }
+            },
+            "agentSettingsPaths": {
+                "claudeDir": tmp.path().join("non-existent-claude").to_str().unwrap()
             }
         })),
     )
@@ -4046,11 +4078,13 @@ async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work()
             .get_buffer("terminal:otel-conflict")
             .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
     }));
-    assert!(!state
-        .pty_manager
-        .get_buffer("terminal:otel-conflict")
-        .unwrap()
-        .contains("dam_hopper.run_id="));
+    assert!(
+        !state
+            .pty_manager
+            .get_buffer("terminal:otel-conflict")
+            .unwrap()
+            .contains("dam_hopper.run_id=")
+    );
     state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 
@@ -4160,11 +4194,13 @@ async fn terminal_create_loads_target_worktree_env_file() {
             .get_buffer("target-env-session")
             .is_ok_and(|buffer| buffer.contains("feature"))
     }));
-    assert!(!state
-        .pty_manager
-        .get_buffer("target-env-session")
-        .unwrap()
-        .contains("root"));
+    assert!(
+        !state
+            .pty_manager
+            .get_buffer("target-env-session")
+            .unwrap()
+            .contains("root")
+    );
     state.pty_manager.remove("target-env-session").unwrap();
 }
 
@@ -4491,11 +4527,13 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(branches_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true));
+    assert!(
+        branches_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true)
+    );
 
     let status = get(
         state.clone(),
@@ -4523,11 +4561,13 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(roots_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|root| root["rootId"] == "nested"));
+    assert!(
+        roots_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|root| root["rootId"] == "nested")
+    );
 
     let nested_branches = get(
         state.clone(),
@@ -4551,9 +4591,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .filter_map(|entry| entry["path"].as_str())
         .collect();
     assert!(root_paths.contains(&"root-only.txt"));
-    assert!(!root_paths
-        .iter()
-        .any(|path| path.ends_with("worktree-only.txt")));
+    assert!(
+        !root_paths
+            .iter()
+            .any(|path| path.ends_with("worktree-only.txt"))
+    );
 
     let target_diff = get(
         state,
@@ -4573,12 +4615,16 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .iter()
         .filter_map(|entry| entry["path"].as_str())
         .collect();
-    assert!(target_paths
-        .iter()
-        .any(|path| path.ends_with("worktree-only.txt")));
-    assert!(!target_paths
-        .iter()
-        .any(|path| path.ends_with("root-only.txt")));
+    assert!(
+        target_paths
+            .iter()
+            .any(|path| path.ends_with("worktree-only.txt"))
+    );
+    assert!(
+        !target_paths
+            .iter()
+            .any(|path| path.ends_with("root-only.txt"))
+    );
 }
 
 #[tokio::test]
@@ -4669,9 +4715,11 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     assert_eq!(invalid_json[0]["projectName"], "test-project");
     assert_eq!(invalid_json[0]["success"], false);
     assert_eq!(invalid_json[0]["targetUnavailable"], true);
-    assert!(invalid_json[0]["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("registered worktree")));
+    assert!(
+        invalid_json[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("registered worktree"))
+    );
 }
 
 #[tokio::test]
@@ -4762,10 +4810,12 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("configured project root cannot be removed"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("configured project root cannot be removed")
+    );
 
     let resp = post_json(
         state.clone(),
@@ -5030,10 +5080,12 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         .await
         .unwrap();
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
-    assert!(blocked_json["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("live terminal session"));
+    assert!(
+        blocked_json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("live terminal session")
+    );
 
     let killed = delete_json(
         state.clone(),
@@ -5337,17 +5389,50 @@ async fn git_get_and_edit_commit_message_api() {
 async fn git_log_api_supports_message_query_search_and_pagination() {
     let tmp = tempfile::tempdir().unwrap();
     init_git_repo(tmp.path());
-    git(&["commit", "--allow-empty", "-m", "alpha topic commit 1\n\nfirst match"], tmp.path());
-    git(&["commit", "--allow-empty", "-m", "beta unrelated commit"], tmp.path());
-    git(&["commit", "--allow-empty", "-m", "gamma commit\n\ncontains alpha topic in body"], tmp.path());
-    git(&["commit", "--allow-empty", "-m", "alpha topic commit 2\n\nthird match"], tmp.path());
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "alpha topic commit 1\n\nfirst match",
+        ],
+        tmp.path(),
+    );
+    git(
+        &["commit", "--allow-empty", "-m", "beta unrelated commit"],
+        tmp.path(),
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "gamma commit\n\ncontains alpha topic in body",
+        ],
+        tmp.path(),
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "alpha topic commit 2\n\nthird match",
+        ],
+        tmp.path(),
+    );
 
     let state = make_state_with_project(&tmp);
 
     // 1. Search matching both subject and body
-    let resp = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic").await;
+    let resp = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=alpha+topic",
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let entries: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let list = entries.as_array().unwrap();
     assert_eq!(list.len(), 3);
@@ -5356,22 +5441,49 @@ async fn git_log_api_supports_message_query_search_and_pagination() {
     assert_eq!(list[2]["message"], "alpha topic commit 1");
 
     // 2. Pagination on search results
-    let resp_page1 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=0").await;
+    let resp_page1 = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=0",
+    )
+    .await;
     assert_eq!(resp_page1.status(), StatusCode::OK);
-    let list1: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page1.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let list1: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_page1.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(list1.as_array().unwrap().len(), 2);
     assert_eq!(list1[0]["message"], "alpha topic commit 2");
     assert_eq!(list1[1]["message"], "gamma commit");
 
-    let resp_page2 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=2").await;
+    let resp_page2 = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=2",
+    )
+    .await;
     assert_eq!(resp_page2.status(), StatusCode::OK);
-    let list2: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page2.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let list2: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_page2.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(list2.as_array().unwrap().len(), 1);
     assert_eq!(list2[0]["message"], "alpha topic commit 1");
 
-    let resp_page3 = get(state.clone(), "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=4").await;
+    let resp_page3 = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=alpha+topic&limit=2&offset=4",
+    )
+    .await;
     assert_eq!(resp_page3.status(), StatusCode::OK);
-    let list3: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp_page3.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let list3: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp_page3.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert!(list3.as_array().unwrap().is_empty());
 }
 
@@ -5382,13 +5494,25 @@ async fn git_log_api_validation_and_error_handling() {
     let state = make_state_with_project(&tmp);
 
     // 1. Invalid CR/LF/NUL returns 400 Bad Request
-    let resp_lf = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%0Aworld").await;
+    let resp_lf = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=hello%0Aworld",
+    )
+    .await;
     assert_eq!(resp_lf.status(), StatusCode::BAD_REQUEST);
 
-    let resp_cr = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%0Dworld").await;
+    let resp_cr = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=hello%0Dworld",
+    )
+    .await;
     assert_eq!(resp_cr.status(), StatusCode::BAD_REQUEST);
 
-    let resp_nul = get(state.clone(), "/api/git/test-project/log?messageQuery=hello%00world").await;
+    let resp_nul = get(
+        state.clone(),
+        "/api/git/test-project/log?messageQuery=hello%00world",
+    )
+    .await;
     assert_eq!(resp_nul.status(), StatusCode::BAD_REQUEST);
 
     // 2. Invalid git ref returns 400 Bad Request
@@ -5396,7 +5520,8 @@ async fn git_log_api_validation_and_error_handling() {
     assert_eq!(resp_ref.status(), StatusCode::BAD_REQUEST);
 
     // 3. Unauthorized request returns 401 Unauthorized
-    let resp_unauth = get_without_auth(state.clone(), "/api/git/test-project/log?messageQuery=test").await;
+    let resp_unauth =
+        get_without_auth(state.clone(), "/api/git/test-project/log?messageQuery=test").await;
     assert_eq!(resp_unauth.status(), StatusCode::UNAUTHORIZED);
 
     // 4. Non-git directory returns 409 Conflict with GIT_NOT_INITIALIZED
@@ -5404,7 +5529,9 @@ async fn git_log_api_validation_and_error_handling() {
     let non_git_state = make_state_with_project(&non_git);
     let resp_non_git = get(non_git_state, "/api/git/test-project/log").await;
     assert_eq!(resp_non_git.status(), StatusCode::CONFLICT);
-    let body = axum::body::to_bytes(resp_non_git.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp_non_git.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let err_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(err_json["code"], "GIT_NOT_INITIALIZED");
 }
@@ -5753,14 +5880,18 @@ async fn workspace_reinitialization_revokes_every_media_ticket() {
     .await;
     assert!(reinitialized.is_ok());
 
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&ticket)
-        .is_none());
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&image_ticket)
-        .is_none());
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&ticket)
+            .is_none()
+    );
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&image_ticket)
+            .is_none()
+    );
 }
 
 #[cfg(unix)]
@@ -5925,10 +6056,12 @@ async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(response.headers()[header::SET_COOKIE]
-        .to_str()
-        .unwrap()
-        .contains("Max-Age=0"));
+    assert!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     assert_eq!(
         stream_video(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
@@ -6024,10 +6157,12 @@ async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
     let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
     assert_eq!(full.status(), StatusCode::OK);
     assert_eq!(full.headers()["content-length"], "0");
-    assert!(axum::body::to_bytes(full.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(full.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
     assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6076,10 +6211,12 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         assert!(stale.headers().get(name).is_none());
     }
     assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
-    assert!(axum::body::to_bytes(stale.into_body(), 1)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(stale.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         stream_video(state.clone(), &stale_ticket, "GET", &[])
             .await
@@ -6299,12 +6436,14 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     )
     .await;
     assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
-    assert!(!String::from_utf8_lossy(
-        &axum::body::to_bytes(traversal.into_body(), usize::MAX)
-            .await
-            .unwrap()
-    )
-    .contains("outside.png"));
+    assert!(
+        !String::from_utf8_lossy(
+            &axum::body::to_bytes(traversal.into_body(), usize::MAX)
+                .await
+                .unwrap()
+        )
+        .contains("outside.png")
+    );
 }
 
 #[cfg(unix)]
@@ -6318,11 +6457,13 @@ async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
     std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
     std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
     let fifo = tmp.path().join("trap.gif");
-    assert!(Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
     let state = make_state_with_project(&tmp);
 
     for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
@@ -6512,10 +6653,12 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "10");
     assert!(head.headers().get("content-range").is_none());
-    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        axum::body::to_bytes(head.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
     assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6659,14 +6802,18 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     state.media_tickets.revoke_all();
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&image_ticket)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&video_ticket)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&image_ticket)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&video_ticket)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -6688,14 +6835,18 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(config_response.status(), StatusCode::OK);
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&config_image)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&config_video)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&config_image)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&config_video)
+            .is_none()
+    );
 
     let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
@@ -6706,14 +6857,18 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(settings_response.status(), StatusCode::OK);
-    assert!(state
-        .image_stream_tickets
-        .lookup_and_touch(&settings_image)
-        .is_none());
-    assert!(state
-        .video_stream_tickets
-        .lookup_and_touch(&settings_video)
-        .is_none());
+    assert!(
+        state
+            .image_stream_tickets
+            .lookup_and_touch(&settings_image)
+            .is_none()
+    );
+    assert!(
+        state
+            .video_stream_tickets
+            .lookup_and_touch(&settings_video)
+            .is_none()
+    );
 }
 
 #[tokio::test]

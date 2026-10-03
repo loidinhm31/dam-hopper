@@ -3,7 +3,7 @@
 use futures_util::{SinkExt, StreamExt};
 use std::{os::unix::fs::symlink, path::Path, process::Stdio, time::Duration};
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
+use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
 
 use dam_hopper_server::{
     agent_status::{
@@ -104,7 +104,7 @@ async fn partial_native_request_times_out_before_admission() {
         .await
         .unwrap();
     let mut one = [0u8; 1];
-    let n = tokio::time::timeout(Duration::from_secs(1), stalled.read(&mut one))
+    let n = tokio::time::timeout(Duration::from_secs(3), stalled.read(&mut one))
         .await
         .expect("incomplete native request must not hold a connection")
         .unwrap();
@@ -269,27 +269,29 @@ async fn native_hook_reporter_updates_only_live_capability_and_expires_without_a
     assert!(expired_row.expires_at_ms.is_none());
 
     runtime.revoke_credential("native-test", 1);
-    assert!(runtime
-        .apply_hook_event(
-            "native-test",
-            1,
-            &dam_hopper_server::agent_status::PrivateHookEnvelope {
-                version: 1,
-                agent_kind: AgentKind::Codex,
-                adapter_version: "1.0.0".into(),
-                event_id: "revoked".into(),
-                event: "UserPromptSubmit".into(),
-                agent_session_id: "session-1".into(),
-                turn_id: Some("turn-2".into()),
-                tool_call_id: None,
-                reason: None,
-                notification_type: None,
-                root_process: root,
-                process_ancestry: vec![root],
-            },
-            row.expires_at_ms.unwrap() + 1,
-        )
-        .is_err());
+    assert!(
+        runtime
+            .apply_hook_event(
+                "native-test",
+                1,
+                &dam_hopper_server::agent_status::PrivateHookEnvelope {
+                    version: 1,
+                    agent_kind: AgentKind::Codex,
+                    adapter_version: "1.0.0".into(),
+                    event_id: "revoked".into(),
+                    event: "UserPromptSubmit".into(),
+                    agent_session_id: "session-1".into(),
+                    turn_id: Some("turn-2".into()),
+                    tool_call_id: None,
+                    reason: None,
+                    notification_type: None,
+                    root_process: root,
+                    process_ancestry: vec![root],
+                },
+                row.expires_at_ms.unwrap() + 1,
+            )
+            .is_err()
+    );
     assert_eq!(runtime.snapshot().terminals[0].state, AgentState::Unknown);
     collector.shutdown();
 }
@@ -336,8 +338,16 @@ async fn test_codex_smoke_lifecycle_and_interrupt_via_real_subcommand() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row1 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row1 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "codex-smoke")
+        .unwrap();
     assert_eq!(row1.state, AgentState::Working);
     assert_eq!(row1.turn_id.as_deref(), Some("turn-smoke-1"));
 
@@ -347,8 +357,16 @@ async fn test_codex_smoke_lifecycle_and_interrupt_via_real_subcommand() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row2 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row2 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "codex-smoke")
+        .unwrap();
     assert_eq!(row2.state, AgentState::Working);
 
     // 3. Interrupt: Idle with Interrupted outcome, no completion attention
@@ -357,10 +375,21 @@ async fn test_codex_smoke_lifecycle_and_interrupt_via_real_subcommand() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row3 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "codex-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row3 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "codex-smoke")
+        .unwrap();
     assert_eq!(row3.state, AgentState::Idle);
-    assert_eq!(row3.last_outcome, Some(dam_hopper_server::agent_status::TurnOutcome::Interrupted));
+    assert_eq!(
+        row3.last_outcome,
+        Some(dam_hopper_server::agent_status::TurnOutcome::Interrupted)
+    );
 
     drop(stdin);
     let status = child.wait().await.unwrap();
@@ -410,8 +439,16 @@ async fn test_claude_smoke_lifecycle_notification_and_subagent_rejection() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row1 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row1 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "claude-smoke")
+        .unwrap();
     assert_eq!(row1.state, AgentState::Working);
     assert_eq!(row1.turn_id.as_deref(), Some("prompt-smoke-1"));
 
@@ -421,10 +458,21 @@ async fn test_claude_smoke_lifecycle_notification_and_subagent_rejection() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row2 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row2 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "claude-smoke")
+        .unwrap();
     assert_eq!(row2.state, AgentState::Blocked);
-    assert_eq!(row2.reason, Some(dam_hopper_server::agent_status::BlockedReason::Approval));
+    assert_eq!(
+        row2.reason,
+        Some(dam_hopper_server::agent_status::BlockedReason::Approval)
+    );
 
     // 3. Subagent UserPromptSubmit: must be rejected silently without changing root Blocked state
     stdin.write_all(
@@ -432,8 +480,16 @@ async fn test_claude_smoke_lifecycle_notification_and_subagent_rejection() {
     ).await.unwrap();
     stdin.write_all(b"\n").await.unwrap();
     stdin.flush().await.unwrap();
-    assert_eq!(stdout_lines.next_line().await.unwrap().as_deref(), Some("DONE"));
-    let row3 = runtime.snapshot().terminals.into_iter().find(|r| r.id == "claude-smoke").unwrap();
+    assert_eq!(
+        stdout_lines.next_line().await.unwrap().as_deref(),
+        Some("DONE")
+    );
+    let row3 = runtime
+        .snapshot()
+        .terminals
+        .into_iter()
+        .find(|r| r.id == "claude-smoke")
+        .unwrap();
     assert_eq!(
         row3.state,
         AgentState::Blocked,

@@ -5,13 +5,13 @@
  * performance, and score provenance for an aggregated comparable evaluation group.
  */
 
-import { useEffect, useMemo, useRef, type FC } from 'react';
+import { useEffect, useMemo, useRef, type FC } from "react";
 import type {
   CandidateEvaluationSummary,
   ComparableEvaluationGroup,
-} from '../advisor-types.js';
-import { ScoreProvenanceCard } from '../components/ScoreProvenanceCard.js';
-import { CandidatePerformanceTable } from '../components/CandidatePerformanceTable.js';
+} from "../advisor-types.js";
+import { ScoreProvenanceCard } from "../components/ScoreProvenanceCard.js";
+import { CandidatePerformanceTable } from "../components/CandidatePerformanceTable.js";
 
 export interface EvaluationDetailProps {
   readonly group: ComparableEvaluationGroup;
@@ -31,18 +31,20 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
 
   useEffect(() => {
     const previousFocus =
-      typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+      typeof document !== "undefined"
+        ? (document.activeElement as HTMLElement | null)
+        : null;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
         onCloseRef.current();
       }
     };
-    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-      if (previousFocus && typeof previousFocus.focus === 'function') {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      if (previousFocus && typeof previousFocus.focus === "function") {
         previousFocus.focus();
       }
     };
@@ -50,11 +52,11 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
 
   const raw = group as unknown as Record<string, unknown>;
   const rubricDigest =
-    (typeof group.rubric_digest === 'string' ? group.rubric_digest : null) ??
-    (typeof raw.rubricDigest === 'string' ? raw.rubricDigest : '');
+    (typeof group.rubric_digest === "string" ? group.rubric_digest : null) ??
+    (typeof raw.rubricDigest === "string" ? raw.rubricDigest : "");
   const inputDigest =
-    (typeof group.input_digest === 'string' ? group.input_digest : null) ??
-    (typeof raw.inputDigest === 'string' ? raw.inputDigest : '');
+    (typeof group.input_digest === "string" ? group.input_digest : null) ??
+    (typeof raw.inputDigest === "string" ? raw.inputDigest : "");
   const cases = Array.isArray(group.cases) ? group.cases : [];
   const responses = Array.isArray(group.responses) ? group.responses : [];
   const humanScores = Array.isArray(group.human_scores)
@@ -71,15 +73,21 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
   const candidateLabels = useMemo(() => {
     const idSet = new Set<string>();
     for (const r of responses) {
-      const cid = r.candidate_id || (r as unknown as { candidateId?: string }).candidateId;
+      const cid =
+        r.candidate_id ||
+        (r as unknown as { candidateId?: string }).candidateId;
       if (cid) idSet.add(cid);
     }
     for (const h of humanScores) {
-      const cid = h.candidate_id || (h as unknown as { candidateId?: string }).candidateId;
+      const cid =
+        h.candidate_id ||
+        (h as unknown as { candidateId?: string }).candidateId;
       if (cid) idSet.add(cid);
     }
     for (const a of automatedScores) {
-      const cid = a.candidate_id || (a as unknown as { candidateId?: string }).candidateId;
+      const cid =
+        a.candidate_id ||
+        (a as unknown as { candidateId?: string }).candidateId;
       if (cid) idSet.add(cid);
     }
 
@@ -87,7 +95,7 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
     const map = new Map<string, string>();
     sortedIds.forEach((id, idx) => {
       const letter = String.fromCharCode(65 + (idx % 26));
-      const suffix = idx >= 26 ? String(Math.floor(idx / 26) + 1) : '';
+      const suffix = idx >= 26 ? String(Math.floor(idx / 26) + 1) : "";
       map.set(id, `Candidate ${letter}${suffix}`);
     });
     return map;
@@ -104,11 +112,15 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
           <h3 className="drawer-title">Comparable Evaluation Group</h3>
           <div className="drawer-digests">
             <span className="drawer-digest-item">
-              Rubric: <code>{rubricDigest ? `${rubricDigest.slice(0, 10)}…` : '—'}</code>
+              Rubric:{" "}
+              <code>
+                {rubricDigest ? `${rubricDigest.slice(0, 10)}…` : "—"}
+              </code>
             </span>
             <span className="drawer-digest-divider">&bull;</span>
             <span className="drawer-digest-item">
-              Input: <code>{inputDigest ? `${inputDigest.slice(0, 10)}…` : '—'}</code>
+              Input:{" "}
+              <code>{inputDigest ? `${inputDigest.slice(0, 10)}…` : "—"}</code>
             </span>
           </div>
         </div>
@@ -123,29 +135,41 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
       </div>
 
       <div className="drawer-content">
-        <section className="drawer-section" aria-label="Included Evaluation Cases">
-          <h4 className="section-label">Included Evaluation Cases ({cases.length})</h4>
+        <section
+          className="drawer-section"
+          aria-label="Included Evaluation Cases"
+        >
+          <h4 className="section-label">
+            Included Evaluation Cases ({cases.length})
+          </h4>
           <ul className="eval-cases-list">
             {cases.map((c, idx) => {
               const rawCase = c as unknown as Record<string, unknown>;
               const caseId =
-                (typeof c.case_id === 'string' ? c.case_id : null) ??
-                (typeof rawCase.caseId === 'string' ? rawCase.caseId : `case-${idx}`);
+                (typeof c.case_id === "string" ? c.case_id : null) ??
+                (typeof rawCase.caseId === "string"
+                  ? rawCase.caseId
+                  : `case-${idx}`);
               const runId =
-                (typeof c.run_id === 'string' ? c.run_id : null) ??
-                (typeof rawCase.runId === 'string' ? rawCase.runId : '');
-              const name = c.name || (typeof rawCase.name === 'string' ? rawCase.name : caseId);
+                (typeof c.run_id === "string" ? c.run_id : null) ??
+                (typeof rawCase.runId === "string" ? rawCase.runId : "");
+              const name =
+                c.name ||
+                (typeof rawCase.name === "string" ? rawCase.name : caseId);
               const category =
-                c.category || (typeof rawCase.category === 'string' ? rawCase.category : '');
+                c.category ||
+                (typeof rawCase.category === "string" ? rawCase.category : "");
               return (
                 <li key={`${caseId}-${idx}`} className="eval-case-item">
                   <div className="case-item-title">
-                    <strong>{name}</strong>{' '}
-                    {category && <span className="badge badge-info">{category}</span>}
+                    <strong>{name}</strong>{" "}
+                    {category && (
+                      <span className="badge badge-info">{category}</span>
+                    )}
                   </div>
                   <div className="text-muted id-sub">
-                    Case: <code>{caseId}</code> &bull; Run:{' '}
-                    <code>{runId ? `${runId.slice(0, 8)}…` : '—'}</code>
+                    Case: <code>{caseId}</code> &bull; Run:{" "}
+                    <code>{runId ? `${runId.slice(0, 8)}…` : "—"}</code>
                   </div>
                 </li>
               );
@@ -153,11 +177,16 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
           </ul>
         </section>
 
-        <section className="drawer-section" aria-label="Candidate Response Performance">
+        <section
+          className="drawer-section"
+          aria-label="Candidate Response Performance"
+        >
           <div className="section-header-row">
             <h4 className="section-label">Candidate Response Performance</h4>
             {!revealCandidates && (
-              <span className="badge badge-secondary blinding-badge">Blinded</span>
+              <span className="badge badge-secondary blinding-badge">
+                Blinded
+              </span>
             )}
           </div>
 
@@ -178,7 +207,11 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
                   <div className="score-cards-list">
                     {humanScores.map((hs, idx) => (
                       <ScoreProvenanceCard
-                        key={revealCandidates ? hs.candidate_id : `blinded-hs-${idx}`}
+                        key={
+                          revealCandidates
+                            ? hs.candidate_id
+                            : `blinded-hs-${idx}`
+                        }
                         summary={hs}
                         label={
                           revealCandidates
@@ -201,7 +234,11 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
                   <div className="score-cards-list">
                     {automatedScores.map((as, idx) => (
                       <ScoreProvenanceCard
-                        key={revealCandidates ? as.candidate_id : `blinded-as-${idx}`}
+                        key={
+                          revealCandidates
+                            ? as.candidate_id
+                            : `blinded-as-${idx}`
+                        }
                         summary={as}
                         label={
                           revealCandidates

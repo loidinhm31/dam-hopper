@@ -6,14 +6,14 @@
 
 `GET /api/git/{project}/log` uses the existing authenticated Git route. Optional query parameters are:
 
-| Parameter | Default | Meaning |
-| --- | --- | --- |
-| `limit` | `100` | Page size. |
-| `offset` | `0` | Number of history entries to skip; with `messageQuery`, skips matching entries. |
-| `ref` | `HEAD` | History starting revision. |
-| `worktreePath` | — | Registered worktree target. |
-| `root` | — | VCS root ID. |
-| `messageQuery` | — | Commit-message filter. |
+| Parameter      | Default | Meaning                                                                         |
+| -------------- | ------- | ------------------------------------------------------------------------------- |
+| `limit`        | `100`   | Page size.                                                                      |
+| `offset`       | `0`     | Number of history entries to skip; with `messageQuery`, skips matching entries. |
+| `ref`          | `HEAD`  | History starting revision.                                                      |
+| `worktreePath` | —       | Registered worktree target.                                                     |
+| `root`         | —       | VCS root ID.                                                                    |
+| `messageQuery` | —       | Commit-message filter.                                                          |
 
 Missing or whitespace-only `messageQuery` leaves history unfiltered. Otherwise,
 the server passes the term as one fixed-string Git argument, not interpolated
@@ -111,8 +111,39 @@ The [Phase 06 plan](../../plans/261001-2003-git-history-search-persistence/phase
 
 The standalone page and its focused tests live in `packages/ui/src/components/pages/GitPage.tsx` and `GitPage.test.tsx`; root-relative history diff paths use `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
 
-
 The shared UI components live in the [frontend component architecture](../frontend-components.md). The persisted-store contract is recorded in [Phase 03](../../plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md), the shared-controller contract in [Phase 04](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md), and Workspace integration in [Phase 05](../../plans/261001-2003-git-history-search-persistence/phase-05-workspace-git-integration.md). End-to-end qualification remains Phase 07.
+
+## Shared consecutive-commit squash
+
+Both `WorkspaceGitPanel` and `GitPage` use the history owner's `useGitSquash`
+flow. Accessible checkboxes in graph and filtered-list rows select independently
+from detail navigation and context menus. `useGitHistoryView` owns a transient
+page-bound selection; `git-squash-selection.ts` validates actual parent IDs and
+emits exact oldest-first hashes. Gaps hidden by filtering do not become eligible.
+Selection resets on owner/worktree/root/branch/connection-generation, applied
+query, or page changes. Loading or loss of visible rows invalidates unsubmitted
+preparation, not a same-scope operation already submitted to the server.
+
+Squash is available only for a connected available target viewing its checked-out
+local branch. `GitSquashDialog` loads complete UTF-8 messages concurrently,
+requires matching fresh branch/tip snapshots, composes oldest-first full bodies,
+and retains edits while obtaining signature-removal consent. Pending execution
+cannot be dismissed; cancel before execution preserves selection. Successful
+rewrites clear obsolete details/rows and restore focus to a surviving toolbar.
+Scope changes fence late completions; uncertain outcomes preserve a read-only
+draft without a success receipt or automatic retry.
+
+The raw-object server engine rejects selected or rewritten-descendant merges,
+remaps linear descendants, and moves only the captured local branch under locked
+HEAD/branch compare-and-swap. Root and older ranges are supported; the final tree,
+index, dirty files, and remote refs are preserved. Full-message GETs use a
+lock-free snapshot/recheck so dialog preparation does not fight for ref locks.
+
+Already-pushed history carries an explicit reconciliation warning. After local
+success, `GitSquashFlow` offers a separate prepared, user-confirmed exact-OID
+leased publication tied to the **history root** and successful branch tip.
+Git-page bulk-root selection cannot redirect that publication. Remote movement
+after preparation rejects the lease without overwriting the independent writer.
 
 ## Source map
 
@@ -125,6 +156,8 @@ The shared UI components live in the [frontend component architecture](../fronte
 - `packages/ui/src/components/molecules/GitHistoryToolbar.tsx` — controlled history search, paging, refresh, and follow-active toolbar.
 - `packages/ui/src/components/organisms/GitBranchControl.tsx` — checkout versus canonical-ref view mode.
 - `packages/ui/src/components/organisms/GitLogTree.tsx` — graph/list commit presentation.
+- `packages/ui/src/lib/git-squash-selection.ts`, `packages/ui/src/hooks/use-git-squash.ts`, `GitSquashDialog.tsx`, and `GitSquashFlow.tsx` — shared range selection, full-message preparation, local execution, and separately confirmed history-owned publication.
+- `server/src/git/squash_commits.rs` and `server/tests/git_squash_api.rs` — raw-object linear squash engine and authenticated root/worktree API behavior.
 - Focused UI regressions: `packages/ui/src/stores/git-history.test.ts`, `packages/ui/src/api/ws-transport.test.ts`, `packages/ui/src/api/queries.test.ts`, and `packages/ui/src/api/ownership.test.ts`.
 - Server route/filter: `server/src/api/git.rs` and the Git repository log implementation.
 - `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/components/pages/WorkspacePage.tsx` — Workspace mounts, availability, history presentation, and target/root-scoped actions.

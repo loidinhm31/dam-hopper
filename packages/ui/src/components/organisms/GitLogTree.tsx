@@ -4,7 +4,7 @@ import type { GitLogEntry } from "@/api/client.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
 
 const GRAPH_CELL_WIDTH = 14;
-const ROW_HEIGHT = 28;
+const ROW_HEIGHT = 44;
 const SVG_PADDING = 8;
 const RADIUS = 4;
 
@@ -23,6 +23,9 @@ interface GitLogTreeProps {
   logs: GitLogEntry[];
   isLoading?: boolean;
   selectedHash?: string;
+  squashSelectedHashes?: readonly string[];
+  onToggleSquashCommit?: (hash: string) => void;
+  squashSelectionDisabled?: boolean;
   onSelectCommit?: (entry: GitLogEntry) => void;
   onCherryPick?: (entry: GitLogEntry) => void;
   onRevertCommit?: (entry: GitLogEntry) => void;
@@ -190,6 +193,9 @@ export function GitLogTree({
   logs,
   isLoading = false,
   selectedHash,
+  squashSelectedHashes = [],
+  onToggleSquashCommit,
+  squashSelectionDisabled = false,
   onSelectCommit,
   onCherryPick,
   onRevertCommit,
@@ -244,7 +250,7 @@ export function GitLogTree({
     }
 
     return renderNodes;
-  }, [logs]);
+  }, [logs, presentation]);
 
   const rowsToRender = useMemo(() => {
     if (presentation === "list") {
@@ -287,7 +293,17 @@ export function GitLogTree({
       <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)] bg-[var(--color-background)]">
-            <th className="font-medium px-4 py-2 sticky left-0 z-10 bg-[var(--color-background)]">
+            {onToggleSquashCommit && (
+              <th className="w-11 min-w-11 sticky left-0 z-20 bg-[var(--color-background)]">
+                <span className="sr-only">Select commits for squash</span>
+              </th>
+            )}
+            <th
+              className={cn(
+                "font-medium px-4 py-2 sticky z-10 bg-[var(--color-background)]",
+                onToggleSquashCommit ? "left-11" : "left-0",
+              )}
+            >
               Log
             </th>
             <th className="font-medium px-4 py-2">Author</th>
@@ -319,7 +335,10 @@ export function GitLogTree({
                   aria-haspopup="menu"
                   onClick={() => onSelectCommit?.(entry)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
+                    if (
+                      event.target === event.currentTarget &&
+                      (event.key === "Enter" || event.key === " ")
+                    ) {
                       event.preventDefault();
                       onSelectCommit?.(entry);
                     }
@@ -331,9 +350,28 @@ export function GitLogTree({
                   )}
                   style={{ height: `${ROW_HEIGHT}px` }}
                 >
+                  {onToggleSquashCommit && (
+                    <td className="w-11 min-w-11 sticky left-0 z-20 bg-[var(--color-surface)]">
+                      <label
+                        className="flex h-11 w-11 items-center justify-center cursor-pointer"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={squashSelectedHashes.includes(entry.hash)}
+                          disabled={squashSelectionDisabled}
+                          onChange={() => onToggleSquashCommit(entry.hash)}
+                          aria-label={`Select ${entry.hash.slice(0, 7)}: ${entry.message} for squash`}
+                          className="h-4 w-4 accent-[var(--color-primary)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]"
+                        />
+                      </label>
+                    </td>
+                  )}
                   <td
                     className={cn(
-                      "px-4 py-1 flex items-center gap-2 sticky left-0 z-10 bg-[var(--color-surface)]",
+                      "px-4 py-0 flex items-center gap-2 sticky z-10 bg-[var(--color-surface)]",
+                      onToggleSquashCommit ? "left-11" : "left-0",
                       isSelected
                         ? "bg-[var(--color-primary)]/10"
                         : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]",
@@ -353,12 +391,14 @@ export function GitLogTree({
                           {node.prevTracks.map((hash: string, tIdx: number) => {
                             if (!hash) return null;
                             const color = COLORS[tIdx % COLORS.length];
-                            const startX = SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
+                            const startX =
+                              SVG_PADDING + tIdx * GRAPH_CELL_WIDTH;
                             let endX = startX;
                             // If this track flows into the current node's track
                             if (hash === node.entry.hash) {
                               endX =
-                                SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH;
+                                SVG_PADDING +
+                                node.trackIndex * GRAPH_CELL_WIDTH;
                             }
 
                             return (
@@ -401,7 +441,9 @@ export function GitLogTree({
 
                           {/* Draw commit dot */}
                           <circle
-                            cx={SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH}
+                            cx={
+                              SVG_PADDING + node.trackIndex * GRAPH_CELL_WIDTH
+                            }
                             cy={ROW_HEIGHT / 2}
                             r={RADIUS}
                             fill={COLORS[node.trackIndex % COLORS.length]}

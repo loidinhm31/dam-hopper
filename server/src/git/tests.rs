@@ -10,14 +10,13 @@ use crate::git::diff::{
     stage_files, unstage_files,
 };
 use crate::git::repository::{
-    checkout_branch, cherry_pick, create_branch, delete_branch, get_log, get_status,
-    list_branches, push, reset_to_commit, undo_last_commit, update_branch,
+    checkout_branch, cherry_pick, create_branch, delete_branch, get_log, get_status, list_branches,
+    push, reset_to_commit, undo_last_commit, update_branch,
 };
 use crate::git::types::{
     CheckoutStrategy, GitProgressPhase, PublishPreview, PublishResultStatus, ResetMode,
     VcsRootKind, VcsRootMappingState,
 };
-use crate::git::{prepare_leased_push, publish_leased_push};
 use crate::git::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, edit_commit_message,
     get_commit_message, revert_commit, revert_commit_files,
@@ -27,6 +26,7 @@ use crate::git::{
     resolve_git_request_root, resolve_vcs_root, staged_vcs_root_ids, BulkGitService,
     WorktreeAddOptions,
 };
+use crate::git::{prepare_leased_push, publish_leased_push};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -558,16 +558,9 @@ async fn leased_push_prepare_captures_snapshot_and_publishes_matching_lease() {
         }
     };
 
-    let pub_res = publish_leased_push(
-        seed.path(),
-        seed.path(),
-        "seed",
-        &snapshot,
-        &None,
-        None,
-    )
-    .await
-    .expect("publish_leased_push should succeed");
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish_leased_push should succeed");
 
     assert_eq!(pub_res.status, PublishResultStatus::Published);
     assert_eq!(
@@ -602,16 +595,9 @@ async fn leased_push_rejects_stale_remote_when_remote_advances_after_preview() {
     git(&["push"], clone.path());
     let concurrent_head = git_output(&["rev-parse", "HEAD"], remote.path());
 
-    let pub_res = publish_leased_push(
-        seed.path(),
-        seed.path(),
-        "seed",
-        &snapshot,
-        &None,
-        None,
-    )
-    .await
-    .expect("publish should return result without panic");
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish should return result without panic");
 
     assert_eq!(pub_res.status, PublishResultStatus::StaleRemote);
     assert_eq!(
@@ -642,16 +628,9 @@ async fn leased_push_already_current_returns_no_op_without_push() {
         }
     };
 
-    let pub_res = publish_leased_push(
-        seed.path(),
-        seed.path(),
-        "seed",
-        &snapshot,
-        &None,
-        None,
-    )
-    .await
-    .expect("publish should return result");
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish should return result");
 
     assert_eq!(pub_res.status, PublishResultStatus::AlreadyCurrent);
 }
@@ -680,16 +659,9 @@ async fn leased_push_rejects_stale_local_when_local_tip_changes_after_preview() 
     git(&["add", "local2.txt"], seed.path());
     git(&["commit", "-m", "local 2"], seed.path());
 
-    let pub_res = publish_leased_push(
-        seed.path(),
-        seed.path(),
-        "seed",
-        &snapshot,
-        &None,
-        None,
-    )
-    .await
-    .expect("publish should return result");
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish should return result");
 
     assert_eq!(pub_res.status, PublishResultStatus::StaleLocal);
 }
@@ -735,16 +707,9 @@ async fn leased_push_negotiation_detects_mismatched_remote_oid() {
 
     let remote_head_before = git_output(&["rev-parse", "HEAD"], remote.path());
 
-    let pub_res = publish_leased_push(
-        seed.path(),
-        seed.path(),
-        "seed",
-        &snapshot,
-        &None,
-        None,
-    )
-    .await
-    .expect("publish should return result");
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish should return result");
 
     assert_eq!(pub_res.status, PublishResultStatus::StaleRemote);
     let remote_head_after = git_output(&["rev-parse", "HEAD"], remote.path());
@@ -767,7 +732,10 @@ fn test_is_auth_error_matches_ssh_and_credential_patterns() {
 
     for msg in auth_messages {
         let err = git2::Error::from_str(msg);
-        assert!(is_auth_error(&err), "message should match auth error: {msg}");
+        assert!(
+            is_auth_error(&err),
+            "message should match auth error: {msg}"
+        );
     }
 
     let non_auth_messages = [
@@ -779,7 +747,10 @@ fn test_is_auth_error_matches_ssh_and_credential_patterns() {
 
     for msg in non_auth_messages {
         let err = git2::Error::from_str(msg);
-        assert!(!is_auth_error(&err), "message should not match auth error: {msg}");
+        assert!(
+            !is_auth_error(&err),
+            "message should not match auth error: {msg}"
+        );
     }
 }
 
@@ -2845,7 +2816,16 @@ async fn edit_commit_message_side_parent_of_merge_rewritten() {
     let a_oid = git_output(&["rev-parse", "HEAD"], path);
 
     // Merge feature into main with no fast forward
-    git(&["merge", "--no-ff", "-m", "merge feature into main", "feature"], path);
+    git(
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "merge feature into main",
+            "feature",
+        ],
+        path,
+    );
     let merge_oid = git_output(&["rev-parse", "HEAD"], path);
     let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
     let snap = get_commit_message(path, &b_oid).unwrap();
@@ -3233,9 +3213,33 @@ fn get_log_search_case_insensitivity_and_body_matching() {
     let repo = make_temp_repo();
     let path = repo.path();
 
-    git(&["commit", "--allow-empty", "-m", "Feature ALPHA\n\nimplemented core logic"], path);
-    git(&["commit", "--allow-empty", "-m", "Fix bug in parsing\n\nDetailed context mentioning feature alpha in body"], path);
-    git(&["commit", "--allow-empty", "-m", "Unrelated update\n\nnothing special"], path);
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Feature ALPHA\n\nimplemented core logic",
+        ],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Fix bug in parsing\n\nDetailed context mentioning feature alpha in body",
+        ],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Unrelated update\n\nnothing special",
+        ],
+        path,
+    );
 
     let head_before = git_output(&["rev-parse", "HEAD"], path);
 
@@ -3256,10 +3260,37 @@ fn get_log_search_literal_special_characters() {
     let repo = make_temp_repo();
     let path = repo.path();
 
-    git(&["commit", "--allow-empty", "-m", "chore: bump [release-1.0]"], path);
-    git(&["commit", "--allow-empty", "-m", "feat: add .* regex support"], path);
-    git(&["commit", "--allow-empty", "-m", "docs: document --dry-run option"], path);
-    git(&["commit", "--allow-empty", "-m", "plain commit without symbols"], path);
+    git(
+        &["commit", "--allow-empty", "-m", "chore: bump [release-1.0]"],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "feat: add .* regex support",
+        ],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "docs: document --dry-run option",
+        ],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "plain commit without symbols",
+        ],
+        path,
+    );
 
     // ".*" must be treated as literal fixed string, NOT matching all commits
     let dot_star_entries = get_log(path, 10, 0, None, Some(".*")).unwrap();
@@ -3282,8 +3313,24 @@ fn get_log_search_unicode_literal_and_whitespace() {
     let repo = make_temp_repo();
     let path = repo.path();
 
-    git(&["commit", "--allow-empty", "-m", "feat: hỗ trợ tiếng Việt 🚀"], path);
-    git(&["commit", "--allow-empty", "-m", "docs: english documentation"], path);
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "feat: hỗ trợ tiếng Việt 🚀",
+        ],
+        path,
+    );
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "docs: english documentation",
+        ],
+        path,
+    );
 
     // Literal unicode matching
     let unicode_entries = get_log(path, 10, 0, None, Some("tiếng Việt")).unwrap();
@@ -3336,10 +3383,26 @@ fn get_log_search_beyond_default_page_boundary() {
     let path = repo.path();
 
     // Old commit before 205 filler commits
-    git(&["commit", "--allow-empty", "-m", "needle in haystack old commit"], path);
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "needle in haystack old commit",
+        ],
+        path,
+    );
 
     for idx in 1..=205 {
-        git(&["commit", "--allow-empty", "-m", &format!("filler commit {idx}")], path);
+        git(
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                &format!("filler commit {idx}"),
+            ],
+            path,
+        );
     }
 
     // Default limit is 100 or 200; with limit 100, finding the needle proves search selects before pagination
@@ -3354,10 +3417,21 @@ fn get_log_search_branch_isolation_and_explicit_ref() {
     let path = repo.path();
 
     git(&["checkout", "-b", "feature"], path);
-    git(&["commit", "--allow-empty", "-m", "feature secret_marker commit"], path);
+    git(
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "feature secret_marker commit",
+        ],
+        path,
+    );
 
     git(&["checkout", "main"], path);
-    git(&["commit", "--allow-empty", "-m", "main secret_marker commit"], path);
+    git(
+        &["commit", "--allow-empty", "-m", "main secret_marker commit"],
+        path,
+    );
 
     // On main, default ref searches current branch
     let main_entries = get_log(path, 10, 0, None, Some("secret_marker")).unwrap();
@@ -3396,4 +3470,848 @@ fn get_log_search_no_match_returns_empty() {
 
     let entries = get_log(path, 10, 0, None, Some("completely_nonexistent_term_42")).unwrap();
     assert!(entries.is_empty());
+}
+
+// Raw squash fixtures deliberately use the real ODB and Git CLI as independent oracles.
+fn squash_raw_commit(path: &Path, parents: &[String], extra: &str, message: &[u8]) -> String {
+    let repo = git2::Repository::open(path).unwrap();
+    let tree = repo.head().unwrap().peel_to_commit().unwrap().tree_id();
+    let mut raw = format!("tree {tree}\n");
+    for parent in parents {
+        raw.push_str(&format!("parent {parent}\n"));
+    }
+    raw.push_str("author Old Author <author@example.com> 1700000000 +0530\ncommitter Old Committer <old@example.com> 1700000010 -0700\n");
+    raw.push_str(extra);
+    raw.push('\n');
+    let mut bytes = raw.into_bytes();
+    bytes.extend_from_slice(message);
+    let odb = repo.odb().unwrap();
+    odb.write(git2::ObjectType::Commit, &bytes)
+        .unwrap()
+        .to_string()
+}
+
+fn squash_chain(path: &Path, count: usize) -> Vec<String> {
+    let mut hashes = vec![git_output(&["rev-parse", "HEAD"], path)];
+    for i in 1..count {
+        std::fs::write(path.join(format!("chain-{i}")), format!("content-{i}\n")).unwrap();
+        git(&["add", "."], path);
+        git(&["commit", "-m", &format!("commit {i}\n\nbody {i}")], path);
+        hashes.push(git_output(&["rev-parse", "HEAD"], path));
+    }
+    hashes
+}
+
+fn squash_object_count(path: &Path) -> usize {
+    let repo = git2::Repository::open(path).unwrap();
+    let mut count = 0;
+    repo.odb()
+        .unwrap()
+        .foreach(|_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+    count
+}
+
+fn squash_raw_bytes(path: &Path, oid: &str) -> Vec<u8> {
+    let output = Command::new("git")
+        .args(["cat-file", "commit", oid])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    output.stdout
+}
+
+#[tokio::test]
+async fn squash_commits_head_older_root_and_full_ranges_preserve_topology_and_dirty_state() {
+    for (start, end) in [(1, 3), (1, 2), (0, 1), (0, 4), (3, 4)] {
+        let dir = make_temp_repo();
+        let path = dir.path();
+        let hashes = squash_chain(path, 5);
+        let old_head = hashes.last().unwrap();
+        let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+        let author = git_output(
+            &["show", "-s", "--format=%an <%ae> %at %ai", &hashes[start]],
+            path,
+        );
+        git(&["branch", "untouched"], path);
+        git(&["tag", "original"], path);
+        git(&["config", "user.name", "Current Committer"], path);
+        git(&["config", "user.email", "current@example.com"], path);
+        std::fs::write(path.join("README.md"), "staged\n").unwrap();
+        git(&["add", "README.md"], path);
+        std::fs::write(path.join("README.md"), "unstaged\n").unwrap();
+        std::fs::write(path.join("untracked"), "untracked\n").unwrap();
+        let index_bytes = std::fs::read(path.join(".git/index")).unwrap();
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = crate::git::squash_commits(
+            path,
+            &hashes[start..=end],
+            "  gộp\n\nbody\n\n",
+            "refs/heads/main",
+            old_head,
+            false,
+        )
+        .await
+        .unwrap();
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.old_target_oid.as_ref(), Some(&hashes[end]));
+        assert_eq!(result.old_head_oid.as_ref(), Some(old_head));
+        assert_eq!(result.rewritten_count, Some(1 + 4 - end));
+        assert_eq!(result.no_op, Some(false));
+        assert_eq!(result.signatures_removed, Some(false));
+        let target = result.new_target_oid.as_ref().unwrap();
+        assert_eq!(result.hash.as_ref(), Some(target));
+        assert_eq!(result.new_head_oid.as_ref() == Some(target), end == 4);
+        assert_eq!(
+            git_output(&["rev-parse", "HEAD"], path),
+            *result.new_head_oid.as_ref().unwrap()
+        );
+        assert_eq!(git_output(&["rev-parse", "HEAD^{tree}"], path), old_tree);
+        assert_eq!(
+            git_output(&["rev-list", "--count", "HEAD"], path),
+            (5 - (end - start)).to_string()
+        );
+        let parents = git_output(&["rev-list", "--parents", "-n", "1", target], path);
+        let expected = if start == 0 {
+            target.clone()
+        } else {
+            format!("{target} {}", hashes[start - 1])
+        };
+        assert_eq!(parents, expected);
+        assert_eq!(
+            git_output(&["rev-parse", &format!("{target}^{{tree}}")], path),
+            git_output(&["rev-parse", &format!("{}^{{tree}}", hashes[end])], path)
+        );
+        assert_eq!(
+            git_output(&["show", "-s", "--format=%an <%ae> %at %ai", target], path),
+            author
+        );
+        assert_eq!(
+            git_output(&["show", "-s", "--format=%cn <%ce>", target], path),
+            "Current Committer <current@example.com>"
+        );
+        let seconds = git_output(&["show", "-s", "--format=%ct", target], path)
+            .parse::<i64>()
+            .unwrap();
+        assert!((before..=after).contains(&seconds));
+        let raw = squash_raw_bytes(path, target);
+        let separator = raw.windows(2).position(|w| w == b"\n\n").unwrap();
+        assert_eq!(&raw[separator + 2..], "  gộp\n\nbody\n\n".as_bytes());
+        assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index_bytes);
+        assert_eq!(
+            std::fs::read(path.join("README.md")).unwrap(),
+            b"unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read(path.join("untracked")).unwrap(),
+            b"untracked\n"
+        );
+        assert_eq!(git_output(&["rev-parse", "untouched"], path), *old_head);
+        assert_eq!(git_output(&["rev-parse", "original"], path), *old_head);
+        // Strict descendants differ only in their parent header.
+        let new_chain: Vec<_> = git_output(&["rev-list", "--reverse", "HEAD"], path)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        for old_index in end + 1..5 {
+            let old = String::from_utf8(squash_raw_bytes(path, &hashes[old_index])).unwrap();
+            let new = String::from_utf8(squash_raw_bytes(
+                path,
+                &new_chain[old_index - (end - start)],
+            ))
+            .unwrap();
+            assert_eq!(
+                old.lines()
+                    .filter(|l| !l.starts_with("parent "))
+                    .collect::<Vec<_>>(),
+                new.lines()
+                    .filter(|l| !l.starts_with("parent "))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn squash_commits_raw_descendants_and_predecessor_merge_are_preserved() {
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let root = git_output(&["rev-parse", "HEAD"], path);
+    let side = squash_raw_commit(path, &[root.clone()], "", b"side\n");
+    let merge = squash_raw_commit(path, &[root.clone(), side], "", b"untouched merge\n");
+    let oldest = squash_raw_commit(
+        path,
+        &[merge.clone()],
+        "encoding UTF-8\nx-extra preserve me\n",
+        b"oldest\n",
+    );
+    let newest = squash_raw_commit(path, &[oldest.clone()], "", b"newest\n");
+    let descendant = squash_raw_commit(
+        path,
+        &[newest.clone()],
+        "encoding ISO-8859-1\nx-extra opaque\n",
+        b"opaque \xff\n",
+    );
+    git(&["update-ref", "refs/heads/main", &descendant], path);
+    let result = crate::git::squash_commits(
+        path,
+        &[oldest, newest],
+        "final",
+        "refs/heads/main",
+        &descendant,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.rewritten_count, Some(2));
+    let target = result.new_target_oid.unwrap();
+    let target_raw = String::from_utf8(squash_raw_bytes(path, &target)).unwrap();
+    assert!(target_raw.contains("author Old Author <author@example.com> 1700000000 +0530\n"));
+    assert!(target_raw.contains("x-extra preserve me\n"));
+    assert!(target_raw.ends_with("\n\nfinal\n"));
+    assert_eq!(
+        git_output(&["rev-parse", &format!("{target}^")], path),
+        merge
+    );
+    let old_raw = squash_raw_bytes(path, &descendant);
+    let new_raw = squash_raw_bytes(path, result.new_head_oid.as_ref().unwrap());
+    let without_parent = |raw: &[u8]| {
+        raw.split(|b| *b == b'\n')
+            .filter(|line| !line.starts_with(b"parent "))
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(without_parent(&old_raw), without_parent(&new_raw));
+}
+
+#[tokio::test]
+async fn squash_commits_invalid_requests_ranges_and_stale_first_do_not_write() {
+    use crate::git::GitBlockReason as Reason;
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let chain = squash_chain(path, 4);
+    let tip = &chain[3];
+    let before = squash_object_count(path);
+    for selection in [
+        vec![],
+        vec![chain[0].clone()],
+        vec![chain[0].clone(), chain[0].clone()],
+        vec![chain[0].clone(), chain[0].to_uppercase()],
+        vec!["HEAD".into(), chain[1].clone()],
+        vec![chain[0][..7].to_string(), chain[1].clone()],
+    ] {
+        assert!(matches!(
+            crate::git::squash_commits(path, &selection, "new", "refs/heads/main", tip, false)
+                .await,
+            Err(crate::error::AppError::InvalidInput(_))
+        ));
+    }
+    for (message, branch, head) in [
+        (" \n\t", "refs/heads/main", tip.as_str()),
+        ("new", "main", tip.as_str()),
+        ("new", "refs/heads/main", "HEAD"),
+    ] {
+        assert!(
+            crate::git::squash_commits(path, &chain[..2], message, branch, head, false)
+                .await
+                .is_err()
+        );
+    }
+    for selection in [
+        vec![chain[2].clone(), chain[1].clone()],
+        vec![chain[0].clone(), chain[2].clone()],
+    ] {
+        let result =
+            crate::git::squash_commits(path, &selection, "new", "refs/heads/main", tip, false)
+                .await
+                .unwrap();
+        assert_eq!(result.blocked_reason, Some(Reason::UnsupportedHistory));
+        assert!(result.message.as_deref().unwrap().contains("oldest-first"));
+    }
+    let fake = vec![
+        "1111111111111111111111111111111111111111".into(),
+        "2222222222222222222222222222222222222222".into(),
+    ];
+    let result =
+        crate::git::squash_commits(path, &fake, "new", "refs/heads/main", &chain[0], false)
+            .await
+            .unwrap();
+    assert_eq!(result.blocked_reason, Some(Reason::StaleRef));
+    let result = crate::git::squash_commits(path, &fake, "new", "refs/heads/main", tip, false)
+        .await
+        .unwrap();
+    assert_eq!(result.blocked_reason, Some(Reason::UnreachableCommit));
+    git(&["checkout", "-b", "same-tip"], path);
+    let result = crate::git::squash_commits(path, &fake, "new", "refs/heads/main", tip, false)
+        .await
+        .unwrap();
+    assert_eq!(result.blocked_reason, Some(Reason::StaleRef));
+    assert_eq!(squash_object_count(path), before);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), *tip);
+}
+
+#[tokio::test]
+async fn squash_commits_selected_and_descendant_merges_block_before_signature_consent() {
+    use crate::git::GitBlockReason as Reason;
+    for parent_count in [2, 3] {
+        let dir = make_temp_repo();
+        let path = dir.path();
+        let chain = squash_chain(path, 3);
+        let side = squash_raw_commit(path, &[chain[0].clone()], "", b"side\n");
+        let third = squash_raw_commit(path, &[chain[0].clone()], "", b"third\n");
+        let mut parents = vec![chain[2].clone(), side];
+        if parent_count == 3 {
+            parents.push(third);
+        }
+        let merge = squash_raw_commit(path, &parents, "gpgsig signature\n", b"merge\n");
+        git(&["update-ref", "refs/heads/main", &merge], path);
+        let before = squash_object_count(path);
+        for selected in [
+            vec![chain[1].clone(), chain[2].clone()],
+            vec![chain[2].clone(), merge.clone()],
+            vec![chain[0].clone(), parents[1].clone()],
+        ] {
+            let result = crate::git::squash_commits(
+                path,
+                &selected,
+                "new",
+                "refs/heads/main",
+                &merge,
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.blocked_reason, Some(Reason::UnsupportedHistory));
+            assert!(result.message.as_deref().unwrap().contains("linear"));
+        }
+        assert_eq!(squash_object_count(path), before);
+        assert_eq!(git_output(&["rev-parse", "HEAD"], path), merge);
+    }
+}
+
+#[tokio::test]
+async fn squash_commits_signatures_cover_oldest_absorbed_newest_and_descendants() {
+    for signed_at in 0..4 {
+        for key in ["gpgsig", "gpgsig-sha256"] {
+            let dir = make_temp_repo();
+            let path = dir.path();
+            let predecessor = git_output(&["rev-parse", "HEAD"], path);
+            let mut chain = Vec::new();
+            let mut parent = predecessor;
+            for i in 0..4 {
+                let extra = if i == signed_at {
+                    format!("{key} -----BEGIN SIGNATURE-----\n opaque\n -----END SIGNATURE-----\n")
+                } else {
+                    String::new()
+                };
+                let oid =
+                    squash_raw_commit(path, &[parent], &extra, format!("node {i}\n").as_bytes());
+                chain.push(oid.clone());
+                parent = oid;
+            }
+            git(&["update-ref", "refs/heads/main", &chain[3]], path);
+            let before = squash_object_count(path);
+            let refused = crate::git::squash_commits(
+                path,
+                &chain[..3],
+                "new",
+                "refs/heads/main",
+                &chain[3],
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                refused.blocked_reason,
+                Some(crate::git::GitBlockReason::SignatureConsentRequired)
+            );
+            assert_eq!(squash_object_count(path), before);
+            assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[3]);
+            let allowed = crate::git::squash_commits(
+                path,
+                &chain[..3],
+                "new",
+                "refs/heads/main",
+                &chain[3],
+                true,
+            )
+            .await
+            .unwrap();
+            assert!(allowed.ok, "{allowed:?}");
+            assert_eq!(allowed.signatures_removed, Some(true));
+            for oid in [
+                allowed.new_target_oid.unwrap(),
+                allowed.new_head_oid.unwrap(),
+            ] {
+                assert!(!String::from_utf8_lossy(&squash_raw_bytes(path, &oid)).contains("gpgsig"));
+            }
+            assert!(
+                String::from_utf8_lossy(&squash_raw_bytes(path, &chain[signed_at])).contains(key)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn squash_commits_mergetags_preserve_predecessor_and_require_consent_for_remapped_parents() {
+    for at in 0..3 {
+        let dir = make_temp_repo();
+        let path = dir.path();
+        let mut parent = git_output(&["rev-parse", "HEAD"], path);
+        let mut chain = Vec::new();
+        let mut tag = String::new();
+        for i in 0..3 {
+            let extra = if i == at {
+                tag = format!("mergetag object {parent}\n type commit\n tag retained\n tagger Test <test@test.com> 1700000000 +0000\n \n tag body\n");
+                tag.clone()
+            } else {
+                String::new()
+            };
+            let oid = squash_raw_commit(path, &[parent], &extra, format!("node {i}\n").as_bytes());
+            chain.push(oid.clone());
+            parent = oid;
+        }
+        git(&["update-ref", "refs/heads/main", &chain[2]], path);
+        let refused = crate::git::squash_commits(
+            path,
+            &chain[..2],
+            "new",
+            "refs/heads/main",
+            &chain[2],
+            false,
+        )
+        .await
+        .unwrap();
+        if at == 0 {
+            assert!(refused.ok, "{refused:?}");
+            assert_eq!(refused.signatures_removed, Some(false));
+            assert!(String::from_utf8_lossy(&squash_raw_bytes(
+                path,
+                refused.new_target_oid.as_ref().unwrap()
+            ))
+            .contains(&tag));
+        } else {
+            assert_eq!(
+                refused.blocked_reason,
+                Some(crate::git::GitBlockReason::SignatureConsentRequired)
+            );
+            let allowed = crate::git::squash_commits(
+                path,
+                &chain[..2],
+                "new",
+                "refs/heads/main",
+                &chain[2],
+                true,
+            )
+            .await
+            .unwrap();
+            assert!(allowed.ok, "{allowed:?}");
+            assert_eq!(allowed.signatures_removed, Some(true));
+            for oid in [
+                allowed.new_target_oid.unwrap(),
+                allowed.new_head_oid.unwrap(),
+            ] {
+                assert!(
+                    !String::from_utf8_lossy(&squash_raw_bytes(path, &oid)).contains("mergetag")
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn squash_commits_malformed_metadata_and_selected_non_utf8_block_without_writes() {
+    for extra in [
+        "author Duplicate <duplicate@example.com> 1700000000 +0000\n",
+        "committer Duplicate <duplicate@example.com> 1700000000 +0000\n",
+        "encoding ISO-8859-1\n",
+        "encoding \u{fffd}\n",
+        "mergetag object 1111111111111111111111111111111111111111\n type commit\n",
+        "mergetag object 1111111111111111111111111111111111111111\n type tree\n",
+    ] {
+        let dir = make_temp_repo();
+        let path = dir.path();
+        let root = git_output(&["rev-parse", "HEAD"], path);
+        let oldest = squash_raw_commit(path, &[root], extra, b"oldest\n");
+        let newest = squash_raw_commit(path, &[oldest.clone()], "", b"newest\n");
+        git(&["update-ref", "refs/heads/main", &newest], path);
+        let before = squash_object_count(path);
+        let result = crate::git::squash_commits(
+            path,
+            &[oldest, newest.clone()],
+            "new",
+            "refs/heads/main",
+            &newest,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(!result.ok, "{extra}: {result:?}");
+        assert!(matches!(
+            result.blocked_reason,
+            Some(
+                crate::git::GitBlockReason::InvalidCommitMetadata
+                    | crate::git::GitBlockReason::UnsupportedHistory
+            )
+        ));
+        assert_eq!(git_output(&["rev-parse", "HEAD"], path), newest);
+        assert_eq!(squash_object_count(path), before);
+    }
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let root = git_output(&["rev-parse", "HEAD"], path);
+    let bad = squash_raw_commit(path, &[root.clone()], "", b"bad \xff\n");
+    git(&["update-ref", "refs/heads/main", &bad], path);
+    let result = crate::git::squash_commits(
+        path,
+        &[root, bad.clone()],
+        "new",
+        "refs/heads/main",
+        &bad,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::UnsupportedHistory)
+    );
+}
+
+#[tokio::test]
+async fn squash_commits_active_detached_unborn_and_worktree_guards() {
+    use crate::git::GitBlockReason as Reason;
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let chain = squash_chain(path, 2);
+    std::fs::create_dir(path.join(".git/rebase-merge")).unwrap();
+    let blocked =
+        crate::git::squash_commits(path, &chain, "new", "refs/heads/main", &chain[1], false)
+            .await
+            .unwrap();
+    assert_eq!(blocked.blocked_reason, Some(Reason::ActiveOperation));
+    assert!(blocked.recovery.is_some());
+    std::fs::remove_dir(path.join(".git/rebase-merge")).unwrap();
+    git(&["checkout", "--detach"], path);
+    let blocked =
+        crate::git::squash_commits(path, &chain, "new", "refs/heads/main", &chain[1], false)
+            .await
+            .unwrap();
+    assert_eq!(blocked.blocked_reason, Some(Reason::DetachedHead));
+    git(&["checkout", "main"], path);
+    let wt_parent = tempfile::tempdir().unwrap();
+    let wt = wt_parent.path().join("linked");
+    git(
+        &["worktree", "add", "-b", "linked", wt.to_str().unwrap()],
+        path,
+    );
+    git(&["checkout", "--ignore-other-worktrees", "main"], &wt);
+    let blocked =
+        crate::git::squash_commits(path, &chain, "new", "refs/heads/main", &chain[1], false)
+            .await
+            .unwrap();
+    assert_eq!(blocked.blocked_reason, Some(Reason::CheckedOutBranch));
+    git(&["checkout", "linked"], &wt);
+    let result =
+        crate::git::squash_commits(&wt, &chain, "new", "refs/heads/linked", &chain[1], false)
+            .await
+            .unwrap();
+    assert!(result.ok, "{result:?}");
+    assert_eq!(git_output(&["rev-parse", "main"], path), chain[1]);
+    let unborn = tempfile::tempdir().unwrap();
+    git(&["init", "-b", "main"], unborn.path());
+    let blocked = crate::git::squash_commits(
+        unborn.path(),
+        &chain,
+        "new",
+        "refs/heads/main",
+        &chain[1],
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(blocked.blocked_reason, Some(Reason::DetachedHead));
+}
+
+#[tokio::test]
+async fn squash_commits_pending_revert_preserves_conflict_state_without_writes() {
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let root = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "second version\n").unwrap();
+    git(&["commit", "-am", "second"], path);
+    let second = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "third version\n").unwrap();
+    git(&["commit", "-am", "third"], path);
+    let tip = git_output(&["rev-parse", "HEAD"], path);
+    let revert = Command::new("git")
+        .args(["revert", "--no-edit", &second])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(!revert.status.success());
+    let repo = git2::Repository::open(path).unwrap();
+    assert_eq!(repo.state(), git2::RepositoryState::Revert);
+    let index = std::fs::read(repo.path().join("index")).unwrap();
+    let worktree = std::fs::read(path.join("README.md")).unwrap();
+    let revert_head = std::fs::read(repo.path().join("REVERT_HEAD")).unwrap();
+    let objects = squash_object_count(path);
+    let blocked =
+        crate::git::squash_commits(path, &[root, second], "new", "refs/heads/main", &tip, false)
+            .await
+            .unwrap();
+    assert_eq!(
+        blocked.blocked_reason,
+        Some(crate::git::GitBlockReason::ActiveOperation)
+    );
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), tip);
+    assert_eq!(std::fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(std::fs::read(path.join("README.md")).unwrap(), worktree);
+    assert_eq!(
+        std::fs::read(repo.path().join("REVERT_HEAD")).unwrap(),
+        revert_head
+    );
+    assert_eq!(squash_object_count(path), objects);
+}
+
+#[tokio::test]
+async fn squash_commits_unsafe_history_and_guard_inspection_fail_closed() {
+    for guard in [
+        "replace",
+        "grafts",
+        "shallow",
+        "unreadable-grafts",
+        "missing-parent",
+    ] {
+        let dir = make_temp_repo();
+        let path = dir.path();
+        let chain = squash_chain(path, 3);
+        match guard {
+            "replace" => git(&["replace", &chain[0], &chain[1]], path),
+            "grafts" => {
+                std::fs::create_dir_all(path.join(".git/info")).unwrap();
+                std::fs::write(path.join(".git/info/grafts"), format!("{}\n", chain[0])).unwrap();
+            }
+            "unreadable-grafts" => {
+                std::fs::create_dir_all(path.join(".git/info/grafts")).unwrap();
+            }
+            "shallow" => {
+                std::fs::write(path.join(".git/shallow"), format!("{}\n", chain[0])).unwrap();
+            }
+            "missing-parent" => {
+                let hash = &chain[0];
+                std::fs::remove_file(path.join(".git/objects").join(&hash[..2]).join(&hash[2..]))
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let result = crate::git::squash_commits(
+            path,
+            &chain[1..],
+            "new",
+            "refs/heads/main",
+            &chain[2],
+            false,
+        )
+        .await;
+        if guard == "unreadable-grafts" {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap().blocked_reason,
+                Some(crate::git::GitBlockReason::UnsupportedHistory)
+            );
+        }
+        assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[2]);
+    }
+}
+
+#[test]
+fn squash_commits_final_publish_blocks_late_git_operations() {
+    use super::commit_message_rewrite::{publish_checked_ref, snapshot_branch, RewriteFailure};
+    use crate::git::GitBlockReason as Reason;
+
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let root = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "second version\n").unwrap();
+    git(&["commit", "-am", "second"], path);
+    let second = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "third version\n").unwrap();
+    git(&["commit", "-am", "third"], path);
+    let tip = git_output(&["rev-parse", "HEAD"], path);
+
+    let repo = git2::Repository::open(path).unwrap();
+    let captured = snapshot_branch(&repo).unwrap();
+    let revert = Command::new("git")
+        .args(["revert", "--no-edit", &second])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(!revert.status.success());
+    assert_eq!(repo.state(), git2::RepositoryState::Revert);
+    let index = std::fs::read(repo.path().join("index")).unwrap();
+    let worktree = std::fs::read(path.join("README.md")).unwrap();
+    let revert_head = std::fs::read(repo.path().join("REVERT_HEAD")).unwrap();
+
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&root).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(Reason::ActiveOperation, _))
+    ));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), tip);
+    assert_eq!(std::fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(std::fs::read(path.join("README.md")).unwrap(), worktree);
+    assert_eq!(
+        std::fs::read(repo.path().join("REVERT_HEAD")).unwrap(),
+        revert_head
+    );
+
+    git(&["revert", "--abort"], path);
+    let captured = snapshot_branch(&repo).unwrap();
+    let index_lock = repo.path().join("index.lock");
+    std::fs::write(&index_lock, b"external lock").unwrap();
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&root).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(Reason::ActiveOperation, _))
+    ));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), tip);
+    assert_eq!(std::fs::read(&index_lock).unwrap(), b"external lock");
+    std::fs::remove_file(index_lock).unwrap();
+}
+
+#[test]
+fn squash_commits_final_cas_rejects_independent_tip_and_head_writers() {
+    use super::commit_message_rewrite::{publish_checked_ref, snapshot_branch, RewriteFailure};
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let chain = squash_chain(path, 3);
+    let repo = git2::Repository::open(path).unwrap();
+    let captured = snapshot_branch(&repo).unwrap();
+    git(&["update-ref", "refs/heads/main", &chain[1]], path);
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&chain[0]).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(
+            crate::git::GitBlockReason::StaleRef,
+            _
+        ))
+    ));
+    assert_eq!(git_output(&["rev-parse", "main"], path), chain[1]);
+    let captured = snapshot_branch(&repo).unwrap();
+    git(&["checkout", "-b", "independent"], path);
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&chain[0]).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(
+            crate::git::GitBlockReason::StaleRef,
+            _
+        ))
+    ));
+    assert_eq!(
+        git_output(&["symbolic-ref", "HEAD"], path),
+        "refs/heads/independent"
+    );
+    assert_eq!(git_output(&["rev-parse", "main"], path), chain[1]);
+}
+
+#[tokio::test]
+async fn squash_commits_missing_identity_cannot_be_satisfied_by_host_globals_or_write_objects() {
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let chain = squash_chain(path, 2);
+    // Empty local values mask every lower-priority global/system identity without process env races.
+    git(&["config", "user.name", ""], path);
+    git(&["config", "user.email", ""], path);
+    let before = squash_object_count(path);
+    let index = std::fs::read(path.join(".git/index")).unwrap();
+    let error =
+        crate::git::squash_commits(path, &chain, "new", "refs/heads/main", &chain[1], false)
+            .await
+            .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("git user not configured (set user.name and user.email)"));
+    assert_eq!(squash_object_count(path), before);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[1]);
+    assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn squash_commits_publication_uncertainty_does_not_claim_candidate_oids_installed() {
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let chain = squash_chain(path, 3);
+    let index = std::fs::read(path.join(".git/index")).unwrap();
+    // Explicit unit-only fault injection at transaction commit, after the real ODB writes/locks.
+    super::commit_message_rewrite::inject_publication_failure();
+    let result = crate::git::squash_commits(
+        path,
+        &chain[..2],
+        "new",
+        "refs/heads/main",
+        &chain[2],
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(!result.ok);
+    assert_eq!(
+        result.blocked_reason,
+        Some(crate::git::GitBlockReason::PublicationUncertain)
+    );
+    assert!(result.new_target_oid.is_none());
+    assert!(result.new_head_oid.is_none());
+    assert_eq!(result.old_target_oid.as_ref(), Some(&chain[1]));
+    assert_eq!(result.old_head_oid.as_ref(), Some(&chain[2]));
+    assert!(result
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("candidate tip="));
+    assert!(result
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("candidate squash="));
+    assert!(result
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("observed HEAD="));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[2]);
+    assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
 }

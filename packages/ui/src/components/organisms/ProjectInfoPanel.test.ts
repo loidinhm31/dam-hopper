@@ -108,10 +108,17 @@ vi.mock("@/api/queries.js", () => ({
   useAddWorktree: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
   useRemoveWorktree: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
   resolveTargetOwner: vi.fn(() => undefined),
-  useGitPrepareLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
-  useGitPublishLeasedPush: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
+  useGitPrepareLeasedPush: vi.fn(() => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  })),
+  useGitPublishLeasedPush: vi.fn(() => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  })),
 }));
 
+const cancelSshRetry = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
   useGitWithSshRetry: vi.fn(() => ({
     passphraseDialogProps: {
@@ -122,6 +129,7 @@ vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
       error: undefined,
       availableKeys: [],
     },
+    cancel: cancelSshRetry,
     executeWithRetry: vi.fn(),
   })),
 }));

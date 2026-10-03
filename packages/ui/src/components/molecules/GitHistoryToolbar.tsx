@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useId } from "react";
 import {
   AlertCircle,
   ChevronLeft,
@@ -41,6 +41,12 @@ export interface GitHistoryToolbarProps {
   notice?: string | null;
   onDismissNotice?: () => void;
 
+  squashCount?: number;
+  squashDisabledReason?: string;
+  squashBusy?: boolean;
+  onSquash?: () => void;
+  onClearSquashSelection?: () => void;
+  focusRef?: React.Ref<HTMLDivElement>;
   className?: string;
   compact?: boolean;
 }
@@ -77,9 +83,16 @@ export function GitHistoryToolbar({
 
   className,
   compact = false,
+  squashCount = 0,
+  squashDisabledReason,
+  squashBusy = false,
+  onSquash,
+  onClearSquashSelection,
+  focusRef,
 }: GitHistoryToolbarProps) {
   const isSearchDisabled = disabled || isLoading;
   const isPaginationDisabled = disabled || isLoading || isRefreshing;
+  const squashHelpId = useId();
 
   const countDisplay =
     logsCount === 0
@@ -87,7 +100,15 @@ export function GitHistoryToolbar({
       : `${offset + 1}–${offset + logsCount} commits`;
 
   return (
-    <div className={cn("flex flex-col gap-2", className)}>
+    <div
+      ref={focusRef}
+      tabIndex={-1}
+      aria-label="Git history actions"
+      className={cn(
+        "flex flex-col gap-2 focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]",
+        className,
+      )}
+    >
       {notice ? (
         <div
           role="status"
@@ -110,6 +131,40 @@ export function GitHistoryToolbar({
         </div>
       ) : null}
 
+      {onSquash && (
+        <div className="flex flex-wrap items-center gap-2 text-xs leading-relaxed text-[var(--color-text)]">
+          <span role="status" aria-live="polite">
+            {squashCount} selected
+          </span>
+          {squashCount > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-11"
+              disabled={squashBusy}
+              onClick={onClearSquashSelection}
+            >
+              Clear selection
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="danger"
+            className="min-h-11"
+            disabled={disabled || squashBusy || Boolean(squashDisabledReason)}
+            aria-describedby={squashHelpId}
+            onClick={onSquash}
+          >
+            {squashCount >= 2
+              ? `Squash ${squashCount} commits`
+              : "Squash commits"}
+          </Button>
+          <p id={squashHelpId} className="basis-full break-words">
+            {squashDisabledReason ||
+              "Select at least two parent-contiguous commits on this page."}
+          </p>
+        </div>
+      )}
       <div
         className={cn(
           "flex items-center gap-2 flex-wrap min-w-0 justify-between",
@@ -213,7 +268,10 @@ export function GitHistoryToolbar({
             className="h-7 w-7 p-0"
           >
             <RefreshCw
-              className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
+              className={cn(
+                "h-3.5 w-3.5 motion-reduce:animate-none",
+                isRefreshing && "animate-spin",
+              )}
             />
           </Button>
         </div>

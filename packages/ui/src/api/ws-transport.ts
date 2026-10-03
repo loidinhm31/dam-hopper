@@ -520,7 +520,10 @@ function channelToEndpoint(
       if (d.ref !== undefined) params.set("ref", d.ref);
       setWorktreePath(params, d);
       if (d.root !== undefined) params.set("root", d.root);
-      if (typeof d.messageQuery === "string" && d.messageQuery.trim().length > 0) {
+      if (
+        typeof d.messageQuery === "string" &&
+        d.messageQuery.trim().length > 0
+      ) {
         params.set("messageQuery", d.messageQuery.trim());
       }
       const qs = params.toString();
@@ -1122,6 +1125,31 @@ function channelToEndpoint(
         },
       };
     }
+    case "git:squash": {
+      const d = data as {
+        project: string;
+        hashes: string[];
+        message: string;
+        expectedBranch: string;
+        expectedHeadOid: string;
+        allowSignatureRemoval?: boolean;
+        worktreePath?: string;
+        root?: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/squash`,
+        body: {
+          hashes: d.hashes,
+          message: d.message,
+          expectedBranch: d.expectedBranch,
+          expectedHeadOid: d.expectedHeadOid,
+          allowSignatureRemoval: d.allowSignatureRemoval,
+          worktreePath: d.worktreePath,
+          root: d.root,
+        },
+      };
+    }
     case "git:commitFileDiff": {
       const d = data as {
         project: string;
@@ -1482,21 +1510,45 @@ function channelToEndpoint(
     case "advisor:settings:update":
       return { method: "PATCH", url: "/api/advisor/settings", body: data };
     case "advisor:history:refresh":
-      return { method: "POST", url: "/api/advisor/history/refresh", body: data ?? {} };
+      return {
+        method: "POST",
+        url: "/api/advisor/history/refresh",
+        body: data ?? {},
+      };
     case "advisor:history:summary":
-      return { method: "POST", url: "/api/advisor/history/summary", body: data };
+      return {
+        method: "POST",
+        url: "/api/advisor/history/summary",
+        body: data,
+      };
     case "advisor:history:page":
       return { method: "POST", url: "/api/advisor/history/page", body: data };
     case "advisor:history:detail":
       return { method: "POST", url: "/api/advisor/history/detail", body: data };
     case "advisor:policy:current":
-      return { method: "POST", url: "/api/advisor/policy/current", body: data ?? {} };
+      return {
+        method: "POST",
+        url: "/api/advisor/policy/current",
+        body: data ?? {},
+      };
     case "advisor:evaluations:list":
-      return { method: "POST", url: "/api/advisor/evaluations/list", body: data ?? {} };
+      return {
+        method: "POST",
+        url: "/api/advisor/evaluations/list",
+        body: data ?? {},
+      };
     case "advisor:evaluations:read":
-      return { method: "POST", url: "/api/advisor/evaluations/read", body: data };
+      return {
+        method: "POST",
+        url: "/api/advisor/evaluations/read",
+        body: data,
+      };
     case "advisor:evaluations:compare":
-      return { method: "POST", url: "/api/advisor/evaluations/compare", body: data };
+      return {
+        method: "POST",
+        url: "/api/advisor/evaluations/compare",
+        body: data,
+      };
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }
@@ -1599,7 +1651,6 @@ export class WsTransport implements Transport {
   >();
   /** sub_id → set of event callbacks */
   private fsEventListeners = new Map<number, Set<(ev: FsEventDto) => void>>();
-
 
   // ── FS read state ─────────────────────────────────────────────────────────
   private pendingFsReads = new Map<
@@ -2653,7 +2704,6 @@ export class WsTransport implements Transport {
             });
             break;
           }
-
 
           default: {
             const payload = msg.payload ?? msg;

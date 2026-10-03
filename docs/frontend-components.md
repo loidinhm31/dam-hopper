@@ -149,6 +149,29 @@ date/hash rows, keyboard selection, and commit context-menu actions. Surfaces
 can supply `emptyMessage`. History mutations and dialogs remain surface-owned;
 the hook exposes `effectiveScopeKey` for parent reset boundaries.
 
+### Consecutive-commit squash
+
+`useGitHistoryView` also owns transient checkbox selection bounded to the loaded
+page. `git-squash-selection.ts` checks actual parent continuity and produces
+oldest-first exact IDs; filtered gaps are rejected. Selection clears on effective
+owner/root/branch/generation, applied-query, or page changes. Rows keep detail
+click/Enter and context-menu behavior independent of checkbox click/Space.
+
+`GitHistoryActions` composes `useGitSquash`; both `WorkspaceGitPanel` and `GitPage`
+render `GitSquashFlow`. Its modal `GitSquashDialog` loads full-message snapshots,
+preserves oldest-first bodies in an editable draft, requires coherent branch/tip
+snapshots and explicit signature-removal consent, and blocks dismissal while a
+local rewrite is pending. Known failures retain the draft; uncertain outcomes
+disable automatic retry and never create a success receipt. Closing restores a
+live launcher or surviving toolbar without leaving the app input-locked.
+
+Squash requires an available connected target on the checked-out local branch,
+and rejects selected or rewritten-descendant merges. The success receipt offers
+**Publish rewritten branch** through a separate leased confirmation. Publication
+uses the same history owner/root and verified new branch tip—not Git-page bulk
+root selection. Nothing pushes automatically. Scope/generation changes fence
+late preparation, rewrite, publication, and SSH-retry completions.
+
 See the [Git-history search architecture](./architecture/git-history-search.md)
 for transport, query, and persistence details and the
 [Phase 04 plan](../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).

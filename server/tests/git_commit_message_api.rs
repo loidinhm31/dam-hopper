@@ -10,8 +10,8 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::build_router,
     config::{
-        DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType,
-        ServerConfig, WorkspaceInfo,
+        DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, ServerConfig,
+        WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
     diagnostics::DiagnosticStore,
@@ -160,7 +160,9 @@ async fn test_api_paired_get_and_edit_commit_message() {
     let res = app.router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let snap: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(snap["message"], "initial commit\n");
     assert_eq!(snap["branch"], "refs/heads/main");
@@ -184,7 +186,9 @@ async fn test_api_paired_get_and_edit_commit_message() {
     let edit_res = app.router.clone().oneshot(edit_req).await.unwrap();
     assert_eq!(edit_res.status(), StatusCode::OK);
 
-    let edit_bytes = axum::body::to_bytes(edit_res.into_body(), usize::MAX).await.unwrap();
+    let edit_bytes = axum::body::to_bytes(edit_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let action_res: Value = serde_json::from_slice(&edit_bytes).unwrap();
     assert_eq!(action_res["ok"], true);
 
@@ -209,7 +213,9 @@ async fn test_api_paired_get_and_edit_commit_message() {
     let stale_res = app.router.clone().oneshot(stale_req).await.unwrap();
     assert_eq!(stale_res.status(), StatusCode::OK);
 
-    let stale_bytes = axum::body::to_bytes(stale_res.into_body(), usize::MAX).await.unwrap();
+    let stale_bytes = axum::body::to_bytes(stale_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let stale_json: Value = serde_json::from_slice(&stale_bytes).unwrap();
     assert_eq!(stale_json["ok"], false);
     assert_eq!(stale_json["blockedReason"], "stale-ref");
@@ -232,7 +238,11 @@ async fn test_api_edit_commit_message_preserves_dirty_worktree() {
     std::fs::write(app.project_path.join("unstaged.txt"), "unstaged modified\n").unwrap();
 
     // Untracked change
-    std::fs::write(app.project_path.join("untracked.txt"), "untracked content\n").unwrap();
+    std::fs::write(
+        app.project_path.join("untracked.txt"),
+        "untracked content\n",
+    )
+    .unwrap();
     let new_tip = git_output(&["rev-parse", "HEAD"], &app.project_path);
     let snap_req = Request::builder()
         .method("GET")
@@ -241,7 +251,9 @@ async fn test_api_edit_commit_message_preserves_dirty_worktree() {
         .unwrap();
 
     let snap_res = app.router.clone().oneshot(snap_req).await.unwrap();
-    let snap_bytes = axum::body::to_bytes(snap_res.into_body(), usize::MAX).await.unwrap();
+    let snap_bytes = axum::body::to_bytes(snap_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let snap: Value = serde_json::from_slice(&snap_bytes).unwrap();
 
     let edit_body = json!({
@@ -259,7 +271,9 @@ async fn test_api_edit_commit_message_preserves_dirty_worktree() {
         .unwrap();
 
     let edit_res = app.router.clone().oneshot(edit_req).await.unwrap();
-    let edit_bytes = axum::body::to_bytes(edit_res.into_body(), usize::MAX).await.unwrap();
+    let edit_bytes = axum::body::to_bytes(edit_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let action_res: Value = serde_json::from_slice(&edit_bytes).unwrap();
     assert_eq!(action_res["ok"], true);
 
@@ -288,10 +302,89 @@ async fn test_api_commit_message_unknown_project_returns_not_found() {
     let app = setup_test_app();
     let req = Request::builder()
         .method("GET")
-        .uri("/api/git/non-existent-project/commit/abcdef1234567890abcdef1234567890abcdef12/message")
+        .uri(
+            "/api/git/non-existent-project/commit/abcdef1234567890abcdef1234567890abcdef12/message",
+        )
         .body(Body::empty())
         .unwrap();
 
     let res = app.router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_api_message_reads_do_not_contend_with_ref_locks() {
+    let app = setup_test_app();
+    let head_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    let repo = git2::Repository::open(&app.project_path).unwrap();
+    let mut transaction = repo.transaction().unwrap();
+    transaction.lock_ref("HEAD").unwrap();
+    transaction.lock_ref("refs/heads/main").unwrap();
+
+    // Concurrent draft reads are observational; only the later mutation acquires write locks.
+    let read = || {
+        app.router.clone().oneshot(
+            Request::builder()
+                .uri(format!("/api/git/test-repo/commit/{head_oid}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+    let (first, second) = tokio::join!(read(), read());
+    for response in [first.unwrap(), second.unwrap()] {
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(snapshot["message"], "initial commit\n");
+        assert_eq!(snapshot["branch"], "refs/heads/main");
+        assert_eq!(snapshot["headOid"], head_oid);
+    }
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], &app.project_path),
+        head_oid
+    );
+}
+
+#[tokio::test]
+async fn test_api_message_preserves_raw_body_whitespace_unicode_and_nul() {
+    let app = setup_test_app();
+    let repo = git2::Repository::open(&app.project_path).unwrap();
+    let odb = repo.odb().unwrap();
+    let original = odb.read(repo.head().unwrap().target().unwrap()).unwrap();
+    let boundary = original
+        .data()
+        .windows(2)
+        .position(|bytes| bytes == b"\n\n")
+        .unwrap()
+        + 2;
+    let message = "\n\nSubject Đặng\n\nBody before\0after NUL  \nTrailer: giữ nguyên\n\n";
+    let mut payload = original.data()[..boundary].to_vec();
+    payload.extend_from_slice(message.as_bytes());
+    let oid = odb.write(git2::ObjectType::Commit, &payload).unwrap();
+    repo.find_reference("refs/heads/main")
+        .unwrap()
+        .set_target(oid, "raw message fixture")
+        .unwrap();
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/git/test-repo/commit/{oid}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(snapshot["message"], message);
+    assert_eq!(snapshot["headOid"], oid.to_string());
+    assert_eq!(repo.head().unwrap().target(), Some(oid));
 }

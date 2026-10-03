@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
-use rusqlite::{params, params_from_iter, types::Value, OptionalExtension};
+use rusqlite::{OptionalExtension, params, params_from_iter, types::Value};
 use serde::Serialize;
 
 use super::{
     privacy::HmacDigest,
     store::{TelemetryStore, TelemetryStoreError},
     types::{
-        AgentRole, AgentRunSummary, AgentTokenQuality, CodexModel, CodexVersion, SafeIdentifier,
-        TokenCounterSemantic, UsageQuery, MAX_TOKEN_TOTAL,
+        AgentRole, AgentRunSummary, AgentTokenQuality, CodexModel, CodexVersion, MAX_TOKEN_TOTAL,
+        SafeIdentifier, TokenCounterSemantic, UsageQuery,
     },
 };
 
@@ -120,13 +120,25 @@ pub fn agent_root_aggregates(
     store: &TelemetryStore,
     root_ids: &[HmacDigest],
 ) -> Result<Vec<AgentRootAggregate>, TelemetryStoreError> {
-    let mut result = Vec::new();
-    for root_id in root_ids {
-        let Some(summary) = agent_run_summary(store, root_id)? else {
-            continue;
-        };
-        result.push(AgentRootAggregate {
-            root_run_id: root_id.clone(),
+    if root_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = store.open_read()?;
+    let placeholders = question_marks(root_ids.len());
+    let sql = format!(
+        "SELECT {SESSION_COLUMNS} FROM codex_sessions WHERE session_fingerprint IN ({placeholders})"
+    );
+    let values = root_ids
+        .iter()
+        .cloned()
+        .map(String::from)
+        .map(Value::Text)
+        .collect::<Vec<_>>();
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let summary = session_from_row(row)?;
+        Ok(AgentRootAggregate {
+            root_run_id: summary.run_id,
             child_count: 0,
             token_quality: summary.token_quality,
             input_tokens: summary.input_tokens,
@@ -135,9 +147,10 @@ pub fn agent_root_aggregates(
             reasoning_tokens: summary.reasoning_tokens,
             response_count: summary.response_count,
             duration_ms_sum: summary.duration_ms_sum,
-        });
-    }
-    Ok(result)
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(TelemetryStoreError::Sqlite)
 }
 
 pub fn agent_executor_aggregates(

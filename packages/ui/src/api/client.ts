@@ -1,5 +1,9 @@
 // Transport-agnostic API client — supports explicit owner-bound createApiClient and legacy ambient delegation.
-import { getTransport, type Transport, type TransportInvokeOptions } from "./transport.js";
+import {
+  getTransport,
+  type Transport,
+  type TransportInvokeOptions,
+} from "./transport.js";
 import type {
   AdvisorStatusDto,
   AdvisorSettingsDto,
@@ -1834,6 +1838,11 @@ export interface EditCommitMessageInput {
   allowSignatureRemoval?: boolean;
 }
 
+export interface SquashCommitsInput extends EditCommitMessageInput {
+  /** Exact full OIDs in parent-chain order, oldest first. */
+  hashes: string[];
+}
+
 export interface PublishSnapshot {
   branch: string;
   sourceOid: string;
@@ -2302,6 +2311,16 @@ export function createApiClient(
         transport.invoke<GitActionResult>("git:editCommitMessage", {
           ...toWireTarget(target),
           hash,
+          ...input,
+          root,
+        }),
+      squash: (
+        target: ProjectTargetInput,
+        input: SquashCommitsInput,
+        root?: string,
+      ) =>
+        transport.invoke<GitActionResult>("git:squash", {
+          ...toWireTarget(target),
           ...input,
           root,
         }),
@@ -2949,7 +2968,11 @@ export function createApiClient(
     },
     advisor: {
       status: (options?: TransportInvokeOptions) =>
-        transport.invoke<AdvisorStatusDto>("advisor:status", undefined, options),
+        transport.invoke<AdvisorStatusDto>(
+          "advisor:status",
+          undefined,
+          options,
+        ),
       updateSettings: (
         body: AdvisorSettingsUpdateDto,
         options?: TransportInvokeOptions,
@@ -2995,10 +3018,7 @@ export function createApiClient(
           body,
           options,
         ),
-      policyCurrent: (
-        body?: unknown,
-        options?: TransportInvokeOptions,
-      ) =>
+      policyCurrent: (body?: unknown, options?: TransportInvokeOptions) =>
         transport.invoke<PolicyReadCurrentResultDto>(
           "advisor:policy:current",
           body,
@@ -3063,10 +3083,7 @@ export interface ApiClient {
   git: {
     fetch: (targets?: ProjectTargetInput[]) => Promise<GitOpResult[]>;
     pull: (targets?: ProjectTargetInput[]) => Promise<GitOpResult[]>;
-    push: (
-      target: ProjectTargetInput,
-      root?: string,
-    ) => Promise<GitOpResult>;
+    push: (target: ProjectTargetInput, root?: string) => Promise<GitOpResult>;
     prepareLeasedPush: (
       target: ProjectTargetInput,
       root?: string,
@@ -3198,6 +3215,11 @@ export interface ApiClient {
       target: ProjectTargetInput,
       hash: string,
       input: EditCommitMessageInput,
+      root?: string,
+    ) => Promise<GitActionResult>;
+    squash: (
+      target: ProjectTargetInput,
+      input: SquashCommitsInput,
       root?: string,
     ) => Promise<GitActionResult>;
     commitFileDiff: (
@@ -3552,7 +3574,6 @@ export interface ApiClient {
     ) => Promise<EvaluationsCompareResultDto>;
   };
 }
-
 
 interface FsTransportSeam {
   fsRead?: (...args: unknown[]) => unknown;

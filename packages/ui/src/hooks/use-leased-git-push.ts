@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ComponentProps } from "react";
 import {
   normalizeProjectTarget,
@@ -15,6 +21,7 @@ import {
 } from "@/api/queries.js";
 import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import type { PassphraseDialog } from "@/components/organisms/PassphraseDialog.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
 
 export type LeasedPushState =
   | "closed"
@@ -43,15 +50,29 @@ export interface UseLeasedGitPushResult {
 export function useLeasedGitPush(
   target: ProjectTargetInput,
   root?: string,
+  options?: {
+    expectedSource?: { branch: string; sourceOid: string };
+    scopeFence?: string;
+  },
 ): UseLeasedGitPushResult {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
-  const scopeKey = `${projectTargetCacheKey(normalized)}::${root ?? "."}`;
+  const connection = useConnectionSnapshot(normalized.profileId ?? "");
+  const expectedSource = options?.expectedSource;
+  const scopeKey = JSON.stringify([
+    projectTargetCacheKey(normalized),
+    root ?? ".",
+    connection?.owner.generation ?? owner?.generation,
+    expectedSource?.branch,
+    expectedSource?.sourceOid,
+    options?.scopeFence,
+  ]);
 
   const [state, setState] = useState<LeasedPushState>("closed");
   const [preview, setPreview] = useState<PublishPreview | null>(null);
   const [result, setResult] = useState<PublishResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renderScope, setRenderScope] = useState(scopeKey);
   const frozenSnapshotRef = useRef<PublishSnapshot | null>(null);
 
   const activeScopeRef = useRef(scopeKey);
@@ -64,31 +85,52 @@ export function useLeasedGitPush(
     passphraseDialogProps,
     statusMessage: sshStatus,
     executeLeasedWithRetry,
+    cancel: cancelSshRetry,
   } = useGitWithSshRetry();
 
-  // Reset state and invalidate in-flight operations when project/worktree/root changes
-  useEffect(() => {
-    if (activeScopeRef.current !== scopeKey) {
-      activeScopeRef.current = scopeKey;
-      activeGenerationRef.current += 1;
-      frozenSnapshotRef.current = null;
-      setState("closed");
-      setPreview(null);
-      setResult(null);
-      setError(null);
-    }
-  }, [scopeKey]);
-
-  const close = useCallback(() => {
-    activeGenerationRef.current += 1;
-    frozenSnapshotRef.current = null;
+  // Reset presentation during render without mutating refs from an uncommitted render.
+  if (renderScope !== scopeKey) {
+    setRenderScope(scopeKey);
     setState("closed");
     setPreview(null);
     setResult(null);
     setError(null);
-  }, []);
+  }
+  // Commit the operation fence before the new surface can receive events.
+  useLayoutEffect(() => {
+    if (activeScopeRef.current !== scopeKey) {
+      activeScopeRef.current = scopeKey;
+      activeGenerationRef.current += 1;
+      frozenSnapshotRef.current = null;
+      cancelSshRetry();
+    }
+  }, [cancelSshRetry, scopeKey]);
+  useEffect(
+    () => () => {
+      activeGenerationRef.current += 1;
+      frozenSnapshotRef.current = null;
+      cancelSshRetry();
+    },
+    [cancelSshRetry],
+  );
+
+  const close = useCallback(() => {
+    activeGenerationRef.current += 1;
+    frozenSnapshotRef.current = null;
+    cancelSshRetry();
+    setState("closed");
+    setPreview(null);
+    setResult(null);
+    setError(null);
+  }, [cancelSshRetry]);
 
   const prepare = useCallback(async () => {
+    if (
+      activeScopeRef.current !== scopeKey ||
+      state === "preparing" ||
+      state === "publishing"
+    )
+      return;
     const generation = ++activeGenerationRef.current;
     const currentScope = scopeKey;
 
@@ -99,8 +141,16 @@ export function useLeasedGitPush(
     frozenSnapshotRef.current = null;
 
     try {
-      const res = await executeLeasedWithRetry(owner, () =>
-        prepareMutation.mutateAsync(),
+      const isCurrent = () =>
+        generation === activeGenerationRef.current &&
+        currentScope === activeScopeRef.current;
+      const res = await executeLeasedWithRetry(
+        owner,
+        () => {
+          if (!isCurrent()) throw new Error("SSH_CANCELLED");
+          return prepareMutation.mutateAsync();
+        },
+        isCurrent,
       );
 
       // Ignore completions if scope changed or closed
@@ -114,6 +164,17 @@ export function useLeasedGitPush(
       setPreview(res);
 
       if (res.status === "ready") {
+        if (
+          expectedSource &&
+          (res.snapshot.branch !== expectedSource.branch ||
+            res.snapshot.sourceOid !== expectedSource.sourceOid)
+        ) {
+          setState("blocked");
+          setError(
+            "Local history changed after squash. Inspect current history before publishing.",
+          );
+          return;
+        }
         if (res.alreadyCurrent) {
           setState("already-current");
         } else {
@@ -139,11 +200,25 @@ export function useLeasedGitPush(
         setError(msg || "Failed to prepare leased push");
       }
     }
-  }, [executeLeasedWithRetry, owner, prepareMutation, scopeKey]);
+  }, [
+    executeLeasedWithRetry,
+    owner,
+    prepareMutation,
+    scopeKey,
+    state,
+    expectedSource,
+  ]);
 
   const publish = useCallback(async () => {
     const snapshot = frozenSnapshotRef.current;
-    if (!snapshot) return;
+    if (
+      !snapshot ||
+      activeScopeRef.current !== scopeKey ||
+      state !== "confirming"
+    )
+      return;
+    // Consume once before awaiting, including repeated clicks before React rerenders.
+    frozenSnapshotRef.current = null;
 
     const generation = ++activeGenerationRef.current;
     const currentScope = scopeKey;
@@ -152,8 +227,16 @@ export function useLeasedGitPush(
     setError(null);
 
     try {
-      const res = await executeLeasedWithRetry(owner, () =>
-        publishMutation.mutateAsync(snapshot),
+      const isCurrent = () =>
+        generation === activeGenerationRef.current &&
+        currentScope === activeScopeRef.current;
+      const res = await executeLeasedWithRetry(
+        owner,
+        () => {
+          if (!isCurrent()) throw new Error("SSH_CANCELLED");
+          return publishMutation.mutateAsync(snapshot);
+        },
+        isCurrent,
       );
 
       if (
@@ -198,13 +281,14 @@ export function useLeasedGitPush(
 
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === "SSH_CANCELLED" || msg === "SSH_CANCELLED_STALE_CONNECTION") {
+        frozenSnapshotRef.current = snapshot;
         setState("confirming");
       } else {
         setState("unknown");
         setError(msg || "Failed to publish leased push");
       }
     }
-  }, [executeLeasedWithRetry, owner, publishMutation, scopeKey]);
+  }, [executeLeasedWithRetry, owner, publishMutation, scopeKey, state]);
 
   return {
     state,

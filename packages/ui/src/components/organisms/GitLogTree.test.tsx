@@ -1,4 +1,7 @@
+// @vitest-environment jsdom
 import * as React from "react";
+import { act, useState } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { GitLogEntry } from "@/api/client.js";
@@ -121,3 +124,79 @@ describe("GitLogTree presentation modes", () => {
     expect(html).toContain("No commits found.");
   });
 });
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+describe.each(["graph", "list"] as const)(
+  "independent checkbox channel in %s rows",
+  (presentation) => {
+    it("keeps click and nested Space separate from row detail selection and preserves row keyboard/context menu", async () => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      function Harness() {
+        const [selected, setSelected] = useState<GitLogEntry | null>(null);
+        const [hashes, setHashes] = useState<string[]>([]);
+        return (
+          <>
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={selected?.hash}
+              onSelectCommit={setSelected}
+              squashSelectedHashes={hashes}
+              onToggleSquashCommit={(hash) =>
+                setHashes((old) =>
+                  old.includes(hash)
+                    ? old.filter((oid) => oid !== hash)
+                    : [...old, hash],
+                )
+              }
+            />
+            <output aria-label="Detail hash">{selected?.hash}</output>
+          </>
+        );
+      }
+      try {
+        await act(async () => root.render(<Harness />));
+        const input = container.querySelector<HTMLInputElement>(
+          'input[type="checkbox"]',
+        )!;
+        const row = container.querySelector("tbody tr")!;
+        const detail = container.querySelector("output")!;
+        await act(async () => input.click());
+        expect(input.checked).toBe(true);
+        expect(detail.textContent).toBe("");
+        await act(async () =>
+          input.dispatchEvent(
+            new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+          ),
+        );
+        expect(detail.textContent).toBe("");
+        await act(async () =>
+          row.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+          ),
+        );
+        expect(detail.textContent).toBe(sampleLogs[0].hash);
+        expect(input.checked).toBe(true);
+        const secondRow = container.querySelectorAll("tbody tr")[1];
+        await act(async () =>
+          secondRow.dispatchEvent(
+            new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+          ),
+        );
+        expect(detail.textContent).toBe(sampleLogs[1].hash);
+        await act(async () =>
+          row.dispatchEvent(
+            new MouseEvent("contextmenu", { bubbles: true, button: 2 }),
+          ),
+        );
+        expect(detail.textContent).toBe(sampleLogs[0].hash);
+        expect(input.checked).toBe(true);
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+      }
+    });
+  },
+);

@@ -1,0 +1,30 @@
+# Phase 08 Completion Receipt
+
+- **Project ID:** `882985d5cddedda38b07fb78c217bde1c6d19d81a0780758e0b7622e60096efa`
+- **Plan:** [Native Advisor and complete plugin-platform retirement](../261002-0246-native-advisor-migration/plan.md)
+- **Phase:** `phase-08` (Remove Evcrate plugin integration and release assets)
+- **Task Run ID:** `47f05280-c917-4174-8bd9-5d21bf2a9369`
+- **Consultation ID:** `dc0e10f9-3344-47de-8dfa-4c1bf82de4ea`
+- **Action ID:** `4d6bd1a8-03f2-4e8e-8a83-8f866575ec41`
+- **Episode ID:** `phase-08-finalization`
+- **Completion Revision:** 7
+- **Gate Status:** `completed`
+- **Evidence Revision:** 0
+- **Disposition:** `accept`
+- **Outcome Result:** `resolved`
+- **Git Commit:** `4709105d`
+- **Validation:**
+  - Dam-Hopper `cargo test advisor --manifest-path server/Cargo.toml`: 34 passed, 0 failed, 1,691 filtered
+  - Dam-Hopper `pnpm --filter @dam-hopper/ui test`: 2,206 passed, 0 failed across 293 test files
+  - Evcrate `npm run build`: prebuild, runtime brief, and TypeScript compilation completed
+  - Evcrate `npm run test:advisor-metrics`: 6 passed, 0 failed
+  - Evcrate `npm run test:advisor-controller`: 234 passed, 0 failed, 24 skipped (Windows platform gates)
+  - Evcrate `npm run test:protocol`: 53 passed, 0 failed
+  - Evcrate `npm run test:release`: 34 passed, 0 failed
+  - Evcrate `node --test tests/viewer/*.test.mjs`: 60 passed, 0 failed
+  - Scratch release output verification: 7 public release assets verified, zero plugin archives produced
+- **Retained Evidence:**
+  - [Tester Report](./tester-261002-1645-phase-08-plugin-removal.md)
+  - [Code Review Report](./code-review-261002-1700-phase-08-plugin-removal.md)
+  - [Project Manager Report](./project-manager-261002-1730-phase-08-plugin-removal.md)
+  - [Docs Manager Report](./docs-manager-261002-1730-phase-08-plugin-removal.md)

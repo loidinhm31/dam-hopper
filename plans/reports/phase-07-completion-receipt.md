@@ -1,0 +1,24 @@
+# Phase 07 Completion Receipt
+
+- **Project ID:** `882985d5cddedda38b07fb78c217bde1c6d19d81a0780758e0b7622e60096efa`
+- **Plan:** [Native Advisor and complete plugin-platform retirement](../261002-0246-native-advisor-migration/plan.md)
+- **Phase:** `phase-07` (Retire Linux runner and deliver safe manual uninstall)
+- **Task Run ID:** `1647ecae-b14e-4eae-9d00-8c4543522059`
+- **Consultation ID:** `e787664c-eadf-4a45-b54d-9a304dc420a4`
+- **Action ID:** `12916200-00d1-4aad-92aa-3aed4eea5b18`
+- **Episode ID:** `phase-07-finalization`
+- **Completion Revision:** 7
+- **Gate Status:** `completed`
+- **Evidence Revision:** 1
+- **Disposition:** `accept`
+- **Outcome Result:** `resolved`
+- **Git Commit:** `034da0c4`
+- **Validation:**
+  - `cargo test --manifest-path server/Cargo.toml`: 1,728 passed, 0 failed, 6 ignored across 55 suites (including dedicated `linux_release_native_phase07` test suite)
+  - `pnpm test:deploy`: 8/8 deployment journeys passed (clean install, upgrade rollback, crash recovery, security, reset smoke, web contract, format-2 migration, remove plugin platform)
+  - `pnpm --filter @dam-hopper/ui test`: 2,206 passed, 0 failed across 293 test files
+- **Retained Evidence:**
+  - [Tester Report](./tester-261002-1530-phase-07-linux-runner-validation.md)
+  - [Code Review Report](./code-review-261002-1520-phase-07-retire-linux-runner.md)
+  - [Project Manager Report](./project-manager-261002-1530-phase-07-linux-runner-retirement.md)
+  - [Docs Manager Report](./docs-manager-261002-1530-phase-07-linux-runner-retirement.md)
