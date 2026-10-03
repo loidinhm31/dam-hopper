@@ -77,14 +77,20 @@ function reduceSnapshotAlerts(
   alert?: HostResourceAlert | null,
   resourceAlerts?: HostResourceResourceAlert[],
 ): { versions: AlertVersion[]; unreadIds: string[] } {
-  const nextAlerts = [
+  const nextAlertsByIncident = new Map<string, PresentableAlert>();
+  for (const nextAlert of [
     ...(alert ? [alert] : []),
     ...(resourceAlerts ?? []),
-  ];
+  ]) {
+    if (nextAlert.incidentId) {
+      nextAlertsByIncident.set(nextAlert.incidentId, nextAlert);
+    }
+  }
+
   let versions = currentVersions;
   let unreadIds = currentUnreadIds;
 
-  for (const nextAlert of nextAlerts) {
+  for (const nextAlert of nextAlertsByIncident.values()) {
     const res = reduceAlert(versions, unreadIds, nextAlert);
     versions = res.versions;
     unreadIds = res.unreadIds;

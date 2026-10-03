@@ -14,6 +14,7 @@ pub enum PlatformRelayResult {
 #[derive(Debug)]
 pub enum PlatformRelayError {
     Unavailable(String),
+    #[cfg_attr(not(windows), allow(dead_code))]
     Security(String),
 }
 

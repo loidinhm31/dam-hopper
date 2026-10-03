@@ -188,6 +188,21 @@ async function triggerCognitoShortcut(code = "KeyB", key = "b"): Promise<void> {
   });
 }
 
+function findMediaRule(
+  rules: CSSRuleList,
+  predicate: (rule: CSSMediaRule) => boolean,
+): CSSMediaRule | null {
+  for (const rule of Array.from(rules)) {
+    if (rule instanceof CSSMediaRule && predicate(rule)) {
+      return rule;
+    }
+    if ("cssRules" in rule) {
+      const nested = findMediaRule((rule as CSSGroupingRule).cssRules, predicate);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
 describe("Cognito Mode Real-Browser Regressions", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -414,26 +429,100 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(toastViewport?.textContent).not.toContain("Claude needs attention");
   });
 
-  it("applies correct CSS classes for heavy-blur and black-screen styles", async () => {
+  it("applies correct CSS classes and computed styles for heavy-blur and black-screen styles", async () => {
+    // 1. Activate Heavy Blur
     await act(async () => {
       useSettingsStore.setState({ cognitoModeStyle: "heavy-blur" });
     });
     await triggerCognitoShortcut();
-    let overlay = document.querySelector("[data-cognito-mode-overlay]");
+    let overlay = document.querySelector<HTMLElement>("[data-cognito-mode-overlay]");
+    expect(overlay).not.toBeNull();
     expect(overlay?.classList.contains("cognito-mode-overlay--heavy-blur")).toBe(true);
+
+    // Verify Chromium supports backdrop-filter and applies frosted-glass styling
+    expect(CSS.supports("backdrop-filter", "blur(20px) saturate(140%)")).toBe(true);
+    let computed = window.getComputedStyle(overlay!);
+    expect(computed.backgroundColor).toBe("rgba(13, 17, 23, 0.52)");
+    expect(computed.backdropFilter).toMatch(/^blur\(20px\)\s+saturate\((?:140%|1\.4)\)$/);
+    expect(computed.boxShadow).toMatch(
+      /rgba\(255,\s*255,\s*255,\s*0\.05\)\s+0px\s+0px\s+0px\s+1px\s+inset/,
+    );
 
     // Dismiss
     await triggerCognitoShortcut();
 
-    // Switch style
+    // 2. Switch style to Black Screen
     await act(async () => {
       useSettingsStore.setState({ cognitoModeStyle: "black-screen" });
     });
     await triggerCognitoShortcut();
-    overlay = document.querySelector("[data-cognito-mode-overlay]");
+    overlay = document.querySelector<HTMLElement>("[data-cognito-mode-overlay]");
+    expect(overlay).not.toBeNull();
     expect(overlay?.classList.contains("cognito-mode-overlay--black-screen")).toBe(true);
+    expect(overlay?.classList.contains("cognito-mode-overlay--heavy-blur")).toBe(false);
+
+    computed = window.getComputedStyle(overlay!);
+    expect(computed.backgroundColor).toBe("rgb(0, 0, 0)");
+    expect(computed.backdropFilter).toBe("none");
+    expect(computed.boxShadow).toBe("none");
 
     await triggerCognitoShortcut();
+  });
+
+  it("applies the production reduced-transparency override as opaque black when its media query matches", async () => {
+    // Find the production media rule, including if a bundler nests it in @layer.
+    let targetRule: CSSMediaRule | null = null;
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        targetRule = findMediaRule(
+          sheet.cssRules,
+          (rule) => rule.media.mediaText.includes("prefers-reduced-transparency"),
+        );
+      } catch {
+        // Ignore cross-origin stylesheets if any.
+      }
+      if (targetRule) break;
+    }
+
+    expect(targetRule).not.toBeNull();
+    expect(targetRule!.media.mediaText).toContain("prefers-reduced-transparency");
+    expect(targetRule!.media.mediaText).toContain("reduce");
+    const overrideRule = Array.from(targetRule!.cssRules).find(
+      (rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.selectorText === ".cognito-mode-overlay--heavy-blur",
+    );
+    expect(overrideRule).toBeDefined();
+    const prefixedFilter = overrideRule!.style.getPropertyValue("-webkit-backdrop-filter");
+    if (CSS.supports("-webkit-backdrop-filter", "none")) {
+      expect(prefixedFilter).toBe("none");
+    } else {
+      expect(prefixedFilter).toBe("");
+    }
+
+    const originalMedia = targetRule!.media.mediaText;
+
+    try {
+      targetRule!.media.mediaText = "all";
+
+      await act(async () => {
+        useSettingsStore.setState({ cognitoModeStyle: "heavy-blur" });
+      });
+      await triggerCognitoShortcut();
+
+      const overlay = document.querySelector<HTMLElement>("[data-cognito-mode-overlay]");
+      expect(overlay).not.toBeNull();
+      expect(overlay?.classList.contains("cognito-mode-overlay--heavy-blur")).toBe(true);
+
+      const computed = window.getComputedStyle(overlay!);
+      expect(computed.backgroundColor).toBe("rgb(0, 0, 0)");
+      expect(computed.backdropFilter).toBe("none");
+      expect(computed.boxShadow).toBe("none");
+
+      await triggerCognitoShortcut();
+    } finally {
+      targetRule!.media.mediaText = originalMedia;
+    }
   });
 
   it("preserves deterministic audio playback while active", async () => {

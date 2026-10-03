@@ -161,6 +161,7 @@ pub fn run() {
         controller.register_main_window(main.clone());
         let app_handle = app.handle().clone();
         let controller = controller.clone();
+        #[cfg(windows)]
         let main_label = main.label().to_string();
         #[cfg(windows)]
         let shutdown = app
@@ -186,22 +187,22 @@ pub fn run() {
     let app = builder
         .build(tauri::generate_context!())
         .expect("error while building DamHopper native client");
-    app.run(move |app_handle, event| {
+    app.run(move |_app_handle, _event| {
         #[cfg(windows)]
-        match event {
+        match _event {
             tauri::RunEvent::ExitRequested { api, .. } => {
-                let coordinator = app_handle
+                let coordinator = _app_handle
                     .state::<Arc<shutdown::NativeShutdownCoordinator>>()
                     .inner()
                     .clone();
                 handle_exit_requested(
                     coordinator.should_prevent_exit(),
                     || api.prevent_exit(),
-                    || coordinator.trigger(app_handle.clone()),
+                    || coordinator.trigger(_app_handle.clone()),
                 );
             }
             tauri::RunEvent::Exit => {
-                app_handle
+                _app_handle
                     .state::<Arc<shutdown::NativeShutdownCoordinator>>()
                     .inner()
                     .force_close_now();

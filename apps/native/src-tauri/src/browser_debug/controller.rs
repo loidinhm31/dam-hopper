@@ -755,7 +755,7 @@ fn select_replay_url(
 }
 
 fn page_load_is_current(current_url: Option<&Url>, committed_url: &Url, loaded_url: &Url) -> bool {
-    current_url.map_or(true, |current_url| current_url == loaded_url) && committed_url == loaded_url
+    current_url.is_none_or(|current_url| current_url == loaded_url) && committed_url == loaded_url
 }
 
 fn validate_bounds(bounds: &BrowserDebugBounds) -> Result<(), String> {

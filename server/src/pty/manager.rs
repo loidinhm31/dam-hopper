@@ -1253,7 +1253,7 @@ impl PtySessionManager {
             let current_seq = fence
                 .output_sequence
                 .load(std::sync::atomic::Ordering::Acquire);
-            if current_seq >= crate::pty::activity::SATURATED_COUNTER_SENTINEL
+            if current_seq == crate::pty::activity::SATURATED_COUNTER_SENTINEL
                 || current_seq != fence.accepted_sequence
             {
                 return Err(crate::pty::fleet_state::HandoffClaimError::RawOutputAdvanced);

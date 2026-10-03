@@ -1855,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_admission_rejects_stale_parent_and_duplicate_ports() {
+    fn rule_admission_rejects_wrong_scope_and_unestablished_parent() {
         let mut registry = ConnectionRegistry::new();
         let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
         let connection = connection(connection_id);
@@ -1870,7 +1870,7 @@ mod tests {
         wrong_scope.scope_id = SCOPE_2.into();
         assert!(matches!(
             registry.reserve_rule(wrong_scope, connection_generation, WireCounter::ZERO),
-            Err(RuntimeError::InvalidArgument)
+            Err(RuntimeError::ConnectionNotFound)
         ));
         assert!(matches!(
             registry.reserve_rule(
@@ -2388,19 +2388,26 @@ mod tests {
     #[test]
     fn active_rule_count_and_port_conflict_detection() {
         let mut registry = ConnectionRegistry::new();
-        let conn = connection("c1");
-        let _ = registry
-            .reserve_connection(conn, WireCounter::ZERO)
+        let connection_id = "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96";
+        let rule_id = "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0";
+        registry
+            .reserve_connection(connection(connection_id), WireCounter::ZERO)
             .unwrap();
-
-        let r1 = rule("r1", "c1", 8080);
-        let _ = registry
-            .reserve_rule(r1, WireCounter::ZERO, WireCounter::ONE)
-            .unwrap();
+        registry
+            .test_entry_mut(connection_id)
+            .unwrap()
+            .children
+            .insert(
+                rule_id.into(),
+                ForwardChild {
+                    state: SshForwardRuleState::On,
+                    ..ForwardChild::new(rule(rule_id, connection_id, 8080), WireCounter::ONE)
+                },
+            );
 
         assert_eq!(registry.active_rule_count(), 1);
         assert!(registry.port_conflict(8080, "other-rule"));
-        assert!(!registry.port_conflict(8080, "r1"));
+        assert!(!registry.port_conflict(8080, rule_id));
         assert!(!registry.port_conflict(8081, "other-rule"));
     }
 }

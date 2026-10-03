@@ -123,6 +123,7 @@ vi.mock("@/lib/terminal-host-attachment.js", () => ({
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   cancelScheduledTerminalFit: vi.fn(),
   fitAllTerminals: vi.fn(),
+  isTerminalFitEligible: vi.fn(() => true),
   scheduleTerminalFit: vi.fn(),
 }));
 

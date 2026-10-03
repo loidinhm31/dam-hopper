@@ -49,9 +49,9 @@ use super::{
     instance::{ClientEpochIssuer, DesktopClientContext},
     known_hosts::{ChallengeContext, HostKeyApproval, HostKeyChallengeBook, SshEndpoint},
     model::{
-        AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshConnectionState,
-        SshForwardCredentialState, SshForwardCredentialStatus, SshForwardEventHint,
-        ScopeContextInput, ScopeHandle, SshForwardEventReason, SshForwardRuleState, SshForwardRuntime,
+        AutoStartDisposition, OpenClientResult, PurgeScopeResult, ScopeContextInput, ScopeHandle,
+        SshConnectionState, SshForwardCredentialState, SshForwardCredentialStatus,
+        SshForwardEventHint, SshForwardEventReason, SshForwardRuleState, SshForwardRuntime,
         SshForwardSnapshot, SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory,
         SshKeyInventoryItem, SshKeyInventorySource, UtcTimestamp, WireCounter,
     },
@@ -4097,7 +4097,8 @@ impl SshForwardManager {
                 .map_err(|_| SshForwardErrorCode::TrustRevisionConflict.command_error())?;
             committed.revision()
         };
-        self.update_trust_revision(&input.scope_id, committed_revision).await;
+        self.update_trust_revision(&input.scope_id, committed_revision)
+            .await;
         self.clear_live_secrets_for_profile(&input.scope_id, &input.connection_profile_id);
         self.emit_runtime_hint(
             None,
@@ -6118,10 +6119,9 @@ mod tests {
 
     use super::{
         abort_channel_tasks, connection_credential_target, credential_save_error_code,
-        store_write_error_code, vault_error_code, ActivationBarrierPoint,
-        ConnectionAdmission, ConnectionReservationGuard, CredentialLease, LoadedPassword,
-        LoadedPasswordCleanup, ResolvedCredentials, RuntimeEntry, SshForwardManager,
-        HANDSHAKE_CONCURRENCY_LIMIT,
+        store_write_error_code, vault_error_code, ActivationBarrierPoint, ConnectionAdmission,
+        ConnectionReservationGuard, CredentialLease, LoadedPassword, LoadedPasswordCleanup,
+        ResolvedCredentials, RuntimeEntry, SshForwardManager, HANDSHAKE_CONCURRENCY_LIMIT,
     };
     use crate::ssh_forward::{
         credential_vault::{
@@ -7288,7 +7288,6 @@ mod tests {
         .expect("loopback listener remained reachable for five seconds");
     }
 
-
     #[tokio::test]
     async fn manager_restart_rejects_previous_session_context() {
         let config = temp_config_dir("restart");
@@ -8181,10 +8180,12 @@ mod tests {
         let config = temp_config_dir("concurrent-open-scope");
         let manager = Arc::new(SshForwardManager::new(&config).unwrap());
         let open_res = manager
-            .open_client(KnownScopesInput::Available { ids: vec![] })
+            .open_client(KnownScopesInput::Available {
+                ids: vec![SCOPE.into()],
+            })
             .await
             .unwrap();
-        let scope_id = "test-scope-concurrent";
+        let scope_id = SCOPE;
 
         let m1 = Arc::clone(&manager);
         let ctx1 = open_res.context.clone();

@@ -4,9 +4,6 @@ on:
   push:
     tags:
       - "desktop-v*"
-  pull_request:
-    branches:
-      - main
   workflow_dispatch: # Allows manual triggering
 
 permissions:
@@ -37,14 +34,13 @@ jobs:
         run: pnpm --filter @dam-hopper/native build
 
       - name: Run Windows native forwarding gates
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
         shell: pwsh
         run: |
           cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path apps/native/src-tauri/Cargo.toml
           pnpm --filter @dam-hopper/native test:e2e:ssh-forward
-          pnpm --filter @dam-hopper/native smoke:ssh-forward -- --build-only
+          pnpm --filter @dam-hopper/native smoke:ssh-forward
           pnpm --filter @dam-hopper/native exec tauri build --no-bundle
 
   build-desktop:
