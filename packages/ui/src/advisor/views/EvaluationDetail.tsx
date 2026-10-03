@@ -6,7 +6,10 @@
  */
 
 import { useEffect, useMemo, useRef, type FC } from 'react';
-import type { ComparableEvaluationGroup } from '../advisor-types.js';
+import type {
+  CandidateEvaluationSummary,
+  ComparableEvaluationGroup,
+} from '../advisor-types.js';
 import { ScoreProvenanceCard } from '../components/ScoreProvenanceCard.js';
 import { CandidatePerformanceTable } from '../components/CandidatePerformanceTable.js';
 
