@@ -363,11 +363,17 @@ describe("WorkspacePage notification navigation in Chromium", () => {
   }
 
   function registerNotifiedTerminal() {
+    const attachmentElement = document.createElement("div");
+    attachmentElement.dataset.testTerminalFitTarget = "true";
+    attachmentElement.style.width = "100px";
+    attachmentElement.style.height = "100px";
+    document.body.append(attachmentElement);
     registerTerminal(
       SESSION_ID,
-      { focus: mocks.focusTerminal } as never,
+      { focus: mocks.focusTerminal, element: attachmentElement } as never,
       { fit: mocks.fitTerminal } as never,
       {} as never,
+      attachmentElement,
     );
   }
 
@@ -394,6 +400,9 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     await act(async () => root?.unmount());
     root = null;
     terminalRegistry.clear();
+    document
+      .querySelectorAll("[data-test-terminal-fit-target='true']")
+      .forEach((element) => element.remove());
     container.remove();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
