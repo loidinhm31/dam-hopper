@@ -7290,27 +7290,6 @@ mod tests {
         .expect("loopback listener remained reachable for five seconds");
     }
 
-    fn auto_start_profile(index: usize) -> SshForwardProfile {
-        SshForwardProfile {
-            id: format!("{index:08x}-0000-4000-8000-000000000000"),
-            scope_id: SCOPE.into(),
-            name: format!("forward-{index}"),
-            ssh_host: "bastion.example".into(),
-            ssh_port: 22,
-            ssh_user: "operator".into(),
-            auth: SshForwardAuth::Agent,
-            local_port: 20_000 + index as u16,
-            target_host: LoopbackHost,
-            target_port: 5_000 + index as u16,
-            auto_start: true,
-            reconnect: ReconnectPolicy {
-                enabled: true,
-                max_attempts: 1,
-            },
-            created_at: UtcTimestamp::parse(&format!("2026-08-10T12:34:{index:02}.000Z")).unwrap(),
-            updated_at: UtcTimestamp::parse("2026-08-10T12:35:00.000Z").unwrap(),
-        }
-    }
 
     #[tokio::test]
     async fn manager_restart_rejects_previous_session_context() {
