@@ -45,11 +45,40 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
     };
   }, []);
 
+  const raw = group as unknown as Record<string, unknown>;
+  const rubricDigest =
+    (typeof group.rubric_digest === 'string' ? group.rubric_digest : null) ??
+    (typeof raw.rubricDigest === 'string' ? raw.rubricDigest : '');
+  const inputDigest =
+    (typeof group.input_digest === 'string' ? group.input_digest : null) ??
+    (typeof raw.inputDigest === 'string' ? raw.inputDigest : '');
+  const cases = Array.isArray(group.cases) ? group.cases : [];
+  const responses = Array.isArray(group.responses) ? group.responses : [];
+  const humanScores = Array.isArray(group.human_scores)
+    ? group.human_scores
+    : Array.isArray(raw.humanScores)
+      ? (raw.humanScores as readonly CandidateEvaluationSummary[])
+      : [];
+  const automatedScores = Array.isArray(group.automated_scores)
+    ? group.automated_scores
+    : Array.isArray(raw.automatedScores)
+      ? (raw.automatedScores as readonly CandidateEvaluationSummary[])
+      : [];
+
   const candidateLabels = useMemo(() => {
     const idSet = new Set<string>();
-    for (const r of group.responses) idSet.add(r.candidate_id);
-    for (const h of group.human_scores) idSet.add(h.candidate_id);
-    for (const a of group.automated_scores) idSet.add(a.candidate_id);
+    for (const r of responses) {
+      const cid = r.candidate_id || (r as unknown as { candidateId?: string }).candidateId;
+      if (cid) idSet.add(cid);
+    }
+    for (const h of humanScores) {
+      const cid = h.candidate_id || (h as unknown as { candidateId?: string }).candidateId;
+      if (cid) idSet.add(cid);
+    }
+    for (const a of automatedScores) {
+      const cid = a.candidate_id || (a as unknown as { candidateId?: string }).candidateId;
+      if (cid) idSet.add(cid);
+    }
 
     const sortedIds = Array.from(idSet).sort();
     const map = new Map<string, string>();
@@ -59,7 +88,7 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
       map.set(id, `Candidate ${letter}${suffix}`);
     });
     return map;
-  }, [group]);
+  }, [responses, humanScores, automatedScores]);
 
   return (
     <aside
@@ -72,11 +101,11 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
           <h3 className="drawer-title">Comparable Evaluation Group</h3>
           <div className="drawer-digests">
             <span className="drawer-digest-item">
-              Rubric: <code>{group.rubric_digest.slice(0, 10)}…</code>
+              Rubric: <code>{rubricDigest ? `${rubricDigest.slice(0, 10)}…` : '—'}</code>
             </span>
             <span className="drawer-digest-divider">&bull;</span>
             <span className="drawer-digest-item">
-              Input: <code>{group.input_digest.slice(0, 10)}…</code>
+              Input: <code>{inputDigest ? `${inputDigest.slice(0, 10)}…` : '—'}</code>
             </span>
           </div>
         </div>
@@ -92,18 +121,32 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
 
       <div className="drawer-content">
         <section className="drawer-section" aria-label="Included Evaluation Cases">
-          <h4 className="section-label">Included Evaluation Cases ({group.cases.length})</h4>
+          <h4 className="section-label">Included Evaluation Cases ({cases.length})</h4>
           <ul className="eval-cases-list">
-            {group.cases.map((c, idx) => (
-              <li key={`${c.case_id}-${idx}`} className="eval-case-item">
-                <div className="case-item-title">
-                  <strong>{c.name}</strong> <span className="badge badge-info">{c.category}</span>
-                </div>
-                <div className="text-muted id-sub">
-                  Case: <code>{c.case_id}</code> &bull; Run: <code>{c.run_id.slice(0, 8)}…</code>
-                </div>
-              </li>
-            ))}
+            {cases.map((c, idx) => {
+              const rawCase = c as unknown as Record<string, unknown>;
+              const caseId =
+                (typeof c.case_id === 'string' ? c.case_id : null) ??
+                (typeof rawCase.caseId === 'string' ? rawCase.caseId : `case-${idx}`);
+              const runId =
+                (typeof c.run_id === 'string' ? c.run_id : null) ??
+                (typeof rawCase.runId === 'string' ? rawCase.runId : '');
+              const name = c.name || (typeof rawCase.name === 'string' ? rawCase.name : caseId);
+              const category =
+                c.category || (typeof rawCase.category === 'string' ? rawCase.category : '');
+              return (
+                <li key={`${caseId}-${idx}`} className="eval-case-item">
+                  <div className="case-item-title">
+                    <strong>{name}</strong>{' '}
+                    {category && <span className="badge badge-info">{category}</span>}
+                  </div>
+                  <div className="text-muted id-sub">
+                    Case: <code>{caseId}</code> &bull; Run:{' '}
+                    <code>{runId ? `${runId.slice(0, 8)}…` : '—'}</code>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </section>
 
@@ -116,21 +159,21 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
           </div>
 
           <CandidatePerformanceTable
-            responses={group.responses}
+            responses={responses}
             revealCandidates={revealCandidates}
             candidateLabels={candidateLabels}
           />
         </section>
 
-        {(group.human_scores.length > 0 || group.automated_scores.length > 0) && (
+        {(humanScores.length > 0 || automatedScores.length > 0) && (
           <section className="drawer-section" aria-label="Scores by Provenance">
             <h4 className="section-label">Scores by Provenance</h4>
             <div className="scores-columns">
-              {group.human_scores.length > 0 && (
+              {humanScores.length > 0 && (
                 <div className="score-provenance-col">
                   <h5 className="score-col-heading">Human Judge Scores</h5>
                   <div className="score-cards-list">
-                    {group.human_scores.map((hs, idx) => (
+                    {humanScores.map((hs, idx) => (
                       <ScoreProvenanceCard
                         key={revealCandidates ? hs.candidate_id : `blinded-hs-${idx}`}
                         summary={hs}
@@ -149,11 +192,11 @@ export const EvaluationDetail: FC<EvaluationDetailProps> = ({
                 </div>
               )}
 
-              {group.automated_scores.length > 0 && (
+              {automatedScores.length > 0 && (
                 <div className="score-provenance-col">
                   <h5 className="score-col-heading">Automated Judge Scores</h5>
                   <div className="score-cards-list">
-                    {group.automated_scores.map((as, idx) => (
+                    {automatedScores.map((as, idx) => (
                       <ScoreProvenanceCard
                         key={revealCandidates ? as.candidate_id : `blinded-as-${idx}`}
                         summary={as}

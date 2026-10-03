@@ -62,6 +62,23 @@ describe('app-state-selectors', () => {
     }
   });
 
+  it('selectHistoryQuery in "workspace-project" scope resolves project name from inventory', () => {
+    const sNamed: AppState = {
+      ...INITIAL_STATE,
+      projectId: 'evcrate',
+      inventory: {
+        entries: [{ projectId: validSha, label: 'evcrate', count: 10 }],
+        totalProjects: 1,
+        unfilteredTotalRecords: 10,
+      },
+    };
+    const res = selectHistoryQuery(sNamed);
+    expect(res.available).toBe(true);
+    if (res.available) {
+      expect(res.query.projectId).toBe(validSha);
+    }
+  });
+
   it('selectFilteredRecords returns entries', () => {
     const s: AppState = {
       ...INITIAL_STATE,

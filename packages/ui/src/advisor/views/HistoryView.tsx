@@ -200,7 +200,7 @@ export const HistoryView: FC<HistoryViewProps> = ({
         </div>
       </div>
 
-      <div className="history-content-layout">
+      <div className={`history-content-layout ${selectedRecord || historyDetail?.status !== 'idle' ? 'has-detail' : ''}`}>
         <div className="history-list-pane">
           {/* Narrow Card Mode (for narrow dock / compact viewports) */}
           <div className="history-cards-list" role="feed" aria-label="Consultations cards">

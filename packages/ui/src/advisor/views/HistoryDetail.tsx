@@ -219,8 +219,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
       </div>
 
       <div className="drawer-content">
-        <section className="drawer-section">
-          <h4 className="section-label">Execution Summary</h4>
+        <section className="drawer-section drawer-section-execution">
+          <h4 className="section-label text-cyan">Execution Summary</h4>
           <dl className="detail-dl">
             <dt>Status:</dt>
             <dd>
@@ -250,8 +250,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
           </dl>
         </section>
 
-        <section className="drawer-section">
-          <h4 className="section-label">Advisor Route</h4>
+        <section className="drawer-section drawer-section-route">
+          <h4 className="section-label text-purple">Advisor Route</h4>
           <dl className="detail-dl">
             <dt>Backend:</dt>
             <dd>
@@ -272,8 +272,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
           </dl>
         </section>
 
-        <section className="drawer-section">
-          <h4 className="section-label">Outcome</h4>
+        <section className="drawer-section drawer-section-outcome">
+          <h4 className="section-label text-success">Outcome</h4>
           <dl className="detail-dl">
             <dt>Outcome State:</dt>
             <dd>
@@ -291,8 +291,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
         </section>
 
         {attempts.length > 0 && (
-          <section className="drawer-section">
-            <h4 className="section-label">Attempts ({attempts.length})</h4>
+          <section className="drawer-section drawer-section-attempts">
+            <h4 className="section-label text-indigo">Attempts ({attempts.length})</h4>
             <div className="attempts-table-wrapper">
               <table className="attempts-table">
                 <thead>
@@ -327,8 +327,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
         )}
 
         {Boolean(checkpoint && (question || taskGoal)) && (
-          <section className="drawer-section">
-            <h4 className="section-label">Checkpoint Request</h4>
+          <section className="drawer-section drawer-section-checkpoint">
+            <h4 className="section-label text-amber">Checkpoint Request</h4>
             {taskGoal && (
               <div style={{ marginBottom: 8 }}>
                 <strong>Task Goal:</strong> <span>{taskGoal}</span>
@@ -353,8 +353,8 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
               cautions.length > 0 ||
               successChecks.length > 0),
         ) && (
-            <section className="drawer-section">
-              <h4 className="section-label">Advisor Response</h4>
+            <section className="drawer-section drawer-section-response">
+              <h4 className="section-label text-cyan">Advisor Response</h4>
               {recommendation && (
                 <div className="recommendation-block" style={{ marginBottom: 12 }}>
                   <strong>Recommendation:</strong>
@@ -407,7 +407,7 @@ export const HistoryDetail: FC<HistoryDetailProps> = ({
           )}
 
         {Boolean(errorObj) && (
-          <section className="drawer-section">
+          <section className="drawer-section drawer-section-error">
             <h4 className="section-label text-danger">Sanitized Error</h4>
             <TextBlock content={errorObj} label="Error Details" />
           </section>

@@ -39,6 +39,16 @@ import { HistoryView } from './views/HistoryView.js';
 import { ConfigurationView } from './views/ConfigurationView.js';
 import { EvaluationsView } from './views/EvaluationsView.js';
 
+function isSnapshotNotFound(err: unknown): boolean {
+  if (err instanceof Error) {
+    return err.message.includes('Snapshot not found') || err.message.includes('SnapshotNotFound');
+  }
+  if (err && typeof err === 'object' && 'code' in err) {
+    return err.code === 'SnapshotNotFound';
+  }
+  return false;
+}
+
 export interface AdvisorPanelProps {
   readonly provider?: AdvisorDataProvider;
   readonly client?: ApiClient;
@@ -48,6 +58,7 @@ export interface AdvisorPanelProps {
   readonly defaultView?: AdvisorView;
   readonly onViewChange?: (view: AdvisorView) => void;
   readonly autoRefreshOnMount?: boolean;
+  readonly isVisible?: boolean;
 }
 
 export const AdvisorPanel: FC<AdvisorPanelProps> = ({
@@ -59,10 +70,11 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
   defaultView,
   onViewChange,
   autoRefreshOnMount = true,
+  isVisible,
 }) => {
   const [state, dispatch] = useReducer(appReducer, {
     ...INITIAL_STATE,
-    activeView: defaultView ?? 'overview',
+    activeView: defaultView ?? 'history',
     projectId: projectTarget?.project ?? null,
     projectLabel: projectTarget?.label ?? projectTarget?.project ?? null,
   });
@@ -75,6 +87,8 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
   const requestSeqRef = useRef<number>(0);
   const providerRef = useRef<AdvisorDataProvider | null>(null);
   const providerRevisionRef = useRef<number>(0);
+  const mountedRef = useRef<boolean>(false);
+  const wasVisibleRef = useRef<boolean>(false);
 
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -166,17 +180,6 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
     };
   }, [activeProvider]);
 
-  // Project target sync
-  useEffect(() => {
-    const rawProject = projectTarget?.project ?? null;
-    const projectLabel = projectTarget?.label ?? rawProject;
-    dispatch({
-      type: 'SET_WORKSPACE_PROJECT',
-      projectId: rawProject,
-      projectLabel,
-    });
-  }, [projectTarget]);
-
   // Data fetching operations
   const refreshData = useCallback(async () => {
     const s = stateRef.current;
@@ -194,7 +197,7 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
     setHistoryError(null);
 
     try {
-      const res = await activeProvider.refreshHistory(reqId, s.projectId);
+      const res = await activeProvider.refreshHistory(reqId);
       if (
         providerRef.current !== activeProvider ||
         stateRef.current.contextEpoch !== epoch
@@ -211,7 +214,12 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
       });
 
       if (res.snapshotId) {
-        const nextQueryRes = selectHistoryQuery(stateRef.current);
+        const nextState: AppState = {
+          ...stateRef.current,
+          inventory: res.inventory ?? stateRef.current.inventory,
+          snapshotId: res.snapshotId,
+        };
+        const nextQueryRes = selectHistoryQuery(nextState);
         if (nextQueryRes.available) {
           const query = nextQueryRes.query;
           const [summary, page] = await Promise.all([
@@ -308,6 +316,32 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
       });
   }, [activeProvider, makeRequestId]);
 
+  // Project target sync
+  useEffect(() => {
+    const rawProject = projectTarget?.project ?? null;
+    const projectLabel = projectTarget?.label ?? rawProject;
+    dispatch({
+      type: 'SET_WORKSPACE_PROJECT',
+      projectId: rawProject,
+      projectLabel,
+    });
+    if (mountedRef.current && (isVisible === undefined || isVisible)) {
+      void refreshData();
+    }
+  }, [projectTarget, isVisible, refreshData]);
+
+  useEffect(() => {
+    if (isVisible && !wasVisibleRef.current) {
+      if (
+        stateRef.current.snapshotId === null ||
+        stateRef.current.historySummary === null ||
+        historyError !== null
+      ) {
+        void refreshData();
+      }
+    }
+    wasVisibleRef.current = Boolean(isVisible);
+  }, [isVisible, refreshData, historyError]);
   const handleScopeChange = useCallback(
     async (scope: ActivityScope) => {
       const s = stateRef.current;
@@ -363,6 +397,10 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
           contextEpoch: epoch,
         });
       } catch (err: unknown) {
+        if (isSnapshotNotFound(err)) {
+          void refreshData();
+          return;
+        }
         if (
           providerRef.current === activeProvider &&
           stateRef.current.contextEpoch === epoch &&
@@ -444,6 +482,10 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
           contextEpoch: epoch,
         });
       } catch (err: unknown) {
+        if (isSnapshotNotFound(err)) {
+          void refreshData();
+          return;
+        }
         if (
           providerRef.current === activeProvider &&
           stateRef.current.contextEpoch === epoch &&
@@ -503,7 +545,11 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
           contextEpoch: epoch,
         });
         return true;
-      } catch {
+      } catch (err: unknown) {
+        if (isSnapshotNotFound(err)) {
+          void refreshData();
+          return false;
+        }
         if (
           providerRef.current === activeProvider &&
           stateRef.current.contextEpoch === epoch &&
@@ -677,7 +723,6 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
   );
 
   // Auto-refresh once on mount if enabled
-  const mountedRef = useRef(false);
   useEffect(() => {
     if (!mountedRef.current && autoRefreshOnMount) {
       mountedRef.current = true;

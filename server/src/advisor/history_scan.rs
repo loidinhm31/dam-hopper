@@ -105,6 +105,27 @@ pub fn read_safe_project_label(metadata_path: &Path, project_id: &str) -> Option
     sanitize_project_label(name)
 }
 
+pub fn find_project_id_by_label(metadata_path: &Path, label: &str) -> Option<String> {
+    let read_result = read_bounded_file(metadata_path, MAX_METADATA_BYTES)?;
+    let parsed: serde_json::Value = serde_json::from_slice(&read_result.bytes).ok()?;
+    if parsed.get("version").and_then(|v| v.as_u64()) != Some(1) {
+        return None;
+    }
+    let projects = parsed.get("projects")?.as_object()?;
+    for (pid, entry) in projects {
+        if is_valid_sha256(pid) {
+            if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
+                if let Some(clean) = sanitize_project_label(name) {
+                    if clean.eq_ignore_ascii_case(label) {
+                        return Some(pid.to_lowercase());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn record_diag(
     scan: &mut HistoryScanSummaryDto,
     code: &str,
@@ -178,17 +199,40 @@ pub fn scan_history_records(
         if is_valid_sha256(&lower) {
             eligible_project_ids.push(lower);
         } else {
-            return ScanOutput {
-                scan,
-                rows,
-                raw_records,
-                normalized_records,
-                inventory: ProjectInventoryDto {
-                    entries: Vec::new(),
-                    total_projects: 0,
-                    unfiltered_total_records: 0,
-                },
-            };
+            let root_meta_path = history_root.join("project-metadata.json");
+            if let Some(matched) = find_project_id_by_label(&root_meta_path, target) {
+                eligible_project_ids.push(matched);
+            } else {
+                if let Ok(entries) = std::fs::read_dir(history_root) {
+                    for entry in entries.flatten() {
+                        if let Ok(name) = entry.file_name().into_string() {
+                            let candidate_pid = name.to_lowercase();
+                            if is_valid_sha256(&candidate_pid) {
+                                let sub_meta = history_root.join(&candidate_pid).join("project-metadata.json");
+                                if let Some(label) = read_safe_project_label(&sub_meta, &candidate_pid) {
+                                    if label.eq_ignore_ascii_case(target) {
+                                        eligible_project_ids.push(candidate_pid);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if eligible_project_ids.is_empty() {
+                return ScanOutput {
+                    scan,
+                    rows,
+                    raw_records,
+                    normalized_records,
+                    inventory: ProjectInventoryDto {
+                        entries: Vec::new(),
+                        total_projects: 0,
+                        unfiltered_total_records: 0,
+                    },
+                };
+            }
         }
     } else {
         if let Ok(entries) = std::fs::read_dir(history_root) {

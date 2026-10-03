@@ -70,7 +70,7 @@ export function IdeShell({
     isDragging: isLeftDragging,
   } = useResizeHandle({
     min: 140,
-    max: 480,
+    max: 1000,
     defaultWidth: 240,
     storageKey: TREE_WIDTH_KEY,
   });
@@ -82,7 +82,7 @@ export function IdeShell({
     isDragging: isRightDragging,
   } = useResizeHandle({
     min: 180,
-    max: 480,
+    max: 1000,
     defaultWidth: 260,
     storageKey: TERMINAL_TREE_WIDTH_KEY,
     reversed: true,

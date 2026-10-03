@@ -40,7 +40,7 @@ export const ComparableGroupsSection: FC<ComparableGroupsSectionProps> = ({
           </p>
         </div>
       ) : (
-        <div className="evaluations-layout">
+        <div className={`evaluations-layout ${selectedGroup ? 'has-detail' : ''}`}>
           <div className="eval-groups-grid" aria-label="Comparable evaluation groups">
             {groups.map((g) => (
               <EvaluationGroupCard
