@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Comprehensive validation of Phase 07: Manager state schema3 migration,
 //! host config normalization, native rollback/staging plugin rejection,
 //! unit policy enforcement, and Advisor history root validation.
