@@ -162,7 +162,6 @@ pub fn run() {
         let app_handle = app.handle().clone();
         let controller = controller.clone();
         #[cfg(windows)]
-
         let main_label = main.label().to_string();
         #[cfg(windows)]
         let shutdown = app
