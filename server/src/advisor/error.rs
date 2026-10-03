@@ -39,6 +39,27 @@ pub enum AdvisorError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Policy validation failed: {code}")]
+    PolicyValidation {
+        code: String,
+        message: String,
+    },
+
+    #[error("Policy revision conflict")]
+    PolicyRevisionConflict,
+
+    #[error("Policy file unsafe")]
+    PolicyFileUnsafe,
+
+    #[error("Policy not editable: {0}")]
+    PolicyNotEditable(String),
+
+    #[error("Policy write failed")]
+    PolicyWriteFailed,
+
+    #[error("Policy payload too large")]
+    PolicyPayloadTooLarge,
 }
 
 impl IntoResponse for AdvisorError {
@@ -130,6 +151,60 @@ impl IntoResponse for AdvisorError {
                 Json(serde_json::json!({
                     "error": msg,
                     "code": "InternalError",
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyValidation { code, message } => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": message,
+                    "code": code,
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyRevisionConflict => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "Policy revision does not match expected revision",
+                    "code": "POLICY_REVISION_CONFLICT",
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyFileUnsafe => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Policy file unsafe or inaccessible",
+                    "code": "POLICY_FILE_UNSAFE",
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyNotEditable(msg) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": msg,
+                    "code": "POLICY_NOT_EDITABLE",
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyWriteFailed => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to update policy",
+                    "code": "POLICY_WRITE_FAILED",
+                })),
+            )
+                .into_response(),
+
+            AdvisorError::PolicyPayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({
+                    "error": "Policy body exceeds maximum size",
+                    "code": "POLICY_PAYLOAD_TOO_LARGE",
                 })),
             )
                 .into_response(),

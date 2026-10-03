@@ -5,12 +5,13 @@ use axum::{
 use serde::Deserialize;
 
 use crate::advisor::{
-    AdvisorError, AdvisorSettingsDto, AdvisorSettingsUpdateDto, AdvisorStatusDto,
-    EvaluationsCompareParamsDto, EvaluationsCompareResultDto, EvaluationsListParamsDto,
-    EvaluationsListResultDto, EvaluationsReadParamsDto, EvaluationsReadResultDto,
-    HistoryDetailParamsDto, HistoryDetailResultDto, HistoryPageParamsDto,
-    HistoryPageResultDto, HistoryRefreshResultDto, HistorySummaryParamsDto,
-    HistorySummaryResultDto, PolicyReadCurrentResultDto,
+    check_credentials, AdvisorError, AdvisorSettingsDto, AdvisorSettingsUpdateDto,
+    AdvisorStatusDto, EvaluationsCompareParamsDto, EvaluationsCompareResultDto,
+    EvaluationsListParamsDto, EvaluationsListResultDto, EvaluationsReadParamsDto,
+    EvaluationsReadResultDto, HistoryDetailParamsDto, HistoryDetailResultDto,
+    HistoryPageParamsDto, HistoryPageResultDto, HistoryRefreshResultDto,
+    HistorySummaryParamsDto, HistorySummaryResultDto, PolicyReadCurrentResultDto,
+    PolicyUpdateParamsDto, MAX_POLICY_BYTES,
 };
 use crate::api::auth::AuthenticatedActor;
 use crate::config::write_config;
@@ -132,6 +133,43 @@ pub async fn policy_current_handler(
 ) -> Result<Json<PolicyReadCurrentResultDto>, AdvisorError> {
     check_advisor_enabled(&state).await?;
     let res = state.advisor_service.read_current_policy();
+    Ok(Json(res))
+}
+
+/// PATCH /api/advisor/policy — updates account routing policy routes.
+pub async fn policy_update_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+    body: axum::body::Bytes,
+) -> Result<Json<PolicyReadCurrentResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+
+    if body.len() as u64 > MAX_POLICY_BYTES {
+        return Err(AdvisorError::PolicyPayloadTooLarge);
+    }
+
+    let raw_val: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
+        AdvisorError::PolicyValidation {
+            code: "ROUTE_SCHEMA_INVALID".to_string(),
+            message: "Request body is not valid JSON".to_string(),
+        }
+    })?;
+
+    if check_credentials(&raw_val) {
+        return Err(AdvisorError::PolicyValidation {
+            code: "ROUTE_CREDENTIAL_FIELD".to_string(),
+            message: "Request contains forbidden credential field".to_string(),
+        });
+    }
+
+    let params: PolicyUpdateParamsDto = serde_json::from_value(raw_val).map_err(|e| {
+        AdvisorError::PolicyValidation {
+            code: "ROUTE_SCHEMA_INVALID".to_string(),
+            message: format!("Invalid policy update request schema: {e}"),
+        }
+    })?;
+
+    let res = state.advisor_service.update_policy(params).await?;
     Ok(Json(res))
 }
 

@@ -19,6 +19,7 @@ use crate::advisor::types::*;
 pub struct AdvisorService {
     home_dir: Option<PathBuf>,
     cache: Mutex<SnapshotCache>,
+    policy_lock: std::sync::Arc<Mutex<()>>,
 }
 
 impl AdvisorService {
@@ -26,6 +27,7 @@ impl AdvisorService {
         Self {
             home_dir,
             cache: Mutex::new(SnapshotCache::new(Vec::new())),
+            policy_lock: std::sync::Arc::new(Mutex::new(())),
         }
     }
 
@@ -33,16 +35,33 @@ impl AdvisorService {
         Self {
             home_dir,
             cache: Mutex::new(SnapshotCache::new(secret)),
+            policy_lock: std::sync::Arc::new(Mutex::new(())),
         }
     }
 
     pub fn status(&self, enabled: bool) -> AdvisorStatusDto {
         inspect_history_root(enabled, self.home_dir.as_deref())
     }
+
     pub fn read_current_policy(&self) -> PolicyReadCurrentResultDto {
         crate::advisor::policy::read_current_policy(self.home_dir.as_deref())
     }
 
+    pub async fn update_policy(
+        &self,
+        params: PolicyUpdateParamsDto,
+    ) -> Result<PolicyReadCurrentResultDto, AdvisorError> {
+        let lock_arc = self.policy_lock.clone();
+        let guard = lock_arc.lock_owned().await;
+        let home_dir = self.home_dir.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            crate::advisor::policy::update_current_policy(home_dir.as_deref(), params)
+        })
+        .await
+        .map_err(|e| AdvisorError::Internal(e.to_string()))?
+    }
     pub fn list_evaluations(
         &self,
         project_root: Option<&Path>,

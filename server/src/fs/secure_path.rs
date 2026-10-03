@@ -286,6 +286,119 @@ mod unix {
         }
         stat_mtime_after_rename(&parent, &name)
     }
+
+    pub fn read_regular_file_bounded(
+        root: &Path,
+        relative: &Path,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, FsError> {
+        let parent_path = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = open_parent(root, parent_path, None)?;
+        let name = component_name(relative)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        let meta = file.metadata().map_err(io_error)?;
+        if !meta.file_type().is_file() {
+            return Err(FsError::MutationRefused("target is not a regular file".into()));
+        }
+        if meta.len() > max_bytes {
+            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+        }
+        use std::io::Read;
+        let mut buffer = Vec::new();
+        Read::take(&mut file, max_bytes + 1).read_to_end(&mut buffer).map_err(io_error)?;
+        if buffer.len() as u64 > max_bytes {
+            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+        }
+        Ok(buffer)
+    }
+
+    pub fn replace_regular_file_if_bytes_match(
+        root: &Path,
+        relative: &Path,
+        expected_bytes: &[u8],
+        replacement_bytes: &[u8],
+        fsync: bool,
+    ) -> Result<(), FsError> {
+        let parent_path = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = open_parent(root, parent_path, None)?;
+        let name = component_name(relative)?;
+
+        let target_fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if target_fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let mut target_file = unsafe { File::from_raw_fd(target_fd) };
+        let meta = target_file.metadata().map_err(io_error)?;
+        if !meta.file_type().is_file() {
+            return Err(FsError::MutationRefused("target is not a regular file".into()));
+        }
+        use std::io::Read;
+        let mut current_bytes = Vec::new();
+        target_file.read_to_end(&mut current_bytes).map_err(io_error)?;
+        drop(target_file);
+
+        if current_bytes != expected_bytes {
+            return Err(FsError::Conflict);
+        }
+
+        let temp_name =
+            std::ffi::CString::new(format!(".dam-hopper-{}", uuid::Uuid::new_v4().as_simple()))
+                .map_err(|_| FsError::PathEscape)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                temp_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let mut temp_file = unsafe { File::from_raw_fd(fd) };
+        if let Err(error) = temp_file.write_all(replacement_bytes) {
+            let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp_name.as_ptr(), 0) };
+            return Err(io_error(error));
+        }
+        if fsync {
+            if let Err(error) = temp_file.sync_data() {
+                let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp_name.as_ptr(), 0) };
+                return Err(io_error(error));
+            }
+        }
+        drop(temp_file);
+
+        if let Err(error) = rename_at(&parent, &temp_name, &name) {
+            let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp_name.as_ptr(), 0) };
+            return Err(error);
+        }
+        stat_mtime_after_rename(&parent, &name)?;
+
+        if fsync {
+            let ret = unsafe { libc::fsync(parent.as_raw_fd()) };
+            if ret < 0 {
+                return Err(io_error(std::io::Error::last_os_error()));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(not(unix))]
@@ -384,6 +497,68 @@ mod unix {
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or(0))
     }
+
+    pub fn read_regular_file_bounded(
+        root: &Path,
+        relative: &Path,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, FsError> {
+        let target = root.join(relative);
+        let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
+        if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+            return Err(FsError::MutationRefused("target is not a regular file".into()));
+        }
+        if meta.len() > max_bytes {
+            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+        }
+        use std::io::Read;
+        let mut file = std::fs::File::open(&target).map_err(FsError::Io)?;
+        let mut buffer = Vec::new();
+        Read::take(&mut file, max_bytes + 1).read_to_end(&mut buffer).map_err(FsError::Io)?;
+        if buffer.len() as u64 > max_bytes {
+            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+        }
+        Ok(buffer)
+    }
+
+    pub fn replace_regular_file_if_bytes_match(
+        root: &Path,
+        relative: &Path,
+        expected_bytes: &[u8],
+        replacement_bytes: &[u8],
+        fsync: bool,
+    ) -> Result<(), FsError> {
+        let target = root.join(relative);
+        let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
+        if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+            return Err(FsError::MutationRefused("target is not a regular file".into()));
+        }
+        use std::io::Read;
+        let mut file = std::fs::File::open(&target).map_err(FsError::Io)?;
+        let mut current_bytes = Vec::new();
+        file.read_to_end(&mut current_bytes).map_err(FsError::Io)?;
+        drop(file);
+
+        if current_bytes != expected_bytes {
+            return Err(FsError::Conflict);
+        }
+
+        let parent = target
+            .parent()
+            .ok_or_else(|| FsError::MutationRefused("target path has no parent".into()))?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(FsError::Io)?;
+        temp.write_all(replacement_bytes).map_err(FsError::Io)?;
+        if fsync {
+            temp.as_file().sync_data().map_err(FsError::Io)?;
+        }
+        temp.persist(&target)
+            .map_err(|error| FsError::Io(error.error))?;
+        let post_meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
+        if post_meta.file_type().is_symlink() || !post_meta.file_type().is_file() {
+            return Err(FsError::MutationRefused("target is not a regular file".into()));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) async fn persist_temp(
@@ -421,6 +596,24 @@ pub(crate) fn write_bytes(
     fsync: bool,
 ) -> Result<i64, FsError> {
     unix::write_bytes(root, relative, bytes, expected_mtime, expected_root, fsync)
+}
+
+pub(crate) fn read_regular_file_bounded(
+    root: &Path,
+    relative: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, FsError> {
+    unix::read_regular_file_bounded(root, relative, max_bytes)
+}
+
+pub(crate) fn replace_regular_file_if_bytes_match(
+    root: &Path,
+    relative: &Path,
+    expected_bytes: &[u8],
+    replacement_bytes: &[u8],
+    fsync: bool,
+) -> Result<(), FsError> {
+    unix::replace_regular_file_if_bytes_match(root, relative, expected_bytes, replacement_bytes, fsync)
 }
 
 #[cfg(all(test, unix))]

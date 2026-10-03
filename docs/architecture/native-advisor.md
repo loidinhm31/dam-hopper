@@ -26,7 +26,7 @@ The source is the server process's `$HOME/.evcrate/advisor-history`. Status uses
 
 ## Phase 03: policy and evaluation reads
 
-Native read-only routes expose current account policy (`POST /api/advisor/policy/current`) and evaluation discovery, revision-checked reads, and comparisons (`POST /api/advisor/evaluations/list`, `POST /api/advisor/evaluations/read`, `POST /api/advisor/evaluations/compare`). They use the existing HOME/registered-project readers; no policy-write, import, or picker API was added.
+Native account policy routes expose current policy (`POST /api/advisor/policy/current`) and update its primary and backup routes (`PATCH /api/advisor/policy`); evaluation routes provide discovery, revision-checked reads, and comparisons (`POST /api/advisor/evaluations/list`, `POST /api/advisor/evaluations/read`, `POST /api/advisor/evaluations/compare`). Policy updates preserve other policy settings. No policy import or picker API exists.
 
 ## Phase 04: native React panel and provider
 
@@ -68,32 +68,34 @@ The panel/provider are implemented; Phase 05 wires them into Settings and persis
 
 ## API and authorization invariants
 
-Phases 02–03 implement status, settings, and data routes; Phase 04's native provider consumes these APIs, and Phase 05 connects it to Settings/Workspace without changing server-side authorization.
+Phases 02–03 implement status, settings, history/evaluation operations, and account policy reads. The API also supports revision-checked route updates at `/api/advisor/policy`; Phase 04's native provider consumes these APIs, and Phase 05 connects them to Settings/Workspace without changing server-side authorization.
 
 - Native status/settings routes work for admins even when disabled or history missing; enable toggle never requires folder creation or plugin registration.
 - Data routes require enabled feature and current admin authorization. Status conveys availability; missing source is explicit empty/not-configured state where source contract defines it.
 - Native routes use `require_auth` plus generalized `require_admin`; the enabled account's admin role is checked per request. Keep ordinary validated sessions and deny `--no-auth`; do not transplant plugin-only bearer admission or a static admin allowlist.
 - No path hash utility or root-identity admission field.
 - No custom root API. Require a real final history-root directory (root symlink rejected per user validation). Do not add canonical-equals-input, ancestor-symlink, UID or grant restrictions. Validate record/evaluation IDs within resolved source roots.
-- Source is read-only: no new delete/import/policy edit API. Refresh mutates in-memory snapshots only. Only requested configuration mutation is enable/disable.
+- History and evaluation sources remain read-only. Advisor configuration mutations are limited to the server enable toggle and primary/backup route updates; there is no history delete, policy import, or picker API. Refresh mutates in-memory snapshots only.
 - Bound pages, comparison workload, source file sizes, and blocking scans; reuse source limits. Do not rebuild entire history for every summary/page/detail request.
 - Snapshot/cursor ownership includes authenticated subject and server-side source/filter identity; never reuse snapshot from another owner or incompatible query.
 - Preserve history format discrimination, provenance, stale/not-configured/error distinctions and comparison eligibility. Full port evidence belongs in plan research/contracts.
 
 ## Phase 02 native history REST API
 
-The current native API uses camelCase JSON. Every route requires a normal validated session plus the current administrator role; Bearer tokens and the authentication cookie use the ordinary REST authentication layer. `--no-auth` is denied. Status and settings remain usable while disabled or while the history root is unavailable; history operations require `server.advisor.enabled`. JSON mutation/history bodies are capped at 64 KiB.
+The current native API uses camelCase JSON. Every route requires a normal validated session plus the current administrator role; Bearer tokens and the authentication cookie use the ordinary REST authentication layer. `--no-auth` is denied. Status and settings remain usable while Advisor is disabled; history and policy operations require `[server.advisor].enabled`. The policy update request is capped at 16 KiB; other Advisor JSON operation bodies are capped at 64 KiB.
 
 | Method and path | Request | Result |
 | --- | --- | --- |
 | `GET /api/advisor/status` | None | `{ enabled, available, path, sourceError }`; a final-root symlink is reported unavailable with `sourceError`. |
 | `PATCH /api/advisor/settings` | `{ enabled }` | `{ enabled }`; persists the server setting and clears active snapshots when disabled. |
+| `POST /api/advisor/policy/current` | None | Current account policy (`PolicyReadCurrentResultDto`). |
+| `PATCH /api/advisor/policy` | `{ expectedRevision, advisor: { primary, backup } }` | Updated `PolicyReadCurrentResultDto`; stale revision returns HTTP 409. |
 | `POST /api/advisor/history/refresh` | Optional `{ projectId? }` | Scan summary and inventory; creates a user-owned snapshot when available. |
 | `POST /api/advisor/history/summary` | `{ snapshotId, query? }` | Filtered aggregate metrics and project inventory. |
 | `POST /api/advisor/history/page` | `{ snapshotId, query?, sort?, cursor?, limit? }` | Page entries, next cursor, and returned byte count. |
 | `POST /api/advisor/history/detail` | `{ snapshotId, recordRef }` | Sanitized detail with status `ready`, `changed`, or `missing`. |
 
-`query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents the default and source-discovery boundary.
+`query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy request/response fields, bounds, and persistence alongside the history behavior.
 
 ## Phase 05 Settings and Workspace cutover (implementation/finalization settled; durable completion pending)
 
