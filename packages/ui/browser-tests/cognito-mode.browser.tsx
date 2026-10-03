@@ -493,7 +493,12 @@ describe("Cognito Mode Real-Browser Regressions", () => {
         rule.selectorText === ".cognito-mode-overlay--heavy-blur",
     );
     expect(overrideRule).toBeDefined();
-    expect(overrideRule!.style.getPropertyValue("-webkit-backdrop-filter")).toBe("none");
+    const prefixedFilter = overrideRule!.style.getPropertyValue("-webkit-backdrop-filter");
+    if (CSS.supports("-webkit-backdrop-filter", "none")) {
+      expect(prefixedFilter).toBe("none");
+    } else {
+      expect(prefixedFilter).toBe("");
+    }
 
     const originalMedia = targetRule!.media.mediaText;
 
