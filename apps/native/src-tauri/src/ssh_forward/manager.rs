@@ -6123,7 +6123,7 @@ mod tests {
         store_write_error_code, vault_error_code, ActivationBarrierPoint,
         ConnectionAdmission, ConnectionReservationGuard, CredentialLease, LoadedPassword,
         LoadedPasswordCleanup, ResolvedCredentials, RuntimeEntry, SshForwardManager,
-        ACTIVE_FORWARD_LIMIT, HANDSHAKE_CONCURRENCY_LIMIT,
+        HANDSHAKE_CONCURRENCY_LIMIT,
     };
     use crate::ssh_forward::{
         credential_vault::{
