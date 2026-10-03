@@ -8181,10 +8181,12 @@ mod tests {
         let config = temp_config_dir("concurrent-open-scope");
         let manager = Arc::new(SshForwardManager::new(&config).unwrap());
         let open_res = manager
-            .open_client(KnownScopesInput::Available { ids: vec![] })
+            .open_client(KnownScopesInput::Available {
+                ids: vec![SCOPE.into()],
+            })
             .await
             .unwrap();
-        let scope_id = "test-scope-concurrent";
+        let scope_id = SCOPE;
 
         let m1 = Arc::clone(&manager);
         let ctx1 = open_res.context.clone();
