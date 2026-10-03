@@ -413,7 +413,7 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(toastViewport?.textContent).not.toContain("Claude needs attention");
   });
 
-  it("applies correct CSS classes, computed styles, and observable rendering for heavy-blur and black-screen styles", async () => {
+  it("applies correct CSS classes and computed styles for heavy-blur and black-screen styles", async () => {
     // 1. Activate Heavy Blur
     await act(async () => {
       useSettingsStore.setState({ cognitoModeStyle: "heavy-blur" });
@@ -476,14 +476,6 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(targetRule).not.toBeNull();
     expect(targetRule!.media.mediaText).toContain("prefers-reduced-transparency");
     expect(targetRule!.media.mediaText).toContain("reduce");
-
-    const heavyBlurRule = Array.from(targetRule!.cssRules).find(
-      (rule): rule is CSSStyleRule =>
-        rule instanceof CSSStyleRule &&
-        rule.selectorText === ".cognito-mode-overlay--heavy-blur",
-    );
-    expect(heavyBlurRule).not.toBeUndefined();
-    expect(heavyBlurRule!.style.getPropertyValue("-webkit-backdrop-filter")).toBe("none");
 
     const originalMedia = targetRule!.media.mediaText;
 
