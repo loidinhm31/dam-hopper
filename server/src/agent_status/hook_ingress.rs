@@ -128,6 +128,30 @@ fn is_any_agent_process(proc_dir: &Path, pid: u32, comm: &str) -> bool {
     super::hook_reporter::is_any_agent_cli_process(proc_dir, pid, comm)
 }
 
+fn is_codex_managed_daemon(proc_dir: &Path, pid: u32) -> bool {
+    let Ok(cmdline) = std::fs::read(proc_dir.join(pid.to_string()).join("cmdline")) else {
+        return false;
+    };
+    let args: Vec<&[u8]> = cmdline
+        .split(|&byte| byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .collect();
+    let Some(arg0) = args.first().and_then(|arg| std::str::from_utf8(arg).ok()) else {
+        return false;
+    };
+    let arg0_name = Path::new(arg0).file_name().and_then(|name| name.to_str());
+    let is_codex = matches!(arg0_name, Some("codex" | "codex-cli"));
+    let has_app_server = args
+        .iter()
+        .skip(1)
+        .any(|arg| *arg == b"app-server");
+    let is_managed = args
+        .iter()
+        .skip(1)
+        .any(|arg| *arg == b"--managed-daemon");
+    is_codex && has_app_server && is_managed
+}
+
 /// Verify that the reporter's reported agent CLI root and the registered PTY shell root
 /// form a valid, verifiable ancestry chain in /proc on Linux.
 ///
@@ -170,6 +194,19 @@ pub fn verify_reporter_ancestry(
             "reporter process {peer_pid} start ticks mismatch (PID reused): expected {}, got {}",
             claimed_leaf.start_ticks, leaf_stat.start_ticks
         )));
+    }
+
+    // Codex 0.160+ can run hooks from a shared app-server daemon detached from the
+    // launching terminal (PPID 1). The daemon may inherit the terminal capability,
+    // but process ancestry can no longer prove which DamHopper PTY owns the hook.
+    // Fail closed with actionable guidance instead of weakening terminal isolation.
+    if envelope.agent_kind == AgentKind::Codex
+        && !envelope.process_ancestry.contains(&registered_root)
+        && is_codex_managed_daemon(proc_dir, envelope.root_process.pid)
+    {
+        return Err(AgentStatusError::UnverifiableProcessAncestry(
+            "Codex shared managed daemon is detached from the DamHopper PTY; launch Codex with `codex --no-daemon` for terminal-scoped status tracking".to_string(),
+        ));
     }
 
     // 3. Chain length check: reporter, agent CLI root, and PTY shell root required
@@ -502,6 +539,84 @@ mod tests {
             process_ancestry: vec![],
         };
         assert!(validate_hook_envelope(&envelope).is_err());
+    }
+
+    #[test]
+    fn test_verify_reporter_ancestry_reports_codex_managed_daemon_incompatibility() {
+        let dir = tempdir().unwrap();
+        let proc_path = dir.path();
+
+        write_mock_process(proc_path, 100, 1, "bash", 1000, &["/bin/bash"]);
+        write_mock_process(
+            proc_path,
+            200,
+            1,
+            "codex",
+            2000,
+            &[
+                "/home/test/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex",
+                "app-server",
+                "--listen",
+                "unix://",
+                "--managed-daemon",
+            ],
+        );
+        write_mock_process(
+            proc_path,
+            300,
+            200,
+            "dam-hopper-serv",
+            3000,
+            &[
+                "/opt/dam-hopper/bin/dam-hopper-server",
+                "integration",
+                "codex",
+                "report-hook",
+            ],
+        );
+
+        let envelope = PrivateHookEnvelope {
+            version: 1,
+            agent_kind: AgentKind::Codex,
+            adapter_version: "1.0.0".to_string(),
+            event_id: "evt-daemon".to_string(),
+            event: "UserPromptSubmit".to_string(),
+            agent_session_id: "sess-daemon".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            tool_call_id: None,
+            reason: None,
+            notification_type: None,
+            root_process: ProcessIdentity {
+                pid: 200,
+                start_ticks: 2000,
+            },
+            process_ancestry: vec![
+                ProcessIdentity {
+                    pid: 300,
+                    start_ticks: 3000,
+                },
+                ProcessIdentity {
+                    pid: 200,
+                    start_ticks: 2000,
+                },
+            ],
+        };
+
+        let err = verify_reporter_ancestry(
+            proc_path,
+            300,
+            ProcessIdentity {
+                pid: 100,
+                start_ticks: 1000,
+            },
+            &envelope,
+        )
+        .expect_err("detached managed daemon must fail closed");
+
+        assert!(
+            err.to_string().contains("codex --no-daemon"),
+            "error should provide the supported compatibility mode: {err}"
+        );
     }
 
     #[test]
