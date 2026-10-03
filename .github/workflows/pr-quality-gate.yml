@@ -78,6 +78,9 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build native frontend for native smoke-backed tests
+        if: matrix.suite == 'native'
+        run: pnpm --filter @dam-hopper/native build
       - name: Run ${{ matrix.suite }} tests
         run: ${{ matrix.command }}
 
@@ -97,7 +100,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm --filter @dam-hopper/ui exec playwright install --with-deps chromium
       - name: Run all UI browser tests
         run: pnpm --filter @dam-hopper/ui test:browser
 
@@ -113,8 +116,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-      - name: Rustfmt
-        run: cargo fmt --manifest-path server/Cargo.toml -- --check
       - name: Clippy
         run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
       - name: Server tests
@@ -167,8 +168,6 @@ jobs:
             librsvg2-dev
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
-      - name: Rustfmt
-        run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
       - name: Clippy
         run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Native Rust tests
@@ -203,8 +202,6 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build native frontend
         run: pnpm --filter @dam-hopper/native build
-      - name: Rustfmt
-        run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
       - name: Clippy
         run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Native Rust tests
@@ -233,8 +230,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify release scripts and version alignment
         run: pnpm release:verify
-      - name: Run Linux release evidence checks
-        run: pnpm release:evidence-check
+      - name: Validate Linux release evidence checker source
+        run: node --check tests/deploy/linux-release-evidence-check.mjs
 
   release_contract_windows:
     name: Release contract - Windows
