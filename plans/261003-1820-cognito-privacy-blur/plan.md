@@ -4,7 +4,7 @@ description: "Restore a distinct frosted-glass privacy mask with exact browser s
 status: completed
 priority: P2
 effort: 2h
-branch: feat/git-squash-commits
+branch: fix/cognito-privacy-blur
 tags: [bugfix, frontend, ui, privacy, accessibility]
 created: 2026-10-03
 ---
@@ -48,7 +48,7 @@ Replace the block starting at the fail-opaque comment, leaving `.cognito-mode-ov
   background-color: #000000;
 }
 
-@supports ((backdrop-filter: blur(20px)) or (-webkit-backdrop-filter: blur(20px))) {
+@supports ((backdrop-filter: blur(20px) saturate(140%)) or (-webkit-backdrop-filter: blur(20px) saturate(140%))) {
   .cognito-mode-overlay--heavy-blur {
     background-color: rgba(13, 17, 23, 0.52);
     -webkit-backdrop-filter: blur(20px) saturate(140%);
@@ -73,7 +73,7 @@ Keep the accessibility override **after** `@supports`, outside that block: equal
 
 Extend `applies correct CSS classes for heavy-blur and black-screen styles` at lines 417-437, retaining the existing `act`, activation/dismissal sequence, settings updates, and class assertions. Assert overlay presence before `getComputedStyle`; read computed styles again after each activation/style change.
 
-- Current runner is headless Playwright **Chromium via Vitest Browser Mode**, not full-stack E2E. Assert its standard `CSS.supports("backdrop-filter", "blur(20px)")` support; do not silently skip the regression or let a broken frosted style pass through the opaque fallback.
+- Current runner is headless Playwright **Chromium via Vitest Browser Mode**, not full-stack E2E. Assert its standard `CSS.supports("backdrop-filter", "blur(20px) saturate(140%)")` support; do not silently skip the regression or let a broken frosted style pass through the opaque fallback.
 - Under default/no-reduction preference, assert background exactly `rgba(13, 17, 23, 0.52)`, filter exactly the ordered `blur(20px)` plus `saturate(140%)` treatment, and inset highlight color/alpha, 1px spread, zero offsets/blur. CSSOM may serialize saturation as `1.4`; accept only `blur(20px) saturate(1.4)` or `blur(20px) saturate(140%)`, not merely a string containing `blur`.
 - Compare the computed shadow to the equivalent serialized inset shadow (Chromium ordinarily returns `rgba(255, 255, 255, 0.05) 0px 0px 0px 1px inset`); normalize serialization if necessary without weakening numeric checks.
 - On Black Screen activation, assert background `rgb(0, 0, 0)`, `backdrop-filter: none`, and `box-shadow: none`. Verify the heavy-blur modifier is absent. This prevents the frosted styling leaking into the opaque style.
@@ -84,7 +84,7 @@ Retain all existing input/focus/terminal/toast/audio tests unchanged; no unit-te
 
 ### 3. Reconcile focused documentation
 
-Update the existing frontend-components paragraph to describe 20px blur, 140% saturation, 0.52 tint, subtle inset highlight, and opaque black for unsupported filtering or reduced transparency. Preserve the visual-only privacy disclaimer in architecture/configuration documentation. Add the dated changelog entry after implementation; do not announce tests/builds passed until their results exist. No broad document rewrite.
+Update the existing frontend-components paragraph to describe 20px blur, 140% saturation, 0.52 tint, subtle inset highlight, and opaque black for unsupported filtering or reduced transparency where that media feature is supported. Preserve the visual-only privacy disclaimer in architecture/configuration documentation. Add the dated changelog entry after implementation; do not announce tests/builds passed until their results exist. No broad document rewrite.
 
 ### 4. Qualification — main agent, after all edits
 
