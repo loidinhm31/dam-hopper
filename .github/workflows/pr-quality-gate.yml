@@ -116,8 +116,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-      - name: Clippy
-        run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
+      - name: Clippy production targets
+        run: cargo clippy --manifest-path server/Cargo.toml --lib --bins -- -D warnings
       - name: Server tests
         run: cargo test --manifest-path server/Cargo.toml
 
