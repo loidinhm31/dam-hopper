@@ -148,6 +148,7 @@ pub(crate) struct WireCounter(u64);
 
 impl WireCounter {
     pub(crate) const ZERO: Self = Self(0);
+    pub(crate) const ONE: Self = Self(1);
 
     pub(crate) fn parse(value: &str) -> Result<Self, WireScalarError> {
         if value.is_empty()
