@@ -197,7 +197,7 @@ pub fn run() {
                 handle_exit_requested(
                     coordinator.should_prevent_exit(),
                     || api.prevent_exit(),
-                    || coordinator.trigger(app_handle.clone()),
+                    || coordinator.trigger(_app_handle.clone()),
                 );
             }
             tauri::RunEvent::Exit => {
