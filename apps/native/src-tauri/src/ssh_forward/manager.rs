@@ -5960,8 +5960,6 @@ async fn run_rule_worker(
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-
 struct ActiveChannelGuard(Arc<AtomicU16>);
 
 impl Drop for ActiveChannelGuard {

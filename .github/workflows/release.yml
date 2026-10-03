@@ -138,7 +138,7 @@ jobs:
           releaseBody: "See the assets to download and install this version."
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: ${{ !startsWith(matrix.platform.os, 'windows') }}
+          includeUpdaterJson: false
           args: >-
             --bundles ${{ matrix.platform.bundles }}
             ${{ startsWith(matrix.platform.os, 'windows') && '--config src-tauri/tauri.windows.package.conf.json' || '' }}
