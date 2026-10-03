@@ -108,6 +108,19 @@ jobs:
     name: Rust server - Linux
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    env:
+      TEST_MONGODB_URI: mongodb://127.0.0.1:27017
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -181,7 +194,7 @@ jobs:
       - name: Native frontend build
         run: pnpm --filter @dam-hopper/native build
       - name: Native smoke build
-        run: pnpm --filter @dam-hopper/native smoke:ssh-forward -- --build-only
+        run: pnpm --filter @dam-hopper/native smoke:ssh-forward
       - name: Tauri compile without bundle
         run: pnpm --filter @dam-hopper/native exec tauri build --no-bundle
 
@@ -219,7 +232,7 @@ jobs:
       - name: SSH forwarding E2E
         run: pnpm --filter @dam-hopper/native test:e2e:ssh-forward
       - name: SSH forwarding smoke build
-        run: pnpm --filter @dam-hopper/native smoke:ssh-forward -- --build-only
+        run: pnpm --filter @dam-hopper/native smoke:ssh-forward
       - name: Tauri compile without bundle
         run: pnpm --filter @dam-hopper/native exec tauri build --no-bundle
 
