@@ -215,3 +215,14 @@ pub async fn evaluations_compare_handler(
         .compare_evaluations(project_root.as_deref(), body)?;
     Ok(Json(res))
 }
+
+/// POST /api/advisor/models — discovers models from harness or returns fallback catalog.
+pub async fn models_list_handler(
+    State(state): State<AppState>,
+    Extension(_actor): Extension<AuthenticatedActor>,
+    Json(body): Json<crate::advisor::models::AdvisorModelsParamsDto>,
+) -> Result<Json<crate::advisor::models::AdvisorModelsResultDto>, AdvisorError> {
+    check_advisor_enabled(&state).await?;
+    let res = state.advisor_service.discover_models(&body.backend).await?;
+    Ok(Json(res))
+}

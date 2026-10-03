@@ -617,3 +617,168 @@ async fn test_policy_patch_payload_limit() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+#[tokio::test]
+async fn test_models_disabled_denied() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (router, _state, token) = create_harness(&temp_dir, home).await;
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"codex"}"#))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "ADVISOR_DISABLED");
+}
+
+#[tokio::test]
+async fn test_models_unknown_backend_rejected() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (router, _state, token) = create_harness(&temp_dir, home).await;
+
+    // Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled": true}"#))
+        .unwrap();
+    router.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"not_a_valid_backend"}"#))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "InvalidInput");
+}
+
+#[tokio::test]
+async fn test_models_payload_limit() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (router, _state, token) = create_harness(&temp_dir, home).await;
+
+    // Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled": true}"#))
+        .unwrap();
+    router.clone().oneshot(req).await.unwrap();
+
+    let large_pad = "a".repeat(20 * 1024);
+    let body_str = format!(r#"{{"backend":"codex","padding":"{}"}}"#, large_pad);
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body_str))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn test_models_discovery_flow_all_backends() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (router, _state, token) = create_harness(&temp_dir, home).await;
+
+    // Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled": true}"#))
+        .unwrap();
+    router.clone().oneshot(req).await.unwrap();
+
+    for backend in &["codex", "claude", "omp", "pi"] {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/advisor/models")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(r#"{{"backend":"{backend}"}}"#)))
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "Failed for backend {backend}");
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["backend"], *backend);
+        assert!(json["source"] == "fallback" || json["source"] == "harness");
+        assert_eq!(json["defaultEffort"], "medium");
+        assert!(json["models"].as_array().unwrap().len() >= 1);
+        assert!(json["efforts"].as_array().unwrap().len() >= 1);
+    }
+}
+
+#[tokio::test]
+async fn test_models_with_fake_runner_harness_success() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (_router, mut state, token) = create_harness(&temp_dir, home.clone()).await;
+
+    // Inject fake runner
+    let fake_runner = Arc::new(dam_hopper_server::advisor::models::FakeHarnessCommandRunner::new());
+    let omp_fixture = br#"{"models":[{"id":"m1","provider":"openai","selector":"openai/m1","displayName":"OpenAI Model 1","thinking":["low","high"]}]}"#;
+    fake_runner.set_result(
+        dam_hopper_server::advisor::models::AdvisorBackend::Omp,
+        Ok(dam_hopper_server::advisor::models::CommandOutput {
+            stdout: omp_fixture.to_vec(),
+            truncated: false,
+        }),
+    );
+
+    let advisor_service = Arc::new(AdvisorService::with_model_runner(Some(home), fake_runner));
+    state = state.with_advisor_service(advisor_service);
+    let router = dam_hopper_server::api::build_router(state);
+
+    // Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled": true}"#))
+        .unwrap();
+    router.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"omp"}"#))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["backend"], "omp");
+    assert_eq!(json["source"], "harness");
+    assert_eq!(json["models"][0]["id"], "openai/m1");
+    assert_eq!(json["models"][0]["label"], "OpenAI Model 1");
+    assert_eq!(json["models"][0]["efforts"], serde_json::json!(["low", "high"]));
+    assert_eq!(json["issueCode"], serde_json::Value::Null);
+}

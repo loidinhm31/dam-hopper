@@ -20,23 +20,51 @@ pub struct AdvisorService {
     home_dir: Option<PathBuf>,
     cache: Mutex<SnapshotCache>,
     policy_lock: std::sync::Arc<Mutex<()>>,
+    model_service: std::sync::Arc<crate::advisor::models::HarnessModelService>,
 }
 
 impl AdvisorService {
     pub fn new(home_dir: Option<PathBuf>) -> Self {
         Self {
-            home_dir,
+            home_dir: home_dir.clone(),
             cache: Mutex::new(SnapshotCache::new(Vec::new())),
             policy_lock: std::sync::Arc::new(Mutex::new(())),
+            model_service: std::sync::Arc::new(crate::advisor::models::HarnessModelService::new(
+                home_dir,
+            )),
         }
     }
 
     pub fn with_secret(home_dir: Option<PathBuf>, secret: Vec<u8>) -> Self {
         Self {
-            home_dir,
+            home_dir: home_dir.clone(),
             cache: Mutex::new(SnapshotCache::new(secret)),
             policy_lock: std::sync::Arc::new(Mutex::new(())),
+            model_service: std::sync::Arc::new(crate::advisor::models::HarnessModelService::new(
+                home_dir,
+            )),
         }
+    }
+
+    pub fn with_model_runner(
+        home_dir: Option<PathBuf>,
+        runner: std::sync::Arc<dyn crate::advisor::models::HarnessCommandRunner>,
+    ) -> Self {
+        Self {
+            home_dir: home_dir.clone(),
+            cache: Mutex::new(SnapshotCache::new(Vec::new())),
+            policy_lock: std::sync::Arc::new(Mutex::new(())),
+            model_service: std::sync::Arc::new(
+                crate::advisor::models::HarnessModelService::with_runner(home_dir, runner),
+            ),
+        }
+    }
+
+    pub async fn discover_models(
+        &self,
+        backend: &str,
+    ) -> Result<crate::advisor::models::AdvisorModelsResultDto, AdvisorError> {
+        self.model_service.discover_models(backend).await
     }
 
     pub fn status(&self, enabled: bool) -> AdvisorStatusDto {

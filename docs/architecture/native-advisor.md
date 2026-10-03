@@ -80,9 +80,9 @@ Phases 02–03 implement status, settings, history/evaluation operations, and ac
 - Snapshot/cursor ownership includes authenticated subject and server-side source/filter identity; never reuse snapshot from another owner or incompatible query.
 - Preserve history format discrimination, provenance, stale/not-configured/error distinctions and comparison eligibility. Full port evidence belongs in plan research/contracts.
 
-## Phase 02 native history REST API
+## Native Advisor REST API
 
-The current native API uses camelCase JSON. Every route requires a normal validated session plus the current administrator role; Bearer tokens and the authentication cookie use the ordinary REST authentication layer. `--no-auth` is denied. Status and settings remain usable while Advisor is disabled; history and policy operations require `[server.advisor].enabled`. The policy update request is capped at 16 KiB; other Advisor JSON operation bodies are capped at 64 KiB.
+The current native API uses camelCase JSON. Every route requires a normal validated session plus the current administrator role; Bearer tokens and the authentication cookie use the ordinary REST authentication layer. `--no-auth` is denied. Status and settings remain usable while Advisor is disabled; history, policy, evaluation, and model-discovery operations require `[server.advisor].enabled`. Policy updates and model-discovery requests are capped at 16 KiB; other Advisor JSON operation bodies are capped at 64 KiB.
 
 | Method and path | Request | Result |
 | --- | --- | --- |
@@ -94,8 +94,40 @@ The current native API uses camelCase JSON. Every route requires a normal valida
 | `POST /api/advisor/history/summary` | `{ snapshotId, query? }` | Filtered aggregate metrics and project inventory. |
 | `POST /api/advisor/history/page` | `{ snapshotId, query?, sort?, cursor?, limit? }` | Page entries, next cursor, and returned byte count. |
 | `POST /api/advisor/history/detail` | `{ snapshotId, recordRef }` | Sanitized detail with status `ready`, `changed`, or `missing`. |
+| `POST /api/advisor/models` | `{ backend }` | `{ backend, source, models, efforts, defaultEffort, observedAt, issueCode? }`; discovers a harness catalog or returns its fallback catalog. |
 
-`query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy request/response fields, bounds, and persistence alongside the history behavior.
+`query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy and model-discovery DTOs, fallback catalogs, limits, and persistence alongside the history behavior.
+
+### Harness model discovery
+
+`POST /api/advisor/models` runs discovery on the server for one of the four supported backend values: `omp`, `codex`, `claude`, or `pi`. The required `backend` string is trimmed; the resulting value must match one of those lowercase names. The request DTO rejects unknown fields. Discovery uses the corresponding local harness executable and a temporary working directory:
+
+| Backend | Discovery adapter |
+| --- | --- |
+| `omp` | `omp models ls --json --no-extensions` |
+| `pi` | `pi --offline --list-models --no-extensions` |
+| `codex` | Starts `codex app-server --listen stdio://` and requests `model/list` with a 100-model limit and hidden models excluded. |
+| `claude` | Uses the Claude stream-JSON control protocol; the model catalog is returned by its initialize response. |
+
+A non-empty normalized harness catalog returns `source: "harness"`. A missing executable, timeout, output-limit failure, unsafe/failed execution, invalid output, or empty usable catalog returns HTTP 200 with `source: "fallback"` and its diagnostic `issueCode` (`HARNESS_NOT_FOUND`, `HARNESS_DISCOVERY_TIMEOUT`, `HARNESS_OUTPUT_LIMIT`, `HARNESS_DISCOVERY_UNSAFE`, `HARNESS_DISCOVERY_FAILED`, `HARNESS_OUTPUT_INVALID`, or `HARNESS_CATALOG_EMPTY`). A non-empty catalog that is truncated remains `source: "harness"` and carries `HARNESS_CATALOG_TRUNCATED`. A disabled feature returns HTTP 403 with `{ "code": "AdvisorDisabled", "error": "ADVISOR_DISABLED" }`; an unsupported backend returns HTTP 400 (`InvalidInput`).
+
+`AdvisorModelsResultDto` uses camelCase JSON:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `backend` | string | Normalized supported backend name. |
+| `source` | string | `harness` for a discovered catalog or `fallback` for the built-in catalog. |
+| `models` | array of objects | Each model has `id`, `label`, and model-specific `efforts`. |
+| `efforts` | string array | Backend-level effort suggestions. |
+| `defaultEffort` | string | Always `medium`. |
+| `observedAt` | number | Observation time in Unix milliseconds. |
+| `issueCode` | string, optional | Fallback reason, or `HARNESS_CATALOG_TRUNCATED` for a partial harness catalog; omitted when no issue is reported. |
+
+Fallback catalogs and backend effort choices are listed in the [Advisor configuration reference](../configuration/advisor.md#model-catalog-discovery). Fallback catalogs are static suggestions, not a confirmation that the corresponding model is installed or available to the current account.
+
+Discovery work is bounded in several ways, but the timeout stages are independent: at most two discoveries hold a semaphore permit; waiting for a permit is capped at five seconds, and the production runner has a separate five-second execution timeout. OMP and Pi stdout capture is capped at 5 MiB. Codex and Claude currently use line readers that do not enforce the declared 1 MiB `MAX_LINE_BYTES` constant, so a per-line byte limit is not guaranteed for those adapters.
+
+Normalization caps catalogs at 500 models and the serialized `models` array at 256 KiB. It trims IDs and labels, drops empty values, control characters, credential-like substrings, and IDs or labels longer than 256 bytes, removes duplicate IDs, and sorts by label then ID. The 256 KiB bound is applied to the model array, not to the enclosing response object.
 
 ## Phase 05 Settings and Workspace cutover (implementation/finalization settled; durable completion pending)
 

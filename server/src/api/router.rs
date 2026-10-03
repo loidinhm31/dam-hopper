@@ -581,6 +581,11 @@ pub fn build_router_with_web_dir_and_origins(
                 .layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
         .route(
+            "/api/advisor/models",
+            post(advisor_api::models_list_handler)
+                .layer(RequestBodyLimitLayer::new(16 * 1024)),
+        )
+        .route(
             "/api/advisor/evaluations/list",
             post(advisor_api::evaluations_list_handler)
                 .layer(RequestBodyLimitLayer::new(64 * 1024)),
