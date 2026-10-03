@@ -363,6 +363,100 @@ describe("HostResourceStreamCoordinator (03-I)", () => {
     expect(getHostResourceSource(owner, mockQc).mode).toBe("RETRY_WAIT");
   });
 
+  it("pauses on BFCache pagehide and resumes on persisted pageshow", () => {
+    const fakeDocument = new EventTarget();
+    Object.defineProperty(fakeDocument, "visibilityState", { value: "visible" });
+    const fakeWindow = new EventTarget();
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("window", fakeWindow);
+
+    const createPageTransitionEvent = (
+      type: "pagehide" | "pageshow",
+    ): Event => {
+      const event = new Event(type);
+      Object.defineProperty(event, "persisted", { value: true });
+      return event;
+    };
+
+    const deregisterQc = registerConnectionRegistryQueryClient(mockQc);
+    const owner = { profileId: "p1", generation: 1 };
+    const mockTransport = new WsTransport("http://localhost:4800");
+    const openSpy = vi
+      .spyOn(mockTransport, "openHostResourceEvents")
+      .mockReturnValue(Promise.withResolvers<never>().promise);
+    __setConnectionSnapshotForTests(
+      "p1",
+      {
+        owner,
+        status: "connected",
+      },
+      mockTransport,
+    );
+
+    const unreg = registerHostResourceInterest(owner, mockQc, "fleet");
+    expect(getHostResourceSource(owner, mockQc).mode).toBe("STARTING");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+
+    fakeWindow.dispatchEvent(createPageTransitionEvent("pagehide"));
+    expect(getHostResourceSource(owner, mockQc).mode).toBe("PAUSED");
+
+    fakeWindow.dispatchEvent(createPageTransitionEvent("pageshow"));
+    expect(getHostResourceSource(owner, mockQc).mode).toBe("STARTING");
+    expect(openSpy).toHaveBeenCalledTimes(2);
+
+    unreg();
+    deregisterQc();
+    mockTransport.destroy();
+  });
+
+  it("BFCache pagehide fences an in-flight host-resource frame switch", async () => {
+    const fakeDocument = new EventTarget();
+    Object.defineProperty(fakeDocument, "visibilityState", { value: "visible" });
+    const fakeWindow = new EventTarget();
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("window", fakeWindow);
+
+    const pageHide = new Event("pagehide");
+    Object.defineProperty(pageHide, "persisted", { value: true });
+
+    const cancelGate = Promise.withResolvers<void>();
+    const gatedQc = {
+      cancelQueries: vi.fn(() => cancelGate.promise),
+      setQueryData: vi.fn(),
+    } as unknown as QueryClient;
+    const deregisterQc = registerConnectionRegistryQueryClient(gatedQc);
+    const owner = { profileId: "p1", generation: 1 };
+    __setConnectionSnapshotForTests("p1", {
+      owner,
+      status: "connected",
+    });
+
+    const coord = new HostResourceStreamCoordinator(owner, gatedQc);
+    coord.mode = "STARTING";
+    coord.attemptNumber = 1;
+
+    const switchPromise = coord.switchToHostResourceFrame(
+      coord.sourceGeneration,
+      MOCK_FRAME,
+      MOCK_STATUS,
+      1,
+    );
+    expect(coord.switching).toBe(true);
+
+    fakeWindow.dispatchEvent(pageHide);
+    expect(coord.mode).toBe("PAUSED");
+    expect(coord.switching).toBe(false);
+
+    cancelGate.resolve();
+    await expect(switchPromise).resolves.toBe(false);
+    expect(coord.mode).toBe("PAUSED");
+    expect(coord.switching).toBe(false);
+    expect(gatedQc.setQueryData).not.toHaveBeenCalled();
+
+    coord.dispose();
+    deregisterQc();
+  });
+
   it("AUTH_UNAVAILABLE sets persistent AUTH_BLOCKED latch across retries", () => {
     registerConnectionRegistryQueryClient(mockQc);
     const owner = { profileId: "p1", generation: 1 };

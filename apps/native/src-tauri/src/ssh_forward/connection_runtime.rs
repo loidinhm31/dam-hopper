@@ -2172,6 +2172,7 @@ mod tests {
             registry.begin_disable_rule(
                 SCOPE,
                 connection_id,
+                reservation.generation,
                 "f2e3d6a0-0ac7-4b6b-b6b4-b4f9e7d2c1a0",
                 WireCounter::parse("1").unwrap(),
             ),
@@ -2209,6 +2210,7 @@ mod tests {
                 .remove_rule(
                     SCOPE,
                     connection_id,
+                    reservation.generation,
                     rule_id,
                     WireCounter::parse("2").unwrap(),
                 )

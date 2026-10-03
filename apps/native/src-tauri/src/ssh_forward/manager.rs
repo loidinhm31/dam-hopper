@@ -51,7 +51,7 @@ use super::{
     model::{
         AutoStartDisposition, OpenClientResult, PurgeScopeResult, SshConnectionState,
         SshForwardCredentialState, SshForwardCredentialStatus, SshForwardEventHint,
-        SshForwardEventReason, SshForwardRuleState, SshForwardRuntime, SshForwardScopeActivation,
+        ScopeContextInput, ScopeHandle, SshForwardEventReason, SshForwardRuleState, SshForwardRuntime,
         SshForwardSnapshot, SshForwardState, SshForwardTrustRepairMetadata, SshKeyInventory,
         SshKeyInventoryItem, SshKeyInventorySource, UtcTimestamp, WireCounter,
     },
@@ -69,6 +69,9 @@ use super::store_schema::{StoredScopeConfigV2, MAX_SAVED_CONNECTIONS};
 
 #[cfg(not(test))]
 use super::credential_vault::WindowsCredentialVault;
+
+#[cfg(test)]
+use super::model::SshForwardScopeActivation;
 
 const ACTIVE_FORWARD_LIMIT: usize = 16;
 const HANDSHAKE_CONCURRENCY_LIMIT: usize = 4;
@@ -362,14 +365,7 @@ impl RuntimeEntry {
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum ActivationBarrierPoint {
-    AfterIntent = 1,
-    BeforeStop = 2,
-    AfterStop = 3,
-    AfterLoad = 4,
-    BeforeCommit = 5,
-    BeforeAutoStart = 6,
-    BeforePublish = 7,
-    BeforeV2CollectionCommit = 8,
+    BeforeV2CollectionCommit = 1,
 }
 
 #[cfg(test)]
@@ -1230,6 +1226,7 @@ impl SshForwardManager {
         token: WireCounter,
         scope_id: &str,
     ) -> Result<(), SshForwardCommandError> {
+        self.ensure_context(context, token, scope_id).await?;
         let active = {
             let scopes = self.scopes.lock().await;
             scopes.get(scope_id).cloned()
@@ -1237,40 +1234,28 @@ impl SshForwardManager {
         let Some(active) = active else {
             return Ok(());
         };
-        let profiles = active
-            .store
-            .load_profiles()
-            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
         let config = active
             .store
             .load_scope_config()
             .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
-        let v2_connections = config
-            .connections()
-            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?;
-        let (candidates, _) = partition_auto_start_candidates(profiles.profiles);
-        for profile in candidates {
-            if let Some(v2_conn) = v2_connections.iter().find(|c| c.id == profile.id) {
-                let manager = Arc::clone(self);
-                let conn_clone = v2_conn.clone();
-                let context_clone = context.clone();
-                let scope_id_owned = scope_id.to_string();
-                let generation = active.generation;
-                tokio::spawn(async move {
-                    let _ = manager
-                        .connect_internal(
-                            &context_clone,
-                            token,
-                            &scope_id_owned,
-                            generation,
-                            &conn_clone,
-                            WireCounter::ZERO,
-                            None,
-                        )
-                        .await;
-                });
-            }
+        let mut desired_rules = config
+            .rules()
+            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
+            .into_iter()
+            .filter(|rule| rule.desired_enabled)
+            .collect::<Vec<_>>();
+        desired_rules.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        // Opening a scope only rehydrates desired state. Authentication and
+        // listeners begin at explicit connect/setRuleEnabled commands.
+        for _rule in desired_rules {
+            self.ensure_context(context, token, scope_id).await?;
         }
+        self.ensure_context(context, token, scope_id).await?;
         Ok(())
     }
 
@@ -1527,7 +1512,7 @@ impl SshForwardManager {
                     true,
                 )
             })?;
-        self.update_connections_revision(committed.connections_revision)
+        self.update_connections_revision(&input.request.scope_id, committed.connections_revision)
             .await;
         self.emit_collection_hint_checked(
             &input.request.scope_id,
@@ -3674,6 +3659,7 @@ impl SshForwardManager {
                     let _ = self.connection_registry.lock().await.remove_rule(
                         scope_id,
                         connection_id,
+                        connection_generation,
                         &rule_id,
                         cleanup_generation,
                     );
@@ -4111,7 +4097,7 @@ impl SshForwardManager {
                 .map_err(|_| SshForwardErrorCode::TrustRevisionConflict.command_error())?;
             committed.revision()
         };
-        self.update_trust_revision(committed_revision).await;
+        self.update_trust_revision(&input.scope_id, committed_revision).await;
         self.clear_live_secrets_for_profile(&input.scope_id, &input.connection_profile_id);
         self.emit_runtime_hint(
             None,
@@ -5055,77 +5041,6 @@ impl SshForwardManager {
         fail(last_error).await
     }
 
-    async fn auto_start_scope(
-        self: &Arc<Self>,
-        _context: &DesktopClientContext,
-        _token: WireCounter,
-        key: ActivationKey,
-    ) -> Result<(), SshForwardCommandError> {
-        let Some(active) = self.active_scope.lock().await.clone() else {
-            return Ok(());
-        };
-        let config = active
-            .store
-            .load_scope_config()
-            .map_err(|_| SshForwardErrorCode::StoreIo.command_error())?;
-        let mut desired_rules = config
-            .rules()
-            .map_err(|_| SshForwardErrorCode::StoreCorrupt.command_error())?
-            .into_iter()
-            .filter(|rule| rule.desired_enabled)
-            .collect::<Vec<_>>();
-        desired_rules.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        // Scope activation only rehydrates the desired set. Authentication and
-        // listener admission begin at explicit connect/setRuleEnabled commands.
-        // Iterating in wire order makes supersession deterministic without
-        // authorizing any network activity from persisted flags.
-        for _rule in desired_rules {
-            self.check_intent(key).await?;
-        }
-        self.check_intent(key).await?;
-        Ok(())
-    }
-
-    async fn restore_suspended_scope(
-        self: &Arc<Self>,
-        context: &DesktopClientContext,
-        token: WireCounter,
-        key: ActivationKey,
-    ) -> Result<(), SshForwardCommandError> {
-        let Some(active) = self.active_scope.lock().await.clone() else {
-            return Ok(());
-        };
-        let suspended = self
-            .runtimes
-            .lock()
-            .await
-            .iter()
-            .filter(|(_, runtime)| runtime.suspended && runtime.worker.is_none())
-            .map(|(profile_id, runtime)| (profile_id.clone(), runtime.generation))
-            .collect::<Vec<_>>();
-        for (profile_id, generation) in suspended {
-            self.check_intent(key).await?;
-            self.start_inner(
-                &super::model::ProfileLifecycleInput {
-                    context: context.clone(),
-                    activation_token: token,
-                    scope_id: active.id.clone(),
-                    scope_generation: active.generation,
-                    profile_id,
-                    expected_generation: generation,
-                    credential_attempt_id: None,
-                },
-                false,
-            )
-            .await?;
-        }
-        Ok(())
-    }
-
     async fn mark_running(&self, profile_id: &str, generation: WireCounter) -> bool {
         let mut runtimes = self.runtimes.lock().await;
         let Some(runtime) = runtimes.get_mut(profile_id) else {
@@ -6045,43 +5960,6 @@ async fn run_rule_worker(
     }
 }
 
-#[cfg(test)]
-fn partition_auto_start_candidates(
-    mut candidates: Vec<SshForwardProfile>,
-) -> (Vec<SshForwardProfile>, Vec<SshForwardProfile>) {
-    candidates.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    let split = candidates.len().min(ACTIVE_FORWARD_LIMIT);
-    let skipped = candidates.split_off(split);
-    (candidates, skipped)
-}
-
-fn record_activation_intent(
-    intent: &mut ActivationIntent,
-    client_epoch: WireCounter,
-    activation_token: WireCounter,
-    scope_id: Option<String>,
-) -> Result<(), SshForwardErrorCode> {
-    if client_epoch != intent.latest_client_epoch {
-        return Err(SshForwardErrorCode::ClientEpochStale);
-    }
-    if activation_token <= intent.latest_activation_token {
-        return Err(SshForwardErrorCode::ActivationSuperseded);
-    }
-    intent.latest_activation_token = activation_token;
-    intent.desired_scope_id = scope_id;
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ActivationKey {
-    client_epoch: WireCounter,
-    activation_token: WireCounter,
-}
-
 struct ActiveChannelGuard(Arc<AtomicU16>);
 
 impl Drop for ActiveChannelGuard {
@@ -6240,11 +6118,10 @@ mod tests {
 
     use super::{
         abort_channel_tasks, connection_credential_target, credential_save_error_code,
-        partition_auto_start_candidates, record_activation_intent, store_write_error_code,
-        vault_error_code, ActivationBarrierPoint, ActivationIntent, ActivationKey,
+        store_write_error_code, vault_error_code, ActivationBarrierPoint,
         ConnectionAdmission, ConnectionReservationGuard, CredentialLease, LoadedPassword,
         LoadedPasswordCleanup, ResolvedCredentials, RuntimeEntry, SshForwardManager,
-        ACTIVE_FORWARD_LIMIT, HANDSHAKE_CONCURRENCY_LIMIT,
+        HANDSHAKE_CONCURRENCY_LIMIT,
     };
     use crate::ssh_forward::{
         credential_vault::{
@@ -6461,6 +6338,7 @@ mod tests {
             };
             registry
                 .fail_connection(
+                    SCOPE,
                     &connection.id,
                     reservation.generation,
                     SshForwardErrorCode::SshConnectFailed,
@@ -6693,6 +6571,7 @@ mod tests {
             };
             registry
                 .fail_connection(
+                    SCOPE,
                     &connection.id,
                     reservation.generation,
                     SshForwardErrorCode::SshConnectFailed,
@@ -6730,10 +6609,10 @@ mod tests {
         .await
         .unwrap();
         let external_store = manager
-            .active_scope
+            .scopes
             .lock()
             .await
-            .as_ref()
+            .get(SCOPE)
             .expect("scope remains active")
             .store
             .clone();
@@ -7370,19 +7249,6 @@ mod tests {
         std::fs::remove_dir_all(config).unwrap();
     }
 
-    async fn wait_for_token(manager: &Arc<SshForwardManager>, token: WireCounter) {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if manager.intent.lock().await.latest_activation_token == token {
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-
     async fn install_listener_worker(
         manager: &SshForwardManager,
         profile_id: &str,
@@ -7422,275 +7288,6 @@ mod tests {
         .expect("loopback listener remained reachable for five seconds");
     }
 
-    fn auto_start_profile(index: usize) -> SshForwardProfile {
-        SshForwardProfile {
-            id: format!("{index:08x}-0000-4000-8000-000000000000"),
-            scope_id: SCOPE.into(),
-            name: format!("forward-{index}"),
-            ssh_host: "bastion.example".into(),
-            ssh_port: 22,
-            ssh_user: "operator".into(),
-            auth: SshForwardAuth::Agent,
-            local_port: 20_000 + index as u16,
-            target_host: LoopbackHost,
-            target_port: 5_000 + index as u16,
-            auto_start: true,
-            reconnect: ReconnectPolicy {
-                enabled: true,
-                max_attempts: 1,
-            },
-            created_at: UtcTimestamp::parse(&format!("2026-08-10T12:34:{index:02}.000Z")).unwrap(),
-            updated_at: UtcTimestamp::parse("2026-08-10T12:35:00.000Z").unwrap(),
-        }
-    }
-
-    #[test]
-    fn auto_start_admission_is_sorted_and_marks_excess_profiles_skipped() {
-        let mut profiles = (0..ACTIVE_FORWARD_LIMIT + 2)
-            .map(auto_start_profile)
-            .collect::<Vec<_>>();
-        profiles.reverse();
-        let (admitted, skipped) = partition_auto_start_candidates(profiles);
-        assert_eq!(admitted.len(), ACTIVE_FORWARD_LIMIT);
-        assert_eq!(skipped.len(), 2);
-        assert_eq!(admitted.first().unwrap().id, auto_start_profile(0).id);
-        assert_eq!(admitted.last().unwrap().id, auto_start_profile(15).id);
-        assert_eq!(skipped[0].id, auto_start_profile(16).id);
-        assert_eq!(skipped[1].id, auto_start_profile(17).id);
-    }
-
-    #[test]
-    fn activation_keys_are_numeric_at_decimal_boundaries() {
-        let nine = ActivationKey {
-            client_epoch: WireCounter::parse("9").unwrap(),
-            activation_token: WireCounter::parse("9").unwrap(),
-        };
-        let ten = ActivationKey {
-            client_epoch: WireCounter::parse("10").unwrap(),
-            activation_token: WireCounter::parse("1").unwrap(),
-        };
-        assert!(ten.client_epoch > nine.client_epoch);
-        assert!(WireCounter::parse("99").unwrap() < WireCounter::parse("100").unwrap());
-    }
-
-    #[test]
-    fn one_thousand_activation_schedules_keep_only_the_maximum_intent() {
-        for schedule in 0..1_000u64 {
-            let epoch = WireCounter::parse("1").unwrap();
-            let mut intent = ActivationIntent {
-                latest_client_epoch: epoch,
-                latest_activation_token: WireCounter::ZERO,
-                desired_scope_id: None,
-            };
-            let mut order = (1..=32u64).collect::<Vec<_>>();
-            let mut seed = schedule.wrapping_add(1);
-            for index in (1..order.len()).rev() {
-                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-                order.swap(index, (seed as usize) % (index + 1));
-            }
-            for token in order {
-                let _ = record_activation_intent(
-                    &mut intent,
-                    epoch,
-                    WireCounter::parse(&token.to_string()).unwrap(),
-                    None,
-                );
-            }
-            assert_eq!(intent.latest_activation_token.value(), 32);
-            intent.latest_client_epoch = WireCounter::parse("2").unwrap();
-            intent.latest_activation_token = WireCounter::ZERO;
-            assert!(record_activation_intent(
-                &mut intent,
-                WireCounter::parse("2").unwrap(),
-                WireCounter::parse("1").unwrap(),
-                None,
-            )
-            .is_ok());
-            assert!(matches!(
-                record_activation_intent(
-                    &mut intent,
-                    WireCounter::parse("1").unwrap(),
-                    WireCounter::parse("999").unwrap(),
-                    None,
-                ),
-                Err(SshForwardErrorCode::ClientEpochStale)
-            ));
-        }
-    }
-
-    #[tokio::test]
-    async fn activation_barriers_cover_each_slow_boundary() {
-        let points = [
-            ActivationBarrierPoint::AfterIntent,
-            ActivationBarrierPoint::BeforeStop,
-            ActivationBarrierPoint::AfterStop,
-            ActivationBarrierPoint::AfterLoad,
-            ActivationBarrierPoint::BeforeCommit,
-            ActivationBarrierPoint::BeforeAutoStart,
-            ActivationBarrierPoint::BeforePublish,
-        ];
-        for (index, point) in points.into_iter().enumerate() {
-            let config = temp_config_dir(&format!("activation-barrier-{index}"));
-            let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-            let opened = manager
-                .open_client(KnownScopesInput::Available {
-                    ids: vec![SCOPE.into()],
-                })
-                .await
-                .unwrap();
-            manager.activation_test_barrier.enable(point);
-            let activation_manager = Arc::clone(&manager);
-            let context = opened.context.clone();
-            let activation = tokio::spawn(async move {
-                activation_manager
-                    .activate_scope(
-                        &context,
-                        WireCounter::parse("1").unwrap(),
-                        Some(SCOPE.into()),
-                    )
-                    .await
-            });
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                manager.activation_test_barrier.wait_entered(),
-            )
-            .await
-            .unwrap();
-            manager.activation_test_barrier.release();
-            activation.await.unwrap().unwrap();
-            drop(manager);
-            std::fs::remove_dir_all(config).unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn randomized_activation_schedules_commit_only_the_maximum_intent() {
-        let config = temp_config_dir("activation-schedules");
-        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let opened = manager
-            .open_client(KnownScopesInput::Available {
-                ids: vec![SCOPE.into(), SCOPE_2.into()],
-            })
-            .await
-            .unwrap();
-        let mut order = (1..=1_000u64).collect::<Vec<_>>();
-        let mut seed = 0x9e37_79b9_u64;
-        for index in (1..order.len()).rev() {
-            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-            order.swap(index, (seed as usize) % (index + 1));
-        }
-        let mut tasks = Vec::with_capacity(order.len());
-        for token in order {
-            let manager = Arc::clone(&manager);
-            let context = opened.context.clone();
-            let scope = if token % 2 == 0 { SCOPE } else { SCOPE_2 };
-            tasks.push(tokio::spawn(async move {
-                manager
-                    .activate_scope(
-                        &context,
-                        WireCounter::parse(&token.to_string()).unwrap(),
-                        Some(scope.into()),
-                    )
-                    .await
-            }));
-        }
-        for task in tasks {
-            let _ = task.await.unwrap();
-        }
-        assert_eq!(
-            manager.intent.lock().await.latest_activation_token,
-            WireCounter::parse("1000").unwrap()
-        );
-        assert_eq!(
-            manager
-                .active_scope
-                .lock()
-                .await
-                .as_ref()
-                .map(|scope| scope.id.as_str()),
-            Some(SCOPE)
-        );
-        drop(manager);
-        std::fs::remove_dir_all(config).unwrap();
-    }
-
-    #[tokio::test]
-    async fn delayed_a_b_c_activation_commits_only_c() {
-        let config = temp_config_dir("abc");
-        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let opened = manager
-            .open_client(KnownScopesInput::Available { ids: vec![] })
-            .await
-            .unwrap();
-        let command_gate = manager.command_gate.lock().await;
-
-        let a_manager = Arc::clone(&manager);
-        let a_context = opened.context.clone();
-        let a = tokio::spawn(async move {
-            a_manager
-                .activate_scope(&a_context, WireCounter::parse("1").unwrap(), None)
-                .await
-        });
-        wait_for_token(&manager, WireCounter::parse("1").unwrap()).await;
-
-        let b_manager = Arc::clone(&manager);
-        let b_context = opened.context.clone();
-        let b = tokio::spawn(async move {
-            b_manager
-                .activate_scope(&b_context, WireCounter::parse("2").unwrap(), None)
-                .await
-        });
-        wait_for_token(&manager, WireCounter::parse("2").unwrap()).await;
-
-        let c_manager = Arc::clone(&manager);
-        let c_context = opened.context.clone();
-        let c = tokio::spawn(async move {
-            c_manager
-                .activate_scope(&c_context, WireCounter::parse("3").unwrap(), None)
-                .await
-        });
-        wait_for_token(&manager, WireCounter::parse("3").unwrap()).await;
-        drop(command_gate);
-
-        assert_eq!(
-            a.await.unwrap().unwrap_err().code,
-            SshForwardErrorCode::ActivationSuperseded
-        );
-        assert_eq!(
-            b.await.unwrap().unwrap_err().code,
-            SshForwardErrorCode::ActivationSuperseded
-        );
-        assert!(c.await.unwrap().is_ok());
-        assert!(manager.active_scope.lock().await.is_none());
-        drop(manager);
-        std::fs::remove_dir_all(config).unwrap();
-    }
-
-    #[tokio::test]
-    async fn new_client_epoch_rejects_old_high_token() {
-        let config = temp_config_dir("epoch");
-        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let first = manager
-            .open_client(KnownScopesInput::Available { ids: vec![] })
-            .await
-            .unwrap();
-        let second = manager
-            .open_client(KnownScopesInput::Available { ids: vec![] })
-            .await
-            .unwrap();
-
-        let stale = manager
-            .admit_activation(&first.context, WireCounter::parse("999").unwrap(), None)
-            .await
-            .unwrap_err();
-        assert_eq!(stale.code, SshForwardErrorCode::ClientEpochStale);
-        assert!(manager
-            .admit_activation(&second.context, WireCounter::parse("1").unwrap(), None,)
-            .await
-            .is_ok());
-        drop(manager);
-        std::fs::remove_dir_all(config).unwrap();
-    }
 
     #[tokio::test]
     async fn manager_restart_rejects_previous_session_context() {
@@ -7704,10 +7301,7 @@ mod tests {
                 .context
         };
         let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let error = manager
-            .activate_scope(&first_context, WireCounter::parse("1").unwrap(), None)
-            .await
-            .unwrap_err();
+        let error = manager.open_scope(&first_context, SCOPE).await.unwrap_err();
         assert_eq!(error.code, SshForwardErrorCode::ManagerSessionMismatch);
         drop(manager);
         std::fs::remove_dir_all(config).unwrap();
@@ -7798,82 +7392,6 @@ mod tests {
         };
         assert!(manager.purge_scope(&input).await.unwrap().purged);
         assert!(!manager.purge_scope(&input).await.unwrap().purged);
-        drop(manager);
-        std::fs::remove_dir_all(config).unwrap();
-    }
-
-    #[tokio::test]
-    async fn purge_rejects_scope_while_activation_is_staged() {
-        let config = temp_config_dir("purge-staged");
-        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let opened = manager
-            .open_client(KnownScopesInput::Available {
-                ids: vec![SCOPE.into()],
-            })
-            .await
-            .unwrap();
-        manager
-            .activation_test_barrier
-            .enable(ActivationBarrierPoint::AfterLoad);
-        let activation_manager = Arc::clone(&manager);
-        let activation_context = opened.context.clone();
-        let activation = tokio::spawn(async move {
-            activation_manager
-                .activate_scope(
-                    &activation_context,
-                    WireCounter::parse("1").unwrap(),
-                    Some(SCOPE.into()),
-                )
-                .await
-        });
-        manager.activation_test_barrier.wait_entered().await;
-        assert!(manager.active_scope.lock().await.is_none());
-        let error = manager
-            .purge_scope(&PurgeScopeInput {
-                context: opened.context,
-                activation_token: WireCounter::parse("1").unwrap(),
-                scope_id: SCOPE.into(),
-                known_scopes: KnownScopesInput::Available { ids: vec![] },
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, SshForwardErrorCode::ScopeActive);
-        manager.activation_test_barrier.release();
-        activation.await.unwrap().unwrap();
-        drop(manager);
-        std::fs::remove_dir_all(config).unwrap();
-    }
-
-    #[tokio::test]
-    async fn scope_switch_closes_manager_listener() {
-        let config = temp_config_dir("switch-listener");
-        let manager = Arc::new(SshForwardManager::new(&config).unwrap());
-        let opened = manager
-            .open_client(KnownScopesInput::Available {
-                ids: vec![SCOPE.into()],
-            })
-            .await
-            .unwrap();
-        manager
-            .activate_scope(
-                &opened.context,
-                WireCounter::parse("1").unwrap(),
-                Some(SCOPE.into()),
-            )
-            .await
-            .unwrap();
-        let (address, closed) = install_listener_worker(&manager, "probe").await;
-        assert!(TcpStream::connect(address).await.is_ok());
-
-        manager
-            .activate_scope(&opened.context, WireCounter::parse("2").unwrap(), None)
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(1), closed)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_unreachable(address).await;
         drop(manager);
         std::fs::remove_dir_all(config).unwrap();
     }
@@ -8235,7 +7753,11 @@ mod tests {
             Ok(ConnectionAdmission::Reserved(_))
         ));
         manager
-            .cleanup_timed_out_connection(&input.connection_profile_id, WireCounter::ZERO)
+            .cleanup_timed_out_connection(
+                &input.scope_id,
+                &input.connection_profile_id,
+                WireCounter::ZERO,
+            )
             .await;
         assert!(manager
             .connection_registry
@@ -8505,6 +8027,7 @@ mod tests {
         {
             let _guard = ConnectionReservationGuard::new(
                 Arc::clone(&manager.connection_registry),
+                SCOPE,
                 "e1634e77-b0b5-4b21-bd2f-462c9e3b7a96",
                 generation,
                 cancellation,
@@ -8658,9 +8181,7 @@ mod tests {
         let config = temp_config_dir("concurrent-open-scope");
         let manager = Arc::new(SshForwardManager::new(&config).unwrap());
         let open_res = manager
-            .open_client(KnownScopesInput {
-                known_scopes: vec![],
-            })
+            .open_client(KnownScopesInput::Available { ids: vec![] })
             .await
             .unwrap();
         let scope_id = "test-scope-concurrent";

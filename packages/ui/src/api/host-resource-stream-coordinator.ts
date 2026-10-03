@@ -280,18 +280,47 @@ export class HostResourceStreamCoordinator {
       }
     };
 
-    const onPageHide = () => {
+    const onPageHide = (event: PageTransitionEvent) => {
+      if (this.disposed) return;
+      if (!isCurrentConnection(this.owner)) {
+        this.dispose();
+        return;
+      }
+
+      if (event.persisted) {
+        if (
+          this.mode === "STARTING" ||
+          this.mode === "LIVE" ||
+          this.mode === "RETRY_WAIT"
+        ) {
+          this.stopActiveStream(false);
+          this.mode = "PAUSED";
+          this.notify();
+        }
+        return;
+      }
+
       this.dispose();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (this.disposed || !event.persisted) return;
+      if (!isCurrentConnection(this.owner)) {
+        this.dispose();
+        return;
+      }
+      this.evaluateLifecycle();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     if (typeof window !== "undefined") {
       window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("pageshow", onPageShow);
     }
 
     this.cleanupDomListeners = () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (typeof window !== "undefined") {
         window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("pageshow", onPageShow);
       }
     };
   }
@@ -377,6 +406,10 @@ export class HostResourceStreamCoordinator {
   }
 
   private stopActiveStream(clearRetryTimer = true): void {
+    // Fence frame commits that may be suspended in cancelQueries().
+    this.switchToken += 1;
+    this.switching = false;
+
     if (clearRetryTimer && this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
