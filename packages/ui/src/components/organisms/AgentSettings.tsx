@@ -255,7 +255,7 @@ export function AgentSettings({ owner }: AgentSettingsProps) {
       setCodexFeedback({
         type: "success",
         message:
-          "Codex hook installed successfully! Restart any active Codex sessions in your terminals.",
+          "Codex hook installed successfully. Restart Codex, review the hook in /hooks if prompted, and use codex --no-daemon for terminal-scoped status tracking while shared daemon mode is unsupported.",
       });
       void refetchCodexReport();
       void refetchVerification();
@@ -727,6 +727,9 @@ export function AgentSettings({ owner }: AgentSettingsProps) {
             </p>
             <p className="text-[11px] text-amber-300/90 mt-0.5 leading-relaxed">
               Codex native hooks track execution state (working/idle/unknown) only. Turn-ended alerts and attention notifications are not supported in this rollout.
+            </p>
+            <p className="text-[11px] text-amber-300/90 mt-1.5 leading-relaxed">
+              Codex shared managed-daemon mode is detached from the launching terminal and cannot be safely correlated to a DamHopper PTY yet. Launch <code>codex --no-daemon</code> for terminal-scoped status tracking. Codex dispatches <code>SessionStart</code> immediately before the first prompt, so hook-based status may first appear when the first turn begins.
             </p>
           </div>
         </div>

@@ -25,6 +25,8 @@ use super::types::{
 static PRE_AUTH_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
     std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_PRE_AUTH_CONCURRENCY));
 
+const HOOK_INGRESS_DEADLINE: Duration = Duration::from_secs(2);
+
 fn valid_private_host(host: &str, runtime: &AgentStatusRuntime) -> bool {
     let Some(port) = runtime.listener_url().and_then(|url| {
         url.strip_prefix("ws://127.0.0.1:")?
@@ -432,7 +434,7 @@ async fn handle_uds_connection(mut stream: tokio::net::UnixStream, runtime: Agen
         }
     };
 
-    let result = tokio::time::timeout(Duration::from_millis(250), operation).await;
+    let result = tokio::time::timeout(HOOK_INGRESS_DEADLINE, operation).await;
     match result {
         Ok(Ok((status, body))) => {
             let resp = format!(
@@ -446,6 +448,11 @@ async fn handle_uds_connection(mut stream: tokio::net::UnixStream, runtime: Agen
             let _ = stream.flush().await;
         }
         Ok(Err((status, msg))) => {
+            tracing::warn!(
+                http_status = status.as_u16(),
+                error = %msg,
+                "Native agent hook rejected"
+            );
             let resp = format!(
                 "HTTP/1.1 {} {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status.as_u16(),
@@ -457,7 +464,10 @@ async fn handle_uds_connection(mut stream: tokio::net::UnixStream, runtime: Agen
             let _ = stream.flush().await;
         }
         Err(_) => {
-            // Timed out (>250ms), close immediately
+            tracing::warn!(
+                deadline_ms = HOOK_INGRESS_DEADLINE.as_millis(),
+                "Native agent hook ingress timed out"
+            );
             let _ = stream.shutdown().await;
         }
     }
