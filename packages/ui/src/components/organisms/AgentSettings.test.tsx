@@ -248,6 +248,12 @@ describe("AgentSettings", () => {
     expect(container?.textContent).toContain(
       "Codex provides status only in this rollout; alert notifications are unsupported",
     );
+    expect(container?.textContent).toContain(
+      "codex --no-daemon",
+    );
+    expect(container?.textContent).toContain(
+      "SessionStart",
+    );
 
     const codexSwitch = container?.querySelector(
       'button[aria-label="Enable Codex notifications"]',
@@ -359,5 +365,8 @@ describe("AgentSettings", () => {
     });
 
     expect(mutateInstallCodex).toHaveBeenCalledWith("~/.codex");
+    expect(container?.textContent).toContain(
+      "use codex --no-daemon for terminal-scoped status tracking",
+    );
   });
 });
