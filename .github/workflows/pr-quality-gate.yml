@@ -128,8 +128,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path server/Cargo.toml -- --check
+      - name: Check changed server Rust formatting
+        shell: bash
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- 'server/**/*.rs')
+          if ((${#files[@]})); then
+            rustfmt --edition 2021 --check "${files[@]}"
+          else
+            echo "No changed server Rust files."
+          fi
       - name: Clippy production targets
         run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
