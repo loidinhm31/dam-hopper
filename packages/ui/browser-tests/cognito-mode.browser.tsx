@@ -187,6 +187,22 @@ async function triggerCognitoShortcut(code = "KeyB", key = "b"): Promise<void> {
     );
   });
 }
+
+function findMediaRule(
+  rules: CSSRuleList,
+  predicate: (rule: CSSMediaRule) => boolean,
+): CSSMediaRule | null {
+  for (const rule of Array.from(rules)) {
+    if (rule instanceof CSSMediaRule && predicate(rule)) {
+      return rule;
+    }
+    if ("cssRules" in rule) {
+      const nested = findMediaRule((rule as CSSGroupingRule).cssRules, predicate);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
 describe("Cognito Mode Real-Browser Regressions", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -454,21 +470,16 @@ describe("Cognito Mode Real-Browser Regressions", () => {
   });
 
   it("applies the production reduced-transparency override as opaque black when its media query matches", async () => {
-    // Find the media rule in imported document stylesheets
+    // Find the production media rule, including if a bundler nests it in @layer.
     let targetRule: CSSMediaRule | null = null;
     for (const sheet of Array.from(document.styleSheets)) {
       try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          if (
-            rule instanceof CSSMediaRule &&
-            rule.media.mediaText.includes("prefers-reduced-transparency")
-          ) {
-            targetRule = rule;
-            break;
-          }
-        }
+        targetRule = findMediaRule(
+          sheet.cssRules,
+          (rule) => rule.media.mediaText.includes("prefers-reduced-transparency"),
+        );
       } catch {
-        // Ignore cross-origin stylesheets if any
+        // Ignore cross-origin stylesheets if any.
       }
       if (targetRule) break;
     }
@@ -476,6 +487,13 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(targetRule).not.toBeNull();
     expect(targetRule!.media.mediaText).toContain("prefers-reduced-transparency");
     expect(targetRule!.media.mediaText).toContain("reduce");
+    const overrideRule = Array.from(targetRule!.cssRules).find(
+      (rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.selectorText === ".cognito-mode-overlay--heavy-blur",
+    );
+    expect(overrideRule).toBeDefined();
+    expect(overrideRule!.style.getPropertyValue("-webkit-backdrop-filter")).toBe("none");
 
     const originalMedia = targetRule!.media.mediaText;
 
