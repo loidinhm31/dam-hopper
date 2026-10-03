@@ -21,6 +21,14 @@ export type AdvisorErrorCode =
   | 'NOT_FOUND'
   | 'NETWORK_ERROR'
   | 'ABORTED'
+  | 'ROUTE_BACKUP_IDENTICAL'
+  | 'ROUTE_ENTRY_INVALID'
+  | 'ROUTE_SCHEMA_INVALID'
+  | 'POLICY_REVISION_CONFLICT'
+  | 'POLICY_FILE_UNSAFE'
+  | 'POLICY_NOT_EDITABLE'
+  | 'POLICY_WRITE_FAILED'
+  | 'POLICY_PAYLOAD_TOO_LARGE'
   | 'UNKNOWN';
 
 export class AdvisorError extends Error {
@@ -336,6 +344,36 @@ export interface AdvisorPolicyV2 {
     readonly retentionDays: number;
     readonly maxBytes: number;
   };
+}
+
+export type AdvisorBackend = 'omp' | 'codex' | 'claude' | 'pi';
+
+export interface PolicyUpdateParamsDto {
+  readonly expectedRevision: string;
+  readonly advisor: {
+    readonly primary: AdvisorRouteTarget;
+    readonly backup: AdvisorRouteTarget;
+  };
+}
+
+export interface AdvisorModelsParamsDto {
+  readonly backend: AdvisorBackend;
+}
+
+export interface AdvisorModelOptionDto {
+  readonly id: string;
+  readonly label: string;
+  readonly efforts: readonly string[];
+}
+
+export interface AdvisorModelsResultDto {
+  readonly backend: AdvisorBackend;
+  readonly source: 'harness' | 'fallback';
+  readonly models: readonly AdvisorModelOptionDto[];
+  readonly efforts: readonly string[];
+  readonly defaultEffort: string;
+  readonly observedAt: number;
+  readonly issueCode?: string | null;
 }
 
 // --- Evaluation DTOs & Domain Types ---

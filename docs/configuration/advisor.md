@@ -103,6 +103,12 @@ Fallback model entries always use the listed backend effort suggestions for thei
 
 The request body is limited to 16 KiB; larger bodies return HTTP 413. Discovery permits at most two concurrent operations, with a five-second semaphore wait and a separate five-second runner timeout. Normalized catalogs are capped at 500 models; IDs and labels over 256 bytes are discarded, and the serialized model array is capped at 256 KiB. The [architecture reference](../architecture/native-advisor.md#harness-model-discovery) describes discovery adapters, diagnostics, stdout bounds, and normalization behavior.
 
+## Frontend routing availability and transport
+
+The frontend sends account-policy updates through `advisor:policy:update` (`PATCH /api/advisor/policy`) and model-list requests through `advisor:models:list` (`POST /api/advisor/models`) over the authenticated REST transport. The provider methods are `updatePolicy(requestId, params)` and `listModels(requestId, backend)`; request-ID cancellation reaches the transport, and structured `ApiRequestError` status/code values are mapped to typed `AdvisorError` categories. See the [frontend transport and provider contract](../architecture/native-advisor.md#frontend-transport-and-provider).
+
+Routing does not depend on the history directory. If Advisor is enabled but the history source is unavailable, the frontend still exposes policy read/update and model discovery while history and evaluation capabilities remain unavailable. These operations still require the feature enabled and current administrator authorization; this frontend change adds no Advisor API key, environment variable, or server configuration field. Harness discovery failures continue to use the fallback catalog described above.
+
 ## History source and status
 
 Advisor reads the server process's `$HOME/.evcrate/advisor-history` directory. There is no custom-root setting, `/home` scan, directory registration, or path-hash prerequisite. Status returns `enabled`, `available`, and, for an administrator, the detected `path` and optional `sourceError`.

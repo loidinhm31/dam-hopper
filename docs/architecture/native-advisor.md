@@ -37,7 +37,7 @@ Native account policy routes expose current policy (`POST /api/advisor/policy/cu
 - **Configuration** — current policy and historical route/build groupings.
 - **Evaluations** — discovered descriptors, revision-bound detail reads, compatible comparisons and provenance.
 
-`NativeAdvisorProvider` implements `AdvisorDataProvider` over the captured owner-bound `ApiClient.advisor`. It maps request IDs to per-request abort controllers for the eight history/policy/evaluation operations, forwards signals to REST, and rejects cancelled results after awaits. Panel tabs use local reducer state and roving keyboard navigation; they never read/write `window.location.hash`.
+`NativeAdvisorProvider` implements `AdvisorDataProvider` through the captured owner-bound `ApiClient.advisor`. It supports history, current-policy read/update, model listing, and evaluation operations. Each request ID is associated with an abort controller whose signal reaches REST; responses are checked again after awaits. Reusing an ID aborts the earlier request, and cleanup removes a controller only while it remains the active controller for that ID.
 
 Advisor selectors, reset rules, variables, and theme fallbacks stay under `.native-advisor`; animation keyframes use Advisor-specific names. The panel path has **0 iframe/srcdoc, 0 MessagePort/plugin bridge, 0 plugin SDK, and 0 nested React root**. It imports no sibling Evcrate checkout code.
 
@@ -95,6 +95,14 @@ The current native API uses camelCase JSON. Every route requires a normal valida
 | `POST /api/advisor/history/page` | `{ snapshotId, query?, sort?, cursor?, limit? }` | Page entries, next cursor, and returned byte count. |
 | `POST /api/advisor/history/detail` | `{ snapshotId, recordRef }` | Sanitized detail with status `ready`, `changed`, or `missing`. |
 | `POST /api/advisor/models` | `{ backend }` | `{ backend, source, models, efforts, defaultEffort, observedAt, issueCode? }`; discovers a harness catalog or returns its fallback catalog. |
+
+### Frontend transport and provider
+
+The typed frontend API exposes `updatePolicy` and `listModels` on `ApiClient.advisor`; `NativeAdvisorProvider` implements the corresponding `AdvisorDataProvider` methods `updatePolicy(requestId, params)` and `listModels(requestId, backend)`. The REST-backed `WsTransport` maps `advisor:policy:update` to `PATCH /api/advisor/policy` and `advisor:models:list` to `POST /api/advisor/models`. Both operations use the normal authenticated REST path, not a WebSocket message protocol, and accept the provider's abort signal.
+
+Non-2xx REST responses become `ApiRequestError` values carrying the HTTP status and optional server code. The provider maps recognized codes/statuses to typed `AdvisorError` categories, including policy revision conflicts, route validation and policy-write errors, disabled/unauthorized/forbidden responses, and not-found conditions; unrecognized API failures retain their status under `UNKNOWN`.
+
+History availability is separate from routing capability. When Advisor is enabled but the history root is unavailable, the provider reports no history or evaluation source and advertises `policy.readCurrent`, `policy.update`, and `models.list`; those operations still require the enabled feature and current administrator authorization. When Advisor is disabled or status probing fails, these capabilities are not advertised.
 
 `query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy and model-discovery DTOs, fallback catalogs, limits, and persistence alongside the history behavior.
 

@@ -6,7 +6,7 @@
  * rejects late responses, and binds to explicit connection/profile owner.
  */
 
-import type { ApiClient, ConnectionRef } from '@/api/client.js';
+import { ApiRequestError, type ApiClient, type ConnectionRef } from '@/api/client.js';
 import type {
   AdvisorDataProvider,
   ProviderContextDescriptor,
@@ -21,6 +21,9 @@ import {
   type HistoryPageResultDto,
   type HistoryDetailResultDto,
   type PolicyReadCurrentResultDto,
+  type PolicyUpdateParamsDto,
+  type AdvisorBackend,
+  type AdvisorModelsResultDto,
   type EvaluationsListResultDto,
   type EvaluationsReadResultDto,
   type EvaluationsCompareResultDto,
@@ -32,12 +35,20 @@ export interface NativeAdvisorProviderOptions {
   readonly initialDescriptor?: Partial<ProviderContextDescriptor>;
 }
 
+const ROUTING_CAPABILITIES: readonly string[] = Object.freeze([
+  'policy.readCurrent',
+  'policy.update',
+  'models.list',
+]);
+
 const DEFAULT_CAPABILITIES: readonly string[] = Object.freeze([
   'history.refresh',
   'history.summary',
   'history.page',
   'history.detail',
   'policy.readCurrent',
+  'policy.update',
+  'models.list',
   'evaluations.list',
   'evaluations.read',
   'evaluations.compare',
@@ -103,21 +114,42 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     }
     try {
       const status = await this.client.advisor.status();
+
+      let capabilities: readonly string[] = [];
+      let hasHistorySource = false;
+      let hasPolicySource = false;
+      let hasEvaluationSource = false;
+
+      if (status.enabled) {
+        hasPolicySource = true;
+        if (status.available) {
+          capabilities = DEFAULT_CAPABILITIES;
+          hasHistorySource = true;
+          hasEvaluationSource = true;
+        } else {
+          capabilities = ROUTING_CAPABILITIES;
+          hasHistorySource = false;
+          hasEvaluationSource = false;
+        }
+      }
+
       const updated: ProviderContextDescriptor = {
         kind: 'native',
         label: this.currentDescriptor.label,
         path: status.path,
         isAvailable: status.available,
-        capabilities: status.available ? DEFAULT_CAPABILITIES : [],
-        hasHistorySource: status.available,
-        hasPolicySource: status.available,
-        hasEvaluationSource: status.available,
+        capabilities,
+        hasHistorySource,
+        hasPolicySource,
+        hasEvaluationSource,
         sourceError: status.sourceError,
       };
 
       const availabilityChanged =
         this.currentDescriptor.isAvailable !== updated.isAvailable ||
-        this.currentDescriptor.sourceError !== updated.sourceError;
+        this.currentDescriptor.sourceError !== updated.sourceError ||
+        this.currentDescriptor.hasPolicySource !== updated.hasPolicySource ||
+        this.currentDescriptor.capabilities.length !== updated.capabilities.length;
 
       this.currentDescriptor = updated;
 
@@ -135,6 +167,10 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
       const updated: ProviderContextDescriptor = {
         ...this.currentDescriptor,
         isAvailable: false,
+        capabilities: [],
+        hasHistorySource: false,
+        hasPolicySource: false,
+        hasEvaluationSource: false,
         sourceError: msg,
       };
       this.currentDescriptor = updated;
@@ -153,11 +189,17 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     }
     const existing = this.activeControllers.get(requestId);
     if (existing) {
-      existing.abort(new Error('Superseeded by new request'));
+      existing.abort(new Error('Superseded by new request'));
     }
     const controller = new AbortController();
     this.activeControllers.set(requestId, controller);
     return controller;
+  }
+
+  private releaseRequestController(requestId: string, controller: AbortController): void {
+    if (this.activeControllers.get(requestId) === controller) {
+      this.activeControllers.delete(requestId);
+    }
   }
 
 
@@ -174,6 +216,49 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     if (err instanceof AdvisorError) {
       throw err;
     }
+    if (err instanceof ApiRequestError) {
+      const code = err.code ?? '';
+      const status = err.status;
+      const msg = err.message || 'API request failed';
+
+      if (code === 'ROUTE_BACKUP_IDENTICAL') {
+        throw new AdvisorError(msg, 'ROUTE_BACKUP_IDENTICAL', status);
+      }
+      if (code === 'ROUTE_ENTRY_INVALID') {
+        throw new AdvisorError(msg, 'ROUTE_ENTRY_INVALID', status);
+      }
+      if (code === 'ROUTE_SCHEMA_INVALID') {
+        throw new AdvisorError(msg, 'ROUTE_SCHEMA_INVALID', status);
+      }
+      if (code === 'POLICY_REVISION_CONFLICT' || status === 409) {
+        throw new AdvisorError(msg, 'POLICY_REVISION_CONFLICT', status || 409);
+      }
+      if (code === 'POLICY_FILE_UNSAFE') {
+        throw new AdvisorError(msg, 'POLICY_FILE_UNSAFE', status);
+      }
+      if (code === 'POLICY_NOT_EDITABLE') {
+        throw new AdvisorError(msg, 'POLICY_NOT_EDITABLE', status);
+      }
+      if (code === 'POLICY_PAYLOAD_TOO_LARGE' || status === 413) {
+        throw new AdvisorError(msg, 'POLICY_PAYLOAD_TOO_LARGE', status || 413);
+      }
+      if (code === 'POLICY_WRITE_FAILED') {
+        throw new AdvisorError(msg, 'POLICY_WRITE_FAILED', status);
+      }
+      if (/advisor_disabled|advisordisabled/i.test(code) || /advisor_disabled|advisordisabled/i.test(msg)) {
+        throw new AdvisorError('Advisor is disabled on this server', 'ADVISOR_DISABLED', 403);
+      }
+      if (status === 401 || /unauthorized|unauthenticated/i.test(code)) {
+        throw new AdvisorError(msg, 'UNAUTHORIZED', 401);
+      }
+      if (status === 403 || /forbidden|permission/i.test(code)) {
+        throw new AdvisorError(msg, 'FORBIDDEN', 403);
+      }
+      if (status === 404 || /not_found|snapshot_not_found|record_not_found/i.test(code)) {
+        const mappedCode = /snapshot/i.test(code) || /snapshot/i.test(msg) ? 'SNAPSHOT_NOT_FOUND' : 'NOT_FOUND';
+        throw new AdvisorError(msg, mappedCode, 404);
+      }
+    }
     const msg = err instanceof Error ? err.message : String(err);
     if (/advisor_disabled|advisordisabled/i.test(msg)) {
       throw new AdvisorError('Advisor is disabled on this server', 'ADVISOR_DISABLED', 403);
@@ -187,7 +272,8 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     if (/forbidden|permission/i.test(msg)) {
       throw new AdvisorError(msg, 'FORBIDDEN', 403);
     }
-    throw new AdvisorError(msg, 'UNKNOWN');
+    const fallbackStatus = err instanceof ApiRequestError ? err.status : undefined;
+    throw new AdvisorError(msg, 'UNKNOWN', fallbackStatus);
   }
 
   async refreshHistory(
@@ -206,7 +292,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -227,7 +313,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -251,7 +337,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -272,7 +358,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -288,7 +374,45 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
+    }
+  }
+  async updatePolicy(
+    requestId: string,
+    params: PolicyUpdateParamsDto,
+  ): Promise<PolicyReadCurrentResultDto> {
+    const controller = this.createRequestController(requestId);
+    try {
+      this.checkAborted(controller.signal, requestId);
+      const res = await this.client.advisor.updatePolicy(params, {
+        signal: controller.signal,
+      });
+      this.checkAborted(controller.signal, requestId);
+      return res;
+    } catch (err: unknown) {
+      return this.mapError(err, requestId, controller.signal);
+    } finally {
+      this.releaseRequestController(requestId, controller);
+    }
+  }
+
+  async listModels(
+    requestId: string,
+    backend: AdvisorBackend,
+  ): Promise<AdvisorModelsResultDto> {
+    const controller = this.createRequestController(requestId);
+    try {
+      this.checkAborted(controller.signal, requestId);
+      const res = await this.client.advisor.listModels(
+        { backend },
+        { signal: controller.signal },
+      );
+      this.checkAborted(controller.signal, requestId);
+      return res;
+    } catch (err: unknown) {
+      return this.mapError(err, requestId, controller.signal);
+    } finally {
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -310,7 +434,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -332,7 +456,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 
@@ -355,7 +479,7 @@ export class NativeAdvisorProvider implements AdvisorDataProvider {
     } catch (err: unknown) {
       return this.mapError(err, requestId, controller.signal);
     } finally {
-      this.activeControllers.delete(requestId);
+      this.releaseRequestController(requestId, controller);
     }
   }
 

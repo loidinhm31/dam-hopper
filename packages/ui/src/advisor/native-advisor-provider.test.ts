@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NativeAdvisorProvider } from './native-advisor-provider.js';
-import { AdvisorError, type HistoryRefreshResultDto } from './advisor-types.js';
-import type { ApiClient } from '@/api/client.js';
+import { AdvisorError, type HistoryRefreshResultDto, type PolicyUpdateParamsDto } from './advisor-types.js';
+import { ApiRequestError, type ApiClient } from '@/api/client.js';
 
 describe('NativeAdvisorProvider', () => {
   let mockClient: ApiClient;
@@ -111,6 +111,32 @@ describe('NativeAdvisorProvider', () => {
             wait: { mode: 'until_terminal', warnAfterMs: 3000, warnEveryMs: 5000 },
             history: { retentionDays: 30, maxBytes: 1048576 },
           },
+        }),
+        updatePolicy: vi.fn().mockResolvedValue({
+          status: 'ready',
+          scope: 'account',
+          temporal: 'current',
+          observedAt: 1000,
+          revision: 'pol-rev-2',
+          policy: {
+            version: 2,
+            advisor: {
+              primary: { backend: 'omp', model: 'claude-3-7-sonnet', effort: 'high' },
+              backup: { backend: 'codex', model: 'gpt-5.6', effort: 'medium' },
+            },
+            wait: { mode: 'until_terminal', warnAfterMs: 3000, warnEveryMs: 5000 },
+            history: { retentionDays: 30, maxBytes: 1048576 },
+          },
+        }),
+        listModels: vi.fn().mockResolvedValue({
+          backend: 'omp',
+          source: 'harness',
+          models: [
+            { id: 'claude-3-7-sonnet', label: 'Claude 3.7 Sonnet', efforts: ['low', 'medium', 'high'] },
+          ],
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+          observedAt: 1000,
         }),
         evaluationsList: vi.fn().mockResolvedValue({
           status: 'ready',
@@ -315,5 +341,220 @@ describe('NativeAdvisorProvider', () => {
 
     // After destroy, operations reject immediately
     await expect(provider.readCurrentPolicy('req-after-destroy')).rejects.toThrow(AdvisorError);
+  });
+
+  it('forwards updatePolicy to ApiClient.advisor.updatePolicy with abort signal', async () => {
+    const provider = new NativeAdvisorProvider({ apiClient: mockClient });
+    const params: PolicyUpdateParamsDto = {
+      expectedRevision: 'a'.repeat(64),
+      advisor: {
+        primary: { backend: 'omp', model: 'claude-3-7-sonnet', effort: 'high' },
+        backup: { backend: 'codex', model: 'gpt-5.6', effort: 'medium' },
+      },
+    };
+
+    const res = await provider.updatePolicy('req-update-1', params);
+    expect(res.status).toBe('ready');
+    expect(res.revision).toBe('pol-rev-2');
+    expect(mockClient.advisor.updatePolicy).toHaveBeenCalledWith(
+      params,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('forwards listModels to ApiClient.advisor.listModels with abort signal', async () => {
+    const provider = new NativeAdvisorProvider({ apiClient: mockClient });
+    const res = await provider.listModels('req-models-1', 'omp');
+    expect(res.backend).toBe('omp');
+    expect(res.source).toBe('harness');
+    expect(res.models).toHaveLength(1);
+    expect(mockClient.advisor.listModels).toHaveBeenCalledWith(
+      { backend: 'omp' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('maps structured ApiRequestError with policy conflict and validation codes', async () => {
+    const provider = new NativeAdvisorProvider({ apiClient: mockClient });
+
+    // 409 conflict
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Policy revision mismatch', 409, 'POLICY_REVISION_CONFLICT'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-conflict', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'low' },
+          backup: { backend: 'omp', model: 'm2', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'POLICY_REVISION_CONFLICT',
+      status: 409,
+    });
+
+    // ROUTE_BACKUP_IDENTICAL
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Identical routes', 400, 'ROUTE_BACKUP_IDENTICAL'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-identical', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'low' },
+          backup: { backend: 'omp', model: 'm1', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'ROUTE_BACKUP_IDENTICAL',
+      status: 400,
+    });
+
+    // ROUTE_ENTRY_INVALID
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Invalid entry', 400, 'ROUTE_ENTRY_INVALID'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-invalid', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'bad-effort' },
+          backup: { backend: 'codex', model: 'm2', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'ROUTE_ENTRY_INVALID',
+      status: 400,
+    });
+
+    // POLICY_FILE_UNSAFE
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Policy file unsafe', 400, 'POLICY_FILE_UNSAFE'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-unsafe', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'low' },
+          backup: { backend: 'codex', model: 'm2', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'POLICY_FILE_UNSAFE',
+      status: 400,
+    });
+
+    // POLICY_NOT_EDITABLE
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Policy not editable', 400, 'POLICY_NOT_EDITABLE'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-not-editable', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'low' },
+          backup: { backend: 'codex', model: 'm2', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'POLICY_NOT_EDITABLE',
+      status: 400,
+    });
+
+    // POLICY_PAYLOAD_TOO_LARGE
+    vi.mocked(mockClient.advisor.updatePolicy).mockRejectedValueOnce(
+      new ApiRequestError('Payload too large', 413, 'POLICY_PAYLOAD_TOO_LARGE'),
+    );
+    await expect(
+      provider.updatePolicy('req-err-too-large', {
+        expectedRevision: 'a'.repeat(64),
+        advisor: {
+          primary: { backend: 'omp', model: 'm1', effort: 'low' },
+          backup: { backend: 'codex', model: 'm2', effort: 'low' },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'POLICY_PAYLOAD_TOO_LARGE',
+      status: 413,
+    });
+  });
+
+  it('decouples routing capabilities from history availability in probeStatus', async () => {
+    const provider = new NativeAdvisorProvider({ apiClient: mockClient });
+
+    // Enabled admin with unavailable history directory
+    vi.mocked(mockClient.advisor.status).mockResolvedValueOnce({
+      enabled: true,
+      available: false,
+      path: null,
+      sourceError: 'History root not configured',
+    });
+
+    const desc = await provider.probeStatus();
+    expect(desc.isAvailable).toBe(false);
+    expect(desc.hasHistorySource).toBe(false);
+    expect(desc.hasEvaluationSource).toBe(false);
+    expect(desc.hasPolicySource).toBe(true);
+    expect(desc.capabilities).toEqual([
+      'policy.readCurrent',
+      'policy.update',
+      'models.list',
+    ]);
+
+    // When disabled, no write capabilities are retained
+    vi.mocked(mockClient.advisor.status).mockResolvedValueOnce({
+      enabled: false,
+      available: false,
+      path: null,
+      sourceError: null,
+    });
+
+    const disabledDesc = await provider.probeStatus();
+    expect(disabledDesc.capabilities).toEqual([]);
+    expect(disabledDesc.hasPolicySource).toBe(false);
+  });
+
+  it('handles same-id supersession without deleting newer controller', async () => {
+    const provider = new NativeAdvisorProvider({ apiClient: mockClient });
+    const { promise: slowPromise, resolve: slowResolve } =
+      Promise.withResolvers<any>();
+    const { promise: fastPromise, resolve: fastResolve } =
+      Promise.withResolvers<any>();
+
+    let callCount = 0;
+    vi.mocked(mockClient.advisor.listModels).mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return slowPromise;
+      return fastPromise;
+    });
+
+    // Dispatch first call
+    const p1 = provider.listModels('same-id-req', 'omp');
+    // Dispatch second call with same ID (superseding first)
+    const p2 = provider.listModels('same-id-req', 'codex');
+
+    // Resolve fast call first
+    fastResolve({
+      backend: 'codex',
+      source: 'fallback',
+      models: [],
+      efforts: [],
+      defaultEffort: 'medium',
+      observedAt: 1000,
+    });
+    const res2 = await p2;
+    expect(res2.backend).toBe('codex');
+
+    // First call rejects due to supersession
+    slowResolve({
+      backend: 'omp',
+      source: 'harness',
+      models: [],
+      efforts: [],
+      defaultEffort: 'medium',
+      observedAt: 1000,
+    });
+    await expect(p1).rejects.toThrow(AdvisorError);
   });
 });
