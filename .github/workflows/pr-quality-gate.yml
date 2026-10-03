@@ -128,13 +128,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path server/Cargo.toml -- --check
       - name: Clippy production targets
         run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
         run: cargo test --manifest-path server/Cargo.toml
 
   server_windows:
-    name: Rust server - Windows compile
+    name: Rust server - Windows
     runs-on: windows-latest
     timeout-minutes: 50
     steps:
@@ -143,8 +145,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-      - name: Compile all server tests
-        run: cargo test --manifest-path server/Cargo.toml --no-run
+      - name: Run server tests
+        run: cargo test --manifest-path server/Cargo.toml
       - name: Check all server targets
         run: cargo check --manifest-path server/Cargo.toml --all-targets
 
@@ -184,6 +186,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build browser bridge prerequisite
         run: pnpm --filter @dam-hopper/browser-bridge build
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
       - name: Clippy
         # Keep Clippy visible, but do not let inherited warning debt prevent the
         # platform tests and E2E gates from executing. Compilation errors still fail.
