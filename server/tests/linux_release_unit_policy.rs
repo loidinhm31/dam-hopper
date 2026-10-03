@@ -279,18 +279,22 @@ fn test_resolve_api_identity_rejects_non_primary_group() {
 }
 
 #[test]
-fn test_render_api_unit_custom_identity() {
-    let ctx = create_valid_context()
-        .with_api_identity(
-            "loidinh".into(),
-            "loidinh".into(),
-            "/var/lib/dam-hopper".into(),
-        )
-        .expect("valid identity params");
+fn test_render_api_unit_explicit_valid_identity() {
+    let user = get_user_by_name("nobody").expect("nobody account");
+    let group = get_group_by_gid(user.gid).expect("nobody primary group");
+    let ctx = UnitRenderContext::new(
+        PathBuf::from("/opt/dam-hopper/releases/v0.2.0/both"),
+        "0.2.0".to_string(),
+        PathBuf::from("/etc/dam-hopper/host-config.json"),
+        vec!["http://localhost:4802".to_string()],
+    )
+    .expect("valid context")
+    .with_api_identity("nobody".into(), group.clone(), API_SERVICE_HOME.into())
+    .expect("valid identity params");
     let rendered = render_api_unit(API_TEMPLATE, &ctx).expect("api unit render should succeed");
 
-    assert!(rendered.contains("User=loidinh"));
-    assert!(rendered.contains("Group=loidinh"));
+    assert!(rendered.contains("User=nobody"));
+    assert!(rendered.contains(&format!("Group={group}")));
     assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
