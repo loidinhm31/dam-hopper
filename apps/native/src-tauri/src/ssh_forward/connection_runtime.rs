@@ -2401,10 +2401,7 @@ mod tests {
                 rule_id.into(),
                 ForwardChild {
                     state: SshForwardRuleState::On,
-                    ..ForwardChild::new(
-                        rule(rule_id, connection_id, 8080),
-                        WireCounter::ONE,
-                    )
+                    ..ForwardChild::new(rule(rule_id, connection_id, 8080), WireCounter::ONE)
                 },
             );
 
