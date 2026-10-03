@@ -2,9 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     #[cfg(windows)]
     {
+        let arguments = std::env::args().skip(1).collect::<Vec<_>>();
         if arguments
             .first()
             .is_some_and(|argument| argument == "--ssh-forward-trust-repair")
