@@ -17,13 +17,13 @@ pub struct CommitMessageSnapshot {
 }
 
 #[derive(Debug, Clone)]
-struct CapturedBranch {
-    branch: String,
-    old_tip: git2::Oid,
+pub(super) struct CapturedBranch {
+    pub(super) branch: String,
+    pub(super) old_tip: git2::Oid,
 }
 
 #[derive(Debug)]
-enum RewriteFailure {
+pub(super) enum RewriteFailure {
     Block(GitBlockReason, String),
     Error(AppError),
 }
@@ -40,26 +40,25 @@ impl From<git2::Error> for RewriteFailure {
     }
 }
 
-struct CommitNode<'odb> {
-    oid: git2::Oid,
-    _tree_oid: git2::Oid,
-    parents: Vec<git2::Oid>,
-    raw_object: git2::OdbObject<'odb>,
+pub(super) struct CommitNode<'odb> {
+    pub(super) oid: git2::Oid,
+    pub(super) tree_oid: git2::Oid,
+    pub(super) parents: Vec<git2::Oid>,
+    pub(super) raw_object: git2::OdbObject<'odb>,
 }
 
 #[derive(Debug)]
-struct RawHeaderBlock<'a> {
-    key: &'a [u8],
-    raw: &'a [u8],
+pub(super) struct RawHeaderBlock<'a> {
+    pub(super) key: &'a [u8],
+    pub(super) raw: &'a [u8],
 }
 
 #[derive(Debug)]
-struct RawCommit<'a> {
+pub(super) struct RawCommit<'a> {
     tree_oid: git2::Oid,
     parents: Vec<git2::Oid>,
-    headers: Vec<RawHeaderBlock<'a>>,
-    message: &'a [u8],
-    encoding: Option<&'a str>,
+    pub(super) headers: Vec<RawHeaderBlock<'a>>,
+    pub(super) message: &'a [u8],
 }
 
 struct RewritePlan {
@@ -75,8 +74,215 @@ struct MergetagInfo {
     object_oid: git2::Oid,
 }
 
+pub(super) fn exact_oid(value: &str, field: &str) -> Result<git2::Oid, AppError> {
+    if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::InvalidInput(format!(
+            "{field} must be a full 40-hex commit OID"
+        )));
+    }
+    git2::Oid::from_str(value).map_err(|e| AppError::InvalidInput(format!("invalid {field}: {e}")))
+}
+
+pub(super) fn validate_expected_snapshot(branch: &str, head: &str) -> Result<git2::Oid, AppError> {
+    if !branch.starts_with("refs/heads/") || !git2::Reference::is_valid_name(branch) {
+        return Err(AppError::InvalidInput(format!(
+            "invalid expectedBranch '{branch}'"
+        )));
+    }
+    exact_oid(head, "expectedHeadOid")
+}
+
+pub(super) fn normalize_message(message: &str) -> Result<Vec<u8>, AppError> {
+    if message.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "commit message cannot be empty".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(message.len() + usize::from(!message.ends_with('\n')));
+    bytes.extend_from_slice(message.as_bytes());
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    Ok(bytes)
+}
+
+/// Shared stale-first gates. An inspection failure is an error, never evidence of safety.
+pub(super) async fn mutation_preflight(
+    path: &Path,
+    expected_branch: &str,
+    expected_tip: git2::Oid,
+) -> Result<Result<CapturedBranch, GitActionResult>, AppError> {
+    // Do not retain libgit2 handles across awaits.
+    let captured = {
+        let repo = git2::Repository::open(path).map_err(|e| AppError::Git(e.message().into()))?;
+        match snapshot_branch(&repo) {
+            Ok(captured) => captured,
+            Err(RewriteFailure::Error(error)) => return Err(error),
+            Err(RewriteFailure::Block(reason, message)) => {
+                let mut action =
+                    GitActionResult::blocked(reason, message, "check out a local branch");
+                action.branch = Some(expected_branch.to_string());
+                return Ok(Err(action));
+            }
+        }
+    };
+    let block = |reason, message: String, recommendation: &str| {
+        let mut action = GitActionResult::blocked(reason, message, recommendation);
+        action.branch = Some(captured.branch.clone());
+        Ok(Err(action))
+    };
+    if captured.branch != expected_branch || captured.old_tip != expected_tip {
+        return block(
+            GitBlockReason::StaleRef,
+            format!("expected branch/head ({expected_branch} at {expected_tip}) differs from current ({} at {})", captured.branch, captured.old_tip),
+            "refresh branch history and review the selection again",
+        );
+    }
+    if let Some(recovery) = cli_fallback::active_git_operation(path).await? {
+        let mut action = GitActionResult::blocked(
+            GitBlockReason::ActiveOperation,
+            "another Git operation is already in progress",
+            "finish or abort the in-progress operation before rewriting history",
+        );
+        action.recovery = Some(recovery);
+        action.branch = Some(captured.branch);
+        return Ok(Err(action));
+    }
+    let current_root = dunce::canonicalize(path)?;
+    for wt in cli_fallback::list_worktrees(path).await? {
+        let branch_matches = wt.branch == captured.branch
+            || Some(wt.branch.as_str()) == captured.branch.strip_prefix("refs/heads/");
+        if branch_matches && dunce::canonicalize(&wt.path)? != current_root {
+            return block(
+                GitBlockReason::CheckedOutBranch,
+                format!(
+                    "branch {} is checked out in another worktree at {}",
+                    captured.branch, wt.path
+                ),
+                "switch branches in the other worktree first",
+            );
+        }
+    }
+    // Resolve before reopening libgit2: async handlers must remain Send.
+    let graft_path =
+        cli_fallback::run_git(&["rev-parse", "--git-path", "info/grafts"], path).await?;
+    let shallow = cli_fallback::run_git(&["rev-parse", "--is-shallow-repository"], path).await?;
+    if !matches!(shallow.trim(), "true" | "false") {
+        return Err(AppError::Git(
+            "could not establish whether repository history is shallow".into(),
+        ));
+    }
+    let repo = git2::Repository::open(path).map_err(|e| AppError::Git(e.message().into()))?;
+    // CLI recovery metadata covers only a subset of sequencer states. Revert,
+    // bisect and other pending operations must still block object-only rewrites.
+    let operation_state = repo.state();
+    if operation_state != git2::RepositoryState::Clean {
+        return block(
+            GitBlockReason::ActiveOperation,
+            format!("another Git operation is in progress: {operation_state:?}"),
+            "finish or abort the active Git operation before rewriting history",
+        );
+    }
+    let mut refs = repo
+        .references_glob("refs/replace/*")
+        .map_err(|e| AppError::Git(e.message().into()))?;
+    if let Some(reference) = refs.next() {
+        reference.map_err(|e| AppError::Git(e.message().into()))?;
+        return block(
+            GitBlockReason::UnsupportedHistory,
+            "git replace refs are active".into(),
+            "remove replace refs before rewriting history",
+        );
+    }
+    let graft_path = path.join(graft_path.trim());
+    match std::fs::read(&graft_path) {
+        Ok(bytes) if bytes.iter().any(|b| !b.is_ascii_whitespace()) => {
+            return block(
+                GitBlockReason::UnsupportedHistory,
+                "git grafts file is present".into(),
+                "convert grafts to proper commits before rewriting history",
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if shallow.trim() == "true" {
+        return block(
+            GitBlockReason::UnsupportedHistory,
+            "shallow history cannot be rewritten".into(),
+            "unshallow the repository before rewriting history",
+        );
+    }
+    Ok(Ok(captured))
+}
+
+pub(super) fn validate_utf8_message<'a>(parsed: &RawCommit<'a>) -> Result<&'a str, RewriteFailure> {
+    for block in &parsed.headers {
+        if block.key == b"encoding"
+            && !std::str::from_utf8(block.raw.strip_prefix(b"encoding ").unwrap_or(&[]))
+                .is_ok_and(|encoding| encoding.trim().eq_ignore_ascii_case("UTF-8"))
+        {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::UnsupportedHistory,
+                "selected commit declares a non-UTF-8 or malformed encoding".into(),
+            ));
+        }
+    }
+    std::str::from_utf8(parsed.message).map_err(|_| {
+        RewriteFailure::Block(
+            GitBlockReason::UnsupportedHistory,
+            "selected commit message is not valid UTF-8".into(),
+        )
+    })
+}
+
+pub(super) fn affected_closure(nodes: &[CommitNode<'_>], anchor: git2::Oid) -> HashSet<git2::Oid> {
+    let mut affected = HashSet::new();
+    for node in nodes {
+        if node.oid == anchor || node.parents.iter().any(|p| affected.contains(p)) {
+            affected.insert(node.oid);
+        }
+    }
+    affected
+}
+
+pub(super) fn signature_removals(
+    nodes: &[CommitNode<'_>],
+    affected: &HashSet<git2::Oid>,
+) -> Result<HashMap<git2::Oid, Vec<usize>>, RewriteFailure> {
+    let mut removals = HashMap::new();
+    for node in nodes.iter().filter(|node| affected.contains(&node.oid)) {
+        let parsed = parse_raw_commit(node.raw_object.data())?;
+        let mut indices = Vec::new();
+        for (index, block) in parsed.headers.iter().enumerate() {
+            if block.key == b"gpgsig" || block.key == b"gpgsig-sha256" {
+                indices.push(index);
+            } else if block.key == b"mergetag" {
+                let tag = parse_mergetag_block(block.raw)?;
+                if !node.parents.contains(&tag.object_oid) {
+                    return Err(RewriteFailure::Block(
+                        GitBlockReason::InvalidCommitMetadata,
+                        format!(
+                            "mergetag object {} is not a parent of {}",
+                            tag.object_oid, node.oid
+                        ),
+                    ));
+                }
+                if affected.contains(&tag.object_oid) {
+                    indices.push(index);
+                }
+            }
+        }
+        if !indices.is_empty() {
+            removals.insert(node.oid, indices);
+        }
+    }
+    Ok(removals)
+}
+
 /// Retrieves the raw UTF-8 commit message along with the current symbolic branch and tip OID.
-/// Re-reads under read-only transaction locks and verifies reachability and UTF-8 validity.
+/// Reads immutable commit data against a lock-free branch snapshot; mutations revalidate under locks.
 pub fn get_commit_message(
     project_path: &Path,
     hash: &str,
@@ -87,17 +293,34 @@ pub fn get_commit_message(
     let target_oid = git2::Oid::from_str(hash)
         .map_err(|e| AppError::InvalidInput(format!("invalid commit hash '{hash}': {e}")))?;
 
-    let captured = match snapshot_branch(&repo) {
-        Ok(c) => c,
-        Err(RewriteFailure::Block(reason, msg)) => {
-            return Err(AppError::Git(format!("{reason:?}: {msg}")));
-        }
-        Err(RewriteFailure::Error(err)) => return Err(err),
+    // Readers must not contend for write locks: squash loads multiple messages concurrently.
+    let head = repo.head().map_err(|e| {
+        AppError::Git(format!(
+            "cannot inspect checked-out branch: {}",
+            e.message()
+        ))
+    })?;
+    let branch = head
+        .name()
+        .filter(|name| head.is_branch() && name.starts_with("refs/heads/"))
+        .ok_or_else(|| {
+            AppError::Git("commit messages require a checked-out local branch".into())
+        })?;
+    let old_tip = head
+        .target()
+        .ok_or_else(|| AppError::Git("checked-out branch has no direct tip OID".into()))?;
+    let captured = CapturedBranch {
+        branch: branch.to_string(),
+        old_tip,
     };
 
-    let commit = repo
-        .find_commit(target_oid)
+    let odb = repo.odb().map_err(|e| AppError::Git(e.message().into()))?;
+    let raw_object = odb
+        .read(target_oid)
         .map_err(|e| AppError::Git(format!("target commit {hash} not found: {}", e.message())))?;
+    if raw_object.kind() != git2::ObjectType::Commit {
+        return Err(AppError::Git(format!("target {hash} is not a commit")));
+    }
 
     let is_reachable = if captured.old_tip == target_oid {
         true
@@ -113,17 +336,29 @@ pub fn get_commit_message(
         )));
     }
 
-    if let Some(enc) = commit.message_encoding() {
-        if !enc.eq_ignore_ascii_case("UTF-8") {
-            return Err(AppError::Git(format!(
-                "target commit declares non-UTF-8 encoding '{enc}'"
-            )));
-        }
-    }
+    let read_error = |failure| match failure {
+        RewriteFailure::Error(error) => error,
+        RewriteFailure::Block(_, message) => AppError::Git(message),
+    };
+    let parsed = parse_raw_commit(raw_object.data()).map_err(read_error)?;
+    // libgit2's message getters prettify leading LF and use NUL-terminated strings.
+    // The object body is the source of truth for the editable full-message draft.
+    let message_str = validate_utf8_message(&parsed).map_err(read_error)?;
 
-    let raw_message = commit.message_bytes();
-    let message_str = std::str::from_utf8(raw_message)
-        .map_err(|_| AppError::Git("target commit message is not valid UTF-8".to_string()))?;
+    let observed = repo
+        .find_reference("HEAD")
+        .map_err(|e| AppError::Git(e.message().into()))?;
+    let observed_tip = repo
+        .find_reference(&captured.branch)
+        .map_err(|e| AppError::Git(e.message().into()))?
+        .target();
+    if observed.symbolic_target() != Some(captured.branch.as_str())
+        || observed_tip != Some(captured.old_tip)
+    {
+        return Err(AppError::Git(
+            "branch changed while reading commit message; refresh history".into(),
+        ));
+    }
 
     Ok(CommitMessageSnapshot {
         message: message_str.to_string(),
@@ -141,153 +376,19 @@ pub async fn edit_commit_message(
     expected_head_oid: &str,
     allow_signature_removal: bool,
 ) -> Result<GitActionResult, AppError> {
-    if message.trim().is_empty() {
-        return Err(AppError::InvalidInput(
-            "commit message cannot be empty".to_string(),
-        ));
-    }
-
-    if expected_branch.is_empty()
-        || !expected_branch.starts_with("refs/heads/")
-        || expected_branch.contains('\n')
-        || expected_branch.contains('\r')
-        || expected_branch.contains('\0')
-        || !git2::Reference::is_valid_name(expected_branch)
-    {
-        return Err(AppError::InvalidInput(format!(
-            "invalid expectedBranch '{expected_branch}'"
-        )));
-    }
-
-    let expected_tip = git2::Oid::from_str(expected_head_oid).map_err(|e| {
-        AppError::InvalidInput(format!(
-            "invalid expectedHeadOid '{expected_head_oid}': {e}"
-        ))
-    })?;
+    let normalized_message = normalize_message(message)?;
+    let expected_tip = validate_expected_snapshot(expected_branch, expected_head_oid)?;
 
     let target_oid = git2::Oid::from_str(hash)
         .map_err(|e| AppError::InvalidInput(format!("invalid target commit hash '{hash}': {e}")))?;
 
-    let repo =
-        git2::Repository::open(project_path).map_err(|e| AppError::Git(e.message().to_string()))?;
-
-    // Step 1: Snapshot symbolic HEAD and branch under locks
-    let captured = match snapshot_branch(&repo) {
-        Ok(c) => c,
-        Err(RewriteFailure::Block(reason, msg)) => {
-            let mut res = GitActionResult::blocked(
-                reason,
-                msg,
-                "check out a branch before rewriting commits",
-            );
-            res.hash = Some(hash.to_string());
-            res.branch = Some(expected_branch.to_string());
-            return Ok(res);
+    let captured = match mutation_preflight(project_path, expected_branch, expected_tip).await? {
+        Ok(captured) => captured,
+        Err(mut action) => {
+            action.hash = Some(hash.to_string());
+            return Ok(action);
         }
-        Err(RewriteFailure::Error(err)) => return Err(err),
     };
-
-    // Step 2: Check stale expected branch / tip before target lookup
-    if captured.branch != expected_branch || captured.old_tip != expected_tip {
-        let mut res = GitActionResult::blocked(
-            GitBlockReason::StaleRef,
-            format!(
-                "expected branch/head snapshot ({expected_branch} at {expected_head_oid}) does not match current state ({} at {})",
-                captured.branch, captured.old_tip
-            ),
-            "fetch or switch to the latest branch tip and re-check commit status",
-        );
-        res.hash = Some(hash.to_string());
-        res.branch = Some(captured.branch);
-        return Ok(res);
-    }
-
-    // Step 3: Check active Git operations
-    if let Some(recovery) = cli_fallback::active_git_operation(project_path).await? {
-        let mut blocked = GitActionResult::blocked(
-            GitBlockReason::ActiveOperation,
-            "another Git operation is already in progress",
-            "finish or abort the in-progress operation before starting a destructive action",
-        );
-        blocked.recovery = Some(recovery);
-        blocked.hash = Some(hash.to_string());
-        blocked.branch = Some(captured.branch);
-        return Ok(blocked);
-    }
-
-    // Step 4: Check if branch is checked out in another linked worktree
-    let worktrees = cli_fallback::list_worktrees(project_path)
-        .await
-        .unwrap_or_default();
-    let current_root =
-        dunce::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
-    let branch_short = captured
-        .branch
-        .strip_prefix("refs/heads/")
-        .unwrap_or(&captured.branch);
-    for wt in worktrees {
-        let wt_path =
-            dunce::canonicalize(&wt.path).unwrap_or_else(|_| Path::new(&wt.path).to_path_buf());
-        if wt_path != current_root && (wt.branch == captured.branch || wt.branch == branch_short) {
-            let mut blocked = GitActionResult::blocked(
-                GitBlockReason::CheckedOutBranch,
-                format!(
-                    "branch {} is checked out in another worktree at {}",
-                    captured.branch, wt.path
-                ),
-                "switch branches in the other worktree first",
-            );
-            blocked.hash = Some(hash.to_string());
-            blocked.branch = Some(captured.branch);
-            return Ok(blocked);
-        }
-    }
-
-    // Step 5: Check replace refs and grafts
-    if let Ok(mut refs) = repo.references_glob("refs/replace/*") {
-        if refs.next().is_some() {
-            let mut blocked = GitActionResult::blocked(
-                GitBlockReason::UnsupportedHistory,
-                "git replace refs are active in this repository",
-                "remove git replace refs before rewriting history",
-            );
-            blocked.hash = Some(hash.to_string());
-            blocked.branch = Some(captured.branch);
-            return Ok(blocked);
-        }
-    }
-
-    let grafts_path = repo.path().join("info/grafts");
-    if grafts_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&grafts_path) {
-            if !content.trim().is_empty() {
-                let mut blocked = GitActionResult::blocked(
-                    GitBlockReason::UnsupportedHistory,
-                    "git grafts file is present in repository",
-                    "convert grafts to proper commits before rewriting history",
-                );
-                blocked.hash = Some(hash.to_string());
-                blocked.branch = Some(captured.branch);
-                return Ok(blocked);
-            }
-        }
-    }
-    if repo.is_shallow() {
-        let mut blocked = GitActionResult::blocked(
-            GitBlockReason::UnsupportedHistory,
-            "shallow repository history is not supported for rewrite",
-            "unshallow repository before rewriting commit messages",
-        );
-        blocked.hash = Some(hash.to_string());
-        blocked.branch = Some(captured.branch);
-        return Ok(blocked);
-    }
-
-    // Normalize incoming message: append one LF iff missing
-    let mut normalized_message = message.as_bytes().to_vec();
-    if !normalized_message.ends_with(b"\n") {
-        normalized_message.push(b'\n');
-    }
 
     let project_path_buf = project_path.to_path_buf();
     let hash_string = hash.to_string();
@@ -402,7 +503,7 @@ pub async fn edit_commit_message(
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
 
-            let payload = match rewrite_bytes(node, &mapped_parents, new_msg, removable) {
+            let payload = match rewrite_bytes(node, &mapped_parents, new_msg, removable, None, None) {
                 Ok(bytes) => bytes,
                 Err(RewriteFailure::Block(reason, msg)) => {
                     let mut res = GitActionResult::blocked(reason, msg, "");
@@ -455,7 +556,7 @@ pub async fn edit_commit_message(
         }
 
         // Publish checked ref using git2 transaction
-        match publish_checked_ref(&repo, &captured_clone, new_tip_oid) {
+        match publish_checked_ref(&repo, &captured_clone, new_tip_oid, "edit commit message") {
             Ok(()) => {}
             Err(RewriteFailure::Block(reason, msg)) => {
                 let mut res = GitActionResult::blocked(reason, msg, "");
@@ -508,7 +609,7 @@ pub async fn edit_commit_message(
 }
 
 /// Takes a snapshot of the current symbolic branch and its direct tip OID under git2 transaction locks.
-fn snapshot_branch(repo: &git2::Repository) -> Result<CapturedBranch, RewriteFailure> {
+pub(super) fn snapshot_branch(repo: &git2::Repository) -> Result<CapturedBranch, RewriteFailure> {
     let mut tx = repo.transaction().map_err(|e| {
         RewriteFailure::Error(AppError::Git(format!(
             "failed to create git transaction: {e}"
@@ -582,7 +683,7 @@ enum DfsState {
 }
 
 /// Performs iterative DFS from tip following all parent OIDs in order, returning nodes in parent-first order.
-fn collect_parent_first<'odb>(
+pub(super) fn collect_parent_first<'odb>(
     repo: &git2::Repository,
     odb: &'odb git2::Odb<'_>,
     tip: git2::Oid,
@@ -680,7 +781,7 @@ fn collect_parent_first<'odb>(
         if let Some((tree_oid, parents, raw_object)) = node_map.remove(&oid) {
             result.push(CommitNode {
                 oid,
-                _tree_oid: tree_oid,
+                tree_oid,
                 parents,
                 raw_object,
             });
@@ -748,7 +849,7 @@ fn cross_check_commit_node(
 }
 
 /// Parses the raw commit object up to the first `\n\n` into logical header blocks and message payload.
-fn parse_raw_commit(raw: &[u8]) -> Result<RawCommit<'_>, RewriteFailure> {
+pub(super) fn parse_raw_commit(raw: &[u8]) -> Result<RawCommit<'_>, RewriteFailure> {
     let sep_idx = match raw.windows(2).position(|w| w == b"\n\n") {
         Some(pos) => pos,
         None => {
@@ -821,7 +922,6 @@ fn parse_raw_commit(raw: &[u8]) -> Result<RawCommit<'_>, RewriteFailure> {
     let mut parents = Vec::new();
     let mut has_author = false;
     let mut has_committer = false;
-    let mut encoding = None;
 
     for block in &headers {
         match block.key {
@@ -866,11 +966,6 @@ fn parse_raw_commit(raw: &[u8]) -> Result<RawCommit<'_>, RewriteFailure> {
             }
             b"author" => has_author = true,
             b"committer" => has_committer = true,
-            b"encoding" => {
-                if let Ok(line_str) = std::str::from_utf8(block.raw) {
-                    encoding = Some(line_str.trim_start_matches("encoding").trim());
-                }
-            }
             _ => {}
         }
     }
@@ -894,7 +989,6 @@ fn parse_raw_commit(raw: &[u8]) -> Result<RawCommit<'_>, RewriteFailure> {
         parents,
         headers,
         message: message_bytes,
-        encoding,
     })
 }
 
@@ -938,24 +1032,29 @@ fn parse_mergetag_block(raw: &[u8]) -> Result<MergetagInfo, RewriteFailure> {
     let tag_header_bytes = &payload[..sep];
 
     let mut object_oid_opt = None;
+    let mut type_count = 0;
     let mut is_commit_type = false;
 
     for line in tag_header_bytes.split(|&b| b == b'\n') {
         if line.starts_with(b"object ") {
+            if object_oid_opt.is_some() {
+                return Err(RewriteFailure::Block(
+                    GitBlockReason::InvalidCommitMetadata,
+                    "mergetag has duplicate object headers".into(),
+                ));
+            }
             let oid_str = std::str::from_utf8(&line[7..]).map_err(|_| {
                 RewriteFailure::Block(
                     GitBlockReason::InvalidCommitMetadata,
                     "mergetag object field is not valid UTF-8".to_string(),
                 )
             })?;
-            let oid = git2::Oid::from_str(oid_str.trim()).map_err(|e| {
-                RewriteFailure::Block(
-                    GitBlockReason::InvalidCommitMetadata,
-                    format!("invalid object OID in mergetag: {e}"),
-                )
+            let oid = exact_oid(oid_str.trim(), "mergetag object").map_err(|e| {
+                RewriteFailure::Block(GitBlockReason::InvalidCommitMetadata, e.to_string())
             })?;
             object_oid_opt = Some(oid);
         } else if line.starts_with(b"type ") {
+            type_count += 1;
             let type_str = std::str::from_utf8(&line[5..]).unwrap_or("").trim();
             if type_str == "commit" {
                 is_commit_type = true;
@@ -970,7 +1069,7 @@ fn parse_mergetag_block(raw: &[u8]) -> Result<MergetagInfo, RewriteFailure> {
         )
     })?;
 
-    if !is_commit_type {
+    if !is_commit_type || type_count != 1 {
         return Err(RewriteFailure::Block(
             GitBlockReason::InvalidCommitMetadata,
             "mergetag does not specify 'type commit'".to_string(),
@@ -995,21 +1094,7 @@ fn plan_rewrite(
 
     let target_parsed = parse_raw_commit(target_node.raw_object.data())?;
 
-    if let Some(enc) = target_parsed.encoding {
-        if !enc.eq_ignore_ascii_case("UTF-8") {
-            return Err(RewriteFailure::Block(
-                GitBlockReason::UnsupportedHistory,
-                format!("target commit declares non-UTF-8 encoding '{enc}'"),
-            ));
-        }
-    }
-
-    if std::str::from_utf8(target_parsed.message).is_err() {
-        return Err(RewriteFailure::Block(
-            GitBlockReason::UnsupportedHistory,
-            "target commit message is not valid UTF-8".to_string(),
-        ));
-    }
+    validate_utf8_message(&target_parsed)?;
 
     if target_parsed.message == normalized_message.as_slice() {
         return Ok(RewritePlan {
@@ -1021,46 +1106,8 @@ fn plan_rewrite(
         });
     }
 
-    let mut affected_set = HashSet::new();
-    let mut removable_headers = HashMap::new();
-
-    for node in nodes {
-        let is_target = node.oid == target;
-        let has_affected_parent = node.parents.iter().any(|p| affected_set.contains(p));
-        if !is_target && !has_affected_parent {
-            continue;
-        }
-
-        affected_set.insert(node.oid);
-
-        let parsed = parse_raw_commit(node.raw_object.data())?;
-        let mut to_remove = Vec::new();
-
-        for (idx, block) in parsed.headers.iter().enumerate() {
-            if block.key == b"gpgsig" || block.key == b"gpgsig-sha256" {
-                to_remove.push(idx);
-            } else if block.key == b"mergetag" {
-                let tag_info = parse_mergetag_block(block.raw)?;
-                let matches_parent = node.parents.iter().any(|&p| p == tag_info.object_oid);
-                if !matches_parent {
-                    return Err(RewriteFailure::Block(
-                        GitBlockReason::InvalidCommitMetadata,
-                        format!(
-                            "mergetag references object {} which is not a parent of commit {}",
-                            tag_info.object_oid, node.oid
-                        ),
-                    ));
-                }
-                if affected_set.contains(&tag_info.object_oid) {
-                    to_remove.push(idx);
-                }
-            }
-        }
-
-        if !to_remove.is_empty() {
-            removable_headers.insert(node.oid, to_remove);
-        }
-    }
+    let affected_set = affected_closure(nodes, target);
+    let removable_headers = signature_removals(nodes, &affected_set)?;
 
     Ok(RewritePlan {
         affected_set,
@@ -1076,14 +1123,28 @@ fn required_removals(plan: &RewritePlan) -> bool {
 }
 
 /// Constructs the raw commit object bytes for an affected node with mapped parents and updated message.
-fn rewrite_bytes(
+pub(super) fn rewrite_bytes(
     node: &CommitNode<'_>,
     mapped_parents: &[git2::Oid],
     new_message: Option<&[u8]>,
     removable_header_indices: &[usize],
+    new_tree: Option<git2::Oid>,
+    new_committer: Option<&[u8]>,
 ) -> Result<Vec<u8>, RewriteFailure> {
     let parsed = parse_raw_commit(node.raw_object.data())?;
-    let mut out = Vec::new();
+    let header_len: usize = parsed
+        .headers
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !removable_header_indices.contains(index))
+        .map(|(_, block)| match block.key {
+            b"parent" => 48,
+            b"tree" if new_tree.is_some() => 46,
+            b"committer" if new_committer.is_some() => new_committer.unwrap().len(),
+            _ => block.raw.len(),
+        })
+        .sum();
+    let mut out = Vec::with_capacity(header_len + 1 + new_message.unwrap_or(parsed.message).len());
     let mut parent_idx = 0;
 
     for (i, block) in parsed.headers.iter().enumerate() {
@@ -1101,6 +1162,10 @@ fn rewrite_bytes(
             let new_parent = mapped_parents[parent_idx];
             parent_idx += 1;
             let _ = write!(&mut out, "parent {new_parent}\n");
+        } else if block.key == b"tree" && new_tree.is_some() {
+            let _ = writeln!(&mut out, "tree {}", new_tree.unwrap());
+        } else if block.key == b"committer" && new_committer.is_some() {
+            out.extend_from_slice(new_committer.unwrap());
         } else {
             out.extend_from_slice(block.raw);
         }
@@ -1116,11 +1181,36 @@ fn rewrite_bytes(
     Ok(out)
 }
 
+// Fault injection is thread-local and compiled only in unit tests. Production always commits.
+#[cfg(test)]
+thread_local! {
+    static FAIL_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn inject_publication_failure() {
+    FAIL_PUBLICATION.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn take_publication_failure() -> bool {
+    FAIL_PUBLICATION.with(|flag| flag.replace(false))
+}
+
+fn commit_transaction(tx: git2::Transaction<'_>) -> Result<(), git2::Error> {
+    #[cfg(test)]
+    if take_publication_failure() {
+        return Err(git2::Error::from_str("injected transaction commit failure"));
+    }
+    tx.commit()
+}
+
 /// Publishes the rewritten tip to the captured branch ref using git2's two-lock/one-ref-write transaction.
-fn publish_checked_ref(
+pub(super) fn publish_checked_ref(
     repo: &git2::Repository,
     captured: &CapturedBranch,
     new_tip: git2::Oid,
+    reflog_message: &str,
 ) -> Result<(), RewriteFailure> {
     let mut tx = repo.transaction().map_err(|e| {
         RewriteFailure::Error(AppError::Git(format!(
@@ -1160,7 +1250,7 @@ fn publish_checked_ref(
         ));
     }
 
-    tx.set_target(&captured.branch, new_tip, None, "edit commit message")
+    tx.set_target(&captured.branch, new_tip, None, reflog_message)
         .map_err(|e| {
             RewriteFailure::Error(AppError::Git(format!(
                 "failed to set target on {}: {e}",
@@ -1168,7 +1258,7 @@ fn publish_checked_ref(
             )))
         })?;
 
-    match tx.commit() {
+    match commit_transaction(tx) {
         Ok(()) => Ok(()),
         Err(e) => {
             let head_obs = repo
@@ -1182,7 +1272,8 @@ fn publish_checked_ref(
             Err(RewriteFailure::Block(
                 GitBlockReason::PublicationUncertain,
                 format!(
-                    "git transaction commit failed: {e}; observed HEAD={head_obs:?}, branch={branch_obs:?}"
+                    "git transaction commit failed: {e}; original branch={} original tip={} candidate tip={new_tip}; observed HEAD={head_obs:?}, branch={branch_obs:?}",
+                    captured.branch, captured.old_tip
                 ),
             ))
         }

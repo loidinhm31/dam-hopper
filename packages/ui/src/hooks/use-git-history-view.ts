@@ -25,6 +25,11 @@ import {
   useGitHistoryStore,
   type HistoryBranchPreference,
 } from "@/stores/git-history.js";
+import {
+  deriveGitSquashSelection,
+  type GitSquashSelection,
+} from "@/lib/git-squash-selection.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
 
 export const GIT_HISTORY_PAGE_SIZE = 200;
 
@@ -80,6 +85,13 @@ export interface GitHistoryViewResult {
   selectCommit: (entry: GitLogEntry | null) => void;
   clearSelectedCommit: () => void;
   effectiveScopeKey: string;
+  squashSelectedHashes: string[];
+  toggleSquashCommit: (hash: string) => void;
+  clearSquashSelection: () => void;
+  squashSelection: GitSquashSelection;
+  squashScopeKey: string;
+  squashAvailable: boolean;
+  squashUnavailableReason?: string;
 }
 
 export function useGitHistoryView(
@@ -88,6 +100,7 @@ export function useGitHistoryView(
 ): GitHistoryViewResult {
   const queryClient = useQueryClient();
   const targetRef = useMemo(() => normalizeProjectTarget(target), [target]);
+  const connectionSnapshot = useConnectionSnapshot(targetRef.profileId ?? "");
   const isHydrated = useGitHistoryHydrated();
   const available = options?.available ?? true;
 
@@ -128,9 +141,7 @@ export function useGitHistoryView(
     () => rawBranchPreference ?? { mode: "follow-active" },
     [rawBranchPreference],
   );
-  const setBranchPreference = useGitHistoryStore(
-    (s) => s.setBranchPreference,
-  );
+  const setBranchPreference = useGitHistoryStore((s) => s.setBranchPreference);
   const clearBranchPreference = useGitHistoryStore(
     (s) => s.clearBranchPreference,
   );
@@ -258,11 +269,9 @@ export function useGitHistoryView(
     return Boolean(activeBranch && resolved.branch.name === activeBranch);
   }, [resolved, activeBranchRef, activeBranch]);
 
-  const owner = useMemo(
-    () => resolveTargetOwner(targetRef.profileId),
-    [targetRef.profileId],
-  );
-  const connectionGeneration = owner?.generation ?? 0;
+  const owner = resolveTargetOwner(targetRef.profileId);
+  const connectionGeneration =
+    connectionSnapshot?.owner.generation ?? owner?.generation ?? 0;
 
   // Scope key for resetting transient state (includes connection generation for reconnect fencing)
   const effectiveScopeKey = useMemo(() => {
@@ -360,6 +369,85 @@ export function useGitHistoryView(
     isLogLoading || (!isHydrated && available) || isScopeResolving;
   const isFetching = isLogFetching || isBranchesFetching;
 
+  const squashUnavailableReason = !availability.isAvailable
+    ? availability.reason
+    : !targetRef.profileId || connectionSnapshot?.status !== "connected"
+      ? "Connect the selected profile before squashing history."
+      : !isRootsSuccess ||
+          !isBranchesSuccess ||
+          !rootsData.some((entry) => entry.rootId === effectiveRootId)
+        ? "Waiting for available root and checked-out branch discovery."
+        : !activeBranchRef?.startsWith("refs/heads/") ||
+            activeBranchObj?.isRemote
+          ? "Squash requires a checked-out local branch."
+          : resolved.canonicalRef !== activeBranchRef
+            ? "View the checked-out branch to select commits for squash."
+            : error
+              ? "Refresh history before selecting commits."
+              : undefined;
+  const squashAvailable = !squashUnavailableReason;
+  const squashScopeKey = JSON.stringify([
+    effectiveScopeKey,
+    resolved.canonicalRef,
+    activeBranchRef,
+    searchText,
+    appliedMessageQuery,
+    page,
+    offset,
+    squashAvailable,
+    squashUnavailableReason,
+  ]);
+  const [squashState, setSquashState] = useState<{
+    scope: string;
+    hashes: string[];
+  }>({
+    scope: squashScopeKey,
+    hashes: [],
+  });
+  const visibleHashes = useMemo(
+    () => new Set(logs.map((entry) => entry.hash)),
+    [logs],
+  );
+  const selectionMissing = squashState.hashes.some(
+    (hash) => !visibleHashes.has(hash),
+  );
+  if (squashState.scope !== squashScopeKey || selectionMissing) {
+    setSquashState({ scope: squashScopeKey, hashes: [] });
+  }
+  const squashSelectedHashes =
+    squashState.scope === squashScopeKey && !selectionMissing
+      ? squashState.hashes
+      : [];
+  const squashSelection = useMemo(
+    () => deriveGitSquashSelection(logs, squashSelectedHashes),
+    [logs, squashSelectedHashes],
+  );
+  const squashScopeRef = useRef(squashScopeKey);
+  squashScopeRef.current = squashScopeKey;
+  const clearSquashSelection = useCallback(() => {
+    setSquashState({ scope: squashScopeRef.current, hashes: [] });
+  }, []);
+  const toggleSquashCommit = useCallback(
+    (hash: string) => {
+      if (
+        !squashAvailable ||
+        squashScopeRef.current !== squashScopeKey ||
+        !visibleHashes.has(hash)
+      )
+        return;
+      setSquashState((previous) => {
+        const hashes = previous.scope === squashScopeKey ? previous.hashes : [];
+        return {
+          scope: squashScopeKey,
+          hashes: hashes.includes(hash)
+            ? hashes.filter((oid) => oid !== hash)
+            : [...hashes, hash],
+        };
+      });
+    },
+    [squashAvailable, squashScopeKey, visibleHashes],
+  );
+
   // Search input handling & 300 ms debounce
   const setSearchText = useCallback(
     (text: string) => {
@@ -436,21 +524,13 @@ export function useGitHistoryView(
 
   const selectBranchRef = useCallback(
     (ref: string) => {
-      setBranchPreference(
-        targetRef,
-        { mode: "pinned", ref },
-        effectiveRootId,
-      );
+      setBranchPreference(targetRef, { mode: "pinned", ref }, effectiveRootId);
     },
     [setBranchPreference, targetRef, effectiveRootId],
   );
 
   const followCheckedOutBranch = useCallback(() => {
-    setBranchPreference(
-      targetRef,
-      { mode: "follow-active" },
-      effectiveRootId,
-    );
+    setBranchPreference(targetRef, { mode: "follow-active" }, effectiveRootId);
   }, [setBranchPreference, targetRef, effectiveRootId]);
 
   const hasPreviousPage = page > 0;
@@ -517,7 +597,7 @@ export function useGitHistoryView(
       );
       const refreshedRef =
         branchPreference.mode === "pinned"
-          ? refreshedResolved.branch?.lastCommit ?? branchPreference.ref
+          ? (refreshedResolved.branch?.lastCommit ?? branchPreference.ref)
           : undefined;
 
       const refreshedLogs = await queryClient.fetchQuery<GitLogEntry[]>(
@@ -539,9 +619,7 @@ export function useGitHistoryView(
       // Reconcile selected commit against fresh rows
       setSelectedCommit((prev) => {
         if (!prev) return null;
-        return (
-          refreshedLogs.find((entry) => entry.hash === prev.hash) ?? null
-        );
+        return refreshedLogs.find((entry) => entry.hash === prev.hash) ?? null;
       });
     } catch (err) {
       if (capturedScopeKey === currentScopeRef.current) {
@@ -607,5 +685,12 @@ export function useGitHistoryView(
     selectCommit,
     clearSelectedCommit,
     effectiveScopeKey,
+    squashSelectedHashes,
+    toggleSquashCommit,
+    clearSquashSelection,
+    squashSelection,
+    squashScopeKey,
+    squashAvailable,
+    squashUnavailableReason,
   };
 }

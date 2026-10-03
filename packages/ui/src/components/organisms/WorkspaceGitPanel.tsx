@@ -4,15 +4,8 @@ import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { cn } from "@/lib/utils.js";
-import {
-  isGitUnavailableError,
-  normalizeProjectTarget,
-} from "@/api/client.js";
-import type {
-  DiffFileEntry,
-  VcsRoot,
-  ProjectTargetRef,
-} from "@/api/client.js";
+import { isGitUnavailableError, normalizeProjectTarget } from "@/api/client.js";
+import type { DiffFileEntry, VcsRoot, ProjectTargetRef } from "@/api/client.js";
 import { GitBranchControl } from "@/components/organisms/GitBranchControl.js";
 import { GitHistoryToolbar } from "@/components/molecules/GitHistoryToolbar.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -23,6 +16,7 @@ import { useGitWithSshRetry } from "@/hooks/use-git-with-ssh-retry.js";
 import { useLeasedGitPush } from "@/hooks/use-leased-git-push.js";
 import { useGitPush } from "@/api/queries.js";
 import { useGitHistoryView } from "@/hooks/use-git-history-view.js";
+import { GitSquashFlow } from "@/components/organisms/GitSquashFlow.js";
 import {
   GitDropCommitDialog,
   GitEditCommitMessageDialog,
@@ -89,7 +83,11 @@ export function WorkspaceGitPanel({
 
   const historyView = useGitHistoryView(targetRef, { available });
   const openDiff = useEditorStore((s) => s.openDiff);
-  const historyActions = useGitHistoryActions(targetRef, historyView.rootId);
+  const historyActions = useGitHistoryActions(
+    targetRef,
+    historyView.rootId,
+    historyView,
+  );
   const gitPush = useGitPush();
   const { passphraseDialogProps, statusMessage, executeWithRetry } =
     useGitWithSshRetry();
@@ -107,8 +105,9 @@ export function WorkspaceGitPanel({
   );
 
   const selectedRoot =
-    historyView.rootOptions.find((root) => root.rootId === historyView.rootId) ??
-    historyView.rootOptions[0];
+    historyView.rootOptions.find(
+      (root) => root.rootId === historyView.rootId,
+    ) ?? historyView.rootOptions[0];
   const selectedRootLabel = selectedRoot
     ? formatProjectInfoRootLabel(selectedRoot)
     : "Project root";
@@ -204,16 +203,16 @@ export function WorkspaceGitPanel({
         onPublish={() => void leasedPush.publish()}
         onClose={leasedPush.close}
       />
-      <div className="flex h-full overflow-hidden bg-[var(--color-surface)]">
+      <div className="flex flex-col md:flex-row h-full overflow-y-auto md:overflow-hidden bg-[var(--color-surface)]">
         <div
           className={cn(
-            "flex min-h-0 flex-col min-w-0 transition-all duration-200",
+            "flex flex-1 min-h-0 flex-col min-w-0 transition-all duration-200 motion-reduce:transition-none",
             historyView.selectedCommit
-              ? "w-0 md:w-[60%] lg:w-[65%] border-r border-[var(--color-border)]"
+              ? "min-h-[480px] md:min-h-0 shrink-0 md:flex-none w-full md:w-[60%] lg:w-[65%] border-r border-[var(--color-border)]"
               : "w-full",
           )}
         >
-          <div className="p-3 border-b border-[var(--color-border)]">
+          <div className="shrink-0 p-3 border-b border-[var(--color-border)]">
             <div className="mb-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <label className="min-w-0">
                 <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -258,9 +257,10 @@ export function WorkspaceGitPanel({
             ) : null}
             {!historyView.isViewingActiveBranch && historyView.activeBranch ? (
               <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300">
-                Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick and revert
-                apply to checked-out branch <strong>{historyView.activeBranch}</strong>.
-                Rewrite actions stay on the active branch.
+                Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick
+                and revert apply to checked-out branch{" "}
+                <strong>{historyView.activeBranch}</strong>. Rewrite actions
+                stay on the active branch.
               </div>
             ) : null}
             <GitHistoryStatusBanner
@@ -268,7 +268,9 @@ export function WorkspaceGitPanel({
               status={historyActions.status}
             />
             <div className="mt-2 flex items-center justify-between gap-2">
-              <SshRetryStatusMessage message={statusMessage || leasedPush.sshStatus} />
+              <SshRetryStatusMessage
+                message={statusMessage || leasedPush.sshStatus}
+              />
               <Button
                 size="sm"
                 variant="secondary"
@@ -307,6 +309,18 @@ export function WorkspaceGitPanel({
           <div className="flex flex-1 min-h-0 flex-col">
             <GitHistoryToolbar
               searchText={historyView.searchText}
+              squashCount={historyView.squashSelection.count}
+              squashDisabledReason={
+                historyView.squashUnavailableReason ||
+                historyView.squashSelection.disabledReason
+              }
+              squashBusy={
+                historyActions.squash.open ||
+                historyActions.squash.publication.state !== "closed"
+              }
+              onSquash={historyActions.squash.begin}
+              onClearSquashSelection={historyView.clearSquashSelection}
+              focusRef={historyActions.squash.toolbarRef}
               onSearchChange={historyView.setSearchText}
               onClearSearch={historyView.clearSearch}
               onCompositionStart={historyView.onCompositionStart}
@@ -329,8 +343,9 @@ export function WorkspaceGitPanel({
               onFollowCheckedOutBranch={historyView.followCheckedOutBranch}
               notice={historyView.notice}
               onDismissNotice={historyView.dismissNotice}
-              className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
+              className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]"
             />
+            <GitSquashFlow squash={historyActions.squash} />
 
             {historyView.error ? (
               <div className="m-3 flex items-center justify-between gap-2 rounded border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-300">
@@ -353,6 +368,13 @@ export function WorkspaceGitPanel({
 
             <div className="flex-1 min-h-0 p-3">
               <GitLogTree
+                squashSelectedHashes={historyView.squashSelectedHashes}
+                onToggleSquashCommit={historyView.toggleSquashCommit}
+                squashSelectionDisabled={
+                  !historyView.squashAvailable ||
+                  historyActions.squash.open ||
+                  historyActions.squash.publication.state !== "closed"
+                }
                 logs={historyView.logs}
                 isLoading={historyView.isLoading}
                 presentation={historyView.isFiltered ? "list" : "graph"}
@@ -393,7 +415,7 @@ export function WorkspaceGitPanel({
         </div>
 
         {historyView.selectedCommit && (
-          <div className="flex-1 min-h-0 min-w-0 md:w-[40%] lg:w-[35%]">
+          <div className="flex-1 min-h-[240px] md:min-h-0 min-w-0 md:w-[40%] lg:w-[35%]">
             <CommitDetailsPanel
               project={project}
               target={targetRef}

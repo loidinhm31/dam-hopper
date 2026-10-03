@@ -47,6 +47,7 @@ import type {
   GitOpResult,
   CommitMessageResponse,
   EditCommitMessageInput,
+  SquashCommitsInput,
   PublishPreview,
   PublishResult,
   PublishSnapshot,
@@ -82,7 +83,11 @@ import {
   isCurrentConnection,
 } from "./connections.js";
 import { profileQueryKey, profileQueryPrefix } from "./query-client.js";
-import { ConnectionOwnerError, type ConnectionRef, type ProfileId } from "./ownership.js";
+import {
+  ConnectionOwnerError,
+  type ConnectionRef,
+  type ProfileId,
+} from "./ownership.js";
 import {
   registerHostResourceInterest,
   getHostResourceSource,
@@ -125,10 +130,19 @@ function gitRootKey(root?: string) {
   return root ?? DEFAULT_GIT_ROOT_ID;
 }
 
-function projectStatusQueryKey(normalized: { project: string; profileId?: string; worktreePath?: string }) {
+function projectStatusQueryKey(normalized: {
+  project: string;
+  profileId?: string;
+  worktreePath?: string;
+}) {
   const owner = resolveTargetOwner(normalized.profileId);
   return owner
-    ? profileQueryKey(owner, "project-status", normalized.project, projectTargetCacheKey(normalized))
+    ? profileQueryKey(
+        owner,
+        "project-status",
+        normalized.project,
+        projectTargetCacheKey(normalized),
+      )
     : ["project-status", normalized.project, projectTargetCacheKey(normalized)];
 }
 
@@ -136,10 +150,19 @@ function projectsQueryKey(owner?: ConnectionRef) {
   return owner ? profileQueryKey(owner, "projects") : ["projects"];
 }
 
-function fsTreeQueryKey(normalized: { project: string; profileId?: string; worktreePath?: string }) {
+function fsTreeQueryKey(normalized: {
+  project: string;
+  profileId?: string;
+  worktreePath?: string;
+}) {
   const owner = resolveTargetOwner(normalized.profileId);
   return owner
-    ? profileQueryKey(owner, "fs", normalized.project, projectTargetCacheKey(normalized))
+    ? profileQueryKey(
+        owner,
+        "fs",
+        normalized.project,
+        projectTargetCacheKey(normalized),
+      )
     : ["fs-tree", normalized.project, projectTargetCacheKey(normalized)];
 }
 
@@ -436,7 +459,9 @@ export function useInitWorkspace(options?: OwnerInput) {
     mutationFn: (path: string) => getBoundApiClient(owner).workspace.init(path),
     onSuccess: () => {
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "workspace-status") : ["workspace-status"],
+        queryKey: owner
+          ? profileQueryKey(owner, "workspace-status")
+          : ["workspace-status"],
       });
     },
   });
@@ -479,7 +504,8 @@ export function useProjects(options?: {
 
   return useQuery<ProjectWithStatus[]>({
     queryKey,
-    queryFn: () => (owner ? getApi(owner).projects.list() : api.projects.list()),
+    queryFn: () =>
+      owner ? getApi(owner).projects.list() : api.projects.list(),
     refetchInterval: 30_000,
   });
 }
@@ -487,7 +513,9 @@ export function useProjects(options?: {
 export function useProject(name: string, options?: OwnerInput) {
   const owner = resolveTargetOwner(options);
   return useQuery({
-    queryKey: owner ? profileQueryKey(owner, "project", name) : ["project", name],
+    queryKey: owner
+      ? profileQueryKey(owner, "project", name)
+      : ["project", name],
     queryFn: () => getBoundApiClient(owner).projects.get(name),
     enabled: !!name,
   });
@@ -498,8 +526,17 @@ export function useProjectStatus(target: ProjectTargetInput, enabled = true) {
   const owner = resolveTargetOwner(normalized.profileId);
   return useQuery({
     queryKey: owner
-      ? profileQueryKey(owner, "project-status", normalized.project, projectTargetCacheKey(normalized))
-      : ["project-status", normalized.project, projectTargetCacheKey(normalized)],
+      ? profileQueryKey(
+          owner,
+          "project-status",
+          normalized.project,
+          projectTargetCacheKey(normalized),
+        )
+      : [
+          "project-status",
+          normalized.project,
+          projectTargetCacheKey(normalized),
+        ],
     queryFn: () => getBoundApiClient(owner).projects.status(normalized),
     enabled: enabled && !!normalized.project,
   });
@@ -539,7 +576,10 @@ export function useHostMetrics(enabled: boolean, options?: OwnerInput) {
       if (!isCurrentConnection(owner) || !canUseResourceRest(owner, qc)) {
         const cached = qc.getQueryData<HostMetrics>(queryKey);
         if (cached) return cached;
-        throw new ConnectionOwnerError("Host metrics REST not permitted", "unavailable");
+        throw new ConnectionOwnerError(
+          "Host metrics REST not permitted",
+          "unavailable",
+        );
       }
       const sourceGen = captureResourceSource(owner, qc);
       const metrics = await getBoundApiClient(owner).system.metrics(signal);
@@ -592,7 +632,8 @@ export function useHostResourceSnapshot(enabled = true, options?: OwnerInput) {
   return useQuery<HostResourceSnapshotV1>({
     queryKey,
     queryFn: async ({ signal }) => {
-      if (!owner) throw new Error("No owner specified for host resource snapshot");
+      if (!owner)
+        throw new Error("No owner specified for host resource snapshot");
       if (!isCurrentConnection(owner) || !canUseResourceRest(owner, qc)) {
         const cached = qc.getQueryData<HostResourceSnapshotV1>(queryKey);
         if (cached) return cached;
@@ -602,7 +643,8 @@ export function useHostResourceSnapshot(enabled = true, options?: OwnerInput) {
         );
       }
       const sourceGen = captureResourceSource(owner, qc);
-      const snapshot = await getBoundApiClient(owner).system.resourceSnapshot(signal);
+      const snapshot =
+        await getBoundApiClient(owner).system.resourceSnapshot(signal);
       if (
         !isCurrentConnection(owner) ||
         !isResourceSourceCurrent(owner, qc, sourceGen) ||
@@ -649,7 +691,8 @@ export function useHostResourceAlerts(
   const isAuthBlocked = sourceState?.mode === "AUTH_BLOCKED";
   const isVisible =
     typeof document === "undefined" || document.visibilityState === "visible";
-  const canPollHistory = enabled && Boolean(owner) && !isAuthBlocked && isVisible;
+  const canPollHistory =
+    enabled && Boolean(owner) && !isAuthBlocked && isVisible;
 
   return useQuery<HostResourceAlertIncident[]>({
     queryKey,
@@ -674,7 +717,7 @@ export const IDLE_SUSPEND_STATUS_QUERY_KEY = [
   "idle-suspend",
   "v1",
   "status",
-  ];
+];
 
 export function useIdleSuspendStatus(enabled = true, options?: OwnerInput) {
   const owner = resolveTargetOwner(options);
@@ -739,8 +782,12 @@ export function useWorktrees(
   options: WorktreeQueryOptions = {},
 ) {
   const normalized = normalizeProjectTarget(project);
-  const projectName = typeof normalized === "string" ? normalized : normalized.project;
-  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const projectName =
+    typeof normalized === "string" ? normalized : normalized.project;
+  const profileId =
+    typeof normalized === "object" && normalized !== null
+      ? normalized.profileId
+      : undefined;
   const owner = resolveTargetOwner(profileId);
   const enabled = !!projectName && (options.enabled ?? true);
   const queryKey = owner
@@ -780,7 +827,9 @@ export function useBranches(target: ProjectTargetInput, root?: string) {
   });
 }
 
-export function normalizeGitMessageQuery(query?: string | null): string | undefined {
+export function normalizeGitMessageQuery(
+  query?: string | null,
+): string | undefined {
   if (query == null) return undefined;
   const trimmed = query.trim();
   return trimmed.length > 0 ? trimmed : undefined;
@@ -826,7 +875,10 @@ export function gitLogQueryOptions(
  * Provides owner-qualified prefixes for branches, project status, log queries,
  * and commit detail queries (files, message, file-diff) without exposing unowned legacy keys.
  */
-export function gitHistoryQueryPrefixes(target: ProjectTargetInput, root?: string) {
+export function gitHistoryQueryPrefixes(
+  target: ProjectTargetInput,
+  root?: string,
+) {
   const normalized = normalizeProjectTarget(target);
   const rootKey = gitRootKey(root);
   return {
@@ -1030,7 +1082,8 @@ export function useTerminalSessions(options?: {
 export function useSwitchWorkspace(options?: OwnerInput) {
   const owner = resolveTargetOwner(options);
   return useMutation({
-    mutationFn: (path: string) => getBoundApiClient(owner).workspace.switch(path),
+    mutationFn: (path: string) =>
+      getBoundApiClient(owner).workspace.switch(path),
     // No onSuccess invalidation — SSE workspace:changed handles nuclear cache flush
   });
 }
@@ -1181,7 +1234,13 @@ export function useGitUntracked(
   const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
     queryKey: gitQueryKey("git-untracked", normalized, rootKey, offset, limit),
-    queryFn: () => getBoundApiClient(owner).git.untrackedFiles(normalized, offset, limit, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.untrackedFiles(
+        normalized,
+        offset,
+        limit,
+        root,
+      ),
     enabled: !!normalized.project && enabled,
     staleTime: 0,
   });
@@ -1197,7 +1256,8 @@ export function useGitFileDiff(
   const rootKey = gitRootKey(root);
   return useQuery<FileDiffContent>({
     queryKey: gitQueryKey("git-file-diff", normalized, rootKey, path),
-    queryFn: () => getBoundApiClient(owner).git.fileDiff(normalized, path, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.fileDiff(normalized, path, root),
     enabled: !!normalized.project && !!path,
     staleTime: 0,
   });
@@ -1213,7 +1273,8 @@ export function useGitCommitFiles(
   const rootKey = gitRootKey(root);
   return useQuery<DiffFileEntry[]>({
     queryKey: gitQueryKey("git-commit-files", normalized, rootKey, hash),
-    queryFn: () => getBoundApiClient(owner).git.commitFiles(normalized, hash, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.commitFiles(normalized, hash, root),
     enabled: !!normalized.project && !!hash,
     staleTime: 60_000,
   });
@@ -1251,7 +1312,8 @@ export function useGitCommitFileDiff(
       hash,
       path,
     ),
-    queryFn: () => getBoundApiClient(owner).git.commitFileDiff(normalized, hash, path, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.commitFileDiff(normalized, hash, path, root),
     enabled: !!normalized.project && !!hash && !!path,
     staleTime: Infinity, // historical diffs are immutable
   });
@@ -1274,7 +1336,8 @@ export function useGitStage(target: ProjectTargetInput, root?: string) {
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => getBoundApiClient(owner).git.stage(normalized, paths, root),
+    mutationFn: (paths: string[]) =>
+      getBoundApiClient(owner).git.stage(normalized, paths, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeGitDiff: true,
@@ -1289,7 +1352,8 @@ export function useGitUnstage(target: ProjectTargetInput, root?: string) {
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (paths: string[]) => getBoundApiClient(owner).git.unstage(normalized, paths, root),
+    mutationFn: (paths: string[]) =>
+      getBoundApiClient(owner).git.unstage(normalized, paths, root),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeGitDiff: true,
@@ -1304,7 +1368,8 @@ export function useGitDiscard(target: ProjectTargetInput, root?: string) {
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => getBoundApiClient(owner).git.discard(normalized, path, root),
+    mutationFn: (path: string) =>
+      getBoundApiClient(owner).git.discard(normalized, path, root),
     onSuccess: (_data, path) =>
       void invalidateGitFileOperation(qc, normalized, path),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1317,7 +1382,12 @@ export function useGitDiscardHunk(target: ProjectTargetInput, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, hunkIndex }: { path: string; hunkIndex: number }) =>
-      getBoundApiClient(owner).git.discardHunk(normalized, path, hunkIndex, root),
+      getBoundApiClient(owner).git.discardHunk(
+        normalized,
+        path,
+        hunkIndex,
+        root,
+      ),
     onSuccess: (_data, { path }) =>
       void invalidateGitFileOperation(qc, normalized, path),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1370,7 +1440,11 @@ export function useGitCreateBranch(target: ProjectTargetInput, root?: string) {
       name: string;
       startPoint?: string;
       checkout?: boolean;
-    }) => getBoundApiClient(owner).git.createBranch(normalized, { ...options, root }),
+    }) =>
+      getBoundApiClient(owner).git.createBranch(normalized, {
+        ...options,
+        root,
+      }),
     onSuccess: (_result, vars) =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1399,7 +1473,11 @@ export function useGitCheckoutBranch(
       startPoint?: string;
       create?: boolean;
       strategy?: CheckoutStrategy;
-    }) => getBoundApiClient(owner).git.checkoutBranch(normalized, { ...options, root }),
+    }) =>
+      getBoundApiClient(owner).git.checkoutBranch(normalized, {
+        ...options,
+        root,
+      }),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1421,7 +1499,10 @@ export function useGitDeleteBranch(target: ProjectTargetInput, root?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (options: { name: string }) =>
-      getBoundApiClient(owner).git.deleteBranch(normalized, { ...options, root }),
+      getBoundApiClient(owner).git.deleteBranch(normalized, {
+        ...options,
+        root,
+      }),
     onSuccess: () =>
       invalidateGitProjectQueries(qc, normalized, {
         includeBranches: true,
@@ -1436,7 +1517,8 @@ export function useGitCherryPick(target: ProjectTargetInput, root?: string) {
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (hash: string) => getBoundApiClient(owner).git.cherryPick(normalized, hash, root),
+    mutationFn: (hash: string) =>
+      getBoundApiClient(owner).git.cherryPick(normalized, hash, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1462,7 +1544,8 @@ export function useGitUndoLastCommit(
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => getBoundApiClient(owner).git.undoLastCommit(normalized, root),
+    mutationFn: () =>
+      getBoundApiClient(owner).git.undoLastCommit(normalized, root),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
@@ -1477,7 +1560,12 @@ export function useGitCherryPickCommitFiles(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      getBoundApiClient(owner).git.cherryPickCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.cherryPickCommitFiles(
+        normalized,
+        hash,
+        paths,
+        root,
+      ),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1493,7 +1581,12 @@ export function useGitDropCommitFiles(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      getBoundApiClient(owner).git.dropCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.dropCommitFiles(
+        normalized,
+        hash,
+        paths,
+        root,
+      ),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1527,9 +1620,48 @@ export function useGitEditCommitMessage(
       hash: string;
       input: EditCommitMessageInput;
     }) =>
-      getBoundApiClient(owner).git.editCommitMessage(normalized, hash, input, root),
+      getBoundApiClient(owner).git.editCommitMessage(
+        normalized,
+        hash,
+        input,
+        root,
+      ),
     onSuccess: () => void invalidateGitBranchOperation(qc, normalized),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
+  });
+}
+
+export function useGitSquash(target: ProjectTargetInput, root?: string) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  const qc = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (input: SquashCommitsInput) => {
+      // Capture before asynchronous transport work; never reroute a submitted rewrite.
+      const capturedTarget = { ...normalized };
+      const capturedRoot = root;
+      const client = getBoundApiClient(owner);
+      const refresh = () => {
+        // Refresh failures cannot make a proven/possibly applied rewrite retry-safe.
+        void Promise.all([
+          invalidateGitBranchOperation(qc, capturedTarget),
+          invalidateGitHistoryDetails(qc, capturedTarget, capturedRoot),
+        ]).catch(() => {});
+      };
+      return client.git.squash(capturedTarget, input, capturedRoot).then(
+        (result) => {
+          if (result.ok || result.blockedReason === "publication-uncertain")
+            refresh();
+          return result;
+        },
+        (error: unknown) => {
+          refresh();
+          markTargetUnavailableIfNeeded(capturedTarget, error);
+          throw error;
+        },
+      );
+    },
   });
 }
 
@@ -1554,7 +1686,12 @@ export function useGitRevertCommitFiles(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ hash, paths }: { hash: string; paths: string[] }) =>
-      getBoundApiClient(owner).git.revertCommitFiles(normalized, hash, paths, root),
+      getBoundApiClient(owner).git.revertCommitFiles(
+        normalized,
+        hash,
+        paths,
+        root,
+      ),
     onSuccess: (_result, { paths }) =>
       void invalidateGitHistoryOperation(qc, normalized, paths),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
@@ -1693,12 +1830,17 @@ export function useGitPush() {
           },
     ) => {
       const [project, root] = resolveGitPushTarget(target);
-      const profileId = typeof target === "object" ? target.profileId : undefined;
+      const profileId =
+        typeof target === "object" ? target.profileId : undefined;
       const owner = resolveTargetOwner(profileId);
       const targetRef =
         typeof target === "string" || target.worktreePath == null
-          ? (profileId ? { profileId, project } : project)
-          : (profileId ? { profileId, project, worktreePath: target.worktreePath } : { project, worktreePath: target.worktreePath });
+          ? profileId
+            ? { profileId, project }
+            : project
+          : profileId
+            ? { profileId, project, worktreePath: target.worktreePath }
+            : { project, worktreePath: target.worktreePath };
       return getBoundApiClient(owner).git.push(targetRef, root);
     },
     onSuccess: (_result, target) => {
@@ -1740,7 +1882,11 @@ export function useGitPublishLeasedPush(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (snapshot: PublishSnapshot) =>
-      getBoundApiClient(owner).git.publishLeasedPush(normalized, snapshot, root),
+      getBoundApiClient(owner).git.publishLeasedPush(
+        normalized,
+        snapshot,
+        root,
+      ),
     onSuccess: (result) => {
       markTargetUnavailableIfNeeded(normalized, result);
       invalidateGitProjectQueries(qc, normalized, {
@@ -1756,8 +1902,12 @@ export function useGitPublishLeasedPush(
 
 export function useAddWorktree(project: ProjectTargetInput) {
   const normalized = normalizeProjectTarget(project);
-  const projectName = typeof normalized === "string" ? normalized : normalized.project;
-  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const projectName =
+    typeof normalized === "string" ? normalized : normalized.project;
+  const profileId =
+    typeof normalized === "object" && normalized !== null
+      ? normalized.profileId
+      : undefined;
   const owner = resolveTargetOwner(profileId);
   const qc = useQueryClient();
   return useMutation({
@@ -1841,8 +1991,12 @@ export function useSshListKeys() {
 
 export function useRemoveWorktree(project: ProjectTargetInput) {
   const normalized = normalizeProjectTarget(project);
-  const projectName = typeof normalized === "string" ? normalized : normalized.project;
-  const profileId = typeof normalized === "object" && normalized !== null ? normalized.profileId : undefined;
+  const projectName =
+    typeof normalized === "string" ? normalized : normalized.project;
+  const profileId =
+    typeof normalized === "object" && normalized !== null
+      ? normalized.profileId
+      : undefined;
   const owner = resolveTargetOwner(profileId);
   const qc = useQueryClient();
   return useMutation({
@@ -1907,9 +2061,15 @@ export function useImportSettings(options?: OwnerInput) {
     onSuccess: (result) => {
       if (result?.imported) {
         if (owner) {
-          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "config") });
-          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "projects") });
-          void qc.invalidateQueries({ queryKey: profileQueryKey(owner, "workspace") });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "config"),
+          });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "projects"),
+          });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(owner, "workspace"),
+          });
         } else {
           void qc.invalidateQueries({ queryKey: ["config"] });
           void qc.invalidateQueries({ queryKey: ["projects"] });
@@ -2088,7 +2248,9 @@ export function useAgentStoreItems(
   return useQuery({
     queryKey,
     queryFn: () =>
-      owner ? getApi(owner).agentStore.list(category) : api.agentStore.list(category),
+      owner
+        ? getApi(owner).agentStore.list(category)
+        : api.agentStore.list(category),
     staleTime: 30_000,
   });
 }
@@ -2105,7 +2267,9 @@ export function useAgentStoreItem(
   return useQuery({
     queryKey,
     queryFn: () =>
-      owner ? getApi(owner).agentStore.get(name, category) : api.agentStore.get(name, category),
+      owner
+        ? getApi(owner).agentStore.get(name, category)
+        : api.agentStore.get(name, category),
     enabled: !!name,
     staleTime: 30_000,
   });
@@ -2192,7 +2356,9 @@ export function useRemoveFromStore(options?: {
         : api.agentStore.remove(opts.name, opts.category),
     onSuccess: () => {
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store")
+          : ["agent-store"],
       });
     },
   });
@@ -2311,7 +2477,9 @@ export function useAbsorbItem(options?: {
           ),
     onSuccess: () => {
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store")
+          : ["agent-store"],
       });
     },
   });
@@ -2330,11 +2498,17 @@ export function useBulkShip(options?: {
       method?: DistributionMethod;
     }) =>
       owner
-        ? getApi(owner).agentStore.bulkShip(opts.items, opts.targets, opts.method)
+        ? getApi(owner).agentStore.bulkShip(
+            opts.items,
+            opts.targets,
+            opts.method,
+          )
         : api.agentStore.bulkShip(opts.items, opts.targets, opts.method),
     onSuccess: () => {
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store")
+          : ["agent-store"],
       });
     },
   });
@@ -2393,12 +2567,22 @@ export function useUpdateMemoryFile(options?: {
       content: string;
     }) =>
       owner
-        ? getApi(owner).agentMemory.update(opts.projectName, opts.agent, opts.content)
+        ? getApi(owner).agentMemory.update(
+            opts.projectName,
+            opts.agent,
+            opts.content,
+          )
         : api.agentMemory.update(opts.projectName, opts.agent, opts.content),
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({
         queryKey: owner
-          ? profileQueryKey(owner, "agent-memory", "file", vars.projectName, vars.agent)
+          ? profileQueryKey(
+              owner,
+              "agent-memory",
+              "file",
+              vars.projectName,
+              vars.agent,
+            )
           : ["agent-memory", "file", vars.projectName, vars.agent],
       });
     },
@@ -2417,8 +2601,16 @@ export function useApplyMemoryTemplate(options?: {
       agent: AgentType;
     }) =>
       owner
-        ? getApi(owner).agentMemory.apply(opts.templateName, opts.projectName, opts.agent)
-        : api.agentMemory.apply(opts.templateName, opts.projectName, opts.agent),
+        ? getApi(owner).agentMemory.apply(
+            opts.templateName,
+            opts.projectName,
+            opts.agent,
+          )
+        : api.agentMemory.apply(
+            opts.templateName,
+            opts.projectName,
+            opts.agent,
+          ),
   });
 }
 
@@ -2431,7 +2623,9 @@ export function useScanRepo(options?: {
   const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (repoUrl: string) =>
-      owner ? getApi(owner).agentImport.scan(repoUrl) : api.agentImport.scan(repoUrl),
+      owner
+        ? getApi(owner).agentImport.scan(repoUrl)
+        : api.agentImport.scan(repoUrl),
   });
 }
 
@@ -2442,7 +2636,9 @@ export function useScanLocalDir(options?: {
   const owner = resolveWorkflowOwner(options);
   return useMutation({
     mutationFn: (dirPath: string) =>
-      owner ? getApi(owner).agentImport.scanLocal(dirPath) : api.agentImport.scanLocal(dirPath),
+      owner
+        ? getApi(owner).agentImport.scanLocal(dirPath)
+        : api.agentImport.scanLocal(dirPath),
   });
 }
 
@@ -2475,7 +2671,9 @@ export function useImportConfirm(options?: {
           ),
     onSuccess: () => {
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "agent-store") : ["agent-store"],
+        queryKey: owner
+          ? profileQueryKey(owner, "agent-store")
+          : ["agent-store"],
       });
     },
   });
@@ -2492,7 +2690,8 @@ export function useOmpExtensionStatus(
 
   return useQuery<ExtensionStatusReport>({
     queryKey,
-    queryFn: () => (owner ? getApi(owner) : api).terminal.getOmpExtensionStatus(agentDir),
+    queryFn: () =>
+      (owner ? getApi(owner) : api).terminal.getOmpExtensionStatus(agentDir),
     staleTime: 5_000,
   });
 }
@@ -2639,11 +2838,17 @@ export function useAgentPathsVerification(
         codexDirKey,
         claudeDirKey,
       )
-    : (["agent-paths-verification", agentDirKey, codexDirKey, claudeDirKey] as const);
+    : ([
+        "agent-paths-verification",
+        agentDirKey,
+        codexDirKey,
+        claudeDirKey,
+      ] as const);
 
   return useQuery<AgentPathsVerification>({
     queryKey,
-    queryFn: () => (owner ? getApi(owner) : api).terminal.getAgentPathsVerification(params),
+    queryFn: () =>
+      (owner ? getApi(owner) : api).terminal.getAgentPathsVerification(params),
     staleTime: 5_000,
   });
 }

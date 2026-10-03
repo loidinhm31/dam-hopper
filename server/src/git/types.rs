@@ -244,18 +244,25 @@ pub struct GitActionResult {
     pub blocked_reason: Option<GitBlockReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommendation: Option<String>,
+    /// Squash: newest selected original OID (not the oldest template).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_target_oid: Option<String>,
+    /// Confirmed replacement target; squash commit for squash. Absent on uncertainty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_target_oid: Option<String>,
+    /// Captured branch tip before local rewrite.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_head_oid: Option<String>,
+    /// Confirmed installed branch tip, possibly a rewritten descendant of the target.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_head_oid: Option<String>,
+    /// Replacement objects written: squash counts one synthesized commit + strict descendants.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rewritten_count: Option<usize>,
+    /// Squash is always false; message editing may return an exact-message no-op.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_op: Option<bool>,
+    /// Any invalidated cryptographic header removed, including absorbed selected commits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signatures_removed: Option<bool>,
 }
@@ -494,7 +501,11 @@ pub enum PublishBlockReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum PublishPreview {
     Ready {
         snapshot: PublishSnapshot,

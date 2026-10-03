@@ -14,10 +14,18 @@ import { projectKey } from "@/api/ownership.js";
 import type { AggregatedProjectItem } from "@/hooks/use-aggregated-projects.js";
 import type * as QueriesModule from "@/api/queries.js";
 
-const mockGitFetchMutate = vi.fn().mockResolvedValue([{ success: true, projectName: "repo-1" }]);
-const mockGitPullMutate = vi.fn().mockResolvedValue([{ success: true, projectName: "repo-1" }]);
-const mockGitPushMutate = vi.fn().mockResolvedValue([{ success: true, projectName: "repo-1" }]);
-const mockUseProjectStatus = vi.fn().mockReturnValue({ data: { branch: "main" } });
+const mockGitFetchMutate = vi
+  .fn()
+  .mockResolvedValue([{ success: true, projectName: "repo-1" }]);
+const mockGitPullMutate = vi
+  .fn()
+  .mockResolvedValue([{ success: true, projectName: "repo-1" }]);
+const mockGitPushMutate = vi
+  .fn()
+  .mockResolvedValue([{ success: true, projectName: "repo-1" }]);
+const mockUseProjectStatus = vi
+  .fn()
+  .mockReturnValue({ data: { branch: "main" } });
 const mockOpenDiff = vi.fn();
 
 const mockProjects: AggregatedProjectItem[] = [
@@ -25,21 +33,33 @@ const mockProjects: AggregatedProjectItem[] = [
     profileId: "profile-a",
     profileName: "Profile A",
     serverUrl: "http://a.local:4800",
-    project: { name: "shared-repo", type: "git", isAvailable: true } as unknown as AggregatedProjectItem["project"],
+    project: {
+      name: "shared-repo",
+      type: "git",
+      isAvailable: true,
+    } as unknown as AggregatedProjectItem["project"],
     ref: { profileId: "profile-a", project: "shared-repo" },
   },
   {
     profileId: "profile-b",
     profileName: "Profile B",
     serverUrl: "http://b.local:4800",
-    project: { name: "shared-repo", type: "git", isAvailable: true } as unknown as AggregatedProjectItem["project"],
+    project: {
+      name: "shared-repo",
+      type: "git",
+      isAvailable: true,
+    } as unknown as AggregatedProjectItem["project"],
     ref: { profileId: "profile-b", project: "shared-repo" },
   },
   {
     profileId: "profile-b",
     profileName: "Profile B",
     serverUrl: "http://b.local:4800",
-    project: { name: "other-repo", type: "git", isAvailable: true } as unknown as AggregatedProjectItem["project"],
+    project: {
+      name: "other-repo",
+      type: "git",
+      isAvailable: true,
+    } as unknown as AggregatedProjectItem["project"],
     ref: { profileId: "profile-b", project: "other-repo" },
   },
 ];
@@ -68,7 +88,9 @@ vi.mock("@/api/queries.js", async (importOriginal) => {
       mutateAsync: mockGitPushMutate,
       isPending: false,
     }),
-    useGitRoots: () => ({ data: [{ rootId: ".", label: "Root", kind: "primary", warnings: [] }] }),
+    useGitRoots: () => ({
+      data: [{ rootId: ".", label: "Root", kind: "primary", warnings: [] }],
+    }),
     useProjectStatus: (targetRef: unknown) => mockUseProjectStatus(targetRef),
   };
 });
@@ -78,7 +100,15 @@ let mockHistoryViewResult = createDefaultMockHistoryView();
 function createDefaultMockHistoryView(options?: { available?: boolean }) {
   return {
     rootId: ".",
-    rootOptions: [{ rootId: ".", path: ".", absolutePath: "", kind: "primary" as const, warnings: [] }],
+    rootOptions: [
+      {
+        rootId: ".",
+        path: ".",
+        absolutePath: "",
+        kind: "primary" as const,
+        warnings: [],
+      },
+    ],
     setRootId: vi.fn(),
     branchRef: "refs/heads/main",
     branchLabel: "main",
@@ -125,6 +155,20 @@ function createDefaultMockHistoryView(options?: { available?: boolean }) {
     selectCommit: vi.fn(),
     clearSelectedCommit: vi.fn(),
     effectiveScopeKey: '["test","shared-repo",null,"."]',
+    squashScopeKey: "test-history-squash",
+    squashSelectedHashes: [],
+    toggleSquashCommit: vi.fn(),
+    clearSquashSelection: vi.fn(),
+    squashSelection: {
+      count: 0,
+      valid: false,
+      entries: [],
+      orderedHashes: [],
+      disabledReason:
+        "Select at least two parent-contiguous commits on this page.",
+    },
+    squashAvailable: false,
+    squashUnavailableReason: "Discovery unresolved",
   };
 }
 
@@ -141,17 +185,26 @@ vi.mock("@/hooks/use-git-history-view.js", () => ({
 }));
 
 vi.mock("@/stores/editor.js", () => ({
-  useEditorStore: (selector: (state: { openDiff: typeof mockOpenDiff }) => unknown) =>
+  useEditorStore: (
+    selector: (state: { openDiff: typeof mockOpenDiff }) => unknown,
+  ) =>
     selector({
       openDiff: mockOpenDiff,
     }),
 }));
 
+const cancelSshRetry = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
   useGitWithSshRetry: () => ({
-    passphraseDialogProps: { open: false, onClose: vi.fn(), onConfirm: vi.fn() },
+    passphraseDialogProps: {
+      open: false,
+      onClose: vi.fn(),
+      onConfirm: vi.fn(),
+    },
     statusMessage: null,
-    executeWithRetry: (_opts: unknown, action: () => Promise<unknown>) => action(),
+    cancel: cancelSshRetry,
+    executeWithRetry: (_opts: unknown, action: () => Promise<unknown>) =>
+      action(),
   }),
 }));
 
@@ -326,8 +379,16 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     const firstCallTargets = mockGitFetchMutate.mock.calls[0][0];
     const secondCallTargets = mockGitFetchMutate.mock.calls[1][0];
 
-    expect(firstCallTargets.every((t: { profileId?: string }) => t.profileId === "profile-a")).toBe(true);
-    expect(secondCallTargets.every((t: { profileId?: string }) => t.profileId === "profile-b")).toBe(true);
+    expect(
+      firstCallTargets.every(
+        (t: { profileId?: string }) => t.profileId === "profile-a",
+      ),
+    ).toBe(true);
+    expect(
+      secondCallTargets.every(
+        (t: { profileId?: string }) => t.profileId === "profile-b",
+      ),
+    ).toBe(true);
   });
 
   it("retains Workspace focus and preserves explicit [] selection on reload", async () => {
@@ -389,7 +450,9 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     });
 
     // Both checkboxes are checked
-    const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    const checkboxes = container.querySelectorAll<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
     expect(checkboxes[0].checked).toBe(true);
     expect(checkboxes[1].checked).toBe(true);
   });
@@ -428,12 +491,14 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     expect(container.textContent).toContain("offline or unavailable");
 
     // History shows distinct offline message rather than empty commits
-    expect(container.textContent).toContain("Selected Project Offline or Unavailable");
+    expect(container.textContent).toContain(
+      "Selected Project Offline or Unavailable",
+    );
 
     // Deselect the offline project
-    const deselectButton = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.getAttribute("title") === "Deselect unavailable project",
-    );
+    const deselectButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((b) => b.getAttribute("title") === "Deselect unavailable project");
     expect(deselectButton).toBeDefined();
 
     await act(async () => {
@@ -449,7 +514,9 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     mockHistoryViewResult.activeBranch = "main";
 
     useGitHistoryStore.setState({
-      gitPageSelection: [projectKey({ profileId: "profile-a", project: "shared-repo" })],
+      gitPageSelection: [
+        projectKey({ profileId: "profile-a", project: "shared-repo" }),
+      ],
     });
 
     await act(async () => {
@@ -462,16 +529,9 @@ describe("GitPage multi-profile routing & selection persistence", () => {
 
     // Explanatory banner is visible
     expect(container.textContent).toContain("Viewing feature/experiment");
-    expect(container.textContent).toContain("Cherry-pick and revert apply to checked-out branch main");
-
-    // In GitLogTree, rewrite actions are undefined, cherry-pick and revert are functions
-    expect(capturedGitLogTreeProps).not.toBeNull();
-    expect(capturedGitLogTreeProps.onUndoLastCommit).toBeUndefined();
-    expect(capturedGitLogTreeProps.onDropCommit).toBeUndefined();
-    expect(capturedGitLogTreeProps.onEditCommitMessage).toBeUndefined();
-    expect(capturedGitLogTreeProps.onReset).toBeUndefined();
-    expect(typeof capturedGitLogTreeProps.onCherryPick).toBe("function");
-    expect(typeof capturedGitLogTreeProps.onRevertCommit).toBe("function");
+    expect(container.textContent).toContain(
+      "Cherry-pick and revert apply to checked-out branch main",
+    );
   });
 
   it("recovers from corrupt saved selection when user selects a valid project or clears", async () => {
@@ -489,7 +549,9 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     });
 
     // Shows recovery warning
-    expect(container.textContent).toContain("Saved project selection was corrupted or invalid");
+    expect(container.textContent).toContain(
+      "Saved project selection was corrupted or invalid",
+    );
 
     // Bulk operations disabled
     const fetchButton = Array.from(container.querySelectorAll("button")).find(

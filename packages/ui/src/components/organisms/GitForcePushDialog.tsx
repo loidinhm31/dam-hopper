@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/atoms/Button.js";
 import type { PublishPreview, PublishResult } from "@/api/client.js";
 import type { LeasedPushState } from "@/hooks/use-leased-git-push.js";
+import { cn } from "@/lib/utils.js";
 
 export function buildForcePushDialogDescription(
   project: string,
@@ -34,6 +35,8 @@ export interface GitForcePushDialogProps {
   onPublish?: () => void;
   onClose: () => void;
   onConfirm?: () => void;
+  scopeLabel?: string;
+  onRestoreFocus?: () => void;
 }
 
 export function GitForcePushDialog({
@@ -49,6 +52,8 @@ export function GitForcePushDialog({
   onPublish,
   onClose,
   onConfirm,
+  scopeLabel,
+  onRestoreFocus,
 }: GitForcePushDialogProps) {
   // Derive effective state for backward compatibility
   const effectiveState: LeasedPushState =
@@ -62,7 +67,8 @@ export function GitForcePushDialog({
   let title = "Force Push (Leased)";
   if (effectiveState === "preparing") title = "Preparing Leased Push";
   else if (effectiveState === "blocked") title = "Publication Blocked";
-  else if (effectiveState === "confirming") title = "Confirm Leased Publication";
+  else if (effectiveState === "confirming")
+    title = "Confirm Leased Publication";
   else if (effectiveState === "publishing") title = "Publishing...";
   else if (effectiveState === "published") title = "Publication Succeeded";
   else if (effectiveState === "already-current") title = "Already Up to Date";
@@ -71,19 +77,50 @@ export function GitForcePushDialog({
   else if (effectiveState === "unknown") title = "Publication Status Uncertain";
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <DialogContent className="sm:max-w-[520px]">
-        <DialogHeader>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && effectiveState !== "publishing") onClose();
+      }}
+    >
+      <DialogContent
+        className={cn(
+          "sm:max-w-[520px] overflow-y-auto",
+          scopeLabel &&
+            "[&_button]:min-h-11 [&>button]:size-11 [&>button]:flex [&>button]:items-center [&>button]:justify-center [&>button]:right-2 [&>button]:top-2 [&>button]:focus-visible:outline-2 [&>button]:focus-visible:outline-[var(--color-primary)]",
+        )}
+        closeDisabled={effectiveState === "publishing"}
+        onEscapeKeyDown={(event) => {
+          if (effectiveState === "publishing") event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (effectiveState === "publishing") event.preventDefault();
+        }}
+        onCloseAutoFocus={
+          onRestoreFocus
+            ? (event) => {
+                event.preventDefault();
+                onRestoreFocus();
+              }
+            : undefined
+        }
+      >
+        <DialogHeader className={scopeLabel ? "pr-10" : undefined}>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {buildForcePushDialogDescription(project, rootLabel)}
+            {scopeLabel && (
+              <span className="mt-2 block break-words">{scopeLabel}</span>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         {effectiveState === "preparing" && (
           <div className="flex items-center gap-3 py-4 text-xs text-[var(--color-text-muted)]">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
-            <span>Checking remote branch advertisement and preparing lease...</span>
+            <div className="h-4 w-4 animate-spin motion-reduce:animate-none rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+            <span>
+              Checking remote branch advertisement and preparing lease...
+            </span>
           </div>
         )}
 
@@ -97,7 +134,10 @@ export function GitForcePushDialog({
             </div>
             {preview && preview.status === "blocked" && (
               <div className="text-xs text-[var(--color-text-muted)]">
-                Reason: <span className="font-mono text-[var(--color-text)]">{preview.reason}</span>
+                Reason:{" "}
+                <span className="font-mono text-[var(--color-text)]">
+                  {preview.reason}
+                </span>
               </div>
             )}
           </div>
@@ -109,13 +149,18 @@ export function GitForcePushDialog({
               {buildForcePushDialogWarning()}
             </div>
             {snapshot && (
-              <div className="flex flex-col gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-background-subtle)] p-3 font-mono text-xs">
+              <div className="flex flex-col gap-1.5 break-all rounded border border-[var(--color-border)] bg-[var(--color-background-subtle)] p-3 font-mono text-xs">
                 <div>
-                  Remote: <span className="text-[var(--color-text)]">{snapshot.remoteName}</span>
+                  Remote:{" "}
+                  <span className="text-[var(--color-text)]">
+                    {snapshot.remoteName}
+                  </span>
                 </div>
                 <div>
                   Destination:{" "}
-                  <span className="text-[var(--color-text)]">{snapshot.destinationRef}</span>
+                  <span className="text-[var(--color-text)]">
+                    {snapshot.destinationRef}
+                  </span>
                 </div>
                 <div>
                   Expected remote commit:{" "}
@@ -123,28 +168,35 @@ export function GitForcePushDialog({
                     className="text-[var(--color-text)]"
                     title={snapshot.expectedRemoteOid}
                   >
-                    {snapshot.expectedRemoteOid.slice(0, 7)}
+                    {scopeLabel
+                      ? snapshot.expectedRemoteOid
+                      : snapshot.expectedRemoteOid.slice(0, 7)}
                   </span>
                 </div>
                 <div>
                   Local branch source:{" "}
-                  <span className="text-[var(--color-text)]" title={snapshot.sourceOid}>
-                    {snapshot.sourceOid.slice(0, 7)}
+                  <span
+                    className="text-[var(--color-text)]"
+                    title={snapshot.sourceOid}
+                  >
+                    {scopeLabel
+                      ? snapshot.sourceOid
+                      : snapshot.sourceOid.slice(0, 7)}
                   </span>
                 </div>
               </div>
             )}
             <div className="text-xs text-[var(--color-text-muted)]">
               Warning: The entire local branch{" "}
-              <strong>{snapshot?.branch ?? "HEAD"}</strong> will replace the upstream destination
-              history.
+              <strong>{snapshot?.branch ?? "HEAD"}</strong> will replace the
+              upstream destination history.
             </div>
           </div>
         )}
 
         {effectiveState === "publishing" && (
           <div className="flex items-center gap-3 py-4 text-xs text-[var(--color-text-muted)]">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
+            <div className="h-4 w-4 animate-spin motion-reduce:animate-none rounded-full border-2 border-[var(--color-primary)] border-t-transparent" />
             <span>Publishing branch to remote with exact-OID lease...</span>
           </div>
         )}
@@ -157,7 +209,8 @@ export function GitForcePushDialog({
 
         {effectiveState === "already-current" && (
           <div className="rounded border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
-            The remote branch is already up to date with your local branch. No push was necessary.
+            The remote branch is already up to date with your local branch. No
+            push was necessary.
           </div>
         )}
 
@@ -168,7 +221,8 @@ export function GitForcePushDialog({
                 "Publication lease is outdated. The remote or local history has changed."}
             </div>
             <div className="text-xs text-[var(--color-text-muted)]">
-              Cannot publish with an outdated lease. Click Refresh to prepare a new publication lease.
+              Cannot publish with an outdated lease. Click Refresh to prepare a
+              new publication lease.
             </div>
           </div>
         )}
@@ -182,11 +236,12 @@ export function GitForcePushDialog({
         {effectiveState === "unknown" && (
           <div className="space-y-2">
             <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              {result?.message ?? "Network transport completed with uncertain status."}
+              {result?.message ??
+                "Network transport completed with uncertain status."}
             </div>
             <div className="text-xs text-[var(--color-text-muted)]">
-              Do not retry blindly. Check remote state manually or refresh to inspect the advertised
-              remote.
+              Do not retry blindly. Check remote state manually or refresh to
+              inspect the advertised remote.
             </div>
           </div>
         )}
@@ -224,7 +279,8 @@ export function GitForcePushDialog({
               disabled={effectiveState === "publishing"}
               onClick={onClose}
             >
-              {effectiveState === "published" || effectiveState === "already-current"
+              {effectiveState === "published" ||
+              effectiveState === "already-current"
                 ? "Close"
                 : "Cancel"}
             </Button>

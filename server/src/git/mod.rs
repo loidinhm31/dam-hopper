@@ -6,6 +6,7 @@ pub mod diff;
 pub mod leased_push;
 pub mod progress;
 pub mod repository;
+pub mod squash_commits;
 pub mod types;
 pub mod vcs_roots;
 pub mod worktree;
@@ -29,13 +30,14 @@ pub use repository::{
     checkout_branch, cherry_pick, create_branch, delete_branch, fetch, get_log, get_status,
     list_branches, pull, push, reset_to_commit, undo_last_commit, update_branch,
 };
+pub use squash_commits::squash_commits;
 pub use types::{
     BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
     FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry, GitOperation,
     GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation, GitRecoveryState,
     GitStatus, HunkInfo, PublishBlockReason, PublishPreview, PublishResult, PublishResultStatus,
-    PublishSnapshot, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind,
-    VcsRootMappingState, Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    PublishSnapshot, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind, VcsRootMappingState,
+    Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
 };
 pub use vcs_roots::{
     discover_available_vcs_roots, discover_vcs_roots, resolve_git_path_root,

@@ -1,0 +1,24 @@
+# Phase 06 Completion Receipt
+
+- **Project ID:** `882985d5cddedda38b07fb78c217bde1c6d19d81a0780758e0b7622e60096efa`
+- **Plan:** [Native Advisor and complete plugin-platform retirement](../261002-0246-native-advisor-migration/plan.md)
+- **Phase:** `phase-06` (Delete Dam-Hopper plugin runtime, SDK and bridge)
+- **Task Run ID:** `2e640c67-f55b-4b49-a2b9-755696064f4f`
+- **Consultation ID:** `5faa4eb9-3e7e-4784-a6ba-8c02769c9af8`
+- **Action ID:** `eb62f08e-93b5-425f-9a89-25151c2b8dba`
+- **Episode ID:** `phase-06-finalization`
+- **Completion Revision:** 7
+- **Gate Status:** `completed`
+- **Evidence Revision:** 1
+- **Disposition:** `accept`
+- **Outcome Result:** `resolved`
+- **Git Commit:** `a9b749e2`
+- **Validation:**
+  - `cd server && cargo test`: 1,719 passed, 0 failed, 6 ignored across 54 suites
+  - `pnpm --filter @dam-hopper/ui test`: 2,206 passed, 0 failed across 293 test files
+  - Live route smoke: `GET /api/plugins` returns 404 Not Found, followed by `GET /api/health` 200 OK
+- **Retained Evidence:**
+  - [Tester Report](./tester-261002-1351-phase-06-plugin-runtime-validation.md)
+  - [Code Review Report](./code-review-261002-1358-phase-06-delete-plugin-runtime.md)
+  - [Project Manager Report](./project-manager-261002-1405-phase-06-plugin-platform-retirement.md)
+  - [Docs Manager Report](./docs-manager-261002-1405-phase-06-plugin-platform-retirement.md)

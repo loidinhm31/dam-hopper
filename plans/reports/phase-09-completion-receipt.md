@@ -1,0 +1,33 @@
+# Phase 09 Completion Receipt
+
+- **Project ID:** `882985d5cddedda38b07fb78c217bde1c6d19d81a0780758e0b7622e60096efa`
+- **Plan:** [Native Advisor and complete plugin-platform retirement](../261002-0246-native-advisor-migration/plan.md)
+- **Phase:** `phase-09` (Qualify native-only cutover and update current docs)
+- **Task Run ID:** `4fc06a13-c7ad-44bd-8e43-3129cba9f3d1`
+- **Consultation ID:** `b461420a-00b3-4735-b427-49ee169f3440`
+- **Action ID:** `12f166da-1532-4900-9acb-704386f6d763`
+- **Episode ID:** `phase-09-finalization`
+- **Completion Revision:** 10
+- **Gate Status:** `completed`
+- **Evidence Revision:** 1
+- **Disposition:** `accept`
+- **Outcome Result:** `resolved`
+- **Git Commit:** `15fd8f47` (`dam-hopper`); `75f4f1bc` (`evcrate`)
+- **Validation:**
+  - Dam-Hopper `cargo test advisor --manifest-path server/Cargo.toml`: 34 passed, 0 failed
+  - Dam-Hopper `cargo test --test advisor_history_api --manifest-path server/Cargo.toml`: 8 passed, 0 failed
+  - Dam-Hopper `cargo test --test advisor_policy_evaluations --manifest-path server/Cargo.toml`: 4 passed, 0 failed
+  - Dam-Hopper `cargo test --test linux_release_native_phase07 --manifest-path server/Cargo.toml`: 9 passed, 0 failed
+  - Dam-Hopper `pnpm --filter @dam-hopper/ui test`: 2,206 passed, 0 failed across 293 test files
+  - Dam-Hopper `workspace-advisor.browser.tsx`: 2 passed, 0 failed
+  - Dam-Hopper `pnpm build`: passed, 0 errors
+  - Dam-Hopper `pnpm lint`: passed, 0 errors
+  - Evcrate `npm run test:release`: 34 passed, 0 failed; 7 public release assets verified, 0 plugin archives
+  - Evcrate `npm run test:advisor-metrics`: 6 passed, 0 failed
+  - Evcrate `node --test tests/viewer/*.test.mjs`: 60 passed, 0 failed
+- **Retained Evidence:**
+  - [Qualification Report](../261002-0246-native-advisor-migration/reports/qualification.md)
+  - [Tester Report](./tester-261002-1958-phase-09-qualification-and-documentation.md)
+  - [Code Review Report](./code-review-261002-2006-phase-09-qualification.md)
+  - [Project Manager Report](./project-manager-261002-2015-phase-09-qualification.md)
+  - [Docs Manager Report](./docs-manager-261002-2015-phase-09-qualification.md)

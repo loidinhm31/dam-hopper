@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiRequestError } from "./client.js";
+import { ApiRequestError, createApiClient } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
 import { setActiveProfile, setAuthToken } from "./server-config.js";
 
@@ -398,6 +398,67 @@ describe("WsTransport commit message endpoints", () => {
     transport.destroy();
   });
 });
+
+describe("owner-bound squash REST boundary", () => {
+  it("encodes the project and sends complete ordered multiline input without profile identity or WebSocket mutation", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          blockedReason: "signature-consent-required",
+          recommendation: "Consent covers descendants too",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport(
+      "http://owner.invalid",
+      "owner",
+      "secret",
+    );
+    const client = createApiClient(
+      { profileId: "owner", generation: 7 },
+      transport,
+    );
+    const result = await client.git.squash(
+      {
+        profileId: "owner",
+        project: "demo / Việt",
+        worktreePath: "/tmp/work tree",
+      },
+      {
+        hashes: ["a".repeat(40), "b".repeat(40)],
+        message: "Cũ\n\nNội dung  \n\nMới\n",
+        expectedBranch: "refs/heads/main",
+        expectedHeadOid: "c".repeat(40),
+        allowSignatureRemoval: true,
+      },
+      "nested/history",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.blockedReason).toBe("signature-consent-required");
+    expect(result.recommendation).toContain("descendants");
+    const [url, request] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `http://owner.invalid/api/git/${encodeURIComponent("demo / Việt")}/squash`,
+    );
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(request.body)).toEqual({
+      hashes: ["a".repeat(40), "b".repeat(40)],
+      message: "Cũ\n\nNội dung  \n\nMới\n",
+      expectedBranch: "refs/heads/main",
+      expectedHeadOid: "c".repeat(40),
+      allowSignatureRemoval: true,
+      worktreePath: "/tmp/work tree",
+      root: "nested/history",
+    });
+    expect(JSON.parse(request.body)).not.toHaveProperty("profileId");
+    expect(sockets[0].sent).toEqual([]);
+    transport.destroy();
+  });
+});
 describe("WsTransport git:log endpoint", () => {
   it("serializes log options and encodes query parameters safely", async () => {
     installMockWebSocket();
@@ -430,7 +491,9 @@ describe("WsTransport git:log endpoint", () => {
     expect(url1.searchParams.get("ref")).toBe("refs/heads/main");
     expect(url1.searchParams.get("worktreePath")).toBe("/tmp/worktree");
     expect(url1.searchParams.get("root")).toBe("sub/root");
-    expect(url1.searchParams.get("messageQuery")).toBe("fix(auth): bug #123 & + % ?");
+    expect(url1.searchParams.get("messageQuery")).toBe(
+      "fix(auth): bug #123 & + % ?",
+    );
 
     // 2. Omits empty or whitespace-only messageQuery
     await transport.invoke("git:log", {
@@ -454,7 +517,6 @@ describe("WsTransport git:log endpoint", () => {
     transport.destroy();
   });
 });
-
 
 describe("WsTransport typed API errors", () => {
   it("preserves status and code from a JSON error response", async () => {

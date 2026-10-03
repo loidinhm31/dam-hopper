@@ -213,8 +213,7 @@ pub async fn push_project(
         });
     }
 
-    let result =
-        crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await;
+    let result = crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await;
     Ok(Json(result))
 }
 
@@ -791,6 +790,39 @@ pub struct EditCommitMessageBody {
     pub allow_signature_removal: bool,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SquashCommitsBody {
+    pub hashes: Vec<String>,
+    pub message: String,
+    pub expected_branch: String,
+    pub expected_head_oid: String,
+    #[serde(default)]
+    pub allow_signature_removal: bool,
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+}
+
+pub async fn squash_commits_route(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<SquashCommitsBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_target_path(&state, &project, body.worktree_path).await?;
+    let root = resolve_git_request_root(&path, body.root.as_deref()).map_err(ApiError::from_app)?;
+    let result = crate::git::squash_commits(
+        &root.root_path,
+        &body.hashes,
+        &body.message,
+        &body.expected_branch,
+        &body.expected_head_oid,
+        body.allow_signature_removal,
+    )
+    .await
+    .map_err(ApiError::from_app)?;
+    Ok(Json(result))
 }
 
 pub async fn get_commit_message_route(

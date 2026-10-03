@@ -26,11 +26,10 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    advisor as advisor_api, agent_status,
-    agent_import, agent_memory, agent_store, auth, auth_mfa, browser_debug, commands, config,
-    diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff, host_actions, idle_suspend,
-    media_session, port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel, usage,
-    usage_sessions, workflow, workspace, ws,
+    advisor as advisor_api, agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
+    browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff,
+    host_actions, idle_suspend, media_session, port_forward as port_forward_api, resource_events,
+    settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -221,6 +220,7 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route("/api/git/{project}/resolve", post(git_diff::resolve))
         .route("/api/git/{project}/commit", post(git_diff::commit))
+        .route("/api/git/{project}/squash", post(git::squash_commits_route))
         .route(
             "/api/git/{project}/commit/{hash}/files",
             get(git_diff::get_commit_files),
@@ -517,7 +517,6 @@ pub fn build_router_with_web_dir_and_origins(
             mark_allowed_media_origin,
         ));
 
-
     // Feature-local host resource SSE stream route.
     // Reverse layer order: subject -> bearer -> feature auth helper -> Origin -> global permit
     let host_resource_stream_routes = Router::new()
@@ -547,7 +546,10 @@ pub fn build_router_with_web_dir_and_origins(
         ));
 
     let advisor_routes = Router::new()
-        .route("/api/advisor/status", get(advisor_api::advisor_status_handler))
+        .route(
+            "/api/advisor/status",
+            get(advisor_api::advisor_status_handler),
+        )
         .route(
             "/api/advisor/settings",
             patch(advisor_api::advisor_settings_update_handler)
@@ -555,28 +557,23 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route(
             "/api/advisor/history/refresh",
-            post(advisor_api::history_refresh_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+            post(advisor_api::history_refresh_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .route(
             "/api/advisor/history/summary",
-            post(advisor_api::history_summary_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+            post(advisor_api::history_summary_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .route(
             "/api/advisor/history/page",
-            post(advisor_api::history_page_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+            post(advisor_api::history_page_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .route(
             "/api/advisor/history/detail",
-            post(advisor_api::history_detail_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+            post(advisor_api::history_detail_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .route(
             "/api/advisor/policy/current",
-            post(advisor_api::policy_current_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
+            post(advisor_api::policy_current_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .route(
             "/api/advisor/evaluations/list",
@@ -616,9 +613,7 @@ pub fn build_router_with_web_dir_and_origins(
             .route("/api", any(|| async { StatusCode::NOT_FOUND }))
             .route("/api/", any(|| async { StatusCode::NOT_FOUND }))
             .route("/api/{*path}", any(|| async { StatusCode::NOT_FOUND }))
-            .fallback_service(
-                ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
-            ),
+            .fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html")))),
         None => router.fallback(any(|| async { StatusCode::NOT_FOUND })),
     };
 
@@ -870,5 +865,4 @@ mod tests {
             .get("access-control-allow-origin")
             .is_none());
     }
-
 }

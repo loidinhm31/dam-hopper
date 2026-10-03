@@ -4,12 +4,18 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PublishPreview, PublishResult, PublishSnapshot } from "@/api/client.js";
+import type {
+  PublishPreview,
+  PublishResult,
+  PublishSnapshot,
+} from "@/api/client.js";
+import { __setConnectionSnapshotForTests } from "@/api/connections.js";
 
 const mocks = vi.hoisted(() => ({
   prepareMutateAsync: vi.fn(),
   publishMutateAsync: vi.fn(),
   executeLeasedWithRetry: vi.fn(),
+  cancel: vi.fn(),
 }));
 
 vi.mock("@/api/queries.js", () => ({
@@ -36,10 +42,14 @@ vi.mock("@/hooks/use-git-with-ssh-retry.js", () => ({
     },
     statusMessage: undefined,
     executeLeasedWithRetry: mocks.executeLeasedWithRetry,
+    cancel: mocks.cancel,
   })),
 }));
 
-import { useLeasedGitPush, type UseLeasedGitPushResult } from "./use-leased-git-push.js";
+import {
+  useLeasedGitPush,
+  type UseLeasedGitPushResult,
+} from "./use-leased-git-push.js";
 
 const mockSnapshot: PublishSnapshot = {
   branch: "refs/heads/feature",
@@ -47,8 +57,10 @@ const mockSnapshot: PublishSnapshot = {
   remoteName: "origin",
   destinationRef: "refs/heads/feature",
   expectedRemoteOid: "2222222222222222222222222222222222222222",
-  remoteIdentity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  repositoryIdentity: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  remoteIdentity:
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  repositoryIdentity:
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 };
 
 let root: Root | null = null;
@@ -57,11 +69,17 @@ let currentHook: UseLeasedGitPushResult | null = null;
 function Harness({
   project,
   rootPath,
+  expectedSource,
+  profileId,
 }: {
   project: string;
   rootPath?: string;
+  expectedSource?: { branch: string; sourceOid: string };
+  profileId?: string;
 }) {
-  const hook = useLeasedGitPush({ project }, rootPath);
+  const hook = useLeasedGitPush({ project, profileId }, rootPath, {
+    expectedSource,
+  });
   React.useEffect(() => {
     currentHook = hook;
   }, [hook]);
@@ -86,6 +104,7 @@ afterEach(() => {
     act(() => root?.unmount());
   }
   document.body.innerHTML = "";
+  __setConnectionSnapshotForTests("lease-profile", null);
 });
 
 describe("useLeasedGitPush", () => {
@@ -465,6 +484,11 @@ describe("useLeasedGitPush", () => {
 
     expect(currentHook?.state).toBe("unknown");
     expect(currentHook?.result).toEqual(unknownResult);
+    await act(async () => {
+      await currentHook?.publish();
+    });
+    expect(currentHook?.state).toBe("unknown");
+    expect(mocks.publishMutateAsync).toHaveBeenCalledTimes(1);
   });
 
   it("transitions publishing -> already-current when re-advertised remote was already at tip", async () => {
@@ -501,5 +525,63 @@ describe("useLeasedGitPush", () => {
 
     expect(currentHook?.state).toBe("already-current");
     expect(currentHook?.result).toEqual(currentResult);
+  });
+  it("blocks a prepared source that differs from the successful squash receipt", async () => {
+    mocks.prepareMutateAsync.mockResolvedValueOnce({
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    });
+    await act(async () =>
+      root?.render(
+        <Harness
+          project="demo"
+          expectedSource={{
+            branch: mockSnapshot.branch,
+            sourceOid: "f".repeat(40),
+          }}
+        />,
+      ),
+    );
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("blocked");
+    expect(currentHook?.error).toContain("Local history changed after squash");
+    await act(async () => {
+      await currentHook?.publish();
+    });
+    expect(mocks.publishMutateAsync).not.toHaveBeenCalled();
+  });
+  it("removes an actionable prepared preview synchronously on transport generation change", async () => {
+    __setConnectionSnapshotForTests("lease-profile", {
+      owner: { profileId: "lease-profile", generation: 1 },
+      status: "connected",
+    });
+    mocks.prepareMutateAsync.mockResolvedValueOnce({
+      status: "ready",
+      snapshot: mockSnapshot,
+      alreadyCurrent: false,
+    });
+    await act(async () =>
+      root?.render(<Harness project="demo" profileId="lease-profile" />),
+    );
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+    expect(currentHook?.state).toBe("confirming");
+    const oldPublish = currentHook!.publish;
+    await act(async () =>
+      __setConnectionSnapshotForTests("lease-profile", {
+        owner: { profileId: "lease-profile", generation: 2 },
+        status: "connected",
+      }),
+    );
+    expect(currentHook?.state).toBe("closed");
+    expect(currentHook?.preview).toBeNull();
+    await act(async () => {
+      await oldPublish();
+    });
+    expect(mocks.publishMutateAsync).not.toHaveBeenCalled();
   });
 });

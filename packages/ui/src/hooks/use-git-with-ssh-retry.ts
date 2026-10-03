@@ -83,7 +83,10 @@ export interface UseGitWithSshRetryResult {
   executeLeasedWithRetry: <T extends { status: string }>(
     owner: ConnectionRef | undefined,
     fn: () => Promise<T>,
+    isCurrent: () => boolean,
   ) => Promise<T>;
+  /** Revoke pending authentication and its saved retry, including delayed auth responses. */
+  cancel: () => void;
 }
 
 export function getSshLoadKeyStatus(
@@ -185,6 +188,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     resolve: (val: unknown) => void;
     reject: (err: unknown) => void;
   } | null>(null);
+  const retryGenerationRef = useRef(0);
 
   const sshAddKey = useSshAddKey();
   const { data: availableKeys = [] } = useSshListKeys();
@@ -230,17 +234,40 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     async <T extends { status: string }>(
       owner: ConnectionRef | undefined,
       fn: () => Promise<T>,
+      isCurrent: () => boolean,
     ): Promise<T> => {
+      const generation = retryGenerationRef.current;
+      const assertCurrent = () => {
+        if (
+          generation !== retryGenerationRef.current ||
+          !isCurrent() ||
+          (owner && !isCurrentConnection(owner))
+        ) {
+          throw new Error("SSH_CANCELLED");
+        }
+      };
+      assertCurrent();
       ownerRef.current = owner ?? null;
       setState((current) => ({ ...current, status: undefined }));
       const initial = await fn();
-      if (initial.status !== "auth-required") {
+      assertCurrent();
+      if (
+        initial.status !== "auth-required" &&
+        !(
+          initial.status === "blocked" &&
+          "reason" in initial &&
+          initial.reason === "auth-required"
+        )
+      ) {
         return initial;
       }
 
       return new Promise<T>((resolve, reject) => {
         pendingLeasedRetryRef.current = {
-          fn: fn as () => Promise<unknown>,
+          fn: async () => {
+            assertCurrent();
+            return fn();
+          },
           resolve: resolve as (val: unknown) => void,
           reject,
         };
@@ -261,6 +288,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
       keyPath: string | undefined,
       saveForLater: boolean,
     ) => {
+      const generation = retryGenerationRef.current;
       setState((s) => ({ ...s, loading: true, error: undefined }));
 
       let result;
@@ -271,6 +299,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
           saveForLater,
         });
       } catch (error) {
+        if (generation !== retryGenerationRef.current) return;
         setState((s) => ({
           ...s,
           loading: false,
@@ -278,6 +307,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
         }));
         return;
       }
+      if (generation !== retryGenerationRef.current) return;
 
       if (!result.success) {
         setState((s) => ({
@@ -303,8 +333,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
           open: false,
           loading: false,
           error: undefined,
-          status:
-            "Connection changed during authentication; retry cancelled.",
+          status: "Connection changed during authentication; retry cancelled.",
         }));
         pendingRetryRef.current = null;
         resolveRef.current = null;
@@ -320,8 +349,11 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
       }
 
       if (pendingLeasedRetryRef.current) {
-        const { fn: leasedFn, resolve: leasedResolve, reject: leasedReject } =
-          pendingLeasedRetryRef.current;
+        const {
+          fn: leasedFn,
+          resolve: leasedResolve,
+          reject: leasedReject,
+        } = pendingLeasedRetryRef.current;
         pendingLeasedRetryRef.current = null;
         ownerRef.current = null;
         try {
@@ -370,6 +402,7 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
   );
 
   const handleCancel = useCallback(() => {
+    retryGenerationRef.current += 1;
     const reject = rejectRef.current;
     const leasedPending = pendingLeasedRetryRef.current;
     pendingLeasedRetryRef.current = null;
@@ -403,5 +436,6 @@ export function useGitWithSshRetry(): UseGitWithSshRetryResult {
     statusMessage: state.status,
     executeWithRetry,
     executeLeasedWithRetry,
+    cancel: handleCancel,
   };
 }

@@ -77,7 +77,11 @@ fn setup_test_app() -> TestApp {
     // 2. Local repo clone
     let project_dir = root_path.join("test-repo");
     git(
-        &["clone", remote_bare.to_str().unwrap(), project_dir.to_str().unwrap()],
+        &[
+            "clone",
+            remote_bare.to_str().unwrap(),
+            project_dir.to_str().unwrap(),
+        ],
         &root_path,
     );
     git(&["config", "user.email", "test@example.com"], &project_dir);
@@ -187,7 +191,10 @@ async fn test_api_leased_push_prepare_and_publish_flow() {
     // Create a new local commit
     std::fs::write(app.project_path.join("new_file.txt"), "content\n").unwrap();
     git(&["add", "new_file.txt"], &app.project_path);
-    git(&["commit", "-m", "local commit for push"], &app.project_path);
+    git(
+        &["commit", "-m", "local commit for push"],
+        &app.project_path,
+    );
     let local_head = git_output(&["rev-parse", "HEAD"], &app.project_path);
     let remote_head_before = git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path);
     assert_ne!(local_head, remote_head_before);
@@ -203,7 +210,9 @@ async fn test_api_leased_push_prepare_and_publish_flow() {
     let prep_res = app.router.clone().oneshot(prep_req).await.unwrap();
     assert_eq!(prep_res.status(), StatusCode::OK);
 
-    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX).await.unwrap();
+    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let prep_json: Value = serde_json::from_slice(&prep_bytes).unwrap();
     assert_eq!(prep_json["status"], "ready");
     assert_eq!(prep_json["alreadyCurrent"], false);
@@ -228,7 +237,9 @@ async fn test_api_leased_push_prepare_and_publish_flow() {
     let pub_res = app.router.clone().oneshot(pub_req).await.unwrap();
     assert_eq!(pub_res.status(), StatusCode::OK);
 
-    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX).await.unwrap();
+    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let pub_json: Value = serde_json::from_slice(&pub_bytes).unwrap();
     assert_eq!(pub_json["status"], "published");
 
@@ -251,7 +262,9 @@ async fn test_api_leased_push_already_current() {
         .unwrap();
 
     let prep_res = app.router.clone().oneshot(prep_req).await.unwrap();
-    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX).await.unwrap();
+    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let prep_json: Value = serde_json::from_slice(&prep_bytes).unwrap();
 
     assert_eq!(prep_json["status"], "ready");
@@ -270,7 +283,9 @@ async fn test_api_leased_push_already_current() {
         .unwrap();
 
     let pub_res = app.router.clone().oneshot(pub_req).await.unwrap();
-    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX).await.unwrap();
+    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let pub_json: Value = serde_json::from_slice(&pub_bytes).unwrap();
     assert_eq!(pub_json["status"], "already-current");
 
@@ -296,21 +311,33 @@ async fn test_api_leased_push_stale_remote_rejected() {
         .unwrap();
 
     let prep_res = app.router.clone().oneshot(prep_req).await.unwrap();
-    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX).await.unwrap();
+    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let prep_json: Value = serde_json::from_slice(&prep_bytes).unwrap();
     let snapshot = &prep_json["snapshot"];
 
     // Simulate an independent writer advancing the remote directly
     let other_clone = tempfile::tempdir().unwrap();
     git(
-        &["clone", app.remote_bare_path.to_str().unwrap(), other_clone.path().to_str().unwrap()],
+        &[
+            "clone",
+            app.remote_bare_path.to_str().unwrap(),
+            other_clone.path().to_str().unwrap(),
+        ],
         other_clone.path(),
     );
-    git(&["config", "user.email", "other@example.com"], other_clone.path());
+    git(
+        &["config", "user.email", "other@example.com"],
+        other_clone.path(),
+    );
     git(&["config", "user.name", "Other User"], other_clone.path());
     std::fs::write(other_clone.path().join("other.txt"), "other\n").unwrap();
     git(&["add", "other.txt"], other_clone.path());
-    git(&["commit", "-m", "remote advanced independently"], other_clone.path());
+    git(
+        &["commit", "-m", "remote advanced independently"],
+        other_clone.path(),
+    );
     git(&["push"], other_clone.path());
     let remote_advanced_oid = git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path);
 
@@ -327,7 +354,9 @@ async fn test_api_leased_push_stale_remote_rejected() {
         .unwrap();
 
     let pub_res = app.router.clone().oneshot(pub_req).await.unwrap();
-    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX).await.unwrap();
+    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let pub_json: Value = serde_json::from_slice(&pub_bytes).unwrap();
     assert_eq!(pub_json["status"], "stale-remote");
 
@@ -354,7 +383,9 @@ async fn test_api_leased_push_stale_local_rejected() {
         .unwrap();
 
     let prep_res = app.router.clone().oneshot(prep_req).await.unwrap();
-    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX).await.unwrap();
+    let prep_bytes = axum::body::to_bytes(prep_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let prep_json: Value = serde_json::from_slice(&prep_bytes).unwrap();
     let snapshot = &prep_json["snapshot"];
 
@@ -376,7 +407,213 @@ async fn test_api_leased_push_stale_local_rejected() {
         .unwrap();
 
     let pub_res = app.router.clone().oneshot(pub_req).await.unwrap();
-    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX).await.unwrap();
+    let pub_bytes = axum::body::to_bytes(pub_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let pub_json: Value = serde_json::from_slice(&pub_bytes).unwrap();
     assert_eq!(pub_json["status"], "stale-local");
+}
+
+async fn squash_lease_post(app: &TestApp, uri: &str, body: &Value) -> Value {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn pushed_squash_chain(app: &TestApp) -> Vec<String> {
+    let mut hashes = vec![git_output(&["rev-parse", "HEAD"], &app.project_path)];
+    for i in 1..3 {
+        std::fs::write(
+            app.project_path.join(format!("pushed-{i}")),
+            format!("{i}\n"),
+        )
+        .unwrap();
+        git(&["add", "."], &app.project_path);
+        git(&["commit", "-m", &format!("pushed {i}")], &app.project_path);
+        hashes.push(git_output(&["rev-parse", "HEAD"], &app.project_path));
+    }
+    git(&["push"], &app.project_path);
+    hashes
+}
+
+async fn squash_pushed_range(app: &TestApp, hashes: &[String]) -> Value {
+    let result = squash_lease_post(
+        app,
+        "/api/git/test-repo/squash",
+        &json!({
+            "hashes": &hashes[..2], "message": "pushed range squashed\n",
+            "expectedBranch": "refs/heads/main", "expectedHeadOid": hashes[2]
+        }),
+    )
+    .await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["rewrittenCount"], 2);
+    assert_ne!(result["newTargetOid"], result["newHeadOid"]);
+    result
+}
+
+#[tokio::test]
+async fn test_api_pushed_squash_requires_fresh_explicit_lease_and_keeps_normal_push_safe() {
+    let app = setup_test_app();
+    let hashes = pushed_squash_chain(&app);
+    let tree = git_output(&["rev-parse", "HEAD^{tree}"], &app.project_path);
+    let old_lease = squash_lease_post(&app, "/api/git/test-repo/push/prepare", &json!({})).await;
+    assert_eq!(old_lease["status"], "ready");
+    let result = squash_pushed_range(&app, &hashes).await;
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        hashes[2]
+    );
+    let stale = squash_lease_post(
+        &app,
+        "/api/git/test-repo/push/publish",
+        &json!({"snapshot": old_lease["snapshot"]}),
+    )
+    .await;
+    assert_eq!(stale["status"], "stale-local");
+    let normal = squash_lease_post(&app, "/api/git/push", &json!({"project": "test-repo"})).await;
+    assert_eq!(normal["success"], false, "{normal}");
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        hashes[2]
+    );
+    let fresh = squash_lease_post(&app, "/api/git/test-repo/push/prepare", &json!({})).await;
+    assert_eq!(fresh["status"], "ready", "{fresh}");
+    assert_eq!(fresh["snapshot"]["sourceOid"], result["newHeadOid"]);
+    assert_eq!(fresh["snapshot"]["expectedRemoteOid"], hashes[2]);
+    let published = squash_lease_post(
+        &app,
+        "/api/git/test-repo/push/publish",
+        &json!({"snapshot": fresh["snapshot"]}),
+    )
+    .await;
+    assert_eq!(published["status"], "published", "{published}");
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        result["newHeadOid"].as_str().unwrap()
+    );
+    assert_eq!(
+        git_output(
+            &["rev-parse", "refs/heads/main^{tree}"],
+            &app.remote_bare_path
+        ),
+        tree
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD^{tree}"], &app.project_path),
+        tree
+    );
+}
+
+#[tokio::test]
+async fn test_api_post_squash_lease_preserves_independent_remote_writer() {
+    let app = setup_test_app();
+    let hashes = pushed_squash_chain(&app);
+    let result = squash_pushed_range(&app, &hashes).await;
+    let fresh = squash_lease_post(&app, "/api/git/test-repo/push/prepare", &json!({})).await;
+    let independent = tempfile::tempdir().unwrap();
+    git(
+        &[
+            "clone",
+            app.remote_bare_path.to_str().unwrap(),
+            independent.path().to_str().unwrap(),
+        ],
+        independent.path(),
+    );
+    git(&["config", "user.name", "Independent"], independent.path());
+    git(
+        &["config", "user.email", "independent@example.com"],
+        independent.path(),
+    );
+    git(
+        &["commit", "--allow-empty", "-m", "independent remote tip"],
+        independent.path(),
+    );
+    git(&["push"], independent.path());
+    let independent_tip = git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path);
+    let rejected = squash_lease_post(
+        &app,
+        "/api/git/test-repo/push/publish",
+        &json!({"snapshot": fresh["snapshot"]}),
+    )
+    .await;
+    assert_eq!(rejected["status"], "stale-remote", "{rejected}");
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        independent_tip
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "HEAD"], &app.project_path),
+        result["newHeadOid"].as_str().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn test_api_post_squash_lease_fences_local_upstream_url_and_root_changes() {
+    for change in ["local", "upstream", "url", "root"] {
+        let app = setup_test_app();
+        let hashes = pushed_squash_chain(&app);
+        let result = squash_pushed_range(&app, &hashes).await;
+        let fresh = squash_lease_post(&app, "/api/git/test-repo/push/prepare", &json!({})).await;
+        let mut payload = json!({"snapshot": fresh["snapshot"]});
+        match change {
+            "local" => git(
+                &["commit", "--allow-empty", "-m", "later local writer"],
+                &app.project_path,
+            ),
+            "upstream" => git(
+                &["config", "branch.main.merge", "refs/heads/other"],
+                &app.project_path,
+            ),
+            "url" => git(
+                &[
+                    "config",
+                    "remote.origin.pushurl",
+                    "/nonexistent/changed.git",
+                ],
+                &app.project_path,
+            ),
+            "root" => {
+                let child = app.project_path.join("modules/child");
+                std::fs::create_dir_all(&child).unwrap();
+                git(&["init", "-b", "main"], &child);
+                git(&["config", "user.name", "Child"], &child);
+                git(&["config", "user.email", "child@example.com"], &child);
+                git(&["commit", "--allow-empty", "-m", "child history"], &child);
+                payload["root"] = json!("modules/child");
+            }
+            _ => unreachable!(),
+        }
+        let local_before = git_output(&["rev-parse", "HEAD"], &app.project_path);
+        let rejected = squash_lease_post(&app, "/api/git/test-repo/push/publish", &payload).await;
+        assert_eq!(
+            rejected["status"],
+            if change == "local" {
+                "stale-local"
+            } else {
+                "stale-config"
+            },
+            "{change}: {rejected}"
+        );
+        assert_eq!(
+            git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+            hashes[2]
+        );
+        assert_eq!(
+            git_output(&["rev-parse", "HEAD"], &app.project_path),
+            local_before
+        );
+        if change != "local" {
+            assert_eq!(local_before, result["newHeadOid"].as_str().unwrap());
+        }
+    }
 }

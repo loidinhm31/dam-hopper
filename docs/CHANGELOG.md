@@ -1,3 +1,7 @@
+# 2026-10-03
+
+- **Squash commits in both Git surfaces.** Added independent checkbox selection in Workspace Git panels and the Git page, full-body oldest-first editable drafts, root/older linear ranges, pushed-history warnings, explicit signature-removal consent, and separate history-root-bound leased publication. The raw-object rewrite preserves the final tree, index and dirty files; merges, invalid ranges and stale snapshots fail closed. Concurrent full-message reads no longer acquire Git ref write locks. Live Chromium/Axum smoke verified both surfaces, nested-root isolation, real bare-remote publication and stale-lease no-overwrite.
+
 # 2026-10-02
 
 - **Native Advisor migration — Phase 09 qualification evidence and documentation reconciliation (2026-10-02).** Recorded the native-only cutover qualification and retired the Dam-Hopper plugin platform across backend, UI, and release; durable completion receipt publication for Phases 01–05 remains parent-coordinated. Backend suites passed 34/34 Advisor integration tests and 14/14 native release/migration tests; UI passed 2,206 unit/component tests and 2 Playwright Chromium browser tests; web build passed, and lint reported 0 errors / 150 warnings. Retirement removed the obsolete plugin runner service, SDK, IPC bridges, and release assets while preserving native Advisor services, Workspace surfaces, and manual uninstall tooling. See the [qualification report](../plans/261002-0246-native-advisor-migration/reports/qualification.md).

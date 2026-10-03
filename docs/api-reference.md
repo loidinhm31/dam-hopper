@@ -92,18 +92,19 @@ The history source is `$HOME/.evcrate/advisor-history` in the server process env
 
 ### Advisor endpoints
 
-| Method and path | Request | Success result | Notes |
-| --- | --- | --- | --- |
-| `GET /api/advisor/status` | none | `{ enabled, available, path?, sourceError? }` | Available while disabled; a final-component history-root symlink is reported unavailable. |
-| `PATCH /api/advisor/settings` | `{ enabled: boolean }` | `{ enabled: boolean }` | Persists `server.advisor.enabled`; disabling clears active snapshots. |
-| `POST /api/advisor/history/refresh` | Optional `{ projectId? }` | `{ state, snapshotId?, observedAt, scan, staleReason?, inventory? }` | Scans the history root; creates a user-owned snapshot when available. |
-| `POST /api/advisor/history/summary` | `{ snapshotId, query? }` | `{ state, snapshotId, metrics, inventory }` | Filtered aggregate metrics and project inventory. |
-| `POST /api/advisor/history/page` | `{ snapshotId, query?, sort?, cursor?, limit? }` | `{ state, snapshotId, entries, nextCursor, returnedBytes }` | Page size defaults to 100 and is capped at 500; continuation cursor is HMAC-signed. |
-| `POST /api/advisor/history/detail` | `{ snapshotId, recordRef }` | `{ status, snapshotId, recordRef, detailRevision?, observedRevision?, execution?, outcome? }` | Rechecks captured file integrity; status is `ready`, `changed`, or `missing`. |
-| `POST /api/advisor/policy/current` | Optional `{}` | `{ status, scope, temporal, observedAt, revision, policy?, issueCode? }` | Reads current account policy from `$HOME/.evcrate/advisor-routing.json`. |
-| `POST /api/advisor/evaluations/list` | Optional `{ target?, cursor?, limit? }` | `{ status, observedAt, bindingRevision, items, nextCursor? }` | Discovers available evaluation runs from project and global locations. |
-| `POST /api/advisor/evaluations/read` | `{ evaluationRef, target?, expectedRevision? }` | `{ status, descriptor?, document?, evaluationRef?, observedRevision? }` | Status is `ready`, `changed`, or `missing`; revision is checked when supplied. |
-| `POST /api/advisor/evaluations/compare` | `{ items: [{ evaluationRef, expectedRevision }], target?, cursor?, limit? }` | `{ status, sourceRevisions, groups, nextCursor?, returnedBytes?, evaluationRef?, observedRevision? }` | Requires 1–32 items; groups compatible evaluation documents. |
+| Method and path                         | Request                                                                      | Success result                                                                                        | Notes                                                                                     |
+| --------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET /api/advisor/status`               | none                                                                         | `{ enabled, available, path?, sourceError? }`                                                         | Available while disabled; a final-component history-root symlink is reported unavailable. |
+| `PATCH /api/advisor/settings`           | `{ enabled: boolean }`                                                       | `{ enabled: boolean }`                                                                                | Persists `server.advisor.enabled`; disabling clears active snapshots.                     |
+| `POST /api/advisor/history/refresh`     | Optional `{ projectId? }`                                                    | `{ state, snapshotId?, observedAt, scan, staleReason?, inventory? }`                                  | Scans the history root; creates a user-owned snapshot when available.                     |
+| `POST /api/advisor/history/summary`     | `{ snapshotId, query? }`                                                     | `{ state, snapshotId, metrics, inventory }`                                                           | Filtered aggregate metrics and project inventory.                                         |
+| `POST /api/advisor/history/page`        | `{ snapshotId, query?, sort?, cursor?, limit? }`                             | `{ state, snapshotId, entries, nextCursor, returnedBytes }`                                           | Page size defaults to 100 and is capped at 500; continuation cursor is HMAC-signed.       |
+| `POST /api/advisor/history/detail`      | `{ snapshotId, recordRef }`                                                  | `{ status, snapshotId, recordRef, detailRevision?, observedRevision?, execution?, outcome? }`         | Rechecks captured file integrity; status is `ready`, `changed`, or `missing`.             |
+| `POST /api/advisor/policy/current`      | Optional `{}`                                                                | `{ status, scope, temporal, observedAt, revision, policy?, issueCode? }`                              | Reads current account policy from `$HOME/.evcrate/advisor-routing.json`.                  |
+| `POST /api/advisor/evaluations/list`    | Optional `{ target?, cursor?, limit? }`                                      | `{ status, observedAt, bindingRevision, items, nextCursor? }`                                         | Discovers available evaluation runs from project and global locations.                    |
+| `POST /api/advisor/evaluations/read`    | `{ evaluationRef, target?, expectedRevision? }`                              | `{ status, descriptor?, document?, evaluationRef?, observedRevision? }`                               | Status is `ready`, `changed`, or `missing`; revision is checked when supplied.            |
+| `POST /api/advisor/evaluations/compare` | `{ items: [{ evaluationRef, expectedRevision }], target?, cursor?, limit? }` | `{ status, sourceRevisions, groups, nextCursor?, returnedBytes?, evaluationRef?, observedRevision? }` | Requires 1–32 items; groups compatible evaluation documents.                              |
+
 ### Query filters and pagination
 
 `query.filters` supports arrays `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, and `buildIdentities`, plus numeric `startedAtFrom` / `startedAtTo` bounds. All Advisor JSON routes have a 64 KiB request-body limit.
@@ -1418,6 +1419,8 @@ worktree's current branch. Optional query fields `worktreePath` and `root`
 select the registered worktree and VCS root. The response also returns the
 full symbolic branch and exact tip OID; keep both values together as the
 snapshot for a subsequent edit.
+Message reads use a lock-free branch/tip snapshot and recheck both refs before
+returning; concurrent full-message reads do not contend for Git write locks.
 
 ```json
 {
@@ -1474,8 +1477,52 @@ On success, the `GitActionResult` includes `hash` (the new target OID),
 `newHeadOid`, `rewrittenCount`, `noOp`, and `signaturesRemoved`. For a no-op,
 the old/new OID pairs match, `rewrittenCount` is zero, and `signaturesRemoved`
 is false.
-These edit-only fields are omitted from results for unrelated Git actions.
-Successful edits do not set `dirty`, `conflict`, or rebase-recovery fields.
+These fields are also used by squash results below and are omitted from unrelated
+Git actions. Successful object-only rewrites do not set `dirty`, `conflict`, or
+rebase-recovery fields.
+
+**POST /api/git/{project}/squash**
+Collapse at least two parent-contiguous commits on the checked-out local branch
+into one commit. Send unique, full 40-hex OIDs in exact **oldest-first** order;
+abbreviated IDs, gaps, reversed ranges, and duplicates are not accepted.
+
+```json
+{
+  "hashes": ["full-oldest-selected-oid", "full-newest-selected-oid"],
+  "message": "Combined subject\n\nEdited complete message bodies\n",
+  "expectedBranch": "refs/heads/main",
+  "expectedHeadOid": "full-branch-tip-oid",
+  "allowSignatureRemoval": false,
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+The branch and tip must come from agreeing fresh full-message GET snapshots.
+Message normalization and the checked branch/HEAD compare-and-swap use the same
+safeguards as message editing. A stale snapshot is blocked before writing objects.
+Every selected commit must be reachable. Selected commits and rewritten descendants
+must have at most one parent; a merge in either blocks the operation. The oldest
+selected commit may be a root. Detached/unborn HEAD, active Git operations,
+another worktree holding the branch, or unsupported history fail closed.
+
+The synthesized commit takes the newest selected tree, oldest selected predecessor
+and author, and current configured repository committer. Linear descendants retain
+their trees, messages, and metadata while their parent IDs are remapped. The final
+tip tree, index, staged/unstaged/untracked files, and remote refs remain unchanged.
+Already-pushed commits are allowed: squash is local only. Publishing requires a
+separate user-confirmed `/push/prepare` and `/push/publish` exact-OID lease.
+
+Invalidated signatures in absorbed commits and rewritten descendants require
+explicit `allowSignatureRemoval: true`. Successful results reuse `GitActionResult`:
+`oldTargetOid` is the newest selected OID, `newTargetOid` and `hash` are the
+synthesized squash OID, `oldHeadOid`/`newHeadOid` are branch tips, and
+`rewrittenCount` counts **one squash object plus rewritten descendants**, not
+removed commits. `noOp` is false; `signaturesRemoved` reports consented removal.
+Known blocks return `ok: false` with `blockedReason` and recommendations.
+`publication-uncertain` means local ref publication is unresolved: candidate OIDs
+are not a success receipt. Refresh and reconcile before any further mutation;
+neither a blind squash retry nor automatic push is safe.
 
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
@@ -1524,8 +1571,8 @@ Result flags:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ok`                | `true` when the Git action completed; `false` for a blocked or recoverable outcome.                                                                                                                                    |
 | `message`           | Human-readable operation summary or recovery hint.                                                                                                                                                                     |
-| `branch`            | Branch affected by branch create/checkout; full local ref on message-edit results.                                                                                                                                     |
-| `hash`              | Commit affected by cherry-pick/reset; rewritten target OID on successful message edits.                                                                                                                                |
+| `branch`            | Branch affected by branch create/checkout; full local ref on message-edit and squash results.                                                                                                                          |
+| `hash`              | Commit affected by cherry-pick/reset; rewritten target or synthesized squash OID on successful object-only rewrites.                                                                                                   |
 | `stashed`           | Checkout used `strategy: "stash"` and created a stash before switching branches.                                                                                                                                       |
 | `conflict`          | Cherry-pick or reset reached a Git conflict state.                                                                                                                                                                     |
 | `dirty`             | The operation was blocked by local working tree changes.                                                                                                                                                               |
@@ -1533,11 +1580,11 @@ Result flags:
 | `recovery`          | Active operation metadata when recovery commands are available.                                                                                                                                                        |
 | `blockedReason`     | Machine-readable reason; includes operation-specific guards and message-edit reasons such as `stale-ref`, `unsupported-history`, `invalid-commit-metadata`, `signature-consent-required`, and `publication-uncertain`. |
 | `recommendation`    | User-facing next action for blocked or recoverable operations.                                                                                                                                                         |
-| `oldTargetOid`      | Original target commit OID for a message edit.                                                                                                                                                                         |
-| `newTargetOid`      | Rewritten target commit OID; also returned as `hash` for a successful edit.                                                                                                                                            |
-| `oldHeadOid`        | Captured branch-tip OID before a message edit.                                                                                                                                                                         |
-| `newHeadOid`        | Branch-tip OID after a successful rewrite; unchanged for a no-op.                                                                                                                                                      |
-| `rewrittenCount`    | Number of rewritten commits; zero for a no-op.                                                                                                                                                                         |
+| `oldTargetOid`      | Original target OID for message editing; newest selected OID for squash.                                                                                                                                               |
+| `newTargetOid`      | Rewritten target or synthesized squash OID; also returned as `hash` on success.                                                                                                                                        |
+| `oldHeadOid`        | Captured branch-tip OID before an object-only rewrite.                                                                                                                                                                 |
+| `newHeadOid`        | Branch-tip OID after a successful object-only rewrite; unchanged for a message-edit no-op.                                                                                                                             |
+| `rewrittenCount`    | Replacement objects written: target plus descendants for an edit; one squash plus descendants for squash; zero for a no-op.                                                                                            |
 | `noOp`              | Whether the normalized message matched the raw target message and no object/ref update was made.                                                                                                                       |
 | `signaturesRemoved` | Whether invalidated signature or merge-tag headers were removed after explicit consent.                                                                                                                                |
 
@@ -1611,8 +1658,8 @@ Checked-out branch update guard example:
 Invalid branch names, relative paths, and malformed commit hashes are rejected
 before Git execution. Rewrite policy is operation-specific: destructive
 history-removal actions keep their dirty-worktree, reachability, and
-pushed/shared-history guards; commit-message edits use the snapshot,
-reachability, active-operation, and supported-history checks described above.
+pushed/shared-history guards; commit-message edits and squash use the snapshot,
+reachability, active-operation, and operation-specific history checks above.
 Blocked Git actions return `GitActionResult`; request validation failures use
 the standard API error shape with a 400 status:
 
@@ -1624,9 +1671,9 @@ the standard API error shape with a 400 status:
 
 Git actions apply operation-specific history rules. `drop`, `drop-files`, and
 `undo-last-commit` retain their existing pushed/shared-history protections.
-Commit-message edits can target a commit already pushed elsewhere, but update
-only the selected local branch; they never publish automatically. A later
-push is separate and may be rejected by remote policy.
+Commit-message edits and squash can include commits already pushed elsewhere,
+but update only the selected local branch; neither publishes automatically.
+A later push is separate and may be rejected by remote policy.
 
 | Operation          | History effect        | Shared-history behavior                                  |
 | ------------------ | --------------------- | -------------------------------------------------------- |
@@ -1635,6 +1682,7 @@ push is separate and may be rejected by remote policy.
 | `drop`             | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
 | `drop-files`       | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
 | `message`          | Rewrites local branch | Allowed for reachable commits; remote ref is not changed |
+| `squash`           | Rewrites local branch | Allowed for a linear contiguous range; remote unchanged  |
 | `undo-last-commit` | Rewrites local HEAD   | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state  | Allowed only after explicit request and preflight checks |
 
