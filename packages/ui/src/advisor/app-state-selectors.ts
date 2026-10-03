@@ -33,7 +33,7 @@ export function selectHistoryQuery(state: AppState): HistoryQueryResult {
   }
 
   // Workspace project scope
-  const projectId = state.projectId?.trim() ?? null;
+  let projectId = state.projectId?.trim() ?? null;
   if (!projectId) {
     return {
       available: false,
@@ -43,13 +43,19 @@ export function selectHistoryQuery(state: AppState): HistoryQueryResult {
   }
 
   if (!SHA256_HEX_PATTERN.test(projectId)) {
-    return {
-      available: false,
-      query: null,
-      reason: 'Unresolved Workspace project ID hash',
-    };
+    const matched = state.inventory?.entries.find(
+      (e) => e.label && e.label.toLowerCase() === projectId?.toLowerCase(),
+    );
+    if (matched) {
+      projectId = matched.projectId;
+    } else {
+      return {
+        available: false,
+        query: null,
+        reason: 'Unresolved Workspace project ID hash',
+      };
+    }
   }
-
   return {
     available: true,
     query: {

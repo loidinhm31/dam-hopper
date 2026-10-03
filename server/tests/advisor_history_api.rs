@@ -564,3 +564,57 @@ async fn test_advisor_default_app_state_uses_effective_home() {
     assert!(status_json.get("enabled").is_some());
     assert!(status_json.get("available").is_some());
 }
+
+#[tokio::test]
+async fn test_advisor_refresh_and_query_by_project_label() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let home = setup_test_home(&temp_dir);
+    let (router, _state) = create_harness(&temp_dir, false, UserRole::Admin, Some(home)).await;
+    let token = generate_auth_token("admin-user", "session-admin");
+    // 0. Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled": true}"#))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 1. Refresh with project label "Project Alpha"
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/history/refresh")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"projectId": "Project Alpha"}"#))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let refresh_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(refresh_json["scan"]["projectsDiscovered"], 1);
+    assert!(refresh_json["scan"]["acceptedRecords"].as_u64().unwrap() > 0);
+    let snapshot_id = refresh_json["snapshotId"].as_str().unwrap();
+
+    // 2. Query summary with project label "Project Alpha"
+    let summary_payload = serde_json::json!({
+        "snapshotId": snapshot_id,
+        "query": {
+            "projectId": "Project Alpha"
+        }
+    });
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/history/summary")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(summary_payload.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let summary_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(summary_json["metrics"]["totalConsultations"].as_u64().unwrap() > 0);
+}

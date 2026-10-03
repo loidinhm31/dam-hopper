@@ -125,7 +125,19 @@ pub fn paginate_entries(
         .iter()
         .filter(|r| {
             if let Some(target_pid) = &query.project_id {
-                if !r.project_id.eq_ignore_ascii_case(target_pid) {
+                let pid_matches = r.project_id.eq_ignore_ascii_case(target_pid);
+                let label_matches = snapshot
+                    .inventory
+                    .entries
+                    .iter()
+                    .any(|e| {
+                        e.project_id.eq_ignore_ascii_case(&r.project_id)
+                            && e.label
+                                .as_deref()
+                                .map(|l| l.eq_ignore_ascii_case(target_pid))
+                                .unwrap_or(false)
+                    });
+                if !pid_matches && !label_matches {
                     return false;
                 }
             }

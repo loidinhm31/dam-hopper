@@ -179,7 +179,7 @@ export const INITIAL_BOUND_COMPARISON_STATE: BoundComparisonState = Object.freez
 
 export const INITIAL_STATE: AppState = Object.freeze({
   status: 'idle',
-  activeView: 'overview',
+  activeView: 'history',
   activityScope: 'workspace-project',
   projectId: null,
   projectLabel: null,

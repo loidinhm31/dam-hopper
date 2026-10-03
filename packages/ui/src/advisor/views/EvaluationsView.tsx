@@ -44,8 +44,31 @@ export const EvaluationsView: FC<EvaluationsViewProps> = ({
   const hasEvalPerm = capabilities.length === 0 || capabilities.includes('evaluations.list');
 
   const groups: readonly ComparableEvaluationGroup[] = useMemo(() => {
-    if (evaluationsComparison && evaluationsComparison.status === 'ready' && evaluationsComparison.groups) {
-      return evaluationsComparison.groups as unknown as readonly ComparableEvaluationGroup[];
+    if (
+      evaluationsComparison &&
+      evaluationsComparison.status === 'ready' &&
+      Array.isArray(evaluationsComparison.groups)
+    ) {
+      return (evaluationsComparison.groups as readonly unknown[]).map((g) => {
+        const obj = g && typeof g === 'object' ? (g as Record<string, unknown>) : {};
+        return {
+          key: String(obj.key ?? obj.groupKey ?? ''),
+          rubric_digest: String(obj.rubric_digest ?? obj.rubricDigest ?? ''),
+          input_digest: String(obj.input_digest ?? obj.inputDigest ?? ''),
+          cases: (Array.isArray(obj.cases) ? obj.cases : []) as never,
+          responses: (Array.isArray(obj.responses) ? obj.responses : []) as never,
+          human_scores: (Array.isArray(obj.human_scores)
+            ? obj.human_scores
+            : Array.isArray(obj.humanScores)
+              ? obj.humanScores
+              : []) as never,
+          automated_scores: (Array.isArray(obj.automated_scores)
+            ? obj.automated_scores
+            : Array.isArray(obj.automatedScores)
+              ? obj.automatedScores
+              : []) as never,
+        };
+      });
     }
     return [];
   }, [evaluationsComparison]);

@@ -33,13 +33,33 @@ export const CandidatePerformanceTable: FC<CandidatePerformanceTableProps> = ({
         </thead>
         <tbody>
           {responses.map((resp, idx) => {
+            const raw = resp as unknown as Record<string, unknown>;
+            const cid =
+              resp.candidate_id ||
+              (typeof raw.candidateId === 'string' ? raw.candidateId : `cand-${idx}`);
             const displayLabel = revealCandidates
-              ? (resp.label ?? resp.candidate_id)
-              : (candidateLabels.get(resp.candidate_id) ?? `Candidate ${String.fromCharCode(65 + idx)}`);
+              ? (resp.label ?? (typeof raw.label === 'string' ? raw.label : cid))
+              : (candidateLabels.get(cid) ?? `Candidate ${String.fromCharCode(65 + idx)}`);
+            const totalObs =
+              resp.total_observations ??
+              (typeof raw.totalObservations === 'number' ? raw.totalObservations : 0);
+            const readyCount =
+              resp.ready_count ?? (typeof raw.readyCount === 'number' ? raw.readyCount : 0);
+            const failedCount =
+              resp.failed_count ?? (typeof raw.failedCount === 'number' ? raw.failedCount : 0);
+            const missingCount =
+              resp.missing_count ?? (typeof raw.missingCount === 'number' ? raw.missingCount : 0);
+            const route = resp.route ?? (raw.route as { backend?: string; model?: string } | undefined) ?? {
+              backend: '—',
+              model: '—',
+            };
+            const buildId =
+              resp.build_identity ??
+              (typeof raw.buildIdentity === 'string' ? raw.buildIdentity : null);
 
             return (
               <tr
-                key={revealCandidates ? resp.candidate_id : `blinded-resp-${idx}`}
+                key={revealCandidates ? cid : `blinded-resp-${idx}`}
                 aria-label={displayLabel}
               >
                 <td>
@@ -48,27 +68,27 @@ export const CandidatePerformanceTable: FC<CandidatePerformanceTableProps> = ({
                 {revealCandidates && (
                   <td>
                     <code>
-                      {resp.route.backend}/{resp.route.model}
+                      {route.backend}/{route.model}
                     </code>
                     <div className="text-submuted">
-                      Build: {resp.build_identity?.slice(0, 8) ?? '—'}
+                      Build: {buildId ? `${buildId.slice(0, 8)}…` : '—'}
                     </div>
                   </td>
                 )}
-                <td>{resp.total_observations}</td>
+                <td>{totalObs}</td>
                 <td>
-                  <span className="badge badge-success">{resp.ready_count}</span>
+                  <span className="badge badge-success">{readyCount}</span>
                 </td>
                 <td>
-                  {resp.failed_count > 0 ? (
-                    <span className="badge badge-danger">{resp.failed_count}</span>
+                  {failedCount > 0 ? (
+                    <span className="badge badge-danger">{failedCount}</span>
                   ) : (
                     '0'
                   )}
                 </td>
                 <td>
-                  {resp.missing_count > 0 ? (
-                    <span className="badge badge-warning">{resp.missing_count}</span>
+                  {missingCount > 0 ? (
+                    <span className="badge badge-warning">{missingCount}</span>
                   ) : (
                     '0'
                   )}

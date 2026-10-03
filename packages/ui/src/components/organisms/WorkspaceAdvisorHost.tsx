@@ -145,6 +145,7 @@ export function WorkspaceAdvisorHost({
       <AdvisorPanel
         connection={connection}
         projectTarget={projectTarget}
+        isVisible={isVisible}
         className="workspace-advisor-host-content h-full w-full min-h-0 flex-1 overflow-hidden"
       />
     </div>

@@ -201,7 +201,7 @@ describe('AdvisorPanel', () => {
     container = null;
   });
 
-  it('renders .native-advisor root container and Overview view by default', async () => {
+  it('renders .native-advisor root container and History view by default', async () => {
     await act(async () => {
       root?.render(<AdvisorPanel provider={mockProvider} autoRefreshOnMount={false} />);
     });
@@ -210,8 +210,8 @@ describe('AdvisorPanel', () => {
     expect(rootEl).not.toBeNull();
     expect(rootEl?.getAttribute('data-testid')).toBe('native-advisor-panel');
 
-    const overviewPanel = container?.querySelector('#panel-overview');
-    expect(overviewPanel).not.toBeNull();
+    const historyPanel = container?.querySelector('#panel-history');
+    expect(historyPanel).not.toBeNull();
   });
 
   it('switches views when clicking tabs', async () => {
