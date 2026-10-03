@@ -696,9 +696,10 @@ In Settings > Keyboard Shortcuts, capture/reset Cognito's shortcut; Settings > A
 `CognitoModeOverlay` portals a focusable, labelled region to `document.body`
 only while active. Its full-viewport fixed layer uses the app viewport
 dimensions and `z-index: 10000`. `black-screen` is opaque black; `heavy-blur`
-uses a 40px backdrop blur and dark tint, with an opaque-black fallback when
-backdrop filtering is unsupported. The accessible description includes the
-captured dismissal chord, and activation moves focus to the overlay.
+uses a 20px backdrop blur with 140% saturation, a 0.52 dark tint, and a subtle
+inset highlight, with an opaque-black fallback when backdrop filtering is
+unsupported or when reduced transparency is preferred. The accessible description
+includes the captured dismissal chord, and activation moves focus to the overlay.
 
 `useCognitoModeInputGuard` owns window-capture input isolation. It registers
 non-passive capture listeners for pointer, mouse, touch, click/context, wheel,
