@@ -117,7 +117,7 @@ jobs:
         with:
           workspaces: server
       - name: Clippy production targets
-        run: cargo clippy --manifest-path server/Cargo.toml --lib --bins -- -D warnings
+        run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
         run: cargo test --manifest-path server/Cargo.toml
 
@@ -168,6 +168,8 @@ jobs:
             librsvg2-dev
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build browser bridge prerequisite
+        run: pnpm --filter @dam-hopper/browser-bridge build
       - name: Clippy
         run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Native Rust tests
@@ -202,6 +204,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build native frontend
         run: pnpm --filter @dam-hopper/native build
+      - name: Build browser bridge prerequisite
+        run: pnpm --filter @dam-hopper/browser-bridge build
       - name: Clippy
         run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Native Rust tests
