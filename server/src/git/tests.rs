@@ -4139,6 +4139,71 @@ async fn squash_commits_unsafe_history_and_guard_inspection_fail_closed() {
 }
 
 #[test]
+fn squash_commits_final_publish_blocks_late_git_operations() {
+    use super::commit_message_rewrite::{publish_checked_ref, snapshot_branch, RewriteFailure};
+    use crate::git::GitBlockReason as Reason;
+
+    let dir = make_temp_repo();
+    let path = dir.path();
+    let root = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "second version\n").unwrap();
+    git(&["commit", "-am", "second"], path);
+    let second = git_output(&["rev-parse", "HEAD"], path);
+    std::fs::write(path.join("README.md"), "third version\n").unwrap();
+    git(&["commit", "-am", "third"], path);
+    let tip = git_output(&["rev-parse", "HEAD"], path);
+
+    let repo = git2::Repository::open(path).unwrap();
+    let captured = snapshot_branch(&repo).unwrap();
+    let revert = Command::new("git")
+        .args(["revert", "--no-edit", &second])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(!revert.status.success());
+    assert_eq!(repo.state(), git2::RepositoryState::Revert);
+    let index = std::fs::read(repo.path().join("index")).unwrap();
+    let worktree = std::fs::read(path.join("README.md")).unwrap();
+    let revert_head = std::fs::read(repo.path().join("REVERT_HEAD")).unwrap();
+
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&root).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(Reason::ActiveOperation, _))
+    ));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), tip);
+    assert_eq!(std::fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(std::fs::read(path.join("README.md")).unwrap(), worktree);
+    assert_eq!(
+        std::fs::read(repo.path().join("REVERT_HEAD")).unwrap(),
+        revert_head
+    );
+
+    git(&["revert", "--abort"], path);
+    let captured = snapshot_branch(&repo).unwrap();
+    let index_lock = repo.path().join("index.lock");
+    std::fs::write(&index_lock, b"external lock").unwrap();
+    let result = publish_checked_ref(
+        &repo,
+        &captured,
+        git2::Oid::from_str(&root).unwrap(),
+        "squash commits",
+    );
+    assert!(matches!(
+        result,
+        Err(RewriteFailure::Block(Reason::ActiveOperation, _))
+    ));
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), tip);
+    assert_eq!(std::fs::read(&index_lock).unwrap(), b"external lock");
+    std::fs::remove_file(index_lock).unwrap();
+}
+
+#[test]
 fn squash_commits_final_cas_rejects_independent_tip_and_head_writers() {
     use super::commit_message_rewrite::{publish_checked_ref, snapshot_branch, RewriteFailure};
     let dir = make_temp_repo();

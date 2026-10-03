@@ -17,6 +17,7 @@ import { resetGitHistoryStore } from "@/stores/git-history.js";
 import {
   deferred,
   installSquashFixture,
+  squashEntry,
   squashOids,
   type SquashFixture,
 } from "@/test-fixtures/git-squash.js";
@@ -28,6 +29,7 @@ let container: HTMLDivElement;
 let qc: QueryClient;
 let view: GitHistoryViewResult;
 let available = true;
+const MESSAGE_LOAD_CONCURRENCY_FOR_TEST = 8;
 function Harness() {
   view = useGitHistoryView(fixture.target, { available });
   const squash = useGitSquashActions(fixture.target, view.rootId, view);
@@ -305,6 +307,74 @@ describe("shared squash controller and actual controls", () => {
       expect(mutations()).toHaveLength(0);
     },
   );
+  it.each([
+    "stale-ref",
+    "active-operation",
+    "unsupported-history",
+  ] as const)(
+    "requires refresh/reselection after server %s block",
+    async (blockedReason) => {
+      fixture.squashResponse = async () => ({
+        ok: false,
+        blockedReason,
+        message: "Refresh before retrying",
+      });
+      await render();
+      await open();
+      await edit("Keep this draft for copying");
+      await click("Squash locally");
+      expect(document.querySelector("textarea")!.value).toBe(
+        "Keep this draft for copying",
+      );
+      expect(button("Squash locally").disabled).toBe(true);
+      expect(button("Inspect / refresh history")).toBeDefined();
+      expect(mutations()).toHaveLength(1);
+    },
+  );
+  it("bounds concurrent full-message reads for large selections", async () => {
+    const count = 18;
+    const hashes = Array.from(
+      { length: count },
+      (_, index) =>
+        (index + 1).toString(16).padStart(7, "0") + "0".repeat(33),
+    );
+    fixture.logs = hashes
+      .map((hash, index) =>
+        squashEntry(
+          hash,
+          index === 0 ? [] : [hashes[index - 1]],
+          `commit ${index + 1}`,
+        ),
+      )
+      .reverse();
+    let active = 0;
+    let maxActive = 0;
+    fixture.messageResponse = async (hash) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return {
+        message: `message ${hash.slice(0, 7)}`,
+        branch: "refs/heads/main",
+        headOid: squashOids.descendant,
+      };
+    };
+
+    await render();
+    await act(async () => {
+      for (const hash of hashes) {
+        container
+          .querySelector<HTMLInputElement>(
+            `input[aria-label^="Select ${hash.slice(0, 7)}:"]`,
+          )!
+          .click();
+      }
+    });
+    expect(view.squashSelection.valid).toBe(true);
+    await click(`Squash ${count} commits`);
+    expect(maxActive).toBe(MESSAGE_LOAD_CONCURRENCY_FOR_TEST);
+  });
   it("forbids duplicate submit and every pending dismissal; uncertainty never enables blind retry", async () => {
     const pending = deferred<GitActionResult>();
     fixture.squashResponse = () => pending.promise;

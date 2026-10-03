@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
 use crate::git::cli_fallback;
@@ -1197,6 +1198,39 @@ pub(super) fn take_publication_failure() -> bool {
     FAIL_PUBLICATION.with(|flag| flag.replace(false))
 }
 
+struct IndexLockGuard {
+    path: PathBuf,
+    _file: File,
+}
+
+impl IndexLockGuard {
+    fn acquire(repo: &git2::Repository) -> Result<Self, RewriteFailure> {
+        let path = repo.path().join("index.lock");
+        let file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(RewriteFailure::Block(
+                    GitBlockReason::ActiveOperation,
+                    "repository index is locked by another Git operation".into(),
+                ));
+            }
+            Err(error) => {
+                return Err(RewriteFailure::Error(AppError::Git(format!(
+                    "failed to lock repository index {}: {error}",
+                    path.display()
+                ))));
+            }
+        };
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for IndexLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn commit_transaction(tx: git2::Transaction<'_>) -> Result<(), git2::Error> {
     #[cfg(test)]
     if take_publication_failure() {
@@ -1212,6 +1246,10 @@ pub(super) fn publish_checked_ref(
     new_tip: git2::Oid,
     reflog_message: &str,
 ) -> Result<(), RewriteFailure> {
+    // Git worktree mutations conventionally take index.lock before updating refs.
+    // Hold it through the final CAS so an external sequencer cannot enter between
+    // the earlier preflight and publication while HEAD/branch still look unchanged.
+    let _index_lock = IndexLockGuard::acquire(repo)?;
     let mut tx = repo.transaction().map_err(|e| {
         RewriteFailure::Error(AppError::Git(format!(
             "failed to create git transaction: {e}"
@@ -1226,6 +1264,14 @@ pub(super) fn publish_checked_ref(
             captured.branch
         )))
     })?;
+
+    let operation_state = repo.state();
+    if operation_state != git2::RepositoryState::Clean {
+        return Err(RewriteFailure::Block(
+            GitBlockReason::ActiveOperation,
+            format!("another Git operation started before publication: {operation_state:?}"),
+        ));
+    }
 
     let head = repo
         .find_reference("HEAD")

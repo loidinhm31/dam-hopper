@@ -79,6 +79,8 @@ export interface GitSquashActions extends SquashState {
   project: string;
   rootLabel: string;
 }
+const MESSAGE_LOAD_CONCURRENCY = 8;
+
 const closedState = (): SquashState => ({
   phase: "closed",
   entries: [],
@@ -207,11 +209,22 @@ export function useGitSquashActions(
     setState(stateRef.current);
     try {
       const client = getBoundApiClient(owner);
-      const messages = await Promise.all(
-        capturedEntries.map((entry) =>
-          client.git.commitMessage(capturedTarget, entry.hash, capturedRoot),
-        ),
-      );
+      const messages: CommitMessageResponse[] = [];
+      for (
+        let start = 0;
+        start < capturedEntries.length;
+        start += MESSAGE_LOAD_CONCURRENCY
+      ) {
+        const batch = await Promise.all(
+          capturedEntries
+            .slice(start, start + MESSAGE_LOAD_CONCURRENCY)
+            .map((entry) =>
+              client.git.commitMessage(capturedTarget, entry.hash, capturedRoot),
+            ),
+        );
+        if (!isCurrent(token, capturedScope)) return;
+        messages.push(...batch);
+      }
       if (!isCurrent(token, capturedScope)) return;
       const snapshot = messages[0];
       if (
@@ -310,10 +323,11 @@ export function useGitSquashActions(
         const consent = result.blockedReason === "signature-consent-required";
         setState((previous) => ({
           ...previous,
-          phase:
-            result.blockedReason === "publication-uncertain"
+          phase: consent
+            ? "ready"
+            : result.blockedReason === "publication-uncertain"
               ? "uncertain"
-              : "ready",
+              : "blocked",
           signatureConsentRequired:
             consent || previous.signatureConsentRequired,
           error: [
