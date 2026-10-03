@@ -292,7 +292,10 @@ fn test_staging_helper_unit_and_pidfile_content() {
     assert!(helper_unit_path.exists());
     let helper_content = fs::read_to_string(&helper_unit_path).unwrap();
     assert!(helper_content.contains("User=root"));
-    assert!(helper_content.contains("Group=nobody"));
+    let service_user = get_user_by_name("nobody").expect("test service user exists");
+    let service_group =
+        get_group_by_gid(service_user.gid).expect("test service user's primary group exists");
+    assert!(helper_content.contains(&format!("Group={service_group}")));
     assert!(helper_content.contains("ExecStart="));
     assert!(helper_content.contains("dam-hopper-idle-suspend-helper"));
     assert!(helper_content.contains("--socket /run/dam-hopper/idle-suspend.sock"));
