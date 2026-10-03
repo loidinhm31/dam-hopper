@@ -453,8 +453,8 @@ impl<P: ProcessSource + Send + 'static, T: SocketDiagnosticsSource + Send + 'sta
 
         for evidence in &prepared_process.sample().monitored_terminals {
             let sample_end_seq = evidence.output_sequence.load(Ordering::Acquire);
-            if sample_end_seq >= SATURATED_COUNTER_SENTINEL
-                || evidence.sample_start_sequence >= SATURATED_COUNTER_SENTINEL
+            if sample_end_seq == SATURATED_COUNTER_SENTINEL
+                || evidence.sample_start_sequence == SATURATED_COUNTER_SENTINEL
             {
                 return Err(ActivityUnavailable::new(
                     ActivityUnavailableReason::CounterOverflow,
