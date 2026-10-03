@@ -61,12 +61,23 @@ vi.mock("@/hooks/use-browser-shortcut-guard.js", () => ({
 vi.mock("@/hooks/use-browser-context-menu-suppression.js", () => ({
   useBrowserContextMenuSuppression: () => {},
 }));
-vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: {
-    getState: () => ({ systemFontSize: 14, hydrate: vi.fn() }),
-    subscribe: () => () => {},
-  },
-}));
+vi.mock("@/stores/settings.js", () => {
+  const settingsState = {
+    systemFontSize: 14,
+    cognitoModeStyle: "heavy-blur",
+    hydrate: vi.fn(),
+  };
+  return {
+    useSettingsStore: Object.assign(
+      (selector: (state: typeof settingsState) => unknown) =>
+        selector(settingsState),
+      {
+        getState: () => settingsState,
+        subscribe: () => () => {},
+      },
+    ),
+  };
+});
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: (selector: (state: { activeProject: null }) => unknown) =>
     selector({ activeProject: null }),
