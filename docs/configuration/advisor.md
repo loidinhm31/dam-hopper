@@ -39,15 +39,15 @@ Each route target requires `backend`, `model`, and `effort`; supported backends 
 
 The endpoint returns `PolicyReadCurrentResultDto`, also used by `POST /api/advisor/policy/current`:
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `status` | string | Successful update: `ready`. |
-| `scope` | string | `account`. |
-| `temporal` | string | `current`. |
-| `observedAt` | number | Observation time in Unix milliseconds. |
-| `revision` | string | SHA-256 digest of the persisted policy bytes. |
-| `policy` | object, optional | Version 2 policy: `version`, `advisor` (`primary` and `backup` route targets), `wait` (`mode`, `warnAfterMs`, `warnEveryMs`), and `history` (`retentionDays`, `maxBytes`). |
-| `issueCode` | string, optional | Present when the policy cannot be returned as ready; omitted when absent. |
+| Field        | Type             | Meaning                                                                                                                                                                    |
+| ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`     | string           | Successful update: `ready`.                                                                                                                                                |
+| `scope`      | string           | `account`.                                                                                                                                                                 |
+| `temporal`   | string           | `current`.                                                                                                                                                                 |
+| `observedAt` | number           | Observation time in Unix milliseconds.                                                                                                                                     |
+| `revision`   | string           | SHA-256 digest of the persisted policy bytes.                                                                                                                              |
+| `policy`     | object, optional | Version 2 policy: `version`, `advisor` (`primary` and `backup` route targets), `wait` (`mode`, `warnAfterMs`, `warnEveryMs`), and `history` (`retentionDays`, `maxBytes`). |
+| `issueCode`  | string, optional | Present when the policy cannot be returned as ready; omitted when absent.                                                                                                  |
 
 The request body and stored policy file are each limited to 16 KiB. Oversize request bodies return HTTP 413. Updates are serialized by the server and use revision compare-and-swap; the secure file helper also checks that the target bytes still match before replacement. A stale revision returns HTTP 409 with `code: "POLICY_REVISION_CONFLICT"`; read the current policy again before submitting a new update.
 
@@ -67,36 +67,36 @@ Supported backend values are the lowercase strings `omp`, `codex`, `claude`, and
 
 The camelCase `AdvisorModelsResultDto` contains:
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `backend` | string | Normalized supported backend name. |
-| `source` | string | `harness` for a discovered catalog; `fallback` for the built-in catalog. |
-| `models` | array | Each item has `id`, `label`, and `efforts` fields. |
-| `efforts` | string array | Backend-level effort suggestions. |
-| `defaultEffort` | string | Always `medium`. |
-| `observedAt` | number | Observation time in Unix milliseconds. |
-| `issueCode` | string, optional | A fallback reason or `HARNESS_CATALOG_TRUNCATED`; omitted when no issue is reported. |
+| Field           | Type             | Meaning                                                                              |
+| --------------- | ---------------- | ------------------------------------------------------------------------------------ |
+| `backend`       | string           | Normalized supported backend name.                                                   |
+| `source`        | string           | `harness` for a discovered catalog; `fallback` for the built-in catalog.             |
+| `models`        | array            | Each item has `id`, `label`, and `efforts` fields.                                   |
+| `efforts`       | string array     | Backend-level effort suggestions.                                                    |
+| `defaultEffort` | string           | Always `medium`.                                                                     |
+| `observedAt`    | number           | Observation time in Unix milliseconds.                                               |
+| `issueCode`     | string, optional | A fallback reason or `HARNESS_CATALOG_TRUNCATED`; omitted when no issue is reported. |
 
 A discovery failure or empty catalog still returns HTTP 200 with `source: "fallback"` and an `issueCode`; a non-empty truncated catalog returns `source: "harness"` with `HARNESS_CATALOG_TRUNCATED`. The fixed fallback entries are:
 
-| Backend | Fallback model IDs (labels match IDs) | Backend effort suggestions |
-| --- | --- | --- |
-| `codex` | `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh` |
-| `claude` | `sonnet`, `opus`, `haiku` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `omp` | `openai/gpt-6.1-sol`, `anthropic/claude-sonnet-5-5` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `pi` | `openai/gpt-6.1-sol`, `anthropic/claude-sonnet-5-5` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| Backend  | Fallback model IDs (labels match IDs)               | Backend effort suggestions                                |
+| -------- | --------------------------------------------------- | --------------------------------------------------------- |
+| `codex`  | `gpt-6.1-sol`                                       | `low`, `medium`, `high`, `xhigh`                          |
+| `claude` | `sonnet`, `opus`, `haiku`                           | `low`, `medium`, `high`, `xhigh`, `max`                   |
+| `omp`    | `openai/gpt-6.1-sol`, `anthropic/claude-sonnet-5-5` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `pi`     | `openai/gpt-6.1-sol`, `anthropic/claude-sonnet-5-5` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 
 The service emits these `issueCode` values:
 
-| Code | Meaning |
-| --- | --- |
-| `HARNESS_NOT_FOUND` | Backend executable was not found. |
-| `HARNESS_DISCOVERY_TIMEOUT` | Waiting for a discovery slot or running discovery timed out. |
-| `HARNESS_OUTPUT_LIMIT` | The runner reported an output-limit failure. |
-| `HARNESS_DISCOVERY_UNSAFE` | The runner rejected execution as unsafe. |
-| `HARNESS_DISCOVERY_FAILED` | Discovery execution failed. |
-| `HARNESS_OUTPUT_INVALID` | Harness output could not be parsed. |
-| `HARNESS_CATALOG_EMPTY` | No usable models were discovered. |
+| Code                        | Meaning                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `HARNESS_NOT_FOUND`         | Backend executable was not found.                                            |
+| `HARNESS_DISCOVERY_TIMEOUT` | Waiting for a discovery slot or running discovery timed out.                 |
+| `HARNESS_OUTPUT_LIMIT`      | The runner reported an output-limit failure.                                 |
+| `HARNESS_DISCOVERY_UNSAFE`  | The runner rejected execution as unsafe.                                     |
+| `HARNESS_DISCOVERY_FAILED`  | Discovery execution failed.                                                  |
+| `HARNESS_OUTPUT_INVALID`    | Harness output could not be parsed.                                          |
+| `HARNESS_CATALOG_EMPTY`     | No usable models were discovered.                                            |
 | `HARNESS_CATALOG_TRUNCATED` | The harness catalog was non-empty but truncated; `source` remains `harness`. |
 
 Fallback model entries always use the listed backend effort suggestions for their `efforts`; discovered entries use model-specific efforts when present, otherwise backend-level suggestions. These fallback values are suggestions, not proof that a model is installed or usable by the server's account.

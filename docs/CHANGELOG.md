@@ -1,3 +1,12 @@
+# 2026-10-04
+
+- **Advisor routing editor and harness model selector — Phase 05 verification and quality gates complete (2026-10-04).** Fully qualified end-to-end advisor routing persistence and model selection across backend Rust domain/API and frontend React UI:
+  - **Backend domain & filesystem safety:** real temporary HOME and `.evcrate/advisor-routing.json` atomic replacement via owner-only temporary file (`0600`) and `O_NOFOLLOW` rename; preservation of non-route keys (`wait`, `history`); recursive rejection of credential keys in policy contents or updates (`ROUTE_CREDENTIAL_FIELD`); byte-size boundaries (16 KiB limit); symlink target and parent directory rejection (`POLICY_FILE_UNSAFE`).
+  - **Harness model discovery:** `POST /api/advisor/models` CLI execution bounded by timeouts and output limits; fallback catalogs for `claude`, `codex`, `omp`, and `pi`; strict provider prefix requirement for OMP/Pi models (`provider/model`).
+  - **Authentication & Authorization:** both `PATCH /api/advisor/policy` and `POST /api/advisor/models` deny unauthenticated requests (401), non-admin users (403 `AdminRoleRequired`), `--no-auth` mode (403 `NoAuthForbidden`), and disabled feature state (403 `ADVISOR_DISABLED`); admin Bearer and cookie sessions succeed. Routing capabilities remain operational and advertised when history directory is absent.
+  - **Frontend UI & validation:** `PolicySummaryCard` inline routing editor with dual `RouteFieldset` components, live duplicate route triple rejection (`ROUTE_BACKUP_IDENTICAL`), differing effort allowance, custom model input mode, and cancellation restoring pristine state.
+  - **Cross-layer Vitest Browser Mode qualification:** dedicated loopback Axum fixture (`advisor_routing_browser_fixture`) exercising real `WsTransport`, `ApiClient`, and `NativeAdvisorProvider` over REST in Playwright-backed Chromium (5/5 browser interaction tests passing).
+
 # 2026-10-03
 
 - **Squash commits in both Git surfaces.** Added independent checkbox selection in Workspace Git panels and the Git page, full-body oldest-first editable drafts, root/older linear ranges, pushed-history warnings, explicit signature-removal consent, and separate history-root-bound leased publication. The raw-object rewrite preserves the final tree, index and dirty files; merges, invalid ranges and stale snapshots fail closed. Concurrent full-message reads no longer acquire Git ref write locks. Live Chromium/Axum smoke verified both surfaces, nested-root isolation, real bare-remote publication and stale-lease no-overwrite.

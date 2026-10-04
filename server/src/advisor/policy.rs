@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
+use crate::advisor::error::AdvisorError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use crate::advisor::error::AdvisorError;
+use std::path::{Path, PathBuf};
 
 pub const MAX_POLICY_BYTES: u64 = 16 * 1024; // 16 KiB
 pub const ENABLED_BACKENDS: &[&str] = &["claude", "codex", "pi", "omp"];
@@ -94,7 +94,10 @@ pub fn check_credentials(val: &serde_json::Value) -> bool {
 }
 
 pub fn is_valid_revision(rev: &str) -> bool {
-    rev.len() == 64 && rev.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    rev.len() == 64
+        && rev
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 pub fn is_valid_effort_for_backend(backend: &str, effort: &str) -> bool {
@@ -140,18 +143,26 @@ pub fn validate_route_target(
     Ok((backend.to_string(), model.to_string(), effort.to_string()))
 }
 
-pub fn validate_policy_value(val: &serde_json::Value) -> Result<PolicyDocumentV2Dto, (String, String)> {
+pub fn validate_policy_value(
+    val: &serde_json::Value,
+) -> Result<PolicyDocumentV2Dto, (String, String)> {
     if check_credentials(val) {
         return Err(("invalid".to_string(), "ROUTE_CREDENTIAL_FIELD".to_string()));
     }
 
     if val.get("hosts").is_some() {
-        return Err(("migration_required".to_string(), "ROUTE_SCHEMA_HOSTS_V1".to_string()));
+        return Err((
+            "migration_required".to_string(),
+            "ROUTE_SCHEMA_HOSTS_V1".to_string(),
+        ));
     }
 
     let version = val.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
     if version == 1 {
-        return Err(("migration_required".to_string(), "V1_MIGRATION_REQUIRED".to_string()));
+        return Err((
+            "migration_required".to_string(),
+            "V1_MIGRATION_REQUIRED".to_string(),
+        ));
     }
 
     if version != 2 {
@@ -163,30 +174,35 @@ pub fn validate_policy_value(val: &serde_json::Value) -> Result<PolicyDocumentV2
         _ => return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string())),
     };
 
-    let parse_route = |v: Option<&serde_json::Value>| -> Result<PolicyRouteTargetDto, (String, String)> {
-        let obj = v.ok_or_else(|| ("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()))?;
-        let backend = obj.get("backend").and_then(|s| s.as_str()).unwrap_or("");
-        let model = obj.get("model").and_then(|s| s.as_str()).unwrap_or("");
-        let effort = obj.get("effort").and_then(|s| s.as_str()).unwrap_or("");
+    let parse_route =
+        |v: Option<&serde_json::Value>| -> Result<PolicyRouteTargetDto, (String, String)> {
+            let obj =
+                v.ok_or_else(|| ("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()))?;
+            let backend = obj.get("backend").and_then(|s| s.as_str()).unwrap_or("");
+            let model = obj.get("model").and_then(|s| s.as_str()).unwrap_or("");
+            let effort = obj.get("effort").and_then(|s| s.as_str()).unwrap_or("");
 
-        if backend.is_empty() || model.is_empty() || effort.is_empty() {
-            return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()));
-        }
-        if !ENABLED_BACKENDS.contains(&backend) {
-            return Err(("unsupported".to_string(), "ROUTE_ENTRY_INVALID".to_string()));
-        }
+            if backend.is_empty() || model.is_empty() || effort.is_empty() {
+                return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()));
+            }
+            if !ENABLED_BACKENDS.contains(&backend) {
+                return Err(("unsupported".to_string(), "ROUTE_ENTRY_INVALID".to_string()));
+            }
 
-        Ok(PolicyRouteTargetDto {
-            backend: backend.to_string(),
-            model: model.to_string(),
-            effort: effort.to_string(),
-        })
-    };
+            Ok(PolicyRouteTargetDto {
+                backend: backend.to_string(),
+                model: model.to_string(),
+                effort: effort.to_string(),
+            })
+        };
 
     let primary = parse_route(advisor.get("primary"))?;
     let backup = parse_route(advisor.get("backup"))?;
 
-    if primary.backend == backup.backend && primary.model == backup.model && primary.effort == backup.effort {
+    if primary.backend == backup.backend
+        && primary.model == backup.model
+        && primary.effort == backup.effort
+    {
         return Err(("invalid".to_string(), "ROUTE_BACKUP_IDENTICAL".to_string()));
     }
 
@@ -196,8 +212,14 @@ pub fn validate_policy_value(val: &serde_json::Value) -> Result<PolicyDocumentV2
     };
 
     let wait_mode = wait_obj.get("mode").and_then(|s| s.as_str()).unwrap_or("");
-    let warn_after_ms = wait_obj.get("warn_after_ms").and_then(|n| n.as_u64()).unwrap_or(0);
-    let warn_every_ms = wait_obj.get("warn_every_ms").and_then(|n| n.as_u64()).unwrap_or(0);
+    let warn_after_ms = wait_obj
+        .get("warn_after_ms")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let warn_every_ms = wait_obj
+        .get("warn_every_ms")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
 
     if wait_mode != "until_terminal"
         || !(1_000..=3_600_000).contains(&warn_after_ms)
@@ -211,8 +233,14 @@ pub fn validate_policy_value(val: &serde_json::Value) -> Result<PolicyDocumentV2
         _ => return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string())),
     };
 
-    let retention_days = history_obj.get("retention_days").and_then(|n| n.as_u64()).unwrap_or(0) as u32;
-    let max_bytes = history_obj.get("max_bytes").and_then(|n| n.as_u64()).unwrap_or(0);
+    let retention_days = history_obj
+        .get("retention_days")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0) as u32;
+    let max_bytes = history_obj
+        .get("max_bytes")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
 
     if !(1..=365).contains(&retention_days) || !(1_048_576..=1_073_741_824).contains(&max_bytes) {
         return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()));
@@ -359,23 +387,26 @@ pub fn update_current_policy(
     if !is_valid_revision(&params.expected_revision) {
         return Err(AdvisorError::PolicyValidation {
             code: "ROUTE_SCHEMA_INVALID".to_string(),
-            message: "expectedRevision must be a 64-character lowercase hexadecimal string".to_string(),
+            message: "expectedRevision must be a 64-character lowercase hexadecimal string"
+                .to_string(),
         });
     }
 
-    let (pri_b, pri_m, pri_e) = validate_route_target(&params.advisor.primary).map_err(|(_, code)| {
-        AdvisorError::PolicyValidation {
-            code: code.to_string(),
-            message: format!("Invalid primary route: {code}"),
-        }
-    })?;
+    let (pri_b, pri_m, pri_e) =
+        validate_route_target(&params.advisor.primary).map_err(|(_, code)| {
+            AdvisorError::PolicyValidation {
+                code: code.to_string(),
+                message: format!("Invalid primary route: {code}"),
+            }
+        })?;
 
-    let (bak_b, bak_m, bak_e) = validate_route_target(&params.advisor.backup).map_err(|(_, code)| {
-        AdvisorError::PolicyValidation {
-            code: code.to_string(),
-            message: format!("Invalid backup route: {code}"),
-        }
-    })?;
+    let (bak_b, bak_m, bak_e) =
+        validate_route_target(&params.advisor.backup).map_err(|(_, code)| {
+            AdvisorError::PolicyValidation {
+                code: code.to_string(),
+                message: format!("Invalid backup route: {code}"),
+            }
+        })?;
 
     if pri_b == bak_b && pri_m == bak_m && pri_e == bak_e {
         return Err(AdvisorError::PolicyValidation {
@@ -389,7 +420,9 @@ pub fn update_current_policy(
         None => match std::env::var("HOME") {
             Ok(val) if !val.trim().is_empty() => PathBuf::from(val),
             _ => {
-                return Err(AdvisorError::PolicyNotEditable("HOME is not configured".to_string()));
+                return Err(AdvisorError::PolicyNotEditable(
+                    "HOME is not configured".to_string(),
+                ));
             }
         },
     };
@@ -410,7 +443,9 @@ pub fn update_current_policy(
     let evcrate_meta = match std::fs::symlink_metadata(&evcrate_dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AdvisorError::PolicyNotEditable("Policy file missing".to_string()));
+            return Err(AdvisorError::PolicyNotEditable(
+                "Policy file missing".to_string(),
+            ));
         }
         Err(_) => return Err(AdvisorError::PolicyFileUnsafe),
     };
@@ -422,11 +457,16 @@ pub fn update_current_policy(
     let file_meta = match std::fs::symlink_metadata(&policy_path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AdvisorError::PolicyNotEditable("Policy file missing".to_string()));
+            return Err(AdvisorError::PolicyNotEditable(
+                "Policy file missing".to_string(),
+            ));
         }
         Err(_) => return Err(AdvisorError::PolicyFileUnsafe),
     };
-    if file_meta.file_type().is_symlink() || !file_meta.is_file() || file_meta.len() > MAX_POLICY_BYTES {
+    if file_meta.file_type().is_symlink()
+        || !file_meta.is_file()
+        || file_meta.len() > MAX_POLICY_BYTES
+    {
         return Err(AdvisorError::PolicyFileUnsafe);
     }
 
@@ -436,7 +476,9 @@ pub fn update_current_policy(
         MAX_POLICY_BYTES,
     )
     .map_err(|e| match e {
-        crate::fs::FsError::NotFound => AdvisorError::PolicyNotEditable("Policy file missing".to_string()),
+        crate::fs::FsError::NotFound => {
+            AdvisorError::PolicyNotEditable("Policy file missing".to_string())
+        }
         _ => AdvisorError::PolicyFileUnsafe,
     })?;
 
@@ -448,20 +490,30 @@ pub fn update_current_policy(
         return Err(AdvisorError::PolicyRevisionConflict);
     }
 
-    let mut current_json: serde_json::Value = serde_json::from_slice(&current_bytes).map_err(|_| {
-        AdvisorError::PolicyNotEditable("Policy file contains invalid JSON".to_string())
-    })?;
+    let mut current_json: serde_json::Value =
+        serde_json::from_slice(&current_bytes).map_err(|_| {
+            AdvisorError::PolicyNotEditable("Policy file contains invalid JSON".to_string())
+        })?;
 
     match validate_policy_value(&current_json) {
         Ok(_) => {}
         Err((_, code)) => {
-            return Err(AdvisorError::PolicyNotEditable(format!("Policy status is not ready: {code}")));
+            return Err(AdvisorError::PolicyNotEditable(format!(
+                "Policy status is not ready: {code}"
+            )));
         }
     }
 
-    let advisor_obj = match current_json.get_mut("advisor").and_then(|v| v.as_object_mut()) {
+    let advisor_obj = match current_json
+        .get_mut("advisor")
+        .and_then(|v| v.as_object_mut())
+    {
         Some(obj) => obj,
-        None => return Err(AdvisorError::PolicyNotEditable("Missing advisor object".to_string())),
+        None => {
+            return Err(AdvisorError::PolicyNotEditable(
+                "Missing advisor object".to_string(),
+            ));
+        }
     };
 
     advisor_obj.insert(
@@ -488,8 +540,8 @@ pub fn update_current_policy(
         }
     })?;
 
-    let mut new_bytes = serde_json::to_vec_pretty(&current_json)
-        .map_err(|_| AdvisorError::PolicyWriteFailed)?;
+    let mut new_bytes =
+        serde_json::to_vec_pretty(&current_json).map_err(|_| AdvisorError::PolicyWriteFailed)?;
     new_bytes.push(b'\n');
 
     if new_bytes.len() as u64 > MAX_POLICY_BYTES {
@@ -533,8 +585,7 @@ mod tests {
     use super::*;
 
     fn fixture_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../__fixtures__/native-advisor")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../__fixtures__/native-advisor")
     }
 
     #[test]
@@ -763,7 +814,8 @@ mod tests {
         )
         .unwrap();
 
-        let stale_rev = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let stale_rev =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let params = PolicyUpdateParamsDto {
             expected_revision: stale_rev,
             advisor: PolicyAdvisorDto {
@@ -902,6 +954,162 @@ mod tests {
         match err {
             AdvisorError::PolicyNotEditable(_) => {}
             other => panic!("Expected PolicyNotEditable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_update_policy_byte_size_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_evcrate = tmp.path().join(".evcrate");
+        std::fs::create_dir_all(&dot_evcrate).unwrap();
+
+        // File on disk > 16 KiB (16384 bytes)
+        let huge_padding = "a".repeat(16385);
+        let huge_json = format!(
+            r#"{{"version":2,"advisor":{{"primary":{{"backend":"codex","model":"gpt","effort":"high"}},"backup":{{"backend":"omp","model":"gpt","effort":"low"}}}},"padding":"{}"}}"#,
+            huge_padding
+        );
+        std::fs::write(dot_evcrate.join("advisor-routing.json"), huge_json).unwrap();
+
+        let read_res = read_current_policy(Some(tmp.path()));
+        assert_eq!(read_res.status, "invalid");
+        assert_eq!(read_res.issue_code, Some("POLICY_FILE_UNSAFE".to_string()));
+
+        let valid_rev = "a".repeat(64);
+        let params = PolicyUpdateParamsDto {
+            expected_revision: valid_rev,
+            advisor: PolicyAdvisorDto {
+                primary: PolicyRouteTargetDto {
+                    backend: "codex".to_string(),
+                    model: "m1".to_string(),
+                    effort: "high".to_string(),
+                },
+                backup: PolicyRouteTargetDto {
+                    backend: "omp".to_string(),
+                    model: "openai/m2".to_string(),
+                    effort: "low".to_string(),
+                },
+            },
+        };
+        let update_err = update_current_policy(Some(tmp.path()), params).unwrap_err();
+        assert!(matches!(update_err, AdvisorError::PolicyFileUnsafe));
+    }
+
+    #[test]
+    fn test_update_policy_credential_recursion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_evcrate = tmp.path().join(".evcrate");
+        std::fs::create_dir_all(&dot_evcrate).unwrap();
+
+        // Nested secret in array inside custom meta
+        let credential_json = r#"{
+            "version": 2,
+            "advisor": {
+                "primary": { "backend": "codex", "model": "gpt", "effort": "high" },
+                "backup": { "backend": "omp", "model": "gpt", "effort": "low" }
+            },
+            "metadata": [
+                { "nested": { "auth_token": "secret-token-123" } }
+            ]
+        }"#;
+        std::fs::write(dot_evcrate.join("advisor-routing.json"), credential_json).unwrap();
+
+        let read_res = read_current_policy(Some(tmp.path()));
+        assert_eq!(read_res.status, "invalid");
+        assert_eq!(
+            read_res.issue_code,
+            Some("ROUTE_CREDENTIAL_FIELD".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_policy_symlink_and_non_regular_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_evcrate = tmp.path().join(".evcrate");
+        std::fs::create_dir_all(&dot_evcrate).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        // Symlink policy file
+        let real_file = outside.join("real.json");
+        std::fs::copy(fixture_root().join("advisor-routing.json"), &real_file).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real_file, dot_evcrate.join("advisor-routing.json"))
+                .unwrap();
+
+            let initial = read_current_policy(Some(tmp.path()));
+            assert_eq!(initial.status, "invalid");
+            assert_eq!(initial.issue_code, Some("POLICY_FILE_UNSAFE".to_string()));
+
+            let valid_rev = "b".repeat(64);
+            let params = PolicyUpdateParamsDto {
+                expected_revision: valid_rev,
+                advisor: PolicyAdvisorDto {
+                    primary: PolicyRouteTargetDto {
+                        backend: "codex".to_string(),
+                        model: "m1".to_string(),
+                        effort: "high".to_string(),
+                    },
+                    backup: PolicyRouteTargetDto {
+                        backend: "omp".to_string(),
+                        model: "openai/m2".to_string(),
+                        effort: "low".to_string(),
+                    },
+                },
+            };
+            let err = update_current_policy(Some(tmp.path()), params).unwrap_err();
+            assert!(matches!(err, AdvisorError::PolicyFileUnsafe));
+        }
+
+        // Directory target
+        let tmp2 = tempfile::tempdir().unwrap();
+        let dot_evcrate2 = tmp2.path().join(".evcrate");
+        std::fs::create_dir_all(dot_evcrate2.join("advisor-routing.json")).unwrap();
+        let initial2 = read_current_policy(Some(tmp2.path()));
+        assert_eq!(initial2.status, "invalid");
+    }
+
+    #[test]
+    fn test_update_policy_temp_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_evcrate = tmp.path().join(".evcrate");
+        std::fs::create_dir_all(&dot_evcrate).unwrap();
+        std::fs::copy(
+            fixture_root().join("advisor-routing.json"),
+            dot_evcrate.join("advisor-routing.json"),
+        )
+        .unwrap();
+
+        let initial = read_current_policy(Some(tmp.path()));
+        let rev = initial.revision;
+
+        let params = PolicyUpdateParamsDto {
+            expected_revision: rev,
+            advisor: PolicyAdvisorDto {
+                primary: PolicyRouteTargetDto {
+                    backend: "claude".to_string(),
+                    model: "sonnet".to_string(),
+                    effort: "medium".to_string(),
+                },
+                backup: PolicyRouteTargetDto {
+                    backend: "pi".to_string(),
+                    model: "openai/gpt-6.1-sol".to_string(),
+                    effort: "low".to_string(),
+                },
+            },
+        };
+
+        let res = update_current_policy(Some(tmp.path()), params).unwrap();
+        assert_eq!(res.status, "ready");
+
+        // Ensure no .dam-hopper-* temp files exist in .evcrate
+        for entry in std::fs::read_dir(&dot_evcrate).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.starts_with(".dam-hopper-"),
+                "found leftover temp file: {name}"
+            );
         }
     }
 }

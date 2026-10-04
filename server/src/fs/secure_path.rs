@@ -308,16 +308,24 @@ mod unix {
         let mut file = unsafe { File::from_raw_fd(fd) };
         let meta = file.metadata().map_err(io_error)?;
         if !meta.file_type().is_file() {
-            return Err(FsError::MutationRefused("target is not a regular file".into()));
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
         }
         if meta.len() > max_bytes {
-            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+            return Err(FsError::MutationRefused(
+                "target file exceeds maximum size".into(),
+            ));
         }
         use std::io::Read;
         let mut buffer = Vec::new();
-        Read::take(&mut file, max_bytes + 1).read_to_end(&mut buffer).map_err(io_error)?;
+        Read::take(&mut file, max_bytes + 1)
+            .read_to_end(&mut buffer)
+            .map_err(io_error)?;
         if buffer.len() as u64 > max_bytes {
-            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+            return Err(FsError::MutationRefused(
+                "target file exceeds maximum size".into(),
+            ));
         }
         Ok(buffer)
     }
@@ -346,11 +354,15 @@ mod unix {
         let mut target_file = unsafe { File::from_raw_fd(target_fd) };
         let meta = target_file.metadata().map_err(io_error)?;
         if !meta.file_type().is_file() {
-            return Err(FsError::MutationRefused("target is not a regular file".into()));
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
         }
         use std::io::Read;
         let mut current_bytes = Vec::new();
-        target_file.read_to_end(&mut current_bytes).map_err(io_error)?;
+        target_file
+            .read_to_end(&mut current_bytes)
+            .map_err(io_error)?;
         drop(target_file);
 
         if current_bytes != expected_bytes {
@@ -506,17 +518,25 @@ mod unix {
         let target = root.join(relative);
         let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
         if meta.file_type().is_symlink() || !meta.file_type().is_file() {
-            return Err(FsError::MutationRefused("target is not a regular file".into()));
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
         }
         if meta.len() > max_bytes {
-            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+            return Err(FsError::MutationRefused(
+                "target file exceeds maximum size".into(),
+            ));
         }
         use std::io::Read;
         let mut file = std::fs::File::open(&target).map_err(FsError::Io)?;
         let mut buffer = Vec::new();
-        Read::take(&mut file, max_bytes + 1).read_to_end(&mut buffer).map_err(FsError::Io)?;
+        Read::take(&mut file, max_bytes + 1)
+            .read_to_end(&mut buffer)
+            .map_err(FsError::Io)?;
         if buffer.len() as u64 > max_bytes {
-            return Err(FsError::MutationRefused("target file exceeds maximum size".into()));
+            return Err(FsError::MutationRefused(
+                "target file exceeds maximum size".into(),
+            ));
         }
         Ok(buffer)
     }
@@ -531,7 +551,9 @@ mod unix {
         let target = root.join(relative);
         let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
         if meta.file_type().is_symlink() || !meta.file_type().is_file() {
-            return Err(FsError::MutationRefused("target is not a regular file".into()));
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
         }
         use std::io::Read;
         let mut file = std::fs::File::open(&target).map_err(FsError::Io)?;
@@ -555,7 +577,9 @@ mod unix {
             .map_err(|error| FsError::Io(error.error))?;
         let post_meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
         if post_meta.file_type().is_symlink() || !post_meta.file_type().is_file() {
-            return Err(FsError::MutationRefused("target is not a regular file".into()));
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
         }
         Ok(())
     }
@@ -613,12 +637,18 @@ pub(crate) fn replace_regular_file_if_bytes_match(
     replacement_bytes: &[u8],
     fsync: bool,
 ) -> Result<(), FsError> {
-    unix::replace_regular_file_if_bytes_match(root, relative, expected_bytes, replacement_bytes, fsync)
+    unix::replace_regular_file_if_bytes_match(
+        root,
+        relative,
+        expected_bytes,
+        replacement_bytes,
+        fsync,
+    )
 }
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::write_bytes;
+    use super::{read_regular_file_bounded, replace_regular_file_if_bytes_match, write_bytes};
     use crate::fs::FsError;
 
     #[test]
@@ -710,5 +740,111 @@ mod tests {
 
         assert!(matches!(result, Err(FsError::MutationRefused(_))));
         assert!(!root.join("data.txt").exists());
+    }
+
+    #[test]
+    fn replace_regular_file_success_and_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let file_path = root.join("policy.json");
+        std::fs::write(&file_path, b"original-content").unwrap();
+
+        // Conflict when expected bytes do not match
+        let err = replace_regular_file_if_bytes_match(
+            &root,
+            std::path::Path::new("policy.json"),
+            b"wrong-expected",
+            b"new-content",
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FsError::Conflict));
+        assert_eq!(std::fs::read(&file_path).unwrap(), b"original-content");
+
+        // Success when expected bytes match
+        replace_regular_file_if_bytes_match(
+            &root,
+            std::path::Path::new("policy.json"),
+            b"original-content",
+            b"new-content",
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&file_path).unwrap(), b"new-content");
+
+        // Verify no leftover .dam-hopper-* temp files exist
+        for entry in std::fs::read_dir(&root).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.starts_with(".dam-hopper-"),
+                "found leftover temp file: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn replace_regular_file_rejects_symlink_and_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        // Symlink target
+        let outside_file = outside.join("target.txt");
+        std::fs::write(&outside_file, b"outside-data").unwrap();
+        std::os::unix::fs::symlink(&outside_file, root.join("link.txt")).unwrap();
+
+        let res = replace_regular_file_if_bytes_match(
+            &root,
+            std::path::Path::new("link.txt"),
+            b"outside-data",
+            b"mutated-data",
+            false,
+        );
+        assert!(res.is_err());
+        assert_eq!(std::fs::read(&outside_file).unwrap(), b"outside-data");
+
+        // Directory target
+        let dir_target = root.join("subdir");
+        std::fs::create_dir_all(&dir_target).unwrap();
+        let res_dir = replace_regular_file_if_bytes_match(
+            &root,
+            std::path::Path::new("subdir"),
+            b"",
+            b"data",
+            false,
+        );
+        assert!(matches!(res_dir, Err(FsError::MutationRefused(_))));
+    }
+
+    #[test]
+    fn read_regular_file_bounded_limits_and_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let file = root.join("bounded.txt");
+        std::fs::write(&file, b"1234567890").unwrap();
+
+        // Within bound
+        let content =
+            read_regular_file_bounded(&root, std::path::Path::new("bounded.txt"), 10).unwrap();
+        assert_eq!(content, b"1234567890");
+
+        // Exceeds bound
+        let err =
+            read_regular_file_bounded(&root, std::path::Path::new("bounded.txt"), 9).unwrap_err();
+        assert!(matches!(err, FsError::MutationRefused(_)));
+
+        // Symlink rejection
+        let outside_file = outside.join("sym.txt");
+        std::fs::write(&outside_file, b"symlink-target").unwrap();
+        std::os::unix::fs::symlink(&outside_file, root.join("symlink.txt")).unwrap();
+        let err_sym = read_regular_file_bounded(&root, std::path::Path::new("symlink.txt"), 100);
+        assert!(err_sym.is_err());
     }
 }
