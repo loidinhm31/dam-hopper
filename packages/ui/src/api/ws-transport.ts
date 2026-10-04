@@ -1902,7 +1902,8 @@ export class WsTransport implements Transport {
       }
       if (currentReader) {
         try {
-          void currentReader.cancel();
+          // Aborting fetch can error the reader before cancel() settles.
+          void currentReader.cancel().catch(() => {});
         } catch {
           // ignore
         }

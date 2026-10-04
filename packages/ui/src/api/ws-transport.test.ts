@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError, createApiClient } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
@@ -1811,6 +1812,51 @@ describe("WsTransport host-resource streaming (03-T)", () => {
       expect(fetchSignal?.aborted).toBe(true);
     }
     transport.destroy();
+  });
+
+  it("handles an aborted reader during close and can open a fresh stream", async () => {
+    installMockWebSocket();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const signal = init!.signal!;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(": connected\n\n"));
+              signal.addEventListener(
+                "abort",
+                () => controller.error(signal.reason),
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const transport = new WsTransport("http://localhost:4800");
+    try {
+      const first = await transport.openHostResourceEvents();
+      expect(first.kind).toBe("stream");
+      if (first.kind !== "stream") throw new Error("Expected a stream");
+      await first.reader.read();
+      const pendingRead = first.reader.read().catch((error: unknown) => error);
+      first.close();
+      expect(await pendingRead).toBeInstanceOf(Error);
+      // Let unhandled cancellation rejections reach the test runner.
+      await setImmediate();
+
+      const next = await transport.openHostResourceEvents();
+      expect(next.kind).toBe("stream");
+      if (next.kind !== "stream") throw new Error("Expected a stream");
+      const chunk = await next.reader.read();
+      expect(new TextDecoder().decode(chunk.value)).toBe(": connected\n\n");
+      next.close();
+      await setImmediate();
+    } finally {
+      transport.destroy();
+    }
   });
 
   it("returns kind: unsupported when 200 response body is null or not readable", async () => {

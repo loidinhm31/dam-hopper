@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient as RealQueryClient } from "@tanstack/react-query";
 import {
   __setConnectionSnapshotForTests,
   resetConnections,
@@ -407,6 +408,75 @@ describe("HostResourceStreamCoordinator (03-I)", () => {
     unreg();
     deregisterQc();
     mockTransport.destroy();
+  });
+
+  it("resumes SSE when the connection finishes after BFCache restoration", async () => {
+    const fakeDocument = new EventTarget();
+    Object.defineProperty(fakeDocument, "visibilityState", {
+      value: "visible",
+    });
+    const fakeWindow = new EventTarget();
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("window", fakeWindow);
+    mockQc = new RealQueryClient();
+    const deregisterQc = registerConnectionRegistryQueryClient(mockQc);
+    const owner = { profileId: "p1", generation: 1 };
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  encoder.encode(
+                    `event: host-resources-status\ndata: ${JSON.stringify(MOCK_STATUS_WIRE)}\n\n` +
+                      `event: host-resources\ndata: ${JSON.stringify(MOCK_FRAME_WIRE)}\n\n`,
+                  ),
+                );
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          ),
+      ),
+    );
+    const transport = new WsTransport("http://localhost:4800");
+    __setConnectionSnapshotForTests(
+      "p1",
+      { owner, status: "connected" },
+      transport,
+    );
+    const unreg = registerHostResourceInterest(owner, mockQc, "fleet");
+    await vi.waitFor(() => {
+      expect(getHostResourceSource(owner, mockQc).mode).toBe("LIVE");
+    });
+
+    const pageHide = new Event("pagehide");
+    Object.defineProperty(pageHide, "persisted", { value: true });
+    fakeWindow.dispatchEvent(pageHide);
+    __setConnectionSnapshotForTests("p1", { owner, status: "connecting" });
+    const pageShow = new Event("pageshow");
+    Object.defineProperty(pageShow, "persisted", { value: true });
+    fakeWindow.dispatchEvent(pageShow);
+    expect(getHostResourceSource(owner, mockQc).mode).toBe("STOPPED");
+    mockQc.removeQueries();
+
+    // No consumer remount or second visibility event accompanies WS recovery.
+    __setConnectionSnapshotForTests("p1", { owner, status: "connected" });
+    await vi.waitFor(() => {
+      expect(getHostResourceSource(owner, mockQc).mode).toBe("LIVE");
+    });
+    expect(
+      mockQc.getQueryData(
+        profileQueryKey(owner, "system", "resource-snapshot"),
+      ),
+    ).toEqual(MOCK_FRAME.snapshot);
+
+    unreg();
+    deregisterQc();
+    transport.destroy();
+    mockQc.clear();
   });
 
   it("BFCache pagehide fences an in-flight host-resource frame switch", async () => {

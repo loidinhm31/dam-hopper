@@ -10,6 +10,7 @@ import {
   getConnectionSnapshot,
   getTransport,
   isCurrentConnection,
+  subscribeConnections,
 } from "./connections.js";
 import {
   computeProjectionFreshness,
@@ -173,6 +174,7 @@ export class HostResourceStreamCoordinator {
   private currentCloseHandle: (() => void) | null = null;
 
   private cleanupDomListeners: (() => void) | null = null;
+  private cleanupConnectionListener: (() => void) | null = null;
   // Paired pre-data status state for the active attempt
   private lastStatusForAttempt: StatusFrame | null = null;
   private statusAdjacent = false;
@@ -191,6 +193,10 @@ export class HostResourceStreamCoordinator {
     public readonly queryClient: QueryClient,
   ) {
     this.setupVisibilityListeners();
+    // Restoration can precede WS recovery; do not depend on a consumer remount.
+    this.cleanupConnectionListener = subscribeConnections(() =>
+      this.evaluateLifecycle(),
+    );
   }
   private cachedSnapshot: HostResourceSourceState | null = null;
 
@@ -253,12 +259,20 @@ export class HostResourceStreamCoordinator {
     return document.visibilityState === "visible";
   }
 
+  private isCurrentOwner(): boolean {
+    // A matching generation may still be connecting after page restoration.
+    return (
+      getConnectionSnapshot(this.owner.profileId)?.owner.generation ===
+      this.owner.generation
+    );
+  }
+
   private setupVisibilityListeners(): void {
     if (typeof document === "undefined") return;
 
     const onVisibilityChange = () => {
       if (this.disposed) return;
-      if (!isCurrentConnection(this.owner)) {
+      if (!this.isCurrentOwner()) {
         this.dispose();
         return;
       }
@@ -282,7 +296,7 @@ export class HostResourceStreamCoordinator {
 
     const onPageHide = (event: PageTransitionEvent) => {
       if (this.disposed) return;
-      if (!isCurrentConnection(this.owner)) {
+      if (!this.isCurrentOwner()) {
         this.dispose();
         return;
       }
@@ -304,7 +318,7 @@ export class HostResourceStreamCoordinator {
     };
     const onPageShow = (event: PageTransitionEvent) => {
       if (this.disposed || !event.persisted) return;
-      if (!isCurrentConnection(this.owner)) {
+      if (!this.isCurrentOwner()) {
         this.dispose();
         return;
       }
@@ -327,7 +341,7 @@ export class HostResourceStreamCoordinator {
 
   public evaluateLifecycle(): void {
     if (this.disposed) return;
-    if (!isCurrentConnection(this.owner)) {
+    if (!this.isCurrentOwner()) {
       this.dispose();
       return;
     }
@@ -528,7 +542,8 @@ export class HostResourceStreamCoordinator {
       (typeof transport === "object" &&
         transport !== null &&
         "openHostResourceEvents" in transport &&
-        typeof (transport as Record<string, unknown>).openHostResourceEvents === "function");
+        typeof (transport as Record<string, unknown>).openHostResourceEvents ===
+          "function");
 
     if (!hasCapability) {
       this.restOnlyLatch = true;
@@ -539,8 +554,11 @@ export class HostResourceStreamCoordinator {
     }
 
     const streamingSupported =
-      typeof (transport as Record<string, unknown>).supportsHostResourceStreaming === "function"
-        ? (transport as { supportsHostResourceStreaming: () => boolean }).supportsHostResourceStreaming()
+      typeof (transport as Record<string, unknown>)
+        .supportsHostResourceStreaming === "function"
+        ? (
+            transport as { supportsHostResourceStreaming: () => boolean }
+          ).supportsHostResourceStreaming()
         : true;
 
     if (!streamingSupported) {
@@ -554,16 +572,26 @@ export class HostResourceStreamCoordinator {
     let openResult;
     try {
       openResult = await (
-        transport as { openHostResourceEvents: (s: AbortSignal) => Promise<any> }
+        transport as {
+          openHostResourceEvents: (s: AbortSignal) => Promise<any>;
+        }
       ).openHostResourceEvents(signal);
     } catch (err) {
-      if (signal.aborted || this.disposed || capturedAttempt !== this.streamAttemptFence) {
+      if (
+        signal.aborted ||
+        this.disposed ||
+        capturedAttempt !== this.streamAttemptFence
+      ) {
         return;
       }
       this.handleStreamFailure(capturedAttempt, err);
       return;
     }
-    if (signal.aborted || this.disposed || capturedAttempt !== this.streamAttemptFence) {
+    if (
+      signal.aborted ||
+      this.disposed ||
+      capturedAttempt !== this.streamAttemptFence
+    ) {
       openResult.close();
       return;
     }
@@ -579,7 +607,12 @@ export class HostResourceStreamCoordinator {
 
     if (openResult.kind === "finite") {
       openResult.close();
-      this.handleFiniteResponse(capturedAttempt, openResult.status, openResult.code, openResult.retryAfter);
+      this.handleFiniteResponse(
+        capturedAttempt,
+        openResult.status,
+        openResult.code,
+        openResult.retryAfter,
+      );
       return;
     }
 
@@ -593,7 +626,11 @@ export class HostResourceStreamCoordinator {
         const { done, value } = await reader.read();
         if (done) break;
 
-        if (signal.aborted || this.disposed || capturedAttempt !== this.streamAttemptFence) {
+        if (
+          signal.aborted ||
+          this.disposed ||
+          capturedAttempt !== this.streamAttemptFence
+        ) {
           break;
         }
 
@@ -602,18 +639,33 @@ export class HostResourceStreamCoordinator {
 
         const pieces = parser.push(value);
         for (const piece of pieces) {
-          this.handleParsedPiece(capturedAttempt, piece, transport as unknown as WsTransport);
+          this.handleParsedPiece(
+            capturedAttempt,
+            piece,
+            transport as unknown as WsTransport,
+          );
         }
       }
 
       // Stream closed normally (EOF)
       parser.finish();
-      if (!signal.aborted && !this.disposed && capturedAttempt === this.streamAttemptFence) {
-        this.handleStreamFailure(capturedAttempt, new Error("Unexpected stream EOF"));
+      if (
+        !signal.aborted &&
+        !this.disposed &&
+        capturedAttempt === this.streamAttemptFence
+      ) {
+        this.handleStreamFailure(
+          capturedAttempt,
+          new Error("Unexpected stream EOF"),
+        );
       }
     } catch (err) {
       parser.finish();
-      if (!signal.aborted && !this.disposed && capturedAttempt === this.streamAttemptFence) {
+      if (
+        !signal.aborted &&
+        !this.disposed &&
+        capturedAttempt === this.streamAttemptFence
+      ) {
         this.handleStreamFailure(capturedAttempt, err);
       }
     }
@@ -656,7 +708,11 @@ export class HostResourceStreamCoordinator {
           this.stopActiveStream(true);
           const qcLike = asQueryClientLike(this.queryClient);
           if (qcLike) {
-            const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+            const snapshotKey = profileQueryKey(
+              this.owner,
+              "system",
+              "resource-snapshot",
+            );
             const metricsKey = profileQueryKey(this.owner, "system", "metrics");
             void Promise.all([
               qcLike.cancelQueries({ queryKey: snapshotKey, exact: true }),
@@ -795,7 +851,11 @@ export class HostResourceStreamCoordinator {
       }
 
       // Cancel exact in-flight owner queries before paired writes
-      const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+      const snapshotKey = profileQueryKey(
+        this.owner,
+        "system",
+        "resource-snapshot",
+      );
       const metricsKey = profileQueryKey(this.owner, "system", "metrics");
       const qcLike = asQueryClientLike(this.queryClient);
 
@@ -924,17 +984,17 @@ export class HostResourceStreamCoordinator {
     if (status === 429 && retryAfter) {
       const parsedSeconds = Number.parseFloat(retryAfter);
       if (!Number.isNaN(parsedSeconds) && parsedSeconds > 0) {
-        delayMs = Math.min(MAX_RETRY_AFTER_MS, Math.floor(parsedSeconds * 1000));
+        delayMs = Math.min(
+          MAX_RETRY_AFTER_MS,
+          Math.floor(parsedSeconds * 1000),
+        );
       }
     }
 
     this.scheduleRetry(capturedAttempt, delayMs);
   }
 
-  private handleStreamFailure(
-    capturedAttempt: number,
-    _err?: unknown,
-  ): void {
+  private handleStreamFailure(capturedAttempt: number, _err?: unknown): void {
     void _err;
     if (this.disposed || capturedAttempt !== this.streamAttemptFence) return;
     const wasLive = this.mode === "LIVE";
@@ -946,7 +1006,11 @@ export class HostResourceStreamCoordinator {
     if (wasLive && canUseResourceRest(this.owner, this.queryClient)) {
       const qcLike = asQueryClientLike(this.queryClient);
       if (qcLike) {
-        const snapshotKey = profileQueryKey(this.owner, "system", "resource-snapshot");
+        const snapshotKey = profileQueryKey(
+          this.owner,
+          "system",
+          "resource-snapshot",
+        );
         const metricsKey = profileQueryKey(this.owner, "system", "metrics");
         void qcLike.invalidateQueries({ queryKey: snapshotKey, exact: true });
         if (this.interestCounts.detailMetrics > 0) {
@@ -1008,6 +1072,8 @@ export class HostResourceStreamCoordinator {
     this.stopActiveStream(true);
     this.cleanupDomListeners?.();
     this.cleanupDomListeners = null;
+    this.cleanupConnectionListener?.();
+    this.cleanupConnectionListener = null;
     this.mode = "STOPPED";
     this.listeners.clear();
   }
