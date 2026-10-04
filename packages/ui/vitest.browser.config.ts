@@ -412,8 +412,11 @@ export default defineConfig({
     // finite resource budget. Serial files keep native media readiness checks
     // deterministic when the full suite is run.
     fileParallelism: false,
-    include: ["browser-tests/**/*.browser.{ts,tsx}", "e2e/**/*.e2e.{ts,tsx}"],
-    exclude: ["browser-tests/advisor-routing.browser.tsx"],
+    include: ["browser-tests/**/*.browser.{ts,tsx}"],
+    exclude: [
+      "browser-tests/advisor-routing.browser.tsx",
+      "browser-tests/__screenshots__/**",
+    ],
     browser: {
       enabled: true,
       api: { port: 15173 },
