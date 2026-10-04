@@ -27,6 +27,12 @@ import {
   type ActivityScope,
   type UiHistoryFilters,
 } from './app-state-types.js';
+import type {
+  AdvisorBackend,
+  AdvisorModelsResultDto,
+  PolicyReadCurrentResultDto,
+  PolicyUpdateParamsDto,
+} from './advisor-types.js';
 import { selectHistoryQuery } from './app-state-selectors.js';
 import type { AdvisorDataProvider } from './advisor-data-provider.js';
 import { NativeAdvisorProvider } from './native-advisor-provider.js';
@@ -89,6 +95,9 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
   const providerRevisionRef = useRef<number>(0);
   const mountedRef = useRef<boolean>(false);
   const wasVisibleRef = useRef<boolean>(false);
+  const policyOperationSeqRef = useRef<number>(0);
+  const catalogRequestIdsRef = useRef<Map<AdvisorBackend, string>>(new Map());
+  const saveRequestIdRef = useRef<string | null>(null);
 
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -114,6 +123,10 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
       providerRef.current !== null && providerRef.current !== activeProvider;
     if (providerChanged) {
       providerRevisionRef.current += 1;
+      for (const reqId of catalogRequestIdsRef.current.values()) {
+        activeProvider.cancel(reqId);
+      }
+      catalogRequestIdsRef.current.clear();
     }
     providerRef.current = activeProvider;
 
@@ -265,22 +278,27 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
       }
     }
 
-    // Policy read (independent)
+    // Policy read (independent, sequence-fenced)
+    const policySeq = ++policyOperationSeqRef.current;
     dispatch({ type: 'POLICY_START', contextEpoch: epoch });
     activeProvider
       .readCurrentPolicy(makeRequestId('policy'))
       .then((policy) => {
         if (
+          mountedRef.current &&
           providerRef.current === activeProvider &&
-          stateRef.current.contextEpoch === epoch
+          stateRef.current.contextEpoch === epoch &&
+          policyOperationSeqRef.current === policySeq
         ) {
           dispatch({ type: 'POLICY_COMMIT', policy, contextEpoch: epoch });
         }
       })
       .catch((err: unknown) => {
         if (
+          mountedRef.current &&
           providerRef.current === activeProvider &&
-          stateRef.current.contextEpoch === epoch
+          stateRef.current.contextEpoch === epoch &&
+          policyOperationSeqRef.current === policySeq
         ) {
           dispatch({
             type: 'POLICY_ERROR',
@@ -721,14 +739,146 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
     },
     [activeProvider, makeRequestId],
   );
+  const handleLoadRoutingModels = useCallback(
+    async (backend: AdvisorBackend): Promise<AdvisorModelsResultDto | null> => {
+      if (!mountedRef.current) return null;
+      const epoch = stateRef.current.contextEpoch;
+      const capturedProvider = activeProvider;
+      const reqId = makeRequestId(`models-${backend}`);
+      catalogRequestIdsRef.current.set(backend, reqId);
+
+      try {
+        const res = await capturedProvider.listModels(reqId, backend);
+        if (
+          !mountedRef.current ||
+          providerRef.current !== capturedProvider ||
+          stateRef.current.contextEpoch !== epoch
+        ) {
+          return null;
+        }
+        if (res.backend !== backend) {
+          return null;
+        }
+        return res;
+      } catch (err: unknown) {
+        if (
+          !mountedRef.current ||
+          providerRef.current !== capturedProvider ||
+          stateRef.current.contextEpoch !== epoch
+        ) {
+          return null;
+        }
+        throw err;
+      } finally {
+        if (catalogRequestIdsRef.current.get(backend) === reqId) {
+          catalogRequestIdsRef.current.delete(backend);
+        }
+      }
+    },
+    [activeProvider, makeRequestId],
+  );
+
+  const handleSaveRouting = useCallback(
+    async (params: PolicyUpdateParamsDto): Promise<PolicyReadCurrentResultDto | null> => {
+      if (!mountedRef.current) return null;
+      const epoch = stateRef.current.contextEpoch;
+      const capturedProvider = activeProvider;
+      const saveSeq = ++policyOperationSeqRef.current;
+      const reqId = makeRequestId('save-policy');
+      saveRequestIdRef.current = reqId;
+
+      try {
+        const res = await capturedProvider.updatePolicy(reqId, params);
+        if (
+          !mountedRef.current ||
+          providerRef.current !== capturedProvider ||
+          stateRef.current.contextEpoch !== epoch ||
+          policyOperationSeqRef.current !== saveSeq
+        ) {
+          return null;
+        }
+        dispatch({
+          type: 'POLICY_COMMIT',
+          policy: res,
+          contextEpoch: epoch,
+        });
+        return res;
+      } catch (err: unknown) {
+        if (
+          !mountedRef.current ||
+          providerRef.current !== capturedProvider ||
+          stateRef.current.contextEpoch !== epoch
+        ) {
+          return null;
+        }
+        throw err;
+      } finally {
+        if (saveRequestIdRef.current === reqId) {
+          saveRequestIdRef.current = null;
+        }
+      }
+    },
+    [activeProvider, makeRequestId],
+  );
+
+  const handleCancelRoutingEdit = useCallback(() => {
+    for (const reqId of catalogRequestIdsRef.current.values()) {
+      activeProvider.cancel(reqId);
+    }
+    catalogRequestIdsRef.current.clear();
+  }, [activeProvider]);
+
+  const handleReloadPolicy = useCallback(async (): Promise<PolicyReadCurrentResultDto | null> => {
+    if (!mountedRef.current) return null;
+    const epoch = stateRef.current.contextEpoch;
+    const capturedProvider = activeProvider;
+    const policySeq = ++policyOperationSeqRef.current;
+    const reqId = makeRequestId('policy-reload');
+
+    dispatch({ type: 'POLICY_START', contextEpoch: epoch });
+    try {
+      const policy = await capturedProvider.readCurrentPolicy(reqId);
+      if (
+        mountedRef.current &&
+        providerRef.current === capturedProvider &&
+        stateRef.current.contextEpoch === epoch &&
+        policyOperationSeqRef.current === policySeq
+      ) {
+        dispatch({ type: 'POLICY_COMMIT', policy, contextEpoch: epoch });
+        return policy;
+      }
+      return null;
+    } catch (err: unknown) {
+      if (
+        mountedRef.current &&
+        providerRef.current === capturedProvider &&
+        stateRef.current.contextEpoch === epoch &&
+        policyOperationSeqRef.current === policySeq
+      ) {
+        dispatch({
+          type: 'POLICY_ERROR',
+          error: err instanceof Error ? err.message : String(err),
+          contextEpoch: epoch,
+        });
+      }
+      return null;
+    }
+  }, [activeProvider, makeRequestId]);
 
   // Auto-refresh once on mount if enabled
   useEffect(() => {
-    if (!mountedRef.current && autoRefreshOnMount) {
-      mountedRef.current = true;
+    mountedRef.current = true;
+    if (autoRefreshOnMount) {
       void refreshData();
     }
-  }, [autoRefreshOnMount, refreshData]);
+    return () => {
+      mountedRef.current = false;
+      for (const reqId of catalogRequestIdsRef.current.values()) {
+        activeProvider.cancel(reqId);
+      }
+      catalogRequestIdsRef.current.clear();
+    };
+  }, [autoRefreshOnMount, refreshData, activeProvider]);
 
   return (
     <div className={cn('native-advisor', className)} data-testid="native-advisor-panel">
@@ -794,7 +944,13 @@ export const AdvisorPanel: FC<AdvisorPanelProps> = ({
             />
           )}
           {state.activeView === 'configuration' && (
-            <ConfigurationView state={state} />
+            <ConfigurationView
+              state={state}
+              onLoadRoutingModels={handleLoadRoutingModels}
+              onSaveRouting={handleSaveRouting}
+              onCancelRoutingEdit={handleCancelRoutingEdit}
+              onReloadPolicy={handleReloadPolicy}
+            />
           )}
           {state.activeView === 'evaluations' && (
             <EvaluationsView

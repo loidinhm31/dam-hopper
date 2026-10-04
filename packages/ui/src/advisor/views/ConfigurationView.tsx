@@ -4,17 +4,33 @@
  * Compares active account-wide owner routing policy alongside historical route and build groupings.
  */
 
-import type { FC } from 'react';
-import type { AppState } from '../app-state-types.js';
-import { formatRatioPercent } from '../components/MetricRatio.js';
-import { RouteGroupCard, type RouteGroupData } from '../components/RouteGroupCard.js';
-import { PolicySummaryCard } from '../components/PolicySummaryCard.js';
-
-export interface ConfigurationViewProps {
-  readonly state: AppState;
-}
-
-export const ConfigurationView: FC<ConfigurationViewProps> = ({ state }) => {
+ import type { FC } from 'react';
+ import type { AppState } from '../app-state-types.js';
+import type {
+  AdvisorBackend,
+  AdvisorModelsResultDto,
+  PolicyReadCurrentResultDto,
+  PolicyUpdateParamsDto,
+} from '../advisor-types.js';
+ import { formatRatioPercent } from '../components/MetricRatio.js';
+ import { RouteGroupCard, type RouteGroupData } from '../components/RouteGroupCard.js';
+ import { PolicySummaryCard } from '../components/PolicySummaryCard.js';
+ 
+ export interface ConfigurationViewProps {
+   readonly state: AppState;
+  readonly onLoadRoutingModels?: (backend: AdvisorBackend) => Promise<AdvisorModelsResultDto | null>;
+  readonly onSaveRouting?: (params: PolicyUpdateParamsDto) => Promise<PolicyReadCurrentResultDto | null>;
+  readonly onCancelRoutingEdit?: () => void;
+  readonly onReloadPolicy?: () => Promise<PolicyReadCurrentResultDto | null>;
+ }
+ 
+export const ConfigurationView: FC<ConfigurationViewProps> = ({
+  state,
+  onLoadRoutingModels,
+  onSaveRouting,
+  onCancelRoutingEdit,
+  onReloadPolicy,
+}) => {
   const { historySummary, activityScope } = state;
 
   // Derive route groups from historySummary metrics or routeDistribution
@@ -54,7 +70,13 @@ export const ConfigurationView: FC<ConfigurationViewProps> = ({ state }) => {
       </div>
 
       <div className="config-grid">
-        <PolicySummaryCard state={state} />
+        <PolicySummaryCard
+          state={state}
+          onLoadRoutingModels={onLoadRoutingModels}
+          onSaveRouting={onSaveRouting}
+          onCancelRoutingEdit={onCancelRoutingEdit}
+          onReloadPolicy={onReloadPolicy}
+        />
 
         <div className="config-card routes-section-card">
           <div className="routes-header">

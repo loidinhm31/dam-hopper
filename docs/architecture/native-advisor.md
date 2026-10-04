@@ -106,6 +106,25 @@ History availability is separate from routing capability. When Advisor is enable
 
 `query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy and model-discovery DTOs, fallback catalogs, limits, and persistence alongside the history behavior.
 
+#### Inline routing editor (Phase 04)
+
+`PolicySummaryCard` keeps the current owner policy read-only until **Edit Routing** is selected. In edit mode, the static primary/backup route summary is replaced by two `RouteFieldset`s for the primary and backup targets; the full-policy disclosure remains available. `ConfigurationView` and `AdvisorPanel` pass the catalog, save, cancel, and reload operations to the card.
+
+`policy-routing-validation.ts` contains pure draft normalization and validation. It trims backend, model, and effort values before returning normalized routes and comparing them. The two routes are duplicates only when the normalized backend, model, **and** effort all match; same backend/model with different effort is valid.
+
+| Validation | Rule |
+| --- | --- |
+| Model identifier | Required; at most 256 UTF-8 bytes; after trimming, rejects remaining ASCII C0 and DEL control characters. `omp` and `pi` additionally require a slash with non-empty provider and model parts (`provider/model`). |
+| Effort | Required; at most 64 UTF-8 bytes; after trimming, rejects remaining ASCII C0 and DEL control characters. |
+| Backend effort set | `codex`: `low`, `medium`, `high`, `xhigh`; `claude`: those values plus `max`; `omp` and `pi`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| Catalog compatibility | If a model advertises efforts, a mismatch is an advisory warning; it does not invalidate an effort that is allowed for the backend. |
+
+Model catalogs load lazily for the current primary and backup backends when editing begins, and for a newly selected backend after a backend change. The panel calls `activeProvider.listModels(requestId, backend)`. Each fieldset shows `Discovering…` while loading and a `source: harness` or `source: fallback` badge when a result arrives. The response's optional `issueCode` describes fallback/truncation diagnostics (see [model discovery](../configuration/advisor.md#model-catalog-discovery)); a rejected discovery request shows `Discovery unavailable`, with the error text in the badge tooltip.
+
+An existing model absent from its backend catalog remains in the draft and is editable through the custom-model input. Changing backend also retains the current model identifier as a custom value; when the selected model came from the old backend's catalog, the editor warns that it is being retained as custom for the new backend.
+
+Policy read, save, and reload commits are fenced by `policyOperationSeqRef`, the active provider, and context epoch. Starting a newer save advances the sequence, so a slower earlier policy read cannot overwrite the saved revision. Catalog request IDs are tracked, passed to `cancel()`, and cleared on editor cancellation, panel unmount, and provider replacement; results are also discarded if the panel is unmounted or the captured provider/context epoch is no longer current.
+
 ### Harness model discovery
 
 `POST /api/advisor/models` runs discovery on the server for one of the four supported backend values: `omp`, `codex`, `claude`, or `pi`. The required `backend` string is trimmed; the resulting value must match one of those lowercase names. The request DTO rejects unknown fields. Discovery uses the corresponding local harness executable and a temporary working directory:

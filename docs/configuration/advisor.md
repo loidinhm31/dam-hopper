@@ -109,6 +109,18 @@ The frontend sends account-policy updates through `advisor:policy:update` (`PATC
 
 Routing does not depend on the history directory. If Advisor is enabled but the history source is unavailable, the frontend still exposes policy read/update and model discovery while history and evaluation capabilities remain unavailable. These operations still require the feature enabled and current administrator authorization; this frontend change adds no Advisor API key, environment variable, or server configuration field. Harness discovery failures continue to use the fallback catalog described above.
 
+### Inline routing editor (Phase 04)
+
+When the current account policy is ready and update is available, **Edit Routing** replaces the static route summary with separate primary and backup fieldsets. A successful save closes the editor and reflects the server policy; a revision conflict keeps the editor open and offers **Reload Policy**.
+
+The editor uses the pure `policy-routing-validation.ts` helper: values are trimmed before checking; primary and backup are duplicates only when backend, model, and effort all match. Model IDs are limited to 256 UTF-8 bytes, effort values to 64 bytes, and both reject remaining ASCII C0/DEL control characters after trimming. `omp` and `pi` require non-empty `provider/model` parts; effort choices are backend-specific (`codex`: `low`, `medium`, `high`, `xhigh`; `claude`: those plus `max`; `omp` and `pi`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). A catalog-advertised effort mismatch is a warning when the effort remains valid for its backend. See the [architecture validation contract](../architecture/native-advisor.md#inline-routing-editor-phase-04).
+
+Catalog queries are lazy: the editor calls `activeProvider.listModels` for the current routes on entry and for a backend selected while editing. Each route shows **Discovering…**, then a `source: harness` or `source: fallback` badge. A server fallback carries the optional `issueCode` listed under [model catalog discovery](#model-catalog-discovery); a failed frontend query shows **Discovery unavailable**, with the error in the badge tooltip.
+
+An existing model not present in its catalog stays selected as a custom model and can be edited in the custom identifier field. Switching backend preserves the current identifier as custom; if it came from the previous backend catalog, the editor displays a notice explaining that it was retained for the new backend.
+
+Policy read, save, and reload commits are guarded by `policyOperationSeqRef`, active-provider identity, and context epoch, so a late earlier read cannot replace a newer saved policy. Catalog request IDs are tracked, passed to `cancel()`, and cleared on editor cancellation, panel unmount, and provider replacement; late results are ignored after unmount or a provider/context change.
+
 ## History source and status
 
 Advisor reads the server process's `$HOME/.evcrate/advisor-history` directory. There is no custom-root setting, `/home` scan, directory registration, or path-hash prerequisite. Status returns `enabled`, `available`, and, for an administrator, the detected `path` and optional `sourceError`.
