@@ -1,0 +1,41 @@
+{
+  "run_id": "e2e-run-1791138562239-65af3610",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-04T18:29:22.239Z",
+  "completed_at": "2026-10-04T18:29:28.138Z",
+  "case_name": "privacy-heavy-blur",
+  "route": "/workspace",
+  "git_head": "2dfaca5bd54a2db3fc76aee98b9b66b7d8b0cf0a",
+  "source_fingerprint": "2b472bdb933c204e1448da1988614f236d44616eded85b32378d0afa840f22ce",
+  "seed_digest": "7decb834f6ce24d417e2bfc6cf6a3e71f709718031d0209cbcb49796db43f2e3",
+  "browser": "chromium",
+  "browser_version": "1.61.1",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "unmasked-before",
+      "file_name": "unmasked-before.png",
+      "sha256": "160fecee2956cb34e53cf59948e04c80d209f1d27ed7faff511ce5589ab5e6ca",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "c4c0aba1ab518745881adecc0bc0bb58d5970cdfb57d113892954757745658c4",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

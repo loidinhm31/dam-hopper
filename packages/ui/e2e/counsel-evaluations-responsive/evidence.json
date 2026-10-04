@@ -1,0 +1,33 @@
+{
+  "run_id": "e2e-run-1791138553525-cd4cace9",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-04T18:29:13.525Z",
+  "completed_at": "2026-10-04T18:29:19.305Z",
+  "case_name": "counsel-evaluations-responsive",
+  "route": "/workspace",
+  "git_head": "2dfaca5bd54a2db3fc76aee98b9b66b7d8b0cf0a",
+  "source_fingerprint": "2b472bdb933c204e1448da1988614f236d44616eded85b32378d0afa840f22ce",
+  "seed_digest": "9411de66ae294d81f9a847dfa4c53db13a1a74a525fc75a8521f9bc3ea2cb51b",
+  "browser": "chromium",
+  "browser_version": "1.61.1",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "dock_width": 320,
+  "checkpoints": [
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "0a6efe4d02b7b777506f36b8e40ee6236283f03cbe58703b708dc6ec1982a42e",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

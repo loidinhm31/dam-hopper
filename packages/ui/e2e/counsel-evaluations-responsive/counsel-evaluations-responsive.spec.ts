@@ -193,6 +193,7 @@ test.describe("Counsel Evaluations Responsive Layout Real Application Journey (A
     // 6. Capture complete application viewport at narrow checkpoint (screenshot.png)
     await captureApplicationCheckpoint(page, {
       caseDir: CASE_DIR,
+      dockWidth: 320,
     });
   });
 });

@@ -29,6 +29,7 @@ export interface SeedTreeResult {
   mfaKeyHex: string;
   workspaceName: string;
   projectName: string;
+  seedDigest: string;
   dispose: () => Promise<void>;
 }
 
@@ -46,27 +47,6 @@ const DEFAULT_POLICY = JSON.stringify(
   2,
 );
 
-/**
- * Computes a deterministic SHA-256 fingerprint of the current source tree.
- */
-export function computeSourceFingerprint(): string {
-  try {
-    const head = execSync("git rev-parse HEAD", {
-      cwd: REPO_ROOT,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const status = execSync("git status --porcelain=v2 -z", {
-      cwd: REPO_ROOT,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-
-    return createHash("sha256").update(head).update(":").update(status).digest("hex");
-  } catch {
-    return createHash("sha256").update("static-fallback-source-fingerprint").digest("hex");
-  }
-}
 
 /**
  * Creates an isolated deterministic seed tree on the host in a temporary directory.
@@ -126,6 +106,15 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
   // 6. Root dam-hopper.toml for the container
   const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n`;
   await fs.writeFile(path.join(hostStagingDir, "dam-hopper.toml"), tomlContent);
+  const seedDigest = createHash("sha256")
+    .update(serverToken)
+    .update(":")
+    .update(mfaKeyHex)
+    .update(":")
+    .update(initialPolicyJson)
+    .update(":")
+    .update(tomlContent)
+    .digest("hex");
 
   const dispose = async () => {
     try {
@@ -137,5 +126,5 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
     }
   };
 
-  return { hostStagingDir, serverToken, mfaKeyHex, workspaceName, projectName, dispose };
+  return { hostStagingDir, serverToken, mfaKeyHex, workspaceName, projectName, seedDigest, dispose };
 }

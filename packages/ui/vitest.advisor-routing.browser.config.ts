@@ -5,6 +5,7 @@ import { defineConfig, type Plugin } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { playwright } from "@vitest/browser-playwright";
+import { shouldCaptureE2E } from "./e2e/fixtures/capture-policy.js";
 
 const requestedBrowserChannel = process.env.BROWSER_CHANNEL?.trim();
 const requestedExecutablePath = process.env.BROWSER_EXECUTABLE_PATH?.trim();
@@ -171,6 +172,7 @@ export default defineConfig({
       provider: playwright({ launchOptions: browserLaunchOptions }),
       instances: [{ browser: "chromium" }],
       headless: true,
+      screenshotFailures: shouldCaptureE2E(),
     },
   },
 });

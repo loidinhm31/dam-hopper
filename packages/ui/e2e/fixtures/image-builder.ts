@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeSourceFingerprint } from "./application-data.js";
+import { computeSourceFingerprint } from "./capture-source-fingerprint.js";
 import { getContainerEngine, runEngine } from "./container-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,7 +36,7 @@ export async function isImageUpToDate(fingerprint: string): Promise<boolean> {
  * Ensures the production app and E2E runtime images are built with the current source fingerprint.
  */
 export async function ensureApplicationImagesBuilt(force = false): Promise<string> {
-  const fingerprint = computeSourceFingerprint();
+  const { sourceFingerprint: fingerprint } = computeSourceFingerprint();
 
   if (!force && (await isImageUpToDate(fingerprint))) {
     return APP_IMAGE_NAME;
