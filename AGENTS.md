@@ -16,7 +16,7 @@ Use the repository’s configured ESLint, Prettier, and Rust formatting rules; k
 
 ## Testing Guidelines
 
-Add Rust tests alongside the relevant module or under `server/tests/`; use real temporary filesystems and git repositories rather than mocks. Name tests for observable behavior, for example `test_list_dir`. Add Vitest coverage for shared UI logic and browser regression coverage when behavior depends on Chromium or user interaction.
+Add Rust tests alongside the relevant module or under `server/tests/`; use real temporary filesystems and git repositories rather than mocks. Name tests for observable behavior, for example `test_list_dir`. Add Vitest coverage for shared UI logic and browser regression coverage when behavior depends on Chromium or user interaction. Follow E2E full-screen visual evidence and CI bypass standards in `docs/testing.md`.
 
 ## Commits and Pull Requests
 
