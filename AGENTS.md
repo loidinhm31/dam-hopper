@@ -104,6 +104,21 @@ pnpm --filter @dam-hopper/ui test
 
 # Run UI browser component tests (Chromium / Playwright via Vitest):
 pnpm --filter @dam-hopper/ui test:browser
+
+# Run application E2E user journeys (Playwright against containerized web + server + Mongo):
+pnpm --filter @dam-hopper/ui test:e2e
+
+# Run application E2E with visual evidence capture enabled (local default):
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e
+
+# Run application service lifecycle probes (requires Docker/Podman):
+pnpm --filter @dam-hopper/ui test:e2e:probes
+
+# Typecheck E2E configuration and specs:
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+
+# Run aggregate local test suite (Rust server, JS tests, UI browser, and application E2E):
+./scripts/run-all-tests.sh
 ```
 
 ---
@@ -228,10 +243,17 @@ Browser / Tauri Host (React 19 SPA)
 - **UI Unit Tests**:
   - Vitest in `packages/ui` (`pnpm --filter @dam-hopper/ui test`).
   - Mock external network calls cleanly; use `QueryClientProvider` with generation-fenced fixtures.
-- **Browser Regression Tests**:
+- **Browser Component Tests**:
   - Vitest Browser Mode with Playwright (`pnpm --filter @dam-hopper/ui test:browser`).
-  - Test real browser rendering, backdrop filters, focus traps, and keyboard capture.
-
+  - Test real browser rendering, backdrop filters, focus traps, and keyboard capture on focused components. Component screenshots or isolated harness passes do not certify full application integration.
+- **Application E2E Journeys**:
+  - Dedicated `@playwright/test` runner (`pnpm --filter @dam-hopper/ui test:e2e`).
+  - Runs full user journeys against built SPA and production Rust server in isolated Docker/Podman containers with real MongoDB.
+  - Test specs use `.spec.ts` under `packages/ui/e2e/`.
+- **Visual Evidence & Review Policy**:
+  - Local runs capture full application viewport screenshots colocated in `packages/ui/e2e/<case>/`.
+  - Capture behavior follows `capture-policy.ts`: enabled locally by default; disabled in CI (`CI=true` or `E2E_CAPTURE=0`) where all DOM/CSSOM assertions execute with zero image/video/trace generation.
+  - Human review governance via `review.md` requires mandatory fresh local app captures and explicit human inspection (`ACCEPTED`/`REJECTED`); green CI runs verify assertions only and cannot synthesize or bypass visual review.
 ---
 
 ## 8. Commits, Pull Requests & Security
