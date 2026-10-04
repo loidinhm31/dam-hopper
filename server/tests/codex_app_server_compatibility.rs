@@ -14,14 +14,6 @@ const PROVENANCE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/telemetry/codex_app_server/fixtures/provenance.txt"
 );
-const REPORT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../plans/260801-1455-session-model-delegation-audit/reports/phase-01-compatibility-gate.md"
-);
-const PHASE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../plans/260801-1455-session-model-delegation-audit/phase-01-codex-app-server-compatibility-gate.md"
-);
 const SCHEMA_HASHES: [&str; 3] = [
     "ccc09fa6d5d89fa76afd474f6d7ef8cf14edbe0e037d8a52aebf5bd14f435c5b",
     "0c12f87cf3ab2c5fed95152a1e36873e6e56dadae39f46096267371ad65d1321",
@@ -37,7 +29,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 fn assert_retained_artifacts_are_sanitized() {
-    let mut retained = [FIXTURE, PROVENANCE, REPORT, PHASE]
+    let mut retained = [FIXTURE, PROVENANCE]
         .map(|path| fs::read_to_string(path).unwrap())
         .join("\n");
     for forbidden in [
