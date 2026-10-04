@@ -440,12 +440,12 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(overlay?.classList.contains("cognito-mode-overlay--heavy-blur")).toBe(true);
 
     // Verify Chromium supports backdrop-filter and applies frosted-glass styling
-    expect(CSS.supports("backdrop-filter", "blur(20px) saturate(140%)")).toBe(true);
+    expect(CSS.supports("backdrop-filter", "blur(16px)")).toBe(true);
     let computed = window.getComputedStyle(overlay!);
-    expect(computed.backgroundColor).toBe("rgba(13, 17, 23, 0.52)");
-    expect(computed.backdropFilter).toMatch(/^blur\(20px\)\s+saturate\((?:140%|1\.4)\)$/);
+    expect(computed.backgroundColor).toBe("rgba(148, 163, 184, 0.12)");
+    expect(computed.backdropFilter).toMatch(/^blur\(16px\)\s+saturate\((?:180%|1\.8)\)$/);
     expect(computed.boxShadow).toMatch(
-      /rgba\(255,\s*255,\s*255,\s*0\.05\)\s+0px\s+0px\s+0px\s+1px\s+inset/,
+      /rgba\(255,\s*255,\s*255,\s*0\.1\)\s+0px\s+0px\s+0px\s+1px\s+inset/,
     );
 
     // Dismiss
