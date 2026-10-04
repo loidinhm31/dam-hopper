@@ -15,10 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY server/Cargo.toml server/Cargo.lock ./
 # Pre-build dependency layer for caching
-RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+RUN mkdir -p src/bin \
+    && echo 'fn main() {}' > src/main.rs \
+    && echo 'fn main() {}' > src/bin/dam-hopper.rs \
+    && echo 'fn main() {}' > src/bin/dam-hopper-web.rs \
+    && echo 'fn main() {}' > src/bin/dam-hopper-idle-suspend-helper.rs \
     && cargo build --release --features vendored \
     && rm -rf src
 
+COPY deploy /deploy
 COPY server/src ./src
 COPY server/assets ./assets
 RUN touch src/main.rs && cargo build --release --features vendored
