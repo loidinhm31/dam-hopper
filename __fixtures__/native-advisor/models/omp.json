@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "provider": "openai",
+      "id": "gpt-6.1-sol",
+      "selector": "openai/gpt-6.1-sol",
+      "thinking": ["low", "medium", "high", "xhigh"]
+    },
+    {
+      "provider": "anthropic",
+      "id": "claude-sonnet-5-5",
+      "selector": "anthropic/claude-sonnet-5-5",
+      "thinking": ["low", "medium", "high", "max"]
+    }
+  ]
+}

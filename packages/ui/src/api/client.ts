@@ -16,6 +16,11 @@ import type {
   HistoryDetailParamsDto,
   HistoryDetailResultDto,
   PolicyReadCurrentResultDto,
+  PolicyUpdateParamsDto,
+  AdvisorBackend,
+  AdvisorModelsParamsDto,
+  AdvisorModelOptionDto,
+  AdvisorModelsResultDto,
   EvaluationsListParamsDto,
   EvaluationsListResultDto,
   EvaluationsReadParamsDto,
@@ -35,6 +40,11 @@ export type {
   HistoryDetailParamsDto,
   HistoryDetailResultDto,
   PolicyReadCurrentResultDto,
+  PolicyUpdateParamsDto,
+  AdvisorBackend,
+  AdvisorModelsParamsDto,
+  AdvisorModelOptionDto,
+  AdvisorModelsResultDto,
   EvaluationsListParamsDto,
   EvaluationsListResultDto,
   EvaluationsReadParamsDto,
@@ -3024,6 +3034,24 @@ export function createApiClient(
           body,
           options,
         ),
+      updatePolicy: (
+        body: PolicyUpdateParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<PolicyReadCurrentResultDto>(
+          "advisor:policy:update",
+          body,
+          options,
+        ),
+      listModels: (
+        body: AdvisorModelsParamsDto,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<AdvisorModelsResultDto>(
+          "advisor:models:list",
+          body,
+          options,
+        ),
       evaluationsList: (
         body?: EvaluationsListParamsDto,
         options?: TransportInvokeOptions,
@@ -3560,6 +3588,14 @@ export interface ApiClient {
       body?: unknown,
       options?: TransportInvokeOptions,
     ) => Promise<PolicyReadCurrentResultDto>;
+    updatePolicy: (
+      body: PolicyUpdateParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<PolicyReadCurrentResultDto>;
+    listModels: (
+      body: AdvisorModelsParamsDto,
+      options?: TransportInvokeOptions,
+    ) => Promise<AdvisorModelsResultDto>;
     evaluationsList: (
       body?: EvaluationsListParamsDto,
       options?: TransportInvokeOptions,

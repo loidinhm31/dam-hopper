@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use dam_hopper_server::advisor::AdvisorService;
 use dam_hopper_server::agent_store::AgentStoreService;
 use dam_hopper_server::api::build_router;
-use dam_hopper_server::auth::model::{chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole};
 use dam_hopper_server::auth::AuthService;
+use dam_hopper_server::auth::model::{
+    AuthClaims, AuthSession, UserRecord, UserRole, chrono_to_bson,
+};
 use dam_hopper_server::config::{
     DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, RestartPolicy,
     WorkspaceInfo,
@@ -237,11 +239,12 @@ async fn test_advisor_cookie_session_allowed() {
 
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(status_json["available"], true);
 }
-
 
 #[tokio::test]
 async fn test_advisor_status_and_toggle_when_disabled() {
@@ -259,7 +262,9 @@ async fn test_advisor_status_and_toggle_when_disabled() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(status_json["enabled"], false);
     assert_eq!(status_json["available"], true);
@@ -274,7 +279,9 @@ async fn test_advisor_status_and_toggle_when_disabled() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let disabled_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(disabled_json["error"], "ADVISOR_DISABLED");
 
@@ -288,7 +295,9 @@ async fn test_advisor_status_and_toggle_when_disabled() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let settings_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(settings_json["enabled"], true);
 
@@ -326,7 +335,9 @@ async fn test_advisor_history_lifecycle_against_fixtures() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let refresh_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(refresh_json["state"], "fresh");
     assert_eq!(refresh_json["scan"]["acceptedRecords"], 3);
@@ -347,7 +358,9 @@ async fn test_advisor_history_lifecycle_against_fixtures() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let summary_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(summary_json["metrics"]["totalConsultations"], 3);
     assert_eq!(summary_json["metrics"]["adviceReadyCount"], 2);
@@ -370,7 +383,9 @@ async fn test_advisor_history_lifecycle_against_fixtures() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let page1_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(page1_json["entries"].as_array().unwrap().len(), 2);
     let next_cursor = page1_json["nextCursor"].as_str().unwrap().to_string();
@@ -392,7 +407,9 @@ async fn test_advisor_history_lifecycle_against_fixtures() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let page2_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let page2_entries = page2_json["entries"].as_array().unwrap();
     assert_eq!(page2_entries.len(), 1);
@@ -416,7 +433,9 @@ async fn test_advisor_history_lifecycle_against_fixtures() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let detail_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(detail_json["status"], "ready");
     assert!(detail_json["detailRevision"].is_string());
@@ -468,7 +487,9 @@ async fn test_advisor_symlink_rejection_in_api() {
 
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(status_json["available"], false);
     assert_eq!(
@@ -503,7 +524,9 @@ async fn test_advisor_disable_clears_snapshots() {
         .body(Body::from("{}"))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let refresh_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let snapshot_id = refresh_json["snapshotId"].as_str().unwrap().to_string();
 
@@ -558,7 +581,9 @@ async fn test_advisor_default_app_state_uses_effective_home() {
 
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     // Status responds with valid JSON schema
     assert!(status_json.get("enabled").is_some());
@@ -592,7 +617,9 @@ async fn test_advisor_refresh_and_query_by_project_label() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let refresh_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(refresh_json["scan"]["projectsDiscovered"], 1);
     assert!(refresh_json["scan"]["acceptedRecords"].as_u64().unwrap() > 0);
@@ -614,7 +641,239 @@ async fn test_advisor_refresh_and_query_by_project_label() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let summary_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(summary_json["metrics"]["totalConsultations"].as_u64().unwrap() > 0);
+    assert!(
+        summary_json["metrics"]["totalConsultations"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+}
+
+#[tokio::test]
+async fn test_advisor_routing_endpoints_auth_matrix() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // 1. no_auth mode: both PATCH /policy and POST /models return 403 NoAuthForbidden
+    let (router_no_auth, _state) = create_harness(&temp_dir, true, UserRole::Admin, None).await;
+
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/policy")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"expectedRevision":"none","advisor":{"primary":{"backend":"codex","model":"m1","effort":"high"},"backup":{"backend":"omp","model":"openai/m2","effort":"low"}}}"#))
+        .unwrap();
+    let resp = router_no_auth.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"codex"}"#))
+        .unwrap();
+    let resp = router_no_auth.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 2. unauthenticated: returns 401 Unauthorized
+    let (router_auth, _state) = create_harness(&temp_dir, false, UserRole::Admin, None).await;
+
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/policy")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"expectedRevision":"none","advisor":{"primary":{"backend":"codex","model":"m1","effort":"high"},"backup":{"backend":"omp","model":"openai/m2","effort":"low"}}}"#))
+        .unwrap();
+    let resp = router_auth.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"codex"}"#))
+        .unwrap();
+    let resp = router_auth.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 3. non-admin: returns 403 AdminRoleRequired
+    let (router_user, _state) = create_harness(&temp_dir, false, UserRole::User, None).await;
+    let user_token = generate_auth_token("normal-user", "session-normal");
+
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/policy")
+        .header(header::AUTHORIZATION, format!("Bearer {user_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"expectedRevision":"none","advisor":{"primary":{"backend":"codex","model":"m1","effort":"high"},"backup":{"backend":"omp","model":"openai/m2","effort":"low"}}}"#))
+        .unwrap();
+    let resp = router_user.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {user_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"codex"}"#))
+        .unwrap();
+    let resp = router_user.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 4. cookie session for admin succeeds
+    let home = setup_test_home(&temp_dir);
+    let (router_cookie, _state) =
+        create_harness(&temp_dir, false, UserRole::Admin, Some(home)).await;
+    let admin_token = generate_auth_token("admin-user", "session-admin");
+
+    // Enable advisor first via cookie
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::COOKIE, format!("damhopper-auth={admin_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled":true}"#))
+        .unwrap();
+    let resp = router_cookie.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // POST /api/advisor/models via cookie
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::COOKIE, format!("damhopper-auth={admin_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"codex"}"#))
+        .unwrap();
+    let resp = router_cookie.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_advisor_routing_with_missing_history_directory() {
+    let temp_dir = TempDir::new().unwrap();
+    let home = temp_dir.path().join("home");
+    let dot_evcrate = home.join(".evcrate");
+    std::fs::create_dir_all(&dot_evcrate).unwrap();
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_policy = manifest_dir.join("../__fixtures__/native-advisor/advisor-routing.json");
+    std::fs::copy(&fixture_policy, dot_evcrate.join("advisor-routing.json")).unwrap();
+    // Note: No history directory is created!
+
+    let (router, _state) =
+        create_harness(&temp_dir, false, UserRole::Admin, Some(home.clone())).await;
+    let token = generate_auth_token("admin-user", "session-admin");
+
+    // Enable advisor
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/settings")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled":true}"#))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 1. History refresh responds without crashing, discover projects finds 0 records
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/history/refresh")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{}"#))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let refresh_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(refresh_json["scan"]["acceptedRecords"], 0);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/advisor/status")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status_json["available"], false); // History source unavailable
+    assert_eq!(status_json["enabled"], true); // But admin enabled
+    // 2. Discover models works
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/models")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"backend":"omp"}"#))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let models_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(models_json["backend"], "omp");
+    assert!(!models_json["models"].as_array().unwrap().is_empty());
+
+    // 3. Read current policy (POST /api/advisor/policy/current)
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/advisor/policy/current")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let policy_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(policy_json["status"], "ready");
+    let current_revision = policy_json["revision"].as_str().unwrap().to_string();
+
+    // 4. Update policy works even without history directory
+    let update_body = serde_json::json!({
+        "expectedRevision": current_revision,
+        "advisor": {
+            "primary": {
+                "backend": "codex",
+                "model": "gpt-updated-model",
+                "effort": "high"
+            },
+            "backup": {
+                "backend": "omp",
+                "model": "openai/gpt-backup-model",
+                "effort": "low"
+            }
+        }
+    });
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/advisor/policy")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(update_body.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let updated_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(updated_json["status"], "ready");
+    assert_eq!(
+        updated_json["policy"]["advisor"]["primary"]["model"],
+        "gpt-updated-model"
+    );
 }

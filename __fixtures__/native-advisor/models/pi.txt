@@ -1,0 +1,3 @@
+Provider   Model                 Context   Max Out  Thinking
+openai     gpt-6.1-sol           128k      16k      off, low, medium, high, xhigh
+anthropic  claude-sonnet-5-5     200k      8k       low, medium, high, max

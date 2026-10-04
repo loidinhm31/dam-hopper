@@ -37,6 +37,11 @@ export {
   type ProjectInventoryItemDto,
   type ProjectInventoryDto,
   type PolicyReadCurrentResultDto,
+  type PolicyUpdateParamsDto,
+  type AdvisorBackend,
+  type AdvisorModelsParamsDto,
+  type AdvisorModelOptionDto,
+  type AdvisorModelsResultDto,
   type AdvisorPolicyV2,
   type EvaluationDescriptorDto,
   type EvaluationsListParamsDto,
@@ -113,3 +118,20 @@ export { HistoryDetail, type HistoryDetailProps } from './views/HistoryDetail.js
 export { ConfigurationView, type ConfigurationViewProps } from './views/ConfigurationView.js';
 export { EvaluationsView, type EvaluationsViewProps } from './views/EvaluationsView.js';
 export { EvaluationDetail, type EvaluationDetailProps } from './views/EvaluationDetail.js';
+
+// Routing policy validation exports
+export {
+  ENABLED_BACKENDS,
+  CUSTOM_MODEL_SENTINEL,
+  BACKEND_EFFORTS,
+  DEFAULT_BACKEND_EFFORT,
+  isKnownBackend,
+  isValidEffortForBackend,
+  validateRoute,
+  validateRoutingDraft,
+  isDraftDirty,
+  createDraftFromPolicy,
+  type RouteDraft,
+  type PolicyRoutingDraft,
+  type RoutingValidationResult,
+} from './policy-routing-validation.js';

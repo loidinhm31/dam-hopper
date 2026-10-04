@@ -1,0 +1,1 @@
+{"id":2,"result":{"data":[{"model":"gpt-6.1-sol","displayName":"GPT-6.1 Sol","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}],"defaultReasoningEffort":"medium"},{"model":"hidden-model","displayName":"Hidden","isInternal":true}],"nextCursor":null}}

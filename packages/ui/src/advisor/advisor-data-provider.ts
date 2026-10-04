@@ -11,6 +11,9 @@ import type {
   HistoryPageResultDto,
   HistoryDetailResultDto,
   PolicyReadCurrentResultDto,
+  PolicyUpdateParamsDto,
+  AdvisorBackend,
+  AdvisorModelsResultDto,
   EvaluationsListResultDto,
   EvaluationsReadResultDto,
   EvaluationsCompareResultDto,
@@ -64,6 +67,14 @@ export interface AdvisorDataProvider {
     recordRef: string,
   ): Promise<HistoryDetailResultDto>;
   readCurrentPolicy(requestId: string): Promise<PolicyReadCurrentResultDto>;
+  updatePolicy(
+    requestId: string,
+    params: PolicyUpdateParamsDto,
+  ): Promise<PolicyReadCurrentResultDto>;
+  listModels(
+    requestId: string,
+    backend: AdvisorBackend,
+  ): Promise<AdvisorModelsResultDto>;
   listEvaluations(
     requestId: string,
     cursor: string | null,

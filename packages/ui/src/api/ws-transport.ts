@@ -1531,6 +1531,18 @@ function channelToEndpoint(
         url: "/api/advisor/policy/current",
         body: data ?? {},
       };
+    case "advisor:policy:update":
+      return {
+        method: "PATCH",
+        url: "/api/advisor/policy",
+        body: data,
+      };
+    case "advisor:models:list":
+      return {
+        method: "POST",
+        url: "/api/advisor/models",
+        body: data,
+      };
     case "advisor:evaluations:list":
       return {
         method: "POST",

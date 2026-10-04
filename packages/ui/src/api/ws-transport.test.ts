@@ -1956,3 +1956,175 @@ describe("WsTransport host-resource streaming (03-T)", () => {
     transport.destroy();
   });
 });
+
+describe("WsTransport Advisor endpoints (Phase 03)", () => {
+  it("maps advisor:policy:update to PATCH /api/advisor/policy with payload, auth, and signal", async () => {
+    installMockWebSocket();
+    const updatePayload = {
+      expectedRevision: "a".repeat(64),
+      advisor: {
+        primary: { backend: "omp", model: "claude-3-7-sonnet", effort: "high" },
+        backup: { backend: "codex", model: "gpt-5.6", effort: "medium" },
+      },
+    };
+
+    const responsePayload = {
+      status: "ready",
+      scope: "account",
+      temporal: "current",
+      observedAt: 1000,
+      revision: "b".repeat(64),
+      policy: {
+        version: 2,
+        advisor: updatePayload.advisor,
+        wait: { mode: "until_terminal", warnAfterMs: 3000, warnEveryMs: 5000 },
+        history: { retentionDays: 30, maxBytes: 1048576 },
+      },
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responsePayload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      authToken: "test-token-123",
+    });
+    const controller = new AbortController();
+
+    const result = await transport.invoke(
+      "advisor:policy:update",
+      updatePayload,
+      { signal: controller.signal },
+    );
+
+    expect(result).toEqual(responsePayload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:4800/api/advisor/policy");
+    expect(init).toMatchObject({
+      method: "PATCH",
+      headers: expect.objectContaining({
+        Authorization: "Bearer test-token-123",
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(updatePayload),
+      signal: controller.signal,
+    });
+    transport.destroy();
+  });
+
+  it("maps advisor:models:list to POST /api/advisor/models with payload and signal", async () => {
+    installMockWebSocket();
+    const modelsParams = { backend: "omp" };
+    const responsePayload = {
+      backend: "omp",
+      source: "harness",
+      models: [
+        { id: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet", efforts: ["low", "medium", "high"] },
+      ],
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      observedAt: 1000,
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responsePayload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      authToken: "test-token-123",
+    });
+    const controller = new AbortController();
+
+    const result = await transport.invoke(
+      "advisor:models:list",
+      modelsParams,
+      { signal: controller.signal },
+    );
+
+    expect(result).toEqual(responsePayload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:4800/api/advisor/models");
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({
+        Authorization: "Bearer test-token-123",
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(modelsParams),
+      signal: controller.signal,
+    });
+    transport.destroy();
+  });
+
+  it("throws ApiRequestError with status and server error code on 409 conflict and 400 validation", async () => {
+    installMockWebSocket();
+    const conflictResponse = {
+      error: "Policy revision does not match expected revision",
+      code: "POLICY_REVISION_CONFLICT",
+    };
+
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify(conflictResponse), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("http://localhost:4800");
+
+    await expect(
+      transport.invoke("advisor:policy:update", {
+        expectedRevision: "a".repeat(64),
+        advisor: {
+          primary: { backend: "omp", model: "m1", effort: "low" },
+          backup: { backend: "codex", model: "m2", effort: "low" },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiRequestError",
+      status: 409,
+      code: "POLICY_REVISION_CONFLICT",
+    });
+
+    // 400 validation error
+    const validationResponse = {
+      error: "Primary and backup routes cannot be identical",
+      code: "ROUTE_BACKUP_IDENTICAL",
+    };
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(validationResponse), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(
+      transport.invoke("advisor:policy:update", {
+        expectedRevision: "a".repeat(64),
+        advisor: {
+          primary: { backend: "omp", model: "m1", effort: "low" },
+          backup: { backend: "omp", model: "m1", effort: "low" },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiRequestError",
+      status: 400,
+      code: "ROUTE_BACKUP_IDENTICAL",
+    });
+
+    transport.destroy();
+  });
+});
