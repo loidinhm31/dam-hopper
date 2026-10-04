@@ -611,6 +611,42 @@ impl ProductionHarnessCommandRunner {
 
         Ok((buffer, truncated))
     }
+
+    async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
+        reader: &mut R,
+        total_bytes: &mut usize,
+        max_line_bytes: usize,
+        max_total_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, HarnessRunError> {
+        let mut line = Vec::new();
+
+        loop {
+            let available = reader
+                .fill_buf()
+                .await
+                .map_err(|e| HarnessRunError::Execution(format!("stdout read failed: {e}")))?;
+            if available.is_empty() {
+                return if line.is_empty() { Ok(None) } else { Ok(Some(line)) };
+            }
+
+            let newline = available.iter().position(|b| *b == b'\n');
+            let take = newline.map(|idx| idx + 1).unwrap_or(available.len());
+
+            if line.len().saturating_add(take) > max_line_bytes
+                || total_bytes.saturating_add(take) > max_total_bytes
+            {
+                return Err(HarnessRunError::OutputLimit);
+            }
+
+            line.extend_from_slice(&available[..take]);
+            *total_bytes += take;
+            reader.consume(take);
+
+            if newline.is_some() {
+                return Ok(Some(line));
+            }
+        }
+    }
 }
 
 impl HarnessCommandRunner for ProductionHarnessCommandRunner {
@@ -770,17 +806,21 @@ impl HarnessCommandRunner for ProductionHarnessCommandRunner {
                             HarnessRunError::Execution(format!("flush init failed: {e}"))
                         })?;
 
-                        // Read response to initialize
-                        let mut line = String::new();
+                        // Read response to initialize with per-line and cumulative bounds.
+                        let mut total_bytes = 0usize;
                         loop {
-                            line.clear();
-                            let n = reader.read_line(&mut line).await.map_err(|e| {
-                                HarnessRunError::Execution(format!("read line failed: {e}"))
+                            let line = Self::read_bounded_line(
+                                &mut reader,
+                                &mut total_bytes,
+                                MAX_LINE_BYTES,
+                                MAX_DISCOVERY_STDOUT_BYTES,
+                            )
+                            .await?
+                            .ok_or_else(|| {
+                                HarnessRunError::Execution("unexpected EOF on codex init".into())
                             })?;
-                            if n == 0 {
-                                return Err(HarnessRunError::Execution("unexpected EOF on codex init".into()));
-                            }
-                            if line.contains("\"id\":1") || line.contains("\"id\": 1") {
+                            let text = String::from_utf8_lossy(&line);
+                            if text.contains("\"id\":1") || text.contains("\"id\": 1") {
                                 break;
                             }
                         }
@@ -800,17 +840,21 @@ impl HarnessCommandRunner for ProductionHarnessCommandRunner {
                             HarnessRunError::Execution(format!("flush list failed: {e}"))
                         })?;
 
-                        // 3. Read response to model/list
+                        // 3. Read response to model/list under the same output budget.
                         let result_line = loop {
-                            line.clear();
-                            let n = reader.read_line(&mut line).await.map_err(|e| {
-                                HarnessRunError::Execution(format!("read line failed: {e}"))
+                            let line = Self::read_bounded_line(
+                                &mut reader,
+                                &mut total_bytes,
+                                MAX_LINE_BYTES,
+                                MAX_DISCOVERY_STDOUT_BYTES,
+                            )
+                            .await?
+                            .ok_or_else(|| {
+                                HarnessRunError::Execution("unexpected EOF on codex list".into())
                             })?;
-                            if n == 0 {
-                                return Err(HarnessRunError::Execution("unexpected EOF on codex list".into()));
-                            }
-                            if line.contains("\"id\":2") || line.contains("\"id\": 2") {
-                                break line.clone();
+                            let text = String::from_utf8_lossy(&line);
+                            if text.contains("\"id\":2") || text.contains("\"id\": 2") {
+                                break line;
                             }
                         };
 
@@ -818,7 +862,7 @@ impl HarnessCommandRunner for ProductionHarnessCommandRunner {
                         let _ = child.kill().await;
 
                         Ok(CommandOutput {
-                            stdout: result_line.into_bytes(),
+                            stdout: result_line,
                             truncated: false,
                         })
                     }
@@ -885,18 +929,22 @@ impl HarnessCommandRunner for ProductionHarnessCommandRunner {
                             HarnessRunError::Execution(format!("flush init failed: {e}"))
                         })?;
 
-                        let mut line = String::new();
-                        let mut result_line = String::new();
+                        let mut total_bytes = 0usize;
+                        let mut result_line = None;
                         loop {
-                            line.clear();
-                            let n = reader.read_line(&mut line).await.map_err(|e| {
-                                HarnessRunError::Execution(format!("read line failed: {e}"))
-                            })?;
-                            if n == 0 {
+                            let Some(line) = Self::read_bounded_line(
+                                &mut reader,
+                                &mut total_bytes,
+                                MAX_LINE_BYTES,
+                                MAX_DISCOVERY_STDOUT_BYTES,
+                            )
+                            .await?
+                            else {
                                 break;
-                            }
-                            if line.contains("advisor-models-init") && line.contains("control_response") {
-                                result_line = line.clone();
+                            };
+                            let text = String::from_utf8_lossy(&line);
+                            if text.contains("advisor-models-init") && text.contains("control_response") {
+                                result_line = Some(line);
                                 break;
                             }
                         }
@@ -904,12 +952,12 @@ impl HarnessCommandRunner for ProductionHarnessCommandRunner {
                         drop(stdin);
                         let _ = child.kill().await;
 
-                        if result_line.is_empty() {
-                            return Err(HarnessRunError::Execution("claude init response not found".into()));
-                        }
+                        let result_line = result_line.ok_or_else(|| {
+                            HarnessRunError::Execution("claude init response not found".into())
+                        })?;
 
                         Ok(CommandOutput {
-                            stdout: result_line.into_bytes(),
+                            stdout: result_line,
                             truncated: false,
                         })
                     }
@@ -1122,6 +1170,50 @@ mod tests {
                 assert!(!m.efforts.is_empty());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_read_bounded_line_rejects_oversized_line() {
+        let input = b"123456789\n";
+        let mut reader = BufReader::new(&input[..]);
+        let mut total = 0usize;
+        let err = ProductionHarnessCommandRunner::read_bounded_line(
+            &mut reader,
+            &mut total,
+            8,
+            64,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HarnessRunError::OutputLimit));
+    }
+
+    #[tokio::test]
+    async fn test_read_bounded_line_enforces_cumulative_budget() {
+        let input = b"1234\n5678\n";
+        let mut reader = BufReader::new(&input[..]);
+        let mut total = 0usize;
+
+        let first = ProductionHarnessCommandRunner::read_bounded_line(
+            &mut reader,
+            &mut total,
+            8,
+            8,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(first, b"1234\n");
+
+        let err = ProductionHarnessCommandRunner::read_bounded_line(
+            &mut reader,
+            &mut total,
+            8,
+            8,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HarnessRunError::OutputLimit));
     }
 
     #[test]
