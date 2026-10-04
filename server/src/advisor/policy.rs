@@ -178,21 +178,31 @@ pub fn validate_policy_value(
         |v: Option<&serde_json::Value>| -> Result<PolicyRouteTargetDto, (String, String)> {
             let obj =
                 v.ok_or_else(|| ("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()))?;
-            let backend = obj.get("backend").and_then(|s| s.as_str()).unwrap_or("");
-            let model = obj.get("model").and_then(|s| s.as_str()).unwrap_or("");
-            let effort = obj.get("effort").and_then(|s| s.as_str()).unwrap_or("");
+            let route = PolicyRouteTargetDto {
+                backend: obj
+                    .get("backend")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                model: obj
+                    .get("model")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                effort: obj
+                    .get("effort")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            };
 
-            if backend.is_empty() || model.is_empty() || effort.is_empty() {
-                return Err(("invalid".to_string(), "ROUTE_SCHEMA_INVALID".to_string()));
-            }
-            if !ENABLED_BACKENDS.contains(&backend) {
-                return Err(("unsupported".to_string(), "ROUTE_ENTRY_INVALID".to_string()));
-            }
+            let (backend, model, effort) = validate_route_target(&route)
+                .map_err(|(status, code)| (status.to_string(), code.to_string()))?;
 
             Ok(PolicyRouteTargetDto {
-                backend: backend.to_string(),
-                model: model.to_string(),
-                effort: effort.to_string(),
+                backend,
+                model,
+                effort,
             })
         };
 
@@ -285,7 +295,46 @@ pub fn read_current_policy(home_override: Option<&Path>) -> PolicyReadCurrentRes
         },
     };
 
-    let candidate = home_path.join(".evcrate").join("advisor-routing.json");
+    let evcrate_dir = home_path.join(".evcrate");
+    let evcrate_meta = match std::fs::symlink_metadata(&evcrate_dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return PolicyReadCurrentResultDto {
+                status: "not_configured".to_string(),
+                scope: "account".to_string(),
+                temporal: "current".to_string(),
+                observed_at: now,
+                revision: "missing".to_string(),
+                policy: None,
+                issue_code: Some("POLICY_FILE_MISSING".to_string()),
+            };
+        }
+        Err(_) => {
+            return PolicyReadCurrentResultDto {
+                status: "invalid".to_string(),
+                scope: "account".to_string(),
+                temporal: "current".to_string(),
+                observed_at: now,
+                revision: "unreadable".to_string(),
+                policy: None,
+                issue_code: Some("POLICY_FILE_UNSAFE".to_string()),
+            };
+        }
+    };
+
+    if evcrate_meta.file_type().is_symlink() || !evcrate_meta.is_dir() {
+        return PolicyReadCurrentResultDto {
+            status: "invalid".to_string(),
+            scope: "account".to_string(),
+            temporal: "current".to_string(),
+            observed_at: now,
+            revision: "unreadable".to_string(),
+            policy: None,
+            issue_code: Some("POLICY_FILE_UNSAFE".to_string()),
+        };
+    }
+
+    let candidate = evcrate_dir.join("advisor-routing.json");
     let meta = match std::fs::symlink_metadata(&candidate) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -666,6 +715,47 @@ mod tests {
         let res = read_current_policy(Some(tmp.path()));
         assert_eq!(res.status, "invalid");
         assert_eq!(res.issue_code, Some("ROUTE_CREDENTIAL_FIELD".to_string()));
+    }
+
+    #[test]
+    fn test_policy_existing_route_uses_update_validation_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_evcrate = tmp.path().join(".evcrate");
+        std::fs::create_dir_all(&dot_evcrate).unwrap();
+        let invalid = r#"{
+  "version": 2,
+  "advisor": {
+    "primary": { "backend": "codex", "model": "gpt", "effort": "max" },
+    "backup": { "backend": "omp", "model": "missing-provider-prefix", "effort": "low" }
+  },
+  "wait": { "mode": "until_terminal", "warn_after_ms": 10000, "warn_every_ms": 5000 },
+  "history": { "retention_days": 30, "max_bytes": 10485760 }
+}"#;
+        std::fs::write(dot_evcrate.join("advisor-routing.json"), invalid).unwrap();
+
+        let res = read_current_policy(Some(tmp.path()));
+        assert_eq!(res.status, "invalid");
+        assert_eq!(res.issue_code, Some("ROUTE_ENTRY_INVALID".to_string()));
+        assert!(res.policy.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_policy_read_rejects_symlinked_evcrate_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::copy(
+            fixture_root().join("advisor-routing.json"),
+            outside.join("advisor-routing.json"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, tmp.path().join(".evcrate")).unwrap();
+
+        let res = read_current_policy(Some(tmp.path()));
+        assert_eq!(res.status, "invalid");
+        assert_eq!(res.issue_code, Some("POLICY_FILE_UNSAFE".to_string()));
+        assert!(res.policy.is_none());
     }
 
     #[test]
