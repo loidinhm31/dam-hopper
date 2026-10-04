@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeSourceFingerprint } from "./capture-source-fingerprint.js";
-import { getContainerEngine, runEngine } from "./container-client.js";
+import { computeSourceFingerprint } from "./capture-source-fingerprint.ts";
+import { getContainerEngine, runEngine } from "./container-client.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
