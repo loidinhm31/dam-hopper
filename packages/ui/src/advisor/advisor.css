@@ -201,14 +201,56 @@
   min-height: 28px;
 }
 
+.form-control,
 .form-select {
   background-color: var(--bg-surface);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 6px 12px;
+  font-family: inherit;
   font-size: 13px;
+  line-height: 1.4;
   min-height: 36px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: var(--bg-surface);
+}
+
+.form-control[aria-invalid="true"],
+.form-select[aria-invalid="true"] {
+  border-color: var(--color-danger, #ef4444);
+}
+
+select.form-control,
+select.form-select {
+  cursor: pointer;
+}
+
+select.form-control option,
+select.form-select option {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+select.form-control optgroup,
+select.form-select optgroup {
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
 }
 
 /* Source Controls */
@@ -762,6 +804,7 @@ tr.row-selected {
 
 .card-field {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: baseline;
   min-width: 0;
@@ -1296,7 +1339,7 @@ tr.row-selected {
   gap: 12px;
 }
 
-@media (min-width: 640px) {
+@container config-view (min-width: 640px) {
   .route-fieldsets-container {
     grid-template-columns: 1fr 1fr;
   }
@@ -1606,7 +1649,7 @@ tr.row-selected {
   min-width: 0;
 }
 
-@media (min-width: 600px) {
+@container history-view (min-width: 640px) {
   .evaluations-header {
     flex-direction: row;
     justify-content: space-between;
@@ -1641,7 +1684,25 @@ tr.row-selected {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  min-width: 0;
+}
+
+@container history-view (max-width: 639px) {
+  .evaluations-controls {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .compare-action-group {
+    width: 100%;
+  }
+
+  .compare-action-group .btn,
+  .evaluations-controls > .btn {
+    width: 100%;
+    text-align: center;
+  }
 }
 
 .compare-action-group {
@@ -1666,9 +1727,11 @@ tr.row-selected {
 
 .descriptors-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .descriptors-cards-list {
@@ -1678,7 +1741,7 @@ tr.row-selected {
   min-width: 0;
 }
 
-@media (min-width: 600px) {
+@container history-view (min-width: 600px) {
   .descriptors-cards-list {
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   }
@@ -1702,10 +1765,17 @@ tr.row-selected {
 
 .descriptor-card-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+@container history-view (max-width: 380px) {
+  .descriptor-card-header .btn {
+    width: 100%;
+  }
 }
 
 .descriptor-ref-group {
@@ -1714,6 +1784,7 @@ tr.row-selected {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .descriptor-ref {
@@ -1747,7 +1818,7 @@ tr.row-selected {
   min-width: 0;
 }
 
-@media (min-width: 580px) {
+@container history-view (min-width: 580px) {
   .eval-groups-grid {
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   }
