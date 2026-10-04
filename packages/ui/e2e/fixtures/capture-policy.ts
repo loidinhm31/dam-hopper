@@ -9,8 +9,10 @@
  *     - If CI is set and not "0" and not "false", disabled by default in CI.
  *     - Otherwise, enabled by default for local runs.
  */
-export function shouldCaptureE2E(): boolean {
-  const e2eCapture = process.env.E2E_CAPTURE?.trim();
+export function shouldCaptureE2E(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const e2eCapture = env.E2E_CAPTURE?.trim();
   if (e2eCapture !== undefined && e2eCapture !== "") {
     if (e2eCapture === "1" || e2eCapture.toLowerCase() === "true") {
       return true;
@@ -23,7 +25,7 @@ export function shouldCaptureE2E(): boolean {
     );
   }
 
-  const ci = process.env.CI?.trim();
+  const ci = env.CI?.trim();
   if (
     ci !== undefined &&
     ci !== "" &&

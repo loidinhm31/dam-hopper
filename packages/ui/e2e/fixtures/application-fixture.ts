@@ -6,6 +6,10 @@ import {
   type ApplicationServicesConfig,
 } from "./application-services.js";
 import { createBrowserStorageState } from "./application-data.js";
+import {
+  initEvidenceSession,
+  finalizeEvidenceSession,
+} from "./capture-evidence.js";
 
 export interface ApplicationFixtureOptions {
   servicesConfig?: ApplicationServicesConfig;
@@ -24,12 +28,26 @@ export interface ApplicationFixtures {
 export const test = base.extend<ApplicationFixtures & ApplicationFixtureOptions>({
   servicesConfig: [undefined, { option: true }],
 
-  appServices: async ({ servicesConfig }, use) => {
+  appServices: async ({ servicesConfig }, use, testInfo) => {
     const services = await startApplicationServices(servicesConfig);
+    initEvidenceSession({
+      seedDigest: services.seedDigest,
+    });
     try {
       await use(services);
     } finally {
-      await services.dispose();
+      let disposeErr: unknown = null;
+      try {
+        await services.dispose();
+      } catch (err) {
+        disposeErr = err;
+        throw err;
+      } finally {
+        await finalizeEvidenceSession({
+          testPassed: testInfo.status === "passed" && !disposeErr,
+          cleanupPassed: !disposeErr,
+        });
+      }
     }
   },
 

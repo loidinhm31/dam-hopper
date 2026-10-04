@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
+import { shouldCaptureE2E } from "./e2e/fixtures/capture-policy.js";
 
 const videoFixture = readFileSync(
   fileURLToPath(
@@ -423,6 +424,7 @@ export default defineConfig({
       provider: playwright({ launchOptions: browserLaunchOptions }),
       instances: [{ browser: "chromium" }],
       headless: true,
+      screenshotFailures: shouldCaptureE2E(),
     },
   },
 });

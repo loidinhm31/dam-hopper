@@ -30,6 +30,7 @@ export interface ApplicationServices {
   readonly sessionId: string;
   readonly databaseName: string;
   readonly serverToken: string;
+  readonly seedDigest: string;
   readContainerFile(filePath: string): Promise<string>;
   readPolicyFile(): Promise<unknown>;
   fetchApi(endpoint: string, init?: RequestInit): Promise<Response>;
@@ -199,6 +200,7 @@ export async function startApplicationServices(
       sessionId: seedOutput.sessionId,
       databaseName,
       serverToken: seedTree.serverToken,
+      seedDigest: seedTree.seedDigest,
       readContainerFile(filePath: string): Promise<string> {
         return execInContainer(appContainerId, ["cat", filePath]);
       },
