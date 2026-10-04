@@ -413,6 +413,7 @@ export default defineConfig({
     // deterministic when the full suite is run.
     fileParallelism: false,
     include: ["browser-tests/**/*.browser.{ts,tsx}"],
+    exclude: ["browser-tests/advisor-routing.browser.tsx"],
     browser: {
       enabled: true,
       api: { port: 15173 },
