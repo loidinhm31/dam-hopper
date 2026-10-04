@@ -295,6 +295,44 @@ pub fn read_current_policy(home_override: Option<&Path>) -> PolicyReadCurrentRes
         },
     };
 
+    if !home_path.is_absolute() {
+        return PolicyReadCurrentResultDto {
+            status: "invalid".to_string(),
+            scope: "account".to_string(),
+            temporal: "current".to_string(),
+            observed_at: now,
+            revision: "unreadable".to_string(),
+            policy: None,
+            issue_code: Some("POLICY_FILE_UNSAFE".to_string()),
+        };
+    }
+
+    let home_meta = match std::fs::symlink_metadata(&home_path) {
+        Ok(meta) => meta,
+        Err(_) => {
+            return PolicyReadCurrentResultDto {
+                status: "invalid".to_string(),
+                scope: "account".to_string(),
+                temporal: "current".to_string(),
+                observed_at: now,
+                revision: "unreadable".to_string(),
+                policy: None,
+                issue_code: Some("POLICY_FILE_UNSAFE".to_string()),
+            };
+        }
+    };
+    if home_meta.file_type().is_symlink() || !home_meta.is_dir() {
+        return PolicyReadCurrentResultDto {
+            status: "invalid".to_string(),
+            scope: "account".to_string(),
+            temporal: "current".to_string(),
+            observed_at: now,
+            revision: "unreadable".to_string(),
+            policy: None,
+            issue_code: Some("POLICY_FILE_UNSAFE".to_string()),
+        };
+    }
+
     let evcrate_dir = home_path.join(".evcrate");
     let evcrate_meta = match std::fs::symlink_metadata(&evcrate_dir) {
         Ok(meta) => meta,
