@@ -27,11 +27,17 @@ const launchOptions = requestedBrowserChannel
   : systemChromiumPath
     ? { executablePath: systemChromiumPath }
     : {};
+const isProbesRun = process.argv.some(
+  (arg) =>
+    arg.includes("fixtures/application-services") ||
+    arg.includes("application-services.spec"),
+);
 
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
+  testIgnore: isProbesRun ? [] : ["**/fixtures/**"],
   workers: 1,
   retries: 0,
   forbidOnly: Boolean(process.env.CI),
@@ -42,7 +48,7 @@ export default defineConfig({
   outputDir: "./test-results",
   use: {
     ...devices["Desktop Chrome"],
-    viewport: { width: 1280, height: 800 },
+    viewport: { width: 1440, height: 900 },
     locale: "en-US",
     timezoneId: "UTC",
     launchOptions,
@@ -55,7 +61,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        viewport: { width: 1280, height: 800 },
+        viewport: { width: 1440, height: 900 },
         launchOptions,
       },
     },

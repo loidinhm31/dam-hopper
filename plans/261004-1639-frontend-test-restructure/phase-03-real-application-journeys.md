@@ -5,7 +5,7 @@
 - [Acceptance matrix](./acceptance-checks.md), [local evidence](./phase-04-local-evidence-and-human-review.md).
 
 ## Overview
-- Date: 2026-10-04. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-05. Priority: P2. Implementation: delivered; final phase closeout pending parent review. Review: 9.2/10; no critical or must-fix findings.
 - Replace three component harnesses with actual web navigation/control/persistence journeys. Preserve unique low-level browser checks in component layer, not a synthetic shell.
 
 ## Key Insights
@@ -65,10 +65,29 @@
 7. Execute each real case independently, then all cases on fresh data. Prove measured panel width, actual persistence and input isolation; adjust selectors/fixture defects, not target behavior.
 
 ## Todo list
-- [ ] Actual application privacy journey + input isolation/restoration.
-- [ ] Actual Advisor routing journey + independent persisted readback.
-- [ ] Actual Evaluations journey + narrow docked-panel bounds/inspection/comparison.
-- [ ] Remove obsolete harnesses; preserve only unique useful component checks.
+- [x] Actual application privacy journey + input isolation/restoration.
+- [x] Actual Advisor routing journey + independent persisted readback.
+- [x] Actual Evaluations journey + narrow docked-panel bounds/inspection/comparison.
+- [x] Remove obsolete harnesses; preserve only unique useful component checks.
+
+## Implementation and validation (2026-10-05)
+- **Review:** 9.2/10; zero critical findings and zero Advisor must-fix items. See [Phase 03 review](../reports/code-review-261005-0005-phase-03-application-journeys.md).
+- **Journey outcomes:** A04 privacy 1/1 passed (masked viewport, inert underlying content, blocked coordinate/keyboard/navigation input, restored interaction, inactive reload); A05 routing 1/1 passed (distinct primary/backup values, changed revision, independent API and disk readback, preserved wait/history fields, reload); A06 evaluations 1/1 passed (two seeded descriptors, inspect/compare, narrow dock width and horizontal-bound checks).
+- **Validation runs:**
+
+  | Command | Result |
+  |---|---|
+  | `pnpm --filter @dam-hopper/ui test:e2e` | Pass: 3/3 application journeys, 0 failed (27.3 s). |
+  | `pnpm --filter @dam-hopper/ui test:e2e:probes` | Pass: 7/7 fixture probes, 0 failed (32.0 s). |
+  | `pnpm --filter @dam-hopper/ui test:e2e:typecheck` | Pass: 0 TypeScript errors (1.11 s). |
+  | `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.advisor-routing.browser.config.ts` | Pass: 5/5 specialized Advisor browser tests, 0 failed (2.05 s). |
+  | `pnpm --filter @dam-hopper/ui test` | Pass: 2,287/2,287 tests across 300 files, 0 failed (17.40 s). |
+
+- **Aggregate:** 2,302 tests passed, 0 failed; typecheck is not included in the test count. Discovery found exactly 3 application specs and 0 legacy `.e2e.tsx` harnesses; the 7 fixture probes remain a separate run.
+- **Layout metric:** A06 asserts the rendered Advisor host is within 1.5 CSS px of the 320px dock target; wide and narrow document overflow, card, header, inspected detail, and compare action bounds are fully asserted. Fresh evidence provenance and human visual approval remain Phase 04 work; passing functional tests do not satisfy that review gate.
+- **Non-failing diagnostics:** The unit run emitted two jsdom unsupported-navigation diagnostics; Playwright emitted a `NO_COLOR`/`FORCE_COLOR` warning. No test failures resulted.
+
+Unresolved questions: none. A06's detailed-boundary coverage and Phase 04 evidence/review remain follow-up gates; final phase-closeout status remains with the parent.
 
 ## Success Criteria
 - A04–A06 pass against normal web/server services; no mounted-component fallback.
