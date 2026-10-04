@@ -5,3 +5,5 @@ export * from "./application-storage-state.js";
 export * from "./application-readiness.js";
 export * from "./container-client.js";
 export * from "./image-builder.js";
+export * from "./capture-policy.js";
+export * from "./capture-evidence.js";
