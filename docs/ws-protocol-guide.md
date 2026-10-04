@@ -12,41 +12,15 @@ All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut fro
 
 **Direction:** Bidirectional (client↔server).
 
-## Plugin connection epoch (Phase D03)
+## Retired plugin epoch protocol
 
-An authenticated `/ws` handshake retains the JWT subject and expiry and issues
-one cryptographically random, non-zero epoch for that socket. The client may
-request the value after connect:
+The historical D03 trusted-plugin platform used socket epochs and messages such
+as `plugin:get_epoch` and `plugin:epoch`. That platform is retired: current
+WebSocket and REST transports do not support plugin epochs, plugin context
+leases, or plugin routes. Do not build integrations against the old protocol.
 
-```json
-{ "kind": "plugin:get_epoch", "req_id": 1 }
-```
-
-The server replies on the same socket:
-
-```json
-{
-  "kind": "plugin:epoch",
-  "req_id": 1,
-  "epoch": 739128,
-  "actor": "alice",
-  "expiresAt": 1780000000
-}
-```
-
-The epoch is supplied in the protected plugin REST DTOs documented in the [API
-reference](./api-reference.md#trusted-plugin-api-phase-d03). It is bound to the
-authenticated actor and cannot be moved between sockets, profiles, or client
-connection generations. A `--no-auth` socket reports epoch `0`, but all
-production plugin operations remain denied in that mode.
-
-Socket teardown revokes the epoch and closes its contexts. HTTP logout revokes
-the actor's epochs and contexts; runner reconnect also invalidates local
-contexts so an old context cannot reach a new worker generation. The
-`plugin:revoked` server variant is reserved for bounded revocation notices; D03
-enforces teardown by rejecting subsequent requests and does not claim a push
-notice for every revocation cause. Clients must discard contexts on transport
-generation change or a revoked-context response.
+See the [retired plugin architecture](./architecture/plugin-platform-d03.md)
+for historical design notes and the [API reference retirement notice](./api-reference.md#retired-plugin-api-anchors).
 
 ## Project target context
 

@@ -45,4 +45,10 @@ export default [
       "react-hooks/purity": "off",
     },
   },
+  {
+    files: ["**/e2e/**", "**/*.spec.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+    },
+  },
 ];

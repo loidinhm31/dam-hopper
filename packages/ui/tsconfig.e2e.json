@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node", "@playwright/test", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@dam-hopper/browser-bridge": ["../browser-bridge/src/index.ts"],
+      "@dam-hopper/shared": ["../shared/src/index.ts"],
+      "@dam-hopper/shared/*": ["../shared/src/*"]
+    }
+  },
+  "include": ["playwright.config.ts", "e2e/**/*.ts"],
+  "exclude": ["e2e/**/*.e2e.tsx"]
+}

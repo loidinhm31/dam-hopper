@@ -1,7 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { page } from "vitest/browser";
 import {
   createApiClient,
   type ApiClient,
@@ -143,19 +142,15 @@ describe("Advisor routing editor and harness model selector (Browser Mode)", () 
     expect(container!.querySelector(".primary-route-fieldset")).not.toBeNull();
     expect(container!.querySelector(".backup-route-fieldset")).not.toBeNull();
     // Verify all selects have form-control class and theme-styled background (not white default)
-    const primaryBackend = container!.querySelector<HTMLSelectElement>("#primary-backend")!;
-    const backupBackend = container!.querySelector<HTMLSelectElement>("#backup-backend")!;
+    const primaryBackend =
+      container!.querySelector<HTMLSelectElement>("#primary-backend")!;
+    const backupBackend =
+      container!.querySelector<HTMLSelectElement>("#backup-backend")!;
     expect(primaryBackend.classList.contains("form-control")).toBe(true);
     expect(backupBackend.classList.contains("form-control")).toBe(true);
     const primaryComputed = window.getComputedStyle(primaryBackend);
     expect(primaryComputed.backgroundColor).not.toBe("rgb(255, 255, 255)");
     expect(primaryComputed.borderRadius).toBe("6px");
-    if (!import.meta.env.CI) {
-      await page.viewport(1280, 800);
-      await page.screenshot({
-        path: "/home/loidinh/WS/dam-hopper/packages/ui/e2e/advisor-model-dropdown-theme/screenshot.png",
-      });
-    }
 
     await act(async () => {
       backupBackend.value = "codex";

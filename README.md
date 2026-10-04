@@ -1,308 +1,69 @@
-# dam-hopper
+# DamHopper
 
-A web-based app for managing multi-project development environments. Manage git operations, builds, and running services across all your projects from a single React UI backed by a Rust server with interactive PTY terminals.
+DamHopper is a multi-profile development workbench for web and desktop. A Rust server provides project, Git, filesystem, PTY, workflow, and host services; a shared React 19 UI is hosted by Vite on the web or by a Tauri 2 desktop app.
 
-## Features
+## What it provides
 
-- **Global project registry** — Define projects once in `~/.config/dam-hopper/dam-hopper.toml` or another registry file, then operate on all of them
-- **Bulk git operations** — Fetch, pull, push across all projects with concurrent progress
-- **Build management** — Build/run projects using per-type presets (Maven, Gradle, npm, pnpm, Cargo) or custom commands
-- **Interactive terminals** — Full PTY terminals (xterm.js + portable-pty) per command — color, interactivity, scrollback
-- **Git worktrees** — Create, list, and remove worktrees interactively
-- **Workspace switching** — Switch between multiple workspace configs without restarting
-- **Multi-server profiles** — Profile-scoped URLs, credentials, and local metadata with native/web transport boundaries
-- **Browser Debug** — Web iframe fallback and optional native child WebView (Windows v1; Linux runtime-unverified)
-- **Agent store** — Distribute Claude/Gemini agent configs (skills, commands, hooks) across projects via symlinks
-- **Terminal idle suspend** — Opt-in host suspend with RTC wakealarm scheduling: default `empty-fleet` policy or configured `agent-activity` policy observing PTY raw output and attributable TCP byte activity. See [Configuration Guide](./docs/configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend) and [Security Guide](./docs/terminal-idle-suspend-security.md).
+- Independent server profiles and profile/generation-scoped connections, queries, terminals, files, and settings.
+- Workspace IDE surfaces for project files, editor, federated search, Git history, and terminals.
+- Safe Git workflows, including compare-and-swap commit rewriting and explicitly leased publication.
+- Native Evcrate Advisor in the Rust server and shared UI; it is off by default, requires an authenticated administrator, and is denied in `--no-auth` mode.
+- Agent status, workflow tracking, Agent Store distribution, browser debugging, and host-resource monitoring.
+- Optional Linux idle suspend and encrypted file uploads. Cognito Mode is an in-app visual privacy mask, not authentication or content redaction.
+
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| `server/` | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, Advisor, workflow, telemetry, and host services |
+| `packages/ui/` | Shared React UI, state, API/transport clients, and browser tests |
+| `apps/web/` | Vite browser host |
+| `apps/native/` | Tauri 2 desktop host and native Rust integration |
+| `packages/shared/` | Shared utilities, including sensitive-metadata redaction |
+| `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol |
+| `deploy/release/` | Release packaging, installer, and service templates |
 
 ## Requirements
 
-- Rust 1.97.1+ (server and native build toolchain; verify the pinned toolchain used by deployment)
-- Node.js 20+ + pnpm 9+
-- Android Studio + Android SDK/NDK + `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` (for Android builds only)
+- Node.js 20 or newer and pnpm 10 or newer.
+- Rust toolchain for the server and native builds; Tauri platform prerequisites are needed for desktop packaging.
 
-## Installation
+## Local web development
 
-### Quickstart: Linux Release Installer (x86_64 systemd)
-
-DamHopper releases are published as immutable, attested GitHub release bundles for Linux x86_64 systemd hosts (Ubuntu, Debian, Fedora, Arch, CentOS/RHEL, etc.). Target hosts do not require a compiler, Node.js, or Rust toolchain.
-
-**Prerequisites:**
-
-- Linux x86_64 with systemd (Ubuntu 24.04+, Fedora, Arch, etc.; glibc >= 2.39, systemd >= 245)
-- `curl`, `tar`, `sha256sum`, `sudo`
-- Optional: `gh` CLI (for GitHub artifact attestation verification)
-
-1. **Download the bootstrap installer:**
-
-   ```bash
-   curl -fsSLO https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.sh
-   chmod +x dam-hopper-install.sh
-   ```
-
-2. **Stage a candidate release (unprivileged fetch + staged candidate):**
-
-   ```bash
-   # API server role (0.0.0.0:4801)
-   ./dam-hopper-install.sh --latest --role server
-
-   # Dedicated static web host role (0.0.0.0:4802)
-   ./dam-hopper-install.sh --latest --role web
-
-   # Both roles in lockstep
-   ./dam-hopper-install.sh --latest --role both --allow-web-origin http://localhost:4802
-
-   # Single-user developer workstation (API runs as your user account with native workspace access):
-   ./dam-hopper-install.sh --latest --role both --service-user $(id -un)
-
-   _Note:_ The bootstrap installer stages candidate files, installs the CLI to `/usr/local/bin/dam-hopper`, and stops at `PENDING`. It never starts or activates services automatically.
-
-   ```
-
-3. **Inspect status:**
-
-   ```bash
-   dam-hopper status
-   # Or JSON format:
-   dam-hopper status --json
-   ```
-
-4. **Configure production environment & MFA key (`server` or `both` roles):**
-
-   In production authenticated mode (`RUST_ENV=production` with MongoDB configured), a dedicated 32-byte encryption key is mandatory for encrypting TOTP secrets at rest (`DAM_HOPPER_MFA_KEY_FILE`). Startup fails closed if the key is missing or has insecure permissions (must be mode `0600`, regular file only).
-
-   ```bash
-   # Generate dedicated 32-byte MFA encryption key (64 hex characters) with strict 0600 permissions
-   sudo mkdir -p /etc/dam-hopper
-   openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
-   sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
-   sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
-
-   # Add configuration to /etc/dam-hopper/server.env (see deploy/server.env.example)
-   sudo tee -a /etc/dam-hopper/server.env <<EOF
-   MONGODB_URI=mongodb://127.0.0.1:27017
-   MONGODB_DATABASE=damHopper
-   DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
-   EOF
-   sudo chmod 600 /etc/dam-hopper/server.env
-   ```
-
-5. **Explicitly activate the release:**
-
-   ```bash
-   sudo dam-hopper start
-   ```
-
-   `start` installs concrete systemd units, reloads the daemon, starts configured units, and enforces a strict health gate (20s startup deadline + 20 consecutive 500ms probes / 10s stability window).
-
-6. **Rollback & Recovery:**
-
-   ```bash
-   # Roll back to the recorded previous release
-   sudo dam-hopper rollback
-
-   # Reconcile crash or interrupted transaction
-   sudo dam-hopper recover
-   ```
-
-For complete operator instructions, systemd unit definitions, security boundaries, and format-2 migration, see [Linux systemd guide](./docs/linux-systemd.md).
-
-### Native Evcrate Advisor (Workspace Integration)
-
-DamHopper integrates Evcrate Advisor natively as a built-in Workspace capability without external plugin runners, iframes, MessagePort bridges, or path-hash configuration.
-
-- **Direct History Discovery:** The server automatically inspects `$HOME/.evcrate/advisor-history` in the server process environment. The final component must be a real directory (symlinks are strictly rejected for security).
-- **Per-Server Admin Toggle:** Enabled/disabled per server via **Settings → Native Advisor** (`server.advisor.enabled = true` in `dam-hopper.toml`). Defaults to off for safety.
-- **Admin Access Only:** All Advisor endpoints require an authenticated administrator session (`require_admin`). Development bypass mode (`--no-auth`) explicitly denies Advisor routes (`NoAuthForbidden`).
-- **Workspace Surfaces:** When enabled, administrators can launch the Native Advisor panel across IDE dock, Terminal floating panel, and compact views with four tabs: Overview, History Records, Configuration, and Evaluations.
-
-### Quickstart: Windows Release Installer (x86_64 Direct Server)
-
-DamHopper releases provide a verified PowerShell bootstrap installer and deterministic zip archive for Windows `x86_64-pc-windows-msvc`. No compiler, Node.js, or administrative elevation is required.
-
-**Prerequisites:**
-
-- 64-bit Windows 10 / 11 / Server 2022+ (x86_64)
-- PowerShell 5.1+ or PowerShell 7+
-- Internet access for downloading GitHub release assets
-- Optional: GitHub CLI (`gh`) for artifact attestation verification
-
-1. **Download and run the installer (one-liner):**
-
-   ```powershell
-   Invoke-WebRequest -Uri "https://github.com/loidinhm31/dam-hopper/releases/latest/download/dam-hopper-install.ps1" -OutFile "$env:TEMP\dam-hopper-install.ps1"; & "$env:TEMP\dam-hopper-install.ps1" -Latest -AddToPath; Remove-Item "$env:TEMP\dam-hopper-install.ps1"
-   ```
-
-2. **Or run with explicit parameters:**
-
-   ```powershell
-   # Install specific version with User PATH registration
-   .\dam-hopper-install.ps1 -Version v0.4.2 -AddToPath
-
-   # Install to custom directory
-   .\dam-hopper-install.ps1 -Latest -InstallDir "D:\Tools\dam-hopper" -AddToPath
-
-   # Verify GitHub artifact attestation (requires gh CLI)
-   .\dam-hopper-install.ps1 -Latest -AddToPath -VerifyAttestation
-
-   # Dry-run mode (verifies release metadata and archive without extracting or altering system state)
-   .\dam-hopper-install.ps1 -Latest -DryRun
-   ```
-
-   _Note:_
-   - Default install directory is `%LOCALAPPDATA%\Programs\dam-hopper` (`bin\dam-hopper-server.exe`).
-   - The installer is non-admin: it never requests elevation, never starts background processes, and preserves existing configuration files (`dam-hopper.toml`).
-   - When `-AddToPath` is used, the install `bin` directory is added to your **User PATH**. Open a fresh PowerShell or Command Prompt terminal for PATH changes to take effect in your shell session.
-
-3. **Launch the server:**
-   After opening a fresh terminal (or using the full binary path):
-
-   ```powershell
-   # Using PATH with default global config
-   dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml"
-
-   # Loopback smoke test (development only)
-   dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
-   ```
-
-   _Development note:_ For local unauthenticated development without MongoDB, `--no-auth` can be used on a trusted loopback interface (`127.0.0.1:4801`). `--no-auth` is strictly forbidden in production environments.
-
-4. **Upgrading:**
-   Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server binary while preserving your existing `dam-hopper.toml` configuration:
-   ```powershell
-   .\dam-hopper-install.ps1 -Latest
-   ```
-   For the complete Windows asset contract, profile-specific release gates,
-   attestation behavior, and configuration/smoke runbook, see
-   [Windows Release Asset Packaging](./docs/windows-release-packaging.md) and the
-   [Configuration Guide](./docs/configuration-guide.md#windows-direct-server-installation-and-configuration).
-
-### Build from source (Contributors)
+Install workspace dependencies:
 
 ```bash
-git clone https://github.com/loidinhm31/dam-hopper.git
-cd dam-hopper
-
-# Install dependencies and build web assets
 pnpm install
-pnpm build
-
-# Build Rust release server
-pnpm build:server
-
-# Run the backend directly (default 0.0.0.0:4800)
-./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
 ```
 
-## Configuration
-
-Create `~/.config/dam-hopper/dam-hopper.toml`:
-
-```toml
-[workspace]
-name = "my-workspace"
-
-[[projects]]
-name = "api-server"
-path = "./api-server"
-type = "maven"
-build_command = "mvn clean package -DskipTests"
-run_command = "java -jar target/app.jar"
-env_file = ".env"
-
-[[projects]]
-name = "web-app"
-path = "./web-app"
-type = "pnpm"
-```
-
-Supported project types: `maven`, `gradle`, `npm`, `pnpm`, `cargo`, `custom`.
-
-Each type has built-in default build/run commands. Override with `build_command` / `run_command`.
-
-Project paths may be absolute or relative. Relative paths resolve against the registry file directory, so repo-local registries still work when you pass `--config /path/to/repo/dam-hopper.toml`.
-
-For manual end-to-end validation of multi-root registries and escape rejection, see [docs/configuration-guide.md](docs/configuration-guide.md#manual-smoke-checklist).
-
-## Development
+Run the server in unauthenticated development mode on **loopback only**, then start Vite in another terminal:
 
 ```bash
-# Install web dependencies
-pnpm install
+cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- \
+  --host 127.0.0.1 --port 4803 --no-auth \
+  --cors-origins http://127.0.0.1:5173,http://localhost:5173
 
-# Web dev mode (Vite HMR on http://localhost:5173)
-pnpm dev
-
-# Desktop Tauri shell (Vite on http://localhost:1420)
-pnpm dev:native
-
-# One-time Android scaffold refresh for the native app
-pnpm android:init
-
-# Android emulator / device dev
-pnpm android:dev
-
-# Android release artifacts (APK + AAB)
-pnpm android:build
-
-# Rust server for the Vite dev proxy (isolated loopback port 4801)
-pnpm dev:server
-# Or directly:
-cd server && cargo run -- --config /path/to/dam-hopper.toml --host 127.0.0.1 --port 4801
-
-# Build everything
-pnpm build        # web app
-pnpm build:native # desktop native host assets
-pnpm build:server # Rust release binary
-
-# Run Rust tests
-pnpm test
-# or: cd server && cargo test
-# On Windows (page file / rlib limit): run serially with -j 1
-# PowerShell / cmd: cd server && cargo test -j 1
-# Lint web
-pnpm lint
-
-# Format
-pnpm format
+pnpm --filter @dam-hopper/web stage:browser-extension
+pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 ```
 
-The generated Android Studio project lives in `apps/native/src-tauri/gen/android`. Tauri now runs the native package's local `npm run dev` / `npm run build` hooks, so Android Studio and Gradle do not depend on a globally installed `pnpm`.
+Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to/dam-hopper.toml` to the server command when you need a specific project registry.
 
-### Windows Development & Qualification
+> **Security:** `--no-auth` bypasses authentication and is for isolated local development only. Never expose it to a LAN, the public Internet, or an untrusted network. The server defaults to `0.0.0.0`; always pass `--host 127.0.0.1` for this workflow. The root `pnpm dev:server` and `pnpm dev:server:no-auth` scripts currently bind `0.0.0.0:4803` with `--no-auth`; do not use them on an untrusted network. Native Advisor endpoints are unavailable in this mode.
 
-`dam-hopper-server` is qualified on Windows 11 MSVC (`x86_64-pc-windows-msvc`). Commands can be run directly from PowerShell or `cmd.exe`:
+## Common commands
 
-```powershell
-# Build debug binaries
-cargo build --manifest-path server/Cargo.toml --bins
+| Command | Action |
+| --- | --- |
+| `pnpm dev:native` | Run the Tauri desktop development host |
+| `pnpm build` | Build the web app |
+| `pnpm build:native` | Build the native desktop package |
+| `pnpm build:server` | Build the Rust server in release mode |
+| `pnpm test` | Run Rust server tests |
+| `pnpm test:all` | Run the repository test suite script |
+| `pnpm lint` | Lint `apps/` and `packages/` |
+| `pnpm check` | Run the root build, native build, lint, and server test sequence |
 
-# Run server via default-run (resolves dam-hopper-server)
-cargo run --manifest-path server/Cargo.toml -- --help
+## Documentation
 
-# Run release build
-cargo build --manifest-path server/Cargo.toml --release --bin dam-hopper-server
-
-# Run full serial test suite (avoids MSVC rlib/page-file exhaustion)
-cargo test --manifest-path server/Cargo.toml -j 1
-
-# Run isolated loopback smoke test (--no-auth)
-cargo run --manifest-path server/Cargo.toml -- --config "C:\path\to\dam-hopper.toml" --host 127.0.0.1 --port 4801 --no-auth
-```
-
-**Platform Boundaries:**
-
-- Linux-only utilities (`dam-hopper` release manager and `dam-hopper-idle-suspend-helper`) intentionally exit 1 with an explanatory message on Windows.
-- Windows does not bind Unix helper sockets, probe sysfs/procfs, or attempt RTC/systemd suspend (`UnavailableExecutor` fail-closed behavior).
-- Linux deployment qualification and systemd live tests require a Linux host.
-  For the full path/TOML and health-cleanup procedure, see the [Windows server loopback smoke checklist](./docs/configuration-guide.md#windows-server-loopback-smoke-checklist). Terminal shell behavior is documented in the [API Reference](./docs/api-reference.md#terminals).
-
-```text
-server/        # Rust binary (Axum + Tokio) — all backend logic
-apps/
-  web/          # Thin Vite browser host
-  native/       # Tauri desktop/Android host
-packages/
-  ui/           # Shared React UI and host adapter contract
-  browser-bridge/ # v1 iframe/native DOM bridge
-```
+Start at [the documentation index](./docs/README.md). Key references: [project requirements](./docs/project-overview-pdr.md), [system architecture](./docs/system-architecture.md), [code standards](./docs/code-standards.md), [configuration](./docs/configuration/index.md), and [API reference](./docs/api-reference.md). Deployment guides are indexed there for [Linux](./docs/linux-systemd.md) and [Windows](./docs/windows-release-packaging.md).
