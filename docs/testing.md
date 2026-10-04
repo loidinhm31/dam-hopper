@@ -62,3 +62,11 @@ pnpm --filter @dam-hopper/ui test:e2e
 # Typecheck Playwright configuration and included E2E TypeScript files
 pnpm --filter @dam-hopper/ui test:e2e:typecheck
 ```
+
+---
+
+## Phase 01 Qualification Summary
+- **Vitest Unit Tests:** Disjoint discovery excluding `e2e/**` and `browser-tests/**` (300 files, 2287 tests).
+- **Browser Component Suites:** 52 general suites (`vitest.browser.config.ts`) and 1 backend-backed suite (`vitest.advisor-routing.browser.config.ts`), running sequentially via `test:browser`.
+- **Playwright E2E:** Dedicated runner (`packages/ui/playwright.config.ts`) targeting `e2e/**/*.spec.ts` under Chromium with strict isolation.
+- **Typecheck:** Isolated `tsconfig.e2e.json` typechecking E2E configuration and specs without modifying production compiler options.
