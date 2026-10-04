@@ -61,6 +61,9 @@ pnpm --filter @dam-hopper/ui test:e2e
 
 # Typecheck Playwright configuration and included E2E TypeScript files
 pnpm --filter @dam-hopper/ui test:e2e:typecheck
+
+# Run the Phase 02 isolated application-service probes (requires Docker or Podman)
+pnpm --filter @dam-hopper/ui test:e2e:probes
 ```
 
 ---
@@ -70,3 +73,18 @@ pnpm --filter @dam-hopper/ui test:e2e:typecheck
 - **Browser Component Suites:** 52 general suites (`vitest.browser.config.ts`) and 1 backend-backed suite (`vitest.advisor-routing.browser.config.ts`), running sequentially via `test:browser`.
 - **Playwright E2E:** Dedicated runner (`packages/ui/playwright.config.ts`) targeting `e2e/**/*.spec.ts` under Chromium with strict isolation.
 - **Typecheck:** Isolated `tsconfig.e2e.json` typechecking E2E configuration and specs without modifying production compiler options.
+
+## Phase 02: Isolated Application Services
+
+### Containerized runtime and lifecycle
+- Application E2E runs the built server and SPA in the test runtime image `dam-hopper:production-test`. The image layers the `application_e2e_seed` executable over the production image; the Playwright fixture builds or refreshes it against the current source fingerprint before startup.
+- By default, each service instance receives its own container network, MongoDB container, application container, and unique database name. The default MongoDB image is `docker.io/library/mongo:8.2`; an explicit `databaseName` may override the default. The application port is dynamically mapped to loopback (`127.0.0.1`), and no host MongoDB data directory is mounted.
+- A temporary fixture tree supplies the server configuration, workspace, home, and test files under `/e2e` in the application container. Awaited disposal and startup-failure paths clean up owned containers, the network, and the host temporary tree. The fixture registers SIGINT/SIGTERM cleanup handlers, but the probes exercise explicit disposal rather than signal delivery.
+
+### Seed data and safety invariants
+- The fixture stages repeatable workspace data (`e2e-workspace`, `fixture-project`, and sample files) while generating per-run secrets. `application_e2e_seed` initializes the isolated database's auth indexes, seeds an enabled `admin` account and valid active session, signs a V2 bearer token, and prints the token and seed metadata as JSON. Session IDs default to UUIDs and session times are generated at runtime; tests depend on the seeded state, not fixed credentials or timestamps.
+- Before exposing the services to a test, the fixture waits for `/api/health`, rejects an unauthenticated `GET /api/projects` unless it returns `401`, and requires authenticated auth/advisor status checks to succeed.
+- The effective advisor history path must resolve inside the isolated home at `/e2e/home/.evcrate/advisor-history`. The Phase 02 probe poisons the runner's `HOME` and confirms the application still uses its container home, not runner personal state.
+
+`pnpm --filter @dam-hopper/ui test:e2e:probes` runs the focused Playwright service-probe file (`e2e/fixtures/application-services.spec.ts`), covering service lifecycle, failure/disposal cleanup, concurrent-instance isolation, effective-home safety, and orphan-resource checks. It requires an available Docker or Podman engine. These probes do not run the full application journey suite; run `pnpm --filter @dam-hopper/ui test:e2e` for that suite.
+
