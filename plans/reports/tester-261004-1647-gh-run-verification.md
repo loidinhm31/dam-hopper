@@ -1,0 +1,63 @@
+# GitHub Actions Run 37193115315 Verification
+
+**Verdict:** Deployment run **PASS**. Overall validation **PARTIAL**: the live deployment works, but the local `workflow_dispatch` addition was not exercised by this push-triggered run, and local browser tests encountered a runner error.
+
+## Run outcome
+
+- **Run:** [37193115315 — Deploy Web to GitHub Pages](https://github.com/loidinhm31/dam-hopper/actions/runs/37193115315)
+- **Status / conclusion:** completed / success
+- **Event / ref:** `push`, tag `v0.10.1`
+- **Commit:** `b3d99fef187deff8bb24990523a7da14e1d017d6`
+- **Timing:** run started 2026-10-04 09:53:05 UTC and completed 09:54:11 UTC (1m06s); `deploy` job ran 09:53:11–09:54:10 UTC (59s).
+- **Failing deployment step:** none. Every deploy step completed successfully.
+
+## Deploy job steps
+
+| Step | Result | Evidence |
+|---|---|---|
+| Set up job | PASS | Runner provisioned. |
+| Checkout | PASS | Checked out `v0.10.1` at the run commit above. |
+| Install pnpm | PASS | pnpm 10.34.6. |
+| Setup Node | PASS | Node v24.21.0. |
+| Install dependencies | PASS | Lockfile current; all seven workspace projects installed. |
+| Setup Pages | PASS | Pages configuration completed. |
+| Verify Browser Debug extension origin | PASS | Required origin variable was present. |
+| Build Web | PASS | Vite build completed in 34.88s. |
+| 404.html Trick | PASS | Copied `index.html` to `404.html`. |
+| Upload artifact | PASS | GitHub Pages artifact uploaded (ID `11299997196`, about 6 MB). |
+| Deploy to GitHub Pages | PASS | Pages API reported success for the run commit. |
+| Post Setup Node / Post Install pnpm / Post Checkout / Complete job | PASS | Cleanup and job completion succeeded. |
+
+The job log contains no failing-step error. GitHub emitted non-blocking notices that several pinned actions target Node.js 20 while being forced to run on Node.js 24, and that `ubuntu-latest` will migrate to Ubuntu 26 beginning October 19, 2026.
+
+## Live Pages verification
+
+Checked after the deployment completed:
+
+- `curl --location --silent --show-error --output ... --write-out ... https://loidinhm31.github.io/dam-hopper/`
+- **HTTP:** 200; **content type:** `text/html; charset=utf-8`; **body:** 1,888 bytes; **request time:** 0.491448s.
+- Response is the Dam Hopper HTML document (`<title>Dam Hopper</title>`) and references `/dam-hopper/assets/index-B6ePpPtu.js`.
+- Requested that referenced JavaScript bundle directly: **HTTP 200**, `application/javascript; charset=utf-8`, 546,365 bytes.
+
+## Local checks and test suite
+
+- **Git state:** branch `main` at `b3d99fef187deff8bb24990523a7da14e1d017d6`, tracking `origin/main`. The worktree has an uncommitted change to `.github/workflows/deploy-pages.yml` adding `workflow_dispatch:`. The run event was `push`, and that trigger addition is absent from the run's committed workflow; this run therefore does **not** verify the manual-dispatch trigger. Other untracked plan/report artifacts were present in the worktree; they were left untouched.
+- **Workflow syntax:** `pnpm exec prettier --parser yaml .github/workflows/deploy-pages.yml` passed (YAML parsed). `pnpm exec prettier --check .github/workflows/deploy-pages.yml` failed with “Code style issues found”; the file has CRLF line endings. `git diff --check` flags line 7 (`workflow_dispatch:`) as trailing whitespace due to that line ending.
+- **Lint:** `pnpm lint` exited 0: **0 errors, 164 warnings** across `apps/` and `packages/`.
+- **Aggregate test command:** `pnpm test:all` could not start because `scripts/run-all-tests.sh` is not executable in this checkout (`stat`: mode 600; Git index mode 100644). Exact error: `sh: line 1: scripts/run-all-tests.sh: Permission denied` (exit 126). Ran the test runner directly with `bash scripts/run-all-tests.sh` rather than changing its permissions.
+- **Direct full-suite result:** **4,407 individual tests passed, 0 assertion failures, 6 ignored**, plus a failing browser-test suite load and one unhandled browser-runner error. Overall direct runner exited 1 after about 345s.
+  - Rust server: 1,789 passed, 0 failed, 6 ignored.
+  - Shared: 15 passed; browser bridge: 19 passed; UI unit: 2,287 passed; native host: 48 passed.
+  - UI browser tests: 249 passed; 50 test files passed, one suite failed while loading `packages/ui/e2e/privacy-heavy-blur/privacy-heavy-blur.e2e.tsx`. Error: `Failed to fetch dynamically imported module: http://localhost:15173/home/loidinh/WS/dam-hopper/packages/ui/e2e/privacy-heavy-blur/privacy-heavy-blur.e2e.tsx?...`.
+  - The browser runner also reported an unhandled error running `packages/ui/browser-tests/android-chrome-input-policy.browser.ts`: `Cannot connect to the iframe`; received URL was `unknown due to CORS`, rather than its expected `http://localhost:15173/?sessionId=...&iframeId=...` URL. The second browser config in the package script was skipped because the first command failed.
+- **Coverage:** no coverage report/metrics were generated by the deploy run or local commands.
+- **Performance:** full direct local suite took about 5m45s; browser test command reported 56.53s. No benchmark or load test was run.
+
+## Follow-up
+
+1. Commit and trigger the intended `workflow_dispatch` path, then verify that separate run; the successful tag-push run only proves the release deployment path.
+2. Normalize the workflow line endings and rerun `prettier --check` / `git diff --check`.
+3. Fix the test-runner invocation or executable mode so `pnpm test:all` can launch, and investigate the Chromium iframe/dynamic-import error before treating the complete local browser gate as green.
+4. Plan updates for the Node.js 20 action deprecation notice and upcoming `ubuntu-latest` migration.
+
+**Unresolved questions:** None. The manual-dispatch trigger and local Chromium browser gate remain validation gaps, as noted above.

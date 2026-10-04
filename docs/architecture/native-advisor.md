@@ -1,6 +1,6 @@
 # Native Advisor — frozen contract and migration architecture
 
-Status: **Native implementation and Phase 09 qualification evidence recorded.** Durable completion receipts for Phases 01–05 remain parent-coordinated; Phases 06–08 have published receipts. (2026-10-02).
+Status: **Complete.** Native implementation, plugin-platform retirement, and Phase 09 qualification are complete; the migration progress record reports all nine phases complete (2026-10-04).
 The native Advisor domain service, UI panel/provider, and settings toggle are integrated into Workspace; the plugin platform, runner daemon, SDK, and Evcrate plugin release assets are retired. See the [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md), and [qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md).
 
 ## Frozen decisions
@@ -50,7 +50,7 @@ Native account policy routes expose current policy (`POST /api/advisor/policy/cu
 
 Advisor selectors, reset rules, variables, and theme fallbacks stay under `.native-advisor`; animation keyframes use Advisor-specific names. The panel path has **0 iframe/srcdoc, 0 MessagePort/plugin bridge, 0 plugin SDK, and 0 nested React root**. It imports no sibling Evcrate checkout code.
 
-The panel/provider are implemented; Phase 05 wires them into Settings and persistent Workspace placement. `packages/ui/browser-tests/workspace-advisor.browser.tsx` covers DOM placement, not the full authenticated API/domain-parity or production-qualification gates. Implementation evidence is documented; durable completion receipt publication for Phases 04–05 remains parent-coordinated.
+The panel/provider and Workspace integration are implemented. This placement test covers persistent DOM behavior only; it does not establish all Advisor operations or authenticated server parity by itself. Cross-layer qualification is recorded in the Phase 09 [qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md), and phase status in the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md).
 
 ## Pre-migration source evidence
 
@@ -165,7 +165,7 @@ Discovery work is bounded in several ways, but the timeout stages are independen
 
 Normalization caps catalogs at 500 models and the serialized `models` array at 256 KiB. It trims IDs and labels, drops empty values, control characters, credential-like substrings, and IDs or labels longer than 256 bytes, removes duplicate IDs, and sorts by label then ID. The 256 KiB bound is applied to the model array, not to the enclosing response object.
 
-## Phase 05 Settings and Workspace cutover (implementation/finalization settled; durable completion pending)
+## Phase 05 Settings and Workspace cutover (complete)
 
 The Settings target remains independent of the Workspace project/connection owner. The implemented UI and state wiring are:
 
@@ -178,33 +178,12 @@ The Settings target remains independent of the Workspace project/connection owne
 | `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx`             | Replaces `PluginHost` with one direct `AdvisorPanel`; a single host measures the active slot across modes. Focus capture activates the slot, Escape closes it, and hiding restores focus to a live launcher or blurs.                                                                                                                                                                     |
 | `packages/ui/browser-tests/workspace-advisor.browser.tsx`                   | Chromium harness mocks the panel and asserts the same panel DOM node across IDE → Terminal → compact → IDE, plus an inert/hidden/`aria-hidden` host while the slot is closed.                                                                                                                                                                                                             |
 
-The placement test does not establish all eight domain operations or authenticated real-server parity. Broader integration qualification is recorded separately in the Phase 09 qualification report; durable completion receipts for Phases 01–05 remain parent-coordinated.
+The placement test alone does not establish all eight domain operations or authenticated real-server parity. The Phase 09 report records the broader integration qualification; see the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md) for completed phase status.
 
-## Plugin/deployment cutover
+## Historical plugin/deployment retirement record
 
-- Prove native read/UI parity before deleting Evcrate source integration or Dam-Hopper platform consumers.
-- Remove SDK/runtime/worker binaries, API/plugin WS messages and epochs, host iframe bridge, registration UI, tests/fixtures, package scripts, plugin archives and upload/install requirements.
-- Preserve auth session/MFA watchers, general connection generations, PTY/filesystem websocket pumps, and non-plugin Vite/extension/agent plugins.
-- Replace plugin-named shared runtime tmpfiles/group with native API/helper runtime ownership. Preserve `/run/dam-hopper/server.pid` and idle-suspend socket semantics.
-- Migrate strict manager state and host config before removing plugin metadata types; back up, normalize once, preserve unrelated release records, reject corrupt/unknown state.
-- Native manager rejects plugin-bearing legacy rollback before mutation. Preserve immutable old releases and backup old manager/state for explicit manual legacy recovery; new rollback/recovery never restarts obsolete runner.
-- Manual cleanup script: inspect/dry-run by default; explicit apply; stop/disable verified system or selected user's runner unit, kill only verified runner-owned descendants, remove verified obsolete files. Never broad `pkill`, home removal, account deletion, history deletion, or deletion of current/retained immutable release contents.
-- Fully purge only proven plugin registry/runtime artifacts. Custom users/groups and unrelated `/run/dam-hopper` resources survive. Coordinate cleanup with release manager's lock/state migration and updated API/helper unit provisioning.
+The Dam-Hopper plugin platform, SDK, runner, API/WS bridge, iframe host, registration UI, and release assets were retired as part of the completed migration. This section records the migration boundary; it is not a proposal to add plugin support.
 
-## Verification gates
-
-- Real temporary HOME with durable V1 producer history/V2 checkpoints, account policy and discovered evaluation documents; authenticated native server and real browser.
-- Admin/non-admin/no-auth/role downgrade, missing/unreadable/empty real history directory and root-symlink rejection, multi-project filters, stale snapshot/cursor, corrupt/unsupported record, captured-owner switching/cancellation.
-- IDE/Terminal/compact, keyboard/focus/resize, theme/CSS isolation, reload-persisted toggle, independent Settings versus Workspace profiles, no iframe or plugin/network-worker traffic.
-- Fresh install, upgrade from plugin-bearing manager state, repeated uninstall, rollback and crash recovery; API/PTYS/filesystem/idle-suspend still work without runner or bundled Node.
-- Release assembly and inventories succeed in both repositories without plugin assets; core Evcrate Advisor still produces history readable by native viewer.
-
-## Implementation and retirement status
-
-Implementation and migration qualification evidence is recorded, but durable completion receipt status is not uniform:
-
-- **Phases 01–05:** Contract, native history and policy/evaluation domains, React panel/provider, Settings toggle, and Workspace surfaces are implemented. Durable completion receipts remain parent-coordinated and must not be inferred from this architecture summary.
-- **Phase 06:** Dam-Hopper plugin runtime, SDK, and bridge deleted; completion receipt published.
-- **Phase 07:** Linux runner service retired, manager state schema 3 migrated, and safe manual uninstall script delivered (`deploy/remove-plugin-platform.sh`); completion receipt published.
-- **Phase 08:** Evcrate plugin integration and CI release assets removed; core CLI/controller and shared viewer source remain; completion receipt published.
-- **Phase 09:** Native-only cutover qualification and documentation reconciliation are recorded; parent coordinates final project status and receipt publication.
+- Preserve shared auth/session behavior, PTY and filesystem transports, idle-suspend IPC, and unrelated release state while removing plugin-only assets.
+- New release and rollback paths do not restart the obsolete runner. Legacy cleanup is limited to verified runner-owned artifacts and must preserve unrelated users, groups, and runtime state.
+- Full migration evidence and completion receipts are in the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md) and [Phase 09 qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md).

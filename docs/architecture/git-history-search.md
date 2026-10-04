@@ -166,4 +166,4 @@ after preparation rejects the lease without overwriting the independent writer.
 - Git-page integration and regression coverage: `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/pages/GitPage.test.tsx`, and `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
 - Git-page integration plan: `../../plans/261001-2003-git-history-search-persistence/phase-06-git-page-integration.md`.
 
-See the [API Reference: Commit history](../api-reference.md#commit-history), [Git history search standards](../code-standards.md#git-history-search-queries), and the Phase 03 plan at `plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md`.
+See the [API Reference: Commit history](../api-reference.md#commit-history), [Git history search standards](../code-standards.md#git-history-changes), and the Phase 03 plan at `plans/261001-2003-git-history-search-persistence/phase-03-persisted-history-selections.md`.

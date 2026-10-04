@@ -8,6 +8,8 @@
   - **Authentication & Authorization:** both `PATCH /api/advisor/policy` and `POST /api/advisor/models` deny unauthenticated requests (401), non-admin users (403 `AdminRoleRequired`), `--no-auth` mode (403 `NoAuthForbidden`), and disabled feature state (403 `ADVISOR_DISABLED`); admin Bearer and cookie sessions succeed. Routing capabilities remain operational and advertised when history directory is absent.
   - **Frontend UI & validation:** `PolicySummaryCard` inline routing editor with dual `RouteFieldset` components, live duplicate route triple rejection (`ROUTE_BACKUP_IDENTICAL`), differing effort allowance, custom model input mode, and cancellation restoring pristine state.
   - **Cross-layer Vitest Browser Mode qualification:** dedicated loopback Axum fixture (`advisor_routing_browser_fixture`) exercising real `WsTransport`, `ApiClient`, and `NativeAdvisorProvider` over REST in Playwright-backed Chromium (5/5 browser interaction tests passing).
+- **Documentation refresh (2026-10-04).** Updated repository navigation, product requirements and pass/fail success measures, code standards, architecture, codebase inventory, roadmap, and Native Advisor status against the current checkout and generated Repomix compaction. Large API, frontend, systemd, and server-configuration references were split into linked subtopic guides. Every Markdown page remains below the 800-line limit. The checked-in Cognito CSS currently uses `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)`; this differs from the style values recorded in the historical 2026-10-03 entry. The current Native Advisor completion status supersedes the 2026-10-02 changelog snapshots. No product code changed in this documentation update.
+
 
 # 2026-10-03
 
