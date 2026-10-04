@@ -74,6 +74,7 @@ run_suite 'Browser bridge tests' pnpm --filter @dam-hopper/browser-bridge test
 run_suite 'UI unit tests' pnpm --filter @dam-hopper/ui test
 run_suite 'Native host tests' pnpm --filter @dam-hopper/native test
 run_suite 'UI browser tests' pnpm --filter @dam-hopper/ui test:browser
+run_suite 'Application E2E tests' pnpm --filter @dam-hopper/ui test:e2e
 
 if [[ "${RUN_NATIVE_E2E:-0}" == 1 ]]; then
   run_suite 'Native SSH-forward E2E tests' \
