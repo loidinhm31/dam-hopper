@@ -9,7 +9,7 @@
 ## Overview
 
 - Date: 2026-10-05. Priority: P2.
-- Implementation status: pending. Review status: pending.
+- Implementation status: complete. Review status: complete.
 - Deliver authenticated, bounded native-buffer blame and exact read-only commit details. No frontend work in this phase.
 
 ## Key Insights
@@ -86,12 +86,12 @@ No manifest, lockfile, DB schema or binary changes required.
 
 ## Todo list
 
-- [ ] DTOs/errors and project/root/path frames implemented.
-- [ ] Native attribution/rename/empty/new behavior implemented.
-- [ ] Global admission and cancellation-lifetime bounds enforced.
-- [ ] Feature-local body cap verified without weakening other routes.
-- [ ] Arbitrary exact commit/body reader implemented; edit-snapshot safety unchanged.
-- [ ] Regression suite and actual HTTP smoke prove behavior/no writes.
+- [x] DTOs/errors and project/root/path frames implemented.
+- [x] Native attribution/rename/empty/new behavior implemented.
+- [x] Global admission and cancellation-lifetime bounds enforced.
+- [x] Feature-local body cap verified without weakening other routes.
+- [x] Arbitrary exact commit/body reader implemented; edit-snapshot safety unchanged.
+- [x] Regression suite and actual HTTP smoke prove behavior/no writes.
 
 ## Success Criteria
 
@@ -117,7 +117,6 @@ No manifest, lockfile, DB schema or binary changes required.
 - Read-only details does not unlock mutations; write APIs retain existing branch/tip/lease gates.
 
 ## Next steps
-
-- Phase 03 typed transport/lifecycle; Phase 05 consumes exact commit-details endpoint.
-- Record actual backend proof in implementation evidence; no green claim from this plan.
-- Unresolved questions: none beyond Phase 01's required native evidence.
+- Phase 03 typed transport/lifecycle and Phase 05 workspace commit reveal unblocked.
+- Backend test suites verified: 11 unit blame tests, 5 unit commit_details tests, 9 integration git_blame_api tests (25/25 pass).
+- Unresolved questions: none.
