@@ -431,6 +431,24 @@ async fn watch_events(
             }
         }
     }
+    // Fallback if the channel closed without an explicit terminal event (Failed/Exited).
+    // Transition only active Starting/Ready sessions to Stopped and broadcast once.
+    let should_broadcast_fallback = {
+        let mut s = sessions.write().await;
+        if let Some(sess) = s.get_mut(&id) {
+            if matches!(sess.status, TunnelStatus::Starting | TunnelStatus::Ready) {
+                sess.status = TunnelStatus::Stopped;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if should_broadcast_fallback {
+        sink.broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
+    }
 
     // Cleanup orphaned entries; stop() may have already removed them — that is fine.
     handles.write().await.remove(&id);

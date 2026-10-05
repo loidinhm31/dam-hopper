@@ -6,7 +6,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.advisor-routing.browser.config.ts"
+    "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.advisor-routing.browser.config.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:typecheck": "tsc -p tsconfig.e2e.json",
+    "test:e2e:build-images": "node --experimental-strip-types e2e/fixtures/image-builder.ts",
+    "test:e2e:probes": "playwright test fixtures/application-services.spec.ts"
   },
   "exports": {
     ".": "./src/embed/dam-hopper-app.tsx",
@@ -52,8 +56,10 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@vitest/browser-playwright": "4.1.5",
     "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",

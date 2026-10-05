@@ -348,3 +348,138 @@ describe("SettingsPage Import / Export integration", () => {
     );
   });
 });
+
+describe("SettingsPage accordion collapse behavior", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  const SECTION_TITLES = [
+    "Appearance",
+    "Keyboard Shortcuts",
+    "Usage insights",
+    "Terminal Idle Suspend",
+    "Global Settings",
+    "Workspace Config",
+    "Maintenance",
+    "Import / Export Settings",
+    "Native Advisor",
+  ];
+
+  it("renders all sections collapsed by default", () => {
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+    );
+
+    expect(buttons.length).toBe(SECTION_TITLES.length);
+
+    for (const title of SECTION_TITLES) {
+      const btn = buttons.find((b) => b.textContent?.includes(title));
+      expect(btn, `Section button "${title}" should exist`).toBeTruthy();
+      expect(btn?.getAttribute("aria-expanded")).toBe("false");
+
+      const panelId = btn?.getAttribute("aria-controls");
+      expect(panelId).toBeTruthy();
+      const panel = container.querySelector(`#${panelId}`);
+      expect(panel, `Panel for "${title}" should exist`).toBeTruthy();
+      expect(panel?.hasAttribute("hidden")).toBe(true);
+    }
+  });
+
+  it("expands a collapsed section on click and collapses on next click", async () => {
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+
+    const appearanceBtn = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+    ).find((b) => b.textContent?.includes("Appearance"));
+
+    expect(appearanceBtn).toBeTruthy();
+    expect(appearanceBtn?.getAttribute("aria-expanded")).toBe("false");
+
+    const panelId = appearanceBtn?.getAttribute("aria-controls");
+    const panel = container.querySelector(`#${panelId}`);
+    expect(panel?.hasAttribute("hidden")).toBe(true);
+
+    // Click to expand
+    await act(async () => {
+      appearanceBtn?.click();
+    });
+
+    expect(appearanceBtn?.getAttribute("aria-expanded")).toBe("true");
+    expect(panel?.hasAttribute("hidden")).toBe(false);
+
+    // Click again to collapse
+    await act(async () => {
+      appearanceBtn?.click();
+    });
+
+    expect(appearanceBtn?.getAttribute("aria-expanded")).toBe("false");
+    expect(panel?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("toggles multiple sections independently", async () => {
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+    );
+    const wsConfigBtn = buttons.find((b) =>
+      b.textContent?.includes("Workspace Config"),
+    );
+    const maintenanceBtn = buttons.find((b) =>
+      b.textContent?.includes("Maintenance"),
+    );
+
+    expect(wsConfigBtn).toBeTruthy();
+    expect(maintenanceBtn).toBeTruthy();
+
+    const wsPanel = container.querySelector(
+      `#${wsConfigBtn?.getAttribute("aria-controls")}`,
+    );
+    const maintPanel = container.querySelector(
+      `#${maintenanceBtn?.getAttribute("aria-controls")}`,
+    );
+
+    expect(wsPanel?.hasAttribute("hidden")).toBe(true);
+    expect(maintPanel?.hasAttribute("hidden")).toBe(true);
+
+    // Expand Workspace Config
+    await act(async () => {
+      wsConfigBtn?.click();
+    });
+    expect(wsConfigBtn?.getAttribute("aria-expanded")).toBe("true");
+    expect(wsPanel?.hasAttribute("hidden")).toBe(false);
+    expect(maintenanceBtn?.getAttribute("aria-expanded")).toBe("false");
+    expect(maintPanel?.hasAttribute("hidden")).toBe(true);
+
+    // Expand Maintenance
+    await act(async () => {
+      maintenanceBtn?.click();
+    });
+    expect(wsConfigBtn?.getAttribute("aria-expanded")).toBe("true");
+    expect(wsPanel?.hasAttribute("hidden")).toBe(false);
+    expect(maintenanceBtn?.getAttribute("aria-expanded")).toBe("true");
+    expect(maintPanel?.hasAttribute("hidden")).toBe(false);
+  });
+});

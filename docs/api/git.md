@@ -416,6 +416,7 @@ Known blocks return `ok: false` with `blockedReason` and recommendations.
 `publication-uncertain` means local ref publication is unresolved: candidate OIDs
 are not a success receipt. Refresh and reconcile before any further mutation;
 neither a blind squash retry nor automatic push is safe.
+
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
 from that commit. This is a local-history rewrite and is blocked for pushed
@@ -575,7 +576,6 @@ A later push is separate and may be rejected by remote policy.
 | `drop-files`       | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
 | `message`          | Rewrites target local branch | Allowed for reachable commits; active or inactive branch; remote unchanged |
 | `squash`           | Rewrites target local branch | Allowed for a linear contiguous range; active or inactive branch; remote unchanged |
-
 | `undo-last-commit` | Rewrites local HEAD   | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state  | Allowed only after explicit request and preflight checks |
 

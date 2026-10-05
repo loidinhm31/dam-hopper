@@ -1,0 +1,69 @@
+# Version control
+.git
+.gitignore
+
+# Environment variables & secrets
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+**/*.env
+*server-token*
+*.key
+*.pem
+
+# Dependencies & package manager caches
+node_modules
+**/node_modules
+apps/*/node_modules
+packages/*/node_modules
+.pnpm-store
+**/.pnpm-store
+apps/*/.pnpm-store
+packages/*/.pnpm-store
+
+# Build outputs & caches
+target
+**/target
+dist
+**/dist
+apps/*/dist
+packages/*/dist
+.turbo
+**/.turbo
+apps/*/.turbo
+packages/*/.turbo
+# Tests, reports, logs & evidence
+test-results
+**/test-results
+playwright-report
+**/playwright-report
+*.log
+**/*.log
+plans
+plans/**
+docs
+docs/**
+reports
+**/reports
+research
+**/research
+__screenshots__
+**/__screenshots__
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.mp4
+
+# Editor & personal state
+.idea
+.vscode
+*.swp
+*~
+.DS_Store
+.evcrate
+**/.evcrate
+.config
+**/.config

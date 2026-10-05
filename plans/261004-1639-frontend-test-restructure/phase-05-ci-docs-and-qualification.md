@@ -6,7 +6,7 @@
 - [Vitest v4 failure screenshot setting](https://v4.vitest.dev/config/browser/screenshotfailures).
 
 ## Overview
-- Date: 2026-10-04. Priority: P2. Implementation: pending. Review: pending.
+- Date: 2026-10-05. Priority: P2. Implementation: completed. Review: approved.
 - Make functional application E2E required in CI; keep image creation local and human review separate. Publish correct testing commands, inventory and gaps.
 
 ## Key Insights
@@ -50,12 +50,11 @@
 10. After smoke proof, update existing changelog; keep docs consistent with actual final commands/settings and runner behavior.
 
 ## Todo list
-- [ ] Required functional CI E2E job and aggregate script integration.
-- [ ] Shared CI image bypass across component/application runners.
-- [ ] docs/testing.md and AGENTS.md updates; inventory/workflow gaps.
-- [ ] Acceptance matrix executed; final-source screenshots human-reviewed.
-- [ ] Existing changelog updated after verified implementation.
-
+- [x] Required functional CI E2E job and aggregate script integration.
+- [x] Shared CI image bypass across component/application runners.
+- [x] docs/testing.md and AGENTS.md updates; inventory/workflow gaps.
+- [x] Acceptance matrix executed; final-source screenshots human-reviewed.
+- [x] Existing changelog updated after verified implementation.
 ## Success Criteria
 - All A/L/C functional gates pass and E gates satisfied; pending human review prevents visual acceptance, not hidden behind CI success.
 - `CI=true` without `E2E_CAPTURE` and explicit capture-disabled success/failure runs produce zero images and preserve case evidence/review bytes and mtimes.
@@ -72,4 +71,4 @@
 Loopback-only fixture services; isolated DB names/roots; ephemeral test credentials. CI uploads only sanitized logs/assertion reports, not bearer/session state or image artifacts when disabled. No global container prune/pkill.
 
 ## Next steps
-Deliver exercised implementation evidence and named residual workflow gaps. No implementation starts from this planning session. Unresolved questions: none blocking implementation; actual human image review remains an execution-time gate.
+Frontend testing restructure completed. All 5 phases delivered and qualified. Maintain runner separation and human review governance for future E2E additions. Unresolved questions: none.

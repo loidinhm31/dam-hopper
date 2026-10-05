@@ -104,6 +104,46 @@ jobs:
       - name: Run all UI browser tests
         run: pnpm --filter @dam-hopper/ui test:browser
 
+
+  application_e2e:
+    name: Application E2E journeys
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      CONTAINER_ENGINE: docker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --filter @dam-hopper/ui exec playwright install --with-deps chromium
+      - name: Prefetch MongoDB image
+        run: docker pull docker.io/library/mongo:8.2
+      - name: Typecheck E2E configuration and specs
+        run: pnpm --filter @dam-hopper/ui test:e2e:typecheck
+      - name: Prebuild E2E test runtime images
+        run: pnpm --filter @dam-hopper/ui test:e2e:build-images
+      - name: Run application E2E tests
+        env:
+          CI: "true"
+          E2E_CAPTURE: "0"
+        run: pnpm --filter @dam-hopper/ui test:e2e
+      - name: Upload sanitized test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-e2e-failure-reports
+          path: |
+            packages/ui/playwright-report
+            packages/ui/test-results
+          retention-days: 7
   server_linux:
     name: Rust server - Linux
     runs-on: ubuntu-22.04
@@ -299,6 +339,7 @@ jobs:
       - static_build
       - js_tests
       - browser_tests
+      - application_e2e
       - server_linux
       - server_windows
       - native_linux
@@ -312,6 +353,7 @@ jobs:
           STATIC_BUILD: ${{ needs.static_build.result }}
           JS_TESTS: ${{ needs.js_tests.result }}
           BROWSER_TESTS: ${{ needs.browser_tests.result }}
+          APPLICATION_E2E: ${{ needs.application_e2e.result }}
           SERVER_LINUX: ${{ needs.server_linux.result }}
           SERVER_WINDOWS: ${{ needs.server_windows.result }}
           NATIVE_LINUX: ${{ needs.native_linux.result }}
@@ -323,6 +365,7 @@ jobs:
             "$STATIC_BUILD" \
             "$JS_TESTS" \
             "$BROWSER_TESTS" \
+            "$APPLICATION_E2E" \
             "$SERVER_LINUX" \
             "$SERVER_WINDOWS" \
             "$NATIVE_LINUX" \

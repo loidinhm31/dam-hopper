@@ -112,5 +112,4 @@ Linux idle suspend is coordinated by the server and an enrolled Unix-socket help
 `deploy/release/` provides release packaging, installers, and service templates. Release manager/systemd operations have separate Linux and Windows documentation. Host-resource SSE implementation is documented, but target-host, deployed-proxy, live-browser, and soak qualification remain open; it is not a release qualification claim. See [SSE architecture](./architecture/host-resource-sse.md).
 
 ## Qualification boundary
-
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See the [project roadmap](./project-roadmap.md) and [testing guide](./testing.md) for current open gates.
