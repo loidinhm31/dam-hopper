@@ -310,7 +310,6 @@ export function SettingsPage() {
         <SettingsSectionAccordion
           title="Appearance"
           description="Theme, layout density, editor behavior, and notification preferences."
-          defaultOpen
         >
           <SettingsAppearanceSection />
         </SettingsSectionAccordion>
@@ -325,14 +324,12 @@ export function SettingsPage() {
         <SettingsSectionAccordion
           title="Usage insights"
           description="Opt in to privacy-safe local Codex response telemetry and token summaries."
-          defaultOpen
         >
           <SettingsUsageInsightsSection owner={targetOwner} />
         </SettingsSectionAccordion>
         <SettingsSectionAccordion
           title="Terminal Idle Suspend"
           description="Configure quiet duration and scheduled RTC wake timer for server-authoritative suspend."
-          defaultOpen
         >
           <SettingsIdleSuspendTimingSection owner={targetOwner} />
         </SettingsSectionAccordion>
@@ -340,7 +337,6 @@ export function SettingsPage() {
         <SettingsSectionAccordion
           title="Global Settings"
           description="Edit machine-level defaults that apply across DamHopper workspaces."
-          defaultOpen
         >
           <SettingsGlobalConfigPanel owner={targetOwner} />
         </SettingsSectionAccordion>
@@ -348,7 +344,6 @@ export function SettingsPage() {
         <SettingsSectionAccordion
           title="Workspace Config"
           description="Edit the active workspace TOML config and project definitions."
-          defaultOpen
         >
           <SettingsWorkspaceConfigPanel
             config={config}
