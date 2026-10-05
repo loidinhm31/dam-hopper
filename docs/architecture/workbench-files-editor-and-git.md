@@ -65,6 +65,20 @@ Editor behavior is intentionally conservative:
 
 Git mutations invalidate only the affected profile/target caches and reconcile only tabs belonging to that target. Project root and worktree tabs remain independent even when their relative paths match.
 
+### Planned Git Blame Annotation Contract
+
+**Design only; implementation pending.** See the [phased implementation plan](../../plans/261005-2106-editor-git-blame-annotations/plan.md) and [agreed brainstorm](../../plans/reports/brainstorm-261005-2106-editor-git-blame-annotations.md).
+
+- Line-number gutter context menu toggles dedicated annotations and exposes Refresh Annotations while enabled; existing markers and left-click diff remain separate. Whole editor-wrapper width ≥640px uses220px author/date; narrower panes use author-only `min(120px, wrapperWidth / 3)`, with full date/timezone/hash/subject on hover/focus. Wide viewport does not prevent a narrow source Split from compacting.
+- Native `git2` computes blame from a captured commit and the current editor buffer. New/modified lines have explicit uncommitted attribution; no file/index/ref writes or implicit saves.
+- Annotation results belong to the captured profile/generation, project/worktree, resolved VCS root/path, editor snapshot, and repository revision. An edit or ownership change invalidates visible attribution immediately; late results cannot attach to a newer buffer.
+- Clean files resolve their owning VCS root independently of changed-file status. Input sizes and blocking-worker admission are bounded; aborting HTTP does not imply native work stopped.
+- Enabled state is per-tab, session-only. Buffer bytes, annotations, and navigation requests are not persisted; inactive source editors do not request blame.
+- External Git refresh is event-driven: window focus/visibility restoration, source activation, explicit Refresh Annotations and relevant editor/FS/in-app Git invalidation. No feature-added periodic polling or watcher. Continuously focused external changes may remain stale until a relevant event or focus/manual refresh; refreshing never replaces dirty bytes.
+- Public Monaco geometry and lifecycle events govern visible-row alignment through scrolling, folding, resizing, and font changes; no private editor DOM dependency.
+- Show Commit in Git ensures the source target/root's Workspace Git panel is open by exact OID, independent of pagination/filtering, with read-only full message/files/historical diffs. No inspection mutation controls or fabricated eligibility; selecting a real history row restores existing canonical actions. Preserve unsaved content and mutation gates; an already-open panel never toggles closed.
+- Normal/degraded text and Markdown/HTML source panes are in scope. Preview-only, diff, merge, binary, and large-file viewers are excluded. No inline change popup, settings migration, database, plugin, or alternate CLI blame engine.
+
 ## Federated Search
 
 Search has two explicit scopes in `SearchPanel`:
