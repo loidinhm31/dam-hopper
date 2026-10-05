@@ -41,6 +41,16 @@ test.describe("Privacy Heavy Blur Real Application Journey (A04)", () => {
     // 2. Navigate /settings → Appearance; select Heavy Blur
     await page.goto(`${appServices.appOrigin}/settings`);
 
+    // Expand Appearance accordion if collapsed
+    const appearanceAccordionBtn = page.locator(
+      "button:has-text('Appearance')",
+    );
+    await expect(appearanceAccordionBtn).toBeVisible({ timeout: 15_000 });
+    const isExpanded = await appearanceAccordionBtn.getAttribute("aria-expanded");
+    if (isExpanded !== "true") {
+      await appearanceAccordionBtn.click();
+    }
+
     const cognitoStyleTrigger = page.locator(
       'button[aria-label="Cognito Mode style"]',
     );

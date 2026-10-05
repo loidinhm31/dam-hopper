@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::pty::NoopEventSink;
 
 use super::{
+    cloudflared::cloudflared_tunnel_args,
     driver::{BoxFuture, DriverHandle, TunnelDriver, TunnelDriverEvent},
     error::TunnelError,
     installer::TunnelInstaller,
@@ -242,4 +243,186 @@ fn installer_path_lookup_missing_isolated_path() {
     let result = TunnelInstaller::resolve_path_binary(Some(tmp.path().as_os_str().to_os_string()));
 
     assert!(result.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// cloudflared_tunnel_args isolates subprocess from global configs and rewrites host
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cloudflared_tunnel_args_contains_isolation_and_host_header() {
+    let args = cloudflared_tunnel_args(25001);
+    assert_eq!(
+        args,
+        vec![
+            "--no-autoupdate",
+            "--config",
+            "",
+            "tunnel",
+            "--http-host-header",
+            "localhost",
+            "--url",
+            "http://127.0.0.1:25001"
+        ]
+    );
+}
+
+struct ChannelDropDriver {
+    url_to_send: Option<String>,
+}
+
+impl TunnelDriver for ChannelDropDriver {
+    fn name(&self) -> &'static str {
+        "channel_drop"
+    }
+
+    fn start(
+        &self,
+        _port: u16,
+        _label: &str,
+        event_tx: tokio::sync::mpsc::Sender<TunnelDriverEvent>,
+    ) -> BoxFuture<'_, Result<DriverHandle, TunnelError>> {
+        let url = self.url_to_send.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                if let Some(u) = url {
+                    let _ = event_tx.send(TunnelDriverEvent::UrlReady(u)).await;
+                }
+                // Channel drops here without sending Exited or Failed!
+            });
+
+            Ok(DriverHandle {
+                pid: Some(99999),
+                stop_tx: None,
+            })
+        })
+    }
+}
+
+struct CapturingEventSink {
+    events: Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>,
+}
+
+impl CapturingEventSink {
+    fn new() -> (Self, Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>) {
+        let events = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        (
+            Self {
+                events: Arc::clone(&events),
+            },
+            events,
+        )
+    }
+}
+
+impl crate::pty::EventSink for CapturingEventSink {
+    fn send_terminal_data(&self, _: &str, _: &str, _: u64, _: u64) {}
+    fn send_terminal_exit(&self, _: &str, _: Option<i32>) {}
+    fn send_terminal_changed(&self) {}
+    fn send_terminal_exit_enhanced(
+        &self,
+        _: &str,
+        _: Option<i32>,
+        _: bool,
+        _: Option<u64>,
+        _: Option<u32>,
+    ) {}
+    fn send_process_restarted(&self, _: &str, _: u32, _: Option<i32>) {}
+    fn broadcast(&self, event_type: &str, payload: serde_json::Value) {
+        self.events
+            .lock()
+            .push((event_type.to_string(), payload));
+    }
+}
+
+#[tokio::test]
+async fn channel_drop_triggers_fallback_stopped_broadcast_and_cleanup() {
+    let (sink, events) = CapturingEventSink::new();
+    let driver = Arc::new(ChannelDropDriver {
+        url_to_send: Some("https://test-drop.trycloudflare.com".to_string()),
+    });
+    let manager = TunnelSessionManager::new(Arc::new(sink), driver);
+
+    let session = manager
+        .create(3001, "test-drop".to_string())
+        .await
+        .unwrap();
+
+    // Wait for the driver task to send UrlReady and drop the channel
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Verify that manager cleared the session on channel drop
+    let active = manager.list().await;
+    assert!(active.is_empty(), "session should be cleaned up after channel drop");
+
+    // Verify events received: tunnel:created, tunnel:ready, and fallback tunnel:stopped
+    let captured = events.lock().clone();
+    let event_names: Vec<String> = captured.into_iter().map(|(e, _)| e).collect();
+    assert!(
+        event_names.contains(&"tunnel:created".to_string()),
+        "missing tunnel:created"
+    );
+    assert!(
+        event_names.contains(&"tunnel:ready".to_string()),
+        "missing tunnel:ready"
+    );
+    assert!(
+        event_names.contains(&"tunnel:stopped".to_string()),
+        "missing fallback tunnel:stopped"
+    );
+
+    // Ensure stop on the cleaned-up session returns NotFound without panic
+    let stop_result = manager.stop(session.id).await;
+    assert!(stop_result.is_err());
+}
+
+#[tokio::test]
+async fn driver_exited_event_triggers_stopped_broadcast_once() {
+    let (sink, events) = CapturingEventSink::new();
+    struct ExitedDriver;
+    impl TunnelDriver for ExitedDriver {
+        fn name(&self) -> &'static str {
+            "exited_driver"
+        }
+        fn start(
+            &self,
+            _port: u16,
+            _label: &str,
+            event_tx: tokio::sync::mpsc::Sender<TunnelDriverEvent>,
+        ) -> BoxFuture<'_, Result<DriverHandle, TunnelError>> {
+            Box::pin(async move {
+                tokio::spawn(async move {
+                    let _ = event_tx
+                        .send(TunnelDriverEvent::UrlReady(
+                            "https://test-exited.trycloudflare.com".to_string(),
+                        ))
+                        .await;
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let _ = event_tx.send(TunnelDriverEvent::Exited).await;
+                });
+                Ok(DriverHandle {
+                    pid: Some(88888),
+                    stop_tx: None,
+                })
+            })
+        }
+    }
+
+    let manager = TunnelSessionManager::new(Arc::new(sink), Arc::new(ExitedDriver));
+    let session = manager.create(3002, "test-exited".to_string()).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let active = manager.list().await;
+    assert!(active.is_empty(), "session should be cleaned up after exit");
+
+    let captured = events.lock().clone();
+    let stopped_count = captured
+        .iter()
+        .filter(|(e, _)| e == "tunnel:stopped")
+        .count();
+    assert_eq!(stopped_count, 1, "tunnel:stopped should be broadcast exactly once");
+
+    let stop_result = manager.stop(session.id).await;
+    assert!(stop_result.is_err());
 }

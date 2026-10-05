@@ -37,7 +37,7 @@ fn generate_auth_token(subject: &str, sid: &str) -> String {
         auth_version: 0,
         credential_version: 0,
         iat: now.timestamp() as usize,
-        exp: (now.timestamp() + 3600) as usize,
+        exp: dam_hopper_server::auth::MOCK_EXPIRY_SECS,
     };
     claims.encode(TEST_JWT_SECRET).unwrap()
 }
@@ -127,7 +127,7 @@ async fn create_harness(
 
     if !no_auth {
         let now = chrono::Utc::now();
-        let exp = chrono::DateTime::from_timestamp((now.timestamp() + 3600) as i64, 0).unwrap();
+        let exp = chrono::DateTime::from_timestamp(dam_hopper_server::auth::MOCK_EXPIRY_SECS as i64, 0).unwrap();
         let username = match role {
             UserRole::Admin => "admin-user",
             UserRole::User => "normal-user",
