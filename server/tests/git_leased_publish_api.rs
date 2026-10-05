@@ -617,3 +617,91 @@ async fn test_api_post_squash_lease_fences_local_upstream_url_and_root_changes()
         }
     }
 }
+
+#[tokio::test]
+async fn test_api_leased_push_inactive_branch_squash_and_publish() {
+    let app = setup_test_app();
+    let main_remote_before = git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path);
+    let main_local_before = git_output(&["rev-parse", "HEAD"], &app.project_path);
+
+    // Create feature branch, add commits and push to remote
+    git(&["checkout", "-b", "feature"], &app.project_path);
+    for i in 0..3 {
+        std::fs::write(app.project_path.join("feat.txt"), format!("feat {i}\n")).unwrap();
+        git(&["add", "feat.txt"], &app.project_path);
+        git(&["commit", "-m", &format!("feature commit {i}")], &app.project_path);
+    }
+    git(&["push", "-u", "origin", "feature"], &app.project_path);
+    let feat_remote_before = git_output(&["rev-parse", "refs/heads/feature"], &app.remote_bare_path);
+    let feat_hashes: Vec<String> = git_output(&["rev-list", "--reverse", "refs/heads/feature"], &app.project_path)
+        .lines()
+        .skip(1) // skip the initial main commit
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(feat_hashes.len(), 3);
+    assert_eq!(feat_hashes[2], feat_remote_before);
+
+    // Switch back to main (main is active, feature is inactive)
+    git(&["checkout", "main"], &app.project_path);
+
+    // 1. Squash pushed inactive feature branch
+    let squash_body = json!({
+        "hashes": &feat_hashes[..2],
+        "message": "squashed feature range\n",
+        "expectedBranch": "refs/heads/feature",
+        "expectedHeadOid": feat_hashes[2],
+        "allowSignatureRemoval": false
+    });
+    let squash_res = squash_lease_post(&app, "/api/git/test-repo/squash", &squash_body).await;
+    assert_eq!(squash_res["ok"], true, "{squash_res}");
+    let new_feat_tip = squash_res["newHeadOid"].as_str().unwrap();
+    assert_ne!(new_feat_tip, feat_hashes[2]);
+
+    // Remote feature and main are still completely unchanged
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/feature"], &app.remote_bare_path),
+        feat_remote_before
+    );
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        main_remote_before
+    );
+
+    // 2. Prepare leased push with explicit branch = refs/heads/feature
+    let prep_body = json!({
+        "branch": "refs/heads/feature"
+    });
+    let preview = squash_lease_post(&app, "/api/git/test-repo/push/prepare", &prep_body).await;
+    assert_eq!(preview["status"], "ready", "{preview}");
+    let snapshot = &preview["snapshot"];
+    assert_eq!(snapshot["branch"], "refs/heads/feature");
+    assert_eq!(snapshot["destinationRef"], "refs/heads/feature");
+    assert_eq!(snapshot["remoteName"], "origin");
+    assert_eq!(snapshot["expectedRemoteOid"], feat_remote_before);
+    assert_eq!(snapshot["sourceOid"], new_feat_tip);
+
+    // 3. Checkout change (switch to detached HEAD) does not invalidate frozen branch lease
+    git(&["checkout", "--detach"], &app.project_path);
+
+    // 4. Publish leased push
+    let pub_body = json!({
+        "snapshot": snapshot
+    });
+    let pub_res = squash_lease_post(&app, "/api/git/test-repo/push/publish", &pub_body).await;
+    assert_eq!(pub_res["status"], "published", "{pub_res}");
+
+    // Remote feature is now updated to the rewritten tip!
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/feature"], &app.remote_bare_path),
+        new_feat_tip
+    );
+    // Remote main remains completely unchanged!
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], &app.remote_bare_path),
+        main_remote_before
+    );
+
+    // Return to main branch
+    git(&["checkout", "main"], &app.project_path);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], &app.project_path), main_local_before);
+}

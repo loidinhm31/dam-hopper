@@ -547,3 +547,114 @@ async fn test_api_signature_consent_defaults_false_and_absorbed_signature_requir
     ))
     .contains("gpgsig"));
 }
+
+#[tokio::test]
+async fn test_api_squash_inactive_branch_preserves_worktree_and_active_branch() {
+    let app = setup(true);
+    let main_head = text(&["rev-parse", "HEAD"], &app.path);
+
+    // Create inactive topic branch with 3 commits
+    git(&["checkout", "-b", "topic"], &app.path);
+    std::fs::write(app.path.join("topic0"), "t0\n").unwrap();
+    git(&["add", "topic0"], &app.path);
+    git(&["commit", "-m", "t0 commit"], &app.path);
+    let t0 = text(&["rev-parse", "HEAD"], &app.path);
+
+    std::fs::write(app.path.join("topic1"), "t1\n").unwrap();
+    git(&["add", "topic1"], &app.path);
+    git(&["commit", "-m", "t1 commit"], &app.path);
+    let t1 = text(&["rev-parse", "HEAD"], &app.path);
+
+    std::fs::write(app.path.join("topic2"), "t2\n").unwrap();
+    git(&["add", "topic2"], &app.path);
+    git(&["commit", "-m", "t2 commit"], &app.path);
+    let t2 = text(&["rev-parse", "HEAD"], &app.path);
+
+    // Switch back to main (main is active, topic is inactive)
+    git(&["checkout", "main"], &app.path);
+
+    // Create dirty files on main
+    std::fs::write(app.path.join("dirty_staged"), "dirty staged\n").unwrap();
+    git(&["add", "dirty_staged"], &app.path);
+    std::fs::write(app.path.join("tracked"), "dirty unstaged\n").unwrap();
+
+    // 1. Read commit message of t0 on inactive topic branch via query
+    let (msg_status, msg_body) = request(
+        &app.router,
+        "GET",
+        &format!("/api/git/test-repo/commit/{t0}/message?branch=refs%2Fheads%2Ftopic"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(msg_status, StatusCode::OK);
+    assert_eq!(msg_body["branch"], "refs/heads/topic");
+    assert_eq!(msg_body["headOid"], t2);
+
+    // 2. POST squash on inactive topic branch
+    let squash_payload = json!({
+        "hashes": [t0, t1],
+        "message": "squashed t0 and t1 via API\n",
+        "expectedBranch": "refs/heads/topic",
+        "expectedHeadOid": t2,
+        "allowSignatureRemoval": false
+    });
+    let (squash_status, squash_res) = request(
+        &app.router,
+        "POST",
+        "/api/git/test-repo/squash",
+        Some(&squash_payload),
+        None,
+    )
+    .await;
+    assert_eq!(squash_status, StatusCode::OK);
+    assert_eq!(squash_res["ok"], true, "{squash_res}");
+    assert_eq!(squash_res["branch"], "refs/heads/topic");
+    let new_topic_tip = squash_res["newHeadOid"].as_str().unwrap();
+    assert_ne!(new_topic_tip, t2);
+
+    // Active branch main and checked-out HEAD remain untouched
+    assert_eq!(text(&["rev-parse", "HEAD"], &app.path), main_head);
+    assert_eq!(text(&["rev-parse", "refs/heads/main"], &app.path), main_head);
+    assert_eq!(text(&["rev-parse", "refs/heads/topic"], &app.path), new_topic_tip);
+
+    // Dirty staged and unstaged files on main preserved
+    assert_eq!(std::fs::read_to_string(app.path.join("dirty_staged")).unwrap(), "dirty staged\n");
+    assert_eq!(std::fs::read_to_string(app.path.join("tracked")).unwrap(), "dirty unstaged\n");
+
+    // 3. Stale retry: posting with old expectedHeadOid (t2) returns stale-ref
+    let (stale_status, stale_res) = request(
+        &app.router,
+        "POST",
+        "/api/git/test-repo/squash",
+        Some(&squash_payload),
+        None,
+    )
+    .await;
+    assert_eq!(stale_status, StatusCode::OK);
+    assert_eq!(stale_res["ok"], false);
+    assert_eq!(stale_res["blockedReason"], "stale-ref");
+
+    // 4. Linked worktree: if topic branch is checked out in a linked worktree, it blocks
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt_path = wt_dir.path();
+    git(&["worktree", "add", wt_path.to_str().unwrap(), "topic"], &app.path);
+
+    let wt_blocked_payload = json!({
+        "hashes": [t0, t1],
+        "message": "should fail linked worktree\n",
+        "expectedBranch": "refs/heads/topic",
+        "expectedHeadOid": new_topic_tip,
+        "allowSignatureRemoval": false
+    });
+    let (_, wt_res) = request(
+        &app.router,
+        "POST",
+        "/api/git/test-repo/squash",
+        Some(&wt_blocked_payload),
+        None,
+    )
+    .await;
+    assert_eq!(wt_res["ok"], false);
+    assert_eq!(wt_res["blockedReason"], "checked-out-branch");
+}

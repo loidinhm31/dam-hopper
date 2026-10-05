@@ -54,6 +54,7 @@ export interface GitHistoryViewResult {
   selectBranchRef: (ref: string) => void;
   followCheckedOutBranch: () => void;
   isViewingActiveBranch: boolean;
+  isViewingLocalBranch: boolean;
 
   searchText: string;
   setSearchText: (text: string) => void;
@@ -269,6 +270,14 @@ export function useGitHistoryView(
     return Boolean(activeBranch && resolved.branch.name === activeBranch);
   }, [resolved, activeBranchRef, activeBranch]);
 
+  const isViewingLocalBranch = useMemo(() => {
+    return Boolean(
+      resolved.branch &&
+        !resolved.branch.isRemote &&
+        branchRef?.startsWith("refs/heads/"),
+    );
+  }, [resolved.branch, branchRef]);
+
   const owner = resolveTargetOwner(targetRef.profileId);
   const connectionGeneration =
     connectionSnapshot?.owner.generation ?? owner?.generation ?? 0;
@@ -376,15 +385,12 @@ export function useGitHistoryView(
       : !isRootsSuccess ||
           !isBranchesSuccess ||
           !rootsData.some((entry) => entry.rootId === effectiveRootId)
-        ? "Waiting for available root and checked-out branch discovery."
-        : !activeBranchRef?.startsWith("refs/heads/") ||
-            activeBranchObj?.isRemote
-          ? "Squash requires a checked-out local branch."
-          : resolved.canonicalRef !== activeBranchRef
-            ? "View the checked-out branch to select commits for squash."
-            : error
-              ? "Refresh history before selecting commits."
-              : undefined;
+        ? "Waiting for available root and local branch discovery."
+        : !isViewingLocalBranch
+          ? "Squash requires a local branch."
+          : error
+            ? "Refresh history before selecting commits."
+            : undefined;
   const squashAvailable = !squashUnavailableReason;
   const squashScopeKey = JSON.stringify([
     effectiveScopeKey,
@@ -654,6 +660,7 @@ export function useGitHistoryView(
     selectBranchRef,
     followCheckedOutBranch,
     isViewingActiveBranch,
+    isViewingLocalBranch,
 
     searchText,
     setSearchText,

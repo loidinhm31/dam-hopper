@@ -530,7 +530,7 @@ async fn leased_push_prepare_captures_snapshot_and_publishes_matching_lease() {
     git(&["add", "local.txt"], seed.path());
     git(&["commit", "-m", "local rewrite"], seed.path());
 
-    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+    let preview = prepare_leased_push(seed.path(), seed.path(), None, None)
         .await
         .expect("prepare_leased_push should succeed");
 
@@ -577,7 +577,7 @@ async fn leased_push_rejects_stale_remote_when_remote_advances_after_preview() {
     git(&["add", "local.txt"], seed.path());
     git(&["commit", "-m", "local commit"], seed.path());
 
-    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+    let preview = prepare_leased_push(seed.path(), seed.path(), None, None)
         .await
         .expect("prepare_leased_push should succeed");
 
@@ -611,7 +611,7 @@ async fn leased_push_rejects_stale_remote_when_remote_advances_after_preview() {
 async fn leased_push_already_current_returns_no_op_without_push() {
     let (_remote, seed, _clone) = make_remote_clone_repo();
 
-    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+    let preview = prepare_leased_push(seed.path(), seed.path(), None, None)
         .await
         .expect("prepare should succeed");
 
@@ -643,7 +643,7 @@ async fn leased_push_rejects_stale_local_when_local_tip_changes_after_preview() 
     git(&["add", "local1.txt"], seed.path());
     git(&["commit", "-m", "local 1"], seed.path());
 
-    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+    let preview = prepare_leased_push(seed.path(), seed.path(), None, None)
         .await
         .expect("prepare should succeed");
 
@@ -693,7 +693,7 @@ async fn leased_push_negotiation_detects_mismatched_remote_oid() {
     git(&["add", "file.txt"], seed.path());
     git(&["commit", "-m", "commit"], seed.path());
 
-    let preview = prepare_leased_push(seed.path(), seed.path(), None)
+    let preview = prepare_leased_push(seed.path(), seed.path(), None, None)
         .await
         .expect("prepare should succeed");
 
@@ -1892,7 +1892,7 @@ async fn edit_commit_message_amends_head_and_preserves_tree_and_author() {
     let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
     let old_author = git_output(&["log", "-1", "--format=%an <%ae>"], path);
 
-    let snap = get_commit_message(path, &old_hash).unwrap();
+    let snap = get_commit_message(path, &old_hash, None).unwrap();
     assert_eq!(snap.branch, "refs/heads/main");
     assert_eq!(snap.head_oid, old_hash);
 
@@ -1925,7 +1925,7 @@ async fn edit_commit_message_amends_head_and_preserves_tree_and_author() {
         old_author
     );
     assert_eq!(
-        get_commit_message(path, new_hash).unwrap().message,
+        get_commit_message(path, new_hash, None).unwrap().message,
         "new subject\n\nnew body\n"
     );
 }
@@ -1941,7 +1941,7 @@ async fn edit_commit_message_rewrites_older_commit_and_descendants() {
     let old_head = git_output(&["rev-parse", "HEAD"], path);
     let old_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
 
-    let snap = get_commit_message(path, &root_hash).unwrap();
+    let snap = get_commit_message(path, &root_hash, None).unwrap();
     assert_eq!(snap.branch, "refs/heads/main");
     assert_eq!(snap.head_oid, old_head);
 
@@ -1984,7 +1984,7 @@ async fn edit_commit_message_allows_dirty_worktree_and_pushed_commit() {
     // Untracked file
     std::fs::write(path.join("untracked.txt"), "untracked content\n").unwrap();
 
-    let snap = get_commit_message(path, &hash).unwrap();
+    let snap = get_commit_message(path, &hash, None).unwrap();
     let result = edit_commit_message(
         path,
         &hash,
@@ -2021,7 +2021,7 @@ async fn edit_commit_message_allows_dirty_worktree_and_pushed_commit() {
     let (_remote, seed, _clone) = make_remote_clone_repo();
     let pushed_hash = git_output(&["rev-parse", "HEAD"], seed.path());
     let remote_head_before = git_output(&["rev-parse", "HEAD"], _remote.path());
-    let pushed_snap = get_commit_message(seed.path(), &pushed_hash).unwrap();
+    let pushed_snap = get_commit_message(seed.path(), &pushed_hash, None).unwrap();
 
     let pushed_res = edit_commit_message(
         seed.path(),
@@ -2045,7 +2045,7 @@ async fn edit_commit_message_rejects_empty_active_op_detached_and_unreachable() 
     let repo = make_temp_repo();
     let path = repo.path();
     let hash = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &hash).unwrap();
+    let snap = get_commit_message(path, &hash, None).unwrap();
 
     // Empty message
     assert!(
@@ -2088,15 +2088,16 @@ async fn edit_commit_message_rejects_empty_active_op_detached_and_unreachable() 
         Some(crate::git::GitBlockReason::UnreachableCommit)
     );
 
-    // Detached HEAD
+    // Detached HEAD: default message read fails without checked-out local branch
     git(&["checkout", "--detach", &hash], path);
-    let detached = edit_commit_message(path, &hash, "new", &snap.branch, &snap.head_oid, false)
+    assert!(get_commit_message(path, &hash, None).is_err());
+    // Explicit local branch succeeds even when current HEAD is detached
+    let detached_edit = edit_commit_message(path, &hash, "new message on main while detached", &snap.branch, &snap.head_oid, false)
         .await
         .unwrap();
-    assert_eq!(
-        detached.blocked_reason,
-        Some(crate::git::GitBlockReason::DetachedHead)
-    );
+    assert!(detached_edit.ok);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), hash);
+    assert_ne!(git_output(&["rev-parse", "refs/heads/main"], path), hash);
 }
 
 #[tokio::test]
@@ -2130,7 +2131,7 @@ async fn edit_commit_message_preserves_merge_commit_tree_and_ordered_parents() {
     let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
     let merge_parents_before = git_output(&["rev-parse", "HEAD^1", "HEAD^2"], path);
 
-    let snap = get_commit_message(path, &root_hash).unwrap();
+    let snap = get_commit_message(path, &root_hash, None).unwrap();
     let result = edit_commit_message(
         path,
         &root_hash,
@@ -2166,7 +2167,7 @@ async fn edit_commit_message_exact_no_op() {
     let repo = make_temp_repo();
     let path = repo.path();
     let hash = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &hash).unwrap();
+    let snap = get_commit_message(path, &hash, None).unwrap();
 
     let reflog_before = git_output(&["reflog", "show", "main"], path);
 
@@ -2197,7 +2198,7 @@ async fn edit_commit_message_stale_ref_detected_before_target_lookup() {
     let repo = make_temp_repo();
     let path = repo.path();
     let hash = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &hash).unwrap();
+    let snap = get_commit_message(path, &hash, None).unwrap();
 
     let stale_oid = "0000000000000000000000000000000000000000";
     let fake_target = "1111111111111111111111111111111111111111";
@@ -2245,7 +2246,7 @@ async fn edit_commit_message_signatures_and_mergetag_consent() {
         path,
     );
 
-    let snap = get_commit_message(path, &signed_oid.to_string()).unwrap();
+    let snap = get_commit_message(path, &signed_oid.to_string(), None).unwrap();
 
     let blocked = edit_commit_message(
         path,
@@ -2307,7 +2308,7 @@ async fn edit_commit_message_non_utf8_encoding_rejected() {
         path,
     );
 
-    let snap_res = get_commit_message(path, &iso_oid.to_string());
+    let snap_res = get_commit_message(path, &iso_oid.to_string(), None);
     assert!(snap_res.is_err());
 
     let edit_res = edit_commit_message(
@@ -2348,7 +2349,7 @@ async fn edit_commit_message_linked_worktree_detection() {
     git(&["checkout", "--ignore-other-worktrees", "main"], wt_path);
 
     let head = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &head).unwrap();
+    let snap = get_commit_message(path, &head, None).unwrap();
 
     let result = edit_commit_message(
         path,
@@ -2387,7 +2388,7 @@ async fn edit_commit_message_inside_linked_worktree_succeeds() {
     );
 
     let wt_head = git_output(&["rev-parse", "HEAD"], wt_path);
-    let snap = get_commit_message(wt_path, &wt_head).unwrap();
+    let snap = get_commit_message(wt_path, &wt_head, None).unwrap();
     assert_eq!(snap.branch, "refs/heads/feature");
     assert_eq!(snap.head_oid, wt_head);
 
@@ -2405,7 +2406,7 @@ async fn edit_commit_message_inside_linked_worktree_succeeds() {
     assert!(result.ok);
     assert_eq!(result.branch.as_deref(), Some("refs/heads/feature"));
     assert_eq!(
-        get_commit_message(wt_path, result.hash.as_deref().unwrap())
+        get_commit_message(wt_path, result.hash.as_deref().unwrap(), None)
             .unwrap()
             .message,
         "edited message in linked worktree\n"
@@ -2447,7 +2448,7 @@ async fn edit_commit_message_octopus_merge_preservation() {
     assert_eq!(parents_vec[1], b_head);
     assert_eq!(parents_vec[2], c_head);
 
-    let snap = get_commit_message(path, &b_head).unwrap();
+    let snap = get_commit_message(path, &b_head, None).unwrap();
     let result = edit_commit_message(
         path,
         &b_head,
@@ -2497,7 +2498,7 @@ async fn edit_commit_message_gpgsig_sha256_and_mergetag_retention() {
         path,
     );
 
-    let snap = get_commit_message(path, &sha256_oid.to_string()).unwrap();
+    let snap = get_commit_message(path, &sha256_oid.to_string(), None).unwrap();
     let blocked = edit_commit_message(
         path,
         &sha256_oid.to_string(),
@@ -2541,7 +2542,7 @@ async fn edit_commit_message_gpgsig_sha256_and_mergetag_retention() {
     );
 
     // Now edit p1_oid (p2_oid is NOT affected)
-    let snap_p1 = get_commit_message(path, &p1_oid).unwrap();
+    let snap_p1 = get_commit_message(path, &p1_oid, None).unwrap();
     let res = edit_commit_message(
         path,
         &p1_oid,
@@ -2570,7 +2571,7 @@ async fn edit_commit_message_grafts_and_replace_refs_blocked() {
     let repo = make_temp_repo();
     let path = repo.path();
     let head = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &head).unwrap();
+    let snap = get_commit_message(path, &head, None).unwrap();
 
     // 1. Grafts file
     let grafts_file = path.join(".git/info/grafts");
@@ -2701,7 +2702,7 @@ async fn edit_commit_message_shallow_boundary_blocked() {
     configure_test_repo(shallow_path);
 
     let head = git_output(&["rev-parse", "HEAD"], shallow_path);
-    let snap = get_commit_message(shallow_path, &head).unwrap();
+    let snap = get_commit_message(shallow_path, &head, None).unwrap();
 
     let res = edit_commit_message(
         shallow_path,
@@ -2735,7 +2736,7 @@ async fn edit_commit_message_missing_parent_object_rejected() {
     git(&["commit", "-m", "commit 2"], path);
     let c2_oid = git_output(&["rev-parse", "HEAD"], path);
 
-    let snap = get_commit_message(path, &c2_oid).unwrap();
+    let snap = get_commit_message(path, &c2_oid, None).unwrap();
 
     // Remove the loose object for c1 to simulate missing/corrupt ancestry
     let (prefix, suffix) = c1_oid.split_at(2);
@@ -2763,17 +2764,17 @@ async fn edit_commit_message_missing_parent_object_rejected() {
 }
 
 #[tokio::test]
-async fn edit_commit_message_same_oid_different_branch_rejected() {
+async fn edit_commit_message_same_old_oid_different_branch_targets_requested_ref() {
     let repo = make_temp_repo();
     let path = repo.path();
     let head = git_output(&["rev-parse", "HEAD"], path);
 
     // Create a new branch pointing to the exact same commit
     git(&["branch", "feature", &head], path);
-    let snap = get_commit_message(path, &head).unwrap();
+    let snap = get_commit_message(path, &head, None).unwrap();
     assert_eq!(snap.branch, "refs/heads/main");
 
-    // Switch HEAD to feature: tip OID is identical, but branch is different
+    // Switch HEAD to feature: tip OID is identical, but branch is different (main is now inactive)
     git(&["checkout", "feature"], path);
 
     let res = edit_commit_message(
@@ -2787,12 +2788,15 @@ async fn edit_commit_message_same_oid_different_branch_rejected() {
     .await
     .unwrap();
 
-    assert!(!res.ok);
-    assert_eq!(
-        res.blocked_reason,
-        Some(crate::git::GitBlockReason::StaleRef)
-    );
-    assert_eq!(res.branch, Some("refs/heads/feature".to_string()));
+    assert!(res.ok, "editing inactive main sharing same OID should succeed");
+    assert_eq!(res.branch, Some("refs/heads/main".to_string()));
+    // Feature branch and checked-out HEAD remain untouched at old head
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), head);
+    assert_eq!(git_output(&["rev-parse", "refs/heads/feature"], path), head);
+    // Main branch moved to new commit
+    let main_tip = git_output(&["rev-parse", "refs/heads/main"], path);
+    assert_ne!(main_tip, head);
+    assert_eq!(res.new_head_oid.as_deref(), Some(main_tip.as_str()));
 }
 
 #[tokio::test]
@@ -2828,7 +2832,7 @@ async fn edit_commit_message_side_parent_of_merge_rewritten() {
     );
     let merge_oid = git_output(&["rev-parse", "HEAD"], path);
     let merge_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
-    let snap = get_commit_message(path, &b_oid).unwrap();
+    let snap = get_commit_message(path, &b_oid, None).unwrap();
 
     // Edit commit B (the side parent)
     let res = edit_commit_message(
@@ -2867,7 +2871,7 @@ async fn edit_commit_message_whitespace_only_rejected() {
     let repo = make_temp_repo();
     let path = repo.path();
     let head = git_output(&["rev-parse", "HEAD"], path);
-    let snap = get_commit_message(path, &head).unwrap();
+    let snap = get_commit_message(path, &head, None).unwrap();
 
     let err = edit_commit_message(
         path,
@@ -3754,10 +3758,14 @@ async fn squash_commits_invalid_requests_ranges_and_stale_first_do_not_write() {
         .unwrap();
     assert_eq!(result.blocked_reason, Some(Reason::UnreachableCommit));
     git(&["checkout", "-b", "same-tip"], path);
-    let result = crate::git::squash_commits(path, &fake, "new", "refs/heads/main", tip, false)
+    let result = crate::git::squash_commits(path, &fake, "new", "refs/heads/main", &chain[0], false)
         .await
         .unwrap();
     assert_eq!(result.blocked_reason, Some(Reason::StaleRef));
+    let result = crate::git::squash_commits(path, &fake, "new", "refs/heads/main", tip, false)
+        .await
+        .unwrap();
+    assert_eq!(result.blocked_reason, Some(Reason::UnreachableCommit));
     assert_eq!(squash_object_count(path), before);
     assert_eq!(git_output(&["rev-parse", "HEAD"], path), *tip);
 }
@@ -4005,12 +4013,16 @@ async fn squash_commits_active_detached_unborn_and_worktree_guards() {
     assert!(blocked.recovery.is_some());
     std::fs::remove_dir(path.join(".git/rebase-merge")).unwrap();
     git(&["checkout", "--detach"], path);
-    let blocked =
+    let detached_squash =
         crate::git::squash_commits(path, &chain, "new", "refs/heads/main", &chain[1], false)
             .await
             .unwrap();
-    assert_eq!(blocked.blocked_reason, Some(Reason::DetachedHead));
+    assert!(detached_squash.ok);
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[1]);
+    let new_main = git_output(&["rev-parse", "refs/heads/main"], path);
+    assert_ne!(new_main, chain[1]);
     git(&["checkout", "main"], path);
+    git(&["reset", "--hard", &chain[1]], path);
     let wt_parent = tempfile::tempdir().unwrap();
     let wt = wt_parent.path().join("linked");
     git(
@@ -4154,7 +4166,7 @@ fn squash_commits_final_publish_blocks_late_git_operations() {
     let tip = git_output(&["rev-parse", "HEAD"], path);
 
     let repo = git2::Repository::open(path).unwrap();
-    let captured = snapshot_branch(&repo).unwrap();
+    let captured = snapshot_branch(&repo, "refs/heads/main").unwrap();
     let revert = Command::new("git")
         .args(["revert", "--no-edit", &second])
         .current_dir(path)
@@ -4185,7 +4197,7 @@ fn squash_commits_final_publish_blocks_late_git_operations() {
     );
 
     git(&["revert", "--abort"], path);
-    let captured = snapshot_branch(&repo).unwrap();
+    let captured = snapshot_branch(&repo, "refs/heads/main").unwrap();
     let index_lock = repo.path().join("index.lock");
     std::fs::write(&index_lock, b"external lock").unwrap();
     let result = publish_checked_ref(
@@ -4210,7 +4222,7 @@ fn squash_commits_final_cas_rejects_independent_tip_and_head_writers() {
     let path = dir.path();
     let chain = squash_chain(path, 3);
     let repo = git2::Repository::open(path).unwrap();
-    let captured = snapshot_branch(&repo).unwrap();
+    let captured = snapshot_branch(&repo, "refs/heads/main").unwrap();
     git(&["update-ref", "refs/heads/main", &chain[1]], path);
     let result = publish_checked_ref(
         &repo,
@@ -4226,7 +4238,7 @@ fn squash_commits_final_cas_rejects_independent_tip_and_head_writers() {
         ))
     ));
     assert_eq!(git_output(&["rev-parse", "main"], path), chain[1]);
-    let captured = snapshot_branch(&repo).unwrap();
+    let captured = snapshot_branch(&repo, "refs/heads/main").unwrap();
     git(&["checkout", "-b", "independent"], path);
     let result = publish_checked_ref(
         &repo,
@@ -4314,4 +4326,377 @@ async fn squash_commits_publication_uncertainty_does_not_claim_candidate_oids_in
         .contains("observed HEAD="));
     assert_eq!(git_output(&["rev-parse", "HEAD"], path), chain[2]);
     assert_eq!(std::fs::read(path.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn test_get_commit_message_inactive_branch_and_reachability() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+    let main_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    // Create inactive feature branch with 2 commits
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feat1.txt"), "feat 1\n").unwrap();
+    git(&["add", "feat1.txt"], path);
+    git(&["commit", "-m", "feature root"], path);
+    let feat_root = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("feat2.txt"), "feat 2\n").unwrap();
+    git(&["add", "feat2.txt"], path);
+    git(&["commit", "-m", "feature tip"], path);
+    let feat_tip = git_output(&["rev-parse", "HEAD"], path);
+
+    // Switch back to main (main is active, feature is inactive)
+    // Switch back to main and commit so main has a commit unreachable from feature
+    git(&["checkout", "main"], path);
+    std::fs::write(path.join("main_only.txt"), "main only\n").unwrap();
+    git(&["add", "main_only.txt"], path);
+    git(&["commit", "-m", "main only"], path);
+    let main_only_hash = git_output(&["rev-parse", "HEAD"], path);
+    // Explicit inactive GET returns feature and its tip
+    let snap_tip = get_commit_message(path, &feat_tip, Some("refs/heads/feature")).unwrap();
+    assert_eq!(snap_tip.branch, "refs/heads/feature");
+    assert_eq!(snap_tip.head_oid, feat_tip);
+    assert_eq!(snap_tip.message, "feature tip\n");
+
+    let snap_root = get_commit_message(path, &feat_root, Some("refs/heads/feature")).unwrap();
+    assert_eq!(snap_root.branch, "refs/heads/feature");
+    assert_eq!(snap_root.head_oid, feat_tip);
+    assert_eq!(snap_root.message, "feature root\n");
+
+    // Commit unreachable from feature tip fails
+    // Commit unreachable from feature tip fails
+    assert!(get_commit_message(path, &main_only_hash, Some("refs/heads/feature")).is_err());
+
+    // Default GET still reads active branch (main), where feat_tip is unreachable
+    assert!(get_commit_message(path, &feat_tip, None).is_err());
+    let snap_main = get_commit_message(path, &main_only_hash, None).unwrap();
+    assert_eq!(snap_main.branch, "refs/heads/main");
+    assert_eq!(snap_main.head_oid, main_only_hash);
+
+    // Explicit local works with detached HEAD
+    git(&["checkout", "--detach", &main_hash], path);
+    let snap_detached = get_commit_message(path, &feat_tip, Some("refs/heads/feature")).unwrap();
+    assert_eq!(snap_detached.branch, "refs/heads/feature");
+    assert_eq!(snap_detached.head_oid, feat_tip);
+
+    // Non-local / malformed / missing refs rejected
+    assert!(get_commit_message(path, &feat_tip, Some("feature")).is_err());
+    assert!(get_commit_message(path, &feat_tip, Some("refs/tags/v1.0")).is_err());
+    assert!(get_commit_message(path, &feat_tip, Some("refs/heads/nonexistent")).is_err());
+    assert!(get_commit_message(path, &feat_tip, Some("refs/remotes/origin/main")).is_err());
+}
+
+#[tokio::test]
+async fn test_edit_commit_message_inactive_branch_tip_and_older_with_dirty_tree() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    // Create inactive feature branch with 2 commits
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feat1.txt"), "feat 1\n").unwrap();
+    git(&["add", "feat1.txt"], path);
+    git(&["commit", "-m", "feature commit 1"], path);
+    let c1_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("feat2.txt"), "feat 2\n").unwrap();
+    git(&["add", "feat2.txt"], path);
+    git(&["commit", "-m", "feature commit 2"], path);
+    let c2_hash = git_output(&["rev-parse", "HEAD"], path);
+
+    // Switch to main
+    git(&["checkout", "main"], path);
+    let main_head_before = git_output(&["rev-parse", "HEAD"], path);
+
+    // Create dirty files on main
+    std::fs::write(path.join("staged.txt"), "dirty staged\n").unwrap();
+    git(&["add", "staged.txt"], path);
+    std::fs::write(path.join("README.md"), "dirty unstaged\n").unwrap();
+    std::fs::write(path.join("untracked.txt"), "dirty untracked\n").unwrap();
+
+    let snap = get_commit_message(path, &c2_hash, Some("refs/heads/feature")).unwrap();
+
+    // 1. Edit tip of inactive feature branch
+    let res = edit_commit_message(
+        path,
+        &c2_hash,
+        "edited feature tip\n",
+        &snap.branch,
+        &snap.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(res.ok, "edit inactive tip should succeed: {res:?}");
+    assert_eq!(res.branch.as_deref(), Some("refs/heads/feature"));
+    let new_feat_tip = git_output(&["rev-parse", "refs/heads/feature"], path);
+    assert_ne!(new_feat_tip, c2_hash);
+    assert_eq!(res.new_head_oid.as_deref(), Some(new_feat_tip.as_str()));
+
+    // Active main and checked-out HEAD preserved
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), main_head_before);
+    assert_eq!(git_output(&["branch", "--show-current"], path), "main");
+
+    // Dirty worktree and index preserved
+    assert_eq!(std::fs::read_to_string(path.join("staged.txt")).unwrap(), "dirty staged\n");
+    assert_eq!(std::fs::read_to_string(path.join("README.md")).unwrap(), "dirty unstaged\n");
+    assert_eq!(std::fs::read_to_string(path.join("untracked.txt")).unwrap(), "dirty untracked\n");
+    assert_eq!(git_output(&["diff", "--cached", "--name-only"], path), "staged.txt");
+    assert_eq!(git_output(&["diff", "--name-only"], path), "README.md");
+
+    // 2. Edit older commit (c1) on inactive feature branch
+    let snap2 = get_commit_message(path, &c1_hash, Some("refs/heads/feature")).unwrap();
+    let res2 = edit_commit_message(
+        path,
+        &c1_hash,
+        "edited feature root\n",
+        &snap2.branch,
+        &snap2.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(res2.ok, "edit inactive root should succeed: {res2:?}");
+    assert_eq!(res2.rewritten_count, Some(2));
+    let final_feat_tip = git_output(&["rev-parse", "refs/heads/feature"], path);
+    assert_ne!(final_feat_tip, new_feat_tip);
+    assert_eq!(res2.new_head_oid.as_deref(), Some(final_feat_tip.as_str()));
+
+    // Main and dirty files still completely untouched
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), main_head_before);
+    assert_eq!(std::fs::read_to_string(path.join("staged.txt")).unwrap(), "dirty staged\n");
+
+    // 3. Exact no-op on inactive branch leaves ref unchanged
+    let snap3 = get_commit_message(path, &final_feat_tip, Some("refs/heads/feature")).unwrap();
+    let no_op_res = edit_commit_message(
+        path,
+        &final_feat_tip,
+        &snap3.message,
+        &snap3.branch,
+        &snap3.head_oid,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(no_op_res.ok);
+    assert_eq!(no_op_res.no_op, Some(true));
+    assert_eq!(git_output(&["rev-parse", "refs/heads/feature"], path), final_feat_tip);
+}
+
+#[tokio::test]
+async fn test_squash_commits_inactive_branch_preserves_active_branch_and_worktree() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    // Create inactive feature branch with 3 commits
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feat1.txt"), "feat 1\n").unwrap();
+    git(&["add", "feat1.txt"], path);
+    git(&["commit", "-m", "feature 1"], path);
+    let c1 = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("feat2.txt"), "feat 2\n").unwrap();
+    git(&["add", "feat2.txt"], path);
+    git(&["commit", "-m", "feature 2"], path);
+    let c2 = git_output(&["rev-parse", "HEAD"], path);
+
+    std::fs::write(path.join("feat3.txt"), "feat 3\n").unwrap();
+    git(&["add", "feat3.txt"], path);
+    git(&["commit", "-m", "feature 3"], path);
+    let c3 = git_output(&["rev-parse", "HEAD"], path);
+    let feat_tree = git_output(&["rev-parse", "HEAD^{tree}"], path);
+
+    // Switch to main
+    git(&["checkout", "main"], path);
+    let main_head = git_output(&["rev-parse", "HEAD"], path);
+
+    // Dirty index and files on main
+    std::fs::write(path.join("dirty_staged.txt"), "staged\n").unwrap();
+    git(&["add", "dirty_staged.txt"], path);
+    std::fs::write(path.join("README.md"), "unstaged dirty\n").unwrap();
+
+    let hashes = vec![c1.clone(), c2.clone()];
+    let res = crate::git::squash_commits(
+        path,
+        &hashes,
+        "squashed feature 1 and 2\n",
+        "refs/heads/feature",
+        &c3,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(res.ok, "squash on inactive branch should succeed: {res:?}");
+    assert_eq!(res.branch.as_deref(), Some("refs/heads/feature"));
+    let new_feat_tip = git_output(&["rev-parse", "refs/heads/feature"], path);
+    assert_ne!(new_feat_tip, c3);
+    assert_eq!(res.new_head_oid.as_deref(), Some(new_feat_tip.as_str()));
+    assert_eq!(res.rewritten_count, Some(2)); // squashed commit + descendant c3
+
+    // Final tip tree is preserved
+    let new_feat_tree = git_output(&["rev-parse", "refs/heads/feature^{tree}"], path);
+    assert_eq!(new_feat_tree, feat_tree);
+
+    // Main and worktree completely untouched
+    assert_eq!(git_output(&["rev-parse", "HEAD"], path), main_head);
+    assert_eq!(std::fs::read_to_string(path.join("dirty_staged.txt")).unwrap(), "staged\n");
+    assert_eq!(std::fs::read_to_string(path.join("README.md")).unwrap(), "unstaged dirty\n");
+}
+
+#[tokio::test]
+async fn test_inactive_branch_cas_and_checkout_transition_detection() {
+    let repo = make_temp_repo();
+    let path = repo.path();
+
+    git(&["checkout", "-b", "feature"], path);
+    std::fs::write(path.join("feat.txt"), "feat\n").unwrap();
+    git(&["add", "feat.txt"], path);
+    git(&["commit", "-m", "feat"], path);
+    let feat_tip = git_output(&["rev-parse", "HEAD"], path);
+
+    git(&["checkout", "main"], path);
+
+    // 1. Stale expected tip fails preflight
+    let stale_res = edit_commit_message(
+        path,
+        &feat_tip,
+        "new",
+        "refs/heads/feature",
+        "0000000000000000000000000000000000000000",
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stale_res.blocked_reason, Some(crate::git::GitBlockReason::StaleRef));
+
+    // 2. Deleted target branch fails preflight
+    git(&["branch", "to_delete", &feat_tip], path);
+    git(&["branch", "-D", "to_delete"], path);
+    let del_res = edit_commit_message(
+        path,
+        &feat_tip,
+        "new",
+        "refs/heads/to_delete",
+        &feat_tip,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(del_res.blocked_reason, Some(crate::git::GitBlockReason::StaleRef));
+
+    // 3. Checkout transition: inactive at capture, but checked out before publication
+    let git2_repo = git2::Repository::open(path).unwrap();
+    let captured = crate::git::commit_message_rewrite::CapturedBranch {
+        branch: "refs/heads/feature".to_string(),
+        old_tip: git2::Oid::from_str(&feat_tip).unwrap(),
+        was_active: false,
+    };
+    // Switch checkout to feature so it becomes active!
+    git(&["checkout", "feature"], path);
+    let transition_res = crate::git::commit_message_rewrite::publish_checked_ref(
+        &git2_repo,
+        &captured,
+        git2::Oid::from_str(&feat_tip).unwrap(),
+        "test reflog",
+    );
+    assert!(matches!(
+        transition_res,
+        Err(crate::git::commit_message_rewrite::RewriteFailure::Block(crate::git::GitBlockReason::StaleRef, _))
+    ));
+
+    // 4. Checkout transition: active at capture, but switched away before publication
+    let captured_active = crate::git::commit_message_rewrite::CapturedBranch {
+        branch: "refs/heads/feature".to_string(),
+        old_tip: git2::Oid::from_str(&feat_tip).unwrap(),
+        was_active: true,
+    };
+    git(&["checkout", "main"], path);
+    let active_switch_res = crate::git::commit_message_rewrite::publish_checked_ref(
+        &git2_repo,
+        &captured_active,
+        git2::Oid::from_str(&feat_tip).unwrap(),
+        "test reflog",
+    );
+    assert!(matches!(
+        active_switch_res,
+        Err(crate::git::commit_message_rewrite::RewriteFailure::Block(crate::git::GitBlockReason::StaleRef, _))
+    ));
+}
+
+#[tokio::test]
+async fn test_leased_push_inactive_branch_with_different_upstream_and_checkout_drift() {
+    let (remote, seed, _clone) = make_remote_clone_repo();
+
+    // Create a feature branch in remote and seed
+    git(&["checkout", "-b", "feature"], seed.path());
+    std::fs::write(seed.path().join("feat.txt"), "feat 1\n").unwrap();
+    git(&["add", "feat.txt"], seed.path());
+    git(&["commit", "-m", "feature 1"], seed.path());
+    git(&["push", "-u", "origin", "feature"], seed.path());
+    let feat_remote_before = git_output(&["rev-parse", "refs/heads/feature"], remote.path());
+
+    // Local new commit on feature
+    std::fs::write(seed.path().join("feat.txt"), "feat 2 rewrite\n").unwrap();
+    git(&["commit", "-am", "feature 2"], seed.path());
+    let feat_local_tip = git_output(&["rev-parse", "HEAD"], seed.path());
+
+    // Switch back to main (main is active, feature is inactive)
+    git(&["checkout", "main"], seed.path());
+    let main_remote_before = git_output(&["rev-parse", "refs/heads/main"], remote.path());
+
+    // 1. Prepare leased push for inactive feature branch
+    let preview = prepare_leased_push(seed.path(), seed.path(), Some("refs/heads/feature"), None)
+        .await
+        .expect("prepare_leased_push should succeed");
+
+    let snapshot = match preview {
+        PublishPreview::Ready { snapshot, already_current } => {
+            assert!(!already_current);
+            assert_eq!(snapshot.branch, "refs/heads/feature");
+            assert_eq!(snapshot.destination_ref, "refs/heads/feature");
+            assert_eq!(snapshot.remote_name, "origin");
+            assert_eq!(snapshot.expected_remote_oid, feat_remote_before);
+            assert_eq!(snapshot.source_oid, feat_local_tip);
+            snapshot
+        }
+        PublishPreview::Blocked { reason, message } => {
+            panic!("expected ready preview, got blocked {reason:?}: {message}");
+        }
+    };
+
+    // 2. Checkout change before publish (switch to detached HEAD)
+    git(&["checkout", "--detach"], seed.path());
+
+    // Publish leased push succeeds because snapshot is branch-bound!
+    let pub_res = publish_leased_push(seed.path(), seed.path(), "seed", &snapshot, &None, None)
+        .await
+        .expect("publish_leased_push should succeed");
+
+    assert_eq!(pub_res.status, PublishResultStatus::Published);
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/feature"], remote.path()),
+        feat_local_tip
+    );
+    // Remote main remains completely unchanged!
+    assert_eq!(
+        git_output(&["rev-parse", "refs/heads/main"], remote.path()),
+        main_remote_before
+    );
+
+    // 3. Inactive branch missing upstream returns blocked preview
+    git(&["checkout", "-b", "no_upstream"], seed.path());
+    git(&["checkout", "main"], seed.path());
+    let missing_up = prepare_leased_push(seed.path(), seed.path(), Some("refs/heads/no_upstream"), None)
+        .await
+        .expect("prepare should return blocked");
+    assert!(matches!(
+        missing_up,
+        PublishPreview::Blocked {
+            reason: crate::git::types::PublishBlockReason::MissingUpstream,
+            ..
+        }
+    ));
 }

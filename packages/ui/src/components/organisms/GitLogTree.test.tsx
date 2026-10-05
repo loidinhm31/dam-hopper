@@ -3,7 +3,7 @@ import * as React from "react";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GitLogEntry } from "@/api/client.js";
 import {
   GitLogTree,
@@ -200,3 +200,73 @@ describe.each(["graph", "list"] as const)(
     });
   },
 );
+
+describe("GitLogTree context menu accessibility & branch eligibility", () => {
+  it("enables Edit Commit Message when callback is provided and fires callback on select", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onEdit = vi.fn();
+    try {
+      await act(async () =>
+        root.render(
+          <GitLogTree logs={sampleLogs} onEditCommitMessage={onEdit} />,
+        ),
+      );
+      const row = container.querySelector("tbody tr")!;
+      await act(async () =>
+        row.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, button: 2 }),
+        ),
+      );
+      const editItem = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent?.includes("Edit Commit Message"))!;
+      expect(editItem).toBeDefined();
+      expect(editItem.hasAttribute("data-disabled")).toBe(false);
+      expect(editItem.getAttribute("aria-describedby")).toBeNull();
+      await act(async () => {
+        editItem.click();
+      });
+      expect(onEdit).toHaveBeenCalledWith(sampleLogs[0]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("disables Edit Commit Message when callback is omitted, exposing title, aria-describedby and descriptive text", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(<GitLogTree logs={sampleLogs} onEditCommitMessage={undefined} />),
+      );
+      const row = container.querySelector("tbody tr")!;
+      await act(async () =>
+        row.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, button: 2 }),
+        ),
+      );
+      const editItem = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent?.includes("Edit Commit Message"))!;
+      expect(editItem).toBeDefined();
+      expect(editItem.hasAttribute("data-disabled")).toBe(true);
+      expect(editItem.getAttribute("title")).toBe(
+        "Edit Commit Message is only available for local branches",
+      );
+      const describedById = editItem.getAttribute("aria-describedby");
+      expect(describedById).toBeTruthy();
+      const descriptionParagraph = document.getElementById(describedById!);
+      expect(descriptionParagraph).not.toBeNull();
+      expect(descriptionParagraph?.textContent).toBe(
+        "Edit Commit Message is only available for local branches",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+});

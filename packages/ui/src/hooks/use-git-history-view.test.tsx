@@ -15,7 +15,10 @@ import {
   resetGitHistoryStore,
   useGitHistoryStore,
 } from "@/stores/git-history.js";
-
+import {
+  __setConnectionSnapshotForTests,
+  resetConnections,
+} from "@/api/connections.js";
 const branchesMock = vi.fn();
 const rootsMock = vi.fn();
 
@@ -130,6 +133,11 @@ beforeEach(() => {
     data: sampleRoots,
     isSuccess: true,
   });
+  __setConnectionSnapshotForTests("server-1", {
+    owner: { profileId: "server-1", generation: 1 },
+    status: "connected",
+    api: null,
+  });
 });
 
 afterEach(() => {
@@ -139,8 +147,8 @@ afterEach(() => {
   root = null;
   document.body.innerHTML = "";
   vi.useRealTimers();
+  resetConnections();
 });
-
 describe("useGitHistoryView", () => {
   const defaultTarget: ProjectTargetRef = {
     profileId: "server-1",
@@ -339,5 +347,133 @@ describe("useGitHistoryView", () => {
 
     expect(currentHook?.availability.isAvailable).toBe(true);
     expect(currentHook?.availability.reason).toBeUndefined();
+  });
+
+  it("marks active local branch and pinned inactive local branch eligible for squashing", async () => {
+    // 1. Active local branch (main)
+    await mount(defaultTarget);
+    expect(currentHook?.isViewingLocalBranch).toBe(true);
+    expect(currentHook?.isViewingActiveBranch).toBe(true);
+    expect(currentHook?.squashAvailable).toBe(true);
+    expect(currentHook?.squashUnavailableReason).toBeUndefined();
+
+    // 2. Pinned inactive local branch (feature/auth)
+    act(() => {
+      currentHook?.selectBranchRef("refs/heads/feature/auth");
+    });
+    expect(currentHook?.branchRef).toBe("refs/heads/feature/auth");
+    expect(currentHook?.isViewingLocalBranch).toBe(true);
+    expect(currentHook?.isViewingActiveBranch).toBe(false);
+    expect(currentHook?.squashAvailable).toBe(true);
+    expect(currentHook?.squashUnavailableReason).toBeUndefined();
+  });
+
+  it("disables squash when viewing a pinned remote branch even with matching label", async () => {
+    const branchesWithRemote: Branch[] = [
+      ...sampleBranches,
+      {
+        name: "origin/feature/auth",
+        isCurrent: false,
+        isRemote: true,
+        lastCommit: "commit-remote-sha",
+      },
+    ];
+    branchesMock.mockReturnValue({
+      data: branchesWithRemote,
+      isSuccess: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
+
+    useGitHistoryStore.getState().setBranchPreference(
+      defaultTarget,
+      { mode: "pinned", ref: "refs/remotes/origin/feature/auth" },
+      ".",
+    );
+
+    await mount(defaultTarget);
+    expect(currentHook?.branchRef).toBe("refs/remotes/origin/feature/auth");
+    expect(currentHook?.isViewingLocalBranch).toBe(false);
+    expect(currentHook?.squashAvailable).toBe(false);
+    expect(currentHook?.squashUnavailableReason).toBe("Squash requires a local branch.");
+  });
+
+  it("disables squash on detached HEAD default view and enables when explicitly pinning local branch", async () => {
+    // Detached HEAD: no branch has isCurrent: true
+    const detachedBranches: Branch[] = [
+      {
+        name: "main",
+        isCurrent: false,
+        isRemote: false,
+        lastCommit: "commit-main-sha",
+      },
+    ];
+    branchesMock.mockReturnValue({
+      data: detachedBranches,
+      isSuccess: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
+
+    // Default follow-active view with detached HEAD
+    await mount(defaultTarget);
+    expect(currentHook?.activeBranch).toBe("");
+    expect(currentHook?.isViewingLocalBranch).toBe(false);
+    expect(currentHook?.squashAvailable).toBe(false);
+    expect(currentHook?.squashUnavailableReason).toBe("Squash requires a local branch.");
+
+    // Explicit pinned local branch while HEAD is detached is eligible
+    act(() => {
+      currentHook?.selectBranchRef("refs/heads/main");
+    });
+    expect(currentHook?.branchRef).toBe("refs/heads/main");
+    expect(currentHook?.isViewingLocalBranch).toBe(true);
+    expect(currentHook?.squashAvailable).toBe(true);
+    expect(currentHook?.squashUnavailableReason).toBeUndefined();
+  });
+
+  it("blocks squash availability during discovery, missing root, or disconnected profile", async () => {
+    // Disconnected profile
+    __setConnectionSnapshotForTests("server-1", {
+      owner: { profileId: "server-1", generation: 1 },
+      status: "disconnected",
+      api: null,
+    });
+    await mount(defaultTarget);
+    expect(currentHook?.squashAvailable).toBe(false);
+    expect(currentHook?.squashUnavailableReason).toBe("Connect the selected profile before squashing history.");
+
+    // Restore connection
+    __setConnectionSnapshotForTests("server-1", {
+      owner: { profileId: "server-1", generation: 1 },
+      status: "connected",
+      api: null,
+    });
+
+    // Discovery in progress
+    branchesMock.mockReturnValue({
+      data: [],
+      isSuccess: false,
+      isFetching: true,
+      refetch: vi.fn(),
+    });
+    await mount(defaultTarget);
+    expect(currentHook?.squashAvailable).toBe(false);
+    expect(currentHook?.squashUnavailableReason).toBe("Waiting for available root and local branch discovery.");
+
+    // Missing root
+    branchesMock.mockReturnValue({
+      data: sampleBranches,
+      isSuccess: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
+    rootsMock.mockReturnValue({
+      data: [{ rootId: "other-root", path: "other", absolutePath: "/other", kind: "primary", warnings: [] }],
+      isSuccess: true,
+    });
+    await mount(defaultTarget);
+    expect(currentHook?.squashAvailable).toBe(false);
+    expect(currentHook?.squashUnavailableReason).toBe("Waiting for available root and local branch discovery.");
   });
 });

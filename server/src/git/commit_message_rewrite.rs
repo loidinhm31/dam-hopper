@@ -21,6 +21,7 @@ pub struct CommitMessageSnapshot {
 pub(super) struct CapturedBranch {
     pub(super) branch: String,
     pub(super) old_tip: git2::Oid,
+    pub(super) was_active: bool,
 }
 
 #[derive(Debug)]
@@ -116,12 +117,12 @@ pub(super) async fn mutation_preflight(
     // Do not retain libgit2 handles across awaits.
     let captured = {
         let repo = git2::Repository::open(path).map_err(|e| AppError::Git(e.message().into()))?;
-        match snapshot_branch(&repo) {
+        match snapshot_branch(&repo, expected_branch) {
             Ok(captured) => captured,
             Err(RewriteFailure::Error(error)) => return Err(error),
             Err(RewriteFailure::Block(reason, message)) => {
                 let mut action =
-                    GitActionResult::blocked(reason, message, "check out a local branch");
+                    GitActionResult::blocked(reason, message, "select or refresh target branch history");
                 action.branch = Some(expected_branch.to_string());
                 return Ok(Err(action));
             }
@@ -287,6 +288,7 @@ pub(super) fn signature_removals(
 pub fn get_commit_message(
     project_path: &Path,
     hash: &str,
+    target_branch: Option<&str>,
 ) -> Result<CommitMessageSnapshot, AppError> {
     let repo = git2::Repository::open(project_path)
         .map_err(|e| AppError::Git(format!("failed to open repository: {}", e.message())))?;
@@ -295,24 +297,44 @@ pub fn get_commit_message(
         .map_err(|e| AppError::InvalidInput(format!("invalid commit hash '{hash}': {e}")))?;
 
     // Readers must not contend for write locks: squash loads multiple messages concurrently.
-    let head = repo.head().map_err(|e| {
-        AppError::Git(format!(
-            "cannot inspect checked-out branch: {}",
-            e.message()
-        ))
-    })?;
-    let branch = head
-        .name()
-        .filter(|name| head.is_branch() && name.starts_with("refs/heads/"))
-        .ok_or_else(|| {
-            AppError::Git("commit messages require a checked-out local branch".into())
+    let (branch_name, old_tip) = if let Some(target) = target_branch {
+        if !target.starts_with("refs/heads/") || !git2::Reference::is_valid_name(target) {
+            return Err(AppError::InvalidInput(format!(
+                "invalid target branch '{target}': must be a valid local reference under refs/heads/"
+            )));
+        }
+        let branch_ref = repo.find_reference(target).map_err(|e| {
+            AppError::Git(format!(
+                "cannot inspect target branch {target}: {}",
+                e.message()
+            ))
         })?;
-    let old_tip = head
-        .target()
-        .ok_or_else(|| AppError::Git("checked-out branch has no direct tip OID".into()))?;
-    let captured = CapturedBranch {
-        branch: branch.to_string(),
-        old_tip,
+        if !branch_ref.is_branch() {
+            return Err(AppError::InvalidInput(format!(
+                "target branch '{target}' is not a local branch"
+            )));
+        }
+        let tip = branch_ref
+            .target()
+            .ok_or_else(|| AppError::Git(format!("branch {target} has no direct tip OID")))?;
+        (target.to_string(), tip)
+    } else {
+        let head = repo.head().map_err(|e| {
+            AppError::Git(format!(
+                "cannot inspect checked-out branch: {}",
+                e.message()
+            ))
+        })?;
+        let branch = head
+            .name()
+            .filter(|name| head.is_branch() && name.starts_with("refs/heads/"))
+            .ok_or_else(|| {
+                AppError::Git("commit messages require a checked-out local branch".into())
+            })?;
+        let old_tip = head
+            .target()
+            .ok_or_else(|| AppError::Git("checked-out branch has no direct tip OID".into()))?;
+        (branch.to_string(), old_tip)
     };
 
     let odb = repo.odb().map_err(|e| AppError::Git(e.message().into()))?;
@@ -323,17 +345,17 @@ pub fn get_commit_message(
         return Err(AppError::Git(format!("target {hash} is not a commit")));
     }
 
-    let is_reachable = if captured.old_tip == target_oid {
+    let is_reachable = if old_tip == target_oid {
         true
     } else {
-        repo.graph_descendant_of(captured.old_tip, target_oid)
+        repo.graph_descendant_of(old_tip, target_oid)
             .unwrap_or(false)
     };
 
     if !is_reachable {
         return Err(AppError::Git(format!(
             "target commit {hash} is not reachable from branch tip {}",
-            captured.old_tip
+            old_tip
         )));
     }
 
@@ -346,25 +368,37 @@ pub fn get_commit_message(
     // The object body is the source of truth for the editable full-message draft.
     let message_str = validate_utf8_message(&parsed).map_err(read_error)?;
 
-    let observed = repo
-        .find_reference("HEAD")
-        .map_err(|e| AppError::Git(e.message().into()))?;
-    let observed_tip = repo
-        .find_reference(&captured.branch)
-        .map_err(|e| AppError::Git(e.message().into()))?
-        .target();
-    if observed.symbolic_target() != Some(captured.branch.as_str())
-        || observed_tip != Some(captured.old_tip)
-    {
-        return Err(AppError::Git(
-            "branch changed while reading commit message; refresh history".into(),
-        ));
+    if target_branch.is_none() {
+        let observed = repo
+            .find_reference("HEAD")
+            .map_err(|e| AppError::Git(e.message().into()))?;
+        let observed_tip = repo
+            .find_reference(&branch_name)
+            .map_err(|e| AppError::Git(e.message().into()))?
+            .target();
+        if observed.symbolic_target() != Some(branch_name.as_str())
+            || observed_tip != Some(old_tip)
+        {
+            return Err(AppError::Git(
+                "branch changed while reading commit message; refresh history".into(),
+            ));
+        }
+    } else {
+        let observed_tip = repo
+            .find_reference(&branch_name)
+            .map_err(|e| AppError::Git(e.message().into()))?
+            .target();
+        if observed_tip != Some(old_tip) {
+            return Err(AppError::Git(
+                "branch changed while reading commit message; refresh history".into(),
+            ));
+        }
     }
 
     Ok(CommitMessageSnapshot {
         message: message_str.to_string(),
-        branch: captured.branch,
-        head_oid: captured.old_tip.to_string(),
+        branch: branch_name,
+        head_oid: old_tip.to_string(),
     })
 }
 
@@ -390,11 +424,28 @@ pub async fn edit_commit_message(
             return Ok(action);
         }
     };
+    let current_root = dunce::canonicalize(project_path)?;
+    for wt in cli_fallback::list_worktrees(project_path).await? {
+        let branch_matches = wt.branch == captured.branch
+            || Some(wt.branch.as_str()) == captured.branch.strip_prefix("refs/heads/");
+        if branch_matches && dunce::canonicalize(&wt.path)? != current_root {
+            let mut action = GitActionResult::blocked(
+                GitBlockReason::CheckedOutBranch,
+                format!(
+                    "branch {} is checked out in another worktree at {}",
+                    captured.branch, wt.path
+                ),
+                "switch branches in the other worktree first",
+            );
+            action.branch = Some(captured.branch);
+            action.hash = Some(hash.to_string());
+            return Ok(action);
+        }
+    }
 
     let project_path_buf = project_path.to_path_buf();
     let hash_string = hash.to_string();
     let captured_clone = captured.clone();
-
     enum SyncRewriteOutcome {
         Action(GitActionResult),
         Done {
@@ -428,8 +479,8 @@ pub async fn edit_commit_message(
         if !nodes.iter().any(|n| n.oid == target_oid) {
             let mut res = GitActionResult::blocked(
                 GitBlockReason::UnreachableCommit,
-                format!("commit {target_oid} is not reachable from HEAD"),
-                "check out the branch that contains this commit first",
+                format!("commit {target_oid} is not reachable from captured branch tip"),
+                "select or check out the branch that contains this commit",
             );
             res.hash = Some(hash_string);
             res.branch = Some(captured_clone.branch);
@@ -609,8 +660,17 @@ pub async fn edit_commit_message(
     Ok(res)
 }
 
-/// Takes a snapshot of the current symbolic branch and its direct tip OID under git2 transaction locks.
-pub(super) fn snapshot_branch(repo: &git2::Repository) -> Result<CapturedBranch, RewriteFailure> {
+/// Takes a snapshot of the expected branch and its direct tip OID under git2 transaction locks.
+pub(super) fn snapshot_branch(
+    repo: &git2::Repository,
+    expected_branch: &str,
+) -> Result<CapturedBranch, RewriteFailure> {
+    if !expected_branch.starts_with("refs/heads/") || !git2::Reference::is_valid_name(expected_branch) {
+        return Err(RewriteFailure::Error(AppError::InvalidInput(format!(
+            "invalid expected branch '{expected_branch}'"
+        ))));
+    }
+
     let mut tx = repo.transaction().map_err(|e| {
         RewriteFailure::Error(AppError::Git(format!(
             "failed to create git transaction: {e}"
@@ -624,57 +684,86 @@ pub(super) fn snapshot_branch(repo: &git2::Repository) -> Result<CapturedBranch,
         )
     })?;
 
-    let branch_name = match head.symbolic_target() {
-        Some(name) if name.starts_with("refs/heads/") => name.to_string(),
-        _ => {
+    let is_active_candidate = head.symbolic_target() == Some(expected_branch);
+
+    if is_active_candidate {
+        tx.lock_ref("HEAD")
+            .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to lock HEAD: {e}"))))?;
+        tx.lock_ref(expected_branch).map_err(|e| {
+            RewriteFailure::Error(AppError::Git(format!(
+                "failed to lock branch {expected_branch}: {e}"
+            )))
+        })?;
+
+        let head_under_lock = repo.find_reference("HEAD")?;
+        if head_under_lock.symbolic_target() != Some(expected_branch) {
             return Err(RewriteFailure::Block(
-                GitBlockReason::DetachedHead,
-                "history rewrite requires a checked-out local branch under refs/heads/".to_string(),
+                GitBlockReason::StaleRef,
+                format!(
+                    "symbolic HEAD target changed during snapshot lock acquisition (expected {expected_branch}, observed {:?})",
+                    head_under_lock.symbolic_target()
+                ),
             ));
         }
-    };
 
-    tx.lock_ref("HEAD")
-        .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to lock HEAD: {e}"))))?;
-    tx.lock_ref(&branch_name).map_err(|e| {
-        RewriteFailure::Error(AppError::Git(format!(
-            "failed to lock branch {branch_name}: {e}"
-        )))
-    })?;
+        let branch_ref = repo.find_reference(expected_branch).map_err(|e| {
+            RewriteFailure::Block(
+                GitBlockReason::DetachedHead,
+                format!("target branch {expected_branch} not found under lock: {}", e.message()),
+            )
+        })?;
 
-    let head_under_lock = repo.find_reference("HEAD")?;
-    if head_under_lock.symbolic_target() != Some(&branch_name) {
-        return Err(RewriteFailure::Block(
-            GitBlockReason::StaleRef,
-            format!(
-                "symbolic HEAD target changed during snapshot lock acquisition (expected {branch_name}, observed {:?})",
-                head_under_lock.symbolic_target()
-            ),
-        ));
+        let old_tip = branch_ref.target().ok_or_else(|| {
+            RewriteFailure::Block(
+                GitBlockReason::DetachedHead,
+                format!("branch {expected_branch} has no direct target OID (unborn branch)"),
+            )
+        })?;
+
+        Ok(CapturedBranch {
+            branch: expected_branch.to_string(),
+            old_tip,
+            was_active: true,
+        })
+    } else {
+        tx.lock_ref(expected_branch).map_err(|e| {
+            RewriteFailure::Error(AppError::Git(format!(
+                "failed to lock branch {expected_branch}: {e}"
+            )))
+        })?;
+
+        let head_under_lock = repo.find_reference("HEAD");
+        if let Ok(h) = &head_under_lock {
+            if h.symbolic_target() == Some(expected_branch) {
+                return Err(RewriteFailure::Block(
+                    GitBlockReason::StaleRef,
+                    format!(
+                        "branch {expected_branch} became active during snapshot lock acquisition"
+                    ),
+                ));
+            }
+        }
+
+        let branch_ref = repo.find_reference(expected_branch).map_err(|e| {
+            RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!("target branch {expected_branch} not found under lock: {}", e.message()),
+            )
+        })?;
+
+        let old_tip = branch_ref.target().ok_or_else(|| {
+            RewriteFailure::Block(
+                GitBlockReason::DetachedHead,
+                format!("branch {expected_branch} has no direct target OID (unborn branch)"),
+            )
+        })?;
+
+        Ok(CapturedBranch {
+            branch: expected_branch.to_string(),
+            old_tip,
+            was_active: false,
+        })
     }
-
-    let branch_ref = repo.find_reference(&branch_name).map_err(|e| {
-        RewriteFailure::Block(
-            GitBlockReason::DetachedHead,
-            format!(
-                "cannot inspect branch reference {branch_name}: {}",
-                e.message()
-            ),
-        )
-    })?;
-
-    let old_tip = branch_ref.target().ok_or_else(|| {
-        RewriteFailure::Block(
-            GitBlockReason::DetachedHead,
-            format!("branch {branch_name} has no direct target OID (unborn branch)"),
-        )
-    })?;
-
-    // Transaction is dropped here without commit, releasing locks safely.
-    Ok(CapturedBranch {
-        branch: branch_name,
-        old_tip,
-    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1255,47 +1344,100 @@ pub(super) fn publish_checked_ref(
             "failed to create git transaction: {e}"
         )))
     })?;
+    if captured.was_active {
+        tx.lock_ref("HEAD")
+            .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to lock HEAD: {e}"))))?;
+        tx.lock_ref(&captured.branch).map_err(|e| {
+            RewriteFailure::Error(AppError::Git(format!(
+                "failed to lock branch {}: {e}",
+                captured.branch
+            )))
+        })?;
 
-    tx.lock_ref("HEAD")
-        .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to lock HEAD: {e}"))))?;
-    tx.lock_ref(&captured.branch).map_err(|e| {
-        RewriteFailure::Error(AppError::Git(format!(
-            "failed to lock branch {}: {e}",
-            captured.branch
-        )))
-    })?;
+        let operation_state = repo.state();
+        if operation_state != git2::RepositoryState::Clean {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::ActiveOperation,
+                format!("another Git operation started before publication: {operation_state:?}"),
+            ));
+        }
 
-    let operation_state = repo.state();
-    if operation_state != git2::RepositoryState::Clean {
-        return Err(RewriteFailure::Block(
-            GitBlockReason::ActiveOperation,
-            format!("another Git operation started before publication: {operation_state:?}"),
-        ));
+        let head = repo
+            .find_reference("HEAD")
+            .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to find HEAD: {e}"))))?;
+        if head.symbolic_target() != Some(&captured.branch) {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!(
+                    "symbolic HEAD target changed before ref write (expected active {}, observed {:?})",
+                    captured.branch,
+                    head.symbolic_target()
+                ),
+            ));
+        }
+
+        let branch = repo.find_reference(&captured.branch).map_err(|e| {
+            RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!("branch {} not found before ref write: {e}", captured.branch),
+            )
+        })?;
+        if branch.target() != Some(captured.old_tip) {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!(
+                    "branch tip changed before ref write (expected {}, observed {:?})",
+                    captured.old_tip,
+                    branch.target()
+                ),
+            ));
+        }
+    } else {
+        tx.lock_ref(&captured.branch).map_err(|e| {
+            RewriteFailure::Error(AppError::Git(format!(
+                "failed to lock branch {}: {e}",
+                captured.branch
+            )))
+        })?;
+
+        let operation_state = repo.state();
+        if operation_state != git2::RepositoryState::Clean {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::ActiveOperation,
+                format!("another Git operation started before publication: {operation_state:?}"),
+            ));
+        }
+
+        let head = repo.find_reference("HEAD");
+        if let Ok(h) = &head {
+            if h.symbolic_target() == Some(&captured.branch) {
+                return Err(RewriteFailure::Block(
+                    GitBlockReason::StaleRef,
+                    format!(
+                        "branch {} became active checked-out branch before ref write",
+                        captured.branch
+                    ),
+                ));
+            }
+        }
+
+        let branch = repo.find_reference(&captured.branch).map_err(|e| {
+            RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!("branch {} not found before ref write: {e}", captured.branch),
+            )
+        })?;
+        if branch.target() != Some(captured.old_tip) {
+            return Err(RewriteFailure::Block(
+                GitBlockReason::StaleRef,
+                format!(
+                    "branch tip changed before ref write (expected {}, observed {:?})",
+                    captured.old_tip,
+                    branch.target()
+                ),
+            ));
+        }
     }
-
-    let head = repo
-        .find_reference("HEAD")
-        .map_err(|e| RewriteFailure::Error(AppError::Git(format!("failed to find HEAD: {e}"))))?;
-    if head.symbolic_target() != Some(&captured.branch) {
-        return Err(RewriteFailure::Block(
-            GitBlockReason::StaleRef,
-            "symbolic HEAD target changed before ref write".to_string(),
-        ));
-    }
-
-    let branch = repo.find_reference(&captured.branch).map_err(|e| {
-        RewriteFailure::Error(AppError::Git(format!(
-            "failed to find branch {}: {e}",
-            captured.branch
-        )))
-    })?;
-    if branch.target() != Some(captured.old_tip) {
-        return Err(RewriteFailure::Block(
-            GitBlockReason::StaleRef,
-            "branch tip changed before ref write".to_string(),
-        ));
-    }
-
     tx.set_target(&captured.branch, new_tip, None, reflog_message)
         .map_err(|e| {
             RewriteFailure::Error(AppError::Git(format!(

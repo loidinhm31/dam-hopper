@@ -118,6 +118,7 @@ function createDefaultMockHistoryView(options?: { available?: boolean }) {
     selectBranchRef: vi.fn(),
     followCheckedOutBranch: vi.fn(),
     isViewingActiveBranch: true,
+    isViewingLocalBranch: true,
     searchText: "",
     setSearchText: vi.fn(),
     clearSearch: vi.fn(),
@@ -508,8 +509,10 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     expect(useGitHistoryStore.getState().gitPageSelection).toEqual([]);
   });
 
-  it("disables rewrite actions on non-active branch view while leaving safe actions available", async () => {
+  it("enables inactive local branch edit message and displays updated banner without obsolete suffix", async () => {
     mockHistoryViewResult.isViewingActiveBranch = false;
+    mockHistoryViewResult.isViewingLocalBranch = true;
+    mockHistoryViewResult.branchRef = "refs/heads/feature/experiment";
     mockHistoryViewResult.branchLabel = "feature/experiment";
     mockHistoryViewResult.activeBranch = "main";
 
@@ -532,6 +535,41 @@ describe("GitPage multi-profile routing & selection persistence", () => {
     expect(container.textContent).toContain(
       "Cherry-pick and revert apply to checked-out branch main",
     );
+    expect(container.textContent).not.toContain(
+      "Rewrite actions stay on the active branch.",
+    );
+    expect(capturedGitLogTreeProps?.onEditCommitMessage).toBeDefined();
+  });
+
+  it("disables edit actions and displays banner for remote branch views", async () => {
+    mockHistoryViewResult.isViewingActiveBranch = false;
+    mockHistoryViewResult.isViewingLocalBranch = false;
+    mockHistoryViewResult.branchRef = "refs/remotes/origin/feature/remote";
+    mockHistoryViewResult.branchLabel = "origin/feature/remote";
+    mockHistoryViewResult.activeBranch = "main";
+
+    useGitHistoryStore.setState({
+      gitPageSelection: [
+        projectKey({ profileId: "profile-a", project: "shared-repo" }),
+      ],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <GitPage />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container.textContent).toContain("Viewing origin/feature/remote");
+    expect(container.textContent).toContain(
+      "Cherry-pick and revert apply to checked-out branch main",
+    );
+    expect(container.textContent).not.toContain(
+      "Rewrite actions stay on the active branch.",
+    );
+    expect(capturedGitLogTreeProps?.onEditCommitMessage).toBeUndefined();
   });
 
   it("recovers from corrupt saved selection when user selects a valid project or clears", async () => {

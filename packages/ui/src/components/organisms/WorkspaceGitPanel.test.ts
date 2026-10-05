@@ -136,8 +136,7 @@ describe("Workspace real squash controls", () => {
     expect(button("Push")).toBeDefined();
     expect(button("Force Push")).toBeDefined();
   });
-  it("keeps valid filtered chains actionable but fails closed off the checked-out branch and unavailable target", async () => {
-    fixture.messages[squashOids.oldest] += "matching filter\n";
+  it("keeps valid filtered chains actionable but fails closed on non-local branches and unavailable target", async () => {
     fixture.messages[squashOids.newest] += "\nmatching filter\n";
     fixture.logs = fixture.logs.slice(1);
     await renderPanel();
@@ -172,15 +171,92 @@ describe("Workspace real squash controls", () => {
         .getState()
         .setBranchPreference(
           fixture.target,
-          { mode: "pinned", ref: "refs/heads/other" },
+          { mode: "pinned", ref: "refs/remotes/origin/remote" },
           ".",
         ),
     );
     await renderPanel();
     expect(button("Squash commits").disabled).toBe(true);
-    expect(container.textContent).toContain("View the checked-out branch");
+    expect(container.textContent).toContain("Squash requires a local branch.");
     available = false;
     await renderPanel();
     expect(container.querySelector('input[aria-label^="Select"]')).toBeNull();
+  });
+  it("enables squash and edit actions on inactive local branches while preserving active-only restrictions and banner wording", async () => {
+    await renderPanel();
+    await renderPanel();
+
+    await act(async () =>
+      useGitHistoryStore
+        .getState()
+        .setBranchPreference(
+          fixture.target,
+          { mode: "pinned", ref: "refs/heads/other" },
+          ".",
+        ),
+    );
+    await renderPanel();
+
+    expect(container.textContent).toContain("Viewing other.");
+    expect(container.textContent).toContain(
+      "Cherry-pick and revert apply to checked-out branch main.",
+    );
+    expect(container.textContent).not.toContain(
+      "Rewrite actions stay on the active branch.",
+    );
+
+    const checkboxes = container.querySelectorAll<HTMLInputElement>(
+      'input[aria-label^="Select"]',
+    );
+    expect(checkboxes.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const hash of [squashOids.newest, squashOids.oldest]) {
+        container
+          .querySelector<HTMLInputElement>(
+            `input[aria-label^="Select ${hash.slice(0, 7)}:"]`,
+          )!
+          .click();
+      }
+    });
+    expect(button("Squash 2 commits").disabled).toBe(false);
+
+    const row = container.querySelector("tbody tr")!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, button: 2 }),
+      );
+    });
+
+    const menuItems = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    );
+    const editItem = menuItems.find((item) =>
+      item.textContent?.includes("Edit Commit Message"),
+    );
+    const undoItem = menuItems.find((item) =>
+      item.textContent?.includes("Undo Last Commit"),
+    );
+    const resetItem = menuItems.find((item) =>
+      item.textContent?.includes("Reset to this commit"),
+    );
+    const dropItem = menuItems.find((item) =>
+      item.textContent?.includes("Drop commit"),
+    );
+    const cherryPickItem = menuItems.find((item) =>
+      item.textContent?.includes("Cherry-pick commit"),
+    );
+    const revertItem = menuItems.find((item) =>
+      item.textContent?.includes("Revert commit"),
+    );
+
+    expect(editItem).toBeDefined();
+    expect(editItem?.hasAttribute("data-disabled")).toBe(false);
+
+    expect(undoItem?.hasAttribute("data-disabled")).toBe(true);
+    expect(resetItem?.hasAttribute("data-disabled")).toBe(true);
+    expect(dropItem?.hasAttribute("data-disabled")).toBe(true);
+
+    expect(cherryPickItem?.hasAttribute("data-disabled")).toBe(false);
+    expect(revertItem?.hasAttribute("data-disabled")).toBe(false);
   });
 });

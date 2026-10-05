@@ -565,9 +565,9 @@ interface TerminalPanelProps {
 - Exposes undo last commit and safe revert paths for local history recovery.
 - Prevents local commit drops for pushed commits and shows a shared revert recommendation instead.
 - Branch-history operations refresh Git, project status, file tree, and open editor tabs through scoped Git invalidation helpers.
-- Provides independent squash checkboxes in graph and filtered-list history. Select at least two parent-contiguous commits on the checked-out branch, then edit the complete oldest-first combined message in `GitSquashDialog`.
+- Provides independent squash checkboxes in graph and filtered-list history. Select at least two parent-contiguous commits on an active or inactive local branch, then edit the complete oldest-first combined message in `GitSquashDialog`.
 - Squash supports pushed, older, and root-inclusive linear ranges without changing the final tree, index, dirty files, or remote. Selected merges and rewritten-descendant merges are blocked; invalidated signatures require explicit consent.
-- After a proven local squash, `GitSquashFlow` offers separately prepared and confirmed leased publication bound to the same history owner/root and new branch tip. Git-page bulk-root selection cannot redirect it; closing or changing scope cancels pending SSH retries.
+- After a proven local squash, `GitSquashFlow` offers separately prepared and confirmed leased publication bound to the same history owner/root and receipt branch tip (`receipt.branch`). Git-page bulk-root selection cannot redirect it; closing or changing scope cancels pending SSH retries.
 
 ### Project Info Panel
 

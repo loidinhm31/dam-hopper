@@ -370,6 +370,7 @@ function channelToEndpoint(
         project: string;
         worktreePath?: string;
         root?: string;
+        branch?: string;
       };
       return {
         method: "POST",
@@ -377,6 +378,7 @@ function channelToEndpoint(
         body: {
           worktreePath: d.worktreePath,
           root: d.root,
+          branch: d.branch,
         },
       };
     }
@@ -1091,10 +1093,12 @@ function channelToEndpoint(
         hash: string;
         worktreePath?: string;
         root?: string;
+        branch?: string;
       };
       const params = new URLSearchParams();
       setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
+      if (d.branch) params.set("branch", d.branch);
       const qs = params.toString();
       return {
         method: "GET",

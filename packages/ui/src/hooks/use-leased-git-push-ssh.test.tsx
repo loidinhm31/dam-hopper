@@ -19,10 +19,14 @@ const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   publish: vi.fn(),
   addKey: vi.fn(),
+  prepareArgs: vi.fn(),
 }));
 vi.mock("@/api/queries.js", () => ({
   resolveTargetOwner: () => ({ profileId: "ssh-lease-profile", generation: 1 }),
-  useGitPrepareLeasedPush: () => ({ mutateAsync: mocks.prepare }),
+  useGitPrepareLeasedPush: (...args: unknown[]) => {
+    mocks.prepareArgs(...args);
+    return { mutateAsync: mocks.prepare };
+  },
   useGitPublishLeasedPush: () => ({ mutateAsync: mocks.publish }),
   useSshAddKey: () => ({ mutateAsync: mocks.addKey }),
   useSshListKeys: () => ({ data: [] }),
@@ -43,11 +47,19 @@ const preview: PublishPreview = {
 let root: Root;
 let container: HTMLDivElement;
 let hook: UseLeasedGitPushResult;
-function Harness({ scope = "first" }: { scope?: string }) {
+function Harness({
+  scope = "first",
+  expectedSource,
+  rootPath = ".",
+}: {
+  scope?: string;
+  expectedSource?: { branch: string; sourceOid: string };
+  rootPath?: string;
+}) {
   hook = useLeasedGitPush(
     { profileId: owner.profileId, project: "demo" },
-    ".",
-    { scopeFence: scope },
+    rootPath,
+    { scopeFence: scope, expectedSource },
   );
   return null;
 }
@@ -141,4 +153,83 @@ describe("leased publication with the real SSH retry controller", () => {
       }
     },
   );
+
+  it("retains inactive ref on prepare credential retry and publishes confirmed snapshot on publish retry", async () => {
+    const inactiveSource = {
+      branch: "refs/heads/feature/inactive",
+      sourceOid: "a".repeat(40),
+    };
+    const inactivePreview: PublishPreview = {
+      status: "ready",
+      alreadyCurrent: false,
+      snapshot: {
+        ...preview.snapshot,
+        branch: inactiveSource.branch,
+        destinationRef: inactiveSource.branch,
+      },
+    };
+
+    await act(async () =>
+      root.render(<Harness expectedSource={inactiveSource} rootPath="sub" />),
+    );
+
+    // 1. Prepare returns auth-required
+    mocks.prepare.mockResolvedValueOnce({
+      status: "blocked",
+      reason: "auth-required",
+      message: "authentication required",
+    } as unknown as PublishPreview);
+    mocks.prepare.mockResolvedValueOnce(inactivePreview);
+
+    let prepareOp!: Promise<void>;
+    await act(async () => {
+      prepareOp = hook.prepare();
+    });
+
+    // Dialog opens
+    expect(hook.passphraseDialogProps.open).toBe(true);
+
+    // Verify prepare was called with inactive branch
+    expect(mocks.prepareArgs).toHaveBeenCalledWith(
+      expect.objectContaining({ project: "demo" }),
+      "sub",
+      "refs/heads/feature/inactive",
+    );
+
+    // Submit passphrase for prepare retry
+    await act(async () => {
+      await hook.passphraseDialogProps.onSubmit("secret", undefined, false);
+      await prepareOp;
+    });
+
+    expect(hook.state).toBe("confirming");
+    expect(hook.preview?.snapshot.branch).toBe("refs/heads/feature/inactive");
+
+    // 2. Publish returns auth-required, retries with confirmed snapshot
+    mocks.publish.mockResolvedValueOnce({
+      ...inactivePreview.snapshot,
+      status: "auth-required",
+      message: "publish auth required",
+    } satisfies PublishResult);
+    mocks.publish.mockResolvedValueOnce({
+      ...inactivePreview.snapshot,
+      status: "published",
+      message: "published",
+    } satisfies PublishResult);
+
+    let publishOp!: Promise<void>;
+    await act(async () => {
+      publishOp = hook.publish();
+    });
+
+    expect(hook.passphraseDialogProps.open).toBe(true);
+
+    await act(async () => {
+      await hook.passphraseDialogProps.onSubmit("secret", undefined, false);
+      await publishOp;
+    });
+
+    expect(hook.state).toBe("published");
+    expect(mocks.publish).toHaveBeenLastCalledWith(inactivePreview.snapshot);
+  });
 });

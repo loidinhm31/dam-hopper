@@ -16,14 +16,18 @@ const mocks = vi.hoisted(() => ({
   publishMutateAsync: vi.fn(),
   executeLeasedWithRetry: vi.fn(),
   cancel: vi.fn(),
+  prepareHookArgs: vi.fn(),
 }));
 
 vi.mock("@/api/queries.js", () => ({
   resolveTargetOwner: vi.fn(() => undefined),
-  useGitPrepareLeasedPush: vi.fn(() => ({
-    mutateAsync: mocks.prepareMutateAsync,
-    isPending: false,
-  })),
+  useGitPrepareLeasedPush: vi.fn((...args: unknown[]) => {
+    mocks.prepareHookArgs(...args);
+    return {
+      mutateAsync: mocks.prepareMutateAsync,
+      isPending: false,
+    };
+  }),
   useGitPublishLeasedPush: vi.fn(() => ({
     mutateAsync: mocks.publishMutateAsync,
     isPending: false,
@@ -581,6 +585,97 @@ describe("useLeasedGitPush", () => {
     expect(currentHook?.preview).toBeNull();
     await act(async () => {
       await oldPublish();
+    });
+    expect(mocks.publishMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("forwards expectedSource branch to prepare mutation and publishes frozen inactive snapshot", async () => {
+    const inactiveSnapshot: PublishSnapshot = {
+      ...mockSnapshot,
+      branch: "refs/heads/feature/inactive",
+      destinationRef: "refs/heads/feature/inactive",
+    };
+    mocks.prepareMutateAsync.mockResolvedValueOnce({
+      status: "ready",
+      snapshot: inactiveSnapshot,
+      alreadyCurrent: false,
+    });
+    mocks.publishMutateAsync.mockResolvedValueOnce({
+      status: "published",
+      branch: inactiveSnapshot.branch,
+      remoteName: inactiveSnapshot.remoteName,
+      destinationRef: inactiveSnapshot.destinationRef,
+      sourceOid: inactiveSnapshot.sourceOid,
+      expectedRemoteOid: inactiveSnapshot.expectedRemoteOid,
+      message: "Published with lease",
+    });
+
+    await act(async () =>
+      root?.render(
+        <Harness
+          project="demo"
+          rootPath="subroot"
+          expectedSource={{
+            branch: "refs/heads/feature/inactive",
+            sourceOid: inactiveSnapshot.sourceOid,
+          }}
+        />,
+      ),
+    );
+
+    // Verify useGitPrepareLeasedPush received expectedSource.branch
+    expect(mocks.prepareHookArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({ project: "demo" }),
+      "subroot",
+      "refs/heads/feature/inactive",
+    );
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("confirming");
+    expect(currentHook?.preview?.snapshot.branch).toBe("refs/heads/feature/inactive");
+
+    await act(async () => {
+      await currentHook?.publish();
+    });
+
+    expect(mocks.publishMutateAsync).toHaveBeenCalledWith(inactiveSnapshot);
+    expect(currentHook?.state).toBe("published");
+  });
+
+  it("blocks preparation when preview snapshot branch mismatches receipt branch", async () => {
+    mocks.prepareMutateAsync.mockResolvedValueOnce({
+      status: "ready",
+      snapshot: {
+        ...mockSnapshot,
+        branch: "refs/heads/main", // Mismatch with receipt branch
+      },
+      alreadyCurrent: false,
+    });
+
+    await act(async () =>
+      root?.render(
+        <Harness
+          project="demo"
+          expectedSource={{
+            branch: "refs/heads/feature/inactive",
+            sourceOid: mockSnapshot.sourceOid,
+          }}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      await currentHook?.prepare();
+    });
+
+    expect(currentHook?.state).toBe("blocked");
+    expect(currentHook?.error).toContain("Local history changed after squash");
+
+    await act(async () => {
+      await currentHook?.publish();
     });
     expect(mocks.publishMutateAsync).not.toHaveBeenCalled();
   });

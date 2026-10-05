@@ -91,7 +91,7 @@ same commit rows, selection, keyboard interaction, and context-menu actions.
 
 The shared controller supplies persisted VCS-root and history-branch choices plus search, paging, selected commit, and refresh state. Target/root/branch/generation changes reset transient history state; the panel also resets pending mutation dialogs at the effective-scope boundary. Choosing a history branch is view-only and never checks it out.
 
-Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Rewrite actions remain unavailable while viewing a non-active branch; cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
+Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Viewing an inactive local branch allows commit-message edits and squash via branch-qualified snapshots and CAS ref locking; non-rewrite actions like cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
 
 The implementation and review are settled; scoped validation recorded 71/71 tests, a clean typecheck, and user-approved 9.8/10 review. Durable Phase 05 closure remains pending in explicit advice mode; Phase 06 Git-page integration is described below, and Phase 07 owns end-to-end qualification.
 
@@ -101,7 +101,7 @@ The implementation and review are settled; scoped validation recorded 71/71 test
 
 Selections remain intent, not authority. Missing/offline selected identities stay visible with an explicit deselect control. While any selected identity is unavailable, bulk fetch, pull, push, and publication are disabled rather than widened to all or run against a partial subset. Corrupt selection recovery likewise blocks bulk work until the user makes a valid selection or clears it.
 
-The shared history controller is available only for exactly one available selected project with an available target. Empty/all, multi-select, and unavailable states make no history request. For a usable selection, the page reuses the persisted VCS-root and branch preferences, search, paging, refresh, and commit selection from `useGitHistoryView`; the canonical-ref branch control is view-only and never checks out a branch. Viewing a non-active branch disables rewrite actions while safe cherry-pick/revert actions remain directed at the checked-out branch with an explanatory notice.
+The shared history controller is available only for exactly one available selected project with an available target. Empty/all, multi-select, and unavailable states make no history request. For a usable selection, the page reuses the persisted VCS-root and branch preferences, search, paging, refresh, and commit selection from `useGitHistoryView`; the canonical-ref branch control is view-only and never checks out a branch. Viewing an inactive local branch allows commit-message edits and squashing via branch-qualified CAS transactions, while cherry-pick and revert actions remain directed at the checked-out branch with an explanatory notice. Viewing remote branches or detached HEAD disables rewrite actions.
 
 History details, file diffs, and actions use the selected VCS root; `projectRelativePathForRoot()` maps history file paths for editor diffs. The Local Changes sidebar remains scoped to the project root. Bulk push keeps its independent root selector and existing SSH retry and leased-publication flows.
 
@@ -124,8 +124,7 @@ Selection resets on owner/worktree/root/branch/connection-generation, applied
 query, or page changes. Loading or loss of visible rows invalidates unsubmitted
 preparation, not a same-scope operation already submitted to the server.
 
-Squash is available only for a connected available target viewing its checked-out
-local branch. `GitSquashDialog` loads complete UTF-8 messages concurrently,
+Squash is available for a connected available target viewing any local branch (`isViewingLocalBranch = true`), active or inactive. Remote branches and detached HEAD views remain ineligible. `GitSquashDialog` loads complete UTF-8 messages concurrently,
 requires matching fresh branch/tip snapshots, composes oldest-first full bodies,
 and retains edits while obtaining signature-removal consent. Pending execution
 cannot be dismissed; cancel before execution preserves selection. Successful
@@ -141,9 +140,11 @@ lock-free snapshot/recheck so dialog preparation does not fight for ref locks.
 
 Already-pushed history carries an explicit reconciliation warning. After local
 success, `GitSquashFlow` offers a separate prepared, user-confirmed exact-OID
-leased publication tied to the **history root** and successful branch tip.
-Git-page bulk-root selection cannot redirect that publication. Remote movement
-after preparation rejects the lease without overwriting the independent writer.
+leased publication tied to the **history root** and receipt branch tip (`receipt.branch`).
+Even if HEAD is checked out elsewhere, preparation and publication target the
+rewritten branch without ambient fallback. Git-page bulk-root selection cannot redirect
+that publication. Remote movement after preparation rejects the lease without overwriting
+the independent writer.
 
 ## Source map
 

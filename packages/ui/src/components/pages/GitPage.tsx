@@ -913,8 +913,7 @@ export function GitPage() {
             <div className="rounded border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-300">
               Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick
               and revert apply to checked-out branch{" "}
-              <strong>{historyView.activeBranch}</strong>. Rewrite actions stay
-              on the active branch.
+              <strong>{historyView.activeBranch}</strong>.
             </div>
           ) : null}
 
@@ -1045,7 +1044,7 @@ export function GitPage() {
                           : undefined
                       }
                       onEditCommitMessage={
-                        historyView.isViewingActiveBranch
+                        historyView.isViewingLocalBranch
                           ? historyActions.setEditCommit
                           : undefined
                       }

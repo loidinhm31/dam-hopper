@@ -160,6 +160,98 @@ describe("standalone history squash uses its own root", () => {
       snapshot: { sourceOid: squashOids.tip },
     });
   });
+  it("squashes and leased-publishes an inactive local branch with explicit confirmation and cancellation safety", async () => {
+    await renderPage();
+    await renderPage();
+
+    await act(async () =>
+      useGitHistoryStore
+        .getState()
+        .setBranchPreference(
+          fixture.target,
+          { mode: "pinned", ref: "refs/heads/other" },
+          "nested/history",
+        ),
+    );
+    await renderPage();
+
+    expect(container.textContent).toContain("Viewing other.");
+    expect(container.textContent).toContain(
+      "Cherry-pick and revert apply to checked-out branch main.",
+    );
+    expect(container.textContent).not.toContain(
+      "Rewrite actions stay on the active branch.",
+    );
+
+    await act(async () => {
+      for (const hash of [squashOids.newest, squashOids.oldest])
+        container
+          .querySelector<HTMLInputElement>(
+            `input[aria-label^="Select ${hash.slice(0, 7)}:"]`,
+          )!
+          .click();
+    });
+
+    expect(button("Squash 2 commits").disabled).toBe(false);
+    await act(async () => button("Squash 2 commits").click());
+    await renderPage();
+
+    await act(async () => button("Squash locally").click());
+    await renderPage();
+
+    const squashReq = fixture.requests.find((request) =>
+      request.url.pathname.endsWith("/squash"),
+    )!;
+    expect(squashReq.body).toMatchObject({
+      expectedBranch: "refs/heads/other",
+    });
+
+    expect(
+      fixture.requests.some((request) =>
+        request.url.pathname.endsWith("/push/prepare"),
+      ),
+    ).toBe(false);
+    expect(
+      fixture.requests.some((request) =>
+        request.url.pathname.endsWith("/push/publish"),
+      ),
+    ).toBe(false);
+
+    await act(async () => button("Publish rewritten branch").click());
+    await renderPage();
+
+    const prepareReq = fixture.requests.find((request) =>
+      request.url.pathname.endsWith("/push/prepare"),
+    )!;
+    expect(prepareReq.body).toMatchObject({
+      branch: "refs/heads/other",
+    });
+
+    const cancelButton = button("Cancel");
+    await act(async () => cancelButton.click());
+    await renderPage();
+
+    expect(
+      fixture.requests.some((request) =>
+        request.url.pathname.endsWith("/push/publish"),
+      ),
+    ).toBe(false);
+
+    await act(async () => button("Publish rewritten branch").click());
+    await renderPage();
+
+    await act(async () => button("Publish Branch").click());
+    await renderPage();
+
+    const publishReq = fixture.requests.find((request) =>
+      request.url.pathname.endsWith("/push/publish"),
+    )!;
+    expect(publishReq.body).toMatchObject({
+      snapshot: {
+        branch: "refs/heads/other",
+      },
+    });
+  });
   it("offers no history mutation on empty/multi/unavailable project selection", async () => {
     useGitHistoryStore.setState({ gitPageSelection: [] });
     await renderPage();

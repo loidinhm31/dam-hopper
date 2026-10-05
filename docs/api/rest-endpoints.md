@@ -151,12 +151,15 @@ Client behavior:
 - The endpoint pushes only the checked-out branch to its configured upstream. It rejects non-fast-forward updates; the legacy `force` field is rejected with `422 Unprocessable Entity`. If `branch.<name>.remote` or `branch.<name>.merge` is missing, it returns a clear push error. Use leased publication below for destructive publication.
 
 **POST /api/git/{project}/push/prepare**
-Prepare an exact-OID leased publication preview. Inspects the checked-out branch, upstream remote, and remote reference without mutating any state.
+Prepare an exact-OID leased publication preview without mutating any state. Inspects the specified local branch (or checked-out branch when omitted), upstream remote, and remote reference.
 
 Route: `/api/git/{project}/push/prepare`
 
-Body: `{ worktreePath?: string, root?: string }`
+Body: `{ worktreePath?: string, root?: string, branch?: string }`
 
+- `branch` (optional string): Full local branch reference under `refs/heads/` (e.g. `"refs/heads/feature"`). When provided, prepares a preview for the specified branch (active or inactive, even if `HEAD` is detached). When omitted, defaults to the currently checked-out branch at `HEAD` (and returns blocked `detached-head` if `HEAD` is detached).
+- `worktreePath` (optional string): Target registered worktree path.
+- `root` (optional string): Target VCS root.
 Response: `PublishPreview`:
 
 ```json
@@ -186,7 +189,7 @@ Or blocked when detached HEAD, missing upstream, ambiguous destination, or missi
 ```
 
 **POST /api/git/{project}/push/publish**
-Publish a previously prepared and user-confirmed leased push snapshot with an exact remote-OID lease.
+Publish a previously prepared and user-confirmed leased push snapshot with an exact remote-OID lease. Validates `snapshot.branch` and its destination directly; checkout state changes or detached HEAD between prepare and publish do not invalidate the frozen lease.
 
 Route: `/api/git/{project}/push/publish`
 
@@ -229,7 +232,7 @@ Statuses:
 - `already-current`: Remote is already up to date with `sourceOid`; no push needed.
 - `stale-remote`: Remote moved from `expectedRemoteOid` to a different commit before or during negotiation; push aborted, no remote mutation.
 - `stale-local`: Local branch tip moved from `sourceOid` after preview; push aborted.
-- `stale-config`: Checked-out branch, upstream configuration, or push URL changed; push aborted.
+- `stale-config`: Target branch reference, upstream configuration, or push URL changed; push aborted.
 - `rejected`: Remote receive-pack hook declined the update; local edit is preserved.
 - `auth-required`: SSH or credential authentication failed before transfer.
 - `unknown`: Transport dropped after negotiation/send; status uncertain pending refresh.
@@ -413,7 +416,73 @@ Body: `{ path: string, content: string, root?: string }`
 Create a commit from staged files.
 
 Body: `{ message: string, amend?: bool, root?: string }`
+### Git History Rewriting & Squash
 
+**GET /api/git/:project/commit/:hash/message**
+Read the complete UTF-8 message, canonical branch ref, and tip OID for a commit reachable from the target branch.
+
+Query parameters:
+- `branch` (optional string): Full local branch reference under `refs/heads/` (e.g. `refs/heads/feature`). Enables reading commit messages from inactive branches or while `HEAD` is detached. When omitted, defaults to the currently checked-out branch at `HEAD`. Non-branch refs or invalid ref syntax return HTTP `400 Bad Request`.
+- `worktreePath` (optional string): Target registered worktree path.
+- `root` (optional string): Target VCS root.
+
+Response:
+
+```json
+{
+  "message": "Subject\n\nDetailed body\n",
+  "branch": "refs/heads/main",
+  "headOid": "1111111111111111111111111111111111111111"
+}
+```
+
+**POST /api/git/:project/commit/:hash/message**
+Rewrite a commit message on the target local branch using raw commit objects without modifying working tree files or index entries.
+
+Body:
+
+```json
+{
+  "message": "Updated commit message\n",
+  "expectedBranch": "refs/heads/main",
+  "expectedHeadOid": "1111111111111111111111111111111111111111",
+  "allowSignatureRemoval": false,
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+Notes:
+- Supports rewriting both active and inactive local branches. Inactive branch rewrites leave the active checkout, index, and dirty working tree files completely untouched.
+- Enforces CAS: returns `ok: false` with `blockedReason: "stale-ref"` if the branch tip moved or if the branch changed active/inactive status during snapshot acquisition or publication.
+- Blocked with `checked-out-branch` if the target branch is checked out in another linked worktree, or `active-operation` if a rebase, merge, or cherry-pick is in progress.
+- UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` history actions when `isViewingLocalBranch` is true. `expectedBranch` is captured from `historyView.branchRef` and `expectedHeadOid` is derived from `GET /api/git/:project/commit/:hash/message`.
+- Response follows `GitActionResult`.
+
+**POST /api/git/:project/squash**
+Collapse two or more parent-contiguous commits on an active or inactive local branch into one commit.
+
+Body:
+
+```json
+{
+  "hashes": ["oldest-commit-oid", "newest-commit-oid"],
+  "message": "Squashed commit message\n",
+  "expectedBranch": "refs/heads/main",
+  "expectedHeadOid": "1111111111111111111111111111111111111111",
+  "allowSignatureRemoval": false,
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+Notes:
+- Commits must be unique full 40-hex OIDs in exact oldest-first order with unbroken parent links and no merge commits in the range or rewritten descendants.
+- Supports active and inactive local branches. Inactive branch squashes preserve active checkout and working tree state.
+- Guarded against checkout in other linked worktrees (`checked-out-branch`), concurrent branch switches (`stale-ref`), and active operations (`active-operation`).
+- Publication requires a separate user-confirmed leased push (`/push/prepare` and `/push/publish`).
+- UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
+- Response follows `GitActionResult`.
 ## Client-Side Profile Management (Phase 02)
 
 Profile metadata and endpoint-bound credentials live in the browser. The

@@ -28,7 +28,7 @@ export type GitSquashContext = Pick<
   | "squashScopeKey"
   | "squashSelection"
   | "squashAvailable"
-  | "activeBranchRef"
+  | "branchRef"
   | "clearSquashSelection"
   | "clearSelectedCommit"
   | "refresh"
@@ -194,7 +194,15 @@ export function useGitSquashActions(
     const capturedScope = scope;
     const capturedTarget = { ...targetRef };
     const capturedRoot = root;
-    const branch = context.activeBranchRef;
+    const branch = context.branchRef;
+    if (!branch || !branch.startsWith("refs/heads/")) {
+      setState((previous) => ({
+        ...previous,
+        phase: "blocked",
+        error: "Squash requires a local branch.",
+      }));
+      return;
+    }
     dialogScopeRef.current = capturedScope;
     allowFocusRestoreRef.current = true;
     const capturedEntries = entries.map((entry) => ({
@@ -219,7 +227,12 @@ export function useGitSquashActions(
           capturedEntries
             .slice(start, start + MESSAGE_LOAD_CONCURRENCY)
             .map((entry) =>
-              client.git.commitMessage(capturedTarget, entry.hash, capturedRoot),
+              client.git.commitMessage(
+                capturedTarget,
+                entry.hash,
+                capturedRoot,
+                branch,
+              ),
             ),
         );
         if (!isCurrent(token, capturedScope)) return;
@@ -390,7 +403,7 @@ export function useGitSquashActions(
       targetRef.project,
       targetRef.worktreePath,
       `Root: ${root ?? "."}`,
-      context.activeBranchRef,
+      context.branchRef,
     ]
       .filter(Boolean)
       .join(" · "),
