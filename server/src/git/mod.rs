@@ -1,5 +1,7 @@
+pub mod blame;
 pub mod bulk;
 pub mod cli_fallback;
+pub mod commit_details;
 pub mod commit_file_ops;
 pub mod commit_message_rewrite;
 pub mod diff;
@@ -15,6 +17,8 @@ pub mod worktree;
 mod tests;
 
 pub use bulk::BulkGitService;
+pub use blame::execute_native_blame;
+pub use commit_details::get_commit_details;
 pub use commit_file_ops::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };

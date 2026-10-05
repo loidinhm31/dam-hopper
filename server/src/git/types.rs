@@ -559,3 +559,72 @@ pub struct PublishResult {
     pub actual_remote_oid: Option<String>,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameInput {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    pub content: String,
+    pub snapshot_id: String,
+    pub model_version: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameCommit {
+    pub hash: String,
+    pub author_name: String,
+    pub author_timestamp: i64,
+    pub author_timezone_offset_minutes: i32,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameRange {
+    pub start_line: usize,
+    pub line_count: usize,
+    pub commit_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitBlameStatus {
+    Ready,
+    Uncommitted,
+    Empty,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameResponse {
+    pub snapshot_id: String,
+    pub model_version: i64,
+    pub root_id: String,
+    pub root_relative_path: String,
+    pub base_commit_oid: Option<String>,
+    pub buffer_line_count: usize,
+    pub status: GitBlameStatus,
+    pub ranges: Vec<GitBlameRange>,
+    pub commits: Vec<GitBlameCommit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetails {
+    pub hash: String,
+    pub author_name: String,
+    pub author_timestamp: i64,
+    pub author_timezone_offset_minutes: i32,
+    pub subject: String,
+    pub full_message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetailsQuery {
+    pub root: Option<String>,
+    pub worktree_path: Option<String>,
+}

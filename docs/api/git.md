@@ -1,8 +1,6 @@
 # Git API
 
 Git route and history-safety contracts moved from the [API reference index](../api-reference.md).
-## Git API
-
 Git routes are scoped to the configured project name and run inside the resolved
 project path.
 
@@ -245,6 +243,92 @@ Response format:
 ```
 
 Note: `message` remains subject-only text even when a commit was matched on body content. Full details and query ownership rules are in the [Git history search architecture guide](../architecture/git-history-search.md).
+
+**GET /api/git/{project}/commit/{hash}/details**
+
+Inspects commit metadata and message directly from the Git object database (ODB) by exact 40- or 64-hex OID, without requiring branch reachability or an attached `HEAD`.
+
+Query parameters:
+- `root` (optional string): Target VCS root for submodule or nested repository.
+- `worktreePath` (optional string): Registered worktree path to resolve.
+
+Response format (`GitCommitDetails`):
+```json
+{
+  "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
+  "authorName": "Alice Dev",
+  "authorTimestamp": 1790000000,
+  "authorTimezoneOffsetMinutes": -420,
+  "subject": "feat: initial commit",
+  "fullMessage": "feat: initial commit\n\nFull detailed commit message body."
+}
+```
+
+Error codes:
+| HTTP | Code | Description |
+| ---: | --- | --- |
+| 400 | `GIT_BLAME_INVALID_INPUT` | Hash is not a valid 40- or 64-character hexadecimal OID. |
+| 404 | `GIT_COMMIT_NOT_FOUND` | Commit OID not found in repository ODB or object is not a commit. |
+| 413 | `GIT_COMMIT_TOO_LARGE` | Raw commit object size exceeds the 5 MiB limit. |
+
+### Blame Attribution
+
+**POST /api/git/{project}/blame**
+
+Computes line-by-line attribution for an in-memory editor buffer snapshot against the resolved project root or worktree. Bounded by an HTTP body limit of 32 MiB (`DefaultBodyLimit`) and a buffer content limit of 5 MiB. Enforces global admission via a 2-permit concurrency semaphore (`503 GIT_BLAME_BUSY` when exhausted).
+
+Request body (`GitBlameInput`):
+- `path` (string, required): File path relative to project root (must not contain `..` or leading `/`; max 4096 bytes).
+- `worktreePath` (optional string): Registered worktree target path (max 4096 bytes).
+- `content` (string, required): In-memory editor buffer text (UTF-8, no NUL bytes; max 5 MiB).
+- `snapshotId` (string, required): Client snapshot identifier for stale-response fencing (max 64 bytes).
+- `modelVersion` (integer, required): Monotonic document model version.
+
+Response format (`GitBlameResponse`):
+```json
+{
+  "snapshotId": "snap-1",
+  "modelVersion": 42,
+  "rootId": ".",
+  "rootRelativePath": "src/main.rs",
+  "baseCommitOid": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
+  "bufferLineCount": 120,
+  "status": "ready",
+  "ranges": [
+    { "startLine": 1, "lineCount": 10, "commitIndex": 0 },
+    { "startLine": 11, "lineCount": 2, "commitIndex": null }
+  ],
+  "commits": [
+    {
+      "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
+      "authorName": "Alice Dev",
+      "authorTimestamp": 1790000000,
+      "authorTimezoneOffsetMinutes": -420,
+      "subject": "feat: initial commit"
+    }
+  ]
+}
+```
+
+Response fields:
+- `snapshotId`, `modelVersion`: Echoed from request.
+- `rootId`: Resolved VCS root identifier (`.` for primary repository).
+- `rootRelativePath`: Normalized path relative to the resolved VCS root.
+- `baseCommitOid`: HEAD commit OID at time of blame (`null` when repository is unborn or empty).
+- `bufferLineCount`: Total line count in normalized buffer.
+- `status`: `"ready"` (blame computed), `"uncommitted"` (all lines uncommitted or unborn HEAD), or `"empty"` (empty buffer short-circuit).
+- `ranges`: 1-based contiguous line ranges; `commitIndex` indexes `commits` array (`null` for uncommitted lines).
+- `commits`: Deduplicated list of commit metadata referenced by `ranges`.
+
+Error codes:
+| HTTP | Code | Description |
+| ---: | --- | --- |
+| 400 | `GIT_BLAME_INVALID_INPUT` | Empty path, path traversal (`..`), leading slash, or metadata exceeding length limit. |
+| 409 | `GIT_BLAME_STALE_REVISION` | Repository HEAD revision or root mapping changed during blame calculation. |
+| 413 | `GIT_BLAME_TOO_LARGE` | Buffer content or HEAD baseline blob exceeds 5 MiB limit. |
+| 415 | `GIT_BLAME_UNSUPPORTED_FILE` | Binary buffer content (contains NUL bytes), symlink, or non-blob tree entry. |
+| 503 | `GIT_BLAME_BUSY` | All 2 concurrent blame worker permits are occupied. |
+
 **POST /api/git/{project}/branches**
 
 Create a branch. Set `checkout` to switch to it after creation.
@@ -481,72 +565,11 @@ Result flags:
 | `noOp`              | Whether the normalized message matched the raw target message and no object/ref update was made.                                                                                                                       |
 | `signaturesRemoved` | Whether invalidated signature or merge-tag headers were removed after explicit consent.                                                                                                                                |
 
-Recoverable dirty checkout example:
-
-```json
-{
-  "ok": false,
-  "message": "Working tree has local changes",
-  "branch": "feature/git-flow",
-  "stashed": false,
-  "conflict": false,
-  "dirty": true,
-  "destructive": false
-}
-```
-
-Blocked pushed-history drop example:
-
-```json
-{
-  "ok": false,
-  "message": "commit abc123def456 is already reachable from upstream",
-  "hash": "abc123def456",
-  "conflict": false,
-  "destructive": false,
-  "blockedReason": "pushed-commit",
-  "recommendation": "use revert for pushed/shared history"
-}
-```
-
-Recoverable rebase conflict example:
-
-```json
-{
-  "ok": false,
-  "message": "CONFLICT (content): Merge conflict in README.md",
-  "hash": "abc123def456",
-  "conflict": true,
-  "dirty": true,
-  "destructive": true,
-  "recovery": {
-    "operation": "rebase",
-    "canAbort": true,
-    "canContinue": true
-  },
-  "recommendation": "resolve rebase conflicts, then continue or abort"
-}
-```
-
-Branch update returns `BranchUpdateResult`:
-
-```json
-{
-  "branch": "feature/git-flow",
-  "success": true,
-  "reason": null
-}
-```
-
-Checked-out branch update guard example:
-
-```json
-{
-  "branch": "main",
-  "success": false,
-  "reason": "checked-out — use pull instead"
-}
-```
+Example outcomes:
+- **Recoverable dirty checkout**: `{"ok": false, "message": "Working tree has local changes", "branch": "feature/git-flow", "dirty": true}`
+- **Blocked pushed drop**: `{"ok": false, "message": "commit abc123def456 is already reachable from upstream", "blockedReason": "pushed-commit", "recommendation": "use revert for pushed/shared history"}`
+- **Recoverable rebase conflict**: `{"ok": false, "message": "CONFLICT (content): Merge conflict in README.md", "conflict": true, "dirty": true, "recovery": {"operation": "rebase", "canAbort": true, "canContinue": true}}`
+- **Branch update (`BranchUpdateResult`)**: `{"branch": "feature/git-flow", "success": true}` (success) or `{"branch": "main", "success": false, "reason": "checked-out — use pull instead"}` (checked-out guard)
 
 Invalid branch names, relative paths, and malformed commit hashes are rejected
 before Git execution. Rewrite policy is operation-specific: destructive
