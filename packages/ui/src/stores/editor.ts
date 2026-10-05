@@ -179,6 +179,8 @@ export interface Tab {
   previewRevision?: number;
   /** Connection and endpoint binding metadata. */
   resourceBinding?: ResourceBinding;
+  /** Session-only flag for Git blame line annotation gutter (excluded from persistence). */
+  blameEnabled?: boolean;
 }
 
 interface EditorState {
@@ -217,6 +219,7 @@ interface EditorState {
   reconcileGitProjectFiles: (target: ProjectTargetInput) => Promise<void>;
   markSaved: (key: string, mtime: number) => void;
   saveViewState: (key: string, vs: unknown) => void;
+  setBlameEnabled: (key: string, enabled: boolean) => void;
   getActiveTab: (target: ProjectTargetInput) => Tab | null;
   loadContent: (key: string) => Promise<void>;
   reconcileTabFreshness: (key: string) => Promise<void>;
@@ -399,6 +402,7 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
     hydrated: true,
     stale: false,
     resourceBinding,
+    blameEnabled: false,
   };
 }
 
@@ -441,6 +445,7 @@ export function migrateEditorState(persisted: unknown): {
         diffPath: normalized.diffPath,
         hydrated: true as const,
         resourceBinding: normalized.resourceBinding,
+        blameEnabled: false,
       },
     ];
   });
@@ -1334,6 +1339,14 @@ export const useEditorStore = create<EditorState>()(
           }));
         },
 
+        setBlameEnabled: (key: string, enabled: boolean) => {
+          set((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.key === key ? { ...t, blameEnabled: enabled } : t,
+            ),
+          }));
+        },
+
         getActiveTab: (target: ProjectTargetInput) => {
           const { tabs, activeKeys } = get();
           const activeKey = editorActiveKeyForTarget(activeKeys, target);
@@ -1629,6 +1642,13 @@ export const useEditorStore = create<EditorState>()(
           stale: false,
         })),
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state?.tabs) {
+          for (const tab of state.tabs) {
+            tab.blameEnabled = false;
+          }
+        }
+      },
     },
   ),
 );
