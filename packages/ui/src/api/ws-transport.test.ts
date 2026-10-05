@@ -398,6 +398,117 @@ describe("WsTransport commit message endpoints", () => {
     });
     transport.destroy();
   });
+
+  it("encodes branch URL parameter alongside root and worktree with nested branch names and spaces", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ message: "test", branch: "refs/heads/feat/nested branch", headOid: "abc" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    await transport.invoke("git:commitMessage", {
+      project: "demo project",
+      hash: "abc1234",
+      root: "modules/sub folder",
+      worktreePath: "/tmp/work tree",
+      branch: "refs/heads/feat/nested branch",
+    });
+
+    const calledUrl = new URL(fetchMock.mock.calls[0][0]);
+    expect(calledUrl.pathname).toBe("/api/git/demo%20project/commit/abc1234/message");
+    expect(calledUrl.searchParams.get("root")).toBe("modules/sub folder");
+    expect(calledUrl.searchParams.get("worktreePath")).toBe("/tmp/work tree");
+    expect(calledUrl.searchParams.get("branch")).toBe("refs/heads/feat/nested branch");
+
+    // Omitted branch compatibility: does not emit branch param
+    await transport.invoke("git:commitMessage", {
+      project: "demo",
+      hash: "abc1234",
+    });
+    const secondUrl = new URL(fetchMock.mock.calls[1][0]);
+    expect(secondUrl.pathname).toBe("/api/git/demo/commit/abc1234/message");
+    expect(secondUrl.searchParams.has("branch")).toBe(false);
+    expect(secondUrl.searchParams.has("root")).toBe(false);
+
+    transport.destroy();
+  });
+});
+
+describe("WsTransport leased push endpoints", () => {
+  it("serializes branch in prepareLeasedPush and omits when undefined", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ status: "ready" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+
+    // With explicit branch
+    await transport.invoke("git:prepareLeasedPush", {
+      project: "demo",
+      root: "dir",
+      worktreePath: "/tmp/wt",
+      branch: "refs/heads/feature/inactive",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:4800/api/git/demo/push/prepare");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        worktreePath: "/tmp/wt",
+        root: "dir",
+        branch: "refs/heads/feature/inactive",
+      }),
+    });
+
+    // Omitted branch compatibility
+    await transport.invoke("git:prepareLeasedPush", {
+      project: "demo",
+      root: "dir",
+    });
+
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        root: "dir",
+      }),
+    });
+    const parsedBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect("branch" in parsedBody).toBe(false);
+
+    // publishLeasedPush snapshot body unchanged
+    const snapshot = {
+      branch: "refs/heads/feature/inactive",
+      sourceOid: "1111111111111111111111111111111111111111",
+      remoteName: "origin",
+      destinationRef: "refs/heads/feature/inactive",
+      expectedRemoteOid: "2222222222222222222222222222222222222222",
+      remoteIdentity: "origin-id",
+      repositoryIdentity: "repo-id",
+    };
+    await transport.invoke("git:publishLeasedPush", {
+      project: "demo",
+      snapshot,
+      root: "dir",
+    });
+
+    expect(fetchMock.mock.calls[2][0]).toBe("http://localhost:4800/api/git/demo/push/publish");
+    expect(fetchMock.mock.calls[2][1].method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      root: "dir",
+      snapshot,
+    });
+    transport.destroy();
+  });
 });
 
 describe("owner-bound squash REST boundary", () => {

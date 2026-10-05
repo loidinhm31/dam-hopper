@@ -699,3 +699,51 @@ The server validates `snapshot.branch` directly:
 - Push negotiation uses an exact-OID lease (`expectedRemoteOid`): if another writer updated the remote destination ref, the push is safely aborted with `stale-remote`.
 - Response returns `PublishResult` with status: `published`, `already-current`, `stale-remote`, `stale-local`, `stale-config`, `rejected`, `auth-required`, or `unknown`.
 
+
+### Frontend Transport, Hooks, and Action Controllers (Phase 02)
+
+The UI layer (`packages/ui`) routes Git operations through profile-owned clients, branch-qualified queries, and scoped action controllers. Rewriting inactive local branches and preparing leased publication avoid ambient `HEAD` fallbacks across transport and state boundaries:
+
+#### 1. Client & Transport Contracts (`client.ts`, `ws-transport.ts`)
+
+- `client.git.commitMessage(target, hash, root?, branch?)`:
+  Maps to `GET /api/git/{project}/commit/{hash}/message`. The optional `branch` is encoded alongside `worktreePath` and `root` via `URLSearchParams` without manual URI concatenation or ref truncation.
+- `client.git.prepareLeasedPush(target, root?, branch?)`:
+  Maps to `POST /api/git/{project}/push/prepare`. Optional `branch` is passed in the JSON request body and omitted when `undefined`.
+- `client.git.publishLeasedPush(target, snapshot, root?)`:
+  Publishes the frozen `PublishSnapshot`, which explicitly encapsulates `snapshot.branch`, `sourceOid`, `remoteName`, and `expectedRemoteOid`. No additional branch parameters are needed or accepted on the publish route.
+
+#### 2. Query Keys & Cache Isolation (`queries.ts`)
+
+- `gitCommitMessageQueryKey(target, hash, root?, branch?)`:
+  Appends a stable branch discriminator (`branch:${branch}` vs. `branch:default`) to the query key. This prevents cache collisions when identical commit hashes exist across different branches under the same target and root.
+- Invalidation preserves owner-scoped prefixes (`gitQueryKey("git-commit-message", normalized, rootKey)`), ensuring that Git rewrites refresh all commit message queries in the owning target scope.
+- `useGitCommitMessage` sets `staleTime: 0` and binds query execution to the profile owner and connection generation.
+- `useGitPrepareLeasedPush(target, root?, branch?)` forwards the explicit branch to the bound client.
+
+#### 3. History View Eligibility (`use-git-history-view.ts`)
+
+- `isViewingLocalBranch`: Evaluated as `Boolean(resolved.branch && !resolved.branch.isRemote && branchRef?.startsWith("refs/heads/"))`.
+- Replaces active-only rewrite checks: viewing an inactive discovered local branch permits commit message edits and squash actions. Remote branches and detached `HEAD` views remain ineligible (`"Squash requires a local branch."`).
+- `isViewingActiveBranch` and `activeBranchRef` are preserved for checkout-sensitive operations (such as branch checkout warnings and worktree actions).
+
+#### 4. Squash Controller Target Capture (`use-git-squash.ts`)
+
+- Loads full messages for selected commits via `client.git.commitMessage(capturedTarget, hash, capturedRoot, branch)` using the captured `branchRef`.
+- Validates that every message snapshot returns matching `snapshot.branch === branch` and identical `headOid`. Mismatches abort loading with `"History changed while loading messages. Refresh and select again."`.
+- Submits `expectedBranch: current.snapshot.branch` and `expectedHeadOid: current.snapshot.headOid` under CAS ref protection.
+- On success, emits a `receipt` containing `{ branch, sourceOid: result.newHeadOid, count, targetOid, capturedTarget, root, ownerGeneration }`. Uncertain outcomes or errors never emit a success receipt.
+
+#### 5. Receipt-Bound Leased Push (`use-leased-git-push.ts`)
+
+- Receives `expectedSource?: { branch: string; sourceOid: string }` from the squash receipt.
+- Passes `expectedSource.branch` directly into `useGitPrepareLeasedPush(normalized, root, expectedSource.branch)`.
+- Fences preparation: if `res.snapshot.branch !== expectedSource.branch` or `res.snapshot.sourceOid !== expectedSource.sourceOid`, the flow transitions to `blocked` and rejects confirmation.
+- Retains frozen lease snapshot and credential retry state; target, root, or owner-generation changes immediately revoke pending preparation and retries.
+
+#### 6. Edit Controller Scope & Baseline Safety (`GitHistoryActions.tsx`)
+
+- Uses an isolated `editScope` tuple `[project, projectTargetCacheKey(targetRef), root, editBranch, connectionGeneration]` separate from general action scope.
+- Captures commit entry and `editScope` on opening; queries `commitMessage` with the captured local branch.
+- Freezes `frozenSnapshot` once loaded. Subsequent background query refetches do not overwrite established user drafts or CAS baselines.
+- Validates `frozenSnapshot.branch === editBranch` before submit; mismatched branch disables save and prompts history refresh.

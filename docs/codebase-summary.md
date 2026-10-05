@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-04. The repository compaction was generated with `repomix --output ./repomix-output.xml --quiet`; this summary uses that compaction and a source-tree inventory. Counts below describe application code, not every document, generated asset, or dependency file; source files are authoritative when a summary differs.
+**Generated:** 2026-10-05. The repository compaction was generated with `repomix --output ./repomix-output.xml --quiet`; this summary uses that compaction and a source-tree inventory. Counts below describe application code, not every document, generated asset, or dependency file; source files are authoritative when a summary differs.
 
 ## Repository at a glance
 
@@ -48,7 +48,7 @@ Other backend modules cover Agent Store distribution, browser debugging, host ac
 ## Current architecture and invariants
 
 - **Multi-profile workbench:** Profile management is client-side; connections, transports, QueryClients, and state are scoped to `profileId` and connection generation. Server-owned project, PTY, workflow, and filesystem data remain on the owning server.
-- **Git:** Ordinary publication is separate from history rewriting. Commit rewrites use captured branch/HEAD compare-and-swap; publication uses exact expected-OID leases. Squash accepts only a contiguous oldest-first parent chain and preserves the final tree.
+- **Git:** Ordinary publication is separate from history rewriting. Commit message rewrites and squash operate on active or inactive local branches via branch-qualified snapshots and ref compare-and-swap (CAS); active checkout, index, and untracked files are preserved during inactive rewrites. Publication uses exact expected-OID leases bound to the target or squash-receipt branch. Squash accepts only a contiguous oldest-first parent chain and preserves the final tree.
 - **Native Advisor:** Rust/Axum service under `server/src/advisor/`, API under `server/src/api/advisor.rs`, and React UI under `packages/ui/src/advisor/`. `/api/advisor/*` requires a current authenticated administrator; no-auth is denied. It is per-server, default-off, reads `$HOME/.evcrate/advisor-history`, and CAS-updates routing policy at `$HOME/.evcrate/advisor-routing.json`. The legacy plugin platform is retired. See [Native Advisor architecture](./architecture/native-advisor.md).
 - **Agent Status:** The in-process runtime correlates a terminal ID with PTY incarnation. OMP reports over a private loopback WebSocket with a 5-second heartbeat and 15-second lease; Codex and Claude use protected Unix-socket hook ingress with peer-credential checks. Silence and turn end do not prove task completion. See [Agent Status architecture](./architecture/agent-status.md).
 - **Cognito Mode:** An ephemeral in-app mask and capture-phase input guard, not authentication, content redaction, or OS-level privacy. Current `packages/ui/src/index.css` uses a heavy-blur rule of `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)` when backdrop-filter is supported; unsupported/reduced-transparency cases use opaque black. This current source differs from the styling values recorded in the 2026-10-03 changelog entry; source is authoritative for the checked-in behavior.

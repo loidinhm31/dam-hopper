@@ -167,12 +167,7 @@ local rewrite is pending. Known failures retain the draft; uncertain outcomes
 disable automatic retry and never create a success receipt. Closing restores a
 live launcher or surviving toolbar without leaving the app input-locked.
 
-Squash requires an available connected target on the checked-out local branch,
-and rejects selected or rewritten-descendant merges. The success receipt offers
-**Publish rewritten branch** through a separate leased confirmation. Publication
-uses the same history owner/root and verified new branch tip—not Git-page bulk
-root selection. Nothing pushes automatically. Scope/generation changes fence
-late preparation, rewrite, publication, and SSH-retry completions.
+Squash requires an available connected target on a local branch (`refs/heads/*`), active or inactive (`isViewingLocalBranch`), and rejects selected or rewritten-descendant merges. The success receipt captures the target branch and offers **Publish rewritten branch** through a separate leased confirmation bound to `receipt.branch`. Publication uses the same history owner/root and verified new branch tip—not Git-page bulk root selection or ambient HEAD. Nothing pushes automatically. Scope/generation changes fence late preparation, rewrite, publication, and SSH-retry completions.
 
 See the [Git-history search architecture](../architecture/git-history-search.md)
 for transport, query, and persistence details and the

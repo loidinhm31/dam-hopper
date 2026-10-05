@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import {
+  gitCommitMessageQueryKey,
   gitHistoryQueryPrefixes,
   gitLogQueryOptions,
   invalidateGitHistoryDetails,
@@ -284,5 +285,53 @@ describe("consumer-visible cache isolation and search query variants", () => {
     for (const key of detailsKeys) {
       expect(qc.getQueryCache().find({ queryKey: key })?.isStale()).toBe(true);
     }
+  });
+
+  it("produces distinct query keys for different branches and invalidates via history details prefix", async () => {
+    const target = { project: "my-project" };
+    const hash = "deadbeef";
+
+    const keyMain = gitCommitMessageQueryKey(target, hash, ".", "refs/heads/main");
+    const keyFeature = gitCommitMessageQueryKey(target, hash, ".", "refs/heads/feature/auth");
+    const keyDefault = gitCommitMessageQueryKey(target, hash, ".");
+
+    expect(keyMain).not.toEqual(keyFeature);
+    expect(keyMain).not.toEqual(keyDefault);
+    expect(keyFeature).not.toEqual(keyDefault);
+
+    // Default discriminator is stable
+    expect(gitCommitMessageQueryKey(target, hash, ".", undefined)).toEqual(keyDefault);
+
+    // Profile and generation isolation
+    const targetProf1Gen1 = { profileId: "prof-1", project: "my-project" };
+    const mockTransport: Transport = {
+      invoke: vi.fn(),
+      onEvent: vi.fn(),
+      offEvent: vi.fn(),
+      destroy: vi.fn(),
+    };
+    __setConnectionSnapshotForTests("prof-1", {
+      owner: { profileId: "prof-1", generation: 1 },
+      status: "connected",
+      api: createApiClient({ profileId: "prof-1", generation: 1 }, mockTransport),
+    });
+    const keyProf1 = gitCommitMessageQueryKey(targetProf1Gen1, hash, ".", "refs/heads/feature");
+
+    __setConnectionSnapshotForTests("prof-1", {
+      owner: { profileId: "prof-1", generation: 2 },
+      status: "connected",
+      api: createApiClient({ profileId: "prof-1", generation: 2 }, mockTransport),
+    });
+    const keyProf1Gen2 = gitCommitMessageQueryKey(targetProf1Gen1, hash, ".", "refs/heads/feature");
+    expect(keyProf1).not.toEqual(keyProf1Gen2);
+
+    // Invalidation via details prefix
+    qc.setQueryData(keyMain, { message: "main message" });
+    qc.setQueryData(keyFeature, { message: "feature message" });
+
+    await invalidateGitHistoryDetails(qc, target, ".", hash);
+
+    expect(qc.getQueryCache().find({ queryKey: keyMain })?.isStale()).toBe(true);
+    expect(qc.getQueryCache().find({ queryKey: keyFeature })?.isStale()).toBe(true);
   });
 });

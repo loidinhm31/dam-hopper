@@ -2094,10 +2094,15 @@ export function createApiClient(
           ...toWireTarget(target),
           root,
         }),
-      prepareLeasedPush: (target: ProjectTargetInput, root?: string) =>
+      prepareLeasedPush: (
+        target: ProjectTargetInput,
+        root?: string,
+        branch?: string,
+      ) =>
         transport.invoke<PublishPreview>("git:prepareLeasedPush", {
           ...toWireTarget(target),
           root,
+          branch,
         }),
       publishLeasedPush: (
         target: ProjectTargetInput,
@@ -2306,11 +2311,13 @@ export function createApiClient(
         target: ProjectTargetInput,
         hash: string,
         root?: string,
+        branch?: string,
       ) =>
         transport.invoke<CommitMessageResponse>("git:commitMessage", {
           ...toWireTarget(target),
           hash,
           root,
+          branch,
         }),
       editCommitMessage: (
         target: ProjectTargetInput,
@@ -3115,6 +3122,7 @@ export interface ApiClient {
     prepareLeasedPush: (
       target: ProjectTargetInput,
       root?: string,
+      branch?: string,
     ) => Promise<PublishPreview>;
     publishLeasedPush: (
       target: ProjectTargetInput,
@@ -3238,6 +3246,7 @@ export interface ApiClient {
       target: ProjectTargetInput,
       hash: string,
       root?: string,
+      branch?: string,
     ) => Promise<CommitMessageResponse>;
     editCommitMessage: (
       target: ProjectTargetInput,

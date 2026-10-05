@@ -136,8 +136,7 @@ describe("Workspace real squash controls", () => {
     expect(button("Push")).toBeDefined();
     expect(button("Force Push")).toBeDefined();
   });
-  it("keeps valid filtered chains actionable but fails closed off the checked-out branch and unavailable target", async () => {
-    fixture.messages[squashOids.oldest] += "matching filter\n";
+  it("keeps valid filtered chains actionable but fails closed on non-local branches and unavailable target", async () => {
     fixture.messages[squashOids.newest] += "\nmatching filter\n";
     fixture.logs = fixture.logs.slice(1);
     await renderPanel();
@@ -172,13 +171,13 @@ describe("Workspace real squash controls", () => {
         .getState()
         .setBranchPreference(
           fixture.target,
-          { mode: "pinned", ref: "refs/heads/other" },
+          { mode: "pinned", ref: "refs/remotes/origin/remote" },
           ".",
         ),
     );
     await renderPanel();
     expect(button("Squash commits").disabled).toBe(true);
-    expect(container.textContent).toContain("View the checked-out branch");
+    expect(container.textContent).toContain("Squash requires a local branch.");
     available = false;
     await renderPanel();
     expect(container.querySelector('input[aria-label^="Select"]')).toBeNull();

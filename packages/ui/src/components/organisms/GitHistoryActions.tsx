@@ -10,7 +10,9 @@ import {
   useGitRevertCommitFiles,
   useGitReset,
   useGitUndoLastCommit,
+  resolveTargetOwner,
 } from "@/api/queries.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
 import type {
   DiffFileEntry,
   GitActionResult,
@@ -567,6 +569,18 @@ export function useGitHistoryActions(
   const squash = useGitSquashActions(target, root, squashContext);
   const project = targetRef.project;
   const scope = `${project}\0${projectTargetCacheKey(targetRef)}\0${root ?? "."}`;
+  const owner = resolveTargetOwner(targetRef.profileId);
+  const connectionSnapshot = useConnectionSnapshot(targetRef.profileId ?? "");
+  const connectionGeneration =
+    connectionSnapshot?.owner.generation ?? owner?.generation ?? 0;
+  const editBranch = squashContext.branchRef;
+  const editScope = JSON.stringify([
+    project,
+    projectTargetCacheKey(targetRef),
+    root ?? ".",
+    editBranch,
+    connectionGeneration,
+  ]);
   const [resetCommitState, setResetCommitState] = useState<{
     project: string;
     commit: GitLogEntry | null;
@@ -609,7 +623,7 @@ export function useGitHistoryActions(
   const dropCommit =
     dropCommitState.project === scope ? dropCommitState.commit : null;
   const editCommit =
-    editCommitState.project === scope ? editCommitState.commit : null;
+    editCommitState.project === editScope ? editCommitState.commit : null;
   const revertCommit =
     revertCommitState.project === scope ? revertCommitState.commit : null;
   const undoLastCommit =
@@ -623,6 +637,7 @@ export function useGitHistoryActions(
     targetRef,
     editCommit?.hash ?? "",
     root,
+    editBranch,
   );
   const [signatureConsentRequired, setSignatureConsentRequired] =
     useState(false);
@@ -633,6 +648,7 @@ export function useGitHistoryActions(
     headOid: string;
     scope: string;
   } | null>(null);
+  const [branchMismatch, setBranchMismatch] = useState(false);
 
   useEffect(() => {
     if (
@@ -659,22 +675,43 @@ export function useGitHistoryActions(
     if (!editCommit) {
       setFrozenSnapshot(null);
       setSignatureConsentRequired(false);
+      setBranchMismatch(false);
+      return;
+    }
+    if (
+      frozenSnapshot?.hash === editCommit.hash &&
+      frozenSnapshot?.scope === editScope
+    ) {
       return;
     }
     if (commitMessageQuery.data && !commitMessageQuery.isLoading) {
-      setFrozenSnapshot({
-        hash: editCommit.hash,
-        message: commitMessageQuery.data.message,
-        branch: commitMessageQuery.data.branch,
-        headOid: commitMessageQuery.data.headOid,
-        scope,
-      });
+      const dataBranch = commitMessageQuery.data.branch;
+      if (
+        !editBranch ||
+        !editBranch.startsWith("refs/heads/") ||
+        dataBranch !== editBranch
+      ) {
+        setBranchMismatch(true);
+        setFrozenSnapshot(null);
+      } else {
+        setBranchMismatch(false);
+        setFrozenSnapshot({
+          hash: editCommit.hash,
+          message: commitMessageQuery.data.message,
+          branch: dataBranch,
+          headOid: commitMessageQuery.data.headOid,
+          scope: editScope,
+        });
+      }
     }
   }, [
     editCommit,
     commitMessageQuery.data,
     commitMessageQuery.isLoading,
-    scope,
+    editScope,
+    editBranch,
+    frozenSnapshot?.hash,
+    frozenSnapshot?.scope,
   ]);
 
   function setStatus(value: GitHistoryActionStatus | null) {
@@ -959,8 +996,10 @@ export function useGitHistoryActions(
       !project ||
       !editCommit ||
       !frozenSnapshot ||
-      frozenSnapshot.scope !== scope ||
-      frozenSnapshot.hash !== editCommit.hash
+      frozenSnapshot.scope !== editScope ||
+      frozenSnapshot.hash !== editCommit.hash ||
+      !frozenSnapshot.branch ||
+      frozenSnapshot.branch !== editBranch
     ) {
       return null;
     }
@@ -976,6 +1015,12 @@ export function useGitHistoryActions(
           allowSignatureRemoval,
         },
       });
+      if (
+        editCommitState.project !== editScope ||
+        frozenSnapshot.scope !== editScope
+      ) {
+        return null;
+      }
       if (result.blockedReason === "signature-consent-required") {
         setSignatureConsentRequired(true);
         setStatus({
@@ -993,12 +1038,19 @@ export function useGitHistoryActions(
         ),
       );
       if (result.ok) {
-        setEditCommitState({ project: scope, commit: null });
+        setEditCommitState({ project: editScope, commit: null });
         setFrozenSnapshot(null);
         setSignatureConsentRequired(false);
+        setBranchMismatch(false);
         return targetHash;
       }
     } catch (caughtError) {
+      if (
+        editCommitState.project !== editScope ||
+        frozenSnapshot.scope !== editScope
+      ) {
+        return null;
+      }
       setStatus({
         kind: "error",
         message:
@@ -1023,6 +1075,7 @@ export function useGitHistoryActions(
     setSelectedChangesState((current) => ({ ...current, operation: null }));
     setFrozenSnapshot(null);
     setSignatureConsentRequired(false);
+    setBranchMismatch(false);
     clearStatus();
   }, [clearStatus]);
 
@@ -1034,12 +1087,16 @@ export function useGitHistoryActions(
     editCommitMessage:
       frozenSnapshot?.hash === editCommit?.hash
         ? frozenSnapshot?.message
-        : commitMessageQuery.data?.message,
+        : !branchMismatch && commitMessageQuery.data?.branch === editBranch
+          ? commitMessageQuery.data?.message
+          : undefined,
     editCommitMessageLoading: commitMessageQuery.isLoading,
     editCommitMessageError:
       commitMessageQuery.error instanceof Error
         ? commitMessageQuery.error.message
-        : undefined,
+        : branchMismatch
+          ? "Branch changed while loading commit message. Refresh history."
+          : undefined,
     signatureConsentRequired,
     isEditCommitMessagePending: editCommitMutation.isPending,
     revertCommit,
@@ -1054,7 +1111,7 @@ export function useGitHistoryActions(
     setDropCommit: (commit: GitLogEntry | null) =>
       setDropCommitState({ project: scope, commit }),
     setEditCommit: (commit: GitLogEntry | null) =>
-      setEditCommitState({ project: scope, commit }),
+      setEditCommitState({ project: editScope, commit }),
     setRevertCommit: (commit: GitLogEntry | null) =>
       setRevertCommitState({ project: scope, commit }),
     setUndoLastCommit: (commit: GitLogEntry | null) =>

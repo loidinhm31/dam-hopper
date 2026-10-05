@@ -17,9 +17,12 @@ export interface SquashFixture {
   logs: GitLogEntry[];
   messages: Record<string, string>;
   requests: Array<{ url: URL; method: string; body?: Record<string, unknown> }>;
-  messageResponse: (hash: string) => Promise<CommitMessageResponse>;
+  messageResponse: (
+    hash: string,
+    branch?: string | null,
+  ) => Promise<CommitMessageResponse>;
   squashResponse: (input: SquashCommitsInput) => Promise<GitActionResult>;
-  prepareResponse: () => Promise<PublishPreview>;
+  prepareResponse: (branch?: string | null) => Promise<PublishPreview>;
   publishResponse: () => Promise<PublishResult>;
   bind: (generation?: number) => void;
   transport: WsTransport;
@@ -101,10 +104,13 @@ export function installSquashFixture(): SquashFixture {
     ],
     messages,
     requests,
-    messageResponse: (hash: string): Promise<CommitMessageResponse> =>
+    messageResponse: (
+      hash: string,
+      branch?: string | null,
+    ): Promise<CommitMessageResponse> =>
       Promise.resolve({
         message: messages[hash],
-        branch: `refs/heads/${fixture.branch}`,
+        branch: branch ?? `refs/heads/${fixture.branch}`,
         headOid: squashOids.descendant,
       }),
     squashResponse: (_input: SquashCommitsInput): Promise<GitActionResult> =>
@@ -118,20 +124,22 @@ export function installSquashFixture(): SquashFixture {
         rewrittenCount: 2,
         noOp: false,
       }),
-    prepareResponse: (): Promise<PublishPreview> =>
-      Promise.resolve({
+    prepareResponse: (branch?: string | null): Promise<PublishPreview> => {
+      const targetBranch = branch ?? `refs/heads/${fixture.branch}`;
+      return Promise.resolve({
         status: "ready",
         alreadyCurrent: false,
         snapshot: {
-          branch: "refs/heads/main",
+          branch: targetBranch,
           sourceOid: squashOids.tip,
           remoteName: "origin",
-          destinationRef: "refs/heads/main",
+          destinationRef: targetBranch,
           expectedRemoteOid: squashOids.descendant,
           remoteIdentity: "bare-fixture",
           repositoryIdentity: "fixture",
         },
-      }),
+      });
+    },
     publishResponse: (): Promise<PublishResult> =>
       Promise.resolve({
         status: "published",
@@ -175,16 +183,27 @@ export function installSquashFixture(): SquashFixture {
             isRemote: false,
             lastCommit: squashOids.oldest,
           },
+          {
+            name: "origin/remote",
+            isCurrent: false,
+            isRemote: true,
+            lastCommit: squashOids.oldest,
+          },
         ];
       else if (url.pathname.endsWith("/log")) data = fixture.logs;
       else if (url.pathname.endsWith("/message"))
-        data = await fixture.messageResponse(url.pathname.split("/").at(-2)!);
+        data = await fixture.messageResponse(
+          url.pathname.split("/").at(-2)!,
+          url.searchParams.get("branch"),
+        );
       else if (url.pathname.endsWith("/squash"))
         data = await fixture.squashResponse(
           body as unknown as SquashCommitsInput,
         );
       else if (url.pathname.endsWith("/push/prepare"))
-        data = await fixture.prepareResponse();
+        data = await fixture.prepareResponse(
+          (body?.branch as string | undefined) ?? null,
+        );
       else if (url.pathname.endsWith("/push/publish"))
         data = await fixture.publishResponse();
       else if (url.pathname.endsWith("/status"))

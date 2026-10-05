@@ -78,7 +78,11 @@ export function useLeasedGitPush(
   const activeScopeRef = useRef(scopeKey);
   const activeGenerationRef = useRef(0);
 
-  const prepareMutation = useGitPrepareLeasedPush(normalized, root);
+  const prepareMutation = useGitPrepareLeasedPush(
+    normalized,
+    root,
+    expectedSource?.branch,
+  );
   const publishMutation = useGitPublishLeasedPush(normalized, root);
 
   const {

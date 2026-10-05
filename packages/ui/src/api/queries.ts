@@ -1279,18 +1279,35 @@ export function useGitCommitFiles(
     staleTime: 60_000,
   });
 }
+export function gitCommitMessageQueryKey(
+  target: ProjectTargetInput,
+  hash: string,
+  root?: string,
+  branch?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const rootKey = gitRootKey(root);
+  return gitQueryKey(
+    "git-commit-message",
+    normalized,
+    rootKey,
+    hash,
+    branch ? `branch:${branch}` : "branch:default",
+  );
+}
+
 export function useGitCommitMessage(
   target: ProjectTargetInput,
   hash: string,
   root?: string,
+  branch?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
-  const rootKey = gitRootKey(root);
   return useQuery<CommitMessageResponse>({
-    queryKey: gitQueryKey("git-commit-message", normalized, rootKey, hash),
+    queryKey: gitCommitMessageQueryKey(normalized, hash, root, branch),
     queryFn: () =>
-      getBoundApiClient(owner).git.commitMessage(normalized, hash, root),
+      getBoundApiClient(owner).git.commitMessage(normalized, hash, root, branch),
     enabled: !!normalized.project && !!hash,
     staleTime: 0,
   });
@@ -1863,12 +1880,13 @@ export function useGitPush() {
 export function useGitPrepareLeasedPush(
   target: ProjectTargetInput,
   root?: string,
+  branch?: string,
 ) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
   return useMutation({
     mutationFn: () =>
-      getBoundApiClient(owner).git.prepareLeasedPush(normalized, root),
+      getBoundApiClient(owner).git.prepareLeasedPush(normalized, root, branch),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }

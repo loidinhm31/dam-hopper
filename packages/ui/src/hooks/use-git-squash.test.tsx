@@ -13,7 +13,10 @@ import { GitHistoryToolbar } from "@/components/molecules/GitHistoryToolbar.js";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { GitSquashFlow } from "@/components/organisms/GitSquashFlow.js";
 import { gitHistoryQueryPrefixes } from "@/api/queries.js";
-import { resetGitHistoryStore } from "@/stores/git-history.js";
+import {
+  resetGitHistoryStore,
+  useGitHistoryStore,
+} from "@/stores/git-history.js";
 import {
   deferred,
   installSquashFixture,
@@ -640,5 +643,71 @@ describe("shared squash controller and actual controls", () => {
     );
     expect(button("Squash locally").disabled).toBe(true);
     expect(button("Cancel").disabled).toBe(false);
+  });
+
+  it("captures inactive local branch, passes branch to message reads and submits exact CAS body", async () => {
+    // Pin inactive branch 'other' (active branch in fixture is 'main')
+    useGitHistoryStore.getState().setBranchPreference(
+      fixture.target,
+      { mode: "pinned", ref: "refs/heads/other" },
+      ".",
+    );
+
+    await render();
+    expect(view.branchRef).toBe("refs/heads/other");
+    expect(view.isViewingActiveBranch).toBe(false);
+    expect(view.isViewingLocalBranch).toBe(true);
+
+    await open();
+
+    // Verify all message requests had branch query param
+    const messageRequests = fixture.requests.filter((r) =>
+      r.url.pathname.endsWith("/message"),
+    );
+    expect(messageRequests.length).toBeGreaterThan(0);
+    for (const req of messageRequests) {
+      expect(req.url.searchParams.get("branch")).toBe("refs/heads/other");
+    }
+
+    // Verify dialog displays inactive branch label
+    expect(document.body.textContent).toContain("refs/heads/other");
+
+    await edit("Squashed commit on inactive other branch");
+    await click("Squash locally");
+
+    // Verify CAS submission body targets inactive branch
+    const squashMutations = mutations();
+    expect(squashMutations).toHaveLength(1);
+    expect(squashMutations[0].body).toMatchObject({
+      expectedBranch: "refs/heads/other",
+      expectedHeadOid: squashOids.descendant,
+      message: "Squashed commit on inactive other branch\n",
+    });
+
+    // Confirmation shows local squash success and publication offers prepare
+    expect(document.body.textContent).toContain("Squashed 2 commits locally");
+  });
+
+  it("blocks squash load when message response branch mismatches captured target branch", async () => {
+    useGitHistoryStore.getState().setBranchPreference(
+      fixture.target,
+      { mode: "pinned", ref: "refs/heads/other" },
+      ".",
+    );
+
+    // Override message response to return active branch 'refs/heads/main' instead of 'refs/heads/other'
+    fixture.messageResponse = async (hash) => ({
+      message: fixture.messages[hash],
+      branch: "refs/heads/main",
+      headOid: squashOids.descendant,
+    });
+
+    await render();
+    await open();
+
+    expect(document.body.textContent).toContain(
+      "History changed while loading messages",
+    );
+    expect(button("Squash locally").disabled).toBe(true);
   });
 });
