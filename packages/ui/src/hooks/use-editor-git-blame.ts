@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
 import type { Tab } from "@/stores/editor.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import {
@@ -121,7 +121,7 @@ export function useEditorGitBlame({
   editor,
   active = true,
 }: UseEditorGitBlameParams): UseEditorGitBlameResult {
-  const queryClient = useQueryClient();
+  const queryClient = useContext(QueryClientContext) ?? null;
 
   const isEnabled = Boolean(tab?.blameEnabled && active && isBlameEligibleTab(tab));
   const profileId = tab?.target?.profileId ?? "";
@@ -357,6 +357,7 @@ export function useEditorGitBlame({
           const owner = snapshotRef.current?.owner;
           if (!owner || !isCurrentConnection(owner)) return;
 
+          if (!queryClient) return;
           const roots = await queryClient.fetchQuery({
             queryKey: gitQueryKey("git-roots", currentTab.target),
             queryFn: () =>
@@ -550,31 +551,33 @@ export function useEditorGitBlame({
     });
 
     // QueryCache subscription for Git mutation invalidations
-    const unsubQueryCache = queryClient.getQueryCache().subscribe((event) => {
-      if (event.type === "updated" && event.action.type === "invalidate") {
-        const key = event.query.queryKey;
-        if (!Array.isArray(key)) return;
-        let prefix = key[0];
-        if (
-          key.length >= 5 &&
-          key[0] === "profile" &&
-          (key[3] === "git" || typeof key[3] === "string")
-        ) {
-          prefix = key[4] ?? key[3];
-        }
-        if (
-          prefix === "git-diff" ||
-          prefix === "git-log" ||
-          prefix === "branches" ||
-          prefix === "git-conflicts"
-        ) {
-          const currentTarget = tabRef.current?.target;
-          if (currentTarget && key.includes(currentTarget.project)) {
-            triggerRepositoryRefresh(false);
+    const unsubQueryCache = queryClient
+      ? queryClient.getQueryCache().subscribe((event) => {
+          if (event.type === "updated" && event.action.type === "invalidate") {
+            const key = event.query.queryKey;
+            if (!Array.isArray(key)) return;
+            let prefix = key[0];
+            if (
+              key.length >= 5 &&
+              key[0] === "profile" &&
+              (key[3] === "git" || typeof key[3] === "string")
+            ) {
+              prefix = key[4] ?? key[3];
+            }
+            if (
+              prefix === "git-diff" ||
+              prefix === "git-log" ||
+              prefix === "branches" ||
+              prefix === "git-conflicts"
+            ) {
+              const currentTarget = tabRef.current?.target;
+              if (currentTarget && key.includes(currentTarget.project)) {
+                triggerRepositoryRefresh(false);
+              }
+            }
           }
-        }
-      }
-    });
+        })
+      : () => {};
 
     return () => {
       window.removeEventListener("focus", onWindowFocus);

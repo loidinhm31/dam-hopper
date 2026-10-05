@@ -258,3 +258,153 @@ describe("MonacoHost viewState lifecycle persistence", () => {
     );
   });
 });
+
+describe("MonacoHost Git Blame and input guards", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("guards Git line indicator clicks to primary mouse button only", async () => {
+    const onGitIndicatorClick = vi.fn();
+    let mouseDownHandler: ((event: unknown) => void) | undefined;
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-mouse-guard"
+          content="hello world"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={() => {}}
+          onGitIndicatorClick={onGitIndicatorClick}
+          lineChanges={[{ line: 5, length: 1, type: "modified" }]}
+        />,
+      );
+    });
+
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      restoreViewState: vi.fn(),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn((fn: (event: unknown) => void) => {
+        mouseDownHandler = fn;
+      }),
+      onContextMenu: vi.fn(),
+      addAction: vi.fn(),
+      onDidBlurEditorWidget: vi.fn(),
+      deltaDecorations: vi.fn(() => []),
+    };
+
+    lastOnMount?.(
+      mockEditor,
+      {
+        KeyMod: { CtrlCmd: 1 },
+        KeyCode: { KeyS: 1 },
+        editor: {
+          MouseTargetType: {
+            GUTTER_GLYPH_MARGIN: 2,
+            GUTTER_LINE_DECORATIONS: 3,
+            GUTTER_LINE_NUMBERS: 4,
+          },
+        },
+      },
+    );
+
+    expect(mouseDownHandler).toBeDefined();
+
+    // Right-click on line 5 glyph margin (button: 2, leftButton: false)
+    mouseDownHandler?.({
+      event: { leftButton: false, browserEvent: { button: 2 } },
+      target: { position: { lineNumber: 5 }, type: 2 },
+    });
+    expect(onGitIndicatorClick).not.toHaveBeenCalled();
+
+    // Left-click on line 5 glyph margin (button: 0, leftButton: true)
+    mouseDownHandler?.({
+      event: { leftButton: true, browserEvent: { button: 0 } },
+      target: { position: { lineNumber: 5 }, type: 2 },
+    });
+    expect(onGitIndicatorClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers editor.action.toggleGitBlame action in Monaco", async () => {
+    const addAction = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-action"
+          content="hello"
+          tier="normal"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={() => {}}
+        />,
+      );
+    });
+
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      restoreViewState: vi.fn(),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn(),
+      onContextMenu: vi.fn(),
+      addAction,
+      onDidBlurEditorWidget: vi.fn(),
+      deltaDecorations: vi.fn(() => []),
+    };
+
+    lastOnMount?.(
+      mockEditor,
+      {
+        KeyMod: { CtrlCmd: 1 },
+        KeyCode: { KeyS: 1 },
+        editor: { MouseTargetType: {} },
+      },
+    );
+
+    expect(addAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "editor.action.toggleGitBlame",
+        label: "Toggle Git Blame Annotations",
+      }),
+    );
+  });
+
+  it("renders EditorGitBlameGutter when blameEnabled is true", async () => {
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-blame-gutter"
+          content="hello"
+          tier="normal"
+          blameEnabled={true}
+          blameStatus="loading"
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={() => {}}
+        />,
+      );
+    });
+
+    const gutterEl = container.querySelector("[data-testid='editor-git-blame-gutter']");
+    expect(gutterEl).not.toBeNull();
+    const loadingEl = container.querySelector("[data-testid='editor-git-blame-loading']");
+    expect(loadingEl).not.toBeNull();
+  });
+});
