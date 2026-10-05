@@ -16,17 +16,24 @@
 # Dependencies & package manager caches
 node_modules
 **/node_modules
+apps/*/node_modules
+packages/*/node_modules
 .pnpm-store
 **/.pnpm-store
+apps/*/.pnpm-store
+packages/*/.pnpm-store
 
 # Build outputs & caches
 target
 **/target
 dist
 **/dist
+apps/*/dist
+packages/*/dist
 .turbo
 **/.turbo
-
+apps/*/.turbo
+packages/*/.turbo
 # Tests, reports, logs & evidence
 test-results
 **/test-results

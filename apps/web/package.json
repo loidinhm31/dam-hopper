@@ -14,6 +14,7 @@
   "dependencies": {
     "@dam-hopper/shared": "workspace:*",
     "@dam-hopper/ui": "workspace:*",
+    "@radix-ui/react-select": "2.3.3",
     "@tanstack/react-query": "^5.67.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

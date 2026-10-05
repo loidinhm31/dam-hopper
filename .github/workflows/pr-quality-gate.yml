@@ -109,6 +109,8 @@ jobs:
     name: Application E2E journeys
     runs-on: ubuntu-22.04
     timeout-minutes: 40
+    env:
+      CONTAINER_ENGINE: docker
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
