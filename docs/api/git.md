@@ -700,7 +700,7 @@ The server validates `snapshot.branch` directly:
 - Response returns `PublishResult` with status: `published`, `already-current`, `stale-remote`, `stale-local`, `stale-config`, `rejected`, `auth-required`, or `unknown`.
 
 
-### Frontend Transport, Hooks, and Action Controllers (Phase 02)
+### Frontend Transport, Hooks, Action Controllers, and UI Surfaces (Phase 02 & Phase 03)
 
 The UI layer (`packages/ui`) routes Git operations through profile-owned clients, branch-qualified queries, and scoped action controllers. Rewriting inactive local branches and preparing leased publication avoid ambient `HEAD` fallbacks across transport and state boundaries:
 
@@ -747,3 +747,14 @@ The UI layer (`packages/ui`) routes Git operations through profile-owned clients
 - Captures commit entry and `editScope` on opening; queries `commitMessage` with the captured local branch.
 - Freezes `frozenSnapshot` once loaded. Subsequent background query refetches do not overwrite established user drafts or CAS baselines.
 - Validates `frozenSnapshot.branch === editBranch` before submit; mismatched branch disables save and prompts history refresh.
+
+#### 7. UI Surface Parity & Accessibility (Phase 03)
+
+- **Surface Parity (`WorkspaceGitPanel.tsx`, `GitPage.tsx`)**:
+  Both the compact Workspace Git Panel and standalone Git Page expose commit-message editing and squash mutations whenever viewing any local branch (`historyView.isViewingLocalBranch`), active or inactive. Destructive working-tree actions (`reset`, `drop`, `undoLastCommit`) remain guarded by `historyView.isViewingActiveBranch`.
+- **Branch Banner Synchronization**:
+  When viewing a non-active branch, the banner displays: `Viewing {branchLabel}. Cherry-pick and revert apply to checked-out branch {activeBranch}.` Obsolete warnings restricting rewrite actions to the active branch are removed.
+- **Accessible Disabled Context Menu (`GitLogTree.tsx`)**:
+  When viewing a remote branch or detached `HEAD` without edit permissions, the "Edit Commit Message" Radix context menu item associates its disabled state with a unique `useId()` description ID via `aria-describedby`, paired with mouse `title` tooltip fallback and non-interactive `<p>` explanation text (`"Edit Commit Message is only available for local branches"`).
+- **Post-Squash Leased Publication**:
+  Following a squash on an inactive local branch, the receipt-bound leased push flow prepares and publishes strictly against `receipt.branch` and the frozen target snapshot, protecting against ambient `HEAD` drift or checkout transitions.

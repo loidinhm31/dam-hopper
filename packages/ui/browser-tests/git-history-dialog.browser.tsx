@@ -148,4 +148,32 @@ describe("Git history modal handoff in TERMINAL mode", () => {
       .not.toBeInTheDocument();
     await expectApplicationInputRecovered();
   });
+
+  it("exposes accessible disabled state and description in context menu when edit callback is omitted", async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <GitLogTree logs={[originalCommit]} onEditCommitMessage={undefined} />,
+      ),
+    );
+    const row = page.getByRole("row", { name: /HEAD -> main/ });
+    await userEvent.click(row, { button: "right" });
+    const editItem = page.getByRole("menuitem", {
+      name: "Edit Commit Message",
+      exact: true,
+    });
+    await expect.element(editItem).toBeInTheDocument();
+    await expect.element(editItem).toHaveAttribute("data-disabled");
+    await expect.element(editItem).toHaveAttribute(
+      "title",
+      "Edit Commit Message is only available for local branches",
+    );
+    const describedById = editItem.element().getAttribute("aria-describedby");
+    expect(describedById).toBeTruthy();
+    const desc = document.getElementById(describedById!);
+    expect(desc?.textContent).toBe(
+      "Edit Commit Message is only available for local branches",
+    );
+  });
 });

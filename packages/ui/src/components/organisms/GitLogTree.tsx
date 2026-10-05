@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useId, useMemo } from "react";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
@@ -56,6 +56,7 @@ export function getDropCommitMenuState(entry: Pick<GitLogEntry, "isPushed">) {
 export function getEditCommitMessageMenuState(
   _entry?: Pick<GitLogEntry, "isPushed">,
 ) {
+  void _entry;
   return {
     disabled: false,
     title: undefined,
@@ -112,12 +113,17 @@ export function HistoryContextMenu({
     isHead,
     isPushed: entry.isPushed,
   });
+  const editHelpId = useId();
   const editCommitMessageState = getEditCommitMessageMenuState(entry);
   const resetDisabled = !onReset;
   const undoDisabled = undoLastCommitState.disabled || !onUndoLastCommit;
   const editDisabled = editCommitMessageState.disabled || !onEditCommitMessage;
   const dropDisabled = dropCommitState.disabled || !onDropCommit;
-
+  const editDisabledReason =
+    editCommitMessageState.title ??
+    (!onEditCommitMessage
+      ? "Edit Commit Message is only available for local branches"
+      : undefined);
   return (
     <ContextMenu.Root onOpenChange={(open) => open && onOpen()}>
       <ContextMenu.Trigger>{children}</ContextMenu.Trigger>
@@ -134,17 +140,23 @@ export function HistoryContextMenu({
           <ContextMenu.Label>Rewrite actions</ContextMenu.Label>
           <ContextMenu.Item
             disabled={editDisabled}
-            title={
-              editCommitMessageState.title ??
-              (!onEditCommitMessage
-                ? "Edit Commit Message is only available while viewing the checked-out branch"
-                : undefined)
+            title={editDisabledReason}
+            aria-describedby={
+              editDisabled && editDisabledReason ? editHelpId : undefined
             }
             onSelect={() => onEditCommitMessage?.(entry)}
             className="text-[var(--color-danger)] focus:bg-[var(--color-danger)]/10 focus:text-[var(--color-danger)]"
           >
             Edit Commit Message
           </ContextMenu.Item>
+          {editDisabled && editDisabledReason ? (
+            <p
+              id={editHelpId}
+              className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] leading-tight break-words select-none"
+            >
+              {editDisabledReason}
+            </p>
+          ) : null}
           <ContextMenu.Item
             disabled={undoDisabled}
             title={

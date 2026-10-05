@@ -455,7 +455,8 @@ Body:
 Notes:
 - Supports rewriting both active and inactive local branches. Inactive branch rewrites leave the active checkout, index, and dirty working tree files completely untouched.
 - Enforces CAS: returns `ok: false` with `blockedReason: "stale-ref"` if the branch tip moved or if the branch changed active/inactive status during snapshot acquisition or publication.
-- Blocked with `checked-out-branch` if the target branch is checked out in another linked worktree.
+- Blocked with `checked-out-branch` if the target branch is checked out in another linked worktree, or `active-operation` if a rebase, merge, or cherry-pick is in progress.
+- UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` history actions when `isViewingLocalBranch` is true. `expectedBranch` is captured from `historyView.branchRef` and `expectedHeadOid` is derived from `GET /api/git/:project/commit/:hash/message`.
 - Response follows `GitActionResult`.
 
 **POST /api/git/:project/squash**
@@ -480,8 +481,8 @@ Notes:
 - Supports active and inactive local branches. Inactive branch squashes preserve active checkout and working tree state.
 - Guarded against checkout in other linked worktrees (`checked-out-branch`), concurrent branch switches (`stale-ref`), and active operations (`active-operation`).
 - Publication requires a separate user-confirmed leased push (`/push/prepare` and `/push/publish`).
+- UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
-
 ## Client-Side Profile Management (Phase 02)
 
 Profile metadata and endpoint-bound credentials live in the browser. The

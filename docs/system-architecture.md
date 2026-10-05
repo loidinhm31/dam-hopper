@@ -77,10 +77,20 @@ See [Agent Status architecture](./architecture/agent-status.md).
 
 ## Git safety model
 
-Git operations use porcelain semantics for worktree/index state. Normal push remains fast-forward-only. A commit-message edit or squash first captures branch and HEAD, checks the candidate rewrite against that snapshot, and updates refs with compare-and-swap. Squash requires a unique contiguous oldest-first parent chain that reaches the captured tip and preserves the final tree. Signature loss requires explicit consent when applicable.
+Git operations use porcelain semantics for worktree/index state. Normal push remains fast-forward-only. A commit-message edit or squash operates on raw object plumbing without modifying working tree files or index entries:
+- **Compare-and-swap ref updates**: First captures branch and HEAD, checks candidate rewrites against that snapshot, and updates refs via compare-and-swap. Squash requires a unique contiguous oldest-first parent chain reaching the captured tip and preserving the final tree. Signature loss requires explicit consent when applicable.
+- **Active vs. inactive branch safety**:
+  - Active branch updates lock `HEAD` then the branch ref (`refs/heads/<branch>`), checking worktree invariants.
+  - Inactive branch rewrites lock only the target branch ref (`refs/heads/<branch>`), atomically verifying `HEAD` did not transition to the target branch during mutation. Active checkout, index, staged, unstaged, and untracked files remain completely untouched.
+  - Operations fail closed with `checked-out-branch` if the target is checked out in another linked worktree, and with `active-operation` if a rebase, merge, or cherry-pick is ongoing.
+- **UI surface parity and accessibility**:
+  - Both the compact Workspace Git Panel and standalone Git Page permit commit-message editing and squashing when viewing any local branch (`isViewingLocalBranch`), active or inactive.
+  - Checkout-sensitive operations (`reset`, `drop`, `undoLastCommit`) remain strictly guarded by `isViewingActiveBranch`.
+  - The branch banner communicates current context: `Viewing {branchLabel}. Cherry-pick and revert apply to checked-out branch {activeBranch}.`
+  - Ineligible views (remote branches, detached `HEAD`) provide accessible disabled explanations via `aria-describedby` linking to a unique `useId()` description ID in `GitLogTree` context menus.
+- **Leased publication**: Local rewrite and publication are strictly decoupled. Publication uses an exact-OID CAS lease tied to the target branch (`PublishSnapshot`) and expected remote OID; stale remote state aborts the push with `stale-remote`. The lease is invariant to subsequent checkout state changes.
 
-Local rewrite and publication are separate actions. Publication uses a lease tied to the exact expected remote OID; stale remote state cannot be overwritten. Search filters full commit messages before pagination without mutating refs. See [Git history architecture](./architecture/git-history-search.md) and the [Git API reference](./api-reference.md#git-operations).
-
+Search filters full commit messages before pagination without mutating refs. See [Git history architecture](./architecture/git-history-search.md) and the [Git API reference](./api-reference.md#git-operations).
 ## Cognito Mode
 
 Cognito is an ephemeral in-app overlay controlled by the Cognito state store and configurable shortcut. The app installs a capture-phase input guard and places app content behind an inert/hidden boundary while the mask is active. Activation is not persisted as active state; only supported preference fields persist.

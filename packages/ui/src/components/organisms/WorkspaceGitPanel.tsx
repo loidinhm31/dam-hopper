@@ -259,8 +259,7 @@ export function WorkspaceGitPanel({
               <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300">
                 Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick
                 and revert apply to checked-out branch{" "}
-                <strong>{historyView.activeBranch}</strong>. Rewrite actions
-                stay on the active branch.
+                <strong>{historyView.activeBranch}</strong>.
               </div>
             ) : null}
             <GitHistoryStatusBanner
@@ -400,7 +399,7 @@ export function WorkspaceGitPanel({
                     : undefined
                 }
                 onEditCommitMessage={
-                  historyView.isViewingActiveBranch
+                  historyView.isViewingLocalBranch
                     ? historyActions.setEditCommit
                     : undefined
                 }
