@@ -1,7 +1,7 @@
 # Protected Idle-Suspend Status and Browser UI
 
-**Status:** Phase 07 integrated qualification complete (2026-09-11)  
-**Implementation scope:** Phase 06 protected status decoding, aggregate activity
+**Status:** Integrated qualification complete (2026-09-11)  
+**Implementation scope:** Protected status decoding, aggregate activity
 presentation, measurement warnings, and manual force-sleep preservation.
 
 This guide records the browser-facing contract for configured-agent activity idle
@@ -124,14 +124,14 @@ behavior remains unchanged.
 
 ## Verification record
 
-Phase 06 targeted proof (all passed):
+Status decoder targeted proof (all passed):
 
 - protected backend API tests: **9/9**;
 - decoder, status component, and ForceSleepDialog unit tests: **41/41**;
 - Chromium browser tests: **13/13**;
 - code review: **9.7/10**, approved.
 
-Phase 07 integrated qualification (all passed):
+Integrated qualification (all passed):
 
 | Surface                           | Evidence                                                              |
 | --------------------------------- | --------------------------------------------------------------------- |
@@ -166,5 +166,3 @@ automatic suspend canary; that remains an Operations gate.
 - [System Architecture](./system-architecture.md#server-authoritative-terminal-idle-suspend-architecture)
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md)
 - [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md)
-- [Phase 07 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-07-verification.md)
-- [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)

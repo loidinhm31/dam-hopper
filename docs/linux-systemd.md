@@ -387,7 +387,7 @@ dam-hopper status
 dam-hopper status --json
 ```
 
-### Capturing a production diagnostics bundle (Phase 07 complete)
+### Capturing a production diagnostics bundle
 
 Run the fixed, one-shot collector after an idle-suspend incident:
 
@@ -431,7 +431,7 @@ It uses production read adapters plus temporary output and compares before/after
 host/configuration/audit hashes, RTC wakealarm content, and API/helper
 `ActiveState`, `SubState`, and `MainPID`; it must not trigger suspend.
 
-See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)
+See [Linux Release Manager — Production diagnostics](./linux-release-manager.md#production-diagnostics)
 for fixed source paths and adapter details.
 
 ### Inspecting Service Logs
@@ -473,7 +473,7 @@ a general release manager.
 
 ---
 
-## Terminal Idle Suspend Runbook
+## 11. Terminal Idle Suspend Runbook
 
 Enrollment, helper security, host qualification, canaries, and rollback are covered in the [dedicated operator runbook](./linux-systemd/idle-suspend-runbook.md).
 
@@ -500,7 +500,7 @@ sudo dam-hopper start
 Verify that the API server and Native Advisor endpoint respond:
 Use the session token returned by normal MFA sign-in; `server-token` is the
 server signing secret, not a bearer credential. See the
-[Authentication API](./authentication-api.md).
+[Authentication API](./api/authentication.md).
 
 ```bash
 # Health probe

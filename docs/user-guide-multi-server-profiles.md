@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 02 turns the app into a unified workbench: the shell and navigation stay
+The app is a unified workbench: the shell and navigation stay
 available while each saved server profile owns an independent connection
 runtime. Profiles can be connected, disconnected, logged in, or logged out
 without switching the whole app or reloading the page.
@@ -100,9 +100,9 @@ Settings are also profile-qualified:
 - The **Server configuration** section inside Settings uses the same
   profile/project switcher; it is not a second project hierarchy.
 
-## Phase 03: Files, editor, search, and Git
+## Workbench Files, Editor, Search, and Git
 
-Phase 03 extends the `Profile → Project` selection to a target-qualified IDE
+The `Profile → Project` selection identifies a target-qualified IDE
 resource. Every file, editor tab, watcher, search match, replacement, preview,
 and Git operation carries the owning `profileId`, project, and optional
 `worktreePath`. A missing worktree path means the configured project root.
@@ -123,12 +123,12 @@ of silently falling back to the root or another profile.
 - Monaco model and tab keys include profile and worktree scope. Equal paths on
   two profiles are separate tabs.
 - Files at least 5 MiB open in the read-only range viewer. Image and video
-  previews use Phase 07's UUIDv4-namespaced, short-lived ticket capabilities
+  previews use UUIDv4-namespaced, short-lived ticket capabilities
   rather than bearer URLs or whole-file Blob reads. See the
-  [Phase 07 media guide](./phase-07-media-isolation-and-encryption.md) for
+  [Media Isolation and Encryption Architecture](./architecture/media-isolation-and-encryption.md) for
   cookie binding, cleanup, and exact-origin fallback rules.
 
-See the [Phase 03 workbench contract](./phase-03-files-editor-search-git.md)
+See the [Workbench Files, Editor, Search, and Git Architecture](./architecture/workbench-files-editor-and-git.md)
 for transport messages, invalidation rules, and source locations.
 
 ### Federated search and replace
@@ -152,7 +152,7 @@ authentication failures. After the key loads, only failed targets are retried;
 successful targets are retained and are not replayed. A changed connection
 generation cancels the retry.
 
-## Phase 08: Native forwarding scopes
+## Native Forwarding Scopes
 
 On Windows desktop, each saved server profile has an independent native SSH
 forwarding scope. Two connected profiles can keep forwarding concurrently, even
@@ -181,14 +181,14 @@ exit is the global teardown boundary. Native SSH forwards bind local
 Native SSH forwarding is unavailable in browser, Android, iOS, Linux, and macOS
 hosts; none receives a fallback Tauri call or alternate transport. Native
 Browser Debug is separate and keeps the explicit Browser target owner from
-[Phase 05](./phase-05-agents-ports-and-browser.md). It is not selected by the
+[Agent Store, Ports, and Browser Architecture](./architecture/agent-store-ports-and-browser.md). It is not selected by the
 active SSH scope or by project focus.
 
-See [Phase 08 Native Scope Concurrency and Platform Integration](./phase-08-native-scope-concurrency.md)
+See [Native SSH Forwarding Architecture](./architecture/native-ssh-forwarding.md)
 for the IPC, counter, persistence, and Windows qualification contract.
-## Phase 09: Integration and qualification
+## Integration and Qualification Gate
 
-Phase 09 is complete for the web workbench and Linux-hosted shared behavior
+Integrated qualification covers the web workbench and Linux-hosted shared behavior
 (2026-09-17). The qualification cycle recorded a **9.8/10** review and
 **3,504 passed tests**, with 9 skipped/ignored cases across the executed suites.
 The 24 live assertions cover S01–S12; four embedded browser assertions exercise
@@ -227,9 +227,6 @@ Release gates stay target-specific:
   compatible pair and require fresh authentication when endpoint credentials
   are no longer valid.
 
-See the [Phase 09 plan](../plans/260916-2137-unified-profile/phase-09-integration-and-qualification.md)
-and [verification matrix](../plans/260916-2137-unified-profile/verification-matrix.md)
-for the scenario ledger, prerequisites, evidence rules, and Windows follow-up.
 
 
 ## Persistence and security
@@ -255,7 +252,7 @@ overwrite profiles.
 
 ### Fresh browser-resource reset
 
-Phase 02 performs an idempotent reset of legacy browser resource records, such
+Startup performs an idempotent reset of legacy browser resource records, such
 as unqualified active-project state, old terminal layouts, editor/tree state,
 Browser Debug address history, command history, pins, and quarantine records.
 It preserves saved profiles, endpoint-bound auth records, native scope aliases,
@@ -280,8 +277,8 @@ In a multi-profile environment, different pages resolve API and WebSocket endpoi
 
 - **Workspace (`/workspace`)**: Project-scoped. Terminals, editor tabs, file arbor, search, and diagnostics route to the server owning the selected workspace project (`selectedProject.profileId`).
 - **Git (`/git`)**: Aggregated multi-profile repository list. The page displays repositories from all connected profiles with profile badges for disambiguation. Selecting a project routes all Git operations (log, branch, status, roots, local changes, diffs, push) to that project's profile, and synchronizes selection to the workspace store. Bulk fetch and pull operations are partitioned per profile and executed sequentially to ensure clean SSH credential retry handling without cross-server leakage.
-- **Settings (`/settings`)**: Server administration (workspace config, global defaults, usage insights, cache/workspace maintenance, and plugin management) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
-- **Workspace Advisor (`/workspace`)**: The **EVCrate Advisor** plugin (`evcrate.advisor`) is integrated directly into the Workspace as an IDE dock, Terminal float, and compact overlay tool. It requires a selected workspace project to establish admitted profile context; standalone `/plugins/:installationId` routing and top-navigation plugin links have been removed.
+- **Settings (`/settings`)**: Server administration (workspace config, global defaults, usage insights, and cache/workspace maintenance) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
+- **Workspace Advisor (`/workspace`)**: The in-process **Native Evcrate Advisor** runs natively in the Workspace as an IDE dock, Terminal float, and compact overlay tool. It requires a selected workspace project to establish admitted profile context; standalone plugin runner routing and top-navigation plugin links have been removed.
 - **Agent Store (`/agent-store`) & Usage (`/usage`)**: Dedicated on-page server switchers allow managing catalog inventory and token analytics for any connected profile independently of workspace project selection.
 
 ## Host resources and health delivery across profiles

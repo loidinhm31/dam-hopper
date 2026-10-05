@@ -1,7 +1,7 @@
-# Windows Release Asset Packaging and Bootstrap Installer (Phases 01–03)
+# Windows Release Asset Packaging and Bootstrap Installer
 
-Status: Phase 01 asset packaging, Phase 02 PowerShell bootstrap installer, and
-Phase 03 cross-platform Release CI workflow and guidance are complete
+Status: Asset packaging, PowerShell bootstrap installer, and
+cross-platform Release CI workflow and guidance are complete
 (2026-09-21).
 
 This guide defines the direct-server Windows release package. It is separate from
@@ -91,7 +91,7 @@ selection, exact asset sets, ZIP safety, PowerShell parsing, reproducibility,
 remote metadata, and paths containing spaces. The workflow's package job runs
 the Windows profile gate itself; this command exercises the contract locally.
 
-### Release CI workflow (Phase 03)
+### Release CI workflow
 
 `.github/workflows/release-linux.yml` is the stable cross-platform publisher.
 After shared metadata/version validation, `build-rust-windows` targets
@@ -123,7 +123,7 @@ containing spaces:
 node tests/deploy/windows-release-asset-gate.test.mjs
 ```
 
-## PowerShell bootstrap installer (Phase 02)
+## PowerShell bootstrap installer
 
 The published `dam-hopper-install.ps1` is a non-admin, direct-server bootstrap.
 It downloads the exact Windows ZIP selected from GitHub release metadata,

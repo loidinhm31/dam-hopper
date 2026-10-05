@@ -2,7 +2,7 @@
 
 ## Overview
 
-Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake after a bounded quiet period. The default `empty-fleet` policy requires no live, creating, or restart-pending managed PTYs; the opt-in `agent-activity` policy uses configured-agent PTY/process/TCP activity evidence and may suspend with service-only terminals still open. It is an activity heuristic, not proof of agent completion. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 08.
+Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake after a bounded quiet period. The default `empty-fleet` policy requires no live, creating, or restart-pending managed PTYs; the opt-in `agent-activity` policy uses configured-agent PTY/process/TCP activity evidence and may suspend with service-only terminals still open. It is an activity heuristic, not proof of agent completion. The manual force-sleep implementation adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies across idle-suspend subsystems.
 
 ## Security Invariants
 
@@ -52,9 +52,9 @@ Manual records contain actor subject, request ID, wake mode, requested/effective
 fleet generation and aggregate counts, and typed result only. They exclude tokens,
 cookies, command strings, environment variables, terminal IDs/content, and raw IPC.
 
-### Phases 02–03 canonical semantic event writer and coordinator emission
+### Canonical semantic event writer and coordinator emission
 
-Phases 02–03 add a separate tagged server event stream at
+Diagnostics components provide a separate tagged server event stream at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
 they do not extend or reinterpret the untagged `idle-suspend-audit.jsonl`
 records above. The event envelope is closed, camelCase, deny-unknown-fields,
@@ -72,7 +72,7 @@ regular effective-owner mode-`0600` target, opens with no-follow flags, bounds
 each JSONL line to 16 KiB, and calls `sync_data()` before success. It never
 creates, repairs, chmods, rotates, or truncates the parent or target.
 
-Phase 03 stores one optional writer in `AppState` and passes it into the
+The server stores one optional semantic writer in `AppState` and passes it into the
 coordinator. Each automatic or manual attempt allocates one UUID v4 before
 `attemptStarted`; that exact value is reused for semantic event
 `correlationId`, the helper request ID, accepted manual response, and existing
@@ -81,7 +81,7 @@ boundaries, emits measurement unavailable/recovered only on availability
 transitions, and does not log scheduled samples or status heartbeats.
 Semantic write failure is warning-only: it cannot alter suspend state/outcome,
 prevent reconciliation, or bypass the existing fail-closed manual audit gate.
-### Phase 04 helper audit v2 and milestone ordering (2026-09-13)
+### Helper execution audit v2 and milestone ordering (2026-09-13)
 
 The privileged helper evolves its existing
 `/var/log/dam-hopper/idle-suspend-helper.jsonl` in place. The independent
@@ -139,7 +139,7 @@ projection. Protocol request IDs remain correlation evidence, not authorization;
 `SO_PEERCRED` and enrolled UID/PID policy remain the authority.
 
 
-### Phase 01 execution-domain safeguards
+### Helper execution domain safeguards
 
 - `wakeAfterSeconds: 0` is a numeric sentinel only for helper execution. It is
   converted to `None`/clear-only before backend arithmetic; automatic idle
@@ -159,13 +159,13 @@ projection. Protocol request IDs remain correlation evidence, not authorization;
 - Scoped tests use temporary RTC files and fake preflight/backends only. They
   do not invoke `systemctl`, logind, real RTC hardware, or host suspend.
 
-### Phase 01 status (2026-09-06)
+### Helper execution status (2026-09-06)
 
 Protocol, helper, backend, preflight, audit, and regression-test changes are
-implemented in the Phase 01 source scope. Real-host timed/indefinite canaries
+implemented in the helper execution source scope. Real-host timed/indefinite canaries
 remain separate operational gates and are not implied by automated tests.
 
-### Phase 01 systemd PID enrollment and runtime permissions — DONE (2026-09-09)
+### Managed service enrollment PID and runtime permissions — DONE (2026-09-09)
 
 - `dam-hopper-api.service` declares `PIDFile=/run/dam-hopper/server.pid`.
   `ExecStartPost` writes systemd `$MAINPID` after startup; `ExecStopPost`
@@ -181,11 +181,11 @@ remain separate operational gates and are not implied by automated tests.
   competing `RuntimeDirectory`. The helper pins the rendered API UID and reads
   its enrolled PID without adding broad DAC-override capabilities.
 
-### Phase 02 status (2026-09-06)
+### Force-suspend coordinator status (2026-09-06)
 
 Coordinator force-suspend handling, generation-fenced forced fleet claims, generalized server audit writing, active-fleet confirmation enforcement, independent helper executor enrollment at startup, and deterministic outcome reconciliation are implemented. Focused coordinator, cross-module, REST, and browser coverage verifies the contract; no automated test performs real host suspend or RTC mutation.
 
-### Configured-agent PTY observation — Phase 02 (2026-09-11)
+### Configured-agent PTY evidence observation (2026-09-11)
 
 The PTY evidence seam is private and content-free. Each live incarnation keeps
 the public session ID paired with a monotonic incarnation and captures the
@@ -217,7 +217,7 @@ are outside the manager lock; no snapshot or watcher value includes terminal
 content, credentials, socket details, or command arguments. See
 [PTY Activity Observation](./pty-activity-observation.md).
 
-### Configured-agent process discovery — Phase 03 (2026-09-11)
+### Configured-agent process discovery (2026-09-11)
 
 Process discovery is a private server seam. Production uses bounded Linux
 procfs reads through `LinuxProcSource`; tests inject a deterministic
@@ -241,14 +241,14 @@ diagnostics. Permission, timeout, disappearance, malformed-socket, identity,
 namespace, and limit failures become typed unavailable outcomes; retryable
 close races are not converted into quiet activity. Discovery cannot change
 namespaces, execute processes, signal processes, or request suspend, and it
-does not publish REST, WebSocket, audit, or log payloads. Phase 04 consumes
-these identities through the private TCP observer; Phase 05 performs the
+does not publish REST, WebSocket, audit, or log payloads. The TCP observer consumes
+these identities; the transactional sampler performs the
 transactional pair decision and final manager-locked admission. See [Agent
 Activity Automatic Admission](./agent-activity-automatic-admission.md).
 
-### Configured-agent owned TCP observation — Phase 04 (2026-09-11)
+### Configured-agent owned TCP observer (2026-09-11)
 
-Phase 04 extends the private, read-only evidence seam from owned socket
+The TCP observer extends the private, read-only evidence seam from owned socket
 identity to cumulative TCP byte counters. `tcp_info` parsing requires a
 208-byte prefix and reads only the stable native-endian
 `tcpi_bytes_received`/`tcpi_bytes_sent` offsets with checked slices; extended
@@ -279,9 +279,9 @@ cancellation. No netlink payload, address, terminal content, command data,
 credential, or raw diagnostic detail enters REST, WebSocket, audit, or logs.
 See [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
-## Approval Gates for Privileged Execution (Production CLI Phase 03) — Approved (2026-09-05)
+## Approval Gates for Privileged Execution (Production CLI helper execution) — Approved (2026-09-05)
 
-The Production CLI Phase 03 helper (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:
+The Production CLI helper execution (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:
 
 1. **Execution Backend**:
    - Suspend uses the fixed `systemctl suspend` path, which delegates to systemd/logind and honors host policy.
@@ -296,11 +296,11 @@ The Production CLI Phase 03 helper (privileged systemd helper and unit enrollmen
 4. **Hardened Systemd Helper**:
    - `dam-hopper-idle-suspend-helper.service` sandboxed with `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, and minimal Linux capabilities (`CAP_WAKE_ALARM`, `CAP_SYS_ADMIN` restricted).
 
-### Release-manager staging integration (Phase 02)
+### Release-manager staging integration
 
 When the selected release role includes `server`, the release manager stages `dam-hopper-idle-suspend-helper.service` beside the API unit in the transaction-scoped pending-units directory. It loads the release template (with the checked-in fallback available to local/test staging), renders the release root and API group, applies `validate_helper_unit_policy`, and performs production `systemd-analyze verify` before the candidate can become pending. Activation remains explicit through `dam-hopper start`; staging does not start or enable the helper.
 
-### Release-manager lifecycle integration (Production CLI Phase 03, 2026-09-10)
+### Release-manager lifecycle integration (managed service enrollment, 2026-09-10)
 
 `HELPER_SERVICE_UNIT` is registered in the release manager's
 `ALL_SERVICE_UNITS` set. For every `server` role, `dam-hopper start` starts
@@ -314,10 +314,10 @@ installing a candidate. Activation failure rollback, manual rollback, and boot
 recovery stop/restore the helper with the API and web units; `RECOVERY_REQUIRED`
 stops and disables all managed units. `dam-hopper status` and
 `status --json` expose helper active state plus best-effort PID/UID evidence
-alongside API, web, and recovery records. See the [Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
+alongside API, web, and recovery records. See the [Linux Release Manager](./linux-release-manager.md#current-service-lifecycle)
 for operator commands and ordering.
 
-### Production CLI deployment Phase 04 verification (2026-09-10)
+### Production CLI deployment verification (2026-09-10)
 
 The release-manager integration is verified across staged-unit integration
 tests, rendered-unit policy tests, the idle-suspend suites, the non-privileged
@@ -356,8 +356,6 @@ failures. Repository checks use temporary files, fakes, static assertions, and
 read-only service inspection; they do not invoke host suspend, logind, or real
 RTC hardware. A timed real-host canary remains an operational gate.
 
-[Phase 04 test report](../plans/reports/tester-260910-0732-phase-04-boundary-verification.md)
-and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
 
 ### Sign-Off Record
 
@@ -368,13 +366,13 @@ and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundar
 
 Authenticated manual force-suspend REST API (`POST /api/system/idle-suspend/v1/force-suspend`) and UI dialog (`ForceSleepDialog.tsx`) are implemented. Same-origin protection for cookie sessions, database-backed auth validation, 16 KiB body limit, active fleet detection and confirmation dialog, indefinite sleep default (`wakeAfterSeconds: 0`), and zero-retry reconciliation contracts are verified across unit and browser test suites.
 
-### Manual force-suspend Phase 05 status (2026-09-06)
+### Manual force-suspend verification status (2026-09-06)
 
 Integration testing, traceability, boundary verification, and documentation synchronization are complete. Focused helper/coordinator/REST/cross-module/UI tests verify negative dependencies, denial side effects, race ordering, gate release, one-POST/no-retry behavior, and resume reconciliation. Automated tests use fakes and temporary files; they never invoke `systemctl`, logind, real RTC hardware, or host suspend.
 
 The required timed real-host canary remains an operations procedure, not repository test evidence. An indefinite canary is deferred until explicit operations approval, verified physical or out-of-band wake, and rollback ownership are recorded.
 
-### Configured-agent automatic admission Phase 05 status (2026-09-11)
+### Configured-agent transactional sampler automatic admission status (2026-09-11)
 
 The configured-agent path is private and fail closed. One joinable sampler
 worker owns process and TCP baselines; a sample prepares both observations,
@@ -400,7 +398,7 @@ worker before PTY readers and manager teardown. See [Agent Activity Automatic
 Admission](./agent-activity-automatic-admission.md) for the implementation
 contract.
 
-### Protected status and browser UI Phase 06 (2026-09-11)
+### Protected status decoder and browser UI (2026-09-11)
 
 The additive v1 status fields are protected by the existing authentication
 layer and remain `Cache-Control: no-store`. The UI client validates the
@@ -430,9 +428,9 @@ heuristic, not an authorization boundary; the server's manager-locked claim and
 existing manual force gates remain authoritative. See [Protected Idle-Suspend
 Status and Browser UI](./idle-suspend-status-ui.md).
 
-### Configured-agent activity integrated qualification and host gate — Phase 07 (2026-09-11)
+### Configured-agent activity integrated qualification and host gate (2026-09-11)
 
-Phase 07 closes the deterministic integration and security qualification boundary
+Integrated qualification closes the deterministic integration and security qualification boundary
 without expanding the privileged execution surface:
 
 - `server/tests/idle_suspend.rs` proves service-only PTYs do not block the
@@ -480,9 +478,9 @@ namespace visibility before `agent-activity` is enabled. If required
 the status remains unavailable and automatic policy execution stays disabled.
 
 
-### Configured-agent observation security, privacy, and canary boundaries — Phase 08 (2026-09-11)
+### Configured-agent observation security, privacy, and canary boundaries (2026-09-11)
 
-Phase 08 establishes the operational security, privacy, and canary approval boundaries for the `agent-activity` automatic suspend policy:
+Canary verification establishes the operational security, privacy, and canary approval boundaries for the `agent-activity` automatic suspend policy:
 
 1. **Unprivileged Kernel and Procfs Boundary**:
    The activity observer runs with the API service's existing UID/GID and
@@ -537,9 +535,9 @@ Deployments using split web/API ports (e.g., UAT `:4804`/`:4803` or production `
 2. **Exact CORS Origin Trust**: Cookie-only requests are permitted if the request `Origin` matches an exact configured allowlist entry in `DAM_HOPPER_CORS_ORIGINS` or satisfies strict same-origin (`http(s)://Host`).
 3. **Fail-Closed Rejection**: Foreign origins, duplicate `Origin` headers, malformed URIs, and origins bearing userinfo continue to fail closed with `403 invalidOrigin` before any coordinator handoff or side effect.
 
-### Production idle-suspend diagnostics security, privacy, and AI-attachment boundaries — Phase 07 (2026-09-14)
+### Production idle-suspend diagnostics security, privacy, and AI-attachment boundaries (2026-09-14)
 
-Phase 07 verifies the diagnostics path as a local evidence collector, not a new
+Production diagnostics verification confirms the diagnostics path as a local evidence collector, not a new
 suspend authority:
 
 1. **One-shot and no egress**: `dam-hopper diagnose --json` runs once, uses
@@ -579,7 +577,7 @@ suspend authority:
    before attaching it anywhere. The product never uploads or analyzes it.
 
 ## Unresolved questions (configured-agent automatic-suspend canary)
-Phase 07 diagnostics has no unresolved implementation questions; the items below
+Production diagnostics has no unresolved implementation questions; the items below
 remain operational gates for the separate configured-agent automatic-suspend
 canary.
 

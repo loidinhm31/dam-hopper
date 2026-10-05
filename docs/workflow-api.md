@@ -1,6 +1,6 @@
 # Workflow Service and REST API
 
-Phases 03 and 07 are complete (2026-09-02). This document describes the protected
+This document describes the protected
 workflow service boundary and the `/api/workflow/*` REST contract. The API is
 server-side workflow tracking; it does not start terminals, run agents, or
 infer manual-session completion from a resource observation. Terminal lifecycle
@@ -85,15 +85,14 @@ filesystem, and other IDE APIs remain available. Startup runs a purge once,
 then repeats it every 24 hours; each purge works in batches of 500 and yields
 between batches.
 
-Phase 03 also installs a clone-cheap `WorkflowObservationRecorder` on the PTY
-manager. Production uses a non-blocking `try_send` into a bounded
-`sync_channel(256)`; a worker thread is the only observation consumer that
-opens workflow SQLite transactions. Queue-full and storage failures are
-counted/logged without blocking PTY input, output, or restart handling. The
-closed observation payload contains only terminal ID, incarnation, configured
-project, validated worktree target, server time, exit/restart metadata, and
-allowlisted lifecycle action; it never contains command text, CWD, environment,
-or terminal output.
+The PTY manager integrates a clone-cheap `WorkflowObservationRecorder`.
+Production uses a non-blocking `try_send` into a bounded `sync_channel(256)`;
+a worker thread is the only observation consumer that opens workflow SQLite
+transactions. Queue-full and storage failures are counted/logged without
+blocking PTY input, output, or restart handling. The closed observation
+payload contains only terminal ID, incarnation, configured project, validated
+worktree target, server time, exit/restart metadata, and allowlisted lifecycle
+action; it never contains command text, CWD, environment, or terminal output.
 
 After `restore_sessions_with_state` finishes, startup collects the restored
 live `(sessionId, incarnation)` set and reconciles persisted terminal links.
@@ -210,9 +209,9 @@ Workflow errors use a stable body with a sanitized message and code:
 | DELETE | `/api/workflow/notes/{id}`            | CAS soft-delete a note                              |
 | DELETE | `/api/workflow/history`               | Permanently purge old events and soft-deleted notes |
 
-There is no standalone item GET/list route in Phase 02. Item reads are
-returned by mutation responses and by the overview; the scoped repository also
-has internal get/list methods for service use.
+There is no standalone item GET/list route. Item reads are returned by
+mutation responses and by the overview; the scoped repository also has
+internal get/list methods for service use.
 
 ## Workspace overview
 
@@ -433,7 +432,7 @@ at 200 characters. Terminal links may include an `incarnation`, but cannot
 include `harnessLabel` or `runId`; the referenced PTY must currently exist and
 match the session project/worktree. Agent links cannot include `incarnation`
 and may include a manually supplied harness label (64-character cap) and run
-ID (128-character cap). Phase 03 ships no automatic harness producer or
+ID (128-character cap). The server ships no automatic harness producer or
 command inspection. New links start with `observedState: attached` and record
 `resource_linked`.
 
@@ -446,7 +445,7 @@ Terminal link state is observation-driven:
 | `exited`        | Final exit was observed with exit code `0`.                                             |
 | `crashed`       | Final exit was observed with a non-zero or unavailable exit code.                       |
 | `detached`      | The PTY was explicitly removed or missing after startup restore.                        |
-| `unknown`       | Reserved model value; not emitted by the Phase 03 terminal recorder.                    |
+| `unknown`       | Reserved model value; not emitted by the terminal observation recorder.                |
 
 Incarnations are ordered per public terminal ID. An older observation cannot
 overwrite a newer link incarnation; equal replay observations are suppressed
@@ -473,9 +472,9 @@ Request:
 
 The path identifies the session; `resourceType` and `externalId` identify the
 link. `updatedAt` is the link CAS value. A successful unlink records
-`resource_unlinked` and returns a link tombstone. Phase 03 observation
-ingestion remains an internal PTY-to-worker boundary, not a public route; it
-updates only resource-link health and optional suggested times. Explicit
+`resource_unlinked` and returns a link tombstone. Observation ingestion
+remains an internal PTY-to-worker boundary, not a public route; it updates
+only resource-link health and optional suggested times. Explicit
 `/end` and `/abandon` requests remain the sole manual session lifecycle
 transitions.
 
@@ -545,16 +544,13 @@ sessions, and non-deleted notes are never age-deleted.
 
 ## Validation and implementation evidence
 
-The Phase 03 workflow target is `server/src/workflow/observation_tests.rs`,
-which covers lifecycle mapping, incarnation ordering, duplicate suppression,
-startup reconciliation, bounded queue overflow, direct Plan sessions, manual
-harness links, manual timestamp preservation, and a real PTY-manager flow.
-The Phase 02 API integration target remains `server/tests/workflow_api.rs`;
-its eight cases cover the protected REST contract. The dated Phase 03 review
-reports 28 workflow tests and 907 full-server tests passing with no critical
-issues. See the [Phase 03 code review](../plans/reports/code-reviewer-260902-0420-phase-03-terminal-lifecycle-correlation.md).
+Workflow verification targets:
+- `server/src/workflow/observation_tests.rs` covers lifecycle mapping, incarnation ordering, duplicate suppression, startup reconciliation, bounded queue overflow, direct Plan sessions, manual harness links, manual timestamp preservation, and a real PTY-manager flow.
+- `server/tests/workflow_api.rs` covers the protected REST contract across eight integration test cases.
 
-Primary Phase 03 backend files:
+Historical verification recorded on 2026-09-02 reports 28 workflow tests and 907 full-server tests passing with no critical issues.
+
+Primary backend files:
 
 - `server/src/workflow/observation.rs` — closed terminal observation payloads,
   non-blocking bounded recorder/worker, and transactional link updates.
@@ -566,16 +562,13 @@ Primary Phase 03 backend files:
   observation emission.
 - `server/src/api/workflow/session.rs` — target-validated terminal links and
   bounded manual agent harness links.
-- `server/src/workflow/observation_tests.rs` — Phase 03 behavioral coverage.
-
-Phase 01–02 domain, store, and API files remain listed in the earlier
-workflow documentation and continue to own the public REST contract.
-
+- `server/src/workflow/observation_tests.rs` — observation and lifecycle behavioral coverage.
+- Domain, store, and API routes in `server/src/workflow/` and `server/src/api/workflow/` own the public REST contract.
 ## Boundaries and follow-up
 
-Workflow writes remain separate from terminal WebSocket messages. Phase 03
-connects authoritative PTY lifecycle facts to existing terminal resource links
-without exposing a generic observation endpoint. Persisted observation data is
+Workflow writes remain separate from terminal WebSocket messages. Authoritative
+PTY lifecycle facts connect to existing terminal resource links without
+exposing a generic observation endpoint. Persisted observation data is
 strictly allowlisted: terminal ID, incarnation, project/validated worktree
 target, server time, exit code, restart count/delay, and action. Command lines,
 arguments, CWD, environment, prompts, output, and arbitrary adapter payloads
@@ -588,15 +581,17 @@ session endpoints. A terminal final exit, crash, or removal may provide a
 the session. Agent metadata is also manual in this MVP; future harness
 producers require a separate security and contract review.
 
-See [System Architecture](./system-architecture.md#workflow-phases-0103-service-rest-and-lifecycle-correlation),
+See [System Architecture](./system-architecture.md#workflow-tracking-engine),
 [Codebase Summary](./codebase-summary.md#workflow-tracking),
-and [Project Overview & PDR](./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter-phase-03)
+and [Project Overview & PDR](./project-overview-pdr.md#workflow-persistence-service-correlation)
 for the design and requirement records.
 
 ### Known implementation note
 
-The API event constructors currently assign the 90-day default expiry
-directly. `server.workflow_event_retention_days` is validated and exposed in
-configuration, but custom event-retention values are not yet wired into those
-constructors. The deleted-note retention setting is consumed by the automatic
-purge. Keep this distinction in mind when changing retention configuration.
+The API event constructors currently assign the 90-day default expiry directly
+(`DEFAULT_EVENT_RETENTION_DAYS = 90`). `server.workflow_event_retention_days` is
+validated and exposed in configuration, but custom event-retention values are
+not yet wired into those constructors. In contrast, the deleted-note retention
+setting (`server.workflow_deleted_note_retention_days`, defaulting to 7 days)
+is actively consumed by `WorkflowService` and automatic purges. Keep this
+distinction in mind when changing retention configuration.

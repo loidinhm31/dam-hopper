@@ -1,6 +1,6 @@
 # Code Standards
 
-These standards describe the current Rust backend, shared React UI, and profile-aware transport model. The retired plugin platform is not normative; see the [roadmap](./project-roadmap.md) for retirement status and the [Native Advisor architecture](./architecture/native-advisor.md) for its native replacement.
+These standards describe the current Rust backend, shared React UI, and profile-aware transport model. The retired plugin platform is not normative; see the [roadmap](./project-roadmap.md) and [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md) for retirement status and the [Native Advisor architecture](./architecture/native-advisor.md) for its native replacement.
 
 ## Repository structure
 
@@ -41,7 +41,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Cancel superseded requests when supported and discard late results when request ID, provider, target, or owner generation has changed.
 - Keep effects and listeners paired with deterministic cleanup. Browser APIs and terminal input must not bypass current mode/owner guards.
 - Present disconnected, unsupported, loading, unknown, and error states explicitly; do not fabricate success or silently select another profile.
-
+- **React 19 Radix UI Patch Invariant:** Maintain the pnpm patch `patches/@radix-ui__react-compose-refs@1.1.2.patch`. This patch stabilizes `useComposedRefs` via `useRef` to eliminate infinite ref callback loops under React 19. Do not assume or introduce unverified patches (such as react-slot).
 ## Domain-specific invariants
 
 ### Git history changes
@@ -73,7 +73,7 @@ See the [Agent Status contract](./architecture/agent-status.md).
 ### Cognito Mode
 
 - Keep activation ephemeral; persist only the user preference fields supported by configuration. Treat the overlay as a visual in-app mask, not authorization, content redaction, or an OS capture boundary.
-- Maintain capture-phase input isolation, the app-content inert/hidden boundary, and a usable keyboard dismissal path. Restore focus and listeners on deactivation/unmount.
+- Maintain input isolation through event capture, the app-content inert/hidden boundary, and a usable keyboard dismissal path. Restore focus and listeners on deactivation/unmount.
 - Current checked-in Heavy Blur CSS is `blur(16px) saturate(180%)` over `rgba(148, 163, 184, 0.12)` when backdrop-filter is available. Unsupported and reduced-transparency modes use opaque black. Do not copy older values from historical notes without checking `packages/ui/src/index.css`.
 
 ## Git, auth, and transport security
@@ -86,12 +86,19 @@ See the [Agent Status contract](./architecture/agent-status.md).
 
 ## Testing and delivery
 
-- Place tests next to small domain units; use `server/tests/` for cross-module server behavior and `packages/ui/browser-tests/` for real-browser/component integration.
+- Place tests next to small domain units; use `server/tests/` for cross-module server behavior, `packages/ui/src/**/*.test.ts(x)` for headless unit tests, `packages/ui/browser-tests/` for real-browser component integration, and `packages/ui/e2e/` for application journeys.
 - Test success and denial paths, stale generations, cancellation, unavailable owners, limits, and failure cleanup where those contracts apply.
 - Distinguish mocked component tests from real HTTP/browser/deployment qualification. Record platform/version limitations; do not turn prior test counts into a claim of current release qualification.
 - Run repository-supported commands from `package.json` and package manifests. `pnpm test` runs server tests, `pnpm test:all` runs the repository test script, `pnpm lint` covers `apps/` and `packages/`, and `pnpm check` is the broad root gate.
-- A frontend app-E2E restructuring proposal is pending and plan-only; keep existing Vitest/component tests and do not imply Playwright application E2E is already the repository-wide test standard.
+- **4-Tier Runner Boundaries (see [Testing guide](./testing.md)):**
+  - **Tier 1 — Rust Backend Tests (`cargo test`):** Unit and integration suites against real filesystems and repositories; avoid mocks for Git CAS, PTY, and SQLite persistence.
+  - **Tier 2 — Frontend Unit Tests (Vitest jsdom):** Headless execution of stores, reducers, hooks, and data utilities under `packages/ui/src/**/*.test.{ts,tsx}`.
+  - **Tier 3 — Browser Component Regressions (Vitest Browser Mode):** Headless Chromium suites under `packages/ui/browser-tests/**/*.browser.{ts,tsx}` on ports 15173 and 15174 for focused DOM/xterm/advisor component verification.
+  - **Tier 4 — Application E2E Journeys (`@playwright/test`):** Full end-to-end user journeys under `packages/ui/e2e/**/*.spec.ts` against built web SPAs, production server containers, and real MongoDB instances.
+- **Deterministic Auth Seeding:** Application E2E tests bootstrap sessions using the canonical `application_e2e_seed` tool and browser `storageState`, preventing test coupling to login UI flows. `--no-auth` must not be used for authenticated application journeys.
+- **Visual Evidence Capture Policy (`capture-policy.ts`):** E2E evidence must capture the complete viewport (1440x900 default, 320px narrow dock), validate PNG IHDR dimensions, and colocate machine-readable `evidence.json` and human `review.md` records in `packages/ui/e2e/<case>/`. Visual capture is disabled by default in CI (`CI=true` / `E2E_CAPTURE=0`) for functional parity without artifact bloat. Green automation does not bypass mandatory human visual review.
+- **Version Alignment (13-File Invariant):** Repository version bumps require synchronizing 13 distinct version files across Cargo manifests, npm manifests, Tauri configs, and installer metadata. Localized utilities like `apps/native/scripts/bump-version.js` update only 4 native files and must always be validated against `node deploy/release/check-version-alignment.mjs`.
 
 ## Retired plugin documentation
 
-The D00–D05 trusted plugin platform, runner, SDK, plugin endpoints, and host bridges are retired. Agent Store distribution is a separate current feature and is not the retired plugin host. Retained `plugin-platform-*` documents are historical evidence only; do not use them to design current code.
+The D00–D05 trusted plugin platform, runner, SDK, plugin endpoints, and host bridges are retired. Agent Store distribution is a separate current feature and is not the retired plugin host. Former specifications are consolidated in the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md); do not use retired contracts to design current code.

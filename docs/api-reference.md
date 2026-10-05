@@ -36,12 +36,15 @@ See the [idle-suspend API reference](./api/idle-suspend.md). Automatic policy, t
 
 See the [Git endpoint reference](./api/git.md). Commit rewriting and squash are local CAS-protected operations; publication is a separate exact-OID leased action.
 
-## Project Worktree Targets (Phases 1–7)
+## Project Worktree Targets
 
 The [Git API reference](./api/git.md) documents target validation, worktree
 discovery, and use of `worktreePath` across Git, terminal, and filesystem
 operations.
 
+## Client-Side Profile Management
+
+See the [REST endpoint reference](./api/rest-endpoints.md#client-side-profile-management) and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).
 ## Commit history
 
 The [Git API reference](./api/git.md#commit-history) documents full-message literal filtering and pagination.
@@ -76,10 +79,10 @@ See the [WebSocket API reference](./api/websocket.md).
 
 ## Retired plugin API anchors
 
-### Trusted Plugin API (Phase D03)
+### Trusted Plugin API
 
-Retired. There are no current plugin routes; historical context is in the [D03 architecture record](./architecture/plugin-platform-d03.md).
+Retired. There are no current plugin routes; historical context is in the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md).
 
-### Trusted Plugin Management API (Phase D05)
+### Trusted Plugin Management API
 
-Retired. There are no current plugin-management routes; historical context is in the [D05 architecture record](./architecture/plugin-platform-d05.md).
+Retired. There are no current plugin-management routes; historical context is in the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md).

@@ -52,7 +52,7 @@ Selection payloads are versioned semantic data only: bounded tag/role/name/text,
 an allow-listed set of attributes, a bounded locator, and finite bounds. They
 never contain HTML, input values, passwords/files, cookies, storage, or other
 browser secrets. The bridge package is used by the browser extension; the
-Phase 3 host provides the long-lived iframe owner, exact-origin navigation
+browser host provides the long-lived iframe owner, exact-origin navigation
 policy, handshake/load-error UX, and CSP framing guidance.
 
 ## Related Documentation
@@ -61,7 +61,7 @@ policy, handshake/load-error UX, and CSP framing guidance.
 - [Configuration Guide](../configuration-guide.md)
 
 - [Native Browser Debug Support](../native-browser-debug-support.md)
-- [Phase 07 Media Isolation and Encryption](../phase-07-media-isolation-and-encryption.md)
+- [Media Isolation and Encryption Architecture](../architecture/media-isolation-and-encryption.md)
 
 ## Shared design-system and embedding contract
 

@@ -13,7 +13,7 @@ The client preserves this as `ApiRequestError(status, code)` and uses the code
 to render an actionable unavailable state; callers should not treat it as an
 empty branch list.
 
-### Project worktree targets (Phases 1–7)
+### Project worktree targets
 
 Root-sensitive operations use a project target reference:
 
@@ -63,7 +63,7 @@ The response is an array of operation results; target-scoped entries include
 the server confirmed that target disappeared. Generic request-level failures
 are not attributed to every requested target.
 
-### Profile-owned file and search requests (Phase 03)
+### Profile-owned file and search requests
 
 The browser selects a profile-owned `ProjectTargetRef` before calling a
 target-bound route. `profileId` identifies the owner connection and is checked
@@ -87,7 +87,7 @@ originating profile/project/target metadata before combining results. The
 workspace UI limits the aggregate to 500 matches and surfaces either server
 truncation or the aggregate cap as a warning.
 
-See [Phase 03: Files, Editor, Search, and Git](../phase-03-files-editor-search-git.md)
+See [Workbench Files, Editor, Search, and Git Architecture](../architecture/workbench-files-editor-and-git.md)
 for the browser ownership, editor, replace, preview, and invalidation
 contract.
 
@@ -700,7 +700,7 @@ The server validates `snapshot.branch` directly:
 - Response returns `PublishResult` with status: `published`, `already-current`, `stale-remote`, `stale-local`, `stale-config`, `rejected`, `auth-required`, or `unknown`.
 
 
-### Frontend Transport, Hooks, Action Controllers, and UI Surfaces (Phase 02 & Phase 03)
+### Frontend Transport, Hooks, Action Controllers, and UI Surfaces
 
 The UI layer (`packages/ui`) routes Git operations through profile-owned clients, branch-qualified queries, and scoped action controllers. Rewriting inactive local branches and preparing leased publication avoid ambient `HEAD` fallbacks across transport and state boundaries:
 
@@ -748,7 +748,7 @@ The UI layer (`packages/ui`) routes Git operations through profile-owned clients
 - Freezes `frozenSnapshot` once loaded. Subsequent background query refetches do not overwrite established user drafts or CAS baselines.
 - Validates `frozenSnapshot.branch === editBranch` before submit; mismatched branch disables save and prompts history refresh.
 
-#### 7. UI Surface Parity & Accessibility (Phase 03)
+#### 7. UI Surface Parity & Accessibility
 
 - **Surface Parity (`WorkspaceGitPanel.tsx`, `GitPage.tsx`)**:
   Both the compact Workspace Git Panel and standalone Git Page expose commit-message editing and squash mutations whenever viewing any local branch (`historyView.isViewingLocalBranch`), active or inactive. Destructive working-tree actions (`reset`, `drop`, `undoLastCommit`) remain guarded by `historyView.isViewingActiveBranch`.

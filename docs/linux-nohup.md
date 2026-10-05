@@ -8,10 +8,11 @@ process using the same SQLite files. The historical fixed
 Use the authoritative [Linux systemd workflow](./linux-systemd.md) for current
 production operation.
 
-The current systemd workflow is backend-only. Phase 03 adds the separate
-`dam-hopper-web` host on `0.0.0.0:4802`; `dam-hopper-server` serves browser
-assets only when an explicit `--web-dir` (or `DAM_HOPPER_WEB_DIR`) is supplied.
-The legacy/container notes below describe that explicit combined mode only.
+The current systemd workflow manages backend and web roles separately. The release
+deployment architecture provides the separate `dam-hopper-web` host on `0.0.0.0:4802`;
+`dam-hopper-server` serves browser assets only when an explicit `--web-dir` (or
+`DAM_HOPPER_WEB_DIR`) is supplied. The legacy/container notes below describe that
+explicit combined mode only.
 
 ## Install And Start
 
@@ -135,10 +136,10 @@ It measures CPU only while deep collection runs, the largest per-collection
 wall time, retained RSS delta over the requested iterations, snapshot size,
 and deadline counts. Compare the CPU and wall-time peaks with the configured
 deep-sampling interval and 150 ms process deadline, and keep retained RSS below
-the 5 MiB Phase 03 budget. This does not replace a real non-Linux CI run, staged
+the 5 MiB qualification budget. This does not replace a real non-Linux CI run, staged
 canary, rollback rehearsal, or release-owner sign-off.
 
-The Phase 07 release check set is:
+The release check set is:
 
 ```bash
 cargo fmt --manifest-path server/Cargo.toml -- --check

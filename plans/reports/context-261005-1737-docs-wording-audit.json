@@ -1,0 +1,1712 @@
+{
+  "wordHits": [
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 19,
+      "text": "- Plan progress: **COMPLETE (100%; 8/8 phases done; 111/111h)**. Real-host automatic suspend canary remains an explicit Operations-supervised deployment gate with host qualification, exclusive RTC ownership, and bounded wake."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 36,
+      "text": " identities, and tokens. Integrated real-observer qualification remains Phase"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 53,
+      "text": "- Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues. At that point, Phase 03 and Phase 04 completion entries followed and Phases 05\u201308 were pending."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 56,
+      "text": "- Validation passed: latest focused process discovery validation **18/18**, idle-suspend **100/100**, and PTY **187/187** (one pre-existing performance test ignored). Code review approved **9.0/10** with no critical issues. At that point, Phase 04 and later phases were pending."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 58,
+      "text": "- Validation passed: Phase 04 TCP/netlink focus **40/40**, latest activity suite **59/59**, full idle-suspend library **128/128**, and crate-wide **142/142**; all reported runs passed. Cycle-2 code review approved **9.8/10** with no critical issues. At that point, Phases 05\u201308 were pending."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 62,
+      "text": "- **Production CLI Deployment Setup for Idle Suspend Helper & Socket \u2014 Phases 01\u201304 complete.** Phase 04 closes staged-unit, rendered-policy, role-isolation, boundary, and CLI status verification; release-manager activation starts the helper before the API with non-fatal fallback, and rollback/recovery retain helper ownership."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 69,
+      "text": "- Validation passed: systemd unit verification, release/unit-policy tests, idle-suspend tests, and boundary checks **102/102**; cycle-2 review approved **10/10**. Release-manager staging, lifecycle, and end-to-end phases remain pending."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 73,
+      "text": "- **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 122,
+      "text": " Plan/Phase/Task items, manual sessions, terminal/agent resource links,"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 129,
+      "text": " transitions, and the Plan-first hierarchy (Plan root \u2192 Phase \u2192 Task, with"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 130,
+      "text": " standalone or Plan-level tasks)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 139,
+      "text": " remain outside this phase."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 142,
+      "text": " overview/history, Plan-first item CRUD, manual session lifecycle,"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 167,
+      "text": " observation endpoint was added. Direct Plan sessions do not synthesize"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 168,
+      "text": " Phase/Task children."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 169,
+      "text": "- Phase 03 review reports 28 workflow tests and 907 full-server tests passing;"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 172,
+      "text": "- Validation: Targeted Phase 04 UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(..)` warning is non-blocking."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 173,
+      "text": "- **Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 174,
+      "text": "- Validation: targeted Phase 05 UI tests passed 62/62 (100%), full UI suite passed 1,493/1,493 (100%), and Rust server executed tests passed 907/907 (2 ignored). Review approved 9.8/10. Responsive browser geometry, safe-area, and terminal/editor continuity remain Phase 07 validation work."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 206,
+      "text": "- **Preserve Explorer Tree Expansion & Editor View Scroll Position (Phases 01\u201303).**"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 207,
+      "text": " - **Explorer Tree Expansion Store (Phase 01):** Added persistent Zustand store `useExplorerTreeStore` to preserve directory open/closed states across sidebar tool switching, shell layout changes (IDE vs. Terminal workspace modes), sidebar collapsing/reopening, and browser page reloads. Scoped per project and worktree target (`dam-hopper:explorer-tree-state`). Includes cascading auto-hydration on remount and pruning/renaming synchronization."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 208,
+      "text": " - **Editor ViewState Persistence (Phase 02):** Added Monaco editor `viewState` (cursor position, column, scroll offsets, and code folds) persistence across tab switches, unmounts, and browser page reloads under `dam-hopper:editor-state`. Implemented race-safe view state capture via `prevTabKeyRef` and originating `targetKey` attribution."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 209,
+      "text": " - **Integration & Verification (Phase 03):** Verified end-to-end tree expansion preservation across all three shell surfaces (main IDE sidebar, compact mobile surface, and floating terminal files panel) and editor scroll/cursor retention across tab switches and page reloads. Full test suite passing (213 files / 1,422 unit tests, UI build, browser tests, and zero ESLint errors)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 243,
+      "text": "- **Native SSH port-forwarding Windows gate (Phase 07; complete for Windows-only scope).** Added Windows CI and release pre-bundle checks for Rust formatting/lint/unit coverage, the real temporary OpenSSH remote-loopback forwarding gate, deterministic smoke/evidence validation, WebView2/OpenSSH preflight, no-bundle Tauri compilation, protected same-commit evidence binding, and the unsigned NSIS package profile. Protected packaged-runtime evidence remains a production-release prerequisite; cross-platform support and signed updater artifacts are deferred to a separate scope."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 247,
+      "text": "- **Host-resource restoration alerts (Phase 02).** Added additive snapshot"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 268,
+      "text": "- **Native embedded browser controller (Phase 03).** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux now has a WebKitGTK relay implementation but remains runtime-unverified, and macOS is deferred. See [Native Browser Debug Support](./native-browser-debug-support.md)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 292,
+      "text": " closed terminals fail closed. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 293,
+      "text": " Phase 6 automated hardening covers malformed/nested bridge messages,"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 303,
+      "text": " xterm input suppresses the bindings so they never reach the PTY. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 307,
+      "text": "- **Explorer: Copy Path context menu.** Complete \u2713 2026-07-14. Added \"Copy Absolute Path\" and \"Copy Relative Path\" items to the Explorer (file-tree) right-click menu for both files and folders. Absolute path joins the server-resolved absolute project root (`useProject(name).data.path`) with the node's project-relative path using the native separator (backslash on Windows, forward slash elsewhere); relative path is always forward-slash POSIX. Path computation and the menu item list are extracted into pure `buildTreeCopyPaths` / `getTreeContextMenuItems` helpers for SSR unit testing, mirroring the `getEditorTabContextMenuItems` pattern. The absolute item disables when the project root is unknown; a transient \"Copied to clipboard\" toast reuses the existing `useCopyToClipboard` hook. Frontend-only; no backend/API changes. Validation: `pnpm --filter @dam-hopper/ui build`, `pnpm --filter @dam-hopper/ui test` (422 passing), changed files lint-clean. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 311,
+      "text": "- **Bottom Panel Maximize Toggle.** Complete \u2713 2026-07-08. Added an IntelliJ-style maximize/restore toggle to the IDE bottom tool panel header. Maximizing hides the top area (explorer/editor/right panels) and expands the bottom panel to fill the workspace body; activity bars stay visible so tools remain switchable. State is session-only (not persisted), closing the maximized bottom tool resets it, and the terminal keep-alive element stays in the same React tree position so no PTY is remounted or duplicated on toggle. Layout decisions were extracted into a pure `resolveBottomPanelLayout` helper for SSR unit testing (toggle/restore/reset-on-close), plus an `IdeShell` SSR contract test for button presence/absence. ESLint config now ignores Rust/Tauri `target/` build artifacts that previously produced ~200 false parsing errors. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 327,
+      "text": "- **Responsive Companion Layout.** Complete \u2713 2026-05-25. Added the compact responsive workspace shell with shared media-query helpers, safe-area/dynamic-height CSS primitives, mobile/tablet surface switching, and terminal refit handling for hidden-panel transitions. Reused the existing editor, terminal, fleet, ports, Git, and project surfaces without duplicating business logic. Hardened `MobileWorkspaceShell` for empty-surface fallback, improved TopNav selector layering and compact/tablet behavior, and aligned compact navigation behavior with zoomed and iPad-sized layouts. Validation passed for `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui build`, `pnpm build`, and `pnpm dev` startup verification. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 329,
+      "text": "- **Tauri Native Shell.** Implemented 2026-05-25. Added `@dam-hopper/native` as a thin Tauri v2 host that mounts the shared `@dam-hopper/ui` app, configures the shared logger and TanStack Query, uses an idle transport until a server profile exists, and keeps the native shell remote-client-only with `core:default` permission. Added native Vite config on port 1420 with HMR port 1421, minimal `src-tauri` Rust entrypoint/config/capability, restrictive CSP, root native scripts, native build coverage in `pnpm check`, CORS documentation for Tauri origins, and a committed native Cargo lockfile. Validation passed for native TypeScript and Vite build; full desktop Tauri runtime validation is blocked locally by missing Linux prerequisites (`webkit2gtk-4.1`, `rsvg2`, `dbus-1.pc` / `libdbus-1-dev`, `pkg-config`). Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 335,
+      "text": "- **Root-Aware Git Push and SSH Retry Flow.** Complete \u2713 2026-05-23. Rebuilt push on top of libgit2 so `POST /api/git/push` keeps the root-aware UI/API contract while the backend now uses `Remote::push(..)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials. `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` all preserve the selected VCS root in the push payload, the shared SSH retry hook still normalizes single-result versus array Git responses before auth detection, and successful pushes still invalidate the broader Git cache set. Focused Rust coverage now includes successful local bare-remote push, missing-upstream failure, nested-root isolation, and callback-level remote rejection reporting. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 363,
+      "text": "- **Native SSH Port-Forwarding Control \u2014 (Windows desktop scope).** Completed the host-gated `/ssh-forwarding` route and navigation, explicit reviewed profile form, lifecycle controls, agent/opaque-key inventory selection, unknown-host approval, changed-key stopped-app remediation presentation, bounded reconnect/auto-start states, and exact local-process/loopback security copy. Browser and native-mobile hosts expose no matching route and make zero forwarding calls. Validation: UI 181 files/1,050 tests, Chromium 28 files/121 tests, Rust 140 passed/1 ignored; build, lint, `cargo check`, `cargo fmt`, and diff checks passed. Cross-platform, packaged-runtime, security, product, and manual Phase 07 release gates remain deferred; release readiness is not claimed."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 371,
+      "text": " routes remain scheduled for Phase 04."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 377,
+      "text": " non-durable; `ChannelTelemetrySink` is reserved as the Phase 03 durable-worker"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 390,
+      "text": "- **Workspace Split.** Complete \u2713 2026-05-24. Split the web frontend into a thin `apps/web` Vite host plus a shared `packages/ui` React package, preserving current browser behavior while moving shared components, hooks, styles, tests, assets, and transport-facing UI code behind explicit UI package exports. No native behavior was added yet in this phase. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 395,
+      "text": "- **Terminal Workspace Shortcut Routing.** Complete \u2713 2026-05-19. Added configurable terminal workspace switching: `UiConfig` now carries `terminalWorkspaceShortcut` with default `Mod+Shift+Backquote`, the settings UI exposes a Terminal workspace row, `WorkspacePage` toggles IDE/Terminal mode from the configured shortcut, and `TerminalPanel` plus `PaneContainer` suppress that shortcut from xterm input so the binding stays global. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 397,
+      "text": "- **Workspace Mode Shell.** Complete \u2713 2026-05-19. Added persisted workspace mode for the main shell: `WorkspacePage` now owns `ide`/`terminal` mode state in `localStorage` key `dam-hopper:workspace-mode`, `IdeShell` accepts optional mode props and forwards them to `TopNav`, and `TopNav` shows a compact IDE/Terminal toggle only when those props are present. IDE mode behavior stays unchanged when mode props are omitted. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 399,
+      "text": "- **IntelliJ Real Git Semantics Verification and Docs.** Complete \u2713 2026-05-19. Expanded verification coverage for the real Git semantics refactor: backend tests now cover active-operation rewrite blocking and recovery metadata, frontend tests cover targeted Git invalidation, selected-history refresh, pushed rewrite availability, and recovery banner copy, and the API/architecture docs now define the safe-vs-rewrite history contract plus manual browser verification checklist. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 401,
+      "text": "- **IntelliJ-Compatible Actions.** Complete \u2713 2026-05-19. Added the remaining IntelliJ-style Git action split so safe history preservation and rewrite actions are separate: revert commit for pushed/shared history, revert selected changes as a non-history-rewriting path, undo last commit to move changes back into the worktree, explicit confirmation copy for destructive actions, and backend/web API surface updates for the new action routing. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 403,
+      "text": "- **IntelliJ-Style Git Workspace Semantics.** Complete \u2713 2026-05-19. Updated the web Git workspace to use a shared commit-action status model and tighter workspace refresh behavior: `GitHistoryActions` now maps Git mutation results into explicit `success`/`blocked`/`conflict`/`dirty`/`error` states, local commit drops are blocked for pushed commits with a shared revert recommendation, `WorkspaceGitPanel` refreshes branches, project status, history, and selected commit files in one flow, `GitPage` reuses the same history-action hook for the standalone Git view, and editor tab reconciliation was aligned with Git-side file updates through the shared query helpers. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 405,
+      "text": "- **Backend Real Git Semantics.** Complete \u2713 2026-05-19. Refactored Git history mutations around real `git` porcelain contracts: (1) new repo-state helpers detect clean worktree, current branch, reachability, pushed commits, and active merge/rebase/cherry-pick operations; (2) `GitActionResult` now carries `recovery`, `blockedReason`, and `recommendation`; (3) full commit drop uses reset for local `HEAD` and `rebase --onto` for non-HEAD local commits; (4) pushed/shared history drop is blocked by default with revert recommendation; (5) whole-commit and selected-file revert primitives are exposed through REST and the web API client; (6) regression tests cover HEAD drop, non-HEAD drop with descendants, root/pushed blocking, active rebase blocking, selected-file revert, and active-operation detection. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 407,
+      "text": "- **PTY Env Leakage Verification And Documentation.** Complete \u2713 2026-05-16. Added regression coverage proving PTY children do not inherit non-allowlisted parent env, safe baseline vars remain available for shell execution, project terminal sessions load project environment-file values, request `env` overrides win deterministically, and malformed project environment files fail terminal creation with a clear error. Updated `docs/configuration-guide.md` to document terminal env precedence. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 409,
+      "text": "- **Backend PTY Env Isolation.** Complete \u2713 2026-05-16. PTY child sessions now start from a safe baseline instead of inheriting the DamHopper server process env, and project terminal sessions load `env_file` values before request overrides. Validation passed with targeted PTY and terminal tests plus full `cargo test`. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 411,
+      "text": "- **Git Management Verification And Documentation.** Complete \u2713 2026-05-16. Documented the completed Git management public surface in `docs/api-reference.md` and `docs/frontend-components.md`: branch listing/create/checkout/update, cherry-pick, reset modes, commit amend, shared action result flags, Explorer branch controls, dirty checkout choices, and history actions. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 413,
+      "text": "- **Frontend Git Management.** Complete \u2713 2026-05-16. Added the Git workspace UI in `packages/web/src/components/pages/GitPage.tsx` and related organism components for branch control, history browsing, and working tree review: `WorkspaceGitPanel`, `GitBranchControl`, `GitBranchControlDialogs`, `GitHistoryActions`, `GitLogTree`, `GitLocalChanges`, and `ChangedFilesList`. The updated flows wire the frontend to branch/history APIs through the shared API client and keep Git-aware file rows aligned with the shared file decoration registry. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 415,
+      "text": "- **Backend Git Operations.** Complete \u2713 2026-05-16. Expanded git API coverage for branch and history actions: (1) `POST /api/git/:project/branches` creates a branch with optional checkout; (2) `POST /api/git/:project/branches/checkout` supports `normal`, `stash`, and `force`; (3) `POST /api/git/:project/branches/update` updates a branch from its tracking branch; (4) `POST /api/git/:project/cherry-pick` applies a commit; (5) `POST /api/git/:project/reset` supports `soft`, `mixed`, `hard`, and `keep`; (6) `POST /api/git/:project/commit` now accepts `amend`; (7) branch names and commit hashes are validated before execution; (8) destructive modes return structured result flags for dirty/conflict cases. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 417,
+      "text": "- **Port Session Control Data Flow.** Complete \u2713 2026-05-15. Frontend ports state now preserves detected owner sessions and exposes a kill-session mutation: (1) `PortEntry.sessionId` keeps `DetectedPort.session_id` for detected rows; (2) tunnel-only rows keep `sessionId: null`; (3) `usePorts()` exposes `killPortSession(sessionId)` and revalidates `ports` plus terminal session queries after `terminal:kill`; (4) no direct PID/process killing added. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 419,
+      "text": "- **Shared File Decoration Registry.** Complete \u2713 2026-05-15. Centralized frontend file metadata lookup in `packages/web/src/lib/file-decoration.ts`: (1) one registry now drives icon, badge, display-language, and Monaco-language selection; (2) exact filename matches cover dotfiles and toolchain files like `.env`, `.gitignore`, `Dockerfile`, `Makefile`, and lockfiles; (3) extension lookup covers code, docs, data, images, archives, fonts, and common config files; (4) MIME fallback handles generic or missing file types; (5) `file-decoration-icon.tsx` is a thin render wrapper; (6) `mime-to-language.ts` stays as a compatibility wrapper for MIME-only callers; (7) unit tests cover exact-name priority, extension fallback, MIME fallback, and neutral defaults. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 421,
+      "text": "- **Shared File Decoration Integration.** Complete \u2713 2026-05-15. Rolled the shared decorator out to the visible IDE surfaces: (1) `FileTree` now renders file-specific icons through the shared registry; (2) `EditorTab` uses the active file path/name for its decoration instead of a generic file glyph; (3) `SearchPanel` file headers show the same decoration as the explorer and tabs; (4) file rows in git/change views can reuse the same lookup without changing VCS badges; (5) `FilePathLabel` continues to read from the shared helper so path labels stay consistent everywhere. Historical plan archived."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 423,
+      "text": "- **IDE Tool Windows Refactoring.** Complete \u2713 2026-04-25. Refactored `IdeShell.tsx` to support a flexible, extensible Tool Window system with an Activity Bar, similar to IntelliJ IDEA: (1) New `ActivityBar` component for switching between tool windows (Files, Terminals, etc.); (2) Extensible `ToolWindowDef` interface for defining tool name, icon, and component; (3) `ToolPanel` container with header, actions, and auto-focusing behavior; (4) Persisted layout state in `IdeShell` (active tool ID, sidebar width); (5) Refactored `IdeShell` to use a cleaner tool window state management pattern; (6) Migrated `FileTree` to the new system as the default 'files' tool; (7) Seamless integration with existing `react-resizable-panels` layout; (8) Full TypeScript coverage and logic verification. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 426,
+      "text": " Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit file upload feature: (1) New `server/src/crypto/` module \u2014 `DamHopperOpaqueSuite` implementing `CipherSuite` (Ristretto255 + TripleDH + Identity KSF, matching `@serenity-kit/opaque` client defaults); (2) `load_or_create_server_setup()` generates or loads the server long-term keypair at `~/.config/dam-hopper/opaque-server-setup` with 0o600 permissions; (3) Registration handlers: `handle_register_start()` / `handle_register_finish()` \u2014 stateless two-message flow, returning `RegistrationResponse` and `ServerRegistration`; (4) Login handlers: `handle_login_start()` / `handle_login_finish()` \u2014 two-message flow, returning intermediate `ServerLogin` state and final AES key derived via HKDF-SHA256 with label `\"dam-hopper-aes-256-gcm-v1\"`; (5) `export_key` wrapped in `Zeroizing<Vec<u8>>`, zeroed on drop; (6) New `AppState` fields: `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` (shared) and `opaque_registrations: OpaqueRegistrations` (in-memory HashMap, ephemeral by design \u2014 no disk persistence); (7) 8 new `ClientMsg` WS variants (`auth:register_start/finish`, `auth:login_start/finish`, `fs:put_begin/chunk/commit/save`) and 8 new `ServerMsg` response variants with neutral `auth:*` / `fs:put_*` kind names to avoid IDS/DLP fingerprinting; (8) Full WS dispatch in `ws.rs` with all OPAQUE ops in `spawn_blocking`; per-connection caps: 16 in-flight login states, 16 active session keys; `overwrite: bool` on `auth:register_finish` prevents silent credential overwrite; (9) Phase 04 `fs:put_*` handlers stubbed (return not-implemented error); (10) Identifier validation: alphanumeric + hyphens + underscores, max 128 chars. New Cargo dependencies: `opaque-ke = \"4\"`, `hkdf = \"0.12\"`, `rand`, `aes-gcm = \"0.10\"`, `sha2 = \"0.10\"`, `zeroize = \"1\"`. Historical plan source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 428,
+      "text": "- **Phases 02-04: Combined Ports & Tunnel Panel (F-09 Auto Port Forwarding).** Complete \u2713 2026-04-25. Unified sidebar panel merging port detection and tunnel management into single component: (1) `PortsPanel.tsx` replaces deprecated `TunnelPanel` + `PortsPanel`, deletes former; (2) `usePorts` hook merges `DetectedPort[]` (from `/api/ports` via WS `port:list` channel) with `TunnelInfo[]` (from `/api/tunnels`) by port number into single `PortEntry[]`; (3) Three port row states: A (no tunnel, \"Open localhost\" button if same-host + \"Start tunnel\"), B (tunnel starting with spinner), C (tunnel ready with public URL + copy/QR/stop buttons); (4) `isLocalServer()` helper determines if browser and server on same host \u2014 gates \"Open localhost\" button visibility; (5) WS event subscriptions: `port:discovered`, `port:lost`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped` invalidate queries in real-time; (6) Custom port form allows starting tunnels for specific ports not yet detected; (7) cloudflared installer row preserved (shows missing binary state); (8) Public URL warning banner localStorage-gated, shown once per browser; (9) Sidebar integration: single `{!collapsed && <PortsPanel />}` replaces both former panels; (10) `use-tunnels.ts` kept for Phase 05 evaluation. Zero breaking changes, full backward compatibility with existing port/tunnel infrastructure. [See documentation](./frontend-components.md#portspanel)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 430,
+      "text": "- **Drag-to-Split Terminal Layout (F-06 Terminal Splitting).** Complete \u2713 2026-04-24. Interactive terminal pane splitting and tab management via drag-and-drop: (1) New `TabBar` component with draggable tab handles using @dnd-kit/core (PointerSensor 8px activation); (2) `PaneContainer` with `PaneDropZones` (5 zones: top/bottom/left/right edges, center) always mounted for droppable registration; (3) `SplitLayout` wrapped in `DndContext` with `pointerWithin` collision strategy and floating `DragOverlay` showing dragged tab label; (4) Drag-end logic: edge zones trigger `layout.splitPane(paneId, direction)` to create new split pane, center zone triggers `layout.moveTabToPane()` to transfer tab without splitting; (5) Auto-collapse: if last tab leaves source pane, pane node removed from tree; (6) Visual feedback: blue highlight (`bg-blue-500/30 ring-blue-400`) on target zones during drag, zones invisible (pointer-events-none) when not dragging to preserve terminal input; (7) New `moveTabToPane(sessionId, fromPaneId, toPaneId)` hook method for atomic tab transfer; (8) Dependencies: @dnd-kit/core@6.3.1, @dnd-kit/utilities@3.2.2 added to package.json. User-facing: drag tab grip handle to pane edge \u2192 creates split; drag to pane center \u2192 moves tab (no split); blue highlights appear on targeted zone; floating label shows tab name during drag. Zero breaking changes, fully backward-compatible with existing layout tree. [See Phase 02 documentation](./frontend-components.md#panecontainer)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 438,
+      "text": "- **Buffer Offset Tracking (F-08 Terminal Session Persistence).** Complete \u2713 2026-04-17. Scrollback buffer enhancements for efficient WebSocket reconnect delta replay: (1) Monotonic byte counter `total_written: u64` tracks total bytes ever written, survives buffer eviction; (2) New `current_offset()` method returns checkpoint for client storage; (3) New `read_from(Option<u64>)` method returns (delta bytes, current offset) or fallback to full buffer if offset evicted; (4) O(1) delta calculation with zero-cost implementation; (5) 5 new unit tests + 4 existing tests (9/9 passing) covering fresh buffer, eviction, delta replay, edge cases, and monotonic property. Backward compatible, no breaking changes. Enables Phase 02 WebSocket reconnect to send only new bytes (~90% bandwidth reduction in typical scenarios). Historical documentation source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 442,
+      "text": "- **Terminal Lifecycle UI (Frontend).** Complete \u2713 2026-04-17. Visual indicators for terminal process lifecycle events: (1) Status dots in TerminalTreeView (\ud83d\udfe2 alive, \ud83d\udfe1 restarting, \ud83d\udd34 crashed, \u26aa exited); (2) Restart badge in DashboardPage showing `\u21bb N` when restartCount > 0; (3) Colored exit banners in TerminalPanel (green for code=0, red for non-zero, yellow for willRestart); (4) Restart banner showing `[Process restarted (#N)]` on process:restarted event; (5) Dim reconnect status banners on WebSocket connect/disconnect. New `session-status.ts` module centralizes lifecycle logic. All components subscribe to Phase 5 WS events. Query invalidation on process restart ensures dashboard auto-refresh. Historical Phase 06 documentation source unavailable; see [Frontend Components guide](./frontend-components.md)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 444,
+      "text": "- **Enhanced Exit Events + Channel Decoupling.** Complete \u2713 2026-04-17. Backend WS protocol enhancements: (1) Extended `terminal:exit` with optional `willRestart`, `restartInMs`, `restartCount` fields (backward-compatible); (2) New `process:restarted` event announcing successful restart with restart count and previous exit code; (3) Separate PTY and FS channels (PTY async backpressure, FS graceful overflow) to prevent FS event bursts from crashing PTY connections; (4) New `fs:overflow` event notifies of FS subscription overflow. Frontend: new `onProcessRestarted()` event listener, graceful `fs:overflow` handling. All 8 test matrix rows passing (Phase 04 integration). Resolves Failure Mode 3 (FS pump crushing WS). Historical documentation source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 446,
+      "text": "- **Auto-Restart Engine.** Complete \u2713 2026-04-16. Process lifecycle management with auto-restart on crash: (1) Configurable restart policy per terminal (never/on-failure/always); (2) Exponential backoff (1s\u21922s\u21924s\u21928s\u219216s\u219230s max); (3) Supervisor pattern decouples blocking PTY I/O from async restart logic; (4) Dedicated reader thread handles exit detection and restart decisions; (5) Restart count tracking resets on clean exit (exit_code=0); (6) Session ID reused across restarts so frontend tab stays connected; (7) Extension to config and session metadata (Phase 3). All 8 decision matrix rows validated, 5 integration tests passing. Limitation: exit code always inferred as 0 for natural exits (portable-pty API). Historical documentation source unavailable."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 456,
+      "text": "#### Unreleased (before Phase 01)"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 478,
+      "text": "- **3-phase WebSocket write protocol.** Robust `begin -> chunks -> commit` flow for file saving."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 522,
+      "text": "- **Project worktree target lifecycle (Phase 07).** Added exact-target removal"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "line": 4,
+      "text": "  - Restructured historical phase documents into purpose-based architectural specifications under `docs/architecture/`: `authentication-state-and-cryptography.md`, `workbench-files-editor-and-git.md`, `terminal-continuity-and-workflow.md`, `agent-store-ports-and-browser.md`, `preferences-settings-and-host-resources.md`, `media-isolation-and-encryption.md`, and `native-ssh-forwarding.md`. Removed obsolete phase files; no redirect stubs."
+    },
+    {
+      "file": "docs/README.md",
+      "line": 50,
+      "text": "The former DamHopper plugin platform is permanently retired. Former specifications are documented in the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md); Native Advisor is the current in-process implementation. Expired plan records are archived rather than maintained as active product requirements."
+    },
+    {
+      "file": "docs/agent-activity-automatic-admission.md",
+      "line": 3,
+      "text": "**Status:** Phases 05\u201307 complete (2026-09-11). This page documents the"
+    },
+    {
+      "file": "docs/agent-activity-automatic-admission.md",
+      "line": 23,
+      "text": "The lower-level evidence contracts remain in [PTY Activity Observation](./pty-activity-observation.md), [Configured-Agent Process Discovery](./agent-activity-process-discovery.md), and [Owned TCP Byte Observation](./tcp-activity-observation.md). This page is the integration contract for their Phase 05 consumer."
+    },
+    {
+      "file": "docs/agent-activity-automatic-admission.md",
+      "line": 270,
+      "text": "## Phase 07 integrated qualification"
+    },
+    {
+      "file": "docs/agent-activity-automatic-admission.md",
+      "line": 272,
+      "text": "Phase 07 verifies the coordinator through the public manager and route"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 17,
+      "text": "Phase 03 consumes the qualified PTY roots and atomic output handles from Phase 02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 18,
+      "text": "TCP byte observation. Phase 05 combines both prepared samples in the dedicated"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 93,
+      "text": "Matching uses Phase 01's borrowed, already-validated literal set; it does not"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 100,
+      "text": "  Phase 03 plan: Node/Node.js, Bun, Python (`python3.N`), and POSIX shell"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 164,
+      "text": "failures leave it empty. Phase 03 returns owned socket identities for Phase 04;"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 184,
+      "text": "is part of this phase."
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 188,
+      "text": "Focused implementation commands from the phase plan are:"
+    },
+    {
+      "file": "docs/agent-activity-process-discovery.md",
+      "line": 201,
+      "text": "behavior. TCP observation is documented and tested separately; the Phase 05"
+    },
+    {
+      "file": "docs/api-reference.md",
+      "line": 82,
+      "text": "### Trusted Plugin API (Phase D03)"
+    },
+    {
+      "file": "docs/api-reference.md",
+      "line": 86,
+      "text": "### Trusted Plugin Management API (Phase D05)"
+    },
+    {
+      "file": "docs/archive/retired-plugin-platform.md",
+      "line": 21,
+      "text": "- **`@dam-hopper/plugin-sdk` (Phase D00):** TypeScript SDK exposing `definePlugin`, capability manifests, and `PluginContext`."
+    },
+    {
+      "file": "docs/archive/retired-plugin-platform.md",
+      "line": 22,
+      "text": "- **Manifest v1 (Phase D01):** JSON manifest defining package metadata, required permissions (`capabilities: [\"workspace:read\", \"terminal:execute\"]`), backend runner entrypoints, and frontend iframe assets with SHA-256 integrity hashes."
+    },
+    {
+      "file": "docs/archive/retired-plugin-platform.md",
+      "line": 23,
+      "text": "- **Runner JSON-RPC Protocol (Phase D02):** Length-prefixed framing (4-byte big-endian length + JSON-RPC 2.0) over Unix domain socket `/run/dam-hopper/plugin-runner.sock`. Supported namespaces `runner.*`, `plugin.*`, `context.*`, and `management.*`."
+    },
+    {
+      "file": "docs/archive/retired-plugin-platform.md",
+      "line": 24,
+      "text": "- **UI Iframe Bridge (Phase D03):** Host-to-iframe communication across isolated origins via `MessageChannel` and `window.postMessage`, with `host.bootstrap` handshakes and capability revocation."
+    },
+    {
+      "file": "docs/archive/retired-plugin-platform.md",
+      "line": 25,
+      "text": "- **Management REST APIs (Phase D05):** Endpoints under `/api/plugins/*` for installation, lifecycle state, and host administration."
+    },
+    {
+      "file": "docs/code-standards.md",
+      "line": 76,
+      "text": "- Maintain capture-phase input isolation, the app-content inert/hidden boundary, and a usable keyboard dismissal path. Restore focus and listeners on deactivation/unmount."
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 3,
+      "text": "This detail page is derived from `repomix-output.xml` and the focused release-source files. It keeps the main codebase summary below the documentation size target while preserving release architecture and phase boundaries."
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 22,
+      "text": "### Phase 01\u201302 Windows direct-server release and installer"
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 48,
+      "text": "### Phase 03 cross-platform Release CI and guidance"
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 64,
+      "text": "### Phase 00 merge boundary (2026-09-14)"
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 71,
+      "text": "### Phase 01 runtime-state boundary (2026-09-14)"
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 82,
+      "text": "### Phase 02 systemd unit/policy boundary (2026-09-14)"
+    },
+    {
+      "file": "docs/codebase-summary-release.md",
+      "line": 93,
+      "text": "### Phase 03 preflight, installer, and reset boundary (2026-09-14)"
+    },
+    {
+      "file": "docs/codebase-summary.md",
+      "line": 10,
+      "text": "- **Historical Plans & Reports:** 964 planning/reporting files, 104,621 physical LOC under `plans/`."
+    },
+    {
+      "file": "docs/codebase-summary.md",
+      "line": 68,
+      "text": "- **Hierarchy:** 3-tier structure: Plan -> Phase -> Task."
+    },
+    {
+      "file": "docs/codebase-summary.md",
+      "line": 80,
+      "text": "- **Cognito Mode:** Ephemeral in-browser visual screen mask and 38-event capture-phase input guard. CSS uses Heavy Blur `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)`."
+    },
+    {
+      "file": "docs/configuration/server-deployment.md",
+      "line": 139,
+      "text": "### Media compatibility and Phase 09 qualification"
+    },
+    {
+      "file": "docs/configuration/server-deployment.md",
+      "line": 148,
+      "text": "Phase 09 reconciled **3,504 passed / 9 skipped or ignored** across the release"
+    },
+    {
+      "file": "docs/configuration/server-deployment.md",
+      "line": 171,
+      "text": "The authenticated `GET /api/system/resources/v1/events` stream serves an eligible connected, visible profile. While a paired stream is LIVE it updates snapshot and metrics together; the existing REST endpoints remain the gated fallback. Phase 06 closes documentation and runbooks, not target release qualification."
+    },
+    {
+      "file": "docs/configuration/server-deployment.md",
+      "line": 194,
+      "text": "The process inventory deadline is 150 ms; the 500 ms snapshot deadline is a wait, not a CPU or blocked-syscall bound. The default-cadence whole-monitor \u22642% one-core target requires the separate Phase 00 monitor profiler; ten collector-only scans do not qualify it."
+    },
+    {
+      "file": "docs/configuration/server-runtime-settings.md",
+      "line": 42,
+      "text": "This Phase 07 release has no supported host-action configuration or client"
+    },
+    {
+      "file": "docs/configuration/server-runtime-settings.md",
+      "line": 150,
+      "text": "The Phases 02\u201303 canonical idle-suspend event producer is internal. Its path"
+    },
+    {
+      "file": "docs/configuration/server-runtime-settings.md",
+      "line": 153,
+      "text": "there is no configuration key or public path override. Phase 03 wires the"
+    },
+    {
+      "file": "docs/configuration/server-runtime-settings.md",
+      "line": 158,
+      "text": "`dam-hopper diagnose --json` (Phases 06\u201307). The required `--json` flag is the"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 117,
+      "text": "**Phase 04 note:** `workspace_dir` is now a display/legacy field only; the security boundary is enforced by per-project roots derived from the config. This allows projects to be located anywhere on the filesystem while maintaining strict access control."
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 135,
+      "text": "**Phase 04 note:** Workspace APIs now report `configPath` (the authoritative registry file path) separately from `path`/`root` (legacy display fields)."
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 268,
+      "text": "The Phase 07 release evidence covers the packaged server in no-tunnel mode. Its"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 271,
+      "text": "period. The release owner approved Phase 07 completion with the still-unobserved"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 283,
+      "text": "helper also supports the Phase 01 execution-only indefinite-sleep sentinel; that"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 300,
+      "text": "### Policy and agent-executable fields (Phase 01)"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 303,
+      "text": "Phase 01 freezes this selector and its configuration contract. Phase 02"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 304,
+      "text": "provides private PTY root/raw-output/input evidence, Phase 03 provides bounded"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 306,
+      "text": "procfs seam, and Phase 04 provides owned TCP byte observation and per-socket"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 307,
+      "text": "baseline comparison. Phase 05 completes the dedicated transactional sampler,"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 309,
+      "text": "`agent-activity` coordinator path. Phase 06 adds protected status decoding and"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 311,
+      "text": "mutation route. Phase 07 qualifies the integrated manager/API/Chromium path,"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 504,
+      "text": "### Release-manager helper service (Production CLI Phase 03)"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 516,
+      "text": "### Execution-only indefinite sleep (Phase 01)"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 685,
+      "text": "Agent Settings verifies paths through `GET /api/agent-status/paths` before enabling notification policies. OMP requires matching install/runtime paths and a current managed extension; Codex remains ineligible for notifications even when native status hooks are managed; Claude requires matching paths and ready native hooks. The API rechecks OMP/Claude eligibility on enabled-policy saves and rejects enabled Codex policies. Disabling remains possible when a target disappears. Dispatch follows the saved `enabled` policy without repeating filesystem readiness checks, so external path or hook changes do not themselves revoke a saved policy. Installation and readiness badges are separate. Browser permission is runtime-only and is requested only by explicit user action. Linux live hook qualification is limited to Codex CLI 0.158.0 and Claude Code 2.1.250; see the [Phase 06 report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md)."
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 697,
+      "text": "control. Phase 05's live smoke exercised the app in Linux Chromium; it does"
+    },
+    {
+      "file": "docs/idle-suspend-status-ui.md",
+      "line": 3,
+      "text": "**Status:** Phase 07 integrated qualification complete (2026-09-11)  "
+    },
+    {
+      "file": "docs/idle-suspend-status-ui.md",
+      "line": 4,
+      "text": "**Implementation scope:** Phase 06 protected status decoding, aggregate activity"
+    },
+    {
+      "file": "docs/idle-suspend-status-ui.md",
+      "line": 127,
+      "text": "Phase 06 targeted proof (all passed):"
+    },
+    {
+      "file": "docs/idle-suspend-status-ui.md",
+      "line": 134,
+      "text": "Phase 07 integrated qualification (all passed):"
+    },
+    {
+      "file": "docs/linux-nohup.md",
+      "line": 11,
+      "text": "The current systemd workflow is backend-only. Phase 03 adds the separate"
+    },
+    {
+      "file": "docs/linux-nohup.md",
+      "line": 138,
+      "text": "the 5 MiB Phase 03 budget. This does not replace a real non-Linux CI run, staged"
+    },
+    {
+      "file": "docs/linux-nohup.md",
+      "line": 141,
+      "text": "The Phase 07 release check set is:"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 98,
+      "text": "The Phase 02 canonical event writer is deliberately outside this provisioning"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 101,
+      "text": "or lazily initialize `idle-suspend-events-v1.jsonl`. Phase 03 passes the"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 107,
+      "text": "### Phase 03 preflight SQLite migration protection"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 134,
+      "text": "legacy copying in the runtime gate, but Phase 03 preflight still inspects an"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 162,
+      "text": "## Bootstrap handoff (Phase 06)"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 298,
+      "text": "### Dedicated web-role handoff (Phase 03)"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 367,
+      "text": "The earlier bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 372,
+      "text": "protected runtime matrix for current Phase 03 evidence; stable publication,"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 400,
+      "text": "`previous`, `pending`, transaction phase/backup paths, and latest sanitized"
+    },
+    {
+      "file": "docs/linux-release-manager.md",
+      "line": 613,
+      "text": "## Format-2 migration (Phase 07)"
+    },
+    {
+      "file": "docs/linux-release-manifest.md",
+      "line": 18,
+      "text": "## Publisher and bootstrap boundary (Phase 03 cross-platform release; Phase 06 Linux runtime)"
+    },
+    {
+      "file": "docs/linux-release-manifest.md",
+      "line": 38,
+      "text": "Phase 01 defines one immutable archive per release:"
+    },
+    {
+      "file": "docs/linux-release-manifest.md",
+      "line": 202,
+      "text": "## Phase 03 web runtime contract"
+    },
+    {
+      "file": "docs/linux-release-manifest.md",
+      "line": 259,
+      "text": "The Phase 02 staging implementation preserves this post-commit view shape but"
+    },
+    {
+      "file": "docs/linux-release-manifest.md",
+      "line": 261,
+      "text": "rename. Phase 05 activates only the validated immutable view and records the"
+    },
+    {
+      "file": "docs/linux-release-publisher-bootstrap.md",
+      "line": 3,
+      "text": "Status: Phase 03 cross-platform Release CI and guidance are complete"
+    },
+    {
+      "file": "docs/linux-release-publisher-bootstrap.md",
+      "line": 4,
+      "text": "(2026-09-21); Phase 06 Linux migration-gate qualification was approved on"
+    },
+    {
+      "file": "docs/linux-release-publisher-bootstrap.md",
+      "line": 82,
+      "text": "### Windows direct-server profile and bootstrap installer (Phases 01\u201303)"
+    },
+    {
+      "file": "docs/linux-release-publisher-bootstrap.md",
+      "line": 386,
+      "text": "manager-first evidence. The Phase 03 fixture rejects mixed manager capability,"
+    },
+    {
+      "file": "docs/linux-release-publisher-bootstrap.md",
+      "line": 388,
+      "text": "The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0"
+    },
+    {
+      "file": "docs/linux-release-runtime-provisioning.md",
+      "line": 3,
+      "text": "**Status:** Phase 01 complete (2026-09-14)"
+    },
+    {
+      "file": "docs/linux-release-runtime-provisioning.md",
+      "line": 33,
+      "text": "| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | API-owned diagnostic stream | Validated/used by the semantic event writer; not created by this Phase 01 gate. |"
+    },
+    {
+      "file": "docs/linux-release-runtime-provisioning.md",
+      "line": 36,
+      "text": "operator state. Phase 01 does not create, repair, truncate, delete, or migrate"
+    },
+    {
+      "file": "docs/linux-systemd.md",
+      "line": 390,
+      "text": "### Capturing a production diagnostics bundle (Phase 07 complete)"
+    },
+    {
+      "file": "docs/linux-systemd.md",
+      "line": 434,
+      "text": "See [Linux Release Manager \u2014 Production diagnostics](./linux-release-manager.md#production-diagnostics-phase-06)"
+    },
+    {
+      "file": "docs/native-browser-debug-support.md",
+      "line": 9,
+      "text": "Phase 09 integrated web qualification passed its Browser ownership and handoff"
+    },
+    {
+      "file": "docs/native-browser-debug-support.md",
+      "line": 32,
+      "text": "## Phase 08 owner integration"
+    },
+    {
+      "file": "docs/native-browser-debug-support.md",
+      "line": 34,
+      "text": "The native Browser host consumes the complete Phase 05"
+    },
+    {
+      "file": "docs/native-browser-debug-support.md",
+      "line": 109,
+      "text": "later plan. macOS is intentionally absent from v1 packaging and support claims."
+    },
+    {
+      "file": "docs/project-overview-pdr.md",
+      "line": 3,
+      "text": "**Status date:** 2026-10-05. This PDR summarizes the current product contract. Source code and the linked subsystem references define implementation details; historical plans are not active requirements unless the roadmap says otherwise."
+    },
+    {
+      "file": "docs/project-roadmap.md",
+      "line": 3,
+      "text": "**Updated:** 2026-10-05. This page tracks current delivery and qualification state rather than preserving expired implementation plans. Archived plan notices are in [CHANGELOG archive](./CHANGELOG-archive.md)."
+    },
+    {
+      "file": "docs/project-roadmap.md",
+      "line": 13,
+      "text": "| Cognito Mode | **Complete.** Configurable shortcut/style, ephemeral overlay, capture-phase input isolation, and browser qualification are delivered. It remains an in-app visual mask only; native platform behavior is not claimed beyond recorded evidence. |"
+    },
+    {
+      "file": "docs/project-roadmap.md",
+      "line": 21,
+      "text": "- **Host-resource SSE:** implementation phases are documented, but deployed-proxy identification/verification, target-host CPU/RSS and soak evidence, live-browser qualification, and native C42 remain pending or blocked. Do not treat implementation completion as release qualification. See [SSE architecture](./architecture/host-resource-sse.md)."
+    },
+    {
+      "file": "docs/project-roadmap.md",
+      "line": 26,
+      "text": "These are qualification boundaries, not permission to implement unapproved plans. Check the owning feature contract before making changes."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 3,
+      "text": "**Status:** Phase 02 implemented 2026-09-11. This page is the canonical"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 5,
+      "text": "configured-agent idle-suspend phases."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 7,
+      "text": "Phase 02 records evidence at the PTY boundary without adding a public REST"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 9,
+      "text": "automatic agent-policy claim. Phase 03 consumes the root/stat seam and"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 11,
+      "text": "Phase 04 consumes the resulting owned-socket set for TCP byte observation."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 12,
+      "text": "Phase 05 combines all evidence in the transactional sampler and performs the"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 151,
+      "text": "decision; Phase 02 does not introduce an asynchronous writer queue."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 183,
+      "text": "Phase 03 qualifies process names, roots, and descendants using this seam."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 221,
+      "text": "- Downstream warning/reporting phases may expose a currently attributable PID"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 223,
+      "text": "  contract. Phase 02 does not produce that report or log process identity."
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 239,
+      "text": "The Phase 02 evidence report records 8/8 focused activity tests and 159 passed"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 242,
+      "text": "Phase 02 remains an evidence seam only. It does not inspect descendants,"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 247,
+      "text": "Phase 03 consumes `ProcessIdentity` and the shared proc-stat parser while"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 251,
+      "text": "Phase 04 consumes its `OwnedSocketSet` and is documented in"
+    },
+    {
+      "file": "docs/pty-activity-observation.md",
+      "line": 252,
+      "text": "[Owned TCP Byte Observation](./tcp-activity-observation.md). Phase 05 combines"
+    },
+    {
+      "file": "docs/system-architecture.md",
+      "line": 84,
+      "text": "The `WorkflowService` manages hierarchical plans, phases, tasks (max depth 3), workflow sessions, notes, and activity event streams backed by SQLite (`010_workflow_tracking.sql`)."
+    },
+    {
+      "file": "docs/system-architecture.md",
+      "line": 143,
+      "text": "Cognito is an ephemeral in-app overlay controlled by the Cognito state store and configurable shortcut (`Mod+Alt+KeyB`). The app installs a window capture-phase input guard intercepting 38 pointer, keyboard, clipboard, wheel, and drag events, and places app content behind an `inert` and `aria-hidden=\"true\"` boundary while the mask is active. Activation is memory-only; only supported presentation style preferences persist."
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 3,
+      "text": "**Status:** Phase 04 implemented 2026-09-11. This page documents the private,"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 22,
+      "text": "thread's namespace identity for both Phase 03 ownership and Phase 04 fencing."
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 24,
+      "text": "Phase 03 produces the `OwnedSocketSet` consumed here. Phase 05 combines this"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 33,
+      "text": "Phase 03 OwnedSocketSet + observing namespace"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 214,
+      "text": "is part of these tests. The [Phase 05 admission guide](./agent-activity-automatic-admission.md)"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 221,
+      "text": "  Phase 03 roots, attribution, namespace-qualified socket ownership, and"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 223,
+      "text": "- [PTY Activity Observation](./pty-activity-observation.md) \u2014 Phase 02 root,"
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 229,
+      "text": "  Phase 05 pair transaction, final claim, coordinator, and status projection."
+    },
+    {
+      "file": "docs/tcp-activity-observation.md",
+      "line": 234,
+      "text": "observer latency remain deployment qualification prerequisites; the Phase 05"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 5,
+      "text": "Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with RTC wake after a bounded quiet period. The default `empty-fleet` policy requires no live, creating, or restart-pending managed PTYs; the opt-in `agent-activity` policy uses configured-agent PTY/process/TCP activity evidence and may suspend with service-only terminals still open. It is an activity heuristic, not proof of agent completion. The manual force-sleep plan adds an execution-only indefinite mode while preserving the automatic scheduler's bounded timing domain. This document establishes the security invariants, threat model, approval requirements, and audit policies for Phase 01 through Phase 08."
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 55,
+      "text": "### Phases 02\u201303 canonical semantic event writer and coordinator emission"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 57,
+      "text": "Phases 02\u201303 add a separate tagged server event stream at"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 75,
+      "text": "Phase 03 stores one optional writer in `AppState` and passes it into the"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 84,
+      "text": "### Phase 04 helper audit v2 and milestone ordering (2026-09-13)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 142,
+      "text": "### Phase 01 execution-domain safeguards"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 162,
+      "text": "### Phase 01 status (2026-09-06)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 165,
+      "text": "implemented in the Phase 01 source scope. Real-host timed/indefinite canaries"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 168,
+      "text": "### Phase 01 systemd PID enrollment and runtime permissions \u2014 DONE (2026-09-09)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 184,
+      "text": "### Phase 02 status (2026-09-06)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 188,
+      "text": "### Configured-agent PTY observation \u2014 Phase 02 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 220,
+      "text": "### Configured-agent process discovery \u2014 Phase 03 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 244,
+      "text": "does not publish REST, WebSocket, audit, or log payloads. Phase 04 consumes"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 245,
+      "text": "these identities through the private TCP observer; Phase 05 performs the"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 249,
+      "text": "### Configured-agent owned TCP observation \u2014 Phase 04 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 251,
+      "text": "Phase 04 extends the private, read-only evidence seam from owned socket"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 282,
+      "text": "## Approval Gates for Privileged Execution (Production CLI Phase 03) \u2014 Approved (2026-09-05)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 284,
+      "text": "The Production CLI Phase 03 helper (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 299,
+      "text": "### Release-manager staging integration (Phase 02)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 303,
+      "text": "### Release-manager lifecycle integration (Production CLI Phase 03, 2026-09-10)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 375,
+      "text": "### Configured-agent automatic admission Phase 05 status (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 401,
+      "text": "### Protected status and browser UI Phase 06 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 431,
+      "text": "### Configured-agent activity integrated qualification and host gate \u2014 Phase 07 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 433,
+      "text": "Phase 07 closes the deterministic integration and security qualification boundary"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 481,
+      "text": "### Configured-agent observation security, privacy, and canary boundaries \u2014 Phase 08 (2026-09-11)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 483,
+      "text": "Phase 08 establishes the operational security, privacy, and canary approval boundaries for the `agent-activity` automatic suspend policy:"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 538,
+      "text": "### Production idle-suspend diagnostics security, privacy, and AI-attachment boundaries \u2014 Phase 07 (2026-09-14)"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 540,
+      "text": "Phase 07 verifies the diagnostics path as a local evidence collector, not a new"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "line": 580,
+      "text": "Phase 07 diagnostics has no unresolved implementation questions; the items below"
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 79,
+      "text": "## 4. Isolated Application Services (Phase 02 Architecture)"
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 111,
+      "text": "## 5. Application E2E Journeys (Phase 03 Implementation)"
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 134,
+      "text": "## 6. Visual Evidence Authenticity & Governance (Phase 04 Standard)"
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 140,
+      "text": "### Colocated Artifacts & Plans Separation"
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 145,
+      "text": "- **Plans Folder Separation:** Binary image files (`.png`, `.webp`, `.jpg`) must **never** be placed inside `plans/` or `plans/reports/`. The `plans/` directory is strictly reserved for Markdown documents."
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 174,
+      "text": "## 7. CI Quality Gate Integration (Phase 05 Architecture)"
+    },
+    {
+      "file": "docs/user-guide-multi-server-profiles.md",
+      "line": 5,
+      "text": "Phase 02 turns the app into a unified workbench: the shell and navigation stay"
+    },
+    {
+      "file": "docs/user-guide-multi-server-profiles.md",
+      "line": 105,
+      "text": "Phase 03 extends the `Profile \u2192 Project` selection to a target-qualified IDE"
+    },
+    {
+      "file": "docs/user-guide-multi-server-profiles.md",
+      "line": 126,
+      "text": "  previews use Phase 07's UUIDv4-namespaced, short-lived ticket capabilities"
+    },
+    {
+      "file": "docs/user-guide-multi-server-profiles.md",
+      "line": 191,
+      "text": "Phase 09 is complete for the web workbench and Linux-hosted shared behavior"
+    },
+    {
+      "file": "docs/user-guide-multi-server-profiles.md",
+      "line": 255,
+      "text": "Phase 02 performs an idempotent reset of legacy browser resource records, such"
+    },
+    {
+      "file": "docs/windows-release-packaging.md",
+      "line": 1,
+      "text": "# Windows Release Asset Packaging and Bootstrap Installer (Phases 01\u201303)"
+    },
+    {
+      "file": "docs/windows-release-packaging.md",
+      "line": 3,
+      "text": "Status: Phase 01 asset packaging, Phase 02 PowerShell bootstrap installer, and"
+    },
+    {
+      "file": "docs/windows-release-packaging.md",
+      "line": 4,
+      "text": "Phase 03 cross-platform Release CI workflow and guidance are complete"
+    },
+    {
+      "file": "docs/windows-release-packaging.md",
+      "line": 94,
+      "text": "### Release CI workflow (Phase 03)"
+    },
+    {
+      "file": "docs/windows-release-packaging.md",
+      "line": 126,
+      "text": "## PowerShell bootstrap installer (Phase 02)"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 3,
+      "text": "Phases 03 and 07 are complete (2026-09-02). This document describes the protected"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 200,
+      "text": "| POST   | `/api/workflow/items`                 | Create a Plan, Phase, or Task                       |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 228,
+      "text": "  \"plans\": [],"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 241,
+      "text": "- `plans` contains Plan-rooted `ItemOverviewNode` trees. Each node includes"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 250,
+      "text": "  does not claim that tracked Tasks represent all Plan work."
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 288,
+      "text": "Items use the Plan-first hierarchy:"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 292,
+      "text": "| `plan`  | None; root only                               |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 293,
+      "text": "| `phase` | A same-project/target `plan` (required)       |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 294,
+      "text": "| `task`  | None, or a same-project/target `plan`/`phase` |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 298,
+      "text": "three-level `Plan -> Phase -> Task` depth."
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 308,
+      "text": "  \"parentId\": \"phase-uuid\","
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 548,
+      "text": "- `server/src/workflow/observation_tests.rs` covers lifecycle mapping, incarnation ordering, duplicate suppression, startup reconciliation, bounded queue overflow, direct Plan sessions, manual harness links, manual timestamp preservation, and a real PTY-manager flow."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 41,
+      "text": "- `ItemKind`: `plan | phase | task`."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 71,
+      "text": "- `allowedChildKinds(null)` returns `plan` and `task`; a `plan` allows `phase`"
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 72,
+      "text": "  and `task`; a `phase` allows `task`; a `task` has no children."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 73,
+      "text": "- `isValidParentKind` applies the Plan-first hierarchy without duplicating"
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 82,
+      "text": "  computes a percentage or claims that all Plan work is tracked."
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 4,
+      "text": "hosts one Plan-first view of the active project/worktree. It renders the"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 26,
+      "text": "is a bottom Dialog with Projects, Plans & Work, and Execution segments at"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 101,
+      "text": "| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx`          | Compact Plan-first item form with optional parent, summary, status, and immediate session start.                       |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 103,
+      "text": "| `packages/ui/src/components/molecules/WorkflowItemList.tsx`              | Plan and standalone-Task trees plus selection and New Plan entry point.                                                |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 109,
+      "text": "| `packages/ui/src/components/molecules/WorkflowProjectList.tsx`           | Project/worktree target switcher with plan, task, and running-session counts.                                          |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 112,
+      "text": "| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx`          | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments.                                              |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 167,
+      "text": "then choose the first root Plan or standalone Task with a directly or"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 199,
+      "text": "an assertive error state and polite active-plan live text. It shows the"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 200,
+      "text": "selected project and worktree basename, the active Plan or standalone Task,"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 205,
+      "text": "and offers New Plan only when no active item is selected."
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 228,
+      "text": "The item tree renders root Plans, recursive Phase/Task children, and"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 232,
+      "text": "a trimmed title, defaults to Plan and Backlog, supports Phase/Task with an"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 7,
+      "text": "All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut from old protocol."
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 29,
+      "text": "reference](./api-reference.md#project-worktree-targets-phases-17). The browser"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 79,
+      "text": "#### Terminal Attach (Phase 02+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 125,
+      "text": "#### Frontend Reconnect UI (Phase 3)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 158,
+      "text": "### File System \u2014 Subscribe (Phase 02+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 167,
+      "text": "### File System \u2014 Read (Phase 04)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 177,
+      "text": "### File System \u2014 Write (Phase 04/05)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 203,
+      "text": "### OPAQUE Auth \u2014 Registration (Phase Stealth-01)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 216,
+      "text": "### OPAQUE Auth \u2014 Login (Phase Stealth-01)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 227,
+      "text": "### Encrypted File Put \u2014 Binary Upload (Phase Stealth-01 stubs / Phase Stealth-04 full)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 237,
+      "text": "### Encrypted File Put \u2014 Text Save (Phase Stealth-01 stubs / Phase Stealth-04 full)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 270,
+      "text": "### Terminal Buffer Replay (Phase 02+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 335,
+      "text": "#### Enhanced Exit Event (Phase 5+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 363,
+      "text": "#### Process Restarted Event (Phase 5+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 376,
+      "text": "#### Target Unavailable Event (Phase 07)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 400,
+      "text": "#### Filesystem Overflow Event (Phase 5+)"
+    },
+    {
+      "file": "docs/ws-protocol-guide.md",
+      "line": 420,
+      "text": "### Agent Status Push Events (Phases 01\u201305 complete; Linux-qualified)"
+    }
+  ],
+  "planningDependencies": [
+    {
+      "file": "docs/codebase-summary.md",
+      "line": 10,
+      "text": "- **Historical Plans & Reports:** 964 planning/reporting files, 104,621 physical LOC under `plans/`."
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "line": 685,
+      "text": "Agent Settings verifies paths through `GET /api/agent-status/paths` before enabling notification policies. OMP requires matching install/runtime paths and a current managed extension; Codex remains ineligible for notifications even when native status hooks are managed; Claude requires matching paths and ready native hooks. The API rechecks OMP/Claude eligibility on enabled-policy saves and rejects enabled Codex policies. Disabling remains possible when a target disappears. Dispatch follows the saved `enabled` policy without repeating filesystem readiness checks, so external path or hook changes do not themselves revoke a saved policy. Installation and readiness badges are separate. Browser permission is runtime-only and is requested only by explicit user action. Linux live hook qualification is limited to Codex CLI 0.158.0 and Claude Code 2.1.250; see the [Phase 06 report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md)."
+    },
+    {
+      "file": "docs/testing.md",
+      "line": 145,
+      "text": "- **Plans Folder Separation:** Binary image files (`.png`, `.webp`, `.jpg`) must **never** be placed inside `plans/` or `plans/reports/`. The `plans/` directory is strictly reserved for Markdown documents."
+    }
+  ],
+  "links": {
+    "files": 72,
+    "links": 434,
+    "warnings": [
+      {
+        "file": "docs/linux-systemd.md",
+        "target": "./linux-release-manager.md#production-diagnostics-phase-06",
+        "kind": "missing-anchor"
+      },
+      {
+        "file": "docs/ws-protocol-guide.md",
+        "target": "./api-reference.md#project-worktree-targets-phases-17",
+        "kind": "missing-anchor"
+      }
+    ]
+  },
+  "sizes": [
+    {
+      "path": "docs/api/git.md",
+      "loc": 760
+    },
+    {
+      "path": "docs/frontend-components/terminal-and-ide.md",
+      "loc": 736
+    },
+    {
+      "path": "docs/configuration-guide.md",
+      "loc": 731
+    },
+    {
+      "path": "docs/linux-release-manager.md",
+      "loc": 696
+    },
+    {
+      "path": "docs/api/rest-endpoints.md",
+      "loc": 640
+    },
+    {
+      "path": "docs/ws-protocol-guide.md",
+      "loc": 618
+    },
+    {
+      "path": "docs/workflow-api.md",
+      "loc": 597
+    },
+    {
+      "path": "docs/terminal-idle-suspend-security.md",
+      "loc": 587
+    },
+    {
+      "path": "docs/linux-systemd.md",
+      "loc": 564
+    },
+    {
+      "path": "docs/CHANGELOG-archive.md",
+      "loc": 539
+    },
+    {
+      "path": "docs/worktree-operation.md",
+      "loc": 421
+    },
+    {
+      "path": "docs/linux-release-publisher-bootstrap.md",
+      "loc": 409
+    },
+    {
+      "path": "docs/api/system-services.md",
+      "loc": 389
+    },
+    {
+      "path": "docs/architecture/agent-status.md",
+      "loc": 382
+    },
+    {
+      "path": "docs/linux-systemd/idle-suspend-runbook.md",
+      "loc": 377
+    },
+    {
+      "path": "docs/user-guide-multi-server-profiles.md",
+      "loc": 366
+    },
+    {
+      "path": "docs/api/idle-suspend.md",
+      "loc": 352
+    },
+    {
+      "path": "docs/linux-release-manifest.md",
+      "loc": 337
+    },
+    {
+      "path": "docs/agent-activity-automatic-admission.md",
+      "loc": 321
+    },
+    {
+      "path": "docs/frontend-components/host-and-usage.md",
+      "loc": 291
+    },
+    {
+      "path": "docs/workflow-context-surface.md",
+      "loc": 278
+    },
+    {
+      "path": "docs/frontend-components/workbench.md",
+      "loc": 272
+    },
+    {
+      "path": "docs/api/filesystem-and-media.md",
+      "loc": 270
+    },
+    {
+      "path": "docs/pty-activity-observation.md",
+      "loc": 262
+    },
+    {
+      "path": "docs/api/authentication.md",
+      "loc": 260
+    },
+    {
+      "path": "docs/configuration/server-operations.md",
+      "loc": 256
+    },
+    {
+      "path": "docs/deployment-guide.md",
+      "loc": 247
+    },
+    {
+      "path": "docs/windows-release-packaging.md",
+      "loc": 241
+    },
+    {
+      "path": "docs/tcp-activity-observation.md",
+      "loc": 236
+    },
+    {
+      "path": "docs/testing.md",
+      "loc": 235
+    },
+    {
+      "path": "docs/api/agent-usage-and-sessions.md",
+      "loc": 233
+    },
+    {
+      "path": "docs/agent-activity-process-discovery.md",
+      "loc": 215
+    },
+    {
+      "path": "docs/configuration/server-runtime-settings.md",
+      "loc": 203
+    },
+    {
+      "path": "docs/configuration/server-deployment.md",
+      "loc": 202
+    },
+    {
+      "path": "docs/linux-release-runtime-provisioning.md",
+      "loc": 198
+    },
+    {
+      "path": "docs/architecture/native-advisor.md",
+      "loc": 188
+    },
+    {
+      "path": "docs/workflow-client-state.md",
+      "loc": 185
+    },
+    {
+      "path": "docs/architecture/terminal-continuity-and-workflow.md",
+      "loc": 177
+    },
+    {
+      "path": "docs/linux-nohup.md",
+      "loc": 173
+    },
+    {
+      "path": "docs/architecture/host-resource-sse.md",
+      "loc": 171
+    },
+    {
+      "path": "docs/idle-suspend-status-ui.md",
+      "loc": 168
+    },
+    {
+      "path": "docs/architecture/git-history-search.md",
+      "loc": 166
+    },
+    {
+      "path": "docs/CHANGELOG.md",
+      "loc": 165
+    },
+    {
+      "path": "docs/system-architecture.md",
+      "loc": 164
+    },
+    {
+      "path": "docs/api/transport-and-events.md",
+      "loc": 160
+    },
+    {
+      "path": "docs/architecture/native-ssh-forwarding.md",
+      "loc": 148
+    },
+    {
+      "path": "docs/frontend-components/notifications-and-privacy.md",
+      "loc": 138
+    },
+    {
+      "path": "docs/architecture/workbench-files-editor-and-git.md",
+      "loc": 137
+    },
+    {
+      "path": "docs/configuration/advisor.md",
+      "loc": 134
+    },
+    {
+      "path": "docs/native-browser-debug-support.md",
+      "loc": 130
+    },
+    {
+      "path": "docs/architecture/media-isolation-and-encryption.md",
+      "loc": 129
+    },
+    {
+      "path": "docs/project-overview-pdr.md",
+      "loc": 129
+    },
+    {
+      "path": "docs/frontend-components/files-and-media.md",
+      "loc": 119
+    },
+    {
+      "path": "docs/codebase-summary-release.md",
+      "loc": 112
+    },
+    {
+      "path": "docs/configuration/server-environment-auth.md",
+      "loc": 110
+    },
+    {
+      "path": "docs/architecture/agent-store-ports-and-browser.md",
+      "loc": 105
+    },
+    {
+      "path": "docs/code-standards.md",
+      "loc": 104
+    },
+    {
+      "path": "README.md",
+      "loc": 99
+    },
+    {
+      "path": "docs/api/workspace-settings.md",
+      "loc": 95
+    },
+    {
+      "path": "docs/codebase-summary.md",
+      "loc": 92
+    },
+    {
+      "path": "docs/api-reference.md",
+      "loc": 88
+    },
+    {
+      "path": "docs/frontend-components/platform-integrations.md",
+      "loc": 85
+    },
+    {
+      "path": "docs/architecture/authentication-state-and-cryptography.md",
+      "loc": 80
+    },
+    {
+      "path": "docs/api/advisor-and-workflow.md",
+      "loc": 74
+    },
+    {
+      "path": "docs/architecture/preferences-settings-and-host-resources.md",
+      "loc": 71
+    },
+    {
+      "path": "docs/api/websocket.md",
+      "loc": 70
+    },
+    {
+      "path": "docs/archive/retired-plugin-platform.md",
+      "loc": 58
+    },
+    {
+      "path": "docs/README.md",
+      "loc": 50
+    },
+    {
+      "path": "docs/project-roadmap.md",
+      "loc": 40
+    },
+    {
+      "path": "docs/frontend-components.md",
+      "loc": 35
+    },
+    {
+      "path": "docs/configuration/server-configuration.md",
+      "loc": 27
+    },
+    {
+      "path": "docs/configuration/index.md",
+      "loc": 17
+    }
+  ]
+}

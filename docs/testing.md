@@ -76,7 +76,7 @@ pnpm --filter @dam-hopper/ui test:e2e:typecheck
 
 ---
 
-## 4. Isolated Application Services (Phase 02 Architecture)
+## 4. Isolated Application Services
 
 Application E2E tests interact with authentic production binaries rather than synthetic mock servers or `--no-auth` dev modes:
 
@@ -108,7 +108,7 @@ Application E2E tests interact with authentic production binaries rather than sy
 
 ---
 
-## 5. Application E2E Journeys (Phase 03 Implementation)
+## 5. Application E2E Journeys
 
 Three comprehensive application journeys validate end-to-end user workflows:
 
@@ -131,18 +131,18 @@ Three comprehensive application journeys validate end-to-end user workflows:
 
 ---
 
-## 6. Visual Evidence Authenticity & Governance (Phase 04 Standard)
+## 6. Visual Evidence Authenticity & Governance
 
 ### Full Application Viewport Capture
 - Screenshots must capture the **complete viewport** (1440x900 default, 320px narrow dock checkpoint).
 - Regional snippets, element-only crops, and synthetic HTML captures are forbidden because they conceal layout clipping, z-index bugs, and viewport overflow.
 
-### Colocated Artifacts & Plans Separation
+### Colocated Evidence Artifacts
 - All evidence artifacts are colocated beside the test in `packages/ui/e2e/<case-name>/`:
   - `screenshot.png` (and secondary checkpoints like `unmasked-before.png`).
   - `evidence.json`: Machine-readable metadata (Git HEAD, working tree fingerprint, seed digest, viewport dimensions, image SHA-256 digests).
   - `review.md`: Human review governance record.
-- **Plans Folder Separation:** Binary image files (`.png`, `.webp`, `.jpg`) must **never** be placed inside `plans/` or `plans/reports/`. The `plans/` directory is strictly reserved for Markdown documents.
+- Keep binary image files (`.png`, `.webp`, `.jpg`) alongside their E2E case, not in Markdown-only research or reporting directories.
 
 ### Unified Node-Side Capture Policy (`capture-policy.ts`)
 - Capture behavior is governed by `shouldCaptureE2E(env)` across Playwright and Vitest browser runners:
@@ -171,7 +171,7 @@ Three comprehensive application journeys validate end-to-end user workflows:
 - **Pending Review Limitations:** Automated CI passes certify functional DOM/CSSOM assertions only; they do not certify visual acceptance. Features with pending or rejected reviews must not be shipped as visually qualified.
 ---
 
-## 7. CI Quality Gate Integration (Phase 05 Architecture)
+## 7. CI Quality Gate Integration
 
 ### GitHub Actions Workflow (`.github/workflows/pr-quality-gate.yml`)
 - The `application_e2e` job executes as a required check in the PR quality gate:
@@ -218,7 +218,7 @@ Three comprehensive application journeys validate end-to-end user workflows:
 
 ### Ranked Integrated Workflow Gaps
 
-The three application journeys establish the foundational runner, container lifecycle, and evidence pipeline. The complete source inventory of all 53 browser component suites and historical harnesses is cataloged in [`plans/261004-1639-frontend-test-restructure/research/browser-coverage-inventory.md`](../plans/261004-1639-frontend-test-restructure/research/browser-coverage-inventory.md).
+The three application journeys establish the foundational runner, container lifecycle, and evidence pipeline across all 53 browser component suites.
 
 The following workflows represent documented gaps in full-application E2E coverage. While component, utility, or manual qualifications exist, they are not application-level Playwright tests:
 

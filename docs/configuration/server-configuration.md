@@ -24,4 +24,4 @@ See [Server Operations and Troubleshooting](./server-operations.md#windows-serve
 
 ### Plugin Management Administrator Allowlist
 
-Retired configuration, retained for historical migration context only. See [Server Environment and Authentication](./server-environment-auth.md#historical-retired-plugin-management-administrator-allowlist).
+Retired configuration, retained for historical migration context only. See [Server Environment and Authentication](./server-environment-auth.md#historical-archive-retired-plugin-platform) and the [Retired Plugin Platform Archive Record](../archive/retired-plugin-platform.md).

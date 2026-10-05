@@ -61,8 +61,8 @@ aggregate cap.
 Image preview and video playback/download use opaque ticket URLs and a
 namespaced, server-issued media-session cookie. Ticket issue and revocation
 routes require Bearer authentication. A media stream URL never contains a
-Bearer token. The complete Phase 07 lifecycle, cleanup, and encryption
-contract is in the [Phase 07 guide](../phase-07-media-isolation-and-encryption.md).
+Bearer token. The complete lifecycle, cleanup, and encryption
+contract is in the [Media Isolation and Encryption Architecture](../architecture/media-isolation-and-encryption.md).
 
 #### Client binding and cookie
 
@@ -212,9 +212,9 @@ Media session and ticket state is process-local. Multi-instance deployments
 need sticky routing to the process holding the ticket/session until a shared
 store exists.
 
-#### Phase 09 integration qualification
+#### Workbench media integration qualification
 
-The Phase 09 live harness
+The workbench media live harness
 [`scripts/qualify-phase09-workbench.mjs`](../../scripts/qualify-phase09-workbench.mjs)
 checks the v2 media contract in an isolated two-server fixture: Server A and
 Server B expose equal project/file names on `14801` and `14802`, A issues a
@@ -223,9 +223,9 @@ Server B expose equal project/file names on `14801` and `14802`, A issues a
 remote-effect checks; normal-auth tests remain required for actor and
 credential isolation.
 
-The reconciled Phase 09 ledger records 209 UI browser tests, 1,416 Rust server
+The qualification test ledger records 209 UI browser tests, 1,416 Rust server
 tests, 24 live harness assertions, and four embedded browser assertions within
-3,504 passing tests (nine skipped/ignored). G2-Web passed. G2-Native remains
+3,504 passing tests (nine skipped/ignored). Web qualification passed. Native desktop remains
 blocked pending real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay
 evidence. Do not re-enable a v1 media path during version skew: deploy or roll
 back a matched frontend/backend pair with `workbenchProtocol: 2` and

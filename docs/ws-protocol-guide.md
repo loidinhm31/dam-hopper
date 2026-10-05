@@ -4,7 +4,7 @@ Real-time message envelope for terminal I/O, file watching, and file operations.
 
 ## Message Format
 
-All messages use JSON with `kind` tag (not legacy `type`). Phase 02 hard-cut from old protocol.
+All messages use JSON with the `kind` tag. The legacy `type` envelope is not supported.
 
 ```json
 { "kind": "command:action", ...payload }
@@ -19,14 +19,14 @@ as `plugin:get_epoch` and `plugin:epoch`. That platform is retired: current
 WebSocket and REST transports do not support plugin epochs, plugin context
 leases, or plugin routes. Do not build integrations against the old protocol.
 
-See the [retired plugin architecture](./architecture/plugin-platform-d03.md)
+See the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md)
 for historical design notes and the [API reference retirement notice](./api-reference.md#retired-plugin-api-anchors).
 
 ## Project target context
 
 REST requests that operate on project files, Git state, editor/diff data, or
 media carry the explicit `ProjectTargetRef` fields documented in the [API
-reference](./api-reference.md#project-worktree-targets-phases-17). The browser
+reference](./api-reference.md#project-worktree-targets). The browser
 stores one selected target per project; the server does not keep a global
 active target. A missing or prunable worktree is unavailable for new target
 operations and must be refreshed or reconnected before it can be selected
@@ -66,17 +66,15 @@ terminal is being created or is live.
 
 ## Client→Server Messages
 
-### Legacy WebSocket terminal messages
+### Terminal messages
 
 | Command           | Payload                            | Response                                                 |
 | ----------------- | ---------------------------------- | -------------------------------------------------------- |
-| `terminal:spawn`  | `project, profile, env_overrides?` | `terminal:spawned { id, ... }`                           |
 | `terminal:write`  | `id, data`                         | (no response; server queues)                             |
 | `terminal:resize` | `id, cols, rows`                   | (ACK implicit)                                           |
 | `terminal:attach` | `id, from_offset?`                 | `terminal:buffer { id, data, offset, reset, truncated }` |
-| `terminal:kill`   | `id`                               | (ACK implicit)                                           |
 
-#### Terminal Attach (Phase 02+)
+#### Terminal Attach
 
 Request buffer replay from a session (for reconnection or delta sync):
 
@@ -122,7 +120,7 @@ Request buffer replay from a session (for reconnection or delta sync):
 
 On reconnect, request a delta from the last accepted authoritative offset. Replay parsing must not send historical terminal-query responses to the live PTY. A truncated raw tail cannot reconstruct missing screen, cursor, or mode state; applications may need a fresh redraw.
 
-#### Frontend Reconnect UI (Phase 3)
+#### Frontend Reconnect UI
 
 **Attach Workflow:**
 
@@ -155,7 +153,7 @@ On reconnect, request a delta from the last accepted authoritative offset. Repla
 - Animated spinner with "Reconnecting…" text
 - Auto-dismisses on buffer response; transient timeouts stay in recovery and retry without creating duplicate sessions
 
-### File System — Subscribe (Phase 02+)
+### File System — Subscribe
 
 | Command               | Payload                 | Response                                     |
 | --------------------- | ----------------------- | -------------------------------------------- |
@@ -164,7 +162,7 @@ On reconnect, request a delta from the last accepted authoritative offset. Repla
 
 Afterward, server pushes: `fs:event { sub_id, event: { kind, path, from? } }` on change.
 
-### File System — Read (Phase 04)
+### File System — Read
 
 | Command   | Payload                                | Response                                                                    |
 | --------- | -------------------------------------- | --------------------------------------------------------------------------- |
@@ -174,7 +172,7 @@ Afterward, server pushes: `fs:event { sub_id, event: { kind, path, from? } }` on
 - `data` is base64 (text or binary)
 - If `ok=false`, check `code` (e.g., "NOT_FOUND", "TOO_LARGE")
 
-### File System — Write (Phase 04/05)
+### File System — Write
 
 Binary streaming support added for large file handling.
 
@@ -200,7 +198,7 @@ Binary streaming support added for large file handling.
 - On conflict: `conflict=true`, client must retry with fresh mtime.
 - Orphaned writes cleaned up after timeout.
 
-### OPAQUE Auth — Registration (Phase Stealth-01)
+### OPAQUE Auth — Registration
 
 Zero-knowledge passphrase registration via OPAQUE PAKE. Kind names are intentionally neutral.
 
@@ -213,7 +211,7 @@ Zero-knowledge passphrase registration via OPAQUE PAKE. Kind names are intention
 - `data` — base64-encoded OPAQUE bytes (`RegistrationRequest` then `RegistrationUpload`)
 - `overwrite` — defaults to `false`; must be `true` to replace an existing registration
 
-### OPAQUE Auth — Login (Phase Stealth-01)
+### OPAQUE Auth — Login
 
 | Command             | Payload                    | Response                                                               |
 | ------------------- | -------------------------- | ---------------------------------------------------------------------- |
@@ -224,7 +222,7 @@ Zero-knowledge passphrase registration via OPAQUE PAKE. Kind names are intention
 - After successful login the server holds a derived 32-byte AES-256-GCM key in per-connection state, keyed by `session_id`
 - All OPAQUE ops run in `spawn_blocking`; per-connection cap: 16 concurrent login states + 16 active session keys
 
-### Encrypted File Put — Binary Upload (Phase Stealth-01 stubs / Phase Stealth-04 full)
+### Encrypted File Put — Binary Upload
 
 Chunked encrypted binary upload. Client AES-GCM encrypts before sending.
 
@@ -234,7 +232,7 @@ Chunked encrypted binary upload. Client AES-GCM encrypts before sending.
 | `fs:put_chunk`  | `upload_id, seq` (JSON header, raw binary frame follows)     | `fs:put_chunk_ack { upload_id, seq }`                         |
 | `fs:put_commit` | `req_id, upload_id`                                          | `fs:put_result { req_id, upload_id, ok, new_mtime?, error? }` |
 
-### Encrypted File Put — Text Save (Phase Stealth-01 stubs / Phase Stealth-04 full)
+### Encrypted File Put — Text Save
 
 Single-blob encrypted save for editor text content.
 
@@ -267,7 +265,7 @@ Broadcast lag sends `{ "kind": "terminal:lagged", "dropped": 2 }`. Clients reatt
 their mounted terminal streams even if no later output arrives. Client and server
 must be deployed together: output or replay without the required stream metadata is invalid.
 
-### Terminal Buffer Replay (Phase 02+)
+### Terminal Buffer Replay
 
 Response to `terminal:attach` request. Contains accumulated buffer content for reconnection/delta sync:
 
@@ -326,13 +324,7 @@ respawn, malformed or out-of-order markers, and alternate-buffer entry reset lif
 trust to `unverified`. Clients must treat every unsupported or reset state as unavailable
 for automatic suggestions; terminal input remains normal `terminal:write` data.
 
-#### Basic Exit Event (Legacy)
-
-```json
-{ "kind": "terminal:exited", "id": "uuid", "code": 0 }
-```
-
-#### Enhanced Exit Event (Phase 5+)
+#### Enhanced Exit Event
 
 With restart metadata:
 
@@ -360,7 +352,7 @@ With restart metadata:
 continue handling the event by its public session ID. When that ID is reused for a new
 PTY, clients that track incarnations may reject delayed events from an older incarnation.
 
-#### Process Restarted Event (Phase 5+)
+#### Process Restarted Event
 
 ```json
 {
@@ -373,7 +365,7 @@ PTY, clients that track incarnations may reject delayed events from an older inc
 
 **Usage:** Frontend listens for this to update restart badge and write restart banner.
 
-#### Target Unavailable Event (Phase 07)
+#### Target Unavailable Event
 
 When a target-scoped terminal cannot be respawned because its registered
 worktree disappeared or became unavailable, the server sends:
@@ -397,7 +389,7 @@ original target metadata, and falls back to the configured project root for
 new operations. A `terminal:changed` event follows so terminal listings can
 refresh.
 
-#### Filesystem Overflow Event (Phase 5+)
+#### Filesystem Overflow Event
 
 ```json
 {
@@ -411,13 +403,13 @@ refresh.
 
 #### Other Terminal Events
 
-The historical `terminal:spawned` event is retained only for older clients;
-current browser creation uses the REST `terminal:create` channel above. A
+Terminal creation and deletion use REST, not `terminal:spawn`, `terminal:spawned`,
+or `terminal:kill` WebSocket messages. A
 target-unavailable event is emitted for a create or respawn failure only after
 fresh target validation confirms that the registered target was lost; ordinary
 PTY or cwd failures remain ordinary request/recovery errors.
 
-### Agent Status Push Events (Phases 01–05 complete; Linux-qualified)
+### Agent Status Push Events
 
 Server-owned semantic agent status updates are broadcast to authenticated clients on `/ws`.
 

@@ -1,15 +1,15 @@
 # PTY Activity Observation
 
-**Status:** Phase 02 implemented 2026-09-11. This page is the canonical
-implementation guide for the private PTY evidence seam used by the later
-configured-agent idle-suspend phases.
+**Status:** PTY evidence seam implemented 2026-09-11. This page is the canonical
+implementation guide for the private PTY evidence seam used by the
+configured-agent idle-suspend subsystems.
 
-Phase 02 records evidence at the PTY boundary without adding a public REST
+The PTY evidence seam records evidence at the PTY boundary without adding a public REST
 route, a WebSocket acknowledgement, terminal-content inspection, or an
-automatic agent-policy claim. Phase 03 consumes the root/stat seam and
+automatic agent-policy claim. Process discovery consumes the root/stat seam and
 implements bounded configured-agent process discovery and retained attribution.
-Phase 04 consumes the resulting owned-socket set for TCP byte observation.
-Phase 05 combines all evidence in the transactional sampler and performs the
+The TCP observer consumes the resulting owned-socket set for TCP byte observation.
+The transactional sampler combines all evidence and performs the
 generation-fenced final handoff claim.
 
 ## Source map
@@ -148,7 +148,7 @@ Admission order for `PtySessionManager::write(id, data)` is:
 The same handoff gate applies to automatic and manual handoff state. Rejected
 input is never queued or replayed. Keeping the existing lock during the
 `LiveSession` writer call serializes the evidence update with the admission
-decision; Phase 02 does not introduce an asynchronous writer queue.
+decision; the PTY evidence seam does not introduce an asynchronous writer queue.
 
 ## `PtyActivitySnapshot`
 
@@ -180,7 +180,7 @@ truncated or falsely complete view. Other incomplete reasons are:
 `is_complete()` is true only when `incomplete_reason` is `None`. Later automatic
 policy code must treat an incomplete snapshot as unavailable, never as quiet,
 empty, or zero-agent. Snapshot completeness does not itself identify an agent;
-Phase 03 qualifies process names, roots, and descendants using this seam.
+process discovery qualifies process names, roots, and descendants using this seam.
 
 ## `PtyActivityWatcher`
 
@@ -218,9 +218,9 @@ counter values.
   resize, attach, or termination.
 - Unknown, uncertain, saturated, or oversized evidence is explicit and
   fail-closed for later automatic handoff.
-- Downstream warning/reporting phases may expose a currently attributable PID
+- Downstream warning and reporting subsystems may expose a currently attributable PID
   and safe executable identity only through an authenticated, no-store status
-  contract. Phase 02 does not produce that report or log process identity.
+  contract. The PTY evidence seam does not produce that report or log process identity.
 
 ## Verification coverage
 
@@ -236,20 +236,20 @@ The focused `pty_activity_tests` module covers the observable boundaries:
 - real local PTY root capture and output observation; and
 - explicit incomplete snapshots for counter, root, and revision saturation.
 
-The Phase 02 evidence report records 8/8 focused activity tests and 159 passed
+The PTY evidence report records 8/8 focused activity tests and 159 passed
 PTY-module tests with one pre-existing ignored performance test.
 
-Phase 02 remains an evidence seam only. It does not inspect descendants,
+The PTY evidence seam remains an evidence seam only. It does not inspect descendants,
 classify configured agent executables, read owned TCP counters, calculate
 blocked durations, expose status warnings, or claim automatic suspend
 eligibility.
 
-Phase 03 consumes `ProcessIdentity` and the shared proc-stat parser while
+Process discovery consumes `ProcessIdentity` and the shared proc-stat parser while
 retaining detached lineage. Its `ProcessSource` abstraction, finite matcher,
 exact identity checks, namespace/FD ownership reads, and hard scan bounds are
 documented in [Configured-Agent Process Discovery](./agent-activity-process-discovery.md).
-Phase 04 consumes its `OwnedSocketSet` and is documented in
-[Owned TCP Byte Observation](./tcp-activity-observation.md). Phase 05 combines
+The TCP observer consumes its `OwnedSocketSet` and is documented in
+[Owned TCP Byte Observation](./tcp-activity-observation.md). The transactional sampler combines
 all evidence under a final generation-fenced claim and publishes the
 content-free activity status contract in
 [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).

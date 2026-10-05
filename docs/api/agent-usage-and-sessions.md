@@ -1,16 +1,13 @@
 # Agent Status, Usage, and Session Persistence APIs
 
 These route contracts moved from the [API reference index](../api-reference.md).
-## Agent Status API (OMP-first Phases 01–05; native Phases 01–06)
+## Agent Status API
 
-The OMP-first semantic status track is complete through Linux x86_64 Phase 05
-qualification with OMP 18.4.1 across C01–C19. The separate Codex/Claude native
-rollout completed Phases 01–06 and passed Linux x86_64 live qualification on
-Codex CLI 0.158.0 and Claude Code 2.1.250 (N01–N32); other provider versions
-and server platforms remain unqualified. See the
-[agent-status architecture](../architecture/agent-status.md), the
-[OMP qualification report](../../plans/reports/qualification-260928-1815-agent-status-omp.md),
-and the [native qualification report](../../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
+The OMP semantic status integration is qualified on Linux x86_64 with OMP 18.4.1
+across scenarios C01–C19. The separate Codex and Claude native hook integration
+is qualified on Linux x86_64 for Codex CLI 0.158.0 and Claude Code 2.1.250
+(scenarios N01–N32); other provider versions and server platforms remain
+unqualified. See the [agent-status architecture](../architecture/agent-status.md).
 The snapshot route uses normal `/api/*` Bearer auth middleware.
 
 ### GET /api/agent-status/v1/snapshot
@@ -152,7 +149,7 @@ on success or failure. Full deletion rotates the shared telemetry HMAC key after
 deleted; range deletion keeps it so retained fingerprints remain comparable. The UI must present
 an explicit confirmation before calling this route.
 
-## Session Persistence API (Phase 05)
+## Session Persistence API
 
 Terminal session buffers and metadata are persisted to SQLite when the configured database can be opened. This supports live cross-device resume and DamHopper server-restart relaunch with recovered scrollback; it does not preserve exact shell/process memory across server or host restart.
 
@@ -186,7 +183,7 @@ session_buffer_ttl_hours = 720                       # 30-day retention (default
     "alive": true,
     "exit_code": null,
     "buffer_bytes": 1048576,
-    "persisted": true, // Phase 05: new field
+    "persisted": true, // Persisted buffer indicator
     "started_at": 1234567890
   }
 ]
@@ -194,7 +191,7 @@ session_buffer_ttl_hours = 720                       # 30-day retention (default
 
 ### Storage Details
 
-**Database Schema** (Phase 05):
+**Database Schema**:
 
 - `sessions` table — session metadata (id, project, command, env, cols, rows, restart_max_retries, created_at)
 - `session_buffers` table — binary buffer data (session_id, data BLOB, total_written, updated_at)
@@ -231,6 +228,6 @@ info: Flushing session buffer on exit
 info: Persist worker stopped
 ```
 
-The historical Phase 05 persistence design is retained in this document; its source plan is no longer present in this checkout.
+Session persistence metadata and binary buffers are retained according to the configured retention window.
 
 

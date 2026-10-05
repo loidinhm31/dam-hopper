@@ -77,6 +77,7 @@ Request body:
 Response: `{ "ok": true }`
 
 ### Settings & Health
+<a id="settings-health"></a>
 
 **GET /api/health** (public, no auth required)
 Server health + feature flags.

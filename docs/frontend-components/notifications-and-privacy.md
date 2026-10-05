@@ -1,7 +1,7 @@
 # Privacy and Agent Notification Components
 
 Cognito Mode, agent notifications, and terminal title details moved from the [component index](../frontend-components.md).
-## Cognito Privacy Mode (Phases 02–04)
+## Cognito Privacy Mode
 
 **Locations:** `packages/ui/src/stores/cognito-mode.ts`,
 `components/organisms/CognitoModeOverlay.tsx`,
@@ -67,9 +67,9 @@ replacing the Browser target or host.
 
 The shortcut is scoped to events in DamHopper's app document; this is not an
 OS-wide hotkey and does not capture keys from foreign iframes or native child
-surfaces. Phase 05 still owns real-browser, xterm, visual, and native-shell
-qualification; component and unit coverage alone do not prove those runtime
-boundaries.
+surfaces. Real-browser, xterm, visual, and native-shell environments require
+operational qualification; component and unit coverage alone do not prove those
+runtime boundaries.
 
 ## Terminal Agent Notifications
 

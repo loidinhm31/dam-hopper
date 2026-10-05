@@ -40,7 +40,7 @@ When the Advisor feature is disabled via `PATCH /api/advisor/settings` or server
 
 > **Historical Notice (Retired Plugin APIs):** The former `/api/plugins/*` and `/api/plugins/admin*` endpoints have been deleted as part of the complete plugin-platform retirement (2026-10-02).
 
-## Workflow Tracking Service and REST API (Phase 03)
+## Workflow Tracking Service and REST API
 
 Workflow routes are protected by the normal `/api/*` authentication layer and
 share the configured SQLite session database. The route group covers:
@@ -63,7 +63,7 @@ See the dedicated [Workflow API reference](../workflow-api.md) for complete
 request/response fields, target rules, lifecycle states, retention, and
 examples.
 
-Phase 03 lifecycle facts stay on a server-internal bounded observation path:
+Workflow lifecycle facts stay on a server-internal bounded observation path:
 the PTY manager uses `try_send` into `sync_channel(256)`, and a worker applies
 allowlisted link-state updates in SQLite. The payload excludes command lines,
 arguments, CWD, environment, prompts, and terminal output. There is no generic

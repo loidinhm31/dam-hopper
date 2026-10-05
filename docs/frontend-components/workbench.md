@@ -25,9 +25,9 @@ Shared runtime libraries:
 - **Tailwind CSS v4** for styling
 - **xterm.js** for terminal rendering
 
-## Unified shell and profile navigation (Phase 02)
+## Unified shell and profile navigation
 
-Phase 02 removes the old single-transport/profile-guard boundary. The shared
+The workbench removes the single-transport/profile-guard boundary. The shared
 `DamHopperApp` mounts routes and shell UI even when no profile is connected.
 Connection attempts are independent per profile:
 
@@ -58,7 +58,7 @@ Query state remains memory-only. Host `QueryClient` instances use ordinary
 defaults; profile and generation ownership is encoded by
 `profileQueryKey(owner, ...)` instead of a global active-profile hash.
 
-## Profile-owned enrollment and MFA UI (Phase 04)
+## Profile-owned enrollment and MFA UI
 
 **Locations:**
 
@@ -73,7 +73,7 @@ defaults; profile and generation ownership is encoded by
 The typed auth client models password login as a challenge-or-session result
 and auth status as authenticated, MFA-required, or login-required. It validates
 protocol-v2 responses and preserves machine-readable error code, HTTP status,
-and optional retry delay. See the [Authentication API](../authentication-api.md)
+and optional retry delay. See the [Authentication API](../api/authentication.md)
 for server contracts.
 
 `MfaChallengeForm` serves both enrollment and verification. Enrollment renders
@@ -103,13 +103,12 @@ On Android Chrome, auth controls marked `data-auth-input` or contained by
 also recognizes the explicit `data-dh-allow-native-input="true"` marker.
 Login credentials, TOTP, and the server URL are explicitly exempt so Android
 Chrome can use native keyboard input without relaxing editor/terminal policy.
-Physical target-browser verification remains Phase 05 qualification.
+Physical target-browser verification remains an operational qualification gate.
 
-See the [Phase 04 plan](../../plans/260926-2157-token-rotation-mfa/phase-04-profile-mfa-flow.md)
-and the [component detail index](./index.md) for the
+See the [Frontend Components index](../frontend-components.md) for the
 implementation boundary and adjacent UI guides.
 
-## Shared Git-history view (search plan Phase 04)
+## Shared Git-history view
 
 **Locations:** `packages/ui/src/hooks/use-git-history-view.ts`,
 `packages/ui/src/components/molecules/GitHistoryToolbar.tsx`,
@@ -170,21 +169,17 @@ live launcher or surviving toolbar without leaving the app input-locked.
 Squash requires an available connected target on a local branch (`refs/heads/*`), active or inactive (`isViewingLocalBranch`), and rejects selected or rewritten-descendant merges. The success receipt captures the target branch and offers **Publish rewritten branch** through a separate leased confirmation bound to `receipt.branch`. Publication uses the same history owner/root and verified new branch tip—not Git-page bulk root selection or ambient HEAD. Nothing pushes automatically. Scope/generation changes fence late preparation, rewrite, publication, and SSH-retry completions.
 
 See the [Git-history search architecture](../architecture/git-history-search.md)
-for transport, query, and persistence details and the
-[Phase 04 plan](../../plans/261001-2003-git-history-search-persistence/phase-04-shared-history-view.md).
-Phase 05 Workspace integration is implemented across the desktop IDE dock,
-terminal floating panel, and compact Git surface, using the shared controller
-and selected-target availability. Phase 06 Standalone Git page integration
-persists qualified checkbox selections, fails closed on unavailable projects,
-and reuses the shared history controller for single-project view. Phase 07
-completes integrated qualification across both surfaces with live loopback server
-smoke, latency verification, and Chromium browser tests.
-See [Git-history search architecture](../architecture/git-history-search.md)
-and the [qualification plan](../../plans/261001-2003-git-history-search-persistence/phase-07-qualification-documentation.md).
+for transport, query, and persistence details. Workspace integration is
+implemented across the desktop IDE dock, terminal floating panel, and compact
+Git surface, using the shared controller and selected-target availability.
+Standalone Git page integration persists qualified checkbox selections, fails
+closed on unavailable projects, and reuses the shared history controller for
+single-project view. Integrated qualification across both surfaces verified
+live loopback server smoke, latency benchmarks, and Chromium browser tests.
 
-## Unified-profile Settings, Usage, and Host ownership (Phase 06)
+## Unified-profile Settings, Usage, and Host ownership
 
-Phase 06 keeps browser preference state separate from server-targeted work. The
+The workbench keeps browser preference state separate from server-targeted work. The
 Settings page exposes `preferencesProfileId` (shared UI preference source) and
 `settingsProfileId` (configuration, maintenance, usage, and host target) as
 independent selectors. Project focus does not change either selector.
@@ -256,9 +251,8 @@ The UI coordinates host resource streams across seven distinct operational modes
 - **Privileged actions:** Force Machine to Sleep and idle-suspend remain manual, separately authenticated actions; telemetry never triggers them.
 
 See the [host-resource SSE architecture](../architecture/host-resource-sse.md)
-for source arbitration and the [Phase 04 plan](../../plans/260929-1522-host-resources-sse/phase-04-resource-query-and-ui-cutover.md) for focused evidence. The earlier [Phase 06 Settings, Usage, and Host Resources guide](../phase-06-preferences-settings-usage-and-host.md) documents the underlying owner boundary.
-
-## Native Advisor Workspace host and provider (Phases 04 and 05)
+for source arbitration. The [Preferences, Settings, and Host Resources architecture](../architecture/preferences-settings-and-host-resources.md) documents the underlying owner boundary.
+## Native Advisor Workspace host and provider
 
 The Native Evcrate Advisor UI is hosted directly inside Dam-Hopper Workspace as a pure React component subtree (`packages/ui/src/advisor/AdvisorPanel.tsx`), eliminating iframe isolation, MessagePort bridges, and external plugin SDK dependencies.
 

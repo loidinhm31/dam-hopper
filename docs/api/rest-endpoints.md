@@ -63,7 +63,7 @@ Response: `{ projects: [ { name, path, type } ] }`
 ### Terminals
 
 **POST /api/terminal** (transport channel: `terminal:create`)
-Create a new PTY session (idempotent as of Phase 07).
+Create a new PTY session (idempotent).
 
 Body: `{ id, project?, cwd?, worktreePath?, command, cols, rows, env? }`
 
@@ -95,7 +95,7 @@ browser records that exact target as unavailable, keeps the session metadata
 and scrollback as a non-running orphan, and routes later new operations to the
 configured root.
 
-**Idempotency Guarantees (Phase 07):**
+**Idempotency Guarantees:**
 
 - Calling create with the same `sessionId` during restart backoff will immediately spawn a fresh session
 - Any pending supervisor respawn for that ID is automatically cancelled (killed set flag)
@@ -297,7 +297,7 @@ Reset the current branch to a commit.
 
 Body: `{ hash: string, mode: "soft"|"mixed"|"hard"|"keep" }`
 
-### Git Diff & Change Management (Phase 01)
+### Git Diff & Change Management
 
 **GET /api/git/:project/diff**
 List changed files (staged + unstaged).
@@ -483,8 +483,8 @@ Notes:
 - Publication requires a separate user-confirmed leased push (`/push/prepare` and `/push/publish`).
 - UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
-## Client-Side Profile Management (Phase 02)
-
+## Client-Side Profile Management
+<a id="client-side-profile-management"></a>
 Profile metadata and endpoint-bound credentials live in the browser. The
 profile runtime is client-side; the server participates through its normal
 authentication and WebSocket endpoints. The shared shell does not require a

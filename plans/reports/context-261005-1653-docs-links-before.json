@@ -1,0 +1,101 @@
+{
+  "files": 79,
+  "links": 770,
+  "warnings": [
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "target": "./frontend-components.md#portspanel",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "target": "./frontend-components.md#panecontainer",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "target": "./system-architecture.md#persistence-phase-04",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "target": "./api-reference.md#client-side-profile-management-phase-02",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./linux-release-publisher-bootstrap.md#v051-release-checklist",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./project-roadmap.md#trusted-plugin-platform-2026-09-22",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./system-architecture.md#multi-profile-host-resource-fleet-deck-phase-02",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/api-reference.md",
+      "target": "./api/workspace-settings.md#settings-health",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/configuration/server-runtime-settings.md",
+      "target": "../system-architecture.md#codex-otel-usage-analytics",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "target": "#manual-smoke-checklist",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "target": "./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/configuration-guide.md",
+      "target": "./system-architecture.md#cognito-privacy-mode-2026-10-02",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/idle-suspend-status-ui.md",
+      "target": "./system-architecture.md#server-authoritative-terminal-idle-suspend-architecture",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/phase-06-preferences-settings-usage-and-host.md",
+      "target": "./system-architecture.md#fleet-deck-drilldown-popover-phase-03-2026-09-20",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/terminal-idle-suspend-security.md",
+      "target": "./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "target": "./system-architecture.md#workflow-phases-0103-service-rest-and-lifecycle-correlation",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "target": "./codebase-summary.md#workflow-tracking",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "target": "./project-overview-pdr.md#pr-013-terminal-lifecycle-correlation-and-agent-adapter-phase-03",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "target": "./system-architecture.md#workflow-context-surface-ui-phase-05",
+      "kind": "missing-anchor"
+    }
+  ]
+}

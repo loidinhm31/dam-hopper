@@ -19,7 +19,7 @@ Protocol: JSON frames. Client sends commands via `{kind:}` envelope, server broa
 
 - `{ kind: "terminal:spawn", project, profile, env_overrides? }` → server responds with `{ kind: "terminal:spawned", id, ... }`
 - `{ kind: "terminal:write", id, data }` — send input
-- `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay (Phase 02+); server responds with `{ kind: "terminal:buffer", id, data, offset, reset, truncated }`
+- `{ kind: "terminal:attach", id, from_offset? }` — request buffer replay; server responds with `{ kind: "terminal:buffer", id, data, offset, reset, truncated }`
   - `from_offset` (optional) — client's last received byte offset for delta sync
   - Server sends full buffer with `reset=true` if `from_offset` is omitted
   - Server sends full buffer with `reset=true` and `truncated=true` if `from_offset` is too old (evicted)
@@ -36,13 +36,13 @@ channel documented above. Target-scoped command and profile IDs use stable
 opaque target discriminators; target routing itself is server-validated and
 represented by `worktreePath` session metadata.
 
-**File Tree Subscription (Phase 03):**
+**File Tree Subscription:**
 
 - `{ kind: "fs:subscribe_tree", req_id, project, path }` — start watching directory tree; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`
 - `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching
 - `{ kind: "fs:event", sub_id, event: { kind, path, from? } }` — server pushes FS changes (created|modified|deleted|renamed)
 
-**File Read (Phase 04):**
+**File Read:**
 
 - `{ kind: "fs:read", req_id, project, path, offset?, len? }` — read file content with optional range
   - Supports large files via offset+len (range reads)
@@ -50,7 +50,7 @@ represented by `worktreePath` session metadata.
   - `data` is base64-encoded content (text or binary), max 100MB
   - If `ok=false` and `code="TOO_LARGE"`: file exceeds cap; use range reads (LargeFileViewer)
 
-**File Write (Phase 04):**
+**File Write:**
 
 - `{ kind: "fs:write_begin", req_id, project, path, expected_mtime, size }` — initiate write
   - Server responds: `{ kind: "fs:write_ack", req_id, write_id }`

@@ -8,7 +8,7 @@ Legacy workspace-root discovery still works when you pass `--workspace <dir>` or
 
 ### Basic Setup
 
-For end-to-end validation steps after setup, jump to the [Manual Smoke Checklist](#manual-smoke-checklist).
+For end-to-end validation steps after setup, jump to the [Manual Smoke Checklist](./configuration/server-operations.md#manual-smoke-checklist).
 
 ```toml
 [workspace]
@@ -114,7 +114,7 @@ run_command = "bash scripts/run.sh"
 
 Runtime file access via `/api/fs/*` and WebSocket file operations is **sandboxed per project root**. The server maintains a set of allowed roots derived from the currently loaded `projects[].path` entries. All file paths are validated against these configured roots. This prevents traversal attempts from escaping a project's directory tree and blocks access to other projects' files.
 
-**Phase 04 note:** `workspace_dir` is now a display/legacy field only; the security boundary is enforced by per-project roots derived from the config. This allows projects to be located anywhere on the filesystem while maintaining strict access control.
+**Security note:** `workspace_dir` is now a display/legacy field only; the security boundary is enforced by per-project roots derived from the config. This allows projects to be located anywhere on the filesystem while maintaining strict access control.
 
 - Symlink targets are canonicalized and re-validated against the project boundary
 - Tree subscriptions (watchers) are rooted at each project root
@@ -132,7 +132,7 @@ Server startup resolves configuration in this order:
 5. Current working directory via legacy upward `dam-hopper.toml` discovery
 6. Empty config fallback
 
-**Phase 04 note:** Workspace APIs now report `configPath` (the authoritative registry file path) separately from `path`/`root` (legacy display fields).
+**Registry note:** Workspace APIs now report `configPath` (the authoritative registry file path) separately from `path`/`root` (legacy display fields).
 
 ## Workspace Switching and Config Reload
 
@@ -161,6 +161,7 @@ When switching:
 
 ### Project Type Presets
 
+When registering projects in `dam-hopper.toml`, DamHopper assigns default service build, run, and dev commands based on the detected project type (these reflect standard scripts inside the target project workspace, not DamHopper monorepo root scripts):
 #### npm
 
 - Build: `npm run build`
@@ -264,10 +265,10 @@ workspace path with zero capacity rather than guessing a host mount.
 Do not add re-authentication, action, helper, IPC, enrollment, or host-mutation
 settings to this release. Those remain deferred backlog, not configuration.
 
-The Phase 07 release evidence covers the packaged server in no-tunnel mode. Its
+The current release evidence covers the packaged server in no-tunnel mode. Its
 measured graceful-shutdown budget applies only when no tunnel sessions are
 active; tunnel child-process disposal retains its separate three-second grace
-period. The release owner approved Phase 07 completion with the still-unobserved
+period. The release owner approved release qualification with the still-unobserved
 Windows CI result, canary-host profiling, staged monitor/in-app-alert canary, and
 rollback rehearsal deferred as post-release work; none is passed evidence.
 
@@ -279,7 +280,7 @@ longer live, creating, or restart-pending. `agent-activity` observes configured
 agent PTY/process/TCP evidence and may suspend while service-only terminals
 remain open; it is an activity heuristic, not proof that an agent has
 finished. Both policies use RTC wake after a bounded quiet period. The enrolled
-helper also supports the Phase 01 execution-only indefinite-sleep sentinel; that
+helper also supports the execution-only indefinite-sleep sentinel; that
 path is not a configuration mutation.
 
 The feature is **disabled by default** (`enabled = false`) and requires explicit
@@ -296,20 +297,20 @@ agent_executables = ["codex", "omp", "claude", "agy"]
 
 # enrollment_reference = "systemd:dam-hopper-idle-suspend-helper.service"
 
-### Policy and agent-executable fields (Phase 01)
+### Policy and agent-executable fields
 
 `automatic_policy` accepts `empty-fleet` (the default) or `agent-activity`.
-Phase 01 freezes this selector and its configuration contract. Phase 02
-provides private PTY root/raw-output/input evidence, Phase 03 provides bounded
+The configuration contract defines this selector and its runtime behavior.
+The runtime provides private PTY root/raw-output/input evidence, bounded
 configured-agent process discovery and retained attribution through a private
-procfs seam, and Phase 04 provides owned TCP byte observation and per-socket
-baseline comparison. Phase 05 completes the dedicated transactional sampler,
-manager-locked final admission, bounded warning projection, and
-`agent-activity` coordinator path. Phase 06 adds protected status decoding and
-aggregate browser presentation without adding a policy/matcher editor or
-mutation route. Phase 07 qualifies the integrated manager/API/Chromium path,
-the fake-executor safety boundary, and the explicitly selected Linux PTY/TCP
-observer smoke; it does not authorize a real suspend canary. See [PTY Activity
+procfs seam, and owned TCP byte observation with per-socket baseline comparison.
+A dedicated transactional sampler coordinates manager-locked final admission,
+bounded warning projection, and the `agent-activity` decision path.
+Protected status decoding and aggregate browser presentation display activity
+without adding a policy/matcher editor or mutation route. Release verification
+qualifies the integrated manager/API/Chromium path, the fake-executor safety
+boundary, and the explicitly selected Linux PTY/TCP observer smoke; it does not
+authorize a real suspend canary. See [PTY Activity
 Observation](./pty-activity-observation.md), [Configured-Agent Process
 Discovery](./agent-activity-process-discovery.md), [Owned TCP Byte
 Observation](./tcp-activity-observation.md), [Agent Activity Automatic
@@ -500,7 +501,7 @@ sudo ./deploy/reset-linux-production.sh --dry-run
 sudo ./deploy/reset-linux-production.sh
 ```
 
-### Release-manager helper service (Production CLI Phase 03)
+### Release-manager helper service
 
 For a `server` or `both` release role, `install` stages
 `dam-hopper-idle-suspend-helper.service` but does not start it. Explicit
@@ -509,10 +510,10 @@ enable failure logs a warning and leaves ordinary API operations available.
 `stop`, activation rollback, `rollback`, and boot recovery include the helper
 in the managed-unit lifecycle. Inspect it with `dam-hopper status --json` or
 `systemctl status dam-hopper-idle-suspend-helper.service`; see the
-[Linux Release Manager](./linux-release-manager.md#helper-service-lifecycle-production-cli-phase-03)
+[Linux Release Manager](./linux-release-manager.md#current-service-lifecycle)
 guide for ordering and recovery details.
 
-### Execution-only indefinite sleep (Phase 01)
+### Execution-only indefinite sleep
 
 `wake_after_seconds = 0` is **never valid** in this persisted automatic
 configuration or in the timing PATCH. The helper execution protocol accepts
@@ -681,7 +682,7 @@ The API uses `camelCase` (`terminalAgentNotifications`, `agentSettingsPaths`, `c
 
 `terminalAutoSwitchProjectEnabled` is a global preference and defaults to `true` so terminal selection follows the requested project context immediately. In Settings > Appearance, the **Switch project on terminal selection** switch uses the copy: “Selecting a terminal assigned to a project activates that project; free terminals leave the current project unchanged.” When enabled, selecting a project-assigned terminal or an already-open project terminal tab changes the active project before the tab or panel renders; when disabled, selection opens the terminal without changing the active project. Free terminals, unowned terminals with blank project metadata, and unknown sessions (including unrecognized session-ID prefixes) never switch the active project; free terminals remain excluded even if incidental metadata contains a project. The top-bar project switcher and project-scoped panels (Explorer, Search, Git, Commit, Project Info, and editor) all consume the resulting active project. This uses the existing global UI-config persistence path and requires no new endpoint or migration.
 
-Agent Settings verifies paths through `GET /api/agent-status/paths` before enabling notification policies. OMP requires matching install/runtime paths and a current managed extension; Codex remains ineligible for notifications even when native status hooks are managed; Claude requires matching paths and ready native hooks. The API rechecks OMP/Claude eligibility on enabled-policy saves and rejects enabled Codex policies. Disabling remains possible when a target disappears. Dispatch follows the saved `enabled` policy without repeating filesystem readiness checks, so external path or hook changes do not themselves revoke a saved policy. Installation and readiness badges are separate. Browser permission is runtime-only and is requested only by explicit user action. Linux live hook qualification is limited to Codex CLI 0.158.0 and Claude Code 2.1.250; see the [Phase 06 report](../plans/reports/qualification-260930-1045-agent-status-linux-qualification.md).
+Agent Settings verifies paths through `GET /api/agent-status/paths` before enabling notification policies. OMP requires matching install/runtime paths and a current managed extension; Codex remains ineligible for notifications even when native status hooks are managed; Claude requires matching paths and ready native hooks. The API rechecks OMP/Claude eligibility on enabled-policy saves and rejects enabled Codex policies. Disabling remains possible when a target disappears. Dispatch follows the saved `enabled` policy without repeating filesystem readiness checks, so external path or hook changes do not themselves revoke a saved policy. Installation and readiness badges are separate. Browser permission is runtime-only and is requested only by explicit user action. Linux live hook qualification is limited to Codex CLI 0.158.0 and Claude Code 2.1.250; see [Agent Status Architecture](./architecture/agent-status.md) for notification readiness, policy rules, and platform boundaries.
 
 Shortcuts are normalized by the client config layer. Terminal/IDE panel
 shortcuts can be captured and reset from Settings > Keyboard Shortcuts. Capture
@@ -693,8 +694,8 @@ sound path is not disabled by Cognito; audible output depends on the saved
 notification policy and browser/device audio state. The mask is visual only:
 Heavy Blur is not redaction, OS/browser capture is outside its boundary, and
 the mask does not issue a PTY pause/stop request and is not a background-work
-control. Phase 05's live smoke exercised the app in Linux Chromium; it does
-not establish native-shell visual coverage. See the [System Architecture](./system-architecture.md#cognito-privacy-mode-2026-10-02)
+Live smoke testing exercised the app in Linux Chromium; it does
+not establish native-shell visual coverage. See the [System Architecture](./system-architecture.md#cognito-mode)
 for the feature's qualification evidence and platform boundaries. Git,
 Project, Ports, and Fleet Terminal shortcuts toggle their target in both IDE
 and Terminal modes; opening one closes the other target panels. The Project

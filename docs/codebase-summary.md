@@ -1,62 +1,92 @@
 # DamHopper Codebase Summary
 
-**Generated:** 2026-10-05. The repository compaction was generated with `repomix --output ./repomix-output.xml --quiet`; this summary uses that compaction and a source-tree inventory. Counts below describe application code, not every document, generated asset, or dependency file; source files are authoritative when a summary differs.
+**Inventory snapshot:** 2026-10-05 (Version 0.10.2), before documentation restructuring. Counts represent physical lines of eligible text; tests, caches, generated schemas, and lockfiles are excluded.
 
-## Repository at a glance
+## Repository Inventory at a Glance
 
-The inventory covers approximately **1,349 code files and 416,000 lines of code**. The largest areas are the Rust server and shared React UI.
+The initial scan counted **2,046 eligible text files and 411,852 physical lines of code/text**:
+- **Implementation & Tooling:** 985 files, 286,268 physical LOC across `server/`, `packages/`, `apps/`, `deploy/`, `scripts/`, and `.github/workflows/`.
+- **Documentation at scan time:** 78 files, 20,267 physical LOC.
+- **Historical research and audit artifacts:** 964 files, 104,621 physical LOC; not current implementation evidence.
 
-| Directory | Role and approximate inventory |
-| --- | --- |
-| `server/` | Rust/Axum/Tokio backend; 348 files, ~157k LOC |
-| `packages/ui/` | React 19 shared application; 859 files, ~204k LOC |
-| `apps/web/` | Vite single-page browser host |
-| `apps/native/` | Tauri 2 host; `src-tauri` ~25.8k Rust LOC and `src` ~4.2k LOC |
-| `packages/shared/` | Shared runtime utilities and sensitive-metadata-redacting logger |
-| `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol |
-| `apps/browser-extension/` | Optional browser extension host |
-| `deploy/release/` | Release archives, installers, service templates, and packaging |
-| `docs/`, `plans/` | Maintained guides and historical/active planning records; not included in code LOC |
+| Directory | Role | Files | Direct LOC | Recursive Files | Recursive LOC |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `server/` | Rust Axum/Tokio API, Git, PTYs, workflow, and host services | 2 | 195 | 352 | 128,698 |
+| `packages/ui/` | React 19 application, state, API/transports, components | 5 | 205 | 500 | 117,398 |
+| `apps/native/` | Tauri 2 desktop host, Windows SSH forwarding, and IPC | 4 | 146 | 71 | 29,460 |
+| `apps/web/` | Vite single-page browser host | 4 | 155 | 7 | 561 |
+| `packages/shared/` | Runtime utilities and sensitive logging redaction | 2 | 30 | 5 | 533 |
+| `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol | 3 | 52 | 9 | 1,171 |
+| `apps/browser-extension/` | Injected browser debug extension | 3 | 63 | 6 | 119 |
+| `deploy/` | Release packaging, systemd units, and installers | 4 | 877 | 22 | 5,224 |
+| `scripts/` | Test runners, qualification harnesses, and tooling | 9 | 2,154 | 9 | 2,154 |
+| `.github/workflows/` | CI/CD pipelines, release publishing, quality gates | 4 | 950 | 4 | 950 |
 
-## Backend map
+## Backend Map
 
-`server/src/lib.rs` exports the backend domains; `server/src/api/` registers HTTP, WebSocket, and REST-backed operations. `server/src/state.rs` owns shared `AppState`. Current major source areas:
+`server/src/lib.rs` exports the backend domains; `server/src/api/` registers HTTP, WebSocket, and REST-backed operations. `server/src/state.rs` owns shared `AppState`. Major backend source areas:
 
-| Backend subsystem | Approximate LOC |
-| --- | ---: |
-| `api/` | 27k |
-| `linux_release/` | 20k |
-| `idle_suspend/` | 19k |
-| `pty/` | 12.6k |
-| `git/` | 12k |
-| `agent_status/` | 11.4k |
-| `advisor/` | 6.5k |
-| `telemetry/` | 6.3k |
-| `fs/` | 6k |
-| `workflow/` | 5.5k |
-| `config/` | 5k |
-| `auth/` | 1.4k |
-| `port_forward/` | 1.2k |
-| `tunnel/` | 1k |
+| Backend Subsystem | Recursive Files | Approximate LOC | Responsibility |
+| --- | ---: | ---: | --- |
+| `linux_release/` | 64 | 19,185 | Systemd release management, transactions, format-2 migration |
+| `api/` | 50 | 19,159 | Axum route handlers, WebSocket protocol, and middleware |
+| `idle_suspend/` | 21 | 14,358 | Automatic suspend coordinator, Netlink TCP & procfs sampling |
+| `pty/` | 10 | 9,051 | PTY lifecycle, scrollback buffers, OSC 633 shell tracking |
+| `agent_status/` | 14 | 9,239 | In-process agent status runtime, OMP WS, Codex/Claude hooks |
+| `git/` | 13 | 7,984 | libgit2 ODB commit message rewrites, squashing, leased push |
+| `advisor/` | 12 | 6,536 | In-process Evcrate Advisor, model introspection, CAS routing |
+| `system/` | 17 | 6,431 | Linux host metrics, cgroups v2, PSI, SSE publisher |
+| `fs/` | 16 | 6,000 | Sandboxed filesystem operations, secure paths, media sessions |
+| `telemetry/` | 18 | 5,786 | Loopback OTLP collector, HMAC redaction, SQLite telemetry |
+| `workflow/` | 17 | 3,888 | Workflow domain engine, PTY observation, SQLite persistence |
+| `persistence/` | 13 | 2,844 | SQLite session persistence, migrations 001–010, restore worker |
+| `config/` | 9 | 2,749 | Multi-stage config resolution, global config, schema |
+| `auth/` | 6 | 1,392 | MongoDB authentication, V2 session policy, AES-256-GCM TOTP |
+| `port_forward/` | 5 | 1,206 | Linux `/proc/net/tcp` scanner, stdout port sniffing |
+| `host_actions/` | 6 | 1,090 | Host remediation actions (currently `helperNotEnrolled`) |
+| `tunnel/` | 7 | 847 | Cloudflared quick tunnels with Host rewrite |
+| `web_host/` | 5 | 842 | Dedicated static SPA server (`dam-hopper-web` binary) |
+| `browser_debug/` | 3 | 674 | Ephemeral debug artifact manager |
 
-Other backend modules cover Agent Store distribution, browser debugging, host actions, persistence, SSH, system monitoring, workspace-target resolution, and HTTP shutdown. The legacy DamHopper plugin runtime, SDK, and plugin API are retired; `server/src/plugins/` is not a current subsystem.
+*Note:* The former DamHopper plugin platform (`dam-hopper-plugin-runner`) has been completely removed from `server/`.
 
-## Shared UI map
+## Shared UI Map
 
-`packages/ui/src/` contains components, API clients and transports, profile-scoped query construction, hooks, stores, contexts, and feature domains. Approximate LOC: components 79k; `lib/` 31k; `api/` 28k; hooks 21k; Advisor 10k; stores 7.4k; contexts 2k. `apps/web/` and `apps/native/` mount this shared UI rather than maintaining separate product component trees.
+`packages/ui/` exports the shared application via `packages/ui/src/embed/dam-hopper-app.tsx` (`packages/ui/src/index.ts` does not exist).
+- **Components (`packages/ui/src/components/`):** 238 files, ~53k LOC across atoms, molecules, organisms, templates, and pages.
+- **API & Transports (`packages/ui/src/api/`):** 26 files, ~18.4k LOC managing ownership tuples, connection registry, WebSocket transport, React Query hooks, and SSE parser.
+- **Hooks (`packages/ui/src/hooks/`):** 51 files, ~13k LOC covering Git operations, terminal managers, cognitive privacy guards, and SSE streams.
+- **Core Library (`packages/ui/src/lib/`):** 120 files, ~16k LOC implementing OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
+- **Advisor Panel (`packages/ui/src/advisor/`):** 36 files, ~9.9k LOC providing native React UI for routing policies, history, and evaluations.
+- **State Stores (`packages/ui/src/stores/`):** 11 files, ~4k LOC managing editor tabs, explorer expansion, Git history selection, and privacy mode.
+- **Design Guidelines:** Defined in `packages/ui/src/index.css` and `docs/frontend-components/platform-integrations.md` (JetBrains Mono, dark slate palette, Radix UI primitives with `@radix-ui/react-compose-refs` React 19 patch).
 
-## Current architecture and invariants
+## Workflow Tracking
 
-- **Multi-profile workbench:** Profile management is client-side; connections, transports, QueryClients, and state are scoped to `profileId` and connection generation. Server-owned project, PTY, workflow, and filesystem data remain on the owning server.
-- **Git:** Ordinary publication is separate from history rewriting. Commit message rewrites and squash operate on active or inactive local branches via branch-qualified snapshots and ref compare-and-swap (CAS); active checkout, index, and untracked files are preserved during inactive rewrites. Publication uses exact expected-OID leases bound to the target or squash-receipt branch. Squash accepts only a contiguous oldest-first parent chain and preserves the final tree.
-- **Native Advisor:** Rust/Axum service under `server/src/advisor/`, API under `server/src/api/advisor.rs`, and React UI under `packages/ui/src/advisor/`. `/api/advisor/*` requires a current authenticated administrator; no-auth is denied. It is per-server, default-off, reads `$HOME/.evcrate/advisor-history`, and CAS-updates routing policy at `$HOME/.evcrate/advisor-routing.json`. The legacy plugin platform is retired. See [Native Advisor architecture](./architecture/native-advisor.md).
-- **Agent Status:** The in-process runtime correlates a terminal ID with PTY incarnation. OMP reports over a private loopback WebSocket with a 5-second heartbeat and 15-second lease; Codex and Claude use protected Unix-socket hook ingress with peer-credential checks. Silence and turn end do not prove task completion. See [Agent Status architecture](./architecture/agent-status.md).
-- **Cognito Mode:** An ephemeral in-app mask and capture-phase input guard, not authentication, content redaction, or OS-level privacy. Current `packages/ui/src/index.css` uses a heavy-blur rule of `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)` when backdrop-filter is supported; unsupported/reduced-transparency cases use opaque black. This current source differs from the styling values recorded in the 2026-10-03 changelog entry; source is authoritative for the checked-in behavior.
-- **Idle suspend:** A server coordinator uses a Unix-socket helper, systemd integration, bounded policies, and fail-closed execution checks. See [idle-suspend security](./terminal-idle-suspend-security.md).
-- **Encrypted uploads:** OPAQUE PAKE password exchange and chunked AES-256-GCM writes over the WebSocket transport, bound to a captured profile/generation owner.
+The workflow tracking subsystem (`server/src/workflow/` and `docs/workflow-api.md`) provides durable task tracking across development sessions:
+- **Persistence:** Backed by SQLite (`~/.config/dam-hopper/sessions.db`) via migration `010_workflow_tracking.sql`.
+- **Hierarchy:** 3-tier structure: Plan -> Phase -> Task.
+- **PTY Lifecycle Correlation:** Non-blocking PTY session observation via bounded channel (`sync_channel(256)`).
+- **Retention:** Events expire after a fixed 90 days (`DEFAULT_EVENT_RETENTION_DAYS = 90`); the validated event-retention setting is not wired into insertion. Soft-deleted note retention is configurable through `server.workflow_deleted_note_retention_days`, defaulting to 7 days.
 
-## Test and deployment boundaries
+## Current Architecture and Invariants
 
-Rust tests live with modules and under `server/tests/`. Shared UI tests live beside modules and in `packages/ui/browser-tests/`; app-specific harnesses are in their host packages. Deployment and release code is under `deploy/release/`, with operator contracts in the [release documentation](./README.md#operations-and-release).
+- **Multi-Profile Workbench:** Profile management is client-side; connections, transports, QueryClients, and state are scoped to `profileId` and connection generation. Server-owned project, PTY, workflow, and filesystem data remain on the owning server.
+- **Git Safety:** Commit message rewrites and squashing operate on active or inactive local branches via branch-qualified snapshots and ref compare-and-swap (CAS). Publication uses exact expected-OID leases bound to the target branch (`PublishSnapshot`).
+- **Tunnel Isolation & Supervisor Exit:** Ephemeral Cloudflared quick tunnels are isolated via `--config ""` and `--no-autoupdate`, rewrite forwarded dev-server host headers (`--http-host-header localhost`), and enforce a single-authority supervisor exit lifecycle where `child.wait()` is the sole authority for exit notifications.
+- **Settings Default Collapsed:** Settings page sections (`SettingsSectionAccordion`) default to collapsed state (`defaultOpen = false`), leaving persistent server selectors uncollapsed.
+- **Native Advisor:** In-process Rust/Axum service under `server/src/advisor/` and native React UI under `packages/ui/src/advisor/`. Requires authenticated administrator; `--no-auth` is denied. Atomic CAS updates to `$HOME/.evcrate/advisor-routing.json`. See [Native Advisor Architecture](./architecture/native-advisor.md).
+- **Agent Status:** Correlates terminal ID with PTY incarnation. OMP reports over private loopback WebSocket; Codex and Claude use protected Unix-socket hook ingress with peer-credential checks. See [Agent Status Architecture](./architecture/agent-status.md).
+- **Cognito Mode:** Ephemeral in-browser visual screen mask and 38-event input guard using event capture. CSS uses Heavy Blur `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)`.
+- **Idle Suspend:** Server coordinator uses a privileged Unix-socket helper (`dam-hopper-idle-suspend-helper`), systemd integration, bounded policies (`empty-fleet`, `agent-activity`), and sysfs RTC wakealarm checks. See [Terminal Idle-Suspend Security](./terminal-idle-suspend-security.md).
+- **Encrypted Uploads:** OPAQUE PAKE password exchange and chunked AES-256-GCM writes over WebSocket transport.
 
-The top-level scripts in `package.json` define supported build, test, and check entry points. The frontend test-restructuring plan is **pending and plan-only**: Playwright application E2E restructuring is not implemented. See the [roadmap](./project-roadmap.md) for current qualification gaps.
+## Test and Deployment Boundaries
+
+DamHopper enforces a **4-tier testing architecture** (see [Testing Guide](./testing.md)):
+1. **Rust Backend Tests (`cargo test` / `pnpm test`):** Real temporary filesystems, Git ODB rewrites, CAS updates, PTYs, and API routes without synthetic mocks.
+2. **Frontend Unit Tests (Vitest jsdom):** Headless unit tests under `packages/ui/src/**/*.test.{ts,tsx}`.
+3. **Browser Component Regressions (Vitest Browser Mode):** Headless Chromium tests under `packages/ui/browser-tests/**/*.browser.{ts,tsx}` on ports 15173/15174.
+4. **Application E2E Journeys (`@playwright/test`):** Full end-to-end browser journeys under `packages/ui/e2e/**/*.spec.ts` testing built web SPAs against production server containers with deterministic auth seeding (`application_e2e_seed`).
+
+Deployment artifacts are located in `deploy/release/` and documented in the [Installation and Deployment Guide](./deployment-guide.md).

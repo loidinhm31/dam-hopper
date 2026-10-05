@@ -1,0 +1,1565 @@
+{
+  "documentationCount": 71,
+  "documentationLoc": 17808,
+  "wordHits": [
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 73,
+      "text": "- **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 122,
+      "text": " Plan/Phase/Task items, manual sessions, terminal/agent resource links,"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 129,
+      "text": " transitions, and the Plan-first hierarchy (Plan root \u2192 Phase \u2192 Task, with"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 130,
+      "text": " standalone or Plan-level tasks)."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 142,
+      "text": " overview/history, Plan-first item CRUD, manual session lifecycle,"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 167,
+      "text": " observation endpoint was added. Direct Plan sessions do not synthesize"
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 168,
+      "text": " Phase/Task children."
+    },
+    {
+      "file": "docs/CHANGELOG-archive.md",
+      "line": 173,
+      "text": "- **Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states."
+    },
+    {
+      "file": "docs/codebase-summary.md",
+      "line": 68,
+      "text": "- **Hierarchy:** 3-tier structure: Plan -> Phase -> Task."
+    },
+    {
+      "file": "docs/system-architecture.md",
+      "line": 84,
+      "text": "The `WorkflowService` manages hierarchical plans, phases, tasks (max depth 3), workflow sessions, notes, and activity event streams backed by SQLite (`010_workflow_tracking.sql`)."
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 200,
+      "text": "| POST   | `/api/workflow/items`                 | Create a Plan, Phase, or Task                       |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 228,
+      "text": "  \"plans\": [],"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 241,
+      "text": "- `plans` contains Plan-rooted `ItemOverviewNode` trees. Each node includes"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 250,
+      "text": "  does not claim that tracked Tasks represent all Plan work."
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 288,
+      "text": "Items use the Plan-first hierarchy:"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 292,
+      "text": "| `plan`  | None; root only                               |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 293,
+      "text": "| `phase` | A same-project/target `plan` (required)       |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 294,
+      "text": "| `task`  | None, or a same-project/target `plan`/`phase` |"
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 298,
+      "text": "three-level `Plan -> Phase -> Task` depth."
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 308,
+      "text": "  \"parentId\": \"phase-uuid\","
+    },
+    {
+      "file": "docs/workflow-api.md",
+      "line": 548,
+      "text": "- `server/src/workflow/observation_tests.rs` covers lifecycle mapping, incarnation ordering, duplicate suppression, startup reconciliation, bounded queue overflow, direct Plan sessions, manual harness links, manual timestamp preservation, and a real PTY-manager flow."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 41,
+      "text": "- `ItemKind`: `plan | phase | task`."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 71,
+      "text": "- `allowedChildKinds(null)` returns `plan` and `task`; a `plan` allows `phase`"
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 72,
+      "text": "  and `task`; a `phase` allows `task`; a `task` has no children."
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 73,
+      "text": "- `isValidParentKind` applies the Plan-first hierarchy without duplicating"
+    },
+    {
+      "file": "docs/workflow-client-state.md",
+      "line": 82,
+      "text": "  computes a percentage or claims that all Plan work is tracked."
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 4,
+      "text": "hosts one Plan-first view of the active project/worktree. It renders the"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 26,
+      "text": "is a bottom Dialog with Projects, Plans & Work, and Execution segments at"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 101,
+      "text": "| `packages/ui/src/components/molecules/WorkflowQuickCapture.tsx`          | Compact Plan-first item form with optional parent, summary, status, and immediate session start.                       |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 103,
+      "text": "| `packages/ui/src/components/molecules/WorkflowItemList.tsx`              | Plan and standalone-Task trees plus selection and New Plan entry point.                                                |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 109,
+      "text": "| `packages/ui/src/components/molecules/WorkflowProjectList.tsx`           | Project/worktree target switcher with plan, task, and running-session counts.                                          |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 112,
+      "text": "| `packages/ui/src/components/organisms/WorkflowContextSheet.tsx`          | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments.                                              |"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 167,
+      "text": "then choose the first root Plan or standalone Task with a directly or"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 199,
+      "text": "an assertive error state and polite active-plan live text. It shows the"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 200,
+      "text": "selected project and worktree basename, the active Plan or standalone Task,"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 205,
+      "text": "and offers New Plan only when no active item is selected."
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 228,
+      "text": "The item tree renders root Plans, recursive Phase/Task children, and"
+    },
+    {
+      "file": "docs/workflow-context-surface.md",
+      "line": 232,
+      "text": "a trimmed title, defaults to Plan and Backlog, supports Phase/Task with an"
+    }
+  ],
+  "planningDependencies": [],
+  "links": {
+    "files": 72,
+    "links": 434,
+    "warnings": []
+  },
+  "sizes": [
+    {
+      "path": "docs/api/git.md",
+      "loc": 760
+    },
+    {
+      "path": "docs/frontend-components/terminal-and-ide.md",
+      "loc": 736
+    },
+    {
+      "path": "docs/configuration-guide.md",
+      "loc": 731
+    },
+    {
+      "path": "docs/linux-release-manager.md",
+      "loc": 696
+    },
+    {
+      "path": "docs/api/rest-endpoints.md",
+      "loc": 640
+    },
+    {
+      "path": "docs/ws-protocol-guide.md",
+      "loc": 610
+    },
+    {
+      "path": "docs/workflow-api.md",
+      "loc": 597
+    },
+    {
+      "path": "docs/terminal-idle-suspend-security.md",
+      "loc": 587
+    },
+    {
+      "path": "docs/linux-systemd.md",
+      "loc": 564
+    },
+    {
+      "path": "docs/CHANGELOG-archive.md",
+      "loc": 539
+    },
+    {
+      "path": "docs/worktree-operation.md",
+      "loc": 421
+    },
+    {
+      "path": "docs/linux-release-publisher-bootstrap.md",
+      "loc": 409
+    },
+    {
+      "path": "docs/api/system-services.md",
+      "loc": 389
+    },
+    {
+      "path": "docs/architecture/agent-status.md",
+      "loc": 382
+    },
+    {
+      "path": "docs/linux-systemd/idle-suspend-runbook.md",
+      "loc": 377
+    },
+    {
+      "path": "docs/user-guide-multi-server-profiles.md",
+      "loc": 366
+    },
+    {
+      "path": "docs/api/idle-suspend.md",
+      "loc": 352
+    },
+    {
+      "path": "docs/linux-release-manifest.md",
+      "loc": 337
+    },
+    {
+      "path": "docs/agent-activity-automatic-admission.md",
+      "loc": 321
+    },
+    {
+      "path": "docs/frontend-components/host-and-usage.md",
+      "loc": 291
+    },
+    {
+      "path": "docs/workflow-context-surface.md",
+      "loc": 278
+    },
+    {
+      "path": "docs/frontend-components/workbench.md",
+      "loc": 272
+    },
+    {
+      "path": "docs/api/filesystem-and-media.md",
+      "loc": 270
+    },
+    {
+      "path": "docs/pty-activity-observation.md",
+      "loc": 262
+    },
+    {
+      "path": "docs/api/authentication.md",
+      "loc": 260
+    },
+    {
+      "path": "docs/configuration/server-operations.md",
+      "loc": 256
+    },
+    {
+      "path": "docs/deployment-guide.md",
+      "loc": 247
+    },
+    {
+      "path": "docs/windows-release-packaging.md",
+      "loc": 241
+    },
+    {
+      "path": "docs/tcp-activity-observation.md",
+      "loc": 236
+    },
+    {
+      "path": "docs/testing.md",
+      "loc": 235
+    },
+    {
+      "path": "docs/api/agent-usage-and-sessions.md",
+      "loc": 233
+    },
+    {
+      "path": "docs/agent-activity-process-discovery.md",
+      "loc": 215
+    },
+    {
+      "path": "docs/configuration/server-runtime-settings.md",
+      "loc": 203
+    },
+    {
+      "path": "docs/configuration/server-deployment.md",
+      "loc": 202
+    },
+    {
+      "path": "docs/linux-release-runtime-provisioning.md",
+      "loc": 198
+    },
+    {
+      "path": "docs/architecture/native-advisor.md",
+      "loc": 188
+    },
+    {
+      "path": "docs/workflow-client-state.md",
+      "loc": 185
+    },
+    {
+      "path": "docs/architecture/terminal-continuity-and-workflow.md",
+      "loc": 177
+    },
+    {
+      "path": "docs/linux-nohup.md",
+      "loc": 174
+    },
+    {
+      "path": "docs/architecture/host-resource-sse.md",
+      "loc": 171
+    },
+    {
+      "path": "docs/idle-suspend-status-ui.md",
+      "loc": 168
+    },
+    {
+      "path": "docs/architecture/git-history-search.md",
+      "loc": 166
+    },
+    {
+      "path": "docs/CHANGELOG.md",
+      "loc": 165
+    },
+    {
+      "path": "docs/system-architecture.md",
+      "loc": 164
+    },
+    {
+      "path": "docs/api/transport-and-events.md",
+      "loc": 160
+    },
+    {
+      "path": "docs/architecture/native-ssh-forwarding.md",
+      "loc": 148
+    },
+    {
+      "path": "docs/frontend-components/notifications-and-privacy.md",
+      "loc": 138
+    },
+    {
+      "path": "docs/architecture/workbench-files-editor-and-git.md",
+      "loc": 137
+    },
+    {
+      "path": "docs/configuration/advisor.md",
+      "loc": 134
+    },
+    {
+      "path": "docs/native-browser-debug-support.md",
+      "loc": 130
+    },
+    {
+      "path": "docs/architecture/media-isolation-and-encryption.md",
+      "loc": 129
+    },
+    {
+      "path": "docs/project-overview-pdr.md",
+      "loc": 129
+    },
+    {
+      "path": "docs/frontend-components/files-and-media.md",
+      "loc": 119
+    },
+    {
+      "path": "docs/codebase-summary-release.md",
+      "loc": 112
+    },
+    {
+      "path": "docs/configuration/server-environment-auth.md",
+      "loc": 110
+    },
+    {
+      "path": "docs/architecture/agent-store-ports-and-browser.md",
+      "loc": 105
+    },
+    {
+      "path": "docs/code-standards.md",
+      "loc": 104
+    },
+    {
+      "path": "README.md",
+      "loc": 99
+    },
+    {
+      "path": "docs/api/workspace-settings.md",
+      "loc": 95
+    },
+    {
+      "path": "docs/codebase-summary.md",
+      "loc": 92
+    },
+    {
+      "path": "docs/api-reference.md",
+      "loc": 88
+    },
+    {
+      "path": "docs/frontend-components/platform-integrations.md",
+      "loc": 85
+    },
+    {
+      "path": "docs/architecture/authentication-state-and-cryptography.md",
+      "loc": 80
+    },
+    {
+      "path": "docs/api/advisor-and-workflow.md",
+      "loc": 74
+    },
+    {
+      "path": "docs/architecture/preferences-settings-and-host-resources.md",
+      "loc": 71
+    },
+    {
+      "path": "docs/api/websocket.md",
+      "loc": 70
+    },
+    {
+      "path": "docs/archive/retired-plugin-platform.md",
+      "loc": 58
+    },
+    {
+      "path": "docs/README.md",
+      "loc": 50
+    },
+    {
+      "path": "docs/project-roadmap.md",
+      "loc": 40
+    },
+    {
+      "path": "docs/frontend-components.md",
+      "loc": 35
+    },
+    {
+      "path": "docs/configuration/server-configuration.md",
+      "loc": 27
+    },
+    {
+      "path": "docs/configuration/index.md",
+      "loc": 17
+    }
+  ],
+  "commands": {
+    "verifiedOccurrences": 117,
+    "warnings": [
+      {
+        "file": "docs/code-standards.md",
+        "line": 44,
+        "command": "pnpm patch",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 174,
+        "command": "pnpm start",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/deployment-guide.md",
+        "line": 187,
+        "command": "pnpm 10",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 151,
+        "command": "pnpm 10",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/linux-systemd.md",
+        "line": 467,
+        "command": "pnpm linux:production",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/linux-systemd.md",
+        "line": 467,
+        "command": "pnpm linux:reset",
+        "manifestMatches": []
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 200,
+        "command": "pnpm available:",
+        "manifestMatches": []
+      },
+      {
+        "file": "README.md",
+        "line": 29,
+        "command": "pnpm 10",
+        "manifestMatches": []
+      }
+    ],
+    "checked": [
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 307,
+        "command": "pnpm --filter @dam-hopper/ui build",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 307,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 327,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 327,
+        "command": "pnpm --filter @dam-hopper/ui build",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 327,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 327,
+        "command": "pnpm dev",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 329,
+        "command": "pnpm check",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG-archive.md",
+        "line": 344,
+        "command": "pnpm --filter @dam-hopper/web build",
+        "manifestMatches": [
+          "apps/web/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG.md",
+        "line": 71,
+        "command": "pnpm --filter @dam-hopper/ui build",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG.md",
+        "line": 76,
+        "command": "pnpm lint",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG.md",
+        "line": 112,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/CHANGELOG.md",
+        "line": 139,
+        "command": "pnpm --filter @dam-hopper/ui build",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/agent-activity-automatic-admission.md",
+        "line": 298,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/code-standards.md",
+        "line": 92,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/code-standards.md",
+        "line": 92,
+        "command": "pnpm test:all",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/code-standards.md",
+        "line": 92,
+        "command": "pnpm lint",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/code-standards.md",
+        "line": 92,
+        "command": "pnpm check",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/codebase-summary.md",
+        "line": 87,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 81,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 82,
+        "command": "pnpm dev",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 89,
+        "command": "pnpm tauri:build",
+        "manifestMatches": [
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 90,
+        "command": "pnpm tauri:dev",
+        "manifestMatches": [
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 173,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 175,
+        "command": "pnpm dev",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/configuration-guide.md",
+        "line": 575,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/deployment-guide.md",
+        "line": 190,
+        "command": "pnpm --filter @dam-hopper/browser-bridge build",
+        "manifestMatches": [
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/deployment-guide.md",
+        "line": 203,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/deployment-guide.md",
+        "line": 206,
+        "command": "pnpm build:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/deployment-guide.md",
+        "line": 226,
+        "command": "pnpm --filter @dam-hopper/web stage:browser-extension",
+        "manifestMatches": [
+          "apps/web/package.json"
+        ]
+      },
+      {
+        "file": "docs/frontend-components/terminal-and-ide.md",
+        "line": 338,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/frontend-components/terminal-and-ide.md",
+        "line": 346,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-nohup.md",
+        "line": 23,
+        "command": "pnpm build:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-nohup.md",
+        "line": 148,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-nohup.md",
+        "line": 150,
+        "command": "pnpm lint",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-nohup.md",
+        "line": 151,
+        "command": "pnpm --filter @dam-hopper/ui build",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-nohup.md",
+        "line": 152,
+        "command": "pnpm build:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-manager.md",
+        "line": 352,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-manager.md",
+        "line": 369,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-manager.md",
+        "line": 370,
+        "command": "pnpm test:deploy",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-manager.md",
+        "line": 691,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-manifest.md",
+        "line": 336,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 127,
+        "command": "pnpm release:windows-gate-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 128,
+        "command": "pnpm release:windows-installer-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 129,
+        "command": "pnpm release:verify-windows",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 363,
+        "command": "pnpm release:check-version",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 364,
+        "command": "pnpm release:archive",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 365,
+        "command": "pnpm release:manifest",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 366,
+        "command": "pnpm release:check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 367,
+        "command": "pnpm release:check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 368,
+        "command": "pnpm release:check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 371,
+        "command": "pnpm release:windows-archive",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 372,
+        "command": "pnpm release:windows-check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 373,
+        "command": "pnpm release:windows-package-twice",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 374,
+        "command": "pnpm release:verify-windows",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 375,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 390,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/linux-release-publisher-bootstrap.md",
+        "line": 390,
+        "command": "pnpm test:deploy",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/native-browser-debug-support.md",
+        "line": 74,
+        "command": "pnpm --filter @dam-hopper/native tauri:probe",
+        "manifestMatches": [
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/native-browser-debug-support.md",
+        "line": 91,
+        "command": "pnpm --filter @dam-hopper/native smoke:evidence",
+        "manifestMatches": [
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/terminal-idle-suspend-security.md",
+        "line": 469,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 10,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 14,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 19,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 23,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 31,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 32,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 33,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 34,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 35,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 36,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:probes",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 42,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:typecheck",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 50,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 53,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 56,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 59,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 62,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 65,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 68,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:probes",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 71,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:typecheck",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 182,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:typecheck",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 183,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e:build-images",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 184,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 191,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 192,
+        "command": "pnpm --filter @dam-hopper/shared test",
+        "manifestMatches": [
+          "packages/shared/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 193,
+        "command": "pnpm --filter @dam-hopper/browser-bridge test",
+        "manifestMatches": [
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 194,
+        "command": "pnpm --filter @dam-hopper/ui test",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 195,
+        "command": "pnpm --filter @dam-hopper/native test",
+        "manifestMatches": [
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 196,
+        "command": "pnpm --filter @dam-hopper/ui test:browser",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/testing.md",
+        "line": 197,
+        "command": "pnpm --filter @dam-hopper/ui test:e2e",
+        "manifestMatches": [
+          "packages/ui/package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 81,
+        "command": "pnpm release:windows-archive",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 82,
+        "command": "pnpm release:windows-check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 83,
+        "command": "pnpm release:windows-package-twice",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 84,
+        "command": "pnpm release:windows-installer-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 85,
+        "command": "pnpm release:windows-gate-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 86,
+        "command": "pnpm release:verify-windows",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 87,
+        "command": "pnpm release:verify",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 204,
+        "command": "pnpm release:windows-gate-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 207,
+        "command": "pnpm release:windows-installer-test",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 210,
+        "command": "pnpm release:verify-windows",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 224,
+        "command": "pnpm release:windows-check-assets",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/windows-release-packaging.md",
+        "line": 224,
+        "command": "pnpm release:windows-package-twice",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/worktree-operation.md",
+        "line": 107,
+        "command": "pnpm dev:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/worktree-operation.md",
+        "line": 108,
+        "command": "pnpm dev",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json"
+        ]
+      },
+      {
+        "file": "docs/worktree-operation.md",
+        "line": 173,
+        "command": "pnpm lint",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "docs/worktree-operation.md",
+        "line": 174,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "docs/worktree-operation.md",
+        "line": 175,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 65,
+        "command": "pnpm --filter @dam-hopper/web stage:browser-extension",
+        "manifestMatches": [
+          "apps/web/package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 71,
+        "command": "pnpm dev:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 71,
+        "command": "pnpm dev:server:no-auth",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 77,
+        "command": "pnpm dev:native",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 78,
+        "command": "pnpm build",
+        "manifestMatches": [
+          "package.json",
+          "apps/web/package.json",
+          "apps/native/package.json",
+          "apps/browser-extension/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 79,
+        "command": "pnpm build:native",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 80,
+        "command": "pnpm build:server",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 81,
+        "command": "pnpm test",
+        "manifestMatches": [
+          "package.json",
+          "apps/native/package.json",
+          "packages/ui/package.json",
+          "packages/shared/package.json",
+          "packages/browser-bridge/package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 82,
+        "command": "pnpm test:all",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 83,
+        "command": "pnpm lint",
+        "manifestMatches": [
+          "package.json"
+        ]
+      },
+      {
+        "file": "README.md",
+        "line": 84,
+        "command": "pnpm check",
+        "manifestMatches": [
+          "package.json"
+        ]
+      }
+    ]
+  }
+}

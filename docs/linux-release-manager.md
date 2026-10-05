@@ -95,16 +95,16 @@ rendered command and preserves exactly one zero-operand privileged prestart;
 staging uses the same render → parse → policy path and fails closed on legacy,
 alternate, duplicate, or extra command operands.
 
-The Phase 02 canonical event writer is deliberately outside this provisioning
+The canonical event writer is deliberately outside this provisioning
 set. It requires an already-existing diagnostics parent and refuses a missing,
 unsafe, or mismatched parent; the API pre-start gate does not create, repair,
-or lazily initialize `idle-suspend-events-v1.jsonl`. Phase 03 passes the
+or lazily initialize `idle-suspend-events-v1.jsonl`. The server passes the
 optional writer from `AppState` into coordinator startup. If construction
 fails, the API records a sanitized diagnostic and continues without semantic
 event emission; the missing producer evidence is therefore partial rather than
 silently redirected.
 
-### Phase 03 preflight SQLite migration protection
+### Preflight SQLite migration protection
 
 `validate_candidate_preflight` and active-start preflight discover SQLite
 holders only for `server`/`both`; `web` reads no API state. Discovery is
@@ -131,7 +131,7 @@ files. Canonical TOML is startup authority; legacy TOML is safety coverage and
 copy-once migration source only.
 
 This is intentionally broader than provisioning: canonical presence suppresses
-legacy copying in the runtime gate, but Phase 03 preflight still inspects an
+legacy copying in the runtime gate, but preflight still inspects an
 extant legacy TOML for SQLite holder safety.
 
 ### Installer and reset ownership boundary
@@ -159,7 +159,7 @@ and verify API `0600` ownership, parseable disabled TOML, preserved audits/RTC,
 and stopped helper units before restarting the API.
 
 
-## Bootstrap handoff (Phase 06)
+## Bootstrap handoff
 
 The published `dam-hopper-install.sh` is a non-root wrapper around this
 manager. It requires `--role server|web|both` and accepts `--version vX.Y.Z`,
@@ -295,7 +295,7 @@ Install and role set stop at a durable pending candidate. They do **not**:
 After staging, run `sudo dam-hopper start`. There is no separate `activate`
 command: `start` owns both pending-release activation and ordinary startup.
 
-### Dedicated web-role handoff (Phase 03)
+### Dedicated web-role handoff
 
 A `web` or `both` role projection contains executable
 `bin/dam-hopper-web` and the required `web/` asset directory. During `start`,
@@ -313,7 +313,6 @@ reports web-role health at `/__dam-hopper/health`. The machine-local
 runtime-config file supplies the exact API origin; it is not packaged.
 
 ## Current service lifecycle
-
 The manager's current managed service set is API, helper, web, and recovery.
 Server-role activation starts the idle-suspend helper on a best-effort basis,
 then provisions the API runtime and starts the API; web-role activation starts
@@ -365,12 +364,12 @@ The migration checker validates owner-supplied evidence structure and digest
 binding. It does not embed a GitHub DSSE/certificate trust root or synthesize
 target inventory. External attestation verification remains a prerequisite;
 the protected stable publish job is held when migration evidence is absent.
-The earlier bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
+The earlier bounded qualification (2026-09-13) recorded 84 passed, 0
 failed, and 0 ignored across the seven release-manager integration suites
 available at that time. `pnpm release:verify` passed, and the package's
 `pnpm test:deploy` command invokes seven deployment journeys, including clean
 install, security, and reset smoke. Re-run the focused commands and the
-protected runtime matrix for current Phase 03 evidence; stable publication,
+protected runtime matrix for current qualification evidence; stable publication,
 external trust-root verification, authoritative target-inventory integration,
 and workflow deep validation remain separate gates.
 
@@ -393,14 +392,12 @@ and best-effort PID/UID evidence. Status is read-only and does not prove socket
 protocol readiness. Automated tests use temporary files/fakes and do not invoke
 host suspend, logind, or real RTC hardware.
 
-[Phase 04 test report](../plans/reports/tester-260910-0732-phase-04-boundary-verification.md)
-and [review](../plans/reports/reviewer-260910-0733-phase-04-verification-boundary.md).
 
-## Durable activation, rollback, and recovery (Phase 05)
+## Durable activation, rollback, and recovery
 
 The authoritative deployment state is one generation-numbered
 `/var/lib/dam-hopper-manager/state.json` envelope containing `active`,
-`previous`, `pending`, transaction phase/backup paths, and latest sanitized
+`previous`, `pending`, transaction stage/backup paths, and latest sanitized
 failure. The convenience symlink `/opt/dam-hopper/current` is repaired after
 commit and never decides which release is active.
 
@@ -466,7 +463,7 @@ tokens, archive contents, or command output. `version` reports the Cargo package
 version, the `linux-x86_64-systemd` profile, and release manifest schema `2`;
 persisted manager state remains schema `1`.
 
-### Production diagnostics (Phase 06)
+### Production diagnostics
 
 Run the one-shot local collector:
 
@@ -504,7 +501,7 @@ Role-aware collection reads the role from `/etc/dam-hopper/host.toml`:
 
 The host adapter invokes only fixed `systemctl`, `journalctl`, and `systemd-inhibit` forms (locale `C`, null stdin, discarded stderr, five-second deadlines, bounded stdout).
 The local API probe sends `/var/lib/dam-hopper/.config/dam-hopper/server-token` as Bearer to `/api/system/idle-suspend/v1/status` (no redirects, five-second deadline, 256 KiB cap).
-The file is the JWT signing secret, not an MFA session JWT, so this probe cannot authenticate in normal mode; see [Authentication API](./authentication-api.md).
+The file is the JWT signing secret, not an MFA session JWT, so this probe cannot authenticate in normal mode; see [Authentication API](./api/authentication.md).
 Probes are read-only and redact journal text, credentials, terminal data, arguments, and addresses.
 Non-root collection never calls `sudo`, setuid helpers, or other escalation;
 helper audit is `permissionDenied`, so an applicable non-root run is partial.
@@ -530,9 +527,8 @@ under a temporary root and no host files are changed.
 | `/opt/dam-hopper/.staging/<tx-id>/`                            | Root-private staging workspace (`0700`)   |
 | `/opt/dam-hopper/releases/<tag>/<role>/`                       | Immutable unpacked role view              |
 | `/opt/dam-hopper/current`                                      | Convenience active-view symlink           |
-| `/etc/dam-hopper/host.toml`                                    | Role, API user, plugin owner/admin inputs |
-| `/etc/dam-hopper/tmpfiles.d/dam-hopper-plugin-runner.conf`     | Rendered runner runtime directories       |
-| `/var/lib/dam-hopper-plugin-runner/`                           | Runner-owned durable registry/state       |
+| `/etc/dam-hopper/host-config.json`                             | Public host configuration (role, service user, web origins) |
+| `/var/lib/dam-hopper-plugin-runner/`                           | Retired runner state (cleaned via deploy/remove-plugin-platform.sh) |
 | `/etc/dam-hopper/server.env` and `/etc/dam-hopper/web.env`      | Machine-local service environments        |
 | `/etc/dam-hopper/dam-hopper.toml`                              | Legacy API registry; read-only migration source |
 | `/var/lib/dam-hopper/`                                         | API-owned state root (`0700`, final API UID/GID) |
@@ -573,16 +569,18 @@ root install / role set
   └─ fsync and atomically update the `pending` field in state.json
 ```
 
-### Role-aware unit staging (Phase 02 and D06)
+### Role-Aware Unit Staging
 
 After role projection is extracted, `stage_units.rs` builds the transaction
-unit set. Every role receives recovery; a `server` role also stages API,
-helper, runner, and `dam-hopper-plugin-runner.conf` assets.
+unit set. Every role receives the recovery unit (`dam-hopper-recovery.service`);
+a `server` role stages API (`dam-hopper-api.service`) and helper
+(`dam-hopper-idle-suspend-helper.service`), while a `web` role stages the static
+web host (`dam-hopper-web.service`). Role `both` stages all units.
 
-`render_helper_unit` and `render_runner_unit` substitute allowlisted release,
-identity, registry, Node, and socket tokens, parse the units, and enforce their
-policies. Both rendered files are hashed into pending state.
-
+`render_api_unit`, `render_helper_unit`, `render_web_unit`, and
+`render_recovery_unit` substitute allowlisted release, identity, registry, and
+systemd-hardening tokens, parse the units, and enforce their policies. Rendered
+files are hashed into pending state.
 Production staging requires `systemd-analyze verify` before pending state is
 committed; generic/local staging verifies when the binary is available.
 
@@ -612,7 +610,7 @@ removes that destination before the final rename. Activation occurs only from
 the explicit `start` command; operators should treat the bundle and validated
 manifest as the source of truth for each staging attempt.
 
-## Format-2 migration (Phase 07)
+## Format-2 migration
 
 When `/opt/dam-hopper` is the exact known format-2 root, `install` creates a
 same-filesystem sibling named `/opt/.dam-hopper-migration.<tx_id>`. The
@@ -667,10 +665,10 @@ Commit rechecks the imported binary hash, removes the migration marker, and
 deletes the redundant exchanged root only after equivalence verification.
 
 The old checkout runner is retired. `deploy/run-linux-production.sh`,
-`deploy/reset-linux-production.sh`, `deploy/systemd/dam-hopper.service`,
-`tests/deploy/linux-production-fixtures.sh`, and package aliases
-`linux:production`/`linux:reset` are absent. Use the manager commands and
-`tests/deploy/fedora44-format2-migration.sh`; do not restore those aliases.
+`deploy/systemd/dam-hopper.service`, and package aliases `linux:production` /
+`linux:reset` are deprecated or removed. (`deploy/reset-linux-production.sh` is
+retained specifically for emergency idle-suspend helper rollback). Use the
+manager commands and `tests/deploy/fedora44-format2-migration.sh`.
 
 ## Failure handling and diagnostics
 

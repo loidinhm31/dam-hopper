@@ -1,6 +1,6 @@
 # Project Overview and Product Development Requirements
 
-**Status date:** 2026-10-04. This PDR summarizes the current product contract. Source code and the linked subsystem references define implementation details; historical plans are not active requirements unless the roadmap says otherwise.
+**Status date:** 2026-10-05. This PDR summarizes the current product contract. Source code and the linked subsystem references define implementation details; the roadmap records remaining qualification gates.
 
 ## Product vision
 
@@ -17,26 +17,27 @@ The workbench must make ownership explicit: a browser profile and its current co
 5. **Explicit destructive intent:** History rewriting and publication are separate operations protected by snapshot checks and exact-OID leases.
 
 ## Product requirements and status
+<a id="functional-requirements"></a>
 
 | ID | Requirement area | Current status |
 | --- | --- | --- |
 | PR-001 | TOML project/workspace registry, path handling, and switching | Implemented; see [configuration guide](./configuration-guide.md). |
 | PR-002 | PTY lifecycle, output, restart, and terminal workspace | Implemented; process lifecycle remains distinct from agent/workflow status. |
-| PR-003 | Git operations, history edits, search, squash, and publication | Implemented. Rewrites use captured branch/HEAD CAS; leased publication is separate and exact-OID-bound. |
+| PR-003 | Git operations, history edits, search, squash, and publication | Implemented. Rewrites and contiguous squashes operate on active and inactive local branches via captured branch/HEAD CAS; leased publication is separate, exact-OID-bound, and supports inactive target branches. |
 | PR-004 | Sandboxed file explorer and IDE file operations | Implemented with bounded reads and target-aware operations. |
 | PR-005 | Agent Store distribution and import | Current product functionality; not the retired plugin platform. |
-| PR-006 | REST authentication, MFA, sessions, and authorization | Implemented; production auth and key configuration are covered by the [authentication API](./authentication-api.md). |
+| PR-006 | REST authentication, MFA, sessions, and authorization | Implemented; production auth and key configuration are covered by the [Authentication API](./api/authentication.md). |
 | PR-007 | Multi-server profile workbench | Implemented. Each connection and client state is profile/generation scoped. |
-| PR-007A | Profile-qualified files, editor, search, and Git | Implemented; [Phase 03 guide](./phase-03-files-editor-search-git.md). |
+| PR-007A | Profile-qualified files, editor, search, and Git | Implemented; [Workbench Files, Editor, Search, and Git Architecture](./architecture/workbench-files-editor-and-git.md). |
 | PR-007B | Native profile scope and platform integration | Linux-focused implementation complete; Windows native S13 runtime qualification remains separate. |
 | PR-007C | Unified-profile integration qualification | Web/Linux shared qualification recorded; platform-specific native qualification is tracked separately. |
 | PR-008 | Shared runtime logging utilities | Implemented; sensitive metadata redaction is required. |
 | PR-009 | Host-resource monitoring and presentation | Core monitoring/presentation delivered. SSE target-host, deployed-proxy, browser, and soak qualification remain open; see [SSE architecture](./architecture/host-resource-sse.md). |
 | PR-010 | Browser debugging and native child WebView | Platform-qualified only where documented; Linux child/relay runtime remains unverified. See [Browser Debug guide](./native-browser-debug-support.md). |
-| PR-011–014 | Workflow persistence, service/API, lifecycle correlation, and UI state | Implemented; see [Workflow API](./workflow-api.md) and [client state](./workflow-client-state.md). |
+| PR-011–014 | <a id="workflow-persistence-service-correlation"></a><a id="pr-013-terminal-lifecycle-correlation-and-agent-adapter"></a>Workflow persistence, service/API, lifecycle correlation, and UI state | Implemented; see [Workflow API](./workflow-api.md) and [client state](./workflow-client-state.md). |
 | PR-015–018 | Idle suspend, manual force sleep, agent-activity policy, and diagnostics | Implemented with bounded helper and fail-closed checks; real-host operational rollout remains an operator gate. |
 | PR-019–021 | Multi-profile terminal, Agent/port/Browser, preferences/settings/usage/host features | Implemented; owner scoping and native platform qualifications apply. |
-| PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. |
+| PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. See [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md). |
 | PR-026 | Agent Status and notification ownership | Implemented and Linux-qualified for the documented OMP/Codex/Claude versions; other versions/platforms remain unqualified. |
 | PR-027 | Native Evcrate Advisor | Complete native replacement. Rust/Axum service, shared React UI, admin-only access, history/policy APIs, and plugin-platform retirement are delivered. |
 | PR-028 | Cognito Mode in-app privacy mask | Delivered. Ephemeral activation, configurable shortcut/style, overlay, and input isolation; it is not authentication, redaction, or OS-wide privacy. |
@@ -53,9 +54,10 @@ The workbench must make ownership explicit: a browser profile and its current co
 ### Git safety
 
 - Normal push remains fast-forward-only. Rewriting local commits does not publish automatically.
-- Message rewrites compare the captured branch and HEAD before updating refs.
+- Message rewrites and contiguous squashes compare the captured branch and HEAD before updating refs.
+- Inactive branch rewrites lock the target branch ref while ensuring active HEAD, worktree, index, and untracked files remain untouched.
 - Squash accepts a unique, contiguous, oldest-first parent chain reaching the captured branch tip; unsafe merges/ranges and stale snapshots are rejected.
-- Publication after a rewrite is explicit and leased against the exact expected remote OID. Preserve the final tree and require consent when signatures are invalidated.
+- Publication after a rewrite is explicit and leased against the exact expected remote OID with target branch support. Preserve the final tree and require consent when signatures are invalidated.
 - History search uses literal matching and does not alter repository state.
 
 See [Git history architecture](./architecture/git-history-search.md) and [Git API reference](./api-reference.md#git-operations).
@@ -77,6 +79,18 @@ See [Native Advisor architecture](./architecture/native-advisor.md) and [Advisor
 - Cognito activation is ephemeral. The app overlays the rendered UI and isolates input; content remains in the app and operating-system captures are outside this feature's guarantee.
 - Current Heavy Blur CSS is `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)` where supported; unsupported and reduced-transparency cases use opaque black. See `packages/ui/src/index.css` for the checked-in implementation.
 
+
+### Testing architecture
+
+- Quality gates enforce a **4-tier testing architecture** with strict execution boundaries:
+  1. Rust backend unit and integration tests (`cargo test`).
+  2. Frontend unit tests under jsdom (Vitest).
+  3. Real-browser component regression suites under Chromium (Vitest Browser Mode, ports 15173/15174).
+  4. Application E2E user journeys (`@playwright/test`) testing built SPAs against containerized production servers and MongoDB.
+- Application E2E journeys enforce deterministic auth seeding via `application_e2e_seed` and browser context `storageState`.
+- Visual evidence capture is governed by `capture-policy.ts` (full-viewport captures, PNG IHDR validation, colocated metadata, and human review governance in `review.md`).
+
+See the [Testing guide](./testing.md).
 ## Success measures
 
 These are pass/fail acceptance measures, not a claim that the release is
@@ -112,4 +126,4 @@ qualified on every platform:
 - [Code standards](./code-standards.md)
 - [Testing guide](./testing.md)
 - [Project roadmap](./project-roadmap.md)
-- [Changelog](./CHANGELOG.md) and [archived notices](./CHANGELOG-archive.md)
+- [Changelog](./CHANGELOG.md)

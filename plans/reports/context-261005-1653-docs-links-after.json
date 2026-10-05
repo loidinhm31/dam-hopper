@@ -1,0 +1,46 @@
+{
+  "files": 72,
+  "links": 727,
+  "warnings": [
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./architecture/plugin-platform-d05.md",
+      "kind": "missing-file"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./phase-07-media-isolation-and-encryption.md",
+      "kind": "missing-file"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./phase-06-preferences-settings-usage-and-host.md",
+      "kind": "missing-file"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./phase-04-terminal-continuity-workflow-navigation.md",
+      "kind": "missing-file"
+    },
+    {
+      "file": "docs/CHANGELOG.md",
+      "target": "./phase-03-files-editor-search-git.md",
+      "kind": "missing-file"
+    },
+    {
+      "file": "docs/api-reference.md",
+      "target": "./api/rest-endpoints.md#client-side-profile-management",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/frontend-components.md",
+      "target": "./frontend-components/terminal-and-ide.md#portspanel-and-cloudflared-quick-tunnels",
+      "kind": "missing-anchor"
+    },
+    {
+      "file": "docs/frontend-components.md",
+      "target": "./frontend-components/terminal-and-ide.md#panecontainer-and-terminal-split-layout",
+      "kind": "missing-anchor"
+    }
+  ]
+}

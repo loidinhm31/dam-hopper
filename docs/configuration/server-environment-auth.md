@@ -43,11 +43,7 @@ path = "/tmp/test-workspace"
 | `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
 | `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
 | `RUST_LOG`                                 | string  | Rust logging filter                                                       |
-| `MONGODB_URI` / `MONGODB_DATABASE` / `DAM_HOPPER_MFA_KEY_FILE` | string/path | Optional API auth database; dedicated MFA key required for production authenticated startup. See [Phase 01 auth guide](../phase-01-auth-state-cryptography-and-policy.md). |
-| `DAM_HOPPER_PLUGIN_ADMINS_FILE`              | path    | Optional root-seeded plugin administrator JSON override                       |
-
-Plugin management administrators are not configured in `dam-hopper.toml`; the
-runner reads this host-owned file before opening its management RPC surface.
+| `MONGODB_URI` / `MONGODB_DATABASE` / `DAM_HOPPER_MFA_KEY_FILE` | string/path | Optional API auth database; dedicated MFA key required for production authenticated startup. See [Authentication State & Cryptography](../architecture/authentication-state-and-cryptography.md). |
 
 `VITE_*` values require a web rebuild. `VITE_DAM_HOPPER_SERVER_URL` is not
 allowed for production builds; production API origin is runtime config.
@@ -70,8 +66,7 @@ cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
 
 Normal login returns an MFA challenge, not a bearer token. Use the `token`
 returned by `/api/auth/mfa/confirm` or `/api/auth/mfa/verify`, or the
-`damhopper-auth` cookie where accepted. Never send the signing-secret file as
-`Authorization: Bearer`; see [Authentication API](../authentication-api.md).
+`damhopper-auth` cookie where accepted. Never send the signing-secret file as `Authorization: Bearer`; see [Authentication API](../api/authentication.md).
 
 ## MFA Encryption Key and Operator Recovery Runbook
 
@@ -108,39 +103,8 @@ db.users.updateOne(
 3. WebSockets/live streams poll state every 5s with a 2s DB cap (≤7s; smoke timeout 8s); restart/disconnect instances for immediate containment.
 4. Next password login requires fresh TOTP enrollment. Do not change `passwordHash`, `isEnabled`, `role`, signing keys/settings, or install an unencrypted factor/bypass.
 
-## Historical: Retired Plugin Management Administrator Allowlist
+## Historical Archive: Retired Plugin Platform
 
-The plugin-runner allowlist and its configuration precedence below describe the removed plugin platform; they are not current Dam-Hopper server configuration.
-Historically, the allowlist was separate from project TOML/MongoDB roles; the runner checked JWT subjects per management RPC.
+The trusted plugin platform and external runner daemon (`dam-hopper-plugin-runner`) were decommissioned on 2026-10-02 and superseded by the in-process [Native Evcrate Advisor](../architecture/native-advisor.md).
 
-The runner chooses the first available source:
-
-1. `dam-hopper-plugin-runner --admin-config <path>`
-2. `DAM_HOPPER_PLUGIN_ADMINS_FILE`
-3. `/etc/dam-hopper/plugin-admins.json`
-4. no file → empty list (deny all)
-
-The file accepts either shape:
-
-```json
-{"adminSubjects":["alice","ops@example.test"]}
-```
-
-or:
-
-```json
-["alice","ops@example.test"]
-```
-
-Subjects are trimmed, deduplicated, sorted, and hashed into the persisted
-`adminConfigDigest`. On Unix, group/world-writable files (`mode & 0o022`) are
-rejected. An invalid or unreadable environment/default file logs a warning and
-denies all administrators; an explicit `--admin-config` error prevents runner
-startup. Keep the file host-owned and outside plugin staging. Configuration
-details and management endpoint behavior are in the [D05 plugin architecture](../architecture/plugin-platform-d05.md).
-
-The management API requires `Authorization: Bearer ...` even when the general
-API also accepts an HttpOnly cookie. Cookie-only requests return
-`BearerRequired`; `--no-auth` returns `NoAuthForbidden`. Login and development
-mode never grant plugin administrator access.
-
+Former configuration parameters (such as `DAM_HOPPER_PLUGIN_ADMINS_FILE`, `/etc/dam-hopper/plugin-admins.json`, and runner management RPC allowlists) are no longer active. See [Retired Plugin Platform Archive Record](../archive/retired-plugin-platform.md) for architectural provenance and [Linux systemd Operations](../linux-systemd.md) for the host artifact removal runbook (`deploy/remove-plugin-platform.sh`).

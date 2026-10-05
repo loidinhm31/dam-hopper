@@ -144,7 +144,7 @@ The iframe still must be embeddable: target `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can reject the preview before the
 extension runs.
 
-### Native SSH forwarding host (Phase 08)
+### Native SSH forwarding host
 
 **Locations:** `apps/native/src/native-ssh-forward-host.ts`,
 `packages/ui/src/lib/ssh-forward-host.ts`,
@@ -173,7 +173,7 @@ numeric revisions before a scoped snapshot is requested; events never patch
 React state directly.
 
 Native Browser Debug is independent: `NativeBrowserDebugHost.setTarget` receives
-the Phase 05 `BrowserDebugTarget` with explicit `owner`, creates one
+the `BrowserDebugTarget` with explicit `owner`, creates one
 `browser-debug` child, and rejects stale owner/origin/session/generation relay
 messages. It must not infer Browser ownership from the most recently opened SSH
 scope or active project.
@@ -318,7 +318,7 @@ Terminal fitting skips hidden, disconnected, parked, and zero-size surfaces, pre
 scrollback is a custom buffer surface, so the helper translates vertical
 swipes into `terminal.scrollLines()` calls rather than relying on a native
 scroll container. It listens only when `(any-pointer: coarse)` matches, and
-uses capture-phase, passive `touchstart`, `touchmove`, `touchend`, and
+uses capturing, passive `touchstart`, `touchmove`, `touchend`, and
 `touchcancel` handlers. Single-touch movement is accumulated by screen line
 height, flushed on animation frames, and a bounded decaying fling continues
 after release; multi-touch and helper-textarea/scrollbar touches are ignored
@@ -346,7 +346,7 @@ browser test with:
 pnpm --filter @dam-hopper/ui test:browser -- browser-tests/terminal-scroll-buttons.browser.tsx
 ```
 
-#### Inline terminal suggestions (Phase 04)
+#### Inline terminal suggestions
 
 `useTerminalSuggestions` owns one `TerminalSuggestionController` per mounted terminal and
 exposes its immutable snapshot to React. The controller observes only typed,
@@ -664,7 +664,7 @@ snapshot.
 - **Storage & Hydration:** View state is part of persisted editor tab state under `dam-hopper:editor-state` in `localStorage`. Hydrated tabs retain view state across `loadContent` invocations so opening the file restores line and column positions.
 - **Race-Safe State Capture:** `MonacoHost` captures the originating tab's view state prior to switching active `tabKey` using `prevTabKeyRef` and on unmount, passing `targetKey` explicitly to prevent view states from polluting newly selected tabs.
 
-### Phase 03 files/editor/search ownership
+### Files, editor, and search ownership
 
 The IDE surfaces consume one qualified target:
 `{ profileId, project, worktreePath? }`. `editorTargetScopeKey()` and
@@ -699,7 +699,7 @@ Git fetch/pull results stay target-specific. The shared SSH retry hook keeps
 successful initial results and retries only authentication-failed targets after
 owner-generation validation. A changed connection cancels the retry.
 
-See [Phase 03: Files, Editor, Search, and Git](../phase-03-files-editor-search-git.md)
+See [Workbench Files, Editor, Search, and Git Architecture](../architecture/workbench-files-editor-and-git.md)
 for the transport and invalidation source map.
 
 ### Explorer language filter

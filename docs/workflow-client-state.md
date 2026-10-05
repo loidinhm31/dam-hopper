@@ -1,15 +1,15 @@
 # Workflow Client Types, Transport, and Query State
 
-**Status:** Phase 04 complete (2026-09-02)
+**Status:** Complete (2026-09-02)
 
 This document describes the shared `@dam-hopper/ui` client foundation for the
 workflow REST API. The server contract, authorization rules, persistence model,
-and response examples remain in [Workflow API](./workflow-api.md). Phase 04
-adds typed client boundaries and query state; it does not add workflow UI,
-terminal navigation, or a browser-persisted workflow store.
+and response examples remain in [Workflow API](./workflow-api.md). This client
+foundation provides typed client boundaries and query state without adding
+workflow UI, terminal navigation, or a browser-persisted workflow store.
 The responsive presentation and selected-item note/edit controls are documented
 in [Workflow Context Surface](./workflow-context-surface.md); this document
-keeps the Phase 04 transport/query contract authoritative.
+keeps the authoritative transport and query contract.
 
 ## Module map
 
@@ -66,7 +66,7 @@ server's idempotent request handling, not a reason to generate a new request ID.
 ## Domain helpers
 
 `workflow-domain-helpers.ts` contains no React, transport, or persistence code.
-It provides the shared semantics used by Phase 05 components:
+It provides the shared semantics used by workflow context surface components:
 
 - `allowedChildKinds(null)` returns `plan` and `task`; a `plan` allows `phase`
   and `task`; a `phase` allows `task`; a `task` has no children.
@@ -176,12 +176,10 @@ workflow stores, localStorage, terminal registries, or editor state.
 
 ## Verification
 
-The Phase 04 test report records 51/51 targeted UI tests passing: 13 helper
-assertions in `workflow-types.test.ts`, 30 transport assertions in
+Verification recorded on 2026-09-02 confirmed 51/51 targeted UI tests passing:
+13 helper assertions in `workflow-types.test.ts`, 30 transport assertions in
 `ws-transport.test.ts`, and 8 query-hook assertions in
-`workflow-queries.test.tsx`. The same report records the full UI suite at
-1,452/1,452 and the Rust server suite at 907/907 executed tests. Formal source
-coverage was not generated because the UI coverage provider is not installed;
-these are test execution counts, not line-coverage percentages.
-
-The source-of-truth files are listed in the [Phase 04 plan](../plans/260901-0919-workflow-tracking-notes/phase-04-client-types-transport-and-query-state.md).
+`workflow-queries.test.tsx`. Historical verification also confirmed the full UI
+suite at 1,452/1,452 and the Rust server suite at 907/907 executed tests.
+Formal source coverage was not generated because the UI coverage provider is
+not installed; these are test execution counts, not line-coverage percentages.

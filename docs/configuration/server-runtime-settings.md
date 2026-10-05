@@ -39,7 +39,7 @@ When the database opens successfully:
 
 ### Deferred host-action scaffolding (inactive)
 
-This Phase 07 release has no supported host-action configuration or client
+The current release has no supported host-action configuration or client
 contract. Inert, fail-closed route scaffolding remains in the server for a
 future approved design, but authentication, re-authentication, helper
 enrollment, lifecycle/audit, IPC, and host mutation are deferred together. Do
@@ -147,15 +147,15 @@ Diagnostics export does not currently add user-configurable knobs to `dam-hopper
 
 The export API is local-only, uses camelCase on the wire, and accepts `frontend` plus the legacy `frontendSnapshot` alias.
 
-The Phases 02–03 canonical idle-suspend event producer is internal. Its path
+The canonical idle-suspend event producer is internal. Its path
 is fixed at
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`;
-there is no configuration key or public path override. Phase 03 wires the
+there is no configuration key or public path override. The runtime wires the
 optional writer into `AppState` and coordinator startup; initialization can
 degrade semantic evidence without disabling suspend/status behavior.
 
 Production collection is a separate read-only CLI path:
-`dam-hopper diagnose --json` (Phases 06–07). The required `--json` flag is the
+`dam-hopper diagnose --json`. The required `--json` flag is the
 complete grammar; path, window, source, unit, URL, command, and verbosity
 overrides are not accepted.
 
@@ -192,7 +192,7 @@ after an atomic same-directory write.
 The command returns `0` for complete applicable historical evidence, `2` for a
 valid partial bundle, and `1` for serialization or secure-output failure.
 
-See [Linux Release Manager — Production diagnostics](../linux-release-manager.md#production-diagnostics-phase-06)
+See [Linux Release Manager — Production diagnostics](../linux-release-manager.md#production-diagnostics)
 for fixed source paths, adapter behavior, and the atomic write sequence.
 
 - Backend diagnostics are stored locally at `~/.config/dam-hopper/diagnostics/backend-log.jsonl`

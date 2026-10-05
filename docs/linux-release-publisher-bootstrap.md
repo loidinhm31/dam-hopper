@@ -1,7 +1,7 @@
 # Linux Release Publisher and Bootstrap
 
-Status: Phase 03 cross-platform Release CI and guidance are complete
-(2026-09-21); Phase 06 Linux migration-gate qualification was approved on
+Status: Cross-platform Release CI and guidance are verified
+(2026-09-21); Linux migration-gate qualification was approved on
 2026-09-13. This guide describes the central GitHub publisher and the non-root
 bootstrap for the Linux x86_64 systemd release.
 The runtime manifest and manager rules remain authoritative in [Linux Release
@@ -79,7 +79,7 @@ filename, size, and digest, so embedding it would create a digest cycle. GitHub
 generated source archives are not product assets and are not consumed by the
 manager or bootstrap.
 
-### Windows direct-server profile and bootstrap installer (Phases 01–03)
+### Windows direct-server profile and bootstrap installer
 
 The Windows release is a separate direct-server package, not a systemd or
 Manifest v2 projection. It contains exactly two public assets:
@@ -284,6 +284,7 @@ In the protected `publish-release` job, the checker runs with `--profile all` an
 The attestation job uses `actions/attest-build-provenance` for all six published release subjects: the Linux installer, runtime archive, manifest, and SPDX SBOM, plus the Windows installer and deterministic ZIP archive. Target-manager capability evidence and the forward/rollback migration records remain separate owner inputs until an external verifier and authoritative inventory source are integrated.
 
 ## Historical v0.5.0/v0.5.1 runner packaging incident
+<a id="v051-release-checklist"></a>
 
 An incident-era operator checklist recorded that the v0.5.0 Linux archive
 included the plugin-runner unit but omitted its executable, so `server` and
@@ -382,9 +383,9 @@ checks Node syntax for the Windows packager and profile-aware checker.
 The publisher contract integration test exercises real archive creation, Node
 manifest generation, role projections, tamper rejection, prohibited-file
 rejection, Rust manager validation, and the migration gate's fresh
-manager-first evidence. The Phase 03 fixture rejects mixed manager capability,
+manager-first evidence. The publisher test fixture rejects mixed manager capability,
 stale or unsigned evidence, schema-v1 manifests, and reused rollback bytes.
-The final bounded Phase 03 qualification (2026-09-13) recorded 84 passed, 0
+The final bounded qualification (2026-09-13) recorded 84 passed, 0
 failed, and 0 ignored across the seven focused Rust integration suites.
 `pnpm release:verify` passed, and `pnpm test:deploy` passed all six deployment
 journeys. This evidence qualifies the bounded checker and runtime path only; it

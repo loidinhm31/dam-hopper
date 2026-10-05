@@ -1,7 +1,7 @@
 # Host Resources and Usage Components
 
 Host-resource, diagnostics, usage, and terminal status details moved from the [component index](../frontend-components.md).
-## Unified-profile integration and qualification (Phase 09)
+## Unified-profile integration and qualification
 
 The integrated shell keeps one explicit owner through project aggregation,
 commands, ports, media cleanup, host status, and Browser handoff:
@@ -23,18 +23,18 @@ The browser qualification fixture uses strict port `15173` and one configured
 Chromium channel/executable. The live
 [`scripts/qualify-phase09-workbench.mjs`](../../scripts/qualify-phase09-workbench.mjs)
 runner checks S01–S12 against isolated Server A/B roots (`14801`/`14802`) and
-four embedded workflow/terminal browser assertions. Phase 09 records 3,504
-passing tests (nine skipped/ignored); G2-Web passed. G2-Native remains blocked
-pending real Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay proof.
-See the [Phase 09 verification matrix](../../plans/260916-2137-unified-profile/verification-matrix.md).
+four embedded workflow/terminal browser assertions. Automated verification
+records 3,504 passing tests (nine skipped/ignored); web integration passed.
+Native desktop remains an operational qualification gate pending physical
+Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay verification.
 
-## Host-resource fleet deck and cards (Phase 02)
+## Host-resource fleet deck and cards
 
 **Locations:** `packages/ui/src/components/organisms/HostResourceFleetDeck.tsx`,
 `HostResourceFleetCard.tsx`, and
 `packages/ui/src/lib/host-resource-state.ts`.
 
-`HostResourceFleetDeck` is a layout-only boundary over the Phase 01
+`HostResourceFleetDeck` is a layout-only boundary over the
 `MultiHostResourceEntry[]` read model. It receives `entries`,
 `selectedProfileId`, and `onInspect(profileId)`, renders the configured order
 as a labelled `section` with a semantic `ul`/`li` list, and reports the watched
@@ -141,7 +141,7 @@ unread`. Opening acknowledges the presentation count only; this read-only UI
 does not change query, acknowledgement, bounds, fallback, active incidents, or
 dismissal behavior.
 
-## Terminal idle-suspend status (Phases 06–07)
+## Terminal idle-suspend status
 
 **Locations:** `packages/ui/src/api/client.ts`,
 `packages/ui/src/api/queries.ts`, and
@@ -177,10 +177,10 @@ display-only; ticks never refetch, publish a status hint, or affect admission.
 Manual confirmation continues to use actual
 `liveCount + creatingCount + restartPendingCount`, independent of agent counts
 or measurement warnings. See [Protected Idle-Suspend Status and Browser UI](../idle-suspend-status-ui.md).
-Phase 07 Chromium qualification covers the rendered agent-activity policy,
+Chromium browser qualification covers the rendered agent-activity policy,
 available/initializing/unavailable/disabled measurement, warning duration and
 safe identity/truncation, countdown, manual force flow, and old-server
-compatibility. See [Phase 07 verification report](../../plans/reports/qa-260911-1107-phase07-integrated-qualification.md).
+compatibility.
 
 ## Error Boundary and stale lazy-chunk recovery
 
@@ -201,7 +201,7 @@ fallback/diagnostic path. Focused tests in
 `packages/ui/src/components/ui/ErrorBoundary.test.tsx` cover these boundaries,
 guard ordering, and storage failures.
 
-### Explorer-local transport errors (Phase 01 follow-up)
+### Explorer-local transport errors
 
 `WorkspacePage` wraps the desktop IDE Explorer, compact IDE Explorer, and
 terminal floating Explorer in separate `ErrorBoundary` instances. Each boundary

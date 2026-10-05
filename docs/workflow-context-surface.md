@@ -79,13 +79,13 @@ not perform optimistic cache writes. The surface has no workflow URL or
 localStorage persistence and does not introduce a new API or DTO.
 
 For the complete component architecture and keyboard/focus contracts, see the
-[Frontend Component Details index](./frontend-components/index.md) and
-[System Architecture](./system-architecture.md#workflow-context-surface-ui-phase-05).
+[Frontend Components index](./frontend-components.md) and
+[System Architecture](./system-architecture.md#workflow-tracking-engine).
 
-## Workflow Context Surface (Phases 05–06)
+## Workflow context surface components
 
-**Status:** Phase 05 responsive workflow context UI and Phase 06
-`WorkspacePage`/shell integration complete (2026-09-02). The surface reads the
+**Status:** Responsive workflow context UI and `WorkspacePage` shell
+integration complete (2026-09-02). The surface reads the
 bounded workflow overview and keeps presentation state local; the server
 remains authoritative for workflow validation, timestamps, target ownership,
 and mutation replay. Selected-item note rendering, per-note deletion, and inline
@@ -113,7 +113,7 @@ and [selected-item editing](#selected-item-editing) contracts below.
 | `packages/ui/src/components/organisms/WorkflowContextSurface.tsx`        | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration.                           |
 | `packages/ui/src/hooks/use-workflow-surface-actions.ts`                  | Request-ID-bearing workflow mutation callbacks used by the surface.                                                    |
 
-### WorkspacePage and shell integration (Phase 06)
+### WorkspacePage and shell integration
 
 `WorkspacePage` builds one memoized `workflowToolbarActions` node containing
 `WorkflowContextSurface`. The same node passes through the existing
@@ -260,21 +260,16 @@ the current ISO time.
 
 ### Verification and current qualification
 
-The dated Phase 05 report records 62/62 focused UI/workflow tests,
-1,493/1,493 full UI tests, and 907/907 Rust tests (two ignored). It did not run
-a production UI build.
-
-Phase 06 verification records targeted UI 62/62, full UI 1,515/1,515,
-relevant Chromium smoke 8/8, Rust 907/907 executed (two ignored), and UI
-TypeScript compilation passed. The focused UI breakdown is 13 pure-helper,
-26 WorkspacePage, 6 IdeShell, 12 TerminalWorkspaceShell, and 5
-MobileWorkspaceShell assertions.
+Historical verification recorded on 2026-09-02 confirms targeted UI workflow
+coverage at 62/62 tests (13 pure-helper, 26 WorkspacePage, 6 IdeShell, 12
+TerminalWorkspaceShell, and 5 MobileWorkspaceShell assertions), full UI suite
+at 1,515/1,515 tests passing, relevant Chromium smoke at 8/8 tests, Rust server
+suite at 907/907 executed (two ignored), and UI TypeScript compilation passing.
 
 Formal source coverage remains unavailable because `@vitest/coverage-v8` and
-Rust coverage tools are not installed. Phase 07 completed focused Chromium
+Rust coverage tools are not installed. Focused Chromium verification completed
 geometry, safe-area/accessibility, focus-continuity, and host-integration
 checks; no blanket claim is made for untested browsers or devices.
-
 Resource-attention projection remains a separate selector/UI follow-up; the
 selected-item detail now renders item edit and note controls. `onEditItem` and
 `onDeleteNote` are forwarded through both responsive containers to the selected

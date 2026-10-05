@@ -9,7 +9,7 @@ longer live, creating, or restart-pending. `agent-activity` uses configured-agen
 PTY/process/TCP evidence and may suspend while service-only terminals remain
 open; it is an activity heuristic, not proof that an agent has finished. Both
 policies use RTC wake after a bounded quiet period. The enrolled helper also
-supports the Phase 01 execution-only indefinite-sleep sentinel; automatic
+supports the execution-only indefinite-sleep sentinel; automatic
 persisted timing remains bounded.
 
 ### 11.1 Host Qualification Requirements
@@ -22,7 +22,7 @@ Before enabling terminal idle suspend on a production host:
 
 ### 11.2 Privileged Helper Enrollment & Hardening
 
-The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket. In the Phase 03 release-manager path, the helper service itself binds `/run/dam-hopper/idle-suspend.sock` from its ExecStart arguments:
+The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed suspend request with RTC wakealarm programming over a local Unix domain socket. In the release-manager deployment path, the helper service itself binds `/run/dam-hopper/idle-suspend.sock` from its ExecStart arguments:
 
 - **Manager-managed service**: `deploy/systemd/dam-hopper-idle-suspend-helper.service` runs the helper under strict systemd hardening:
   - `NoNewPrivileges=yes`
@@ -31,7 +31,7 @@ The privileged helper binary `dam-hopper-idle-suspend-helper` executes the fixed
   - `PrivateTmp=yes`
   - `CapabilityBoundingSet=CAP_WAKE_ALARM`
 - **Socket permissions**: Tmpfiles owns the shared directory (`root:<API group>`, `3770`); the helper binds its socket with mode `0660`. The API PID file is API-owned and API-group-readable (`0640`), and enrollment pins the actual API UID as well as the PID.
-- **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The Phase 03 release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
+- **Optional socket unit**: `deploy/systemd/dam-hopper-idle-suspend-helper.socket` is a packaged manual/socket-activation asset. The release manager stages and manages the helper **service**, not this `.socket` unit. Do not enable both direct-binding service mode and the socket unit for the same path.
 - **Peer Credential Verification**: The helper validates peer UID and PID on connection via `SO_PEERCRED`, rejecting unauthorized callers.
 - **Audit Trail**: The single `/var/log/dam-hopper/idle-suspend-helper.jsonl`
   file (mode `0600`) records request/authentication evidence plus v2
@@ -45,7 +45,7 @@ automatic `[server.idle_suspend] enabled = false`. Automatic scheduling policy
 and manual execution availability are separate; both still fail closed on
 missing capability, RTC ownership, inhibitor, audit, or handoff prerequisites.
 
-#### Phase 01 RTC and wake semantics
+#### RTC and wakealarm semantics
 
 The helper protocol remains version 1 and accepts `wakeAfterSeconds: 0` or
 `60..=86400` only. Zero is converted to clear-only mode: the helper writes
@@ -61,7 +61,7 @@ retain `wakeAfterSeconds: 0`; the helper audit remains mode `0600` and bounded.
 The server audit's recent-read APIs are capped; its append retention and
 rotation are operator-managed.
 
-#### Phase 04 helper audit v2
+#### Helper audit v2 specification
 
 The helper audit evolves in place with independent schema version `2`; the
 protocol remains version `1`, with the same required `requestId`/
@@ -90,12 +90,12 @@ retained file and parent directory before atomic replacement, and removes the
 temporary file on failure. A helper restart creates a new producer instance
 and restarts its sequence at one.
 
-The Phase 02 canonical server event stream is separate from both audit files.
+The canonical server event stream is separate from both audit files.
 The isolated writer targets
 `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl`
 with mode `0600`, no-follow append/sync semantics, and does not add a systemd
 unit or `StateDirectory=` directive. Its parent is expected to be provisioned
-by the API runtime path owner. Phase 03 passes the optional writer from
+by the API runtime path owner. Startup passes the optional writer from
 `AppState` into the coordinator; construction failure records a sanitized
 backend diagnostic and disables only semantic emission, not API startup or
 suspend/status behavior.
@@ -204,7 +204,7 @@ Before enabling the `agent-activity` automatic policy on any host, qualify that 
      activity_live_linux_pty_tcp_smoke -- --ignored --exact --nocapture --test-threads=1
    ```
 
-   _Expected Result_: Test passes within 1.00 second (the Phase 08 QA run measured 0.74s). This is observer evidence only, not a target-host or suspend-canary guarantee. The test uses real Linux loopback TCP, managed PTYs, and direct procfs/netlink observation, with a panic executor that guarantees zero host suspend calls.
+   _Expected Result_: Test passes within 1.00 second (historical QA verification measured 0.74s). This is observer evidence only, not a target-host or suspend-canary guarantee. The test uses real Linux loopback TCP, managed PTYs, and direct procfs/netlink observation, with a panic executor that guarantees zero host suspend calls.
    Run the command from a source checkout with the deployed API service's
    effective UID/GID, procfs visibility, mount view, and network namespace (or
    an equivalent `systemd-run` sandbox). Do not add root privileges, capabilities,

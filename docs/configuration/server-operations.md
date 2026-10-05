@@ -5,7 +5,7 @@ SSH key loading, smoke checklists, Windows direct-server operation, troubleshoot
 
 SSH credentials are loaded on-demand via `/api/ssh/keys/load`. Use an
 MFA-issued session JWT, not `server-token` (the server signing secret); see
-[Authentication API](../authentication-api.md).
+[Authentication API](../api/authentication.md).
 
 ```bash
 session_jwt="<session JWT returned by MFA confirmation or verification>"
@@ -180,7 +180,7 @@ ls -la /configured/project/path
 
 When a session expires or stops validating, sign in with password and complete
 MFA again. The `server-token` file is a signing secret, not a bearer token;
-see [Authentication API](../authentication-api.md).
+see [Authentication API](../api/authentication.md).
 
 ## Example: Multi-Project Workspace
 

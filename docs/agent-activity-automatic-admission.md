@@ -1,6 +1,6 @@
 # Configured-Agent Activity: Transactional Sampling and Automatic Admission
 
-**Status:** Phases 05–07 complete (2026-09-11). This page documents the
+**Status:** Integrated qualification complete (2026-09-11). This page documents the
 private Linux `agent-activity` coordinator layer. It combines PTY, process, and
 owned-TCP evidence; it does not treat any single observation as proof that an
 agent is finished or expose process arguments, terminal bytes, socket
@@ -20,7 +20,7 @@ addresses, or raw diagnostics.
 | `server/src/api/idle_suspend.rs`                        | Protected status, timing, and manual force-suspend REST handlers                                                                |
 | `server/src/main.rs`, `server/src/state.rs`             | Startup after persistence restoration and shutdown ordering                                                                     |
 
-The lower-level evidence contracts remain in [PTY Activity Observation](./pty-activity-observation.md), [Configured-Agent Process Discovery](./agent-activity-process-discovery.md), and [Owned TCP Byte Observation](./tcp-activity-observation.md). This page is the integration contract for their Phase 05 consumer.
+The lower-level evidence contracts remain in [PTY Activity Observation](./pty-activity-observation.md), [Configured-Agent Process Discovery](./agent-activity-process-discovery.md), and [Owned TCP Byte Observation](./tcp-activity-observation.md). This page is the integration contract for their transactional sampler consumer.
 
 ## Runtime topology
 
@@ -267,9 +267,9 @@ The implementation's focused verification map is:
 These tests use injected process/socket sources and test managers; this page
 claims the source coverage map, not a production host suspend or RTC run.
 
-## Phase 07 integrated qualification
+## Integrated qualification
 
-Phase 07 verifies the coordinator through the public manager and route
+Integrated qualification verifies the coordinator through the public manager and route
 boundaries rather than reaching into private observer state:
 
 | Surface                                                              | Integrated evidence                                                                                                                                                                                                                                                                                                       |
@@ -312,11 +312,10 @@ physical or out-of-band recovery, and a bounded rollback-owned window.
 - [System Architecture](./system-architecture.md)
 - [API Reference](./api-reference.md#terminal-idle-suspend)
 - [Configuration Guide](./configuration-guide.md#terminal-idle-suspend-opt-in-linux-suspend)
-- [Phase 07 verification report](../plans/reports/qa-260911-1107-phase07-integrated-qualification.md)
 
 ## Unresolved questions
 
-No new product or implementation questions were introduced by Phase 07. The
+No new product or implementation questions were introduced. The
 remaining operational questions about target-host observer feasibility, exclusive
 `rtc0` ownership, shutdown/join latency, and physical or out-of-band wake
 approval remain in [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md#unresolved-questions-configured-agent-automatic-suspend-canary).

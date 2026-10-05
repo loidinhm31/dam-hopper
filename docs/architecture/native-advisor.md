@@ -1,7 +1,7 @@
 # Native Advisor — frozen contract and migration architecture
 
-Status: **Complete.** Native implementation, plugin-platform retirement, and Phase 09 qualification are complete; the migration progress record reports all nine phases complete (2026-10-04).
-The native Advisor domain service, UI panel/provider, and settings toggle are integrated into Workspace; the plugin platform, runner daemon, SDK, and Evcrate plugin release assets are retired. See the [migration plan](../../plans/261002-0246-native-advisor-migration/plan.md), [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md), and [qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md).
+Status: **Complete.** Native implementation and plugin-platform retirement are complete (2026-10-04).
+The native Advisor domain service, UI panel/provider, and settings toggle are integrated into Workspace; the plugin platform, runner daemon, SDK, and Evcrate plugin release assets are retired.
 
 ## Frozen decisions
 
@@ -13,19 +13,19 @@ The native Advisor domain service, UI panel/provider, and settings toggle are in
 - No `/home` scan, registered paths, root-identity admission, grant matrix, project bindings, plugin package, runner, Node worker, or iframe.
 - Validation removed hashing UI entirely. No path SHA-256 generation/copy/field or admission check. Keep producer project_id/checkpoint/document revision/cursor hashes, which are independent domain identities.
 
-## Phase 01: frozen contract and parity baseline
+## Frozen contract and parity baseline
 
 The linked report is the detailed contract and acceptance record; this page summarizes the architecture. It freezes native endpoints and DTOs, authorization and ownership, source discovery, resource bounds, UI cutover, and plugin-retirement/rollback boundaries.
 
 Synthetic fixtures under `__fixtures__/native-advisor/` are checked by `scripts/test-native-advisor-parity.mjs` against canonical Evcrate providers. The observed baseline run passed **16/16 checks**, covering history diagnostics and inventory, pagination and cursor integrity, detail reread, policy statuses, evaluation list/read/compare, and root-symlink/status invariants. This records source-observable parity; it does not prove native API/UI implementation or production qualification.
 
-## Phase 02: native history domain and API
+## Native history domain and API
 
 The Rust implementation in `server/src/advisor/` owns history scanning, diagnostics and metrics, root status, and per-authenticated-user snapshots used by summary, paging, and detail requests. `server/src/api/advisor.rs` exposes this domain; `AppState` captures the source HOME and serializes setting updates.
 
 The source is the server process's `$HOME/.evcrate/advisor-history`. Status uses `symlink_metadata` on the final root and reports a final-component symlink as unavailable. There is no custom root, `/home` scan, or path-hash admission. `[server.advisor].enabled` defaults to `false`; disabling the feature clears active snapshots.
 
-## Phase 03: policy and evaluation reads & routing editor
+## Policy and evaluation reads & routing editor
 
 Native account policy routes expose current policy (`POST /api/advisor/policy/current`) and update its primary and backup routes (`PATCH /api/advisor/policy`); model discovery routes expose harness-catalog options and fallbacks (`POST /api/advisor/models`); evaluation routes provide discovery, revision-checked reads, and comparisons (`POST /api/advisor/evaluations/list`, `POST /api/advisor/evaluations/read`, `POST /api/advisor/evaluations/compare`).
 
@@ -37,7 +37,7 @@ Native account policy routes expose current policy (`POST /api/advisor/policy/cu
 - **Input and credential safety:** Policy bodies and files are capped at 16 KiB. Both disk contents and update payloads are recursively inspected; any presence of credential-like keys (e.g., tokens, secrets, cookies, apiKeys) triggers immediate rejection with `ROUTE_CREDENTIAL_FIELD`.
 - **Harness model discovery:** `POST /api/advisor/models` executes read-only CLI discovery commands bounded by timeouts and output limits, falling back to normalized built-in catalogs if the harness CLI is missing, timed out, or unauthenticated.
 
-## Phase 04: native React panel and provider
+## Native React panel and provider
 
 `packages/ui/src/advisor/AdvisorPanel.tsx` renders one reusable React subtree with four views:
 
@@ -50,15 +50,15 @@ Native account policy routes expose current policy (`POST /api/advisor/policy/cu
 
 Advisor selectors, reset rules, variables, and theme fallbacks stay under `.native-advisor`; animation keyframes use Advisor-specific names. The panel path has **0 iframe/srcdoc, 0 MessagePort/plugin bridge, 0 plugin SDK, and 0 nested React root**. It imports no sibling Evcrate checkout code.
 
-The panel/provider and Workspace integration are implemented. This placement test covers persistent DOM behavior only; it does not establish all Advisor operations or authenticated server parity by itself. Cross-layer qualification is recorded in the Phase 09 [qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md), and phase status in the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md).
+The panel/provider and Workspace integration are implemented. This placement test covers persistent DOM behavior; comprehensive cross-layer qualification validates Advisor operations and authenticated server integration.
 
 ## Pre-migration source evidence
 
-- Before Phase 05, `WorkspaceAdvisorHost.tsx` wrapped `PluginHost`; Phase 05 replaces it with the native panel.
-- Before Phase 05, `SettingsPage.tsx` exposed Plugin Platform registration; it now mounts `AdvisorSettingsSection` in the Native Advisor accordion.
+- Historically, `WorkspaceAdvisorHost.tsx` wrapped `PluginHost`; the native integration replaces it with the native panel.
+- Historically, `SettingsPage.tsx` exposed Plugin Platform registration; it now mounts `AdvisorSettingsSection` in the Native Advisor accordion.
 - The former `PluginAccessModal.tsx` generated the path SHA-256 that native Settings removes.
 - `server/src/api/plugin_admin.rs::advisor_history_probe_handler`: HOME plus `/home` scan and canonical/symlink admission.
-- `server/src/api/auth.rs::require_plugin_admin`: the pre-migration live enabled-user admin check; Phase 02 generalizes it as `require_admin` for native Advisor routes.
+- `server/src/api/auth.rs::require_plugin_admin`: the pre-migration live enabled-user admin check; native Advisor generalizes it as `require_admin` for native routes.
 - Evcrate `plugin/ui/plugin-main.tsx`: imports `viewer/src/app.tsx`, port provider, global CSS.
 - Evcrate `plugin/manifest.json`: eight read/refresh capabilities; no history/policy/evaluation write operation.
 - `server/src/linux_release/state_record.rs`: strict records contain runner/plugin metadata; raw field deletion breaks existing state.
@@ -71,13 +71,13 @@ The panel/provider and Workspace integration are implemented. This placement tes
 3. Workspace uses selected project's profile/connection as data owner, independently of Settings/preference selectors. Without a project, use explicitly selected connected profile; no arbitrary first-connected fallback.
 4. Native status returns configured `enabled`, real-directory `available`, admin-only detected path and explicit source errors; no hash fields.
 5. Native typed client → `/api/advisor/*` → current auth/admin guard → native service → HOME-root history, HOME account policy and current reader evaluation discovery.
-6. Phase 04's native React panel reuses Advisor views, selectors, reducer, and domain formatting through an owner-bound `ApiClient.advisor` adapter with abortable requests.
-7. Phase 05 replaces the persistent host's former `PluginHost` child with `AdvisorPanel` in IDE, Terminal float, and compact placements; it does not use an iframe or nested React root.
+6. The native React panel reuses Advisor views, selectors, reducer, and domain formatting through an owner-bound `ApiClient.advisor` adapter with abortable requests.
+7. The integration replaces the persistent host's former `PluginHost` child with `AdvisorPanel` in IDE, Terminal float, and compact placements; it does not use an iframe or nested React root.
 8. Workspace surfaces and launchers use one current-owner connected + admin + enabled predicate. Owner/profile/generation-qualified queries isolate status and Advisor data. When the predicate is false, launchers/surfaces and the conditional host are removed; an inactive placement keeps the mounted host inert.
 
 ## API and authorization invariants
 
-Phases 02–03 implement status, settings, history/evaluation operations, and account policy reads. The API also supports revision-checked route updates at `/api/advisor/policy`; Phase 04's native provider consumes these APIs, and Phase 05 connects them to Settings/Workspace without changing server-side authorization.
+The API implements status, settings, history/evaluation operations, and account policy reads, alongside revision-checked route updates at `/api/advisor/policy`. The native provider consumes these APIs and connects them to Settings and Workspace without changing server-side authorization.
 
 - Native status/settings routes work for admins even when disabled or history missing; enable toggle never requires folder creation or plugin registration.
 - Data routes require enabled feature and current admin authorization. Status conveys availability; missing source is explicit empty/not-configured state where source contract defines it.
@@ -87,7 +87,7 @@ Phases 02–03 implement status, settings, history/evaluation operations, and ac
 - History and evaluation sources remain read-only. Advisor configuration mutations are limited to the server enable toggle and primary/backup route updates; there is no history delete, policy import, or picker API. Refresh mutates in-memory snapshots only.
 - Bound pages, comparison workload, source file sizes, and blocking scans; reuse source limits. Do not rebuild entire history for every summary/page/detail request.
 - Snapshot/cursor ownership includes authenticated subject and server-side source/filter identity; never reuse snapshot from another owner or incompatible query.
-- Preserve history format discrimination, provenance, stale/not-configured/error distinctions and comparison eligibility. Full port evidence belongs in plan research/contracts.
+- Preserve history format discrimination, provenance, stale/not-configured/error distinctions and comparison eligibility.
 
 ## Native Advisor REST API
 
@@ -115,7 +115,7 @@ History availability is separate from routing capability. When Advisor is enable
 
 `query` contains optional `projectId`, `taskRunId`, and `filters`; `query.filters` supports `statuses`, `outcomeStates`, `outcomeResults`, `backends`, `models`, `efforts`, `promptIdentities`, `buildIdentities`, `startedAtFrom`, and `startedAtTo`. Page sorting defaults to `started_at_desc`; the page size defaults to 100 and is capped at 500. Continuation cursors are HMAC-signed and bound to the snapshot/query. The detail endpoint rechecks captured file fingerprints before returning content. The [Advisor configuration reference](../configuration/advisor.md) documents policy and model-discovery DTOs, fallback catalogs, limits, and persistence alongside the history behavior.
 
-#### Inline routing editor (Phase 04)
+#### Inline routing editor
 
 `PolicySummaryCard` keeps the current owner policy read-only until **Edit Routing** is selected. In edit mode, the static primary/backup route summary is replaced by two `RouteFieldset`s for the primary and backup targets; the full-policy disclosure remains available. `ConfigurationView` and `AdvisorPanel` pass the catalog, save, cancel, and reload operations to the card.
 
@@ -165,7 +165,7 @@ Discovery work is bounded in several ways, but the timeout stages are independen
 
 Normalization caps catalogs at 500 models and the serialized `models` array at 256 KiB. It trims IDs and labels, drops empty values, control characters, credential-like substrings, and IDs or labels longer than 256 bytes, removes duplicate IDs, and sorts by label then ID. The 256 KiB bound is applied to the model array, not to the enclosing response object.
 
-## Phase 05 Settings and Workspace cutover (complete)
+## Settings and Workspace integration
 
 The Settings target remains independent of the Workspace project/connection owner. The implemented UI and state wiring are:
 
@@ -178,7 +178,7 @@ The Settings target remains independent of the Workspace project/connection owne
 | `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx`             | Replaces `PluginHost` with one direct `AdvisorPanel`; a single host measures the active slot across modes. Focus capture activates the slot, Escape closes it, and hiding restores focus to a live launcher or blurs.                                                                                                                                                                     |
 | `packages/ui/browser-tests/workspace-advisor.browser.tsx`                   | Chromium harness mocks the panel and asserts the same panel DOM node across IDE → Terminal → compact → IDE, plus an inert/hidden/`aria-hidden` host while the slot is closed.                                                                                                                                                                                                             |
 
-The placement test alone does not establish all eight domain operations or authenticated real-server parity. The Phase 09 report records the broader integration qualification; see the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md) for completed phase status.
+The placement test verifies that DOM structure and placement are preserved; integration qualification validates domain operations and authenticated server parity.
 
 ## Historical plugin/deployment retirement record
 
@@ -186,4 +186,3 @@ The Dam-Hopper plugin platform, SDK, runner, API/WS bridge, iframe host, registr
 
 - Preserve shared auth/session behavior, PTY and filesystem transports, idle-suspend IPC, and unrelated release state while removing plugin-only assets.
 - New release and rollback paths do not restart the obsolete runner. Legacy cleanup is limited to verified runner-owned artifacts and must preserve unrelated users, groups, and runtime state.
-- Full migration evidence and completion receipts are in the [progress overview](../../plans/261002-0246-native-advisor-migration/progress.md) and [Phase 09 qualification report](../../plans/261002-0246-native-advisor-migration/reports/qualification.md).

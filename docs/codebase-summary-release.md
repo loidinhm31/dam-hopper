@@ -1,6 +1,6 @@
 # Codebase Summary: Release and Deployment
 
-This detail page is derived from `repomix-output.xml` and the focused release-source files. It keeps the main codebase summary below the documentation size target while preserving release architecture and phase boundaries.
+This detail page is derived from `repomix-output.xml` and the focused release-source files. It keeps the main codebase summary below the documentation size target while preserving release architecture and operational boundaries.
 
 ## Linux release and deployment
 
@@ -19,7 +19,7 @@ service, and runner tmpfiles rule. That platform is retired; these paths and the
 v0.5.0/v0.5.1 runner incident are historical, not current release requirements.
 Current packages contain the manager, server, web host/assets, idle-suspend
 helper, and current service/runtime templates. See the [Linux release manifest](./linux-release-manifest.md).
-### Phase 01–02 Windows direct-server release and installer
+### Windows direct-server release and installer
 
 `deploy/release/build-windows-release-archive.mjs` emits a deterministic
 `dam-hopper-vX.Y.Z-windows-x86_64.zip` containing exactly
@@ -45,7 +45,7 @@ This is a direct-server package, not a systemd or Manifest v2 release. See
 [Windows Release Asset Packaging](./windows-release-packaging.md) for the
 asset contract, installer grammar, and operator/test commands.
 
-### Phase 03 cross-platform Release CI and guidance
+### Cross-platform Release CI and guidance
 
 `.github/workflows/release-linux.yml` branches after shared metadata validation:
 Linux builds/package under `--profile linux`; Windows builds
@@ -61,14 +61,14 @@ asset contract without executing the installer or contacting a production
 release. The package-twice and installer fixtures remain separate
 reproducibility and live-installation boundaries.
 
-### Phase 00 merge boundary (2026-09-14)
+### Historical merge reconciliation (2026-09-14)
 
 The merge reconciliation kept refusal-based descriptor provisioning and
 excluded recursive string-path `chown`, while incorporating the workflow and
 Explorer HTML preview surfaces. The API unit renders
 `--config /var/lib/dam-hopper/dam-hopper.toml`; the merge boundary is complete.
 
-### Phase 01 runtime-state boundary (2026-09-14)
+### API runtime-state boundary (2026-09-14)
 
 `server/src/linux_release/api_runtime.rs` now provisions the descriptor-relative
 API state root, canonical `/var/lib/dam-hopper/dam-hopper.toml`, and server
@@ -79,7 +79,7 @@ temporary sibling and Linux `renameat2(RENAME_NOREPLACE)`; mismatches, unsafe
 legacy state, races, and post-publication failures remain refusal/reporting
 boundaries. See [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md).
 
-### Phase 02 systemd unit/policy boundary (2026-09-14)
+### Systemd unit and policy boundary (2026-09-14)
 
 `deploy/systemd/dam-hopper-api.service.in` renders
 `--config @API_HOME@/dam-hopper.toml`; the checked-in unit resolves that
@@ -90,7 +90,7 @@ exactly one canonical `ExecStart` and one zero-operand privileged
 the same unit; duplicate directives, legacy/alternate paths, and extra
 arguments fail closed. Focused unit-policy/staging evidence records 29/29.
 
-### Phase 03 preflight, installer, and reset boundary (2026-09-14)
+### Preflight, installer, and reset boundary (2026-09-14)
 
 `activate_preflight.rs` gates SQLite holder checks only for `server`/`both`
 roles. It inspects canonical `/var/lib/dam-hopper/dam-hopper.toml` first and

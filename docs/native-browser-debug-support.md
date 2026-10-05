@@ -6,7 +6,7 @@ receive Tauri commands, filesystem access, shell access, opener access, or
 generic IPC capabilities. The existing web iframe adapter remains the
 fallback and rollback path.
 
-Phase 09 integrated web qualification passed its Browser ownership and handoff
+Integrated web qualification passed the Browser ownership and handoff
 scenarios. The Windows native S13 gate remains blocked until a real packaged
 runtime records WebView2, DPAPI, SSH-scope, and Browser relay evidence; this
 document's implementation matrix is not a native release claim.
@@ -29,9 +29,9 @@ implementation and keeps viewport rendering/resizing available even if the
 relay cannot be installed, but a successful compile or package does not imply
 runtime verification on every desktop distribution.
 
-## Phase 08 owner integration
+## Owner integration
 
-The native Browser host consumes the complete Phase 05
+The native Browser host consumes the owner-qualified
 `BrowserDebugTarget`, whose owner is `ConnectionRef { profileId, generation }`.
 `apps/native/src/native-browser-debug-host.ts` does not infer an owner from the
 most recently focused project, Settings target, terminal, or SSH scope.
@@ -105,8 +105,8 @@ native application assets.
 Linux CI builds the desktop application and `.deb`/`.rpm` artifacts with the
 WebKitGTK development packages from the workflow. The native child and relay
 are implemented, but runtime behavior remains unverified on the supported
-distribution matrix. AppImage support and Linux runtime verification need a
-later plan. macOS is intentionally absent from v1 packaging and support claims.
+distribution matrix. AppImage support and Linux runtime verification remain
+unqualified. macOS is intentionally absent from v1 packaging and support claims.
 
 ## Rollback
 

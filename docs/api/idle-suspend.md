@@ -9,7 +9,7 @@ force-suspend action, and out-of-band push hints. Automatic idle timing and the
 manual action remain separate: a manual request does not change the persisted
 automatic policy.
 
-### Phase 01 policy/configuration contract
+### Policy and configuration contract
 
 The automatic policy and executable matcher list are startup configuration,
 not status fields or runtime mutation inputs. The registry stores the block
@@ -46,15 +46,14 @@ startup-owned values; only the timing pair remains mutable through the
 dedicated timing endpoint. A full-config update rejects a changed idle-suspend
 block and preserves it when omitted.
 The status endpoint intentionally does not expose the matcher list or policy
-selector's private executable entries. Phase 02 adds private PTY root identity,
-raw-read, accepted-input, bounded-snapshot, and invalidation evidence. Phase 03
-adds private bounded process discovery and retained attribution through
-`ProcessSource`; Phase 04 adds private owned TCP byte observation and per-socket
-baseline comparison. Phase 05 combines those seams through a dedicated
-transactional sampler and manager-locked final admission. See [Configured-Agent
-Process Discovery](../agent-activity-process-discovery.md), [Owned TCP Byte
-Observation](../tcp-activity-observation.md), and [Agent Activity Automatic
-Admission](../agent-activity-automatic-admission.md).
+selector's private executable entries. Observation uses private PTY root identity,
+raw-read, accepted-input, bounded-snapshot, and invalidation evidence, combined with
+private bounded process discovery and retained attribution through `ProcessSource`,
+private owned TCP byte observation, and per-socket baseline comparison. A dedicated
+transactional sampler and manager-locked final admission evaluate these seams. See
+[Configured-Agent Process Discovery](../agent-activity-process-discovery.md),
+[Owned TCP Byte Observation](../tcp-activity-observation.md), and [Agent Activity
+Automatic Admission](../agent-activity-automatic-admission.md).
 
 The public `activity` object is diagnostic status, not a process inventory or
 authorization token. It is null for `empty-fleet` and present for
@@ -237,7 +236,7 @@ invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
 The route is registered only under the protected API router; there is no
 unauthenticated WebSocket or native bypass.
 
-#### Configured-agent activity qualification boundary (Phase 07, 2026-09-11)
+#### Configured-agent activity qualification boundary (2026-09-11)
 
 The idle-suspend route contract is qualified at three consumer boundaries:
 
@@ -252,7 +251,7 @@ The idle-suspend route contract is qualified at three consumer boundaries:
   rendered policy/counts, heuristic notice, warning duration and safe identity,
   truncation, countdown, manual force, and old-server compatibility in Chromium.
 
-The configured-agent activity Phase 07 QA record reports **323 backend/PTY/API
+The configured-agent activity QA record reports **323 backend/PTY/API
 integration tests**, **14/14** boundary checks, **16/16** Chromium tests, and
 an ignored Linux observer smoke passing in **0.72s**. Automated tests use fake
 suspend outcomes and never invoke the helper, RTC programming, `systemctl
@@ -273,7 +272,7 @@ Out-of-band revision-only push hint broadcast over a dedicated event channel iso
 - **Behavior**: Client validates `version: 1` and integer `revision`, then invalidates `['system', 'idle-suspend', 'v1', 'status']` query cache. Reconnects and broadcast lag reconcile automatically via REST status GET.
 - **Post-Resume Reconciliation**: Following a suspend/resume cycle or execution failure, the coordinator refreshes capabilities and authoritative status revision, publishes `host:idleSuspendChanged`, and releases the handoff lock. Clients recover authoritative state on next fetch with no duplicate suspend attempt while the fleet remains empty.
 
-#### Phase 01 helper execution contract
+#### Helper execution contract
 
 The enrolled Unix-socket helper accepts protocol version `1` frames with a
 required camelCase `requestId` and `wakeAfterSeconds` field. Frames use a
@@ -294,7 +293,7 @@ The helper records `wakeAfterSeconds: 0` in both intent and completion audit
 records. These details are internal to the enrolled helper and are not exposed
 as a browser-selectable path, device, command, suspend mode, or absolute time.
 
-#### Phase 04 helper audit v2 (internal diagnostics)
+#### Helper audit v2 (internal diagnostics)
 
 The helper keeps one audit file at
 `/var/log/dam-hopper/idle-suspend-helper.jsonl`; this is not a REST, WebSocket,
@@ -343,12 +342,11 @@ snake_case keys: `light_sample_seconds` (5), `process_sample_seconds` (15),
 safe ranges at runtime. The 500 ms `snapshot_deadline_millis` is a wait
 deadline, not a blocking syscall or CPU bound; process deadline defaults to
 150 ms.
-Phase 07 validation covered Rust format/check/tests, vendored server tests, UI
+Automated validation covered Rust format/check/tests, vendored server tests, UI
 unit/type/browser tests, lint, web/server builds, and a `linux/amd64` Docker
 build. The no-tunnel container shutdown measurement is not a claim about active
-tunnel teardown. The release owner approved Phase 07 completion with the
-still-unobserved Windows CI result, canary-host profiling, staged
-monitor/in-app-alert canary, and rollback rehearsal deferred as post-release
-work; none of those checks is passed evidence.
+tunnel teardown. Windows CI, canary-host profiling, staged
+monitor/in-app-alert canary, and rollback rehearsal remain deferred post-release
+items; none of those checks is passed evidence.
 
 

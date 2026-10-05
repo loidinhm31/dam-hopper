@@ -1,6 +1,6 @@
 # Owned TCP Byte Observation
 
-**Status:** Phase 04 implemented 2026-09-11. This page documents the private,
+**Status:** TCP observer implemented 2026-09-11. This page documents the private,
 read-only Linux socket-diagnostics seam used by the configured-agent
 `agent-activity` idle-suspend policy. It does not expose a REST/WebSocket API,
 make an automatic suspend decision, or authorize a handoff.
@@ -19,18 +19,18 @@ make an automatic suspend decision, or authorize a handoff.
 `activity::netlink` and `activity::tcp_info` remain private implementation
 modules. No activity type or diagnostic transport is public API. The shared
 `NetworkNamespaceIdentity::current_thread()` helper reads the observing
-thread's namespace identity for both Phase 03 ownership and Phase 04 fencing.
+thread's namespace identity for both process discovery ownership and TCP observer fencing.
 
-Phase 03 produces the `OwnedSocketSet` consumed here. Phase 05 combines this
-prepared network result with PTY and process evidence in the transactional
-sampler, then performs warning projection and final handoff admission.
+Process discovery produces the `OwnedSocketSet` consumed here. The transactional
+sampler combines this prepared network result with PTY and process evidence,
+then performs warning projection and final handoff admission.
 
 ## Observation flow
 
 A TCP sample is prepared as one bounded, read-only operation:
 
 ```text
-Phase 03 OwnedSocketSet + observing namespace
+Process discovery OwnedSocketSet + observing namespace
   -> verify current thread network namespace
   -> open one fresh nonblocking NETLINK_SOCK_DIAG socket
   -> dump TCP/IPv4 and TCP/IPv6 records
@@ -211,26 +211,26 @@ baseline establishment, unchanged samples, activity deltas, key changes,
 inode reuse, invalidation, and transactional commit behavior.
 
 No production suspend, RTC mutation, socket mutation, or privileged operation
-is part of these tests. The [Phase 05 admission guide](./agent-activity-automatic-admission.md)
+is part of these tests. The [automatic admission guide](./agent-activity-automatic-admission.md)
 documents how this result joins PTY/process evidence under a generation-fenced
 final claim.
 
 ## Related documentation
 
 - [Configured-Agent Process Discovery](./agent-activity-process-discovery.md) —
-  Phase 03 roots, attribution, namespace-qualified socket ownership, and
+  process discovery roots, attribution, namespace-qualified socket ownership, and
   `OwnedSocketSet` input.
-- [PTY Activity Observation](./pty-activity-observation.md) — Phase 02 root,
+- [PTY Activity Observation](./pty-activity-observation.md) — PTY evidence root,
   output, input, snapshot, and watcher evidence.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
   fail-closed privacy and deployment policy.
 - [System Architecture](./system-architecture.md) — subsystem data flow.
 - [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) —
-  Phase 05 pair transaction, final claim, coordinator, and status projection.
+  transactional sampler pair transaction, final claim, coordinator, and status projection.
 
 ## Unresolved questions
 
 None requiring a product decision. Kernel support, procfs visibility, and
-observer latency remain deployment qualification prerequisites; the Phase 05
+observer latency remain deployment qualification prerequisites; the transactional
 sampler and final handoff contract are documented in
 [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md).

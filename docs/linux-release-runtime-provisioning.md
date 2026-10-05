@@ -1,6 +1,6 @@
 # Linux API Runtime State Provisioning
 
-**Status:** Phase 01 complete (2026-09-14)
+**Status:** Verified (2026-09-14)
 
 This guide documents the Linux release-manager contract for provisioning the
 API daemon's durable configuration and server audit state. It is intentionally
@@ -30,10 +30,10 @@ root is opened.
 | `/var/lib/dam-hopper/dam-hopper.toml` | API UID:GID, regular file `0600` | Canonical API registry consumed at startup. |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | API UID:GID, regular file `0600` | Server timing/manual audit. |
 | `/etc/dam-hopper/dam-hopper.toml` | `root:root`, regular file `0644` | Optional, read-only migration source used only while canonical config is absent. |
-| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | API-owned diagnostic stream | Validated/used by the semantic event writer; not created by this Phase 01 gate. |
+| `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | API-owned diagnostic stream | Validated/used by the semantic event writer; not created by this runtime provisioning gate. |
 
 The old `/etc/dam-hopper/idle-suspend-audit.jsonl`, when present, is legacy
-operator state. Phase 01 does not create, repair, truncate, delete, or migrate
+operator state. The runtime provisioning gate does not create, repair, truncate, delete, or migrate
 that file. The helper audit remains under
 `/var/log/dam-hopper/idle-suspend-helper.jsonl` and has its separate systemd
 `LogsDirectory` authority.

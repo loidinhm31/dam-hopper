@@ -1,9 +1,9 @@
 # System Service APIs
 
 Diagnostics, browser-debug, native forwarding, and host-resource API contracts moved from the [API reference index](../api-reference.md).
-## Frontend Diagnostics Snapshot (Phase 01)
+## Frontend Diagnostics Snapshot
 
-Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is written by the browser host before app render and stored in `localStorage` only.
+A client-side diagnostics ring provides local troubleshooting. It is written by the browser host before app render and stored in `localStorage` only.
 
 **Storage key:** `damhopper_diagnostics_frontend_v1`
 
@@ -23,9 +23,9 @@ Phase 01 adds a client-side diagnostics ring for local troubleshooting. It is wr
 - storage usage is capped at a small fixed budget
 - if browser storage is unavailable or full, capture degrades to memory-only best effort
 
-This phase does not expose a backend export endpoint yet.
+This snapshot is client-side only and does not expose a backend export endpoint.
 
-## Browser Debug Artifacts (Phase 2; Phase 6 hardened)
+## Browser Debug Artifacts
 
 Authenticated, ephemeral storage for a browser-debug selection and optional screenshot. Artifacts are scoped to a live PTY terminal; no read or list endpoint exists.
 
@@ -72,7 +72,7 @@ releases the claim for retry; a concurrent or completed handoff returns
 `409 Conflict`. Expired, unknown, deleted, or dead-terminal artifacts return
 the existing safe not-found response.
 
-### Browser tool host policy (Phase 3)
+### Browser tool host policy
 
 The UI Browser tool embeds a development target directly and uses the
 DamHopper Browser Debug extension for DOM selection; the target app does not
@@ -102,7 +102,7 @@ storage is isolated below application data using a hash of the opaque server
 profile ID; URLs, credentials, tokens, and workspace paths are not used as
 storage identifiers. The native path does not require `chrome://extensions`
 
-## Native SSH forwarding IPC (Phase 08)
+## Native SSH forwarding IPC
 
 Native SSH forwarding is a Windows desktop Tauri capability, not a REST or
 WebSocket API. The shared UI calls the `SshForwardHost` interface; the Axum
@@ -161,7 +161,7 @@ Snapshots are scoped to one profile and include connection/rule data, runtime
 state, revisions, credential status, trust challenges, and the scope identity.
 `ssh-forward:changed` events are bounded refetch hints, not patches. The full
 native lifecycle, persistence, limits, and security contract is in the
-[Phase 08 guide](../phase-08-native-scope-concurrency.md).
+[Native SSH Forwarding Architecture](../architecture/native-ssh-forwarding.md).
 
 Screen capture is optional and remains browser-local until handoff. It requires
 an explicit user gesture, accepts only a browser-tab surface, and stops tracks
@@ -169,16 +169,16 @@ when Browser closes or selection changes. Permission denial, unsupported capture
 wrong-surface selection, coordinate changes, or crop failure preserve the
 semantic selection and offer manual image input instead.
 
-## Backend Diagnostics Export (Phase 04)
+## Backend Diagnostics Export
 
 Protected local export for backend diagnostics. The endpoint reads from the local JSONL store and does not upload data anywhere. The UI entry point is Settings > Maintenance > Export Diagnostics.
 
 This browser-facing export is separate from the production idle-suspend
-diagnostics contract. The canonical server event writer and Phase 03
+diagnostics contract. The canonical server event writer and
 coordinator emission are internal producer paths; they add no REST/WebSocket
 route and are not included in this export.
 
-### Production diagnostics CLI (Phases 06–07)
+### Production diagnostics CLI
 
 Historical idle-suspend incident reconstruction is not exposed via REST or WebSocket endpoints; `/api/system/idle-suspend/v1/status` reports only the latest, ephemeral coordinator state and current host probes. Comprehensive historical diagnosis across coordinator events, audits, systemd lifecycle, journald, and host probes is exclusively provided via the local one-shot CLI:
 
@@ -208,10 +208,10 @@ Non-root collection never escalates; an applicable helper audit is
 |  `2` | Partial historical evidence; valid bundle written.          |
 |  `1` | Serialization or secure-output failure; no path is printed. |
 
-See [Linux Release Manager — Production diagnostics](../linux-release-manager.md#production-diagnostics-phase-06)
+See [Linux Release Manager — Production diagnostics](../linux-release-manager.md#production-diagnostics)
 for source paths, role applicability, fixed adapter limits, and output details.
 
-#### Phase 07 qualification (production diagnostics, 2026-09-14)
+#### Production diagnostics qualification (2026-09-14)
 
 The dedicated verification artifacts are:
 
@@ -302,11 +302,11 @@ Notes:
 - bundles are generated locally and downloaded by the browser; there is no server-side bundle archive
 - terminal tails can still contain sensitive local/dev output even after best-effort redaction; review before sharing the exported JSON
 - when `terminalIds` is provided, backend events with `sessionId` are scoped to those ids while global events remain included
-- **Phase 04:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
+- **Host metrics:** `system` field contains host metrics sampled from the config directory (`~/.config/dam-hopper/` by default) for host-context only, not project sandboxes
 
 ### Host resource snapshot and alerts
 
-Phase 03 exposes the read-only `HostResourceSnapshotV1` contract through
+The read-only `HostResourceSnapshotV1` contract is exposed through
 protected routes. Snapshots use camelCase fields and section-level
 availability states (`available`, `unsupported`, `permissionDenied`,
 `temporarilyUnavailable`, or `stale`) with optional detail codes. Text reads are

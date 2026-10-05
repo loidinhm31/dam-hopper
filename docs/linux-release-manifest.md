@@ -15,7 +15,7 @@ outside this specification:
 - Focused contract tests: `server/tests/linux_release_manifest.rs` and
   `server/tests/linux_release_manifest_errors.rs`
 
-## Publisher and bootstrap boundary (Phase 03 cross-platform release; Phase 06 Linux runtime)
+## Publisher and bootstrap boundary
 
 The central publisher's Linux profile emits four external, attested assets: the
 executable `dam-hopper-install.sh`, one profile archive, `release-manifest.json`,
@@ -35,7 +35,7 @@ the workflow DAG, artifact gate, reproducibility details, and exact grammar.
 
 ## Release identity
 
-Phase 01 defines one immutable archive per release:
+The release contract defines one immutable archive per release:
 
 ```text
 dam-hopper-vX.Y.Z-linux-x86_64-systemd.tar.gz
@@ -199,7 +199,7 @@ and runtime provisioning. Manifest v2 has no API identity field.
 }
 ```
 
-## Phase 03 web runtime contract
+## Web runtime contract
 
 The `web` role carries `bin/dam-hopper-web` and the immutable `web/` asset
 directory. Its dedicated host defaults to `0.0.0.0:4802` and reserves:
@@ -256,9 +256,9 @@ common + web paths, and a both view contains the complete inventory. Each view
 is immutable; a role change creates a new same-version view rather than
 mutating an existing one.
 
-The Phase 02 staging implementation preserves this post-commit view shape but
+The staging implementation preserves this post-commit view shape but
 replaces an existing same-tag/same-role destination before a repeated final
-rename. Phase 05 activates only the validated immutable view and records the
+rename. Activation promotes only the validated immutable view and records the
 result in the manager's authoritative state envelope.
 
 ## Manager consumption (Manifest v2; manager state v3)

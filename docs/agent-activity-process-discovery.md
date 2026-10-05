@@ -1,6 +1,6 @@
 # Configured-Agent Process Discovery
 
-**Status:** Phase 03 implemented 2026-09-11. This page documents the private
+**Status:** Implemented 2026-09-11. This page documents the private
 Linux process-discovery seam used by the opt-in `agent-activity` idle-suspend
 policy. It is not a public API and does not, by itself, claim that an agent is
 complete or authorize suspend.
@@ -14,10 +14,10 @@ complete or authorize suspend.
 | `server/src/idle_suspend/mod.rs`              | Keeps `activity` crate-private; no process identities or matcher state are re-exported                                                           |
 | `server/src/pty/activity.rs`                  | Shared `ProcessIdentity`, `TerminalIdentity`, `ProcessStat`, `PtyActivitySnapshot`, and the sole `/proc/<pid>/stat` parser                       |
 
-Phase 03 consumes the qualified PTY roots and atomic output handles from Phase 02. Phase 04 consumes only the prepared `OwnedSocketSet` and performs owned
-TCP byte observation. Phase 05 combines both prepared samples in the dedicated
-[transactional sampler and admission layer](./agent-activity-automatic-admission.md),
-which owns retry, final admission, and authenticated warning projection.
+Process discovery consumes the qualified PTY roots and atomic output handles from PTY evidence observation. The TCP observer consumes only the prepared `OwnedSocketSet` and performs owned
+TCP byte observation. The dedicated
+[transactional sampler and admission layer](./agent-activity-automatic-admission.md) combines both prepared samples,
+owning retry, final admission, and authenticated warning projection.
 
 ## Observation flow
 
@@ -90,14 +90,14 @@ fleet.
 
 ## Matching contract
 
-Matching uses Phase 01's borrowed, already-validated literal set; it does not
+Matching uses the borrowed, already-validated literal set; it does not
 compile patterns or search arbitrary command text.
 
 - A native executable matches an exact case-sensitive basename or normalized
   absolute `/proc/<pid>/exe` target. Unreadable, deleted, or non-normalizable
   targets are uncertain, not ordinary nonmatches.
 - A supported interpreter is classified only by the finite grammar in the
-  Phase 03 plan: Node/Node.js, Bun, Python (`python3.N`), and POSIX shell
+  process discovery specification: Node/Node.js, Bun, Python (`python3.N`), and POSIX shell
   launchers (`sh`, `bash`, `dash`, `zsh`, `ksh`). The first deterministic
   entrypoint token is compared to the configured basename or absolute path.
 - Relative entrypoints are resolved against that process's `/proc/<pid>/cwd`
@@ -161,7 +161,7 @@ Failures use the closed `ActivityUnavailableReason` set (`procAccess`,
 `namespaceMismatch`, `staleObservation`, `identityUncertain`,
 `counterOverflow`, or `reconciling`). `FailureContext` includes only processes
 directly implicated by the current failure; host-wide scan/timeout/ancestry
-failures leave it empty. Phase 03 returns owned socket identities for Phase 04;
+failures leave it empty. Process discovery returns owned socket identities for the TCP observer;
 the TCP observer adds socket-diagnostics evidence, retryable close-race
 classification, and per-socket baseline results.
 
@@ -181,11 +181,11 @@ suspended, while descendant services or mixed PTY noise can keep the host busy.
 Procfs permissions, `hidepid`/`ProtectProc`, LSM policy, container masking, and
 kernel support are qualification prerequisites; failures remain unavailable.
 No CPU detector, hooks, cgroups, eBPF, process freezing, or provider/API proxy
-is part of this phase.
+is part of process discovery.
 
 ## Verification
 
-Focused implementation commands from the phase plan are:
+Focused implementation commands for process discovery are:
 
 ```sh
 cargo test --manifest-path server/Cargo.toml idle_suspend::activity::process::tests
@@ -198,20 +198,18 @@ tests; the broader idle-suspend and PTY suites remain integration-gate evidence.
 The tests exercise the parser, finite interpreter grammar, fake-proc bounds,
 identity races, namespace and FD handling, retention/reparenting, safe warning
 identity, representative socket ownership, and transactional prepare/commit
-behavior. TCP observation is documented and tested separately; the Phase 05
+behavior. TCP observation is documented and tested separately; the transactional
 sampler, coordinator admission, and public status contract are documented in
 the [automatic admission guide](./agent-activity-automatic-admission.md).
 
 ## Related documentation
 
-- [PTY Activity Observation](./pty-activity-observation.md) — Phase 02 root and
+- [PTY Activity Observation](./pty-activity-observation.md) — Root and
   raw-output/input evidence consumed here.
-- [Owned TCP Byte Observation](./tcp-activity-observation.md) — Phase 04
-  bounded netlink transport, `tcp_info` parsing, and baseline comparison.
+- [Owned TCP Byte Observation](./tcp-activity-observation.md) —
+  Bounded netlink transport, `tcp_info` parsing, and baseline comparison.
 - [Agent Activity Automatic Admission](./agent-activity-automatic-admission.md) —
-  Phase 05 transactional sampling, final admission, coordinator, and status.
+  Transactional sampling, final admission, coordinator, and status.
 - [Terminal Idle Suspend Security](./terminal-idle-suspend-security.md) —
-  privacy and fail-closed deployment policy.
-- [System Architecture](./system-architecture.md) — subsystem data flow.
-- [Phase 03 plan](../plans/260910-1604-agent-activity-idle-suspend/phase-03-process-discovery.md)
-  — normative bounds and frozen interpreter grammar.
+  Privacy and fail-closed deployment policy.
+- [System Architecture](./system-architecture.md) — Subsystem data flow.
