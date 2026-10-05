@@ -226,6 +226,7 @@ pub async fn push_project(
 pub struct PrepareLeasedPushBody {
     pub worktree_path: Option<String>,
     pub root: Option<String>,
+    pub branch: Option<String>,
 }
 
 pub async fn prepare_leased_push_route(
@@ -238,7 +239,7 @@ pub async fn prepare_leased_push_route(
     let root = resolve_git_request_root(&project_path, body.root.as_deref())
         .map_err(ApiError::from_app)?;
     let ssh_cred = state.ssh_creds.read().await.clone();
-    let preview = crate::git::prepare_leased_push(&project_path, &root.root_path, ssh_cred)
+    let preview = crate::git::prepare_leased_push(&project_path, &root.root_path, body.branch.as_deref(), ssh_cred)
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(preview))
@@ -539,6 +540,7 @@ pub async fn get_branches(
 pub struct RootQuery {
     pub worktree_path: Option<String>,
     pub root: Option<String>,
+    pub branch: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -833,7 +835,7 @@ pub async fn get_commit_message_route(
     let path = resolve_target_path(&state, &project, query.worktree_path).await?;
     let root =
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
-    let snapshot = get_commit_message(&root.root_path, &hash).map_err(ApiError::from_app)?;
+    let snapshot = get_commit_message(&root.root_path, &hash, query.branch.as_deref()).map_err(ApiError::from_app)?;
     Ok(Json(CommitMessageResponse {
         message: snapshot.message,
         branch: snapshot.branch,

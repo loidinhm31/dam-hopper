@@ -304,13 +304,13 @@ a merge, rebase, or cherry-pick is already in progress and returns `recovery`
 metadata for the active operation.
 
 **GET /api/git/{project}/commit/{hash}/message**
-Read the complete UTF-8 message for a commit reachable from the selected
-worktree's current branch. Optional query fields `worktreePath` and `root`
-select the registered worktree and VCS root. The response also returns the
-full symbolic branch and exact tip OID; keep both values together as the
-snapshot for a subsequent edit.
-Message reads use a lock-free branch/tip snapshot and recheck both refs before
-returning; concurrent full-message reads do not contend for Git write locks.
+Read the complete UTF-8 message for a commit reachable from the target branch.
+Optional query fields:
+- `branch` (optional string): Target local branch reference (e.g. `refs/heads/feature`). When specified, enables reading commit messages from inactive branches or while `HEAD` is detached. The reference must be a valid local branch under `refs/heads/`; invalid ref syntax or non-branch targets return HTTP `400 Bad Request`. When omitted, defaults to the currently checked-out branch at `HEAD` (and requires an attached local branch).
+- `worktreePath` (optional string): Registered worktree path to resolve.
+- `root` (optional string): Target VCS root for nested repository or submodule.
+
+The target commit must be reachable from the target branch tip. The response returns the full symbolic branch and exact tip OID; keep both values together as the snapshot for a subsequent edit or squash:
 
 ```json
 {
@@ -320,11 +320,10 @@ returning; concurrent full-message reads do not contend for Git write locks.
 }
 ```
 
-Targets with invalid UTF-8 message bytes or a non-UTF-8 `encoding` header are
-rejected rather than returned with lossy replacement characters.
+Message reads use a lock-free branch/tip snapshot and recheck refs before returning; concurrent full-message reads do not contend for Git write locks. Targets with invalid UTF-8 message bytes or a non-UTF-8 `encoding` header are rejected rather than returned with lossy replacement characters.
 
 **POST /api/git/{project}/commit/{hash}/message**
-Rewrite the target's message on the selected local branch. `hash` is the
+Rewrite the target's message on the specified local branch. `hash` is the
 original target commit OID. The body requires `message`, `expectedBranch`, and
 `expectedHeadOid` copied from the same GET snapshot; optional `root` and
 `worktreePath` select the target. `allowSignatureRemoval` defaults to `false`.
@@ -345,16 +344,20 @@ the submitted UTF-8 message lacks a terminal LF. A changed branch or tip
 snapshot returns `ok: false` with `blockedReason: "stale-ref"` before target
 lookup. The target must be reachable from the captured tip, but may be `HEAD`,
 a root, an older commit, a merge-side ancestor, or a commit already present on
-a remote. Staged, unstaged, and untracked changes do not block this operation.
-Detached or unborn `HEAD`, an active Git operation, the same branch checked
-out in another worktree, or incomplete/unsupported ancestry also blocks the
-edit.
+a remote.
+
+The endpoint supports rewriting both active and inactive local branches:
+- **Inactive branch**: When `expectedBranch` is not currently checked out, `HEAD` may point to a different branch or be detached. The active checkout, index, and working tree files (staged, unstaged, untracked) remain completely untouched and preserved. The operation locks only the target branch ref under a transaction, verifying that `HEAD` does not transition to point to the target branch.
+- **Active branch**: When `expectedBranch` is the active branch, `HEAD` must point to it. The operation locks `HEAD` followed by the branch ref.
+- **Worktree guard**: If `expectedBranch` is checked out in *another* linked worktree, the rewrite is blocked with `blockedReason: "checked-out-branch"`.
+- **Active operations**: Active Git operations (rebase, merge, cherry-pick, revert, bisect) block the rewrite with `blockedReason: "active-operation"`.
 
 The rewrite uses raw commit objects: it preserves trees, ordered parent
 topology, author/committer metadata, unrelated headers, and unchanged descendant
-messages while rebuilding the target and affected descendants. It changes no
-worktree files or index entries and does not push or update a remote ref. A
-later push is a separate operation.
+messages while rebuilding the target and affected descendants. Before publication,
+the server verifies that the rewritten tip commit tree exactly matches the
+captured tip tree. It changes no worktree files or index entries and does not
+push or update a remote ref. A later push is a separate operation.
 
 If rewriting would invalidate commit signatures or a merge tag, the request is
 blocked with `signature-consent-required` unless
@@ -370,9 +373,8 @@ is false.
 These fields are also used by squash results below and are omitted from unrelated
 Git actions. Successful object-only rewrites do not set `dirty`, `conflict`, or
 rebase-recovery fields.
-
 **POST /api/git/{project}/squash**
-Collapse at least two parent-contiguous commits on the checked-out local branch
+Collapse at least two parent-contiguous commits on an active or inactive local branch
 into one commit. Send unique, full 40-hex OIDs in exact **oldest-first** order;
 abbreviated IDs, gaps, reversed ranges, and duplicates are not accepted.
 
@@ -389,19 +391,20 @@ abbreviated IDs, gaps, reversed ranges, and duplicates are not accepted.
 ```
 
 The branch and tip must come from agreeing fresh full-message GET snapshots.
-Message normalization and the checked branch/HEAD compare-and-swap use the same
-safeguards as message editing. A stale snapshot is blocked before writing objects.
-Every selected commit must be reachable. Selected commits and rewritten descendants
-must have at most one parent; a merge in either blocks the operation. The oldest
-selected commit may be a root. Detached/unborn HEAD, active Git operations,
-another worktree holding the branch, or unsupported history fail closed.
+Message normalization, active/inactive branch handling, worktree occupancy guards,
+and compare-and-swap ref locking follow the same rules as commit-message editing:
+- Squashing an inactive branch leaves the active branch checkout, index, staged/unstaged changes, and untracked files completely unaffected.
+- If `expectedBranch` is checked out in another linked worktree, the request blocks with `checked-out-branch`.
+- A stale snapshot or concurrent branch switch blocks before writing objects.
+- Every selected commit must be reachable from the captured tip. Selected commits and rewritten descendants must have at most one parent; a merge in either blocks the operation. The oldest selected commit may be a root.
 
 The synthesized commit takes the newest selected tree, oldest selected predecessor
 and author, and current configured repository committer. Linear descendants retain
 their trees, messages, and metadata while their parent IDs are remapped. The final
-tip tree, index, staged/unstaged/untracked files, and remote refs remain unchanged.
-Already-pushed commits are allowed: squash is local only. Publishing requires a
-separate user-confirmed `/push/prepare` and `/push/publish` exact-OID lease.
+tip tree must match the captured branch tip tree. Staged/unstaged/untracked files
+and remote refs remain unchanged. Already-pushed commits are allowed: squash is local
+only. Publishing requires a separate user-confirmed `/push/prepare` and `/push/publish`
+exact-OID lease.
 
 Invalidated signatures in absorbed commits and rewritten descendants require
 explicit `allowSignatureRemoval: true`. Successful results reuse `GitActionResult`:
@@ -413,7 +416,6 @@ Known blocks return `ok: false` with `blockedReason` and recommendations.
 `publication-uncertain` means local ref publication is unresolved: candidate OIDs
 are not a success receipt. Refresh and reconcile before any further mutation;
 neither a blind squash retry nor automatic push is safe.
-
 **POST /api/git/{project}/commit/{hash}/drop-files**
 Drop selected file changes from an unpushed commit while preserving other files
 from that commit. This is a local-history rewrite and is blocked for pushed
@@ -571,8 +573,9 @@ A later push is separate and may be rejected by remote policy.
 | `revert-files`     | Worktree inverse      | Allowed; selected changes stay uncommitted for review    |
 | `drop`             | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
 | `drop-files`       | Rewrites branch       | Blocked for pushed/shared commits; use revert instead    |
-| `message`          | Rewrites local branch | Allowed for reachable commits; remote ref is not changed |
-| `squash`           | Rewrites local branch | Allowed for a linear contiguous range; remote unchanged  |
+| `message`          | Rewrites target local branch | Allowed for reachable commits; active or inactive branch; remote unchanged |
+| `squash`           | Rewrites target local branch | Allowed for a linear contiguous range; active or inactive branch; remote unchanged |
+
 | `undo-last-commit` | Rewrites local HEAD   | Blocked for pushed/shared commits; use revert instead    |
 | `reset --hard`     | Rewrites local state  | Allowed only after explicit request and preflight checks |
 
@@ -644,4 +647,55 @@ Blocked pushed-history example:
 }
 ```
 
+### Leased Push Publication
+
+**POST /api/git/{project}/push/prepare**
+Prepare an exact-OID leased publication preview without mutating any state. Inspects the specified local branch (or currently checked-out branch when omitted), resolves its configured upstream remote, and queries the remote reference OID.
+
+Body:
+
+```json
+{
+  "branch": "refs/heads/feature",
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+Fields:
+- `branch` (optional string): Full local branch reference under `refs/heads/`. When provided, prepares a preview for the specified branch (active or inactive, even if `HEAD` is detached). When omitted, defaults to the currently checked-out branch at `HEAD` (and returns blocked `detached-head` if `HEAD` is detached).
+- `worktreePath` (optional string): Target registered worktree path.
+- `root` (optional string): Target VCS root.
+
+Response: `PublishPreview`:
+- `status: "ready"`: Returns frozen `PublishSnapshot` with `branch`, `sourceOid`, `remoteName`, `destinationRef`, `expectedRemoteOid`, `remoteIdentity`, and `repositoryIdentity`.
+- `status: "blocked"`: Blocked when missing upstream (`missing-upstream`), ambiguous destination (`ambiguous-destination`), missing branch ref (`missing-destination`), or detached HEAD when `branch` is omitted (`detached-head`).
+
+**POST /api/git/{project}/push/publish**
+Publish a previously prepared and user-confirmed leased push snapshot using an exact remote-OID CAS lease.
+
+Body:
+
+```json
+{
+  "snapshot": {
+    "branch": "refs/heads/feature",
+    "sourceOid": "1111111111111111111111111111111111111111",
+    "remoteName": "origin",
+    "destinationRef": "refs/heads/feature",
+    "expectedRemoteOid": "2222222222222222222222222222222222222222",
+    "remoteIdentity": "sha256-of-push-url",
+    "repositoryIdentity": "sha256-of-repo-roots"
+  },
+  "worktreePath": "/worktrees/demo",
+  "root": "modules/child"
+}
+```
+
+The server validates `snapshot.branch` directly:
+- The target branch must exist and its local tip must match `snapshot.sourceOid`.
+- The operation is independent of current checkout: switching branches or detaching `HEAD` between prepare and publish does not invalidate the lease.
+- Repository identity and remote URL identity must match the snapshot.
+- Push negotiation uses an exact-OID lease (`expectedRemoteOid`): if another writer updated the remote destination ref, the push is safely aborted with `stale-remote`.
+- Response returns `PublishResult` with status: `published`, `already-current`, `stale-remote`, `stale-local`, `stale-config`, `rejected`, `auth-required`, or `unknown`.
 

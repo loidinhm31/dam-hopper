@@ -100,53 +100,99 @@ fn make_result(
 pub async fn prepare_leased_push(
     project_path: &Path,
     root_path: &Path,
+    target_branch: Option<&str>,
     ssh_cred: Option<Arc<SshCredStore>>,
 ) -> Result<PublishPreview, AppError> {
     let _project_path = project_path.to_path_buf();
     let root_path = root_path.to_path_buf();
+    let target_branch = target_branch.map(|s| s.to_string());
 
     tokio::task::spawn_blocking(move || {
         let repo = open_repo(&root_path)?;
 
-        if repo.head_detached().unwrap_or(true) {
-            return Ok(PublishPreview::blocked(
-                PublishBlockReason::DetachedHead,
-                "HEAD is detached; leased publication requires a checked-out local branch under refs/heads/",
-            ));
-        }
-
-        let head = match repo.head() {
-            Ok(h) => h,
-            Err(e) => {
+        let (branch_ref, branch_name, source_oid) = if let Some(target) = target_branch.as_deref() {
+            if !target.starts_with("refs/heads/") || !git2::Reference::is_valid_name(target) {
                 return Ok(PublishPreview::blocked(
-                    PublishBlockReason::DetachedHead,
-                    format!("Cannot inspect HEAD reference: {}", e.message()),
+                    PublishBlockReason::AmbiguousDestination,
+                    format!("Target branch '{target}' must be a full ref under refs/heads/"),
                 ));
             }
-        };
-
-        let branch_ref = match head.name() {
-            Some(name) if name.starts_with("refs/heads/") => name.to_string(),
-            _ => {
+            let r = match repo.find_reference(target) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::MissingDestination,
+                        format!("Target branch '{target}' not found: {}", e.message()),
+                    ));
+                }
+            };
+            if !r.is_branch() {
                 return Ok(PublishPreview::blocked(
-                    PublishBlockReason::DetachedHead,
-                    "HEAD does not point to a local branch under refs/heads/",
+                    PublishBlockReason::AmbiguousDestination,
+                    format!("Target branch '{target}' is not a local branch"),
                 ));
             }
-        };
-        let branch_name = match head.shorthand() {
-            Some(s) => s.to_string(),
-            None => branch_ref.strip_prefix("refs/heads/").unwrap().to_string(),
-        };
-
-        let source_oid = match head.target() {
-            Some(oid) => oid.to_string(),
-            None => {
+            let name = match target.strip_prefix("refs/heads/") {
+                Some(s) => s.to_string(),
+                None => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::AmbiguousDestination,
+                        format!("Target branch '{target}' has invalid prefix"),
+                    ));
+                }
+            };
+            let oid = match r.target() {
+                Some(oid) => oid.to_string(),
+                None => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::MissingDestination,
+                        format!("Branch reference {target} has no direct target commit OID"),
+                    ));
+                }
+            };
+            (target.to_string(), name, oid)
+        } else {
+            if repo.head_detached().unwrap_or(true) {
                 return Ok(PublishPreview::blocked(
                     PublishBlockReason::DetachedHead,
-                    format!("Branch reference {branch_ref} has no target commit OID"),
+                    "HEAD is detached; leased publication requires a checked-out local branch under refs/heads/",
                 ));
             }
+
+            let head = match repo.head() {
+                Ok(h) => h,
+                Err(e) => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::DetachedHead,
+                        format!("Cannot inspect HEAD reference: {}", e.message()),
+                    ));
+                }
+            };
+
+            let branch_ref = match head.name() {
+                Some(name) if name.starts_with("refs/heads/") => name.to_string(),
+                _ => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::DetachedHead,
+                        "HEAD does not point to a local branch under refs/heads/",
+                    ));
+                }
+            };
+            let branch_name = match head.shorthand() {
+                Some(s) => s.to_string(),
+                None => branch_ref.strip_prefix("refs/heads/").unwrap().to_string(),
+            };
+
+            let source_oid = match head.target() {
+                Some(oid) => oid.to_string(),
+                None => {
+                    return Ok(PublishPreview::blocked(
+                        PublishBlockReason::DetachedHead,
+                        format!("Branch reference {branch_ref} has no target commit OID"),
+                    ));
+                }
+            };
+            (branch_ref, branch_name, source_oid)
         };
 
         let config = match repo.config() {
@@ -164,7 +210,7 @@ pub async fn prepare_leased_push(
             _ => {
                 return Ok(PublishPreview::blocked(
                     PublishBlockReason::MissingUpstream,
-                    format!("Current branch '{branch_name}' has no configured push destination (missing branch.{branch_name}.remote)"),
+                    format!("Target branch '{branch_name}' has no configured push destination (missing branch.{branch_name}.remote)"),
                 ));
             }
         };
@@ -174,7 +220,7 @@ pub async fn prepare_leased_push(
             _ => {
                 return Ok(PublishPreview::blocked(
                     PublishBlockReason::MissingUpstream,
-                    format!("Current branch '{branch_name}' has no configured upstream branch (missing branch.{branch_name}.merge)"),
+                    format!("Target branch '{branch_name}' has no configured upstream branch (missing branch.{branch_name}.merge)"),
                 ));
             }
         };
@@ -394,58 +440,37 @@ pub async fn publish_leased_push(
             ));
         }
 
-        // 3. Validate attached branch
-        if repo.head_detached().unwrap_or(true) {
-            return Ok(make_result(
-                PublishResultStatus::StaleConfig,
-                &snapshot,
-                None,
-                "HEAD is detached",
-            ));
-        }
-        let head = match repo.head() {
-            Ok(h) => h,
+        // 3. Validate target branch ref existence and shape
+        let branch_ref = match repo.find_reference(&snapshot.branch) {
+            Ok(r) => r,
             Err(e) => {
                 return Ok(make_result(
                     PublishResultStatus::StaleConfig,
                     &snapshot,
                     None,
-                    format!("Cannot inspect HEAD: {}", e.message()),
+                    format!("Target branch '{}' not found: {e}", snapshot.branch),
                 ));
             }
         };
-        let current_branch_ref = match head.name() {
-            Some(name) => name.to_string(),
-            None => {
-                return Ok(make_result(
-                    PublishResultStatus::StaleConfig,
-                    &snapshot,
-                    None,
-                    "HEAD is detached",
-                ));
-            }
-        };
-        if current_branch_ref != snapshot.branch {
+
+        if !branch_ref.is_branch() {
             return Ok(make_result(
                 PublishResultStatus::StaleConfig,
                 &snapshot,
                 None,
-                format!(
-                    "Checked-out branch changed from {} to {}",
-                    snapshot.branch, current_branch_ref
-                ),
+                format!("Target branch '{}' is not a local branch", snapshot.branch),
             ));
         }
 
-        // 4. Validate source OID against current branch tip
-        let current_source_oid = match head.target() {
+        // 4. Validate source OID against target branch tip
+        let current_source_oid = match branch_ref.target() {
             Some(oid) => oid.to_string(),
             None => {
                 return Ok(make_result(
                     PublishResultStatus::StaleLocal,
                     &snapshot,
                     None,
-                    "Branch has no target commit OID",
+                    format!("Target branch '{}' has no target commit OID", snapshot.branch),
                 ));
             }
         };
@@ -460,7 +485,6 @@ pub async fn publish_leased_push(
                 ),
             ));
         }
-
         // 5. Re-resolve config and check remote identity
         let config = match repo.config() {
             Ok(c) => c,
@@ -473,7 +497,17 @@ pub async fn publish_leased_push(
                 ));
             }
         };
-        let branch_name = current_branch_ref.strip_prefix("refs/heads/").unwrap();
+        let branch_name = match snapshot.branch.strip_prefix("refs/heads/") {
+            Some(s) => s,
+            None => {
+                return Ok(make_result(
+                    PublishResultStatus::StaleConfig,
+                    &snapshot,
+                    None,
+                    format!("Target branch '{}' is not under refs/heads/", snapshot.branch),
+                ));
+            }
+        };
         let remote_name = match config.get_string(&format!("branch.{branch_name}.remote")) {
             Ok(r) => r.trim().to_string(),
             Err(_) => {

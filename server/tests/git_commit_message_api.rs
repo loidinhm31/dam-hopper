@@ -388,3 +388,131 @@ async fn test_api_message_preserves_raw_body_whitespace_unicode_and_nul() {
     assert_eq!(snapshot["headOid"], oid.to_string());
     assert_eq!(repo.head().unwrap().target(), Some(oid));
 }
+
+#[tokio::test]
+async fn test_api_get_and_edit_commit_message_inactive_branch() {
+    let app = setup_test_app();
+    let main_head = git_output(&["rev-parse", "HEAD"], &app.project_path);
+
+    // Create inactive feature branch with a commit
+    git(&["checkout", "-b", "feature"], &app.project_path);
+    std::fs::write(app.project_path.join("feat.txt"), "feat\n").unwrap();
+    git(&["add", "feat.txt"], &app.project_path);
+    git(&["commit", "-m", "feature commit"], &app.project_path);
+    let feat_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+
+    // Return to main (main is active, feature is inactive)
+    git(&["checkout", "main"], &app.project_path);
+
+    // 1. GET message with omitted branch fails (feat_oid unreachable from main)
+    let omitted_res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/git/test-repo/commit/{feat_oid}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(omitted_res.status(), StatusCode::OK);
+
+    // 2. GET message with invalid branch parameter returns 400 Bad Request
+    let invalid_res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/git/test-repo/commit/{feat_oid}/message?branch=not-a-full-ref"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_res.status(), StatusCode::BAD_REQUEST);
+
+    // 3. GET message with explicit branch returns 200 OK
+    let ok_res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/git/test-repo/commit/{feat_oid}/message?branch=refs%2Fheads%2Ffeature"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok_res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(ok_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(snapshot["message"], "feature commit\n");
+    assert_eq!(snapshot["branch"], "refs/heads/feature");
+    assert_eq!(snapshot["headOid"], feat_oid);
+
+    // 4. POST edit on inactive feature branch succeeds
+    let edit_body = json!({
+        "message": "edited feature via API\n",
+        "expectedBranch": "refs/heads/feature",
+        "expectedHeadOid": feat_oid,
+        "allowSignatureRemoval": false
+    });
+    let edit_res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/git/test-repo/commit/{feat_oid}/message"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&edit_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edit_res.status(), StatusCode::OK);
+    let edit_bytes = axum::body::to_bytes(edit_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let edit_val: Value = serde_json::from_slice(&edit_bytes).unwrap();
+    assert_eq!(edit_val["ok"], true);
+    assert_eq!(edit_val["branch"], "refs/heads/feature");
+    let new_feat_tip = edit_val["newHeadOid"].as_str().unwrap();
+    assert_ne!(new_feat_tip, feat_oid);
+
+    // Verify on disk: feature updated, main and HEAD untouched
+    assert_eq!(git_output(&["rev-parse", "HEAD"], &app.project_path), main_head);
+    assert_eq!(git_output(&["rev-parse", "refs/heads/main"], &app.project_path), main_head);
+    assert_eq!(git_output(&["rev-parse", "refs/heads/feature"], &app.project_path), new_feat_tip);
+
+    // 5. Stale snapshot on inactive branch returns blocked
+    let stale_edit = json!({
+        "message": "stale edit attempt\n",
+        "expectedBranch": "refs/heads/feature",
+        "expectedHeadOid": feat_oid, // now stale!
+        "allowSignatureRemoval": false
+    });
+    let stale_res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/git/test-repo/commit/{new_feat_tip}/message"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&stale_edit).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_res.status(), StatusCode::OK);
+    let stale_bytes = axum::body::to_bytes(stale_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stale_val: Value = serde_json::from_slice(&stale_bytes).unwrap();
+    assert_eq!(stale_val["ok"], false);
+    assert_eq!(stale_val["blockedReason"], "stale-ref");
+}

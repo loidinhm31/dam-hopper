@@ -9,6 +9,7 @@ use super::commit_message_rewrite::{
 };
 use super::{GitActionResult, GitBlockReason};
 use crate::error::AppError;
+use crate::git::cli_fallback;
 
 /// Collapses an exact oldest-first linear range, changing only the captured local branch.
 /// oldTargetOid is the newest selection; rewrittenCount counts one squash plus descendants.
@@ -46,6 +47,28 @@ pub async fn squash_commits(
             return Ok(action);
         }
     };
+
+    let current_root = dunce::canonicalize(project_path)?;
+    for wt in cli_fallback::list_worktrees(project_path).await? {
+        let branch_matches = wt.branch == captured.branch
+            || Some(wt.branch.as_str()) == captured.branch.strip_prefix("refs/heads/");
+        if branch_matches && dunce::canonicalize(&wt.path)? != current_root {
+            let mut action = GitActionResult::blocked(
+                GitBlockReason::CheckedOutBranch,
+                format!(
+                    "branch {} is checked out in another worktree at {}",
+                    captured.branch, wt.path
+                ),
+                "switch branches in the other worktree first",
+            );
+            action.branch = Some(captured.branch);
+            action.hash = Some(target.to_string());
+            action.old_target_oid = Some(target.to_string());
+            action.old_head_oid = Some(captured.old_tip.to_string());
+            return Ok(action);
+        }
+    }
+
     let path = project_path.to_path_buf();
     #[cfg(test)]
     let fail_publication = super::commit_message_rewrite::take_publication_failure();
@@ -61,7 +84,7 @@ pub async fn squash_commits(
                 let recommendation = match &reason {
                     GitBlockReason::SignatureConsentRequired =>
                         "set allowSignatureRemoval=true only after confirming removal of invalidated signatures",
-                    GitBlockReason::UnreachableCommit => "check out the branch containing every selected commit",
+                    GitBlockReason::UnreachableCommit => "select or check out the branch containing every selected commit",
                     GitBlockReason::PublicationUncertain =>
                         "refresh and reconcile the observed branch before any further mutation; do not blindly retry",
                     _ => "refresh history and review the blocked range before trying again",
@@ -93,7 +116,7 @@ fn squash_objects(
         if !index.contains_key(oid) {
             return Err(RewriteFailure::Block(
                 GitBlockReason::UnreachableCommit,
-                format!("commit {oid} is not reachable from the captured HEAD"),
+                format!("commit {oid} is not reachable from the captured branch tip"),
             ));
         }
     }
