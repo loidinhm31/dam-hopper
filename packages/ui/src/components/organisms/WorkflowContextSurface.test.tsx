@@ -143,8 +143,6 @@ describe("WorkflowContextSurface", () => {
         "Workflow tracking is unavailable for this profile.",
       );
     });
-    expect(container.querySelector("#workflow-context-deck")).toBeNull();
-    expect(container.querySelector("button")).toBeNull();
   });
 
   it("handles keyboard shortcut Mod+Shift+W to toggle surface", async () => {
