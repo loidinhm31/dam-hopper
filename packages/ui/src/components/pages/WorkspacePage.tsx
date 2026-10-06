@@ -808,7 +808,11 @@ export default function WorkspacePage() {
     selectedProject?.project ??
     activeProject ??
     (projects.length > 0 ? projects[0].name : null);
-  const projectTargetInput = selectedProject ?? projectName;
+  const projectTargetInput =
+    selectedProject ??
+    (projectName && activeProfileId
+      ? { profileId: activeProfileId, project: projectName }
+      : projectName);
   const projectTarget = useProjectTarget(projectTargetInput);
 
   const closeTerminalDiagnosticsMenu = useCallback(() => {

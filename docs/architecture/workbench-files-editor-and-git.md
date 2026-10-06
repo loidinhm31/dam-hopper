@@ -252,8 +252,11 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 | Git-page history integration | `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/ProjectInfoHelpers.ts` |
 | Git edit and leased publication | `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `hooks/use-git-squash.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
 | Git blame client and buffer lifecycle | `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame.ts`, `packages/ui/src/stores/editor.ts` |
+| Git blame Monaco gutter and context menu | `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx` |
+| Git blame host integration and edge states | `packages/ui/src/components/organisms/EditorTabs.tsx`, `MonacoHost.tsx`, `MarkdownHost.tsx`, `HtmlHost.tsx` |
 | Git blame API client and transport | `packages/ui/src/api/client.ts`, `packages/ui/src/api/ws-transport.ts`, `packages/ui/src/api/queries.ts` |
 | Git commit reveal and panel intent | `packages/ui/src/lib/git-commit-reveal.ts`, `packages/ui/src/lib/terminal-workspace-panel.ts`, `packages/ui/src/components/pages/WorkspacePage.tsx`, `packages/ui/src/components/templates/TerminalWorkspaceShell.tsx` |
 | Git commit inspection and details panel | `packages/ui/src/components/organisms/CommitDetailsPanel.tsx`, `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/api/queries.ts` |
+| Git blame qualification and verification | `packages/ui/e2e/editor-git-blame/editor-git-blame.spec.ts`, `packages/ui/e2e/editor-git-blame/git-fixture.ts`, `plans/261005-2106-editor-git-blame-annotations/verification.md` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

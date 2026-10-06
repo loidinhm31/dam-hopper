@@ -508,7 +508,9 @@ export function useEditorGitBlame({
     };
 
     attachModelListeners();
-
+    if (dataRef.current === null && !inFlightRef.current) {
+      void runBlame();
+    }
     let editorModelDisposable: { dispose: () => void } | undefined;
     if (typeof editor.onDidChangeModel === "function") {
       editorModelDisposable = editor.onDidChangeModel(() => {

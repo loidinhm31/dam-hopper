@@ -248,6 +248,7 @@ Note: `message` remains subject-only text even when a commit was matched on body
 
 Inspects commit metadata and message directly from the Git object database (ODB) by exact 40- or 64-hex OID, without requiring branch reachability or an attached `HEAD`.
 
+*Distinction from Message Snapshot:* This route is a pure read-only ODB inspection tool designed for commit reveal and history navigation (e.g., from editor Git blame annotations). It loads arbitrary reachable or detached commits across arbitrary history depths (>200 commits). In contrast, `GET /api/git/{project}/commit/{hash}/message` is strictly CAS-bounded to an eligible local branch (`refs/heads/*`) for commit-message rewrite and parent-contiguous squash operations.
 Query parameters:
 - `root` (optional string): Target VCS root for submodule or nested repository.
 - `worktreePath` (optional string): Registered worktree path to resolve.

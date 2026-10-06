@@ -665,6 +665,18 @@ snapshot.
 - **Storage & Hydration:** View state is part of persisted editor tab state under `dam-hopper:editor-state` in `localStorage`. Hydrated tabs retain view state across `loadContent` invocations so opening the file restores line and column positions.
 - **Race-Safe State Capture:** `MonacoHost` captures the originating tab's view state prior to switching active `tabKey` using `prevTabKeyRef` and on unmount, passing `targetKey` explicitly to prevent view states from polluting newly selected tabs.
 
+
+### Git Blame Annotations in Editor
+
+**Locations:** `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx`, `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/stores/editor.ts`
+
+**Purpose:** Renders per-line native Git blame attribution in the Monaco editor line-number gutter without modifying repository refs, working-tree files, or local storage.
+
+- **Toggle & Gutter Mounting:** Right-clicking line numbers in Monaco or selecting "Toggle Git Blame Annotations" mounts `EditorGitBlameGutter`. Session toggle (`tab.blameEnabled`) is ephemeral and deliberately excluded from persistence and hydration.
+- **Normal vs. Compact Layout:** Container widths ≥640px display full author and formatted date (220px). Narrow viewports (<640px) automatically adapt to compact author-only mode (`min(120px, wrapperWidth / 3)`). Hovering or focusing a row surfaces full metadata tooltips (commit hash, author, email, authored date, subject).
+- **Buffer Edits & Dynamic Invalidation:** Keystrokes immediately wipe stale attribution, debounce 250ms, and query in-memory buffer blame. Unsaved buffer additions display as "Uncommitted" while retaining unchanged neighboring line attributions.
+- **Workspace Git Commit Reveal:** Right-clicking an attributed row or line number exposes "Show Commit in Git". Clicking reveals the exact commit in the Workspace Git panel in read-only inspection mode (`mode: "inspect"`), displaying the full multiline commit body, author metadata, and changed files without mutation controls.
+- **Host Lifecycle & Tier Gating:** Blame operations pause and cancel during inactive tabs, minimized panels, or Markdown/HTML Preview modes, resuming when returning to active Edit or Split modes. Binary, diff, image, video, and large files (≥5 MiB) are excluded from blame.
 ### Files, editor, and search ownership
 
 The IDE surfaces consume one qualified target:
