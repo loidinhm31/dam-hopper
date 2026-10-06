@@ -109,6 +109,9 @@ export function MonacoHost({
   const [wrapperWidth, setWrapperWidth] = useState<number>(0);
   const [editorInstance, setEditorInstance] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const [monacoInstance, setMonacoInstance] = useState<typeof monacoNs | null>(
+    null,
+  );
   const [gutterContextMenu, setGutterContextMenu] = useState<{
     x: number;
     y: number;
@@ -142,9 +145,11 @@ export function MonacoHost({
     isBusyProp !== undefined ? isBusyProp : hookResult.isBusy;
 
   const effectiveBlameDataRef = useRef(effectiveBlameData);
-  const handleToggleBlameRef = useRef<((enabled?: boolean) => void) | undefined>(
-    undefined,
-  );
+  const effectiveBlameStatusRef = useRef(effectiveBlameStatus);
+  const onRevealCommitRef = useRef(onRevealCommit);
+  const handleToggleBlameRef = useRef<
+    ((enabled?: boolean) => void) | undefined
+  >(undefined);
 
   const handleToggleBlame = useCallback(
     (enabled?: boolean) => {
@@ -168,6 +173,8 @@ export function MonacoHost({
 
   useEffect(() => {
     effectiveBlameDataRef.current = effectiveBlameData;
+    effectiveBlameStatusRef.current = effectiveBlameStatus;
+    onRevealCommitRef.current = onRevealCommit;
     handleToggleBlameRef.current = handleToggleBlame;
   });
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -190,6 +197,43 @@ export function MonacoHost({
     onEditorReadyRef.current = onEditorReady;
   });
 
+  const handleRevealCommit = useCallback(
+    (commitHash: string, rootId: string) => {
+      if (!onRevealCommitRef.current) return;
+      if (!effectiveBlameEnabled) return;
+
+      const currentBlame = effectiveBlameDataRef.current;
+      const currentStatus = effectiveBlameStatusRef.current;
+
+      if (
+        currentStatus !== "ready" ||
+        !currentBlame ||
+        currentBlame.status !== "ready"
+      ) {
+        return;
+      }
+
+      if (currentBlame.rootId !== rootId) {
+        return;
+      }
+
+      const currentEditor = editorRef.current;
+      const currentModel = currentEditor?.getModel();
+      if (currentModel) {
+        const currentVersion = currentModel.getVersionId();
+        if (
+          typeof currentBlame.modelVersion === "number" &&
+          currentVersion !== currentBlame.modelVersion
+        ) {
+          return;
+        }
+      }
+
+      onRevealCommitRef.current(commitHash, rootId);
+    },
+    [effectiveBlameEnabled],
+  );
+
   useEffect(() => {
     lineChangesRef.current = lineChanges ?? [];
     onGitIndicatorClickRef.current = onGitIndicatorClick;
@@ -200,6 +244,7 @@ export function MonacoHost({
       editorRef.current = editor;
       monacoRef.current = monaco;
       setEditorInstance(editor);
+      setMonacoInstance(monaco);
       if (wrapperRef.current?.clientWidth) {
         setWrapperWidth(wrapperRef.current.clientWidth);
       }
@@ -433,7 +478,8 @@ export function MonacoHost({
       onEditorReadyRef.current?.(null);
       const ed = editorRef.current;
       if (ed) {
-        const vs = typeof ed.saveViewState === "function" ? ed.saveViewState() : null;
+        const vs =
+          typeof ed.saveViewState === "function" ? ed.saveViewState() : null;
         if (vs) {
           onViewStateChangeRef.current(vs, prevTabKeyRef.current);
         }
@@ -463,12 +509,13 @@ export function MonacoHost({
       {effectiveBlameEnabled && (
         <EditorGitBlameGutter
           editor={editorInstance}
+          monaco={monacoInstance ?? monacoRef.current}
           blameData={effectiveBlameData}
           blameStatus={effectiveBlameStatus}
           wrapperWidth={wrapperWidth}
           unavailableReason={effectiveUnavailableReason}
           isBusy={effectiveIsBusy}
-          onRevealCommit={onRevealCommit}
+          onRevealCommit={handleRevealCommit}
           onRefresh={handleRefreshBlame}
           onToggle={handleToggleBlame}
           onOpenContextMenu={setGutterContextMenu}
@@ -517,7 +564,7 @@ export function MonacoHost({
           onClose={() => setGutterContextMenu(null)}
           onToggleBlame={handleToggleBlame}
           onRefreshBlame={handleRefreshBlame}
-          onRevealCommit={onRevealCommit}
+          onRevealCommit={handleRevealCommit}
         />
       )}
     </div>

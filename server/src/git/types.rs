@@ -576,6 +576,7 @@ pub struct GitBlameInput {
 pub struct GitBlameCommit {
     pub hash: String,
     pub author_name: String,
+    pub author_email: String,
     pub author_timestamp: i64,
     pub author_timezone_offset_minutes: i32,
     pub subject: String,
@@ -616,8 +617,13 @@ pub struct GitBlameResponse {
 pub struct GitCommitDetails {
     pub hash: String,
     pub author_name: String,
+    pub author_email: String,
     pub author_timestamp: i64,
     pub author_timezone_offset_minutes: i32,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committer_timestamp: i64,
+    pub committer_timezone_offset_minutes: i32,
     pub subject: String,
     pub full_message: String,
 }

@@ -1,13 +1,13 @@
 {
-  "run_id": "e2e-run-1791256545122-034e7137",
+  "run_id": "e2e-run-1791264287476-0b473ba8",
   "command": "pnpm --filter @dam-hopper/ui test:e2e",
-  "started_at": "2026-10-06T03:15:45.122Z",
-  "completed_at": "2026-10-06T03:15:54.052Z",
+  "started_at": "2026-10-06T05:24:47.476Z",
+  "completed_at": "2026-10-06T05:24:57.216Z",
   "case_name": "editor-git-blame",
   "route": "/workspace",
-  "git_head": "18ab2772fed6af321683e1e3a6baf59eef9e7d32",
-  "source_fingerprint": "ac27b25f1967b805b66668a08a51273569c4b7c0496398846b035eb0f2d5cc88",
-  "seed_digest": "698fe7096bf0d132189d48381004c927bd7fdd70b427fc9a9d2b49d76e0e9218",
+  "git_head": "9c74aaeeb5efe2e1b4f17878ac0b4933c1854fd4",
+  "source_fingerprint": "d771ab652f5408bba0598897843397a45c132ee26acdc34e91ef9a43b7ed7e8b",
+  "seed_digest": "df34c06a1814c7b180b674054067d0adedb896b792914a7b8106bef3e2706948",
   "browser": "chromium",
   "browser_version": "151.0.7922.173",
   "os": "linux",
@@ -20,7 +20,7 @@
     {
       "checkpoint": "normal-author-date",
       "file_name": "normal-author-date.png",
-      "sha256": "ee86783ef6e34d51d94ff292c8d1330fb57e1d66380eee5c8bdf883edc23b679",
+      "sha256": "1a42d3f5ebbfdf8dce576930e0457b08fe62e107204c7264420b686be2b2cb06",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -29,7 +29,7 @@
     {
       "checkpoint": "uncommitted-buffer",
       "file_name": "uncommitted-buffer.png",
-      "sha256": "6a8178dc2b7198b2c15949f130e2ec36b24ad910c2c39734a03cd37d1c39613f",
+      "sha256": "9c9a7b524ccca2f8596ed837e96a19c7c2b93319153f111a5cff388ee4d33ea9",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -38,7 +38,7 @@
     {
       "checkpoint": "gutter-context-menu",
       "file_name": "gutter-context-menu.png",
-      "sha256": "4e2705b0a6715a4fb0e98310fdea3b5cd25797d3a9c89d33f74b3f40c1a82b77",
+      "sha256": "8c5ddc1d5c741649fd3eb370d8ce3c37e719e8262fb2b3e7ca86658cb4bd01c5",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -47,7 +47,7 @@
     {
       "checkpoint": "workspace-git-full-body",
       "file_name": "workspace-git-full-body.png",
-      "sha256": "23fe0e1d06d442d2549b0200120c1491b222b432217eef48c53b8ec9d2256e00",
+      "sha256": "78892269af651f6f7ef5576b8f0d909e614f553ed69ae120de8e362e6105ab5b",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -56,7 +56,7 @@
     {
       "checkpoint": "compact-author-only",
       "file_name": "compact-author-only.png",
-      "sha256": "51266ad6f0587bb98eebca401dcbea60ddf8b42d777a71dab2a1bca320fdc3e1",
+      "sha256": "e3269c67c169c208ab5a45e12bac5d609067d17db98e62072f4b0e3d340a0c34",
       "dimensions": {
         "width": 620,
         "height": 900

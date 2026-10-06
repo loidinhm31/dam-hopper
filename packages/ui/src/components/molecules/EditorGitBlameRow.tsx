@@ -28,6 +28,18 @@ export function EditorGitBlameRow({
   onRevealCommit,
   onOpenContextMenu,
 }: EditorGitBlameRowProps) {
+  const revealCommittedRow = () => {
+    if (!row.isUncommitted && row.commit && rootId) {
+      onRevealCommit?.(row.commit.hash, rootId);
+    }
+  };
+
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
+      return;
+    revealCommittedRow();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       e.preventDefault();
@@ -44,12 +56,9 @@ export function EditorGitBlameRow({
 
     if (e.key === "Enter") {
       e.preventDefault();
-      if (!row.isUncommitted && row.commit && rootId) {
-        onRevealCommit?.(row.commit.hash, rootId);
-      }
+      revealCommittedRow();
       return;
     }
-
     if (e.key === "ArrowDown") {
       e.preventDefault();
       (e.currentTarget.nextElementSibling as HTMLElement | null)?.focus();
@@ -76,6 +85,7 @@ export function EditorGitBlameRow({
         height: row.height,
         lineHeight: `${row.height}px`,
       }}
+      onClick={handleClick}
       onContextMenu={(e) => onContextMenu(e, row.lineNumber)}
       onKeyDown={handleKeyDown}
     >

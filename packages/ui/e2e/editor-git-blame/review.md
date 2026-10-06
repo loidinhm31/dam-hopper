@@ -1,24 +1,26 @@
 # Visual Review — editor-git-blame
 
 - **Status:** ACCEPTED
-- **Reviewer:** User (OMP Operator)
-- **Reviewed At:** 2026-10-06T10:25:00Z
-- **Run ID:** e2e-run-1791256145291-ec7a28ee
-- **Git HEAD:** 18ab2772fed6af321683e1e3a6baf59eef9e7d32
-- **Source Fingerprint:** ac27b25f1967b805b66668a08a51273569c4b7c0496398846b035eb0f2d5cc88
-- **Primary Screenshot SHA-256:** ee86783ef6e34d51d94ff292c8d1330fb57e1d66380eee5c8bdf883edc23b679
+- **Reviewer:** Session operator — explicit approval in this session
+- **Reviewed At:** 2026-10-06T05:34:16.946Z
+- **Run ID:** e2e-run-1791264287476-0b473ba8
+- **Git HEAD:** 9c74aaeeb5efe2e1b4f17878ac0b4933c1854fd4
+- **Source Fingerprint:** d771ab652f5408bba0598897843397a45c132ee26acdc34e91ef9a43b7ed7e8b
+- **Primary Screenshot SHA-256:** 1a42d3f5ebbfdf8dce576930e0457b08fe62e107204c7264420b686be2b2cb06
 
 ## Inspected Checkpoints
-- `normal-author-date.png` (1440x900, SHA-256: `ee86783ef6e34d51d94ff292c8d1330fb57e1d66380eee5c8bdf883edc23b679`)
+- `normal-author-date.png` (1440x900, SHA-256: `1a42d3f5ebbfdf8dce576930e0457b08fe62e107204c7264420b686be2b2cb06`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `uncommitted-buffer.png` (1440x900, SHA-256: `6a8178dc2b7198b2c15949f130e2ec36b24ad910c2c39734a03cd37d1c39613f`)
+- `uncommitted-buffer.png` (1440x900, SHA-256: `9c9a7b524ccca2f8596ed837e96a19c7c2b93319153f111a5cff388ee4d33ea9`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `gutter-context-menu.png` (1440x900, SHA-256: `4e2705b0a6715a4fb0e98310fdea3b5cd25797d3a9c89d33f74b3f40c1a82b77`)
+- `gutter-context-menu.png` (1440x900, SHA-256: `8c5ddc1d5c741649fd3eb370d8ce3c37e719e8262fb2b3e7ca86658cb4bd01c5`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `workspace-git-full-body.png` (1440x900, SHA-256: `23fe0e1d06d442d2549b0200120c1491b222b432217eef48c53b8ec9d2256e00`)
+- `workspace-git-full-body.png` (1440x900, SHA-256: `78892269af651f6f7ef5576b8f0d909e614f553ed69ae120de8e362e6105ab5b`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `compact-author-only.png` (620x900, SHA-256: `51266ad6f0587bb98eebca401dcbea60ddf8b42d777a71dab2a1bca320fdc3e1`)
+- `compact-author-only.png` (620x900, SHA-256: `e3269c67c169c208ab5a45e12bac5d609067d17db98e62072f4b0e3d340a0c34`)
   - Context: Complete application viewport, fully rendered shell and state.
 
 ## Decision
 - **Outcome:** ACCEPTED
+- **Approval provenance:** `plans/reports/approval-261006-1227-pr48-hardening.json`; operator inspected all five listed checkpoints and explicitly approved finalization and a scoped commit. No push authorized.
+- **Timestamp basis:** Acceptance recording time authorized by the operator's “Inspected all five — accept now” response; not a substituted historical review time.

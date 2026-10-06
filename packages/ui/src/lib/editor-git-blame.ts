@@ -4,6 +4,8 @@ import type {
   GitBlameResponse,
   VcsRoot,
 } from "@/api/client.js";
+import { projectTargetCacheKey } from "@/api/client.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
 /** 5 MiB maximum UTF-8 buffer threshold for blame operations. */
 export const GIT_BLAME_MAX_BUFFER_BYTES = 5 * 1024 * 1024;
@@ -123,13 +125,17 @@ export function validateBlameResponse(
     return { valid: false, reason: "Commits must be an array" };
   }
   for (let i = 0; i < r.commits.length; i++) {
-    const c = r.commits[i];
+    const c = r.commits[i] as unknown as
+      | Record<string, unknown>
+      | null
+      | undefined;
     if (
       typeof c !== "object" ||
       c === null ||
       typeof c.hash !== "string" ||
       c.hash.length === 0 ||
       typeof c.authorName !== "string" ||
+      typeof c.authorEmail !== "string" ||
       typeof c.authorTimestamp !== "number" ||
       typeof c.authorTimezoneOffsetMinutes !== "number" ||
       typeof c.subject !== "string"
@@ -333,4 +339,102 @@ export function formatBlameFullTimestamp(
   const tzMins = String(absOffset % 60).padStart(2, "0");
 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} ${sign}${tzHours}${tzMins}`;
+}
+
+export const VALID_GIT_QUERY_PREFIXES: Record<string, true> = {
+  "git-diff": true,
+  "git-file-diff": true,
+  "git-log": true,
+  branches: true,
+  "git-conflicts": true,
+  "git-roots": true,
+};
+
+export interface GitQueryKeyMatch {
+  matches: boolean;
+  prefix?: string;
+  isDiffMutation: boolean;
+}
+
+/**
+ * Matches TanStack Query keys against the current target and owner.
+ * Scoped QueryCache matching must include profile/generation/project/worktree/root
+ * as supported by gitQueryKey, rather than simple project string containment.
+ */
+export function isMatchingGitQueryKey(
+  key: unknown,
+  target: { project: string; profileId?: string; worktreePath?: string | null },
+  owner?: ConnectionRef | null,
+  rootId?: string | null,
+): GitQueryKeyMatch {
+  if (!Array.isArray(key) || key.length === 0) {
+    return { matches: false, isDiffMutation: false };
+  }
+
+  const currentProject = target.project;
+  const currentProfileId = target.profileId ?? owner?.profileId;
+  const currentWorktree = projectTargetCacheKey(target);
+
+  if (key[0] === "profile") {
+    // Expected shape: ["profile", profileId, generation, "git", prefix, project, worktreeKey, ...parts]
+    if (key.length < 7) {
+      return { matches: false, isDiffMutation: false };
+    }
+    const keyProfileId = key[1];
+    const keyGeneration = key[2];
+    const keyNamespace = key[3];
+    const keyPrefix = key[4];
+
+    if (currentProfileId && keyProfileId !== currentProfileId) {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (owner && keyGeneration !== owner.generation) {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (keyNamespace !== "git") {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (typeof keyPrefix !== "string" || !VALID_GIT_QUERY_PREFIXES[keyPrefix]) {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (key[5] !== currentProject) {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (key[6] !== currentWorktree) {
+      return { matches: false, isDiffMutation: false };
+    }
+    if (rootId && key[7] !== undefined && key[7] !== "*" && key[7] !== rootId) {
+      return { matches: false, isDiffMutation: false };
+    }
+
+    return {
+      matches: true,
+      prefix: keyPrefix,
+      isDiffMutation: keyPrefix === "git-diff" || keyPrefix === "git-file-diff",
+    };
+  }
+  if (owner) {
+    return { matches: false, isDiffMutation: false };
+  }
+
+  // Unowned / fallback shape: [prefix, project, worktreeKey, ...parts]
+  const keyPrefix = key[0];
+  if (typeof keyPrefix !== "string" || !VALID_GIT_QUERY_PREFIXES[keyPrefix]) {
+    return { matches: false, isDiffMutation: false };
+  }
+  if (key.length > 1 && key[1] !== currentProject) {
+    return { matches: false, isDiffMutation: false };
+  }
+  if (key.length > 2 && key[2] !== currentWorktree) {
+    return { matches: false, isDiffMutation: false };
+  }
+  if (rootId && key[3] !== undefined && key[3] !== "*" && key[3] !== rootId) {
+    return { matches: false, isDiffMutation: false };
+  }
+
+  return {
+    matches: true,
+    prefix: keyPrefix,
+    isDiffMutation: keyPrefix === "git-diff" || keyPrefix === "git-file-diff",
+  };
 }

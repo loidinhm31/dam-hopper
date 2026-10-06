@@ -18,12 +18,16 @@ import {
   __setConnectionSnapshotForTests,
   resetConnections,
 } from "@/api/connections.js";
+import { gitQueryKey } from "@/api/queries.js";
 import {
   type BlameEditorSeam,
   type UseEditorGitBlameResult,
   useEditorGitBlame,
 } from "./use-editor-git-blame.js";
-import { GIT_BLAME_MAX_BUFFER_BYTES } from "@/lib/editor-git-blame.js";
+import {
+  computeMonacoLineCount,
+  GIT_BLAME_MAX_BUFFER_BYTES,
+} from "@/lib/editor-git-blame.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -117,12 +121,13 @@ function createSampleBlameResponse(
   snapshotId: string,
   modelVersion = 1,
   lineCount = 3,
+  path = "src/file.ts",
 ): GitBlameResponse {
   return {
     snapshotId,
     modelVersion,
     rootId: ".",
-    rootRelativePath: "src/file.ts",
+    rootRelativePath: path,
     baseCommitOid: "head-commit-1111",
     bufferLineCount: lineCount,
     status: "ready",
@@ -130,6 +135,7 @@ function createSampleBlameResponse(
       {
         hash: "1111222233334444555566667777888899990000",
         authorName: "Alice",
+        authorEmail: "alice@example.com",
         authorTimestamp: 1760000000,
         authorTimezoneOffsetMinutes: 0,
         subject: "initial work",
@@ -164,16 +170,11 @@ async function mount(
   editor: BlameEditorSeam | null,
   active = true,
 ) {
-  if (root) {
-    act(() => {
-      root?.unmount();
-    });
-    root = null;
-    document.body.innerHTML = "";
+  if (!root) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
   }
-  const container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
   await act(async () => {
     root?.render(
       <QueryClientProvider client={queryClient}>
@@ -223,8 +224,14 @@ describe("useEditorGitBlame", () => {
     });
 
     blameMock = vi.fn().mockImplementation((_tgt, input: GitBlameInput) => {
+      const lineCount = computeMonacoLineCount(input.content);
       return Promise.resolve(
-        createSampleBlameResponse(input.snapshotId, input.modelVersion, 3),
+        createSampleBlameResponse(
+          input.snapshotId,
+          input.modelVersion,
+          lineCount,
+          input.path,
+        ),
       );
     });
 
@@ -264,7 +271,11 @@ describe("useEditorGitBlame", () => {
     expect(currentHook?.data).toBeNull();
     expect(blameMock).not.toHaveBeenCalled();
 
-    const diffTab = { ...defaultTab, tier: "diff" as const, blameEnabled: true };
+    const diffTab = {
+      ...defaultTab,
+      tier: "diff" as const,
+      blameEnabled: true,
+    };
     await mount(diffTab, mock.editor, true);
     expect(currentHook?.status).toBe("off");
     expect(blameMock).not.toHaveBeenCalled();
@@ -295,9 +306,7 @@ describe("useEditorGitBlame", () => {
 
     const callInput = blameMock.mock.calls[0][1] as GitBlameInput;
     await act(async () => {
-      deferred.resolve(
-        createSampleBlameResponse(callInput.snapshotId, 1, 3),
-      );
+      deferred.resolve(createSampleBlameResponse(callInput.snapshotId, 1, 3));
       await Promise.resolve();
     });
 
@@ -399,6 +408,7 @@ describe("useEditorGitBlame", () => {
     await mount(defaultTab, mock.editor, true);
 
     expect(currentHook?.status).toBe("loading");
+    const inputA = blameMock.mock.calls[0][1] as GitBlameInput;
 
     // Switch to Tab B
     const tabB: Tab = {
@@ -413,12 +423,14 @@ describe("useEditorGitBlame", () => {
 
     // Resolve deferred A
     await act(async () => {
-      deferredA.resolve(createSampleBlameResponse("snap-A", 1, 2));
+      deferredA.resolve(createSampleBlameResponse(inputA.snapshotId, 1, 2));
+      await vi.advanceTimersByTimeAsync(250);
       await Promise.resolve();
     });
 
     // Tab B should not have Tab A's data
-    expect(currentHook?.data?.rootRelativePath).not.toBe("src/file.ts");
+    expect(currentHook?.status).toBe("ready");
+    expect(currentHook?.data?.rootRelativePath).toBe("src/other.ts");
   });
 
   it("discards response on reconnect generation mismatch", async () => {
@@ -434,7 +446,9 @@ describe("useEditorGitBlame", () => {
       owner: { profileId: "server-1", generation: 2 },
       status: "connected",
       serverUrl: "http://localhost:4801",
-      api: { git: { blame: blameMock, roots: rootsMock } } as unknown as ApiClient,
+      api: {
+        git: { blame: blameMock, roots: rootsMock },
+      } as unknown as ApiClient,
     });
 
     await act(async () => {
@@ -531,7 +545,32 @@ describe("useEditorGitBlame", () => {
     expect(rootsMock).toHaveBeenCalled();
     expect(blameMock).toHaveBeenCalledTimes(2);
 
-    // Window focus triggers refresh
+    // Window focus triggers refresh to inspect roots; coalesces without reblaming when HEAD is identical
+    rootsMock.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(rootsMock).toHaveBeenCalled();
+    expect(blameMock).toHaveBeenCalledTimes(2);
+
+    // Window focus reblames if roots report an updated HEAD commit
+    rootsMock.mockResolvedValueOnce([
+      {
+        ...sampleRoots[0],
+        status: {
+          ...sampleRoots[0].status,
+          lastCommit: {
+            hash: "head-commit-2222",
+            author: "Bob",
+            message: "feat: second commit",
+            date: "2026-10-06",
+          },
+        },
+      },
+    ]);
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
@@ -539,5 +578,191 @@ describe("useEditorGitBlame", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(blameMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps status off when roots fetch rejects after feature was toggled off (parent repro)", async () => {
+    const deferredRoots = createDeferred<VcsRoot[]>();
+    rootsMock.mockReturnValueOnce(deferredRoots.promise);
+
+    const mock = createMockEditor("line 1\nline 2\n");
+    await mount(defaultTab, mock.editor, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(currentHook?.status).toBe("ready");
+
+    // Trigger repository refresh
+    act(() => {
+      currentHook?.refresh();
+    });
+
+    // Advance 50ms so triggerRepositoryRefresh initiates roots fetch (now pending deferredRoots)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    // User disables blame (status -> "off")
+    const disabledTab = { ...defaultTab, blameEnabled: false };
+    await mount(disabledTab, mock.editor, true);
+    expect(currentHook?.status).toBe("off");
+
+    // Old in-flight roots fetch rejects
+    await act(async () => {
+      deferredRoots.reject(new Error("Network failed discovering roots"));
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    // Status MUST remain "off", NOT flip to "unavailable" or "error"!
+    expect(currentHook?.status).toBe("off");
+    expect(currentHook?.data).toBeNull();
+  });
+
+  it("clears attribution synchronously on tab switch (finding 1)", async () => {
+    const mockA = createMockEditor("tab A content\n");
+    await mount(defaultTab, mockA.editor, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(currentHook?.status).toBe("ready");
+    expect(currentHook?.data).not.toBeNull();
+
+    // Deferred blame for Tab B
+    const deferredB = createDeferred<GitBlameResponse>();
+    blameMock.mockReturnValueOnce(deferredB.promise);
+
+    const tabB: Tab = {
+      ...defaultTab,
+      key: "my-project::src/tab-b.ts",
+      path: "src/tab-b.ts",
+      name: "tab-b.ts",
+    };
+    const mockB = createMockEditor("tab B content\n");
+
+    // Switch to Tab B
+    await mount(tabB, mockB.editor, true);
+
+    // Synchronously, Tab B must NOT have Tab A's data!
+    expect(currentHook?.data).toBeNull();
+    expect(currentHook?.status).toBe("loading");
+    const inputB = blameMock.mock.calls[1][1] as GitBlameInput;
+
+    // Resolve deferred Tab B
+    await act(async () => {
+      deferredB.resolve(
+        createSampleBlameResponse(inputB.snapshotId, 1, 2, inputB.path),
+      );
+      await Promise.resolve();
+    });
+
+    expect(currentHook?.status).toBe("ready");
+    expect(currentHook?.data?.rootRelativePath).toBe("src/tab-b.ts");
+  });
+
+  it("reblames on same-HEAD git-diff invalidation (staged rename baseline change)", async () => {
+    const mock = createMockEditor("content\n");
+    await mount(defaultTab, mock.editor, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(blameMock).toHaveBeenCalledTimes(1);
+    expect(currentHook?.status).toBe("ready");
+
+    // Invalidate git-diff via QueryCache (same HEAD, but index changed due to staged rename)
+    const diffQueryKey = gitQueryKey("git-diff", target);
+    await act(async () => {
+      queryClient.setQueryData(diffQueryKey, { entries: [] });
+      await queryClient.invalidateQueries({ queryKey: diffQueryKey });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    // Must re-run blame to recompute baseline against the staged rename!
+    expect(blameMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores cross-profile invalidation with identical project name", async () => {
+    const mock = createMockEditor("content\n");
+    await mount(defaultTab, mock.editor, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(blameMock).toHaveBeenCalledTimes(1);
+
+    // Invalidate git-diff on server-2 for same project name
+    const otherProfileKey = [
+      "profile",
+      "server-2",
+      1,
+      "git",
+      "git-diff",
+      "my-project",
+      "root",
+    ];
+
+    await act(async () => {
+      queryClient.setQueryData(otherProfileKey, { entries: [] });
+      await queryClient.invalidateQueries({ queryKey: otherProfileKey });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    // Server-1 blame must NOT have been re-triggered!
+    expect(blameMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces window focus with active in-flight request without aborting", async () => {
+    const deferred = createDeferred<GitBlameResponse>();
+    blameMock.mockReturnValueOnce(deferred.promise);
+
+    const mock = createMockEditor("content\n");
+    await mount(defaultTab, mock.editor, true);
+
+    expect(currentHook?.status).toBe("loading");
+    expect(blameMock).toHaveBeenCalledTimes(1);
+
+    // Window focuses while initial request is in-flight
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    // Advance 50ms so focus repository refresh fires
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    // The initial request must NOT have been aborted or duplicated!
+    expect(blameMock).toHaveBeenCalledTimes(1);
+    const input = blameMock.mock.calls[0][1] as GitBlameInput;
+
+    // Resolve deferred initial request
+    await act(async () => {
+      deferred.resolve(createSampleBlameResponse(input.snapshotId, 1, 2));
+      await Promise.resolve();
+    });
+
+    expect(currentHook?.status).toBe("ready");
+  });
+
+  it("cleans up on unmount and ignores pending promises", async () => {
+    const deferred = createDeferred<GitBlameResponse>();
+    blameMock.mockReturnValueOnce(deferred.promise);
+
+    const mock = createMockEditor("content\n");
+    await mount(defaultTab, mock.editor, true);
+    expect(currentHook?.status).toBe("loading");
+
+    // Unmount
+    act(() => {
+      root?.unmount();
+      root = null;
+    });
+
+    // Resolve after unmount
+    await act(async () => {
+      deferred.resolve(createSampleBlameResponse("snap-1", 1, 2));
+      await Promise.resolve();
+    });
+
+    // No errors thrown, clean unmount
+    expect(root).toBeNull();
   });
 });

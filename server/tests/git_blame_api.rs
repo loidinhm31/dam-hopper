@@ -70,7 +70,11 @@ fn init_git_repo(path: &Path) {
     .unwrap();
     git(&["add", "app.rs"], path);
     git(
-        &["commit", "-m", "feat: initial commit\n\nFull body explanation.\nSecond paragraph."],
+        &[
+            "commit",
+            "-m",
+            "feat: initial commit\n\nFull body explanation.\nSecond paragraph.",
+        ],
         path,
     );
 }
@@ -405,8 +409,18 @@ async fn test_api_blame_concurrency_busy_status() {
     let app = setup_test_app();
 
     // Acquire both permits from the shared semaphore
-    let _permit1 = app.state.git_blame_semaphore.clone().try_acquire_owned().unwrap();
-    let _permit2 = app.state.git_blame_semaphore.clone().try_acquire_owned().unwrap();
+    let _permit1 = app
+        .state
+        .git_blame_semaphore
+        .clone()
+        .try_acquire_owned()
+        .unwrap();
+    let _permit2 = app
+        .state
+        .git_blame_semaphore
+        .clone()
+        .try_acquire_owned()
+        .unwrap();
 
     // Both permits occupied: 3rd request must receive 503 GIT_BLAME_BUSY immediately!
     let payload = json!({
@@ -465,4 +479,108 @@ async fn test_api_blame_body_limit_allows_over_10mb_payload() {
     let json_resp: Value = serde_json::from_slice(&body_bytes).unwrap();
     // Confirms domain-level typed 413 GIT_BLAME_TOO_LARGE was returned because the 32MB layer accepted the HTTP body!
     assert_eq!(json_resp["code"], "GIT_BLAME_TOO_LARGE");
+}
+
+async fn request_blame(app: &TestApp, path: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/git/test-repo/blame")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "path": path,
+                "content": "short text\n",
+                "snapshotId": "baseline-guard",
+                "modelVersion": 1
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn repository_snapshot(path: &Path, file: &str) -> (String, Vec<u8>, Option<Vec<u8>>) {
+    (
+        git_output(&["rev-parse", "HEAD"], path),
+        std::fs::read(path.join(".git/index")).unwrap(),
+        std::fs::read(path.join(file)).ok(),
+    )
+}
+
+async fn assert_rename_baseline_guard(content: &[u8], status: StatusCode, code: &str) {
+    let app = setup_test_app();
+    std::fs::write(app.project_path.join("original.txt"), content).unwrap();
+    git(&["add", "original.txt"], &app.project_path);
+    git(&["commit", "-m", "guard baseline"], &app.project_path);
+    let before = repository_snapshot(&app.project_path, "original.txt");
+    let (actual_status, body) = request_blame(&app, "original.txt").await;
+    assert_eq!(actual_status, status);
+    assert_eq!(body["code"], code);
+    assert_eq!(
+        repository_snapshot(&app.project_path, "original.txt"),
+        before
+    );
+
+    git(&["mv", "original.txt", "renamed.txt"], &app.project_path);
+    let before = repository_snapshot(&app.project_path, "renamed.txt");
+    let (actual_status, body) = request_blame(&app, "renamed.txt").await;
+    assert_eq!(actual_status, status);
+    assert_eq!(body["code"], code);
+    assert_eq!(
+        repository_snapshot(&app.project_path, "renamed.txt"),
+        before
+    );
+}
+
+#[tokio::test]
+async fn oversized_head_baseline_cannot_bypass_limit_by_staged_rename() {
+    let content = vec![b'x'; 5 * 1024 * 1024 + 1];
+    assert_rename_baseline_guard(
+        &content,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "GIT_BLAME_TOO_LARGE",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn binary_head_baseline_cannot_bypass_guard_by_staged_rename() {
+    assert_rename_baseline_guard(
+        b"binary\0data\n",
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "GIT_BLAME_UNSUPPORTED_FILE",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn head_symlink_mode_is_rejected_without_a_working_copy_entry() {
+    let app = setup_test_app();
+    let target = app.project_path.join("target-payload");
+    std::fs::write(&target, "app.rs").unwrap();
+    let blob = git_output(&["hash-object", "-w", "target-payload"], &app.project_path);
+    std::fs::remove_file(target).unwrap();
+    git(
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("120000,{blob},link.txt"),
+        ],
+        &app.project_path,
+    );
+    git(
+        &["commit", "-m", "tree symlink without disk entry"],
+        &app.project_path,
+    );
+    let before = repository_snapshot(&app.project_path, "link.txt");
+    let (status, body) = request_blame(&app, "link.txt").await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(body["code"], "GIT_BLAME_UNSUPPORTED_FILE");
+    assert_eq!(repository_snapshot(&app.project_path, "link.txt"), before);
 }

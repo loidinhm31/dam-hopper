@@ -20,6 +20,7 @@ export {
 
 export interface EditorGitBlameGutterProps {
   editor: monacoNs.editor.IStandaloneCodeEditor | null;
+  monaco?: typeof monacoNs | null;
   blameData: GitBlameResponse | null;
   blameStatus: EditorGitBlameStatus;
   wrapperWidth: number;
@@ -39,6 +40,7 @@ export interface EditorGitBlameGutterProps {
 
 export function EditorGitBlameGutter({
   editor,
+  monaco,
   blameData,
   blameStatus,
   wrapperWidth,
@@ -56,9 +58,9 @@ export function EditorGitBlameGutter({
       setVisibleRows([]);
       return;
     }
-    const rows = computeVisibleBlameRows({ editor, blameData });
+    const rows = computeVisibleBlameRows({ editor, blameData, monaco });
     setVisibleRows(rows);
-  }, [editor, blameStatus, blameData]);
+  }, [editor, blameStatus, blameData, monaco]);
 
   const scheduleUpdate = useCallback(() => {
     if (rafIdRef.current !== null) return;
@@ -70,6 +72,12 @@ export function EditorGitBlameGutter({
 
   useEffect(() => {
     scheduleUpdate();
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
   }, [blameData, blameStatus, scheduleUpdate]);
 
   useEffect(() => {
@@ -114,7 +122,7 @@ export function EditorGitBlameGutter({
   }, [editor, scheduleUpdate]);
 
   // Synchronize wheel scrolling without page trap
-  useBlameGutterWheelSync(gutterRef, editor);
+  useBlameGutterWheelSync(gutterRef, editor, monaco);
 
   return (
     <div

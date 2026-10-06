@@ -6,15 +6,13 @@ import {
   isCurrentConnection,
   useConnectionSnapshot,
 } from "@/api/connections.js";
-import {
-  getBoundApiClient,
-  gitQueryKey,
-} from "@/api/queries.js";
+import { getBoundApiClient, gitQueryKey } from "@/api/queries.js";
 import {
   type GitBlameResponse,
   isGitBlameBusyError,
   isGitBlameStaleError,
   isGitBlameTooLargeError,
+  projectTargetCacheKey,
 } from "@/api/client.js";
 import { subscribeIpc } from "./use-sse.js";
 import { generateUUID } from "@/lib/utils.js";
@@ -23,6 +21,7 @@ import {
   findOwningVcsRoot,
   GIT_BLAME_DEBOUNCE_MS,
   isBufferOverLimit,
+  isMatchingGitQueryKey,
   validateBlameResponse,
 } from "@/lib/editor-git-blame.js";
 
@@ -66,16 +65,16 @@ export interface BlameTextModelSeam {
   getVersionId: () => number;
   getValue: () => string;
   getLineCount?: () => number;
-  onDidChangeContent?: (
-    listener: (e: unknown) => void,
-  ) => { dispose: () => void };
+  onDidChangeContent?: (listener: (e: unknown) => void) => {
+    dispose: () => void;
+  };
 }
 
 export interface BlameEditorSeam {
   getModel?: () => BlameTextModelSeam | null;
-  onDidChangeModel?: (
-    listener: (e: unknown) => void,
-  ) => { dispose: () => void };
+  onDidChangeModel?: (listener: (e: unknown) => void) => {
+    dispose: () => void;
+  };
 }
 
 export interface UseEditorGitBlameParams {
@@ -92,6 +91,11 @@ export interface UseEditorGitBlameResult {
   isBusy: boolean;
   unavailableReason: string | null;
   refresh: () => void;
+}
+
+export interface RepositoryRefreshOptions {
+  force?: boolean;
+  reblameOnSameHead?: boolean;
 }
 
 /**
@@ -125,8 +129,7 @@ export function useEditorGitBlame({
 
   const [isDocumentVisible, setIsDocumentVisible] = useState(
     () =>
-      typeof document === "undefined" ||
-      document.visibilityState !== "hidden",
+      typeof document === "undefined" || document.visibilityState !== "hidden",
   );
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -140,19 +143,16 @@ export function useEditorGitBlame({
   }, []);
 
   const isEnabled = Boolean(
-    tab?.blameEnabled &&
-      active &&
-      isDocumentVisible &&
-      isBlameEligibleTab(tab),
+    tab?.blameEnabled && active && isDocumentVisible && isBlameEligibleTab(tab),
   );
   const profileId = tab?.target?.profileId ?? "";
   const snapshot = useConnectionSnapshot(profileId);
 
   const isOwnerConnected = Boolean(
     snapshot &&
-      snapshot.status === "connected" &&
-      (!tab?.resourceBinding?.serverUrl ||
-        snapshot.serverUrl === tab.resourceBinding.serverUrl),
+    snapshot.status === "connected" &&
+    (!tab?.resourceBinding?.serverUrl ||
+      snapshot.serverUrl === tab.resourceBinding.serverUrl),
   );
 
   const [status, setStatus] = useState<EditorGitBlameStatus>(
@@ -169,6 +169,8 @@ export function useEditorGitBlame({
         : "No active connection"
       : null,
   );
+
+  const isMountedRef = useRef<boolean>(true);
 
   // Mutable refs to track identities and avoid stale closures
   const tabRef = useRef(tab);
@@ -200,6 +202,33 @@ export function useEditorGitBlame({
 
   const lastHeadCommitRef = useRef<string | null>(null);
   const lastOwningRootIdRef = useRef<string | null>(null);
+
+  const currentIdentityKey = tab
+    ? `${tab.target.profileId}:${snapshot?.owner.generation ?? 0}:${tab.target.project}:${projectTargetCacheKey(tab.target)}:${tab.path}:${tab.key}`
+    : "";
+
+  const [prevIdentity, setPrevIdentity] = useState<string>(currentIdentityKey);
+  if (currentIdentityKey !== prevIdentity) {
+    setPrevIdentity(currentIdentityKey);
+    setData(null);
+    dataRef.current = null;
+    setStatus(
+      isEnabled ? (isOwnerConnected ? "waiting" : "unavailable") : "off",
+    );
+    setError(null);
+    setErrorCode(null);
+    setIsBusy(false);
+    setUnavailableReason(null);
+    localEpochRef.current++;
+    repositoryRefreshEpochRef.current++;
+    lastHeadCommitRef.current = null;
+    lastOwningRootIdRef.current = null;
+    clearTimeout(debounceTimerRef.current ?? undefined);
+    debounceTimerRef.current = null;
+    clearTimeout(refreshDebounceTimerRef.current ?? undefined);
+    refreshDebounceTimerRef.current = null;
+    activeControllerRef.current?.abort();
+  }
 
   // Core blame request runner
   const runBlame = useCallback(async () => {
@@ -242,7 +271,9 @@ export function useEditorGitBlame({
     const currentTabKey = currentTab.key;
     const currentModelId =
       model.id ??
-      (typeof model.uri?.toString === "function" ? model.uri.toString() : "model");
+      (typeof model.uri?.toString === "function"
+        ? model.uri.toString()
+        : "model");
     const currentModelVersion = model.getVersionId();
     const currentLocalEpoch = localEpochRef.current;
     const currentRefreshEpoch = repositoryRefreshEpochRef.current;
@@ -274,7 +305,8 @@ export function useEditorGitBlame({
 
       if (controller.signal.aborted) return;
 
-      // Post-await identity verification
+      // Post-await identity and lifecycle verification
+      if (!isMountedRef.current) return;
       if (!isCurrentConnection(owner)) return;
       if (tabRef.current?.key !== currentTabKey) return;
       if (!isEnabledRef.current) return;
@@ -308,15 +340,25 @@ export function useEditorGitBlame({
 
       setStatus("ready");
       setData(validation.response);
+      dataRef.current = validation.response;
+      if (validation.response.baseCommitOid) {
+        lastHeadCommitRef.current = validation.response.baseCommitOid;
+      }
+      if (validation.response.rootId) {
+        lastOwningRootIdRef.current = validation.response.rootId;
+      }
       setError(null);
       setErrorCode(null);
       setIsBusy(false);
       setUnavailableReason(null);
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
+      if (!isMountedRef.current) return;
       if (!isEnabledRef.current) return;
+      if (!isCurrentConnection(owner)) return;
       if (tabRef.current?.key !== currentTabKey) return;
-
+      if (localEpochRef.current !== currentLocalEpoch) return;
+      if (repositoryRefreshEpochRef.current !== currentRefreshEpoch) return;
       if (isGitBlameBusyError(err)) {
         setStatus("unavailable");
         setIsBusy(true);
@@ -352,32 +394,59 @@ export function useEditorGitBlame({
 
       if (pendingIntentRef.current) {
         pendingIntentRef.current = false;
-        clearTimeout(debounceTimerRef.current ?? undefined);
-        debounceTimerRef.current = setTimeout(() => {
-          debounceTimerRef.current = null;
-          void runBlame();
-        }, GIT_BLAME_DEBOUNCE_MS);
+        if (
+          isMountedRef.current &&
+          isEnabledRef.current &&
+          isOwnerConnectedRef.current
+        ) {
+          clearTimeout(debounceTimerRef.current ?? undefined);
+          debounceTimerRef.current = setTimeout(() => {
+            debounceTimerRef.current = null;
+            void runBlame();
+          }, GIT_BLAME_DEBOUNCE_MS);
+        }
       }
     }
   }, []);
 
   // External repository refresh coordinator
   const triggerRepositoryRefresh = useCallback(
-    (force = false) => {
-      if (!isEnabledRef.current || !isOwnerConnectedRef.current) return;
+    (options?: boolean | RepositoryRefreshOptions) => {
+      if (
+        !isMountedRef.current ||
+        !isEnabledRef.current ||
+        !isOwnerConnectedRef.current
+      ) {
+        return;
+      }
+
+      const opts: RepositoryRefreshOptions =
+        typeof options === "boolean" ? { force: options } : (options ?? {});
+      const force = opts.force ?? false;
+      const reblameOnSameHead = opts.reblameOnSameHead ?? false;
 
       clearTimeout(refreshDebounceTimerRef.current ?? undefined);
 
       refreshDebounceTimerRef.current = setTimeout(async () => {
         refreshDebounceTimerRef.current = null;
-        repositoryRefreshEpochRef.current++;
+        if (
+          !isMountedRef.current ||
+          !isEnabledRef.current ||
+          !isOwnerConnectedRef.current
+        ) {
+          return;
+        }
+
+        const currentTab = tabRef.current;
+        if (!currentTab) return;
+        const currentTabKey = currentTab.key;
+        const currentPath = currentTab.path ?? "";
+        const owner = snapshotRef.current?.owner;
+        if (!owner || !isCurrentConnection(owner)) return;
+
+        const currentRefreshEpoch = repositoryRefreshEpochRef.current;
 
         try {
-          const currentTab = tabRef.current;
-          if (!currentTab) return;
-          const owner = snapshotRef.current?.owner;
-          if (!owner || !isCurrentConnection(owner)) return;
-
           if (!queryClient) return;
           const roots = await queryClient.fetchQuery({
             queryKey: gitQueryKey("git-roots", currentTab.target),
@@ -386,12 +455,24 @@ export function useEditorGitBlame({
             staleTime: 0,
           });
 
-          const currentPath = currentTab.path ?? "";
+          // Post-await liveness, identity, owner, and epoch guards
+          if (
+            !isMountedRef.current ||
+            !isEnabledRef.current ||
+            !isOwnerConnectedRef.current ||
+            !isCurrentConnection(owner) ||
+            tabRef.current?.key !== currentTabKey ||
+            repositoryRefreshEpochRef.current !== currentRefreshEpoch
+          ) {
+            return;
+          }
+
           const owningRoot = findOwningVcsRoot(roots, currentPath);
           if (!owningRoot || owningRoot.mappingState === "missing") {
             setStatus("unavailable");
             setUnavailableReason("Owning VCS root unavailable");
             setData(null);
+            dataRef.current = null;
             return;
           }
 
@@ -403,22 +484,59 @@ export function useEditorGitBlame({
           lastHeadCommitRef.current = headOid;
           lastOwningRootIdRef.current = rootId;
 
+          const headChanged = prevHead !== null && headOid !== prevHead;
+          const rootChanged = prevRootId !== null && rootId !== prevRootId;
+          const isSameHead = !headChanged && !rootChanged;
+
+          // If an edit debounce is active, the edit debounce will fire runBlame() when finished.
+          if (debounceTimerRef.current !== null) {
+            return;
+          }
+
+          // Focus / visibility coalesce: if work is already in flight and HEAD is unchanged,
+          // don't abort or trigger redundant duplicate work.
           if (
-            force ||
-            headOid !== prevHead ||
-            rootId !== prevRootId ||
-            !dataRef.current
+            inFlightRef.current &&
+            isSameHead &&
+            !force &&
+            !reblameOnSameHead
           ) {
-            if (headOid !== prevHead || rootId !== prevRootId) {
+            return;
+          }
+
+          const shouldReblame =
+            force ||
+            headChanged ||
+            rootChanged ||
+            !dataRef.current ||
+            (reblameOnSameHead && isSameHead);
+
+          if (shouldReblame) {
+            if (headChanged || rootChanged) {
               setData(null);
+              dataRef.current = null;
               setStatus("waiting");
             }
+            repositoryRefreshEpochRef.current++;
             void runBlame();
           }
         } catch {
+          // Catch block liveness, identity, owner, and epoch guards
+          if (
+            !isMountedRef.current ||
+            !isEnabledRef.current ||
+            !isOwnerConnectedRef.current ||
+            !isCurrentConnection(owner) ||
+            tabRef.current?.key !== currentTabKey ||
+            repositoryRefreshEpochRef.current !== currentRefreshEpoch
+          ) {
+            return;
+          }
+
           setStatus("unavailable");
           setUnavailableReason("Failed to discover Git roots");
           setData(null);
+          dataRef.current = null;
         }
       }, 50);
     },
@@ -427,20 +545,36 @@ export function useEditorGitBlame({
 
   // Manual refresh action exposed to consumers
   const refresh = useCallback(() => {
-    triggerRepositoryRefresh(true);
+    triggerRepositoryRefresh({ force: true });
   }, [triggerRepositoryRefresh]);
+  // Mount / unmount lifecycle and cleanup (runs first to initialize isMountedRef in StrictMode)
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      clearTimeout(debounceTimerRef.current ?? undefined);
+      debounceTimerRef.current = null;
+      clearTimeout(refreshDebounceTimerRef.current ?? undefined);
+      refreshDebounceTimerRef.current = null;
+      activeControllerRef.current?.abort();
+    };
+  }, []);
 
   // Handle enabled / disabled / connection transitions
   useEffect(() => {
+    isMountedRef.current = true;
     if (!isEnabled) {
       setStatus("off");
       setData(null);
+      dataRef.current = null;
       setError(null);
       setErrorCode(null);
       setIsBusy(false);
       setUnavailableReason(null);
       clearTimeout(debounceTimerRef.current ?? undefined);
       debounceTimerRef.current = null;
+      clearTimeout(refreshDebounceTimerRef.current ?? undefined);
+      refreshDebounceTimerRef.current = null;
       activeControllerRef.current?.abort();
       return;
     }
@@ -448,6 +582,7 @@ export function useEditorGitBlame({
     if (!isOwnerConnected) {
       setStatus("unavailable");
       setData(null);
+      dataRef.current = null;
       setError(null);
       setErrorCode(null);
       setIsBusy(false);
@@ -458,18 +593,32 @@ export function useEditorGitBlame({
       );
       clearTimeout(debounceTimerRef.current ?? undefined);
       debounceTimerRef.current = null;
+      clearTimeout(refreshDebounceTimerRef.current ?? undefined);
+      refreshDebounceTimerRef.current = null;
       activeControllerRef.current?.abort();
       return;
     }
 
-    // Enabled and connected: start in waiting state and trigger initial request
+    // Enabled and connected: start in waiting state, clear attribution, and trigger initial request
     setStatus("waiting");
+    setData(null);
+    dataRef.current = null;
     setError(null);
     setErrorCode(null);
     setIsBusy(false);
     setUnavailableReason(null);
+    clearTimeout(debounceTimerRef.current ?? undefined);
+    debounceTimerRef.current = null;
+    clearTimeout(refreshDebounceTimerRef.current ?? undefined);
+    refreshDebounceTimerRef.current = null;
+    activeControllerRef.current?.abort();
+    localEpochRef.current++;
+    repositoryRefreshEpochRef.current++;
+    lastHeadCommitRef.current = null;
+    lastOwningRootIdRef.current = null;
+
     void runBlame();
-  }, [isEnabled, isOwnerConnected, snapshot, tab?.key, runBlame]);
+  }, [isEnabled, isOwnerConnected, currentIdentityKey, runBlame]);
 
   // Model content and model change subscriptions
   useEffect(() => {
@@ -536,12 +685,12 @@ export function useEditorGitBlame({
     if (!isEnabled || !isOwnerConnected) return;
 
     const onWindowFocus = () => {
-      triggerRepositoryRefresh(true);
+      triggerRepositoryRefresh({ force: false, reblameOnSameHead: false });
     };
 
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        triggerRepositoryRefresh(true);
+        triggerRepositoryRefresh({ force: false, reblameOnSameHead: false });
       }
     };
 
@@ -559,7 +708,7 @@ export function useEditorGitBlame({
       const currentProject = tabRef.current?.target.project;
       const projectName = extractProjectName(e.data);
       if (!projectName || projectName === currentProject) {
-        triggerRepositoryRefresh(false);
+        triggerRepositoryRefresh({ reblameOnSameHead: true });
       }
     });
 
@@ -570,7 +719,7 @@ export function useEditorGitBlame({
       ) {
         if (e.generation !== snapshotRef.current.owner.generation) return;
       }
-      triggerRepositoryRefresh(false);
+      triggerRepositoryRefresh({ reblameOnSameHead: false });
     });
 
     // QueryCache subscription for Git mutation invalidations
@@ -578,25 +727,18 @@ export function useEditorGitBlame({
       ? queryClient.getQueryCache().subscribe((event) => {
           if (event.type === "updated" && event.action.type === "invalidate") {
             const key = event.query.queryKey;
-            if (!Array.isArray(key)) return;
-            let prefix = key[0];
-            if (
-              key.length >= 5 &&
-              key[0] === "profile" &&
-              (key[3] === "git" || typeof key[3] === "string")
-            ) {
-              prefix = key[4] ?? key[3];
-            }
-            if (
-              prefix === "git-diff" ||
-              prefix === "git-log" ||
-              prefix === "branches" ||
-              prefix === "git-conflicts"
-            ) {
-              const currentTarget = tabRef.current?.target;
-              if (currentTarget && key.includes(currentTarget.project)) {
-                triggerRepositoryRefresh(false);
-              }
+            const currentTab = tabRef.current;
+            if (!currentTab) return;
+            const match = isMatchingGitQueryKey(
+              key,
+              currentTab.target,
+              snapshotRef.current?.owner,
+              lastOwningRootIdRef.current,
+            );
+            if (match.matches) {
+              triggerRepositoryRefresh({
+                reblameOnSameHead: match.isDiffMutation,
+              });
             }
           }
         })
@@ -618,15 +760,6 @@ export function useEditorGitBlame({
     queryClient,
     triggerRepositoryRefresh,
   ]);
-
-  // Overall cleanup on unmount
-  useEffect(() => {
-    return () => {
-      clearTimeout(debounceTimerRef.current ?? undefined);
-      clearTimeout(refreshDebounceTimerRef.current ?? undefined);
-      activeControllerRef.current?.abort();
-    };
-  }, []);
 
   return {
     status,

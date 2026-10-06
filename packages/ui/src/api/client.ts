@@ -2016,6 +2016,7 @@ export interface GitBlameInput {
 export interface GitBlameCommit {
   hash: string;
   authorName: string;
+  authorEmail: string;
   authorTimestamp: number;
   authorTimezoneOffsetMinutes: number;
   subject: string;
@@ -2044,8 +2045,13 @@ export interface GitBlameResponse {
 export interface GitCommitDetails {
   hash: string;
   authorName: string;
+  authorEmail: string;
   authorTimestamp: number;
   authorTimezoneOffsetMinutes: number;
+  committerName: string;
+  committerEmail: string;
+  committerTimestamp: number;
+  committerTimezoneOffsetMinutes: number;
   subject: string;
   fullMessage: string;
 }

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Component, Path};
 
@@ -86,15 +87,28 @@ pub fn validate_blame_input(input: &GitBlameInput) -> Result<(), GitBlameError> 
     Ok(())
 }
 
-/// Computes Monaco display line count and CRLF-normalized content.
-/// In Monaco, an empty string has 1 display line, and each '\n' adds a line.
+/// Normalizes Monaco's LF, CRLF, and lone-CR line endings in one allocation.
+/// Empty content has one display row; a terminal line ending adds an empty row.
 pub fn normalize_buffer_content(content: &str) -> (String, usize) {
-    let normalized = content.replace('\r', "");
-    let line_count = if normalized.is_empty() {
-        1
-    } else {
-        normalized.split('\n').count()
-    };
+    let mut normalized = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    let mut line_count = 1;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                normalized.push('\n');
+                line_count += 1;
+            }
+            '\n' => {
+                normalized.push('\n');
+                line_count += 1;
+            }
+            _ => normalized.push(ch),
+        }
+    }
     (normalized, line_count)
 }
 
@@ -131,25 +145,18 @@ pub fn execute_native_blame(
         }
     }
 
-    let repo = git2::Repository::open(&resolved_root.root_path)
-        .map_err(|e| GitBlameError::Git(format!("failed to open git repository: {}", e.message())))?;
+    let repo = git2::Repository::open(&resolved_root.root_path).map_err(|e| {
+        GitBlameError::Git(format!("failed to open git repository: {}", e.message()))
+    })?;
 
     // Capture initial HEAD state.
-    let initial_head_oid = match repo.head() {
-        Ok(head_ref) => head_ref.target(),
-        Err(e)
-            if e.code() == git2::ErrorCode::UnbornBranch
-                || e.code() == git2::ErrorCode::NotFound =>
-        {
-            None
-        }
-        Err(e) => return Err(GitBlameError::Git(e.message().to_string())),
-    };
+    let initial_head_oid = read_head_oid(&repo)?;
 
     // Case 1: Unborn HEAD / empty repository.
     let head_oid = match initial_head_oid {
         Some(oid) => oid,
         None => {
+            ensure_head_unchanged(&repo, initial_head_oid)?;
             return Ok(GitBlameResponse {
                 snapshot_id: input.snapshot_id.clone(),
                 model_version: input.model_version,
@@ -168,9 +175,30 @@ pub fn execute_native_blame(
         }
     };
 
-    // Case 2: Empty buffer short-circuit.
-    // Libgit2 blame_buffer rejects 0-length buffers with GenericError.
+    let head_commit = repo
+        .find_commit(head_oid)
+        .map_err(|e| GitBlameError::Git(format!("failed to find HEAD commit: {}", e.message())))?;
+    let head_tree = head_commit
+        .tree()
+        .map_err(|e| GitBlameError::Git(format!("failed to find HEAD tree: {}", e.message())))?;
+
+    // Resolve the HEAD baseline first; direct paths and staged rename origins
+    // must pass exactly the same mode, object-header, and payload checks.
+    let baseline_path = match head_tree.get_path(Path::new(&repo_relative_path)) {
+        Ok(_) => Some(Cow::Borrowed(repo_relative_path.as_str())),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            find_staged_rename_origin(&repo, &head_tree, &repo_relative_path)?.map(Cow::Owned)
+        }
+        Err(e) => return Err(GitBlameError::Git(e.message().to_string())),
+    };
+    if let Some(path) = baseline_path.as_deref() {
+        let entry = head_tree.get_path(Path::new(path)).map_err(|e| {
+            GitBlameError::Git(format!("failed to resolve HEAD baseline: {}", e.message()))
+        })?;
+        validate_baseline_entry(&repo, &entry)?;
+    }
     if input.content.is_empty() {
+        ensure_head_unchanged(&repo, initial_head_oid)?;
         return Ok(GitBlameResponse {
             snapshot_id: input.snapshot_id.clone(),
             model_version: input.model_version,
@@ -184,50 +212,11 @@ pub fn execute_native_blame(
         });
     }
 
-    let head_commit = repo
-        .find_commit(head_oid)
-        .map_err(|e| GitBlameError::Git(format!("failed to find HEAD commit: {}", e.message())))?;
-    let head_tree = head_commit
-        .tree()
-        .map_err(|e| GitBlameError::Git(format!("failed to find HEAD tree: {}", e.message())))?;
-
-    // Determine baseline path in HEAD tree, accounting for staged renames.
-    let baseline_path = match head_tree.get_path(Path::new(&repo_relative_path)) {
-        Ok(entry) => {
-            // Verify blob type and bounds.
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                return Err(GitBlameError::UnsupportedFile(format!(
-                    "target path in HEAD tree is not a blob: {:?}",
-                    entry.kind()
-                )));
-            }
-            let blob = repo.find_blob(entry.id()).map_err(|e| {
-                GitBlameError::Git(format!("failed to read HEAD blob: {}", e.message()))
-            })?;
-            if blob.size() > MAX_BUFFER_CONTENT_BYTES {
-                return Err(GitBlameError::TooLarge(format!(
-                    "HEAD baseline blob size ({} bytes) exceeds limit of {} bytes",
-                    blob.size(),
-                    MAX_BUFFER_CONTENT_BYTES
-                )));
-            }
-            if blob.is_binary() || blob.content().contains(&0) {
-                return Err(GitBlameError::UnsupportedFile(
-                    "HEAD baseline blob is binary".to_string(),
-                ));
-            }
-            Some(repo_relative_path.clone())
-        }
-        Err(_) => {
-            // Not directly at HEAD: check if staged rename exists.
-            find_staged_rename_origin(&repo, &head_tree, &repo_relative_path)?
-        }
-    };
-
     // Case 3: File does not exist at HEAD and is not a staged rename (untracked or brand new file).
     let blame_baseline_path = match baseline_path {
         Some(path) => path,
         None => {
+            ensure_head_unchanged(&repo, initial_head_oid)?;
             return Ok(GitBlameResponse {
                 snapshot_id: input.snapshot_id.clone(),
                 model_version: input.model_version,
@@ -250,7 +239,10 @@ pub fn execute_native_blame(
     let mut blame_opts = git2::BlameOptions::new();
     blame_opts.newest_commit(head_oid);
     let blame = repo
-        .blame_file(Path::new(&blame_baseline_path), Some(&mut blame_opts))
+        .blame_file(
+            Path::new(blame_baseline_path.as_ref()),
+            Some(&mut blame_opts),
+        )
         .map_err(|e| GitBlameError::Git(format!("failed to blame file: {}", e.message())))?;
 
     let blame_with_buffer = blame
@@ -297,7 +289,10 @@ pub fn execute_native_blame(
             }
 
             let commit_obj = repo.find_commit(final_commit_id).map_err(|e| {
-                GitBlameError::Git(format!("failed to find commit {final_commit_id}: {}", e.message()))
+                GitBlameError::Git(format!(
+                    "failed to find commit {final_commit_id}: {}",
+                    e.message()
+                ))
             })?;
 
             let author = commit_obj.author();
@@ -307,20 +302,18 @@ pub fn execute_native_blame(
                 .map(str::to_string)
                 .unwrap_or_else(|| String::from_utf8_lossy(author.name_bytes()).into_owned());
 
-            let subject = commit_obj
-                .summary()
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    commit_obj
-                        .message()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or("")
-                        .to_string()
-                });
+            let subject = commit_obj.summary().map(str::to_string).unwrap_or_else(|| {
+                commit_obj
+                    .message()
+                    .and_then(|m| m.lines().next())
+                    .unwrap_or("")
+                    .to_string()
+            });
 
             let commit_dto = GitBlameCommit {
                 hash: final_commit_id.to_string(),
                 author_name,
+                author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
                 author_timestamp: author_when.seconds(),
                 author_timezone_offset_minutes: author_when.offset_minutes(),
                 subject,
@@ -370,11 +363,7 @@ pub fn execute_native_blame(
         }
     }
 
-    // Revalidate HEAD state before publication.
-    let current_head_oid = repo.head().ok().and_then(|h| h.target());
-    if current_head_oid != Some(head_oid) {
-        return Err(GitBlameError::StaleRevision);
-    }
+    ensure_head_unchanged(&repo, initial_head_oid)?;
 
     let status = if partitioned_ranges.iter().all(|r| r.commit_index.is_none()) {
         GitBlameStatus::Uncommitted
@@ -395,6 +384,67 @@ pub fn execute_native_blame(
     })
 }
 
+fn read_head_oid(repo: &git2::Repository) -> Result<Option<git2::Oid>, GitBlameError> {
+    match repo.head() {
+        Ok(head) => Ok(head.target()),
+        Err(e)
+            if e.code() == git2::ErrorCode::UnbornBranch
+                || e.code() == git2::ErrorCode::NotFound =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(GitBlameError::Git(e.message().to_string())),
+    }
+}
+
+fn ensure_head_unchanged(
+    repo: &git2::Repository,
+    initial_head_oid: Option<git2::Oid>,
+) -> Result<(), GitBlameError> {
+    if read_head_oid(repo)? != initial_head_oid {
+        return Err(GitBlameError::StaleRevision);
+    }
+    Ok(())
+}
+
+fn validate_baseline_entry(
+    repo: &git2::Repository,
+    entry: &git2::TreeEntry<'_>,
+) -> Result<(), GitBlameError> {
+    if !matches!(entry.filemode(), 0o100644 | 0o100755)
+        || entry.kind() != Some(git2::ObjectType::Blob)
+    {
+        return Err(GitBlameError::UnsupportedFile(
+            "HEAD baseline is not a regular file".to_string(),
+        ));
+    }
+    let odb = repo
+        .odb()
+        .map_err(|e| GitBlameError::Git(e.message().to_string()))?;
+    let (size, kind) = odb
+        .read_header(entry.id())
+        .map_err(|e| GitBlameError::Git(e.message().to_string()))?;
+    if kind != git2::ObjectType::Blob {
+        return Err(GitBlameError::UnsupportedFile(
+            "HEAD baseline object is not a blob".to_string(),
+        ));
+    }
+    if size > MAX_BUFFER_CONTENT_BYTES {
+        return Err(GitBlameError::TooLarge(format!(
+            "HEAD baseline blob size ({size} bytes) exceeds limit of {MAX_BUFFER_CONTENT_BYTES} bytes"
+        )));
+    }
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|e| GitBlameError::Git(e.message().to_string()))?;
+    if blob.is_binary() || blob.content().contains(&0) {
+        return Err(GitBlameError::UnsupportedFile(
+            "HEAD baseline blob is binary".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Inspects index delta for staged renames relative to HEAD tree.
 fn find_staged_rename_origin(
     repo: &git2::Repository,
@@ -408,7 +458,10 @@ fn find_staged_rename_origin(
     let mut diff = repo
         .diff_tree_to_index(Some(head_tree), Some(&index), None)
         .map_err(|e| {
-            GitBlameError::Git(format!("failed to create tree-to-index diff: {}", e.message()))
+            GitBlameError::Git(format!(
+                "failed to create tree-to-index diff: {}",
+                e.message()
+            ))
         })?;
 
     let mut find_opts = git2::DiffFindOptions::new();
@@ -741,15 +794,8 @@ mod tests {
 
         let commit_oid = {
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "feat: initial file",
-                &tree,
-                &[],
-            )
-            .unwrap()
+            repo.commit(Some("HEAD"), &sig, &sig, "feat: initial file", &tree, &[])
+                .unwrap()
         };
 
         // Stage a rename: remove original.txt from index, write renamed.txt and add to index
@@ -826,14 +872,9 @@ mod tests {
         let tree_id = index.write_tree().unwrap();
         let nested_oid = {
             let tree = nested_repo.find_tree(tree_id).unwrap();
-            nested_repo.commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "feat: nested commit",
-                &tree,
-                &[],
-            ).unwrap()
+            nested_repo
+                .commit(Some("HEAD"), &sig, &sig, "feat: nested commit", &tree, &[])
+                .unwrap()
         };
 
         let input = GitBlameInput {
@@ -850,5 +891,72 @@ mod tests {
         assert_eq!(resp.root_relative_path, "sub_code.rs");
         assert_eq!(resp.commits[0].hash, nested_oid.to_string());
         assert_eq!(resp.commits[0].author_name, "Dan");
+    }
+
+    #[test]
+    fn lone_cr_buffer_preserves_committed_lines() {
+        let (dir, _repo, oid) = setup_test_repo();
+        let response = execute_native_blame(
+            dir.path(),
+            &GitBlameInput {
+                path: "code.rs".to_string(),
+                worktree_path: None,
+                content: "fn main() {\r    println!(\"hello\");\r}\r".to_string(),
+                snapshot_id: "lone-cr".to_string(),
+                model_version: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(response.buffer_line_count, 4);
+        assert_eq!(response.ranges[0].line_count, 3);
+        assert_eq!(response.ranges[0].commit_index, Some(0));
+        assert_eq!(response.commits[0].hash, oid.to_string());
+        assert_eq!(response.ranges[1].commit_index, None);
+    }
+
+    #[test]
+    fn mixed_line_endings_preserve_boundaries_and_unicode() {
+        let (content, rows) = normalize_buffer_content("α\rβ\r\nγ\nδ\r");
+        assert_eq!(content, "α\nβ\nγ\nδ\n");
+        assert_eq!(rows, 5);
+        assert_eq!(normalize_buffer_content(""), (String::new(), 1));
+    }
+
+    #[test]
+    fn head_publication_guard_rejects_unborn_to_committed_and_head_removal() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let unborn = read_head_oid(&repo).unwrap();
+        assert_eq!(unborn, None);
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("Guard", "guard@example.com").unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        assert!(matches!(
+            ensure_head_unchanged(&repo, unborn),
+            Err(GitBlameError::StaleRevision)
+        ));
+        ensure_head_unchanged(&repo, Some(oid)).unwrap();
+        let next = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "next",
+                &tree,
+                &[&repo.find_commit(oid).unwrap()],
+            )
+            .unwrap();
+        assert!(matches!(
+            ensure_head_unchanged(&repo, Some(oid)),
+            Err(GitBlameError::StaleRevision)
+        ));
+        repo.head().unwrap().delete().unwrap();
+        assert!(matches!(
+            ensure_head_unchanged(&repo, Some(next)),
+            Err(GitBlameError::StaleRevision)
+        ));
     }
 }

@@ -12,6 +12,10 @@ import { EditorGitBlameContextMenu } from "./EditorGitBlameContextMenu.js";
 import type { GitBlameResponse } from "@/api/client.js";
 import type * as monacoNs from "monaco-editor";
 
+const mockMonaco = {
+  editor: { EditorOption: { lineHeight: 75 } },
+} as unknown as typeof monacoNs;
+
 const mockBlameData: GitBlameResponse = {
   snapshotId: "snap-1234",
   modelVersion: 1,
@@ -29,6 +33,7 @@ const mockBlameData: GitBlameResponse = {
     {
       hash: "1111111111111111111111111111111111111111",
       authorName: "Alice Smith",
+      authorEmail: "alice@example.com",
       authorTimestamp: 1760000000,
       authorTimezoneOffsetMinutes: 120,
       subject: "feat: add first line",
@@ -36,6 +41,7 @@ const mockBlameData: GitBlameResponse = {
     {
       hash: "2222222222222222222222222222222222222222",
       authorName: "Bob Jones",
+      authorEmail: "bob@example.com",
       authorTimestamp: 1760100000,
       authorTimezoneOffsetMinutes: -300,
       subject: "fix: update third line",
@@ -43,7 +49,9 @@ const mockBlameData: GitBlameResponse = {
   ],
 };
 
-function createMockEditor(overrides?: Partial<monacoNs.editor.IStandaloneCodeEditor>) {
+function createMockEditor(
+  overrides?: Partial<monacoNs.editor.IStandaloneCodeEditor>,
+) {
   const visibleRanges = [
     {
       startLineNumber: 1,
@@ -77,26 +85,51 @@ function createMockEditor(overrides?: Partial<monacoNs.editor.IStandaloneCodeEdi
 
 describe("EditorGitBlame layout & calculations", () => {
   it("computes normal layout for wrapperWidth >= 640px", () => {
-    expect(computeBlameGutterLayout(640)).toEqual({ width: 220, mode: "normal" });
-    expect(computeBlameGutterLayout(800)).toEqual({ width: 220, mode: "normal" });
-    expect(computeBlameGutterLayout(1920)).toEqual({ width: 220, mode: "normal" });
+    expect(computeBlameGutterLayout(640)).toEqual({
+      width: 220,
+      mode: "normal",
+    });
+    expect(computeBlameGutterLayout(800)).toEqual({
+      width: 220,
+      mode: "normal",
+    });
+    expect(computeBlameGutterLayout(1920)).toEqual({
+      width: 220,
+      mode: "normal",
+    });
   });
 
   it("computes compact layout for wrapperWidth < 640px bounded by min(120, wrapperWidth / 3)", () => {
     // 639 / 3 = 213 -> capped at 120
-    expect(computeBlameGutterLayout(639)).toEqual({ width: 120, mode: "compact" });
-    expect(computeBlameGutterLayout(500)).toEqual({ width: 120, mode: "compact" });
+    expect(computeBlameGutterLayout(639)).toEqual({
+      width: 120,
+      mode: "compact",
+    });
+    expect(computeBlameGutterLayout(500)).toEqual({
+      width: 120,
+      mode: "compact",
+    });
     // 300 / 3 = 100
-    expect(computeBlameGutterLayout(300)).toEqual({ width: 100, mode: "compact" });
+    expect(computeBlameGutterLayout(300)).toEqual({
+      width: 100,
+      mode: "compact",
+    });
     // 150 / 3 = 50
-    expect(computeBlameGutterLayout(150)).toEqual({ width: 50, mode: "compact" });
+    expect(computeBlameGutterLayout(150)).toEqual({
+      width: 50,
+      mode: "compact",
+    });
     // 0 -> min 1
     expect(computeBlameGutterLayout(0)).toEqual({ width: 1, mode: "compact" });
   });
 
   it("computes visible blame rows with correct committed and uncommitted attribution", () => {
     const editor = createMockEditor();
-    const rows = computeVisibleBlameRows({ editor, blameData: mockBlameData });
+    const rows = computeVisibleBlameRows({
+      editor,
+      blameData: mockBlameData,
+      monaco: mockMonaco,
+    });
 
     expect(rows).toHaveLength(3);
 
@@ -106,10 +139,12 @@ describe("EditorGitBlame layout & calculations", () => {
     expect(rows[0].height).toBe(20);
     expect(rows[0].isUncommitted).toBe(false);
     expect(rows[0].displayAuthor).toBe("Alice Smith");
-    expect(rows[0].commit?.hash).toBe("1111111111111111111111111111111111111111");
+    expect(rows[0].commit?.hash).toBe(
+      "1111111111111111111111111111111111111111",
+    );
     expect(rows[0].hoverMetadata).toContain("Alice Smith");
+    expect(rows[0].hoverMetadata).toContain("alice@example.com");
     expect(rows[0].hoverMetadata).toContain("feat: add first line");
-
     // Line 2: Uncommitted (no fabricated commit or link)
     expect(rows[1].lineNumber).toBe(2);
     expect(rows[1].top).toBe(20);
@@ -124,20 +159,58 @@ describe("EditorGitBlame layout & calculations", () => {
     expect(rows[2].top).toBe(40);
     expect(rows[2].isUncommitted).toBe(false);
     expect(rows[2].displayAuthor).toBe("Bob Jones");
-    expect(rows[2].commit?.hash).toBe("2222222222222222222222222222222222222222");
+    expect(rows[2].commit?.hash).toBe(
+      "2222222222222222222222222222222222222222",
+    );
     expect(rows[2].hoverMetadata).toContain("Bob Jones");
+    expect(rows[2].hoverMetadata).toContain("bob@example.com");
   });
 
   it("returns empty rows if editor has no model or lines are outside viewport", () => {
     const editorNoModel = createMockEditor({ getModel: () => null });
-    expect(computeVisibleBlameRows({ editor: editorNoModel, blameData: mockBlameData })).toEqual([]);
+    expect(
+      computeVisibleBlameRows({
+        editor: editorNoModel,
+        blameData: mockBlameData,
+        monaco: mockMonaco,
+      }),
+    ).toEqual([]);
 
     // Lines outside viewport
     const editorFarAway = createMockEditor({
       getTopForLineNumber: () => 10000,
       getLayoutInfo: () => ({ height: 500, width: 800 }),
     });
-    expect(computeVisibleBlameRows({ editor: editorFarAway, blameData: mockBlameData })).toEqual([]);
+    expect(
+      computeVisibleBlameRows({
+        editor: editorFarAway,
+        blameData: mockBlameData,
+        monaco: mockMonaco,
+      }),
+    ).toEqual([]);
+  });
+
+  it("computes row heights matching configured Monaco EditorOption.lineHeight including fractional heights", () => {
+    const editor16_5 = createMockEditor({
+      getOption: vi.fn((opt) => (opt === 75 ? 16.5 : 19)),
+    });
+    const rows16_5 = computeVisibleBlameRows({
+      editor: editor16_5,
+      blameData: mockBlameData,
+      monaco: mockMonaco,
+    });
+    expect(rows16_5[0].height).toBe(16.5);
+    expect(rows16_5[1].height).toBe(16.5);
+
+    const editor24 = createMockEditor({
+      getOption: vi.fn((opt) => (opt === 75 ? 24 : 19)),
+    });
+    const rows24 = computeVisibleBlameRows({
+      editor: editor24,
+      blameData: mockBlameData,
+      monaco: mockMonaco,
+    });
+    expect(rows24[0].height).toBe(24);
   });
 });
 
@@ -170,7 +243,9 @@ describe("EditorGitBlameGutter component states", () => {
       );
     });
 
-    const loadingEl = container.querySelector("[data-testid='editor-git-blame-loading']");
+    const loadingEl = container.querySelector(
+      "[data-testid='editor-git-blame-loading']",
+    );
     expect(loadingEl).not.toBeNull();
     expect(loadingEl?.textContent).toContain("Loading blame…");
   });
@@ -188,7 +263,9 @@ describe("EditorGitBlameGutter component states", () => {
       );
     });
 
-    const unavailEl = container.querySelector("[data-testid='editor-git-blame-unavailable']");
+    const unavailEl = container.querySelector(
+      "[data-testid='editor-git-blame-unavailable']",
+    );
     expect(unavailEl).not.toBeNull();
     expect(unavailEl?.textContent).toContain("Not a Git repository");
   });
@@ -205,7 +282,9 @@ describe("EditorGitBlameGutter component states", () => {
       );
     });
 
-    const errorEl = container.querySelector("[data-testid='editor-git-blame-error']");
+    const errorEl = container.querySelector(
+      "[data-testid='editor-git-blame-error']",
+    );
     expect(errorEl).not.toBeNull();
     expect(errorEl?.textContent).toContain("Failed to load blame");
   });
@@ -219,6 +298,7 @@ describe("EditorGitBlameGutter component states", () => {
       root.render(
         <EditorGitBlameGutter
           editor={editor}
+          monaco={mockMonaco}
           blameData={mockBlameData}
           blameStatus="ready"
           wrapperWidth={800}
@@ -241,7 +321,7 @@ describe("EditorGitBlameGutter component states", () => {
     // Row 1: Alice Smith
     expect(rows[0].textContent).toContain("Alice Smith");
     expect(rows[0].getAttribute("aria-label")).toContain("Alice Smith");
-
+    expect(rows[0].getAttribute("aria-label")).toContain("alice@example.com");
     // Row 2: Uncommitted
     expect(rows[1].textContent).toContain("Uncommitted");
     expect(rows[1].getAttribute("data-uncommitted")).toBe("true");
@@ -277,6 +357,33 @@ describe("EditorGitBlameGutter component states", () => {
       "1111111111111111111111111111111111111111",
       "vcs-root-1",
     );
+
+    // Mouse click on row 1 (committed) calls onRevealCommit
+    onRevealCommit.mockClear();
+    act(() => {
+      rows[0].dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+        }),
+      );
+    });
+    expect(onRevealCommit).toHaveBeenCalledWith(
+      "1111111111111111111111111111111111111111",
+      "vcs-root-1",
+    );
+
+    // Mouse click on row 2 (uncommitted) does NOT call onRevealCommit
+    onRevealCommit.mockClear();
+    act(() => {
+      rows[1].dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+        }),
+      );
+    });
+    expect(onRevealCommit).not.toHaveBeenCalled();
 
     // Press Enter on row 2 (uncommitted) does NOT call onRevealCommit
     onRevealCommit.mockClear();
@@ -332,16 +439,24 @@ describe("EditorGitBlameContextMenu component", () => {
       );
     });
 
-    const menu = document.body.querySelector("[data-testid='editor-git-blame-menu']");
+    const menu = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu']",
+    );
     expect(menu).not.toBeNull();
 
-    const toggleItem = document.body.querySelector("[data-testid='editor-git-blame-menu-toggle']");
+    const toggleItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-toggle']",
+    );
     expect(toggleItem?.textContent).toContain("Hide Git Blame Annotations");
 
-    const refreshItem = document.body.querySelector("[data-testid='editor-git-blame-menu-refresh']");
+    const refreshItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-refresh']",
+    );
     expect(refreshItem?.textContent).toContain("Refresh Annotations");
 
-    const revealItem = document.body.querySelector("[data-testid='editor-git-blame-menu-reveal']");
+    const revealItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-reveal']",
+    );
     expect(revealItem?.textContent).toContain("Show Commit in Git");
     expect(revealItem?.getAttribute("aria-disabled")).not.toBe("true");
   });
@@ -363,7 +478,9 @@ describe("EditorGitBlameContextMenu component", () => {
       );
     });
 
-    const revealItem = document.body.querySelector("[data-testid='editor-git-blame-menu-reveal']");
+    const revealItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-reveal']",
+    );
     expect(revealItem).not.toBeNull();
     expect(revealItem?.getAttribute("aria-disabled")).toBe("true");
     expect(revealItem?.getAttribute("title")).toBe("Uncommitted changes");
@@ -387,9 +504,39 @@ describe("EditorGitBlameContextMenu component", () => {
       );
     });
 
-    const revealItem = document.body.querySelector("[data-testid='editor-git-blame-menu-reveal']");
+    const revealItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-reveal']",
+    );
     expect(revealItem).not.toBeNull();
     expect(revealItem?.getAttribute("aria-disabled")).toBe("true");
-    expect(revealItem?.getAttribute("title")).toBe("Buffer changed; refresh annotations");
+    expect(revealItem?.getAttribute("title")).toBe(
+      "Buffer changed; refresh annotations",
+    );
+  });
+
+  it("disables Show Commit in Git when blameStatus is waiting or loading even if snapshotId matches", () => {
+    act(() => {
+      root.render(
+        <EditorGitBlameContextMenu
+          x={100}
+          y={200}
+          lineNumber={1}
+          blameEnabled={true}
+          blameStatus="waiting"
+          blameData={mockBlameData}
+          targetSnapshotId="snap-1234"
+          onClose={() => {}}
+          onToggleBlame={() => {}}
+          onRefreshBlame={() => {}}
+        />,
+      );
+    });
+
+    const revealItem = document.body.querySelector(
+      "[data-testid='editor-git-blame-menu-reveal']",
+    );
+    expect(revealItem).not.toBeNull();
+    expect(revealItem?.getAttribute("aria-disabled")).toBe("true");
+    expect(revealItem?.getAttribute("title")).toBe("Annotations not ready");
   });
 });

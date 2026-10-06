@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GitBlameResponse, VcsRoot } from "@/api/client.js";
+import { projectTargetCacheKey } from "@/api/client.js";
 import {
   computeMonacoLineCount,
   findBlameRangeForLine,
@@ -9,6 +10,7 @@ import {
   formatBlameFullTimestamp,
   GIT_BLAME_MAX_BUFFER_BYTES,
   isBufferOverLimit,
+  isMatchingGitQueryKey,
   validateBlameResponse,
 } from "./editor-git-blame.js";
 
@@ -50,6 +52,7 @@ describe("editor-git-blame helpers", () => {
     const validCommit = {
       hash: "0123456789abcdef0123456789abcdef01234567",
       authorName: "Alice",
+      authorEmail: "alice@example.com",
       authorTimestamp: 1760000000,
       authorTimezoneOffsetMinutes: 420,
       subject: "feat: initial commit",
@@ -77,6 +80,32 @@ describe("editor-git-blame helpers", () => {
         expectedBufferLineCount: 5,
       });
       expect(res.valid).toBe(true);
+    });
+
+    it("rejects commit record missing authorEmail", () => {
+      const { authorEmail: _, ...commitWithoutEmail } = validCommit;
+      const badResp = {
+        ...validResponse,
+        commits: [commitWithoutEmail],
+      };
+      const res = validateBlameResponse(badResp);
+      expect(res.valid).toBe(false);
+      if (!res.valid) {
+        expect(res.reason).toContain("Invalid commit record at index 0");
+      }
+    });
+
+    it("rejects commit record with non-string authorEmail", () => {
+      const badCommit = { ...validCommit, authorEmail: 12345 };
+      const badResp = {
+        ...validResponse,
+        commits: [badCommit],
+      };
+      const res = validateBlameResponse(badResp);
+      expect(res.valid).toBe(false);
+      if (!res.valid) {
+        expect(res.reason).toContain("Invalid commit record at index 0");
+      }
     });
 
     it("rejects non-object responses", () => {
@@ -221,7 +250,9 @@ describe("editor-git-blame helpers", () => {
       const res = validateBlameResponse(incompleteResp);
       expect(res.valid).toBe(false);
       if (!res.valid) {
-        expect(res.reason).toContain("Range partition covers 5 lines, but bufferLineCount is 10");
+        expect(res.reason).toContain(
+          "Range partition covers 5 lines, but bufferLineCount is 10",
+        );
       }
     });
   });
@@ -255,6 +286,7 @@ describe("editor-git-blame helpers", () => {
       {
         hash: "1111",
         authorName: "Alice",
+        authorEmail: "alice@example.com",
         authorTimestamp: 100,
         authorTimezoneOffsetMinutes: 0,
         subject: "commit 1",
@@ -262,23 +294,47 @@ describe("editor-git-blame helpers", () => {
       {
         hash: "2222",
         authorName: "Bob",
+        authorEmail: "bob@example.com",
         authorTimestamp: 200,
         authorTimezoneOffsetMinutes: 0,
         subject: "commit 2",
       },
     ];
-
     it("returns commit when commitIndex is valid", () => {
-      expect(findCommitForRange(commits, { startLine: 1, lineCount: 1, commitIndex: 0 })).toEqual(commits[0]);
-      expect(findCommitForRange(commits, { startLine: 2, lineCount: 1, commitIndex: 1 })).toEqual(commits[1]);
+      expect(
+        findCommitForRange(commits, {
+          startLine: 1,
+          lineCount: 1,
+          commitIndex: 0,
+        }),
+      ).toEqual(commits[0]);
+      expect(
+        findCommitForRange(commits, {
+          startLine: 2,
+          lineCount: 1,
+          commitIndex: 1,
+        }),
+      ).toEqual(commits[1]);
     });
 
     it("returns null when range is uncommitted (commitIndex null)", () => {
-      expect(findCommitForRange(commits, { startLine: 1, lineCount: 1, commitIndex: null })).toBeNull();
+      expect(
+        findCommitForRange(commits, {
+          startLine: 1,
+          lineCount: 1,
+          commitIndex: null,
+        }),
+      ).toBeNull();
     });
 
     it("returns null when commitIndex is out of bounds or range is null", () => {
-      expect(findCommitForRange(commits, { startLine: 1, lineCount: 1, commitIndex: 99 })).toBeNull();
+      expect(
+        findCommitForRange(commits, {
+          startLine: 1,
+          lineCount: 1,
+          commitIndex: 99,
+        }),
+      ).toBeNull();
       expect(findCommitForRange(commits, null)).toBeNull();
     });
   });
@@ -346,6 +402,184 @@ describe("editor-git-blame helpers", () => {
       // 1760000000 with offset -300 (-0500) -> 2025-10-09 03:53:20 -0500
       const formatted = formatBlameFullTimestamp(1760000000, -300);
       expect(formatted).toBe("2025-10-09 03:53:20 -0500");
+    });
+  });
+
+  describe("isMatchingGitQueryKey", () => {
+    const target = {
+      project: "my-project",
+      profileId: "server-1",
+      worktreePath: null,
+    };
+    const owner = {
+      profileId: "server-1",
+      generation: 1,
+    };
+
+    it("matches owner-scoped git-diff query key exactly", () => {
+      const key = [
+        "profile",
+        "server-1",
+        1,
+        "git",
+        "git-diff",
+        "my-project",
+        "root",
+      ];
+      const res = isMatchingGitQueryKey(key, target, owner);
+      expect(res.matches).toBe(true);
+      expect(res.prefix).toBe("git-diff");
+      expect(res.isDiffMutation).toBe(true);
+    });
+
+    it("identifies non-diff git mutations (git-log, branches, git-roots)", () => {
+      const logKey = [
+        "profile",
+        "server-1",
+        1,
+        "git",
+        "git-log",
+        "my-project",
+        "root",
+      ];
+      const logRes = isMatchingGitQueryKey(logKey, target, owner);
+      expect(logRes.matches).toBe(true);
+      expect(logRes.isDiffMutation).toBe(false);
+
+      const branchesKey = [
+        "profile",
+        "server-1",
+        1,
+        "git",
+        "branches",
+        "my-project",
+        "root",
+      ];
+      const branchesRes = isMatchingGitQueryKey(branchesKey, target, owner);
+      expect(branchesRes.matches).toBe(true);
+      expect(branchesRes.isDiffMutation).toBe(false);
+    });
+
+    it("rejects cross-profile queries with the same project name", () => {
+      const key = [
+        "profile",
+        "server-2",
+        1,
+        "git",
+        "git-diff",
+        "my-project",
+        "root",
+      ];
+      const res = isMatchingGitQueryKey(key, target, owner);
+      expect(res.matches).toBe(false);
+    });
+
+    it("rejects stale generation queries for the same profile", () => {
+      const key = [
+        "profile",
+        "server-1",
+        0,
+        "git",
+        "git-diff",
+        "my-project",
+        "root",
+      ];
+      const res = isMatchingGitQueryKey(key, target, owner);
+      expect(res.matches).toBe(false);
+    });
+
+    it("rejects queries for a different project on the same profile", () => {
+      const key = [
+        "profile",
+        "server-1",
+        1,
+        "git",
+        "git-diff",
+        "other-project",
+        "root",
+      ];
+      const res = isMatchingGitQueryKey(key, target, owner);
+      expect(res.matches).toBe(false);
+    });
+
+    it("rejects queries for a different worktree of the same project", () => {
+      const key = [
+        "profile",
+        "server-1",
+        1,
+        "git",
+        "git-diff",
+        "my-project",
+        "worktree-b",
+      ];
+      const res = isMatchingGitQueryKey(key, target, owner);
+      expect(res.matches).toBe(false);
+    });
+
+    it("matches its canonical worktree and root without crossing sibling roots", () => {
+      const worktreeTarget = { ...target, worktreePath: "/tmp/feature/" };
+      const key = [
+        "profile",
+        owner.profileId,
+        owner.generation,
+        "git",
+        "git-diff",
+        target.project,
+        projectTargetCacheKey(worktreeTarget),
+        "nested",
+      ];
+      expect(
+        isMatchingGitQueryKey(key, worktreeTarget, owner, "nested").matches,
+      ).toBe(true);
+      expect(
+        isMatchingGitQueryKey(key, worktreeTarget, owner, "other").matches,
+      ).toBe(false);
+      expect(
+        isMatchingGitQueryKey(
+          [...key.slice(0, 7), "*"],
+          worktreeTarget,
+          owner,
+          "nested",
+        ).matches,
+      ).toBe(true);
+      expect(
+        isMatchingGitQueryKey(
+          ["git-diff", target.project, "root"],
+          target,
+          owner,
+        ).matches,
+      ).toBe(false);
+    });
+
+    it("rejects non-git namespaces (e.g. system, fs)", () => {
+      const sysKey = ["profile", "server-1", 1, "system", "metrics"];
+      expect(isMatchingGitQueryKey(sysKey, target, owner).matches).toBe(false);
+
+      const fsKey = [
+        "profile",
+        "server-1",
+        1,
+        "fs",
+        "my-project",
+        "root",
+        "src/file.ts",
+      ];
+      expect(isMatchingGitQueryKey(fsKey, target, owner).matches).toBe(false);
+    });
+
+    it("matches unowned git query key format", () => {
+      const key = ["git-diff", "my-project", "root"];
+      const res = isMatchingGitQueryKey(key, target, null);
+      expect(res.matches).toBe(true);
+      expect(res.isDiffMutation).toBe(true);
+    });
+
+    it("rejects invalid or empty keys", () => {
+      expect(isMatchingGitQueryKey(null, target, owner).matches).toBe(false);
+      expect(isMatchingGitQueryKey([], target, owner).matches).toBe(false);
+      expect(isMatchingGitQueryKey("invalid", target, owner).matches).toBe(
+        false,
+      );
     });
   });
 });

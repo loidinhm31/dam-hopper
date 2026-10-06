@@ -248,6 +248,8 @@ Note: `message` remains subject-only text even when a commit was matched on body
 
 Inspects commit metadata and message directly from the Git object database (ODB) by exact 40- or 64-hex OID, without requiring branch reachability or an attached `HEAD`.
 
+SHA-1 repositories use libgit2 ODB reads; SHA-256 repositories use read-only Git CLI object inspection and require `git` on the server's PATH (provided in the runtime image Dockerfile; no configuration migration required). Exact details, changed-file lists, historical diffs, root status and history log reads support SHA-256; native libgit2 blame and repository mutations remain SHA-1. Raw commit payloads are bounded at 5 MiB before decoding (`git cat-file -p`); replacement objects are disabled. This bound does not universally constrain referenced trees, changed-file list output (`git show --numstat` / `--name-status`) or engine history/rename computation.
+
 *Distinction from Message Snapshot:* This route is a pure read-only ODB inspection tool designed for commit reveal and history navigation (e.g., from editor Git blame annotations). It loads arbitrary reachable or detached commits across arbitrary history depths (>200 commits). In contrast, `GET /api/git/{project}/commit/{hash}/message` is strictly CAS-bounded to an eligible local branch (`refs/heads/*`) for commit-message rewrite and parent-contiguous squash operations.
 Query parameters:
 - `root` (optional string): Target VCS root for submodule or nested repository.
@@ -258,8 +260,13 @@ Response format (`GitCommitDetails`):
 {
   "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
   "authorName": "Alice Dev",
+  "authorEmail": "alice@example.com",
   "authorTimestamp": 1790000000,
   "authorTimezoneOffsetMinutes": -420,
+  "committerName": "Integration Bot",
+  "committerEmail": "integration@example.com",
+  "committerTimestamp": 1790000100,
+  "committerTimezoneOffsetMinutes": 0,
   "subject": "feat: initial commit",
   "fullMessage": "feat: initial commit\n\nFull detailed commit message body."
 }
@@ -278,6 +285,10 @@ Error codes:
 
 Computes line-by-line attribution for an in-memory editor buffer snapshot against the resolved project root or worktree. Bounded by an HTTP body limit of 32 MiB (`DefaultBodyLimit`) and a buffer content limit of 5 MiB. Enforces global admission via a 2-permit concurrency semaphore (`503 GIT_BLAME_BUSY` when exhausted).
 
+Direct HEAD paths and staged rename origins share regular-file mode, object-header size/type and binary checks. Oversized baseline payloads are rejected before requesting their blob content; rename similarity/history traversal still performs library work. HEAD symlinks are rejected even when missing on disk. Every successful publication path rechecks captured HEAD, including unborn, untracked and empty-buffer responses.
+
+LF, CRLF and lone-CR buffers normalize to LF with Monaco display-row counting. CRLF/lone-CR input retains attribution against an LF baseline. Native byte comparison can mark a CRLF-committed baseline Uncommitted after normalization; normalization does not promise EOL-insensitive history attribution.
+
 Request body (`GitBlameInput`):
 - `path` (string, required): File path relative to project root (must not contain `..` or leading `/`; max 4096 bytes).
 - `worktreePath` (optional string): Registered worktree target path (max 4096 bytes).
@@ -293,7 +304,7 @@ Response format (`GitBlameResponse`):
   "rootId": ".",
   "rootRelativePath": "src/main.rs",
   "baseCommitOid": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
-  "bufferLineCount": 120,
+  "bufferLineCount": 12,
   "status": "ready",
   "ranges": [
     { "startLine": 1, "lineCount": 10, "commitIndex": 0 },
@@ -303,6 +314,7 @@ Response format (`GitBlameResponse`):
     {
       "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
       "authorName": "Alice Dev",
+      "authorEmail": "alice@example.com",
       "authorTimestamp": 1790000000,
       "authorTimezoneOffsetMinutes": -420,
       "subject": "feat: initial commit"
@@ -319,7 +331,7 @@ Response fields:
 - `bufferLineCount`: Total line count in normalized buffer.
 - `status`: `"ready"` (blame computed), `"uncommitted"` (all lines uncommitted or unborn HEAD), or `"empty"` (empty buffer short-circuit).
 - `ranges`: 1-based contiguous line ranges; `commitIndex` indexes `commits` array (`null` for uncommitted lines).
-- `commits`: Deduplicated list of commit metadata referenced by `ranges`.
+- `commits`: Deduplicated list of commit metadata referenced by `ranges` (includes `authorName`, `authorEmail`, `authorTimestamp`, `authorTimezoneOffsetMinutes`, and `subject`).
 
 Error codes:
 | HTTP | Code | Description |

@@ -1,8 +1,5 @@
 import type * as monacoNs from "monaco-editor";
-import type {
-  GitBlameCommit,
-  GitBlameResponse,
-} from "@/api/client.js";
+import type { GitBlameCommit, GitBlameResponse } from "@/api/client.js";
 import {
   findBlameRangeForLine,
   findCommitForRange,
@@ -20,7 +17,9 @@ export interface BlameGutterLayout {
  * - >= 640px: 220px author/date column ("normal")
  * - < 640px: min(120px, Math.floor(wrapperWidth / 3)) author-only column ("compact")
  */
-export function computeBlameGutterLayout(wrapperWidth: number): BlameGutterLayout {
+export function computeBlameGutterLayout(
+  wrapperWidth: number,
+): BlameGutterLayout {
   if (wrapperWidth >= 640) {
     return { width: 220, mode: "normal" };
   }
@@ -43,6 +42,7 @@ export interface RenderedBlameRow {
 export interface ComputeVisibleBlameRowsParams {
   editor: monacoNs.editor.IStandaloneCodeEditor;
   blameData: GitBlameResponse;
+  monaco?: typeof monacoNs | null;
 }
 
 /**
@@ -52,6 +52,7 @@ export interface ComputeVisibleBlameRowsParams {
 export function computeVisibleBlameRows({
   editor,
   blameData,
+  monaco,
 }: ComputeVisibleBlameRowsParams): RenderedBlameRow[] {
   const model = editor.getModel();
   if (!model) return [];
@@ -61,21 +62,16 @@ export function computeVisibleBlameRows({
   const layoutInfo = editor.getLayoutInfo();
   const viewportHeight = layoutInfo.height;
 
-  let lineHeight = 0;
-  try {
-    lineHeight = editor.getOption(
-      // @ts-expect-error EditorOption enum lookup
-      editor.constructor?.EditorOption?.lineHeight ?? 66,
-    );
-  } catch {
-    lineHeight = 19;
-  }
-  if (!lineHeight || lineHeight < 1) lineHeight = 19;
-
+  if (!monaco) return [];
+  const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
   const rows: RenderedBlameRow[] = [];
 
   for (const range of visibleRanges) {
-    for (let line = range.startLineNumber; line <= range.endLineNumber; line++) {
+    for (
+      let line = range.startLineNumber;
+      line <= range.endLineNumber;
+      line++
+    ) {
       const lineTop = editor.getTopForLineNumber(line);
       const top = lineTop - scrollTop;
 
@@ -110,8 +106,10 @@ export function computeVisibleBlameRows({
           commit.authorTimestamp,
           commit.authorTimezoneOffsetMinutes,
         );
-        const metadata = `Author: ${commit.authorName}\nDate: ${fullTimestamp}\nCommit: ${commit.hash}\n\n${commit.subject}`;
-
+        const authorDisplay = commit.authorEmail
+          ? `${commit.authorName} <${commit.authorEmail}>`
+          : commit.authorName;
+        const metadata = `Author: ${authorDisplay}\nDate: ${fullTimestamp}\nCommit: ${commit.hash}\n\n${commit.subject}`;
         rows.push({
           lineNumber: line,
           top,

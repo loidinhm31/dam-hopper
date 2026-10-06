@@ -1,0 +1,68 @@
+{
+  "run_id": "e2e-run-1791256545122-034e7137",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-06T03:15:45.122Z",
+  "completed_at": "2026-10-06T03:15:54.052Z",
+  "case_name": "editor-git-blame",
+  "route": "/workspace",
+  "git_head": "18ab2772fed6af321683e1e3a6baf59eef9e7d32",
+  "source_fingerprint": "ac27b25f1967b805b66668a08a51273569c4b7c0496398846b035eb0f2d5cc88",
+  "seed_digest": "698fe7096bf0d132189d48381004c927bd7fdd70b427fc9a9d2b49d76e0e9218",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "normal-author-date",
+      "file_name": "normal-author-date.png",
+      "sha256": "ee86783ef6e34d51d94ff292c8d1330fb57e1d66380eee5c8bdf883edc23b679",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "uncommitted-buffer",
+      "file_name": "uncommitted-buffer.png",
+      "sha256": "6a8178dc2b7198b2c15949f130e2ec36b24ad910c2c39734a03cd37d1c39613f",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "gutter-context-menu",
+      "file_name": "gutter-context-menu.png",
+      "sha256": "4e2705b0a6715a4fb0e98310fdea3b5cd25797d3a9c89d33f74b3f40c1a82b77",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "workspace-git-full-body",
+      "file_name": "workspace-git-full-body.png",
+      "sha256": "23fe0e1d06d442d2549b0200120c1491b222b432217eef48c53b8ec9d2256e00",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "compact-author-only",
+      "file_name": "compact-author-only.png",
+      "sha256": "51266ad6f0587bb98eebca401dcbea60ddf8b42d777a71dab2a1bca320fdc3e1",
+      "dimensions": {
+        "width": 620,
+        "height": 900
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

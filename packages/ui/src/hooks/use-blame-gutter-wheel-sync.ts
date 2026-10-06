@@ -8,6 +8,7 @@ import type * as monacoNs from "monaco-editor";
 export function useBlameGutterWheelSync(
   gutterRef: RefObject<HTMLDivElement | null>,
   editor: monacoNs.editor.IStandaloneCodeEditor | null,
+  monaco: typeof monacoNs | null | undefined,
 ) {
   useEffect(() => {
     const gutterEl = gutterRef.current;
@@ -15,14 +16,23 @@ export function useBlameGutterWheelSync(
 
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return;
+      let deltaY = e.deltaY;
+      if (e.deltaMode === 1) {
+        if (!monaco) return;
+        deltaY *= editor.getOption(monaco.editor.EditorOption.lineHeight);
+      } else if (e.deltaMode === 2) {
+        deltaY *= editor.getLayoutInfo().height;
+      }
       const currentScrollTop = editor.getScrollTop();
       const layoutInfo = editor.getLayoutInfo();
-      const maxScroll = Math.max(0, editor.getScrollHeight() - layoutInfo.height);
+      const maxScroll = Math.max(
+        0,
+        editor.getScrollHeight() - layoutInfo.height,
+      );
       const targetScroll = Math.max(
         0,
-        Math.min(maxScroll, currentScrollTop + e.deltaY),
+        Math.min(maxScroll, currentScrollTop + deltaY),
       );
-
       if (targetScroll !== currentScrollTop) {
         e.preventDefault();
         editor.setScrollTop(targetScroll);
@@ -33,5 +43,5 @@ export function useBlameGutterWheelSync(
     return () => {
       gutterEl.removeEventListener("wheel", handleWheel);
     };
-  }, [gutterRef, editor]);
+  }, [gutterRef, editor, monaco]);
 }

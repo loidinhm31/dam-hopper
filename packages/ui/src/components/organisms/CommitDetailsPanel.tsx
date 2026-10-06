@@ -20,8 +20,7 @@ interface CommitDetailsPanelBaseProps {
   onFileDoubleClick: (file: DiffFileEntry) => void;
 }
 
-export interface CommitDetailsPanelHistoryProps
-  extends CommitDetailsPanelBaseProps {
+export interface CommitDetailsPanelHistoryProps extends CommitDetailsPanelBaseProps {
   mode: "history";
   commit: GitLogEntry;
   onCherryPickSelectedChanges?: (
@@ -35,8 +34,7 @@ export interface CommitDetailsPanelHistoryProps
   onDropSelectedChanges?: (commit: GitLogEntry, files: DiffFileEntry[]) => void;
 }
 
-export interface CommitDetailsPanelInspectProps
-  extends CommitDetailsPanelBaseProps {
+export interface CommitDetailsPanelInspectProps extends CommitDetailsPanelBaseProps {
   mode: "inspect";
   commitHash: string;
   outsideViewNotice?: boolean;
@@ -58,10 +56,12 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
   const commitHash =
     props.mode === "inspect" ? props.commitHash : props.commit.hash;
 
-  const {
-    data: details,
-    error: detailsError,
-  } = useGitCommitDetails(targetRef, commitHash, root, Boolean(commitHash));
+  const { data: details, error: detailsError } = useGitCommitDetails(
+    targetRef,
+    commitHash,
+    root,
+    Boolean(commitHash),
+  );
 
   const { data: files, isLoading: filesLoading } = useGitCommitFiles(
     targetRef,
@@ -108,6 +108,10 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
     details?.authorName ??
     (props.mode === "history" ? props.commit.authorName : "...");
 
+  const authorEmail =
+    details?.authorEmail ??
+    (props.mode === "history" ? props.commit.authorEmail : "");
+
   const timestampSeconds =
     details?.authorTimestamp ??
     (props.mode === "history" ? props.commit.timestamp : 0);
@@ -116,6 +120,16 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
     ? formatGitCommitAuthorTimestamp(
         timestampSeconds,
         details?.authorTimezoneOffsetMinutes,
+      )
+    : "";
+
+  const committerName = details?.committerName ?? "";
+  const committerEmail = details?.committerEmail ?? "";
+  const committerTimestampSeconds = details?.committerTimestamp ?? 0;
+  const formattedCommitterTimestamp = committerTimestampSeconds
+    ? formatGitCommitAuthorTimestamp(
+        committerTimestampSeconds,
+        details?.committerTimezoneOffsetMinutes,
       )
     : "";
 
@@ -139,9 +153,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
     if (event.metaKey || event.ctrlKey) {
       setSelection((current) => {
         const basePaths =
-          current.commitHash === commitHash
-            ? current.paths
-            : new Set<string>();
+          current.commitHash === commitHash ? current.paths : new Set<string>();
         const next = new Set(basePaths);
         if (next.has(file.path)) next.delete(file.path);
         else next.add(file.path);
@@ -196,7 +208,9 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
           className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-[11px] text-amber-400 font-medium"
         >
           <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
-          <span>Commit opened from annotation; outside current history view</span>
+          <span>
+            Commit opened from annotation; outside current history view
+          </span>
         </div>
       )}
       {detailsError && (
@@ -206,7 +220,8 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
         >
           <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
           <span>
-            Failed to load commit details: {detailsError.message || "Commit not found"}
+            Failed to load commit details:{" "}
+            {detailsError.message || "Commit not found"}
           </span>
         </div>
       )}
@@ -219,9 +234,19 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
             {subject}
           </span>
           <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-[var(--color-text-muted)]">
-            <span className="font-medium text-[var(--color-text)] truncate max-w-[150px]">
+            <span
+              className="font-medium text-[var(--color-text)] truncate max-w-[150px]"
+              title={
+                authorEmail ? `${authorName} <${authorEmail}>` : authorName
+              }
+            >
               {authorName}
             </span>
+            {authorEmail && (
+              <span className="text-[var(--color-text-muted)] truncate max-w-[180px]">
+                &lt;{authorEmail}&gt;
+              </span>
+            )}
             {formattedTimestamp && (
               <>
                 <span className="opacity-40">•</span>
@@ -242,6 +267,35 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
               )}
             </button>
           </div>
+          {Boolean(committerName || committerEmail) && (
+            <div
+              data-testid="commit-details-committer"
+              className="flex flex-wrap items-center gap-1.5 mt-0.5 text-[10px] text-[var(--color-text-muted)]"
+            >
+              <span className="opacity-70">Committed by</span>
+              <span
+                className="font-medium text-[var(--color-text)] truncate max-w-[150px]"
+                title={
+                  committerEmail
+                    ? `${committerName} <${committerEmail}>`
+                    : committerName
+                }
+              >
+                {committerName}
+              </span>
+              {committerEmail && (
+                <span className="text-[var(--color-text-muted)] truncate max-w-[180px]">
+                  &lt;{committerEmail}&gt;
+                </span>
+              )}
+              {formattedCommitterTimestamp && (
+                <>
+                  <span className="opacity-40">•</span>
+                  <span>{formattedCommitterTimestamp}</span>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -296,7 +350,9 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
                   </div>
                   <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0 opacity-80 group-hover:opacity-100">
                     {file.additions > 0 && (
-                      <span className="text-emerald-500">+{file.additions}</span>
+                      <span className="text-emerald-500">
+                        +{file.additions}
+                      </span>
                     )}
                     {file.deletions > 0 && (
                       <span className="text-rose-500">-{file.deletions}</span>
@@ -311,7 +367,8 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
                     key={file.path}
                     count={selectedFiles.length}
                     canDrop={
-                      Boolean(props.onDropSelectedChanges) && !props.commit.isPushed
+                      Boolean(props.onDropSelectedChanges) &&
+                      !props.commit.isPushed
                     }
                     onOpen={() => selectContextFile(file, index)}
                     onCherryPick={handleCherryPickSelectedChanges}

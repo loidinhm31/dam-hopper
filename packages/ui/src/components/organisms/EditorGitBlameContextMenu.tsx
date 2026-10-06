@@ -67,7 +67,7 @@ export function EditorGitBlameContextMenu({
     blameStatus === "unavailable" ||
     (unavailableReason !== null && unavailableReason !== undefined);
   const refreshTooltip = isRefreshDisabled
-    ? unavailableReason ?? "Source or owner unavailable"
+    ? (unavailableReason ?? "Source or owner unavailable")
     : isBusy
       ? "Refreshing annotations…"
       : undefined;
@@ -75,13 +75,24 @@ export function EditorGitBlameContextMenu({
   // Resolve commit attribution for the targeted line if blame data is valid
   let targetCommit: GitBlameCommit | null = null;
   let isUncommittedLine = false;
-  const isSnapshotCurrent =
-    !targetSnapshotId ||
-    (blameData?.snapshotId === targetSnapshotId &&
-      (!targetModelVersion ||
-        blameData?.modelVersion === targetModelVersion));
 
-  if (lineNumber !== null && lineNumber > 0 && blameData && isSnapshotCurrent) {
+  const isReady =
+    blameStatus === "ready" &&
+    blameData !== null &&
+    blameData.status === "ready";
+
+  const isSnapshotCurrent =
+    isReady &&
+    (!targetSnapshotId || blameData.snapshotId === targetSnapshotId) &&
+    (!targetModelVersion || blameData.modelVersion === targetModelVersion);
+
+  if (
+    lineNumber !== null &&
+    lineNumber > 0 &&
+    isReady &&
+    isSnapshotCurrent &&
+    blameData
+  ) {
     const range = findBlameRangeForLine(blameData.ranges, lineNumber);
     if (range) {
       if (range.commitIndex === null || range.commitIndex === undefined) {
@@ -94,19 +105,24 @@ export function EditorGitBlameContextMenu({
 
   const canRevealCommit =
     blameEnabled &&
+    isReady &&
     isSnapshotCurrent &&
+    !isUncommittedLine &&
     targetCommit !== null &&
     blameData !== null &&
     typeof blameData.rootId === "string" &&
+    blameData.rootId.length > 0 &&
     onRevealCommit !== undefined;
 
-  const revealTooltip = !isSnapshotCurrent
-    ? "Buffer changed; refresh annotations"
-    : isUncommittedLine
-      ? "Uncommitted changes"
-      : !canRevealCommit
-        ? "No committed baseline for line"
-        : undefined;
+  const revealTooltip = !isReady
+    ? "Annotations not ready"
+    : !isSnapshotCurrent
+      ? "Buffer changed; refresh annotations"
+      : isUncommittedLine
+        ? "Uncommitted changes"
+        : !canRevealCommit
+          ? "No committed baseline for line"
+          : undefined;
 
   return (
     <ContextMenu.Root
@@ -125,7 +141,10 @@ export function EditorGitBlameContextMenu({
         />
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="w-56" data-testid="editor-git-blame-menu">
+        <ContextMenu.Content
+          className="w-56"
+          data-testid="editor-git-blame-menu"
+        >
           <ContextMenu.Item
             data-testid="editor-git-blame-menu-toggle"
             onSelect={() => {
@@ -175,7 +194,7 @@ export function EditorGitBlameContextMenu({
                 disabled={!canRevealCommit}
                 title={revealTooltip}
                 onSelect={() => {
-                  if (canRevealCommit && targetCommit && blameData) {
+                  if (canRevealCommit && targetCommit && blameData?.rootId) {
                     setOpen(false);
                     onClose();
                     onRevealCommit(targetCommit.hash, blameData.rootId);

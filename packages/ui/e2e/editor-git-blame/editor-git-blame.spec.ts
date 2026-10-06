@@ -36,7 +36,10 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
 
     // 3. Right-click on line numbers to open blame context menu
     // Monaco line numbers container
-    const lineNumberTwo = page.locator(".monaco-editor .line-numbers").filter({ hasText: /^2$/ }).first();
+    const lineNumberTwo = page
+      .locator(".monaco-editor .line-numbers")
+      .filter({ hasText: /^2$/ })
+      .first();
     await expect(lineNumberTwo).toBeVisible({ timeout: 15_000 });
     await lineNumberTwo.click({ button: "right" });
 
@@ -44,7 +47,9 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     const blameMenu = page.locator("[data-testid='editor-git-blame-menu']");
     await expect(blameMenu).toBeVisible({ timeout: 10_000 });
 
-    const toggleItem = page.locator("[data-testid='editor-git-blame-menu-toggle']");
+    const toggleItem = page.locator(
+      "[data-testid='editor-git-blame-menu-toggle']",
+    );
     await expect(toggleItem).toBeVisible();
     await toggleItem.click();
 
@@ -52,7 +57,9 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     const blameGutter = page.locator("[data-testid='editor-git-blame-gutter']");
     await expect(blameGutter).toBeVisible({ timeout: 20_000 });
 
-    const rowsContainer = page.locator("[data-testid='editor-git-blame-rows-container']");
+    const rowsContainer = page.locator(
+      "[data-testid='editor-git-blame-rows-container']",
+    );
     await expect(rowsContainer).toBeVisible({ timeout: 20_000 });
 
     // Line 2 belongs to Alice Dev
@@ -65,6 +72,36 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await expect(row3).toBeVisible({ timeout: 10_000 });
     await expect(row3).toContainText("Bob Reviewer");
 
+    await expect(row3).toHaveAttribute("title", /bob@example\.com/);
+    await expect
+      .poll(async () => {
+        const gutterHeight = await row3.evaluate(
+          (element) => element.getBoundingClientRect().height,
+        );
+        const editorHeight = await page
+          .locator(".monaco-editor .line-numbers")
+          .filter({ hasText: /^3$/ })
+          .first()
+          .evaluate((element) => element.getBoundingClientRect().height);
+        return Math.abs(gutterHeight - editorHeight);
+      })
+      .toBeLessThan(0.5);
+
+    // Mouse and keyboard must reveal their own exact commits, not just focus.
+    await row3.click();
+    await expect(
+      page.getByTitle(
+        `Click to copy full commit hash: ${fixtureMeta.bobCommitOid}`,
+      ),
+    ).toBeVisible();
+    await row2.focus();
+    await row2.press("Enter");
+    await expect(
+      page.getByTitle(
+        `Click to copy full commit hash: ${fixtureMeta.aliceCommitOid}`,
+      ),
+    ).toBeVisible();
+    await page.getByTitle("Close commit details").click();
     // Checkpoint 1: Normal author/date blame annotation
     await captureApplicationCheckpoint(page, {
       caseDir: CASE_DIR,
@@ -72,6 +109,10 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     });
 
     // 4. Test dirty buffer / unsaved edits
+    // The clean fixture already has a trailing empty row 5. The new edit is row 6.
+    await expect(page.locator(".editor-blame-row[data-line='6']")).toHaveCount(
+      0,
+    );
     // Click editor view lines to activate Monaco input and type an unsaved line
     const viewLines = page.locator(".monaco-editor .view-lines").first();
     await viewLines.click();
@@ -80,15 +121,27 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await page.keyboard.type("// Unsaved newly typed line for dirty test");
 
     // Ensure typed content is rendered in editor
-    await expect(page.getByText("// Unsaved newly typed line for dirty test").first()).toBeVisible();
-    // Verify uncommitted row appears and neighbors remain attributed
-    const uncommittedRow = page.locator(".editor-blame-row[data-uncommitted='true']").first();
+    await expect(
+      page.getByText("// Unsaved newly typed line for dirty test").first(),
+    ).toBeVisible();
+    // Verify the actually typed row, not the pre-existing trailing empty row.
+    const uncommittedRow = page.locator(
+      ".editor-blame-row[data-line='6'][data-uncommitted='true']",
+    );
     await expect(uncommittedRow).toBeVisible({ timeout: 15_000 });
     await expect(uncommittedRow).toContainText("Uncommitted");
 
     // Line 2 and line 3 still retain Alice Dev and Bob Reviewer
     await expect(row2).toContainText("Alice Dev");
     await expect(row3).toContainText("Bob Reviewer");
+    await uncommittedRow.click();
+    await expect(
+      page.locator("[data-testid='outside-history-view-notice']"),
+    ).toHaveCount(0);
+    await uncommittedRow.press("Enter");
+    await expect(
+      page.locator("[data-testid='outside-history-view-notice']"),
+    ).toHaveCount(0);
 
     // Checkpoint 2: Uncommitted buffer key state
     await captureApplicationCheckpoint(page, {
@@ -100,10 +153,14 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await row3.click({ button: "right" });
     await expect(blameMenu).toBeVisible({ timeout: 10_000 });
 
-    const refreshItem = page.locator("[data-testid='editor-git-blame-menu-refresh']");
+    const refreshItem = page.locator(
+      "[data-testid='editor-git-blame-menu-refresh']",
+    );
     await expect(refreshItem).toBeVisible();
 
-    const revealItem = page.locator("[data-testid='editor-git-blame-menu-reveal']");
+    const revealItem = page.locator(
+      "[data-testid='editor-git-blame-menu-reveal']",
+    );
     await expect(revealItem).toBeVisible();
     await expect(revealItem).not.toHaveAttribute("aria-disabled", "true");
 
@@ -117,20 +174,37 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await revealItem.click();
 
     // Verify Workspace Git opens and displays CommitDetailsPanel
-    const outsideNotice = page.locator("[data-testid='outside-history-view-notice']");
+    const outsideNotice = page.locator(
+      "[data-testid='outside-history-view-notice']",
+    );
     await expect(outsideNotice).toBeVisible({ timeout: 20_000 });
-    await expect(outsideNotice).toContainText("Commit opened from annotation; outside current history view");
+    await expect(outsideNotice).toContainText(
+      "Commit opened from annotation; outside current history view",
+    );
 
     // Verify multiline commit message subject and body
     const commitSubject = page.getByText(fixtureMeta.bobCommitSubject).first();
     await expect(commitSubject).toBeVisible();
 
-    const commitBodySnippet = page.getByText("This is a multiline commit message body designed for testing full commit inspection").first();
+    const commitBodySnippet = page
+      .getByText(
+        "This is a multiline commit message body designed for testing full commit inspection",
+      )
+      .first();
     await expect(commitBodySnippet).toBeVisible();
 
     // Verify author and changed file listing
     await expect(page.getByText("Bob Reviewer").first()).toBeVisible();
     await expect(page.getByText("code.ts").first()).toBeVisible();
+    await expect(
+      page.getByText("<bob@example.com>", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(page.getByTestId("commit-details-committer")).toContainText(
+      "Bob Reviewer",
+    );
+    await expect(page.getByTestId("commit-details-committer")).toContainText(
+      "bob@example.com",
+    );
 
     // Verify original editor tab remains intact and selected
     const editorTab = page.getByRole("tab", { name: /code\.ts/ }).first();
@@ -146,7 +220,9 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await page.setViewportSize({ width: 620, height: 900 });
 
     // Confirm gutter switches to compact mode
-    await expect(blameGutter).toHaveAttribute("data-blame-mode", "compact", { timeout: 10_000 });
+    await expect(blameGutter).toHaveAttribute("data-blame-mode", "compact", {
+      timeout: 10_000,
+    });
 
     // Wait for rows container to settle after viewport resize
     await expect(rowsContainer).toBeVisible({ timeout: 15_000 });

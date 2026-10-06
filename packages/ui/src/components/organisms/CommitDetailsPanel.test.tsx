@@ -69,6 +69,7 @@ describe("CommitDetailsPanel discriminated mode behavior", () => {
 
     expect(container.textContent).toContain("feat: history commit subject");
     expect(container.textContent).toContain("Alice Tester");
+    expect(container.textContent).toContain("<alice@example.com>");
     expect(
       container.querySelector('[data-testid="outside-history-view-notice"]'),
     ).toBeNull();
@@ -84,13 +85,17 @@ describe("CommitDetailsPanel discriminated mode behavior", () => {
     qc.setQueryData(queryKey, {
       hash: inspectHash,
       authorName: "Bob Inspect",
+      authorEmail: "bob@example.com",
       authorTimestamp: 1728205000,
       authorTimezoneOffsetMinutes: 420,
+      committerName: "Bob Reviewer",
+      committerEmail: "reviewer@example.com",
+      committerTimestamp: 1728205600,
+      committerTimezoneOffsetMinutes: 420,
       subject: "fix: inspect mode commit",
       fullMessage:
         "fix: inspect mode commit\n\nDetailed explanation of fix body.",
     });
-
     await act(async () => {
       root.render(
         createElement(
@@ -111,9 +116,17 @@ describe("CommitDetailsPanel discriminated mode behavior", () => {
 
     expect(container.textContent).toContain("fix: inspect mode commit");
     expect(container.textContent).toContain("Bob Inspect");
-    expect(container.textContent).toContain("Detailed explanation of fix body.");
+    expect(container.textContent).toContain("<bob@example.com>");
+    expect(container.textContent).toContain(
+      "Detailed explanation of fix body.",
+    );
 
-    // Outside view notice is shown
+    const committerEl = container.querySelector(
+      '[data-testid="commit-details-committer"]',
+    );
+    expect(committerEl).not.toBeNull();
+    expect(committerEl?.textContent).toContain("Bob Reviewer");
+    expect(committerEl?.textContent).toContain("<reviewer@example.com>");
     const notice = container.querySelector(
       '[data-testid="outside-history-view-notice"]',
     );
@@ -203,5 +216,47 @@ describe("CommitDetailsPanel discriminated mode behavior", () => {
     });
 
     expect(writeTextMock).toHaveBeenCalledWith(inspectHash);
+  });
+
+  it("renders committerName, committerEmail, and timestamp metadata from details", async () => {
+    const commitHash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    const queryKey = gitCommitDetailsQueryKey("demo", commitHash, ".");
+    qc.setQueryData(queryKey, {
+      hash: commitHash,
+      authorName: "Alice Author",
+      authorEmail: "alice@example.com",
+      authorTimestamp: 1760000000,
+      authorTimezoneOffsetMinutes: 0,
+      committerName: "Bob Committer",
+      committerEmail: "bob@example.com",
+      committerTimestamp: 1760003600,
+      committerTimezoneOffsetMinutes: 120,
+      subject: "feat: committer metadata test",
+      fullMessage: "feat: committer metadata test\n\nBody",
+    });
+
+    await act(async () => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(CommitDetailsPanel, {
+            mode: "inspect",
+            project: "demo",
+            root: ".",
+            commitHash,
+            onClose: () => {},
+            onFileDoubleClick: () => {},
+          }),
+        ),
+      );
+    });
+
+    const committerBlock = container.querySelector(
+      '[data-testid="commit-details-committer"]',
+    );
+    expect(committerBlock).not.toBeNull();
+    expect(committerBlock?.textContent).toContain("Bob Committer");
+    expect(committerBlock?.textContent).toContain("<bob@example.com>");
   });
 });

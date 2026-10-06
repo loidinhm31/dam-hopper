@@ -1,14 +1,22 @@
+import "@/lib/monaco-setup.js";
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Editor, { type OnMount } from "@monaco-editor/react";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import Editor, { loader, type OnMount } from "@monaco-editor/react";
 import type * as monacoNs from "monaco-editor";
 import { EditorGitBlameGutter } from "@/components/organisms/EditorGitBlameGutter.js";
 import { EditorGitBlameContextMenu } from "@/components/organisms/EditorGitBlameContextMenu.js";
 import type { GitBlameResponse } from "@/api/client.js";
 import "@/index.css";
-
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +38,7 @@ const testBlameData: GitBlameResponse = {
     {
       hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       authorName: "Carol Developer",
+      authorEmail: "carol@example.com",
       authorTimestamp: 1760010000,
       authorTimezoneOffsetMinutes: 0,
       subject: "init: header section",
@@ -37,6 +46,7 @@ const testBlameData: GitBlameResponse = {
     {
       hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       authorName: "Dave Engineer",
+      authorEmail: "dave@example.com",
       authorTimestamp: 1760020000,
       authorTimezoneOffsetMinutes: -240,
       subject: "feat: body implementation",
@@ -65,6 +75,9 @@ function BlameBrowserHarness({
 }: BlameHarnessProps) {
   const [editor, setEditor] =
     React.useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
+  const [monacoInstance, setMonacoInstance] = React.useState<
+    typeof monacoNs | null
+  >(null);
   const [contextMenuState, setContextMenuState] = React.useState<{
     x: number;
     y: number;
@@ -72,13 +85,20 @@ function BlameBrowserHarness({
   } | null>(null);
 
   const handleMount: OnMount = React.useCallback(
-    (ed) => {
+    (ed, monaco) => {
+      ed.layout();
       setEditor(ed);
+      setMonacoInstance(monaco);
       onMountCapture?.(ed);
     },
     [onMountCapture],
   );
 
+  React.useEffect(() => {
+    if (editor) {
+      editor.layout();
+    }
+  }, [editor, wrapperWidth]);
   return (
     <div
       data-testid="blame-browser-wrapper"
@@ -87,6 +107,7 @@ function BlameBrowserHarness({
     >
       <EditorGitBlameGutter
         editor={editor}
+        monaco={monacoInstance}
         blameData={testBlameData}
         blameStatus="ready"
         wrapperWidth={wrapperWidth}
@@ -107,7 +128,7 @@ function BlameBrowserHarness({
             lineNumbers: "on",
             folding: true,
             scrollBeyondLastLine: false,
-            automaticLayout: false,
+            automaticLayout: true,
           }}
         />
       </div>
@@ -129,17 +150,62 @@ function BlameBrowserHarness({
     </div>
   );
 }
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 5000,
+  intervalMs = 20,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) {
+      return;
+    }
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    });
+  }
+  throw new Error(`waitForCondition timed out after ${timeoutMs}ms`);
+}
+
+async function waitForEditor(
+  getEditor: () => monacoNs.editor.IStandaloneCodeEditor | null,
+  timeoutMs = 5000,
+): Promise<monacoNs.editor.IStandaloneCodeEditor> {
+  await waitForCondition(() => getEditor() !== null, timeoutMs);
+  return getEditor()!;
+}
+
+async function waitForRows(
+  container: HTMLElement,
+  selector = "[role='row']",
+  minCount = 1,
+  timeoutMs = 5000,
+): Promise<NodeListOf<Element>> {
+  await waitForCondition(
+    () => container.querySelectorAll(selector).length >= minCount,
+    timeoutMs,
+  );
+  return container.querySelectorAll(selector);
+}
 
 describe("Real Monaco Git Blame browser regression", () => {
   let container: HTMLDivElement;
   let root: Root;
 
+  beforeAll(async () => {
+    await loader.init();
+  });
+
   beforeEach(() => {
     container = document.createElement("div");
+    container.style.width = "1000px";
+    container.style.height = "600px";
     document.body.appendChild(container);
     root = createRoot(container);
   });
-
   afterEach(() => {
     act(() => {
       root.unmount();
@@ -148,28 +214,22 @@ describe("Real Monaco Git Blame browser regression", () => {
   });
 
   it("adjusts gutter column width and mode across 640px and 639px boundary", async () => {
-    let editorInstance: monacoNs.editor.IStandaloneCodeEditor | null = null;
-
     await act(async () => {
-      root.render(
-        <BlameBrowserHarness
-          wrapperWidth={800}
-          onMountCapture={(ed) => {
-            editorInstance = ed;
-          }}
-        />,
-      );
+      root.render(<BlameBrowserHarness wrapperWidth={800} />);
     });
 
-    // Wait for Monaco mount and rAF
-    await act(async () => {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 150);
-      await promise;
+    // Wait for gutter to appear
+    await waitForCondition(() => {
+      const g = container.querySelector(
+        "[data-testid='editor-git-blame-gutter']",
+      );
+      return g !== null;
     });
 
     // Width 800px: normal mode (220px)
-    const gutter800 = container.querySelector("[data-testid='editor-git-blame-gutter']");
+    const gutter800 = container.querySelector(
+      "[data-testid='editor-git-blame-gutter']",
+    );
     expect(gutter800).not.toBeNull();
     expect(gutter800?.getAttribute("data-blame-mode")).toBe("normal");
     const styleWidth800 = (gutter800 as HTMLElement).style.width;
@@ -177,34 +237,38 @@ describe("Real Monaco Git Blame browser regression", () => {
 
     // Re-render at 639px: compact mode (min(120, 639/3) = 120px)
     await act(async () => {
-      root.render(
-        <BlameBrowserHarness
-          wrapperWidth={639}
-          onMountCapture={(ed) => {
-            editorInstance = ed;
-          }}
-        />,
-      );
+      root.render(<BlameBrowserHarness wrapperWidth={639} />);
     });
 
-    const gutter639 = container.querySelector("[data-testid='editor-git-blame-gutter']");
+    await waitForCondition(() => {
+      const g = container.querySelector(
+        "[data-testid='editor-git-blame-gutter']",
+      );
+      return g?.getAttribute("data-blame-mode") === "compact";
+    });
+
+    const gutter639 = container.querySelector(
+      "[data-testid='editor-git-blame-gutter']",
+    );
     expect(gutter639?.getAttribute("data-blame-mode")).toBe("compact");
     const styleWidth639 = (gutter639 as HTMLElement).style.width;
     expect(styleWidth639).toBe("120px");
 
     // Re-render at 300px: compact mode (min(120, 300/3) = 100px)
     await act(async () => {
-      root.render(
-        <BlameBrowserHarness
-          wrapperWidth={300}
-          onMountCapture={(ed) => {
-            editorInstance = ed;
-          }}
-        />,
-      );
+      root.render(<BlameBrowserHarness wrapperWidth={300} />);
     });
 
-    const gutter300 = container.querySelector("[data-testid='editor-git-blame-gutter']");
+    await waitForCondition(() => {
+      const g = container.querySelector(
+        "[data-testid='editor-git-blame-gutter']",
+      );
+      return (g as HTMLElement)?.style.width === "100px";
+    });
+
+    const gutter300 = container.querySelector(
+      "[data-testid='editor-git-blame-gutter']",
+    );
     expect(gutter300?.getAttribute("data-blame-mode")).toBe("compact");
     const styleWidth300 = (gutter300 as HTMLElement).style.width;
     expect(styleWidth300).toBe("100px");
@@ -224,67 +288,126 @@ describe("Real Monaco Git Blame browser regression", () => {
       );
     });
 
-    await act(async () => {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 200);
-      await promise;
-    });
+    const ed = await waitForEditor(() => editorInstance);
+    expect(ed).not.toBeNull();
 
-    if (editorInstance) {
-      const ed = editorInstance as monacoNs.editor.IStandaloneCodeEditor;
-      const rows = container.querySelectorAll("[role='row']");
+    // Wait for initial rows to be rendered
+    await waitForRows(container, ".editor-blame-row[data-line]", 1);
 
-      for (let i = 0; i < rows.length; i++) {
-        const rowEl = rows[i] as HTMLElement;
-        const lineStr = rowEl.getAttribute("data-line");
-        if (!lineStr) continue;
-        const lineNumber = parseInt(lineStr, 10);
+    for (const lineHeight of [20, 31]) {
+      await act(async () => {
+        ed.updateOptions({ lineHeight });
+        ed.layout();
+      });
 
-        const expectedTop = ed.getTopForLineNumber(lineNumber) - ed.getScrollTop();
-        const actualTop = parseFloat(rowEl.style.top);
-
-        // Alignment within 1 CSS pixel as mandated by A04 / contracts §6
-        expect(Math.abs(actualTop - expectedTop)).toBeLessThanOrEqual(1);
+      // Wait for rows to update geometry to the new lineHeight
+      await waitForCondition(() => {
+        const row = container.querySelector(
+          ".editor-blame-row[data-line='2']",
+        ) as HTMLElement | null;
+        if (!row) return false;
+        return Math.abs(row.getBoundingClientRect().height - lineHeight) <= 0.5;
+      });
+      const committedRow = container.querySelector(
+        ".editor-blame-row[data-line='2']",
+      );
+      expect(committedRow?.textContent).toContain("Carol Developer");
+      const rows = container.querySelectorAll(".editor-blame-row[data-line]");
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        const rowEl = row as HTMLElement;
+        const lineNumber = Number(rowEl.dataset.line);
+        const expectedTop =
+          ed.getTopForLineNumber(lineNumber) - ed.getScrollTop();
+        expect(rowEl.getBoundingClientRect().height).toBe(lineHeight);
+        expect(
+          Math.abs(parseFloat(rowEl.style.top) - expectedTop),
+        ).toBeLessThanOrEqual(1);
       }
     }
   });
 
   it("handles keyboard navigation and commit reveal from annotation row", async () => {
     const onRevealCommit = vi.fn();
+    let editorInstance: monacoNs.editor.IStandaloneCodeEditor | null = null;
 
     await act(async () => {
       root.render(
         <BlameBrowserHarness
           wrapperWidth={800}
+          onMountCapture={(ed) => {
+            editorInstance = ed;
+          }}
           onRevealCommit={onRevealCommit}
         />,
       );
     });
 
+    const ed = await waitForEditor(() => editorInstance);
     await act(async () => {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 150);
-      await promise;
+      ed.layout();
+    });
+    const rows = await waitForRows(container, "[role='row']", 3);
+
+    expect(rows[0]?.textContent).toContain("Carol Developer");
+    expect(rows[2]?.textContent).toContain("Uncommitted");
+    const firstRow = rows[0] as HTMLElement;
+    const uncommittedRow = rows[2] as HTMLElement;
+    // Verify authorEmail in title/aria-label
+    expect(firstRow.getAttribute("aria-label")).toContain("carol@example.com");
+
+    // Pressing Enter on committed row triggers onRevealCommit
+    act(() => {
+      firstRow.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
     });
 
-    const rows = container.querySelectorAll("[role='row']");
-    if (rows.length > 0) {
-      const firstRow = rows[0] as HTMLElement;
+    expect(onRevealCommit).toHaveBeenCalledWith(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repo-root-main",
+    );
 
-      // Pressing Enter on committed row triggers onRevealCommit
-      act(() => {
-        firstRow.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Enter",
-            bubbles: true,
-          }),
-        );
-      });
-
-      expect(onRevealCommit).toHaveBeenCalledWith(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "repo-root-main",
+    // Mouse click on committed row triggers onRevealCommit
+    onRevealCommit.mockClear();
+    act(() => {
+      firstRow.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+        }),
       );
-    }
+    });
+    expect(onRevealCommit).toHaveBeenCalledWith(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repo-root-main",
+    );
+
+    // Mouse click on uncommitted row does NOT reveal
+    onRevealCommit.mockClear();
+    act(() => {
+      uncommittedRow.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+        }),
+      );
+    });
+    expect(onRevealCommit).not.toHaveBeenCalled();
+
+    // Enter on uncommitted row does NOT reveal
+    onRevealCommit.mockClear();
+    act(() => {
+      uncommittedRow.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+    });
+    expect(onRevealCommit).not.toHaveBeenCalled();
   });
 });

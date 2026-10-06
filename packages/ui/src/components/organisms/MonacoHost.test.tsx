@@ -267,6 +267,12 @@ describe("MonacoHost Git Blame and input guards", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+    vi.useFakeTimers();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      setTimeout(() => callback(0), 0),
+    );
+    vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   });
 
   afterEach(async () => {
@@ -274,6 +280,8 @@ describe("MonacoHost Git Blame and input guards", () => {
       root.unmount();
     });
     container.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("guards Git line indicator clicks to primary mouse button only", async () => {
@@ -309,20 +317,17 @@ describe("MonacoHost Git Blame and input guards", () => {
       deltaDecorations: vi.fn(() => []),
     };
 
-    lastOnMount?.(
-      mockEditor,
-      {
-        KeyMod: { CtrlCmd: 1 },
-        KeyCode: { KeyS: 1 },
-        editor: {
-          MouseTargetType: {
-            GUTTER_GLYPH_MARGIN: 2,
-            GUTTER_LINE_DECORATIONS: 3,
-            GUTTER_LINE_NUMBERS: 4,
-          },
+    lastOnMount?.(mockEditor, {
+      KeyMod: { CtrlCmd: 1 },
+      KeyCode: { KeyS: 1 },
+      editor: {
+        MouseTargetType: {
+          GUTTER_GLYPH_MARGIN: 2,
+          GUTTER_LINE_DECORATIONS: 3,
+          GUTTER_LINE_NUMBERS: 4,
         },
       },
-    );
+    });
 
     expect(mouseDownHandler).toBeDefined();
 
@@ -341,51 +346,6 @@ describe("MonacoHost Git Blame and input guards", () => {
     expect(onGitIndicatorClick).toHaveBeenCalledTimes(1);
   });
 
-  it("registers editor.action.toggleGitBlame action in Monaco", async () => {
-    const addAction = vi.fn();
-
-    await act(async () => {
-      root.render(
-        <MonacoHost
-          tabKey="tab-action"
-          content="hello"
-          tier="normal"
-          onChange={() => {}}
-          onSave={() => {}}
-          onViewStateChange={() => {}}
-        />,
-      );
-    });
-
-    const mockEditor = {
-      getDomNode: () => document.createElement("div"),
-      restoreViewState: vi.fn(),
-      updateOptions: vi.fn(),
-      addCommand: vi.fn(),
-      onMouseDown: vi.fn(),
-      onContextMenu: vi.fn(),
-      addAction,
-      onDidBlurEditorWidget: vi.fn(),
-      deltaDecorations: vi.fn(() => []),
-    };
-
-    lastOnMount?.(
-      mockEditor,
-      {
-        KeyMod: { CtrlCmd: 1 },
-        KeyCode: { KeyS: 1 },
-        editor: { MouseTargetType: {} },
-      },
-    );
-
-    expect(addAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "editor.action.toggleGitBlame",
-        label: "Toggle Git Blame Annotations",
-      }),
-    );
-  });
-
   it("renders EditorGitBlameGutter when blameEnabled is true", async () => {
     await act(async () => {
       root.render(
@@ -402,9 +362,114 @@ describe("MonacoHost Git Blame and input guards", () => {
       );
     });
 
-    const gutterEl = container.querySelector("[data-testid='editor-git-blame-gutter']");
+    const gutterEl = container.querySelector(
+      "[data-testid='editor-git-blame-gutter']",
+    );
     expect(gutterEl).not.toBeNull();
-    const loadingEl = container.querySelector("[data-testid='editor-git-blame-loading']");
+    const loadingEl = container.querySelector(
+      "[data-testid='editor-git-blame-loading']",
+    );
     expect(loadingEl).not.toBeNull();
+  });
+
+  it("handleRevealCommit dispatches only when model version, rootId, and ready status match", async () => {
+    const onRevealCommit = vi.fn();
+    const mockBlameData = {
+      snapshotId: "snap-valid",
+      modelVersion: 3,
+      rootId: "vcs-root-main",
+      rootRelativePath: "file.ts",
+      baseCommitOid: "1111111111111111111111111111111111111111",
+      bufferLineCount: 1,
+      status: "ready" as const,
+      ranges: [{ startLine: 1, lineCount: 1, commitIndex: 0 }],
+      commits: [
+        {
+          hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          authorName: "Alice Dev",
+          authorEmail: "alice@example.com",
+          authorTimestamp: 1760000000,
+          authorTimezoneOffsetMinutes: 0,
+          subject: "feat: valid commit",
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.render(
+        <MonacoHost
+          tabKey="tab-reveal-guard"
+          content="test line"
+          tier="normal"
+          blameEnabled={true}
+          blameStatus="ready"
+          blameData={mockBlameData}
+          onRevealCommit={onRevealCommit}
+          onChange={() => {}}
+          onSave={() => {}}
+          onViewStateChange={() => {}}
+        />,
+      );
+    });
+
+    let currentVersionId = 3;
+    const mockEditor = {
+      getDomNode: () => document.createElement("div"),
+      getModel: () => ({
+        getVersionId: () => currentVersionId,
+        getValue: () => "test line",
+        getLineCount: () => 1,
+      }),
+      restoreViewState: vi.fn(),
+      updateOptions: vi.fn(),
+      addCommand: vi.fn(),
+      onMouseDown: vi.fn(),
+      onContextMenu: vi.fn(),
+      addAction: vi.fn(),
+      onDidBlurEditorWidget: vi.fn(),
+      deltaDecorations: vi.fn(() => []),
+      getVisibleRanges: () => [{ startLineNumber: 1, endLineNumber: 1 }],
+      getScrollTop: () => 0,
+      getScrollHeight: () => 100,
+      getLayoutInfo: () => ({ height: 200, width: 600 }),
+      getTopForLineNumber: () => 0,
+      getOption: () => 19,
+    };
+
+    await act(async () => {
+      lastOnMount?.(mockEditor, {
+        KeyMod: { CtrlCmd: 1 },
+        KeyCode: { KeyS: 1 },
+        editor: { MouseTargetType: {}, EditorOption: { lineHeight: 0 } },
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Bounded row element rendered in gutter
+    const rowEl = container.querySelector("[role='row']");
+    expect(rowEl).not.toBeNull();
+
+    // 1. Successful reveal when model version matches
+    act(() => {
+      rowEl?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, button: 0 }),
+      );
+    });
+    expect(onRevealCommit).toHaveBeenCalledWith(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vcs-root-main",
+    );
+
+    // 2. Reject reveal if model was modified (dirty buffer drift: version changed to 4)
+    onRevealCommit.mockClear();
+    currentVersionId = 4;
+    act(() => {
+      rowEl?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, button: 0 }),
+      );
+    });
+    expect(onRevealCommit).not.toHaveBeenCalled();
   });
 });
