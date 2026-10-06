@@ -35,6 +35,8 @@ interface MarkdownHostProps {
   onViewStateChange: (vs: unknown, targetKey?: string) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
+  sourceActive?: boolean;
+  onRevealCommit?: (commitHash: string, rootId: string) => void;
 }
 
 const MODES: { id: MarkdownMode; label: string }[] = [
@@ -63,6 +65,8 @@ export function MarkdownHost({
   onViewStateChange,
   lineChanges,
   onGitIndicatorClick,
+  sourceActive,
+  onRevealCommit,
 }: MarkdownHostProps) {
   const [mode, setMode] = useState<MarkdownMode>(() => loadMarkdownViewMode());
 
@@ -71,6 +75,8 @@ export function MarkdownHost({
     saveMarkdownViewMode(nextMode);
   }
 
+  const isSourcePaneActive =
+    (sourceActive ?? true) && (mode === "edit" || mode === "split");
   return (
     <div className="h-full flex flex-col">
       {/* Mode toggle bar */}
@@ -119,6 +125,8 @@ export function MarkdownHost({
                 onViewStateChange={onViewStateChange}
                 lineChanges={lineChanges}
                 onGitIndicatorClick={onGitIndicatorClick}
+                sourceActive={isSourcePaneActive}
+                onRevealCommit={onRevealCommit}
               />
             </Suspense>
           </div>

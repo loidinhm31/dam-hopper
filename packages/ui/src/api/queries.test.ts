@@ -115,6 +115,7 @@ describe("gitHistoryQueryPrefixes", () => {
     expect(prefixes.details("abc1234")).toEqual([
       ["git-commit-files", "my-project", "root", "sub", "abc1234"],
       ["git-commit-message", "my-project", "root", "sub", "abc1234"],
+      ["git-commit-details", "my-project", "root", "sub", "abc1234"],
       ["git-commit-file-diff", "my-project", "root", "sub", "abc1234"],
     ]);
   });

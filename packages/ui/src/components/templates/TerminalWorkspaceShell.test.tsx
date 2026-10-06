@@ -49,25 +49,53 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     { activePanelId: "ports", targetId: "terminals" },
     { activePanelId: "ports", targetId: "advisor" },
   ] as const)(
-    "opens $targetId and replaces the active terminal workspace panel",
+    "opens $targetId and replaces the active terminal workspace panel on toggle",
     ({ activePanelId, targetId }) => {
       expect(
-        resolveTerminalWorkspacePanelActivation({ activePanelId, targetId }),
+        resolveTerminalWorkspacePanelActivation({
+          activePanelId,
+          targetId,
+          intent: "toggle",
+        }),
       ).toBe(targetId);
     },
   );
 
   it.each(["git", "ports", "project", "terminals", "advisor"] as const)(
-    "closes %s when its active target is selected again",
+    "closes %s when its active target is toggled again",
     (targetId) => {
       expect(
         resolveTerminalWorkspacePanelActivation({
           activePanelId: targetId,
           targetId,
+          intent: "toggle",
         }),
       ).toBeNull();
     },
   );
+
+  it.each(["git", "ports", "project", "terminals", "advisor"] as const)(
+    "keeps %s open when requested with reveal intent even if already active",
+    (targetId) => {
+      expect(
+        resolveTerminalWorkspacePanelActivation({
+          activePanelId: targetId,
+          targetId,
+          intent: "reveal",
+        }),
+      ).toBe(targetId);
+    },
+  );
+
+  it("switches to targetId with reveal intent when a different panel was active", () => {
+    expect(
+      resolveTerminalWorkspacePanelActivation({
+        activePanelId: "ports",
+        targetId: "git",
+        intent: "reveal",
+      }),
+    ).toBe("git");
+  });
 });
 
 describe("TerminalWorkspaceShell rendering", () => {

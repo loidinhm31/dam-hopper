@@ -57,6 +57,7 @@ FROM debian:bookworm-20250317-slim@sha256:e9ac68ffde903b241342267a51cd74c5417414
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=server-builder /build/target/release/dam-hopper-server /usr/local/bin/dam-hopper-server

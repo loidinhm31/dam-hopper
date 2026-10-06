@@ -1,0 +1,39 @@
+{
+  "verifiedAt": "2026-10-06T05:35:26.743Z",
+  "acceptedCaptureRunId": "e2e-run-1791264287476-0b473ba8",
+  "approvalRecordedAt": "2026-10-06T05:34:16.946Z",
+  "sourceReceipt": "plans/reports/source-261006-1226-pr48-hardening.json",
+  "verifiedSourceFiles": 20,
+  "captures": [
+    {
+      "path": "packages/ui/e2e/editor-git-blame/normal-author-date.png",
+      "sha256": "1a42d3f5ebbfdf8dce576930e0457b08fe62e107204c7264420b686be2b2cb06",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "packages/ui/e2e/editor-git-blame/uncommitted-buffer.png",
+      "sha256": "9c9a7b524ccca2f8596ed837e96a19c7c2b93319153f111a5cff388ee4d33ea9",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "packages/ui/e2e/editor-git-blame/gutter-context-menu.png",
+      "sha256": "8c5ddc1d5c741649fd3eb370d8ce3c37e719e8262fb2b3e7ca86658cb4bd01c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "packages/ui/e2e/editor-git-blame/workspace-git-full-body.png",
+      "sha256": "78892269af651f6f7ef5576b8f0d909e614f553ed69ae120de8e362e6105ab5b",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "packages/ui/e2e/editor-git-blame/compact-author-only.png",
+      "sha256": "e3269c67c169c208ab5a45e12bac5d609067d17db98e62072f4b0e3d340a0c34",
+      "width": 620,
+      "height": 900
+    }
+  ]
+}

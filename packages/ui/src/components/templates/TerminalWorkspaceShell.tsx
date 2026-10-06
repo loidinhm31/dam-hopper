@@ -73,9 +73,13 @@ export function TerminalWorkspaceShell({
       const next = resolveTerminalWorkspacePanelActivation({
         activePanelId: current,
         targetId: activatePanelRequest.targetId,
+        intent: activatePanelRequest.intent,
       });
       return next;
     });
+    if (activatePanelRequest.intent === "reveal") {
+      setFrontPanelId("tool");
+    }
   }, [activatePanelRequest]);
 
   useEffect(() => {

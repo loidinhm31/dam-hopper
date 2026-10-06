@@ -283,9 +283,13 @@ pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, 
     if !project_path.exists() {
         return Ok(GitStatus::not_found(project_name));
     }
-
-    let mut repo = open_repo(project_path)?;
-
+    let mut repo = match open_repo(project_path) {
+        Ok(r) => r,
+        Err(_) if is_sha256_repository(project_path) => {
+            return get_status_cli(project_path, project_name);
+        }
+        Err(e) => return Err(e),
+    };
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(false)
@@ -333,6 +337,145 @@ pub fn get_status(project_path: &Path, project_name: &str) -> Result<GitStatus, 
     let (ahead, behind) = get_ahead_behind(&repo);
     let last_commit = get_last_commit(&repo);
     let has_stash = count_stash(&mut repo) > 0;
+    let is_clean = staged == 0 && modified == 0 && untracked == 0;
+
+    Ok(GitStatus {
+        project_name: project_name.to_string(),
+        branch,
+        is_clean,
+        ahead,
+        behind,
+        staged,
+        modified,
+        untracked,
+        has_stash,
+        last_commit,
+        path_exists: None,
+        status_error: None,
+    })
+}
+fn is_sha256_repository(project_path: &Path) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-object-format"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(project_path)
+        .output()
+        .is_ok_and(|output| output.status.success() && output.stdout == b"sha256\n")
+}
+
+fn get_status_cli(project_path: &Path, project_name: &str) -> Result<GitStatus, AppError> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .args(["status", "--porcelain=v1", "-b"])
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git status: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("not a git repository") {
+            return Err(AppError::GitNotFound(
+                project_path.to_string_lossy().into_owned(),
+            ));
+        }
+        return Err(AppError::Git(format!(
+            "git status error: {}",
+            stderr.trim()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut branch = "HEAD".to_string();
+    let mut ahead = 0usize;
+    let mut behind = 0usize;
+    let mut staged = 0usize;
+    let mut modified = 0usize;
+    let mut untracked = 0usize;
+
+    for line in stdout.lines() {
+        if line.starts_with("##") {
+            let header = line.trim_start_matches("##").trim();
+            if let Some(rest) = header.strip_prefix("No commits yet on ") {
+                branch = rest.trim().to_string();
+            } else if let Some(rest) = header.strip_prefix("Initial commit on ") {
+                branch = rest.trim().to_string();
+            } else {
+                let parts: Vec<&str> = header.split_whitespace().collect();
+                if let Some(branch_part) = parts.first() {
+                    let b = branch_part.split("...").next().unwrap_or(branch_part);
+                    branch = b.to_string();
+                }
+                if let Some(bracket_start) = header.find('[') {
+                    if let Some(bracket_end) = header.find(']') {
+                        let info = &header[bracket_start + 1..bracket_end];
+                        for item in info.split(',') {
+                            let item = item.trim();
+                            if let Some(num) = item.strip_prefix("ahead ") {
+                                ahead = num.trim().parse().unwrap_or(0);
+                            } else if let Some(num) = item.strip_prefix("behind ") {
+                                behind = num.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if line.len() >= 2 {
+            let x = line.as_bytes()[0];
+            let y = line.as_bytes()[1];
+            if x == b'?' && y == b'?' {
+                untracked += 1;
+            } else {
+                if x != b' ' {
+                    staged += 1;
+                }
+                if y != b' ' {
+                    modified += 1;
+                }
+            }
+        }
+    }
+
+    let stash_output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .args(["stash", "list"])
+        .current_dir(project_path)
+        .output();
+    let has_stash = stash_output.map(|o| !o.stdout.is_empty()).unwrap_or(false);
+
+    let last_commit = {
+        let log_output = Command::new("git")
+            .args(["-c", "safe.directory=*"])
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .args(["log", "-1", "--format=%H%x00%s%x00%at"])
+            .current_dir(project_path)
+            .output();
+        match log_output {
+            Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                let parts: Vec<&str> = text.trim().split('\0').collect();
+                if parts.len() >= 3 {
+                    let ts: i64 = parts[2].parse().unwrap_or(0);
+                    let git_time = git2::Time::new(ts, 0);
+                    crate::git::types::LastCommit {
+                        hash: parts[0].to_string(),
+                        message: parts[1].to_string(),
+                        date: format_commit_time(&git_time),
+                    }
+                } else {
+                    crate::git::types::LastCommit::default()
+                }
+            }
+            _ => crate::git::types::LastCommit::default(),
+        }
+    };
+
     let is_clean = staged == 0 && modified == 0 && untracked == 0;
 
     Ok(GitStatus {
@@ -445,9 +588,10 @@ pub(crate) fn resolve_push_target(repo: &Repository) -> Result<PushTarget, AppEr
     }
 
     let mut push_refspecs = Vec::new();
-    if let Ok(entries) =
-        config.entries(Some(&format!(r"^remote\.{}\.push$", regex::escape(&remote_name))))
-    {
+    if let Ok(entries) = config.entries(Some(&format!(
+        r"^remote\.{}\.push$",
+        regex::escape(&remote_name)
+    ))) {
         let _ = entries.for_each(|entry| {
             if let Some(val) = entry.value() {
                 push_refspecs.push(val.to_string());
@@ -1474,11 +1618,25 @@ pub fn get_log(
 ) -> Result<Vec<crate::git::types::GitLogEntry>, AppError> {
     use std::process::Command;
 
-    let repo = open_repo(project_path)?;
-    if let Some(git_ref) = git_ref {
-        validate_revision(&repo, git_ref, "git ref")?;
-    }
-    let upstream = upstream_oid(&repo);
+    let repo = open_repo(project_path);
+    let (repo_handle, upstream) = match repo {
+        Ok(r) => {
+            if let Some(git_ref) = git_ref {
+                validate_revision(&r, git_ref, "git ref")?;
+            }
+            let up = upstream_oid(&r);
+            (Some(r), up)
+        }
+        Err(_) if is_sha256_repository(project_path) => {
+            if let Some(git_ref) = git_ref {
+                if git_ref.starts_with('-') || git_ref.contains(['\0', ' ', '~', '^', ':', '@']) {
+                    return Err(AppError::InvalidInput("invalid git ref".into()));
+                }
+            }
+            (None, None)
+        }
+        Err(e) => return Err(e),
+    };
 
     let normalized_query = match message_query.map(str::trim) {
         Some(term) if !term.is_empty() => {
@@ -1495,6 +1653,8 @@ pub fn get_log(
     let mut command = Command::new("git");
     command
         .current_dir(project_path)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .args(["-c", "safe.directory=*"])
         .arg("log")
         .arg(format!("--skip={}", offset))
@@ -1552,7 +1712,11 @@ pub fn get_log(
                     .ok()
                     .map(|oid| (upstream_oid, oid))
             })
-            .and_then(|(upstream_oid, oid)| repo.graph_descendant_of(upstream_oid, oid).ok())
+            .and_then(|(upstream_oid, oid)| {
+                repo_handle
+                    .as_ref()
+                    .and_then(|r| r.graph_descendant_of(upstream_oid, oid).ok())
+            })
             .unwrap_or(false);
 
         entries.push(crate::git::types::GitLogEntry {

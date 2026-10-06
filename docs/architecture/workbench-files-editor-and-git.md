@@ -65,6 +65,125 @@ Editor behavior is intentionally conservative:
 
 Git mutations invalidate only the affected profile/target caches and reconcile only tabs belonging to that target. Project root and worktree tabs remain independent even when their relative paths match.
 
+### Git Blame Annotation Architecture and Client Lifecycle
+
+Git blame annotations provide inline line-by-line attribution within the Monaco editor gutter without mutating repository references, the index, or working-tree files. The client architecture binds native `git2` blame computation (`POST /api/git/{project}/blame`) to the active Monaco editor model lifecycle, enforcing profile-qualified owner gating, buffer size safety thresholds, keystroke edit debouncing, single-flight concurrency, and event-driven invalidation.
+
+See the [phased implementation plan](../../plans/261005-2106-editor-git-blame-annotations/plan.md) and [agreed brainstorm](../../plans/reports/brainstorm-261005-2106-editor-git-blame-annotations.md) for full contract context.
+
+#### Target Identity and Owner Gating
+
+Blame operations strictly adhere to profile-qualified target ownership:
+
+- **Connection Ownership:** `useEditorGitBlame` resolves the connection snapshot via `useConnectionSnapshot(profileId)`. Blame requests only execute when `snapshot.status === "connected"` and the resource binding matches (`!tab.resourceBinding?.serverUrl || snapshot.serverUrl === tab.resourceBinding.serverUrl`). When disconnected, status transitions to `"unavailable"` (`"No active connection"` or `"Connection not connected or binding mismatch"`).
+- **Wire Projection:** The client projects the project target reference via `toWireTarget(target)`, omitting the client-side `profileId` and submitting `{ project, worktreePath? }` over the captured owner's transport.
+- **Post-Await Identity Guarding:** When an asynchronous blame request resolves, the hook verifies:
+  1. `isCurrentConnection(owner)` matches the active profile generation.
+  2. Initiating tab key matches the current tab (`tabRef.current?.key === currentTabKey`).
+  3. Feature remains enabled (`isEnabledRef.current`).
+  4. Monaco text model identity matches (`freshModelId === currentModelId`).
+  5. Model version matches (`freshModel.getVersionId() === currentModelVersion`).
+  6. Buffer edit epoch matches (`localEpochRef.current === currentLocalEpoch`).
+  7. Repository refresh epoch matches (`repositoryRefreshEpochRef.current === currentRefreshEpoch`).
+  Stale, mismatched, or out-of-order responses are discarded immediately without applying state.
+
+#### Tab Eligibility and Ephemeral Store State
+
+Blame annotations are scoped strictly to active text editing sessions:
+
+- **Tab Eligibility:** `isBlameEligibleTab` gates enablement. Only clean or dirty text tabs in normal or degraded tiers with `targetAvailable: true`, `conflicted: false`, and a non-empty `path` are eligible. Excluded tiers: `diff`, `binary`, `image`, `video`, and `large` (≥5 MiB).
+- **Session-Only Ephemeral State:** `Tab.blameEnabled` is an ephemeral per-tab flag toggled via `setBlameEnabled(tabKey, enabled)`.
+- **Persistence Exclusion:** `Tab.blameEnabled` is explicitly excluded from `partialize` in `useEditorStore` so it is never persisted to `localStorage`.
+- **Rehydration Normalization:** On store rehydration, `onRehydrateStorage` normalizes `tab.blameEnabled = false` across all tabs to prevent stale gutter activation across page reloads.
+
+#### Buffer Lifecycle and Safety Boundaries
+
+The client enforces strict boundaries on buffer content before dispatching to the transport:
+
+- **Size Threshold (5 MiB):** `GIT_BLAME_MAX_BUFFER_BYTES = 5 * 1024 * 1024`. `isBufferOverLimit(content)` validates UTF-8 byte length (`new TextEncoder().encode(content).length`). Buffers exceeding 5 MiB short-circuit client requests immediately, setting status to `"unavailable"`, error code to `"GIT_BLAME_TOO_LARGE"`, and clearing attribution data.
+- **Line Count Normalization:** `computeMonacoLineCount(content)` calculates expected lines: an empty buffer evaluates to 1 line, and each `\n` character increments the display line count, aligning client expectations with Monaco line metrics.
+- **Snapshot Correlation:** Each blame request generates a correlated `snapshotId` (`${localEpoch}-${generateUUID().substring(0, 8)}`) paired with the monotonic `modelVersion` (`model.getVersionId()`).
+- **Baseline Safety and EOL Boundaries:** Direct HEAD paths and staged rename origins share unified regular-file mode, object-header size/type, and binary baseline checks. Tree symlinks are rejected (even when missing on disk), oversized baseline payloads reject before blob materialization, and HEAD is rechecked before early publication. Buffer normalization converts LF, CRLF, and lone-CR content to LF while preserving display row counts. A CRLF-committed baseline compared to an LF-normalized buffer can evaluate as Uncommitted due to native byte mismatch; expanded EOL-insensitive attribution is explicitly out of scope.
+- **Response Validation:** `validateBlameResponse` enforces strict structural invariants on incoming data:
+  - Echoed `snapshotId` and `modelVersion` match request parameters.
+  - `bufferLineCount` matches client-computed Monaco line count.
+  - `ranges` form a contiguous, non-overlapping, 1-based partition covering `[1..bufferLineCount]`.
+  - Every range with a non-null `commitIndex` references a valid entry in `commits`. Uncommitted lines have `commitIndex: null`.
+- **Lookup and Formatting:**
+  - `findBlameRangeForLine(ranges, lineNumber)` performs an $O(\log N)$ binary search over the ordered range partition.
+  - `findCommitForRange(commits, range)` resolves the commit metadata or returns `null` for uncommitted lines.
+  - `formatBlameDate(timestampSeconds)` formats author dates into `YYYY-MM-DD`.
+  - `formatBlameFullTimestamp(timestampSeconds, tzOffsetMinutes)` formats complete timestamps with the author's original timezone offset (e.g. `2026-10-05 14:32:00 +0700`).
+
+#### Edit Debounce and Single-Flight Concurrency
+
+Buffer edits synchronize attribution without overloading the server or libgit2 worker threads:
+
+- **Synchronous Invalidation:** On `model.onDidChangeContent`, visible attribution is wiped synchronously (`setData(null)`, `setStatus("waiting")`), and `localEpochRef` increments. This guarantees edited lines never display obsolete blame annotations while awaiting computation.
+- **Single-Flight Concurrency:** If a blame request is currently in flight (`inFlightRef.current`):
+  1. The active `AbortController` aborts the in-flight request.
+  2. `pendingIntentRef` is marked `true`.
+- **Keystroke Debounce (250 ms):** Keystrokes reset a 250 ms debounce timer (`GIT_BLAME_DEBOUNCE_MS = 250`). When the timer fires (or when an in-flight request completes with a pending intent), a new request dispatches with the latest buffer snapshot.
+- **Model Switch:** `editor.onDidChangeModel` aborts in-flight requests, clears debounce timers, increments the local epoch, clears attribution, rebinds content change listeners, and dispatches blame for the newly bound model.
+
+#### Invalidation Event Flow and External Refresh
+
+External repository modifications trigger event-driven refresh coordination without background polling:
+
+- **Repository Refresh Coordinator:** `triggerRepositoryRefresh({ force, reblameOnSameHead })` debounces root discovery by 50 ms. Post-await checks require mounted, enabled, connected, current owner/tab and refresh epoch before publishing. The epoch advances when dispatching replacement attribution, not for an unchanged-HEAD focus check.
+- **HEAD Revision Tracking:** If `owningRoot.status?.lastCommit?.hash` or `rootId` has changed (or on forced refresh), existing blame data is invalidated (`setStatus("waiting")`), and the runner re-fetches attribution against the new revision.
+- **Subscribed Invalidation Sources:**
+  1. **Window Focus:** `window.addEventListener("focus")` forces a repository check on window activation.
+  2. **Visibility Change:** `document.addEventListener("visibilitychange")` forces a check when `visibilityState === "visible"`.
+  3. **Profile IPC Events:** `subscribeIpc(profileId, "status:changed")` (filtered by owner generation and matching project) and `"workspace:changed"` trigger repository checks.
+  4. **QueryCache Invalidation:** Scoped keys require exact profile, generation, project and canonical worktree identity; known root-specific keys must match the owning root (or wildcard). Index-sensitive `git-diff` invalidation recomputes attribution even when HEAD is unchanged. Focus/visibility checks coalesce with valid in-flight work.
+  5. **Explicit Manual Refresh:** The `refresh()` callback exposed by `useEditorGitBlame` forces an immediate check and re-blame.
+
+#### Wire Transport, Query Integration, and Error Taxonomy
+
+- **Wire Commands:**
+  - `git:blame`: Maps to `POST /api/git/{project}/blame` with `{ path, content, snapshotId, modelVersion, worktreePath? }`.
+  - `git:commitDetails`: Maps to `GET /api/git/{project}/commit/{hash}/details?worktreePath=...&root=...`.
+- **Commit Details Query:** `useGitCommitDetails(target, hash, root)` caches commit inspection payloads via `gitCommitDetailsQueryKey` and `gitCommitDetailsQueryOptions` with `staleTime: Infinity` (historical Git commits are immutable).
+- **Error Taxonomy:**
+  - `GIT_BLAME_BUSY` (HTTP 503): Server worker queue or concurrency limit reached; sets `status: "unavailable"`, `isBusy: true`.
+  - `GIT_BLAME_TOO_LARGE` (HTTP 413 or client pre-check): Buffer exceeds 5 MiB; sets `status: "unavailable"`, `isBusy: false`.
+  - `GIT_BLAME_STALE_REVISION` (HTTP 409): Base commit shifted; sets `status: "waiting"`, awaiting revision refresh.
+  - `GIT_BLAME_INVALID_RESPONSE` or Transport Error: Malformed response or network failure; sets `status: "error"`.
+
+#### Gutter UI and Geometry Contract
+
+- **Gutter Presentation:** Line-number gutter context menu toggles dedicated annotations and exposes Refresh Annotations while enabled; existing markers and left-click diff remain separate. Whole editor-wrapper width ≥640px uses 220px author/date; narrower panes use author-only `min(120px, wrapperWidth / 3)`, with full date/timezone/hash/subject on hover/focus. Wide viewport does not prevent a narrow source Split from compacting.
+- **Monaco Geometry:** Typed `EditorOption.lineHeight` is the sole authority for line height metrics, paired with public model-line top positions to determine row height and offsets. Following clean cutover, all 56 lines of legacy constructor probing, mock `getOption(0)`, and magic fallback shims were removed; unmounted or unavailable editors yield no fabricated rows. Configuration, layout, scroll, and model events refresh geometry; pending animation frames are cancelled across editor and data transitions. Line/page wheel deltas use the current editor line height/viewport.
+- **Show Commit in Git:** Committed rows support mouse click and Enter, plus the context-menu action. A shared guard requires enabled ready attribution, the current model version and owning root before revealing the exact OID. Uncommitted or stale rows cannot reveal. The source target/root's read-only Workspace Git inspection preserves unsaved content and mutation gates; an already-open panel never toggles closed.
+
+#### Workspace Git Commit Reveal and Details Inspection Contract
+
+The "Show Commit in Git" action transitions from the Monaco gutter annotation to the Workspace Git surface without compromising unsaved editor buffers, active history filters, or repository safety invariants:
+
+- **Reveal Request Contract (`GitCommitRevealRequest`):** Carries typed `{ nonce, owner: { profileId, generation }, target: ProjectTargetRef, rootId, hash }`. The request captures the initiating editor model's owner/target/root rather than ambient active state.
+- **Surface Ensure-Open Across Layouts:**
+  - `WorkspacePage.handleRevealGitCommit` validates the request using `isGitCommitRevealRequestMatchingTarget(request, currentOwner, currentTarget)`. Mismatched profiles, generations, or target projects/worktrees reject the reveal request to prevent routing to unqualified or disconnected targets.
+  - **Desktop IDE:** Invokes `setActiveTool("git")` without `exclusiveTarget`, ensuring an already-open Git panel is never toggled closed.
+  - **Terminal Workspace:** Issues a `TerminalWorkspacePanelRequest` with `{ targetId: "git", intent: "reveal", nonce }`. `resolveTerminalWorkspacePanelActivation` distinguishes `intent: "reveal"` (unconditionally foregrounds and activates the target panel without closing) from `intent: "toggle"` (which closes when already active). Existing shortcut calls retain `intent: "toggle"`.
+  - **Compact IDE:** Activates `setRequestedCompactSurface("git")` directly, keeping editor tab mounts and unsaved buffer content intact for return navigation.
+- **Root-Readiness and Nonce Consumption:**
+  - `WorkspaceGitPanel` receives `revealRequest` and matches it against `targetRef`. If the requested root differs from `historyView.rootId`, it sets the root first (`historyView.setRootId(revealRequest.rootId)`) and resets scope, deferring nonce consumption until roots load and the matching root becomes active.
+  - Once the matching root is active and confirmed in `historyView.rootOptions`, the panel consumes the nonce (`lastConsumedNonceRef`), invokes `onRevealRequestConsumed(nonce)` to clear the request in `WorkspacePage`, clears the normal history selection (`historyView.clearSelectedCommit()`), and mounts local `inspectionState`.
+  - Replay protection: stale nonces from previous requests cannot override newer requests or active inspection.
+- **Inspection Selection vs History Selection Isolation:**
+  - `WorkspaceGitPanel` maintains `inspectionState = { owner, targetKey, rootId, hash, nonce }` locally, completely decoupled from `useGitHistoryView`'s normal history log selection.
+  - Inspected commits absent from the currently loaded 200 log entries (e.g. older commits, branch filter exclusion, or detached commits) are loaded by exact OID via `useGitCommitDetails` without walking or fetching entire repository history.
+  - When the inspected hash is outside the active log view, `outsideViewNotice` is displayed: `"Commit opened from annotation; outside current history view"`.
+  - Filter and pagination changes in history view retain active inspection; switching target, root, or disconnecting owner generation clears inspection.
+  - Selecting any real log entry in the history tree exits inspect mode (`setInspectionState(null)`) and transitions back to normal history selection with canonical action capabilities.
+- **Discriminated `CommitDetailsPanel` Contract:**
+  - Props enforce a strict compile-time and runtime discriminated union: `CommitDetailsPanelProps = CommitDetailsPanelHistoryProps | CommitDetailsPanelInspectProps`.
+  - **History Mode (`mode: "history"`):** Requires canonical `commit: GitLogEntry` and exposes mutation callbacks (`onCherryPickSelectedChanges`, `onRevertSelectedChanges`, `onDropSelectedChanges`). Eligibility is governed by real repository state; no synthetic flags.
+  - **Inspect Mode (`mode: "inspect"`):** Requires exact `commitHash: string` and optional `outsideViewNotice?: boolean`. Mutation callbacks are completely omitted from the interface, enforcing read-only behavior at compile time and runtime.
+  - **Data Fetching:** Commit details are queried via `useGitCommitDetails(target, hash, root, enabled)` with `staleTime: Infinity` (immutable commits). File entries are queried via `useGitCommitFiles(target, hash, root)`. Raw commit payloads are bounded at 5 MiB before decoding; this does not bound referenced trees, file-list output or engine history/rename computation.
+  - **Rendering:** Displays full commit subject/body as escaped React text, copyable full SHA-1/SHA-256 OID, author name/email/date/timezone and committer name/email/date/timezone. Double-clicking a file opens its historical diff. SHA-256 details/files/diffs and supporting status/log reads use read-only Git CLI paths (requiring `git` on PATH, provided in the runtime Dockerfile; no configuration migration); native blame and mutation support are not expanded.
+
 ## Federated Search
 
 Search has two explicit scopes in `SearchPanel`:
@@ -133,5 +252,12 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 | Shared history view | `packages/ui/src/hooks/use-git-history-view.ts`, `packages/ui/src/components/molecules/GitHistoryToolbar.tsx`, `packages/ui/src/components/organisms/GitBranchControl.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx` |
 | Git-page history integration | `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/ProjectInfoHelpers.ts` |
 | Git edit and leased publication | `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `hooks/use-git-squash.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
+| Git blame client and buffer lifecycle | `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame.ts`, `packages/ui/src/stores/editor.ts` |
+| Git blame Monaco gutter and context menu | `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx` |
+| Git blame host integration and edge states | `packages/ui/src/components/organisms/EditorTabs.tsx`, `MonacoHost.tsx`, `MarkdownHost.tsx`, `HtmlHost.tsx` |
+| Git blame API client and transport | `packages/ui/src/api/client.ts`, `packages/ui/src/api/ws-transport.ts`, `packages/ui/src/api/queries.ts` |
+| Git commit reveal and panel intent | `packages/ui/src/lib/git-commit-reveal.ts`, `packages/ui/src/lib/terminal-workspace-panel.ts`, `packages/ui/src/components/pages/WorkspacePage.tsx`, `packages/ui/src/components/templates/TerminalWorkspaceShell.tsx` |
+| Git commit inspection and details panel | `packages/ui/src/components/organisms/CommitDetailsPanel.tsx`, `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/api/queries.ts` |
+| Git blame qualification and verification | `packages/ui/e2e/editor-git-blame/editor-git-blame.spec.ts`, `packages/ui/e2e/editor-git-blame/git-fixture.ts`, `plans/261005-2106-editor-git-blame-annotations/verification.md`, `plans/reports/verification-261006-1205-pr48-hardening.md` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

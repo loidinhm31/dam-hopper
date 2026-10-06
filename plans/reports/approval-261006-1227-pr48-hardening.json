@@ -1,0 +1,83 @@
+{
+  "recordedAt": "2026-10-06T05:34:16.946Z",
+  "approvalSource": "Explicit user answers in this session",
+  "operator": "Session operator",
+  "decisions": {
+    "finalization": "Approve finalization and scoped commit",
+    "visual": "Inspected all five — accept now"
+  },
+  "scope": "All three phases of plans/261006-1052-pr48-review-and-hardening/plan.md",
+  "reviewReport": "plans/reports/code-reviewer-261006-1216-pr48-hardening.md",
+  "reviewScore": 9.8,
+  "captureRunId": "e2e-run-1791264287476-0b473ba8",
+  "captureEvidence": {
+    "run_id": "e2e-run-1791264287476-0b473ba8",
+    "command": "pnpm --filter @dam-hopper/ui test:e2e",
+    "started_at": "2026-10-06T05:24:47.476Z",
+    "completed_at": "2026-10-06T05:24:57.216Z",
+    "case_name": "editor-git-blame",
+    "route": "/workspace",
+    "git_head": "9c74aaeeb5efe2e1b4f17878ac0b4933c1854fd4",
+    "source_fingerprint": "d771ab652f5408bba0598897843397a45c132ee26acdc34e91ef9a43b7ed7e8b",
+    "seed_digest": "df34c06a1814c7b180b674054067d0adedb896b792914a7b8106bef3e2706948",
+    "browser": "chromium",
+    "browser_version": "151.0.7922.173",
+    "os": "linux",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "device_pixel_ratio": 1,
+    "checkpoints": [
+      {
+        "checkpoint": "normal-author-date",
+        "file_name": "normal-author-date.png",
+        "sha256": "1a42d3f5ebbfdf8dce576930e0457b08fe62e107204c7264420b686be2b2cb06",
+        "dimensions": {
+          "width": 1440,
+          "height": 900
+        }
+      },
+      {
+        "checkpoint": "uncommitted-buffer",
+        "file_name": "uncommitted-buffer.png",
+        "sha256": "9c9a7b524ccca2f8596ed837e96a19c7c2b93319153f111a5cff388ee4d33ea9",
+        "dimensions": {
+          "width": 1440,
+          "height": 900
+        }
+      },
+      {
+        "checkpoint": "gutter-context-menu",
+        "file_name": "gutter-context-menu.png",
+        "sha256": "8c5ddc1d5c741649fd3eb370d8ce3c37e719e8262fb2b3e7ca86658cb4bd01c5",
+        "dimensions": {
+          "width": 1440,
+          "height": 900
+        }
+      },
+      {
+        "checkpoint": "workspace-git-full-body",
+        "file_name": "workspace-git-full-body.png",
+        "sha256": "78892269af651f6f7ef5576b8f0d909e614f553ed69ae120de8e362e6105ab5b",
+        "dimensions": {
+          "width": 1440,
+          "height": 900
+        }
+      },
+      {
+        "checkpoint": "compact-author-only",
+        "file_name": "compact-author-only.png",
+        "sha256": "e3269c67c169c208ab5a45e12bac5d609067d17db98e62072f4b0e3d340a0c34",
+        "dimensions": {
+          "width": 620,
+          "height": 900
+        }
+      }
+    ],
+    "functional_outcome": "passed",
+    "cleanup_outcome": "passed"
+  },
+  "sourceReceipt": "plans/reports/source-261006-1226-pr48-hardening.json",
+  "pushAuthorized": false
+}

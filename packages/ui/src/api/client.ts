@@ -163,6 +163,27 @@ export function isGitUnavailableError(error: unknown): boolean {
   );
 }
 
+export function isGitBlameBusyError(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    (error.code === "GIT_BLAME_BUSY" || error.status === 503)
+  );
+}
+
+export function isGitBlameTooLargeError(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    (error.code === "GIT_BLAME_TOO_LARGE" || error.status === 413)
+  );
+}
+
+export function isGitBlameStaleError(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    (error.code === "GIT_BLAME_STALE_REVISION" || error.status === 409)
+  );
+}
+
 const PROJECT_TARGET_ERROR_CODES = [
   "WORKSPACE_PROJECT_NOT_FOUND",
   "WORKSPACE_TARGET_UNREGISTERED",
@@ -1792,7 +1813,7 @@ export interface VcsRoot {
   kind: VcsRootKind;
   mappingState?: VcsRootMappingState;
   gitlink?: SubmoduleGitlinkInfo;
-  status?: unknown;
+  status?: GitStatus;
   warnings: string[];
 }
 
@@ -1983,6 +2004,56 @@ export interface ConflictFile {
   ancestor?: string;
   ours?: string;
   theirs?: string;
+}
+
+export interface GitBlameInput {
+  path: string;
+  content: string;
+  snapshotId: string;
+  modelVersion: number;
+}
+
+export interface GitBlameCommit {
+  hash: string;
+  authorName: string;
+  authorEmail: string;
+  authorTimestamp: number;
+  authorTimezoneOffsetMinutes: number;
+  subject: string;
+}
+
+export interface GitBlameRange {
+  startLine: number;
+  lineCount: number;
+  commitIndex: number | null;
+}
+
+export type GitBlameStatus = "ready" | "uncommitted" | "empty";
+
+export interface GitBlameResponse {
+  snapshotId: string;
+  modelVersion: number;
+  rootId: string;
+  rootRelativePath: string;
+  baseCommitOid: string | null;
+  bufferLineCount: number;
+  status: GitBlameStatus;
+  ranges: GitBlameRange[];
+  commits: GitBlameCommit[];
+}
+
+export interface GitCommitDetails {
+  hash: string;
+  authorName: string;
+  authorEmail: string;
+  authorTimestamp: number;
+  authorTimezoneOffsetMinutes: number;
+  committerName: string;
+  committerEmail: string;
+  committerTimestamp: number;
+  committerTimezoneOffsetMinutes: number;
+  subject: string;
+  fullMessage: string;
 }
 
 export interface CommandDefinition {
@@ -2401,6 +2472,34 @@ export function createApiClient(
           paths,
           root,
         }),
+      blame: (
+        target: ProjectTargetInput,
+        input: GitBlameInput,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<GitBlameResponse>(
+          "git:blame",
+          {
+            ...toWireTarget(target),
+            ...input,
+          },
+          options,
+        ),
+      commitDetails: (
+        target: ProjectTargetInput,
+        hash: string,
+        root?: string,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<GitCommitDetails>(
+          "git:commitDetails",
+          {
+            ...toWireTarget(target),
+            hash,
+            root,
+          },
+          options,
+        ),
     },
     config: {
       get: () => transport.invoke<DamHopperConfig>("config:get"),
@@ -3293,6 +3392,17 @@ export interface ApiClient {
       paths: string[],
       root?: string,
     ) => Promise<GitActionResult>;
+    blame: (
+      target: ProjectTargetInput,
+      input: GitBlameInput,
+      options?: TransportInvokeOptions,
+    ) => Promise<GitBlameResponse>;
+    commitDetails: (
+      target: ProjectTargetInput,
+      hash: string,
+      root?: string,
+      options?: TransportInvokeOptions,
+    ) => Promise<GitCommitDetails>;
   };
   config: {
     get: () => Promise<DamHopperConfig>;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Upload } from "lucide-react";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { CommitDetailsPanel } from "@/components/organisms/CommitDetailsPanel.js";
@@ -30,11 +30,27 @@ import {
   buildProjectInfoPushTarget,
   formatProjectInfoRootLabel,
 } from "@/components/organisms/ProjectInfoPanel.js";
+import { projectTargetKey } from "@/api/ownership.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
+import type {
+  GitCommitRevealOwner,
+  GitCommitRevealRequest,
+} from "@/lib/git-commit-reveal.js";
 
 export interface WorkspaceGitPanelProps {
   project: string;
   target?: ProjectTargetRef;
   available?: boolean;
+  revealRequest?: GitCommitRevealRequest | null;
+  onRevealRequestConsumed?: (nonce: number) => void;
+}
+
+interface InspectionState {
+  owner: GitCommitRevealOwner;
+  targetKey: string;
+  rootId: string;
+  hash: string;
+  nonce: number;
 }
 
 const DEFAULT_GIT_ROOT_ID = ".";
@@ -75,14 +91,21 @@ export function WorkspaceGitPanel({
   project,
   target,
   available = true,
+  revealRequest,
+  onRevealRequestConsumed,
 }: WorkspaceGitPanelProps) {
   const targetRef = useMemo(
     () => normalizeProjectTarget(target ?? project),
     [target, project],
   );
 
+  const connectionSnapshot = useConnectionSnapshot(targetRef.profileId ?? "");
   const historyView = useGitHistoryView(targetRef, { available });
   const openDiff = useEditorStore((s) => s.openDiff);
+  const [inspectionState, setInspectionState] =
+    useState<InspectionState | null>(null);
+  const lastConsumedNonceRef = useRef<number | null>(null);
+
   const historyActions = useGitHistoryActions(
     targetRef,
     historyView.rootId,
@@ -116,16 +139,97 @@ export function WorkspaceGitPanel({
   useEffect(() => {
     historyActions.resetScope();
   }, [historyView.effectiveScopeKey, historyActions.resetScope]);
+  // Consume reveal request once target, available roots, and requested root match
+  useEffect(() => {
+    if (!revealRequest) return;
+    if (lastConsumedNonceRef.current === revealRequest.nonce) return;
+
+    if (revealRequest.target.project !== targetRef.project) return;
+    const reqWorktree = revealRequest.target.worktreePath ?? null;
+    const currWorktree = targetRef.worktreePath ?? null;
+    if (reqWorktree !== currWorktree) return;
+
+    if (historyView.rootOptions.length === 0) return;
+    const rootMatches = historyView.rootOptions.some(
+      (root) => root.rootId === revealRequest.rootId,
+    );
+    if (!rootMatches) return;
+
+    if (historyView.rootId !== revealRequest.rootId) {
+      historyView.setRootId(revealRequest.rootId);
+      historyActions.resetScope();
+      return;
+    }
+
+    lastConsumedNonceRef.current = revealRequest.nonce;
+    historyView.clearSelectedCommit();
+    setInspectionState({
+      owner: revealRequest.owner,
+      targetKey: projectTargetKey(targetRef),
+      rootId: revealRequest.rootId,
+      hash: revealRequest.hash,
+      nonce: revealRequest.nonce,
+    });
+    onRevealRequestConsumed?.(revealRequest.nonce);
+  }, [
+    revealRequest,
+    historyView.rootOptions,
+    historyView.rootId,
+    historyView.setRootId,
+    historyView.clearSelectedCommit,
+    historyActions.resetScope,
+    targetRef,
+    onRevealRequestConsumed,
+  ]);
+
+  // Retire inspection when target, root, or generation changes
+  useEffect(() => {
+    if (!inspectionState) return;
+    const currentGeneration = connectionSnapshot?.owner.generation;
+    if (
+      inspectionState.rootId !== historyView.rootId ||
+      inspectionState.targetKey !== projectTargetKey(targetRef) ||
+      (currentGeneration !== undefined &&
+        inspectionState.owner.generation !== currentGeneration)
+    ) {
+      setInspectionState(null);
+    }
+  }, [
+    historyView.rootId,
+    targetRef,
+    connectionSnapshot?.owner.generation,
+    inspectionState,
+  ]);
+
+  const isInspectedHashInVisibleLogs = useMemo(() => {
+    if (!inspectionState) return false;
+    return historyView.logs.some((entry) => entry.hash === inspectionState.hash);
+  }, [inspectionState, historyView.logs]);
+
+  const activeHash = inspectionState
+    ? inspectionState.hash
+    : historyView.selectedCommit?.hash;
+  const activeRootId = inspectionState
+    ? inspectionState.rootId
+    : historyView.rootId;
+
+  const handleCloseDetails = () => {
+    if (inspectionState) {
+      setInspectionState(null);
+    } else {
+      historyView.clearSelectedCommit();
+    }
+  };
 
   const handleGitFileDoubleClick = (file: DiffFileEntry) => {
-    if (historyView.selectedCommit) {
+    if (activeHash) {
       openDiff(
         targetRef,
-        projectRelativePathForRoot(historyView.rootId, file.path),
+        projectRelativePathForRoot(activeRootId, file.path),
         file.status,
         file.additions,
         file.deletions,
-        historyView.selectedCommit.hash,
+        activeHash,
       );
     }
   };
@@ -207,7 +311,7 @@ export function WorkspaceGitPanel({
         <div
           className={cn(
             "flex flex-1 min-h-0 flex-col min-w-0 transition-all duration-200 motion-reduce:transition-none",
-            historyView.selectedCommit
+            historyView.selectedCommit || inspectionState
               ? "min-h-[480px] md:min-h-0 shrink-0 md:flex-none w-full md:w-[60%] lg:w-[65%] border-r border-[var(--color-border)]"
               : "w-full",
           )}
@@ -382,8 +486,15 @@ export function WorkspaceGitPanel({
                     ? "No matching commits found."
                     : "No commits found."
                 }
-                selectedHash={historyView.selectedCommit?.hash}
-                onSelectCommit={historyView.selectCommit}
+                selectedHash={
+                  inspectionState
+                    ? inspectionState.hash
+                    : historyView.selectedCommit?.hash
+                }
+                onSelectCommit={(entry) => {
+                  setInspectionState(null);
+                  historyView.selectCommit(entry);
+                }}
                 onCherryPick={(entry) =>
                   void historyActions.handleCherryPick(entry)
                 }
@@ -413,28 +524,44 @@ export function WorkspaceGitPanel({
           </div>
         </div>
 
-        {historyView.selectedCommit && (
+        {(inspectionState || historyView.selectedCommit) && (
           <div className="flex-1 min-h-[240px] md:min-h-0 min-w-0 md:w-[40%] lg:w-[35%]">
-            <CommitDetailsPanel
-              project={project}
-              target={targetRef}
-              root={historyView.rootId}
-              commit={historyView.selectedCommit}
-              onClose={historyView.clearSelectedCommit}
-              onFileDoubleClick={handleGitFileDoubleClick}
-              onCherryPickSelectedChanges={(commit, files) =>
-                void historyActions.handleCherryPickFiles(commit, files)
-              }
-              onRevertSelectedChanges={(commit, files) =>
-                void historyActions.handleRevertFiles(commit, files)
-              }
-              onDropSelectedChanges={
-                historyView.isViewingActiveBranch
-                  ? (commit, files) =>
-                      void historyActions.handleDropFiles(commit, files)
-                  : undefined
-              }
-            />
+            {inspectionState ? (
+              <CommitDetailsPanel
+                mode="inspect"
+                project={project}
+                target={targetRef}
+                root={inspectionState.rootId}
+                commitHash={inspectionState.hash}
+                outsideViewNotice={!isInspectedHashInVisibleLogs}
+                onClose={handleCloseDetails}
+                onFileDoubleClick={handleGitFileDoubleClick}
+              />
+            ) : (
+              historyView.selectedCommit && (
+                <CommitDetailsPanel
+                  mode="history"
+                  project={project}
+                  target={targetRef}
+                  root={historyView.rootId}
+                  commit={historyView.selectedCommit}
+                  onClose={handleCloseDetails}
+                  onFileDoubleClick={handleGitFileDoubleClick}
+                  onCherryPickSelectedChanges={(commit, files) =>
+                    void historyActions.handleCherryPickFiles(commit, files)
+                  }
+                  onRevertSelectedChanges={(commit, files) =>
+                    void historyActions.handleRevertFiles(commit, files)
+                  }
+                  onDropSelectedChanges={
+                    historyView.isViewingActiveBranch
+                      ? (commit, files) =>
+                          void historyActions.handleDropFiles(commit, files)
+                      : undefined
+                  }
+                />
+              )
+            )}
           </div>
         )}
       </div>
