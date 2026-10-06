@@ -65,6 +65,7 @@ interface MonacoHostProps {
   blameStatus?: EditorGitBlameStatus;
   unavailableReason?: string | null;
   isBusy?: boolean;
+  sourceActive?: boolean;
 }
 
 function blurEditorSurface(
@@ -100,6 +101,7 @@ export function MonacoHost({
   blameStatus: blameStatusProp,
   unavailableReason: unavailableReasonProp,
   isBusy: isBusyProp,
+  sourceActive = true,
 }: MonacoHostProps) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -125,7 +127,7 @@ export function MonacoHost({
   const hookResult = useEditorGitBlame({
     tab: effectiveTab,
     editor: editorInstance,
-    active: effectiveBlameEnabled,
+    active: effectiveBlameEnabled && sourceActive,
   });
 
   const effectiveBlameData =

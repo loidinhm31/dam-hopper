@@ -2382,6 +2382,8 @@ export default function WorkspacePage() {
               key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
               project={projectName}
               target={projectTarget?.target}
+              sourceActive={activeCompactSurface === "editor"}
+              onRevealGitCommit={handleRevealGitCommit}
             />
           </Suspense>
         ),
@@ -2416,6 +2418,8 @@ export default function WorkspacePage() {
       projectTarget,
       compactAdvisorSurface,
       isAdvisorVisible,
+      activeCompactSurface,
+      handleRevealGitCommit,
     ],
   );
 
@@ -2566,6 +2570,8 @@ export default function WorkspacePage() {
               key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
               project={projectName}
               target={projectTarget?.target}
+              sourceActive={terminalFilePanelOpen}
+              onRevealGitCommit={handleRevealGitCommit}
             />
           </Suspense>
         }
@@ -2586,6 +2592,7 @@ export default function WorkspacePage() {
       terminalFileTreeResizeHandleProps,
       terminalFileTreeWidth,
       projectTarget,
+      handleRevealGitCommit,
     ],
   );
 
@@ -2726,6 +2733,8 @@ export default function WorkspacePage() {
                 key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
                 project={projectName}
                 target={projectTarget?.target}
+                sourceActive={true}
+                onRevealGitCommit={handleRevealGitCommit}
               />
             </Suspense>
           }

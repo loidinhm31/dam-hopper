@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
+import { QueryClientContext } from "@tanstack/react-query";
 import type { Tab } from "@/stores/editor.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import {
@@ -123,7 +123,28 @@ export function useEditorGitBlame({
 }: UseEditorGitBlameParams): UseEditorGitBlameResult {
   const queryClient = useContext(QueryClientContext) ?? null;
 
-  const isEnabled = Boolean(tab?.blameEnabled && active && isBlameEligibleTab(tab));
+  const [isDocumentVisible, setIsDocumentVisible] = useState(
+    () =>
+      typeof document === "undefined" ||
+      document.visibilityState !== "hidden",
+  );
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const handleVisibility = () => {
+      setIsDocumentVisible(document.visibilityState !== "hidden");
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  const isEnabled = Boolean(
+    tab?.blameEnabled &&
+      active &&
+      isDocumentVisible &&
+      isBlameEligibleTab(tab),
+  );
   const profileId = tab?.target?.profileId ?? "";
   const snapshot = useConnectionSnapshot(profileId);
 
