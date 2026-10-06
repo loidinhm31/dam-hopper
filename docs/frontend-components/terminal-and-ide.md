@@ -568,6 +568,7 @@ interface TerminalPanelProps {
 - Provides independent squash checkboxes in graph and filtered-list history. Select at least two parent-contiguous commits on an active or inactive local branch, then edit the complete oldest-first combined message in `GitSquashDialog`.
 - Squash supports pushed, older, and root-inclusive linear ranges without changing the final tree, index, dirty files, or remote. Selected merges and rewritten-descendant merges are blocked; invalidated signatures require explicit consent.
 - After a proven local squash, `GitSquashFlow` offers separately prepared and confirmed leased publication bound to the same history owner/root and receipt branch tip (`receipt.branch`). Git-page bulk-root selection cannot redirect it; closing or changing scope cancels pending SSH retries.
+- Consumes blame-annotation commit reveal requests (`GitCommitRevealRequest`) by exact OID after verifying root readiness. Renders `CommitDetailsPanel` in read-only inspect mode with full commit message and diff opening independent of history log pagination; does not close if already active.
 
 ### Project Info Panel
 

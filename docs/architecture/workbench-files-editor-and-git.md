@@ -156,6 +156,33 @@ External repository modifications trigger event-driven refresh coordination with
 - **Monaco Geometry:** Public Monaco geometry and lifecycle events govern visible-row alignment through scrolling, folding, resizing, and font changes without private editor DOM dependencies.
 - **Show Commit in Git:** Show Commit in Git ensures the source target/root's Workspace Git panel is open by exact OID, independent of pagination/filtering, with read-only full message/files/historical diffs. Preserves unsaved content and mutation gates; an already-open panel never toggles closed.
 
+#### Workspace Git Commit Reveal and Details Inspection Contract
+
+The "Show Commit in Git" action transitions from the Monaco gutter annotation to the Workspace Git surface without compromising unsaved editor buffers, active history filters, or repository safety invariants:
+
+- **Reveal Request Contract (`GitCommitRevealRequest`):** Carries typed `{ nonce, owner: { profileId, generation }, target: ProjectTargetRef, rootId, hash }`. The request captures the initiating editor model's owner/target/root rather than ambient active state.
+- **Surface Ensure-Open Across Layouts:**
+  - `WorkspacePage.handleRevealGitCommit` validates the request using `isGitCommitRevealRequestMatchingTarget(request, currentOwner, currentTarget)`. Mismatched profiles, generations, or target projects/worktrees reject the reveal request to prevent routing to unqualified or disconnected targets.
+  - **Desktop IDE:** Invokes `setActiveTool("git")` without `exclusiveTarget`, ensuring an already-open Git panel is never toggled closed.
+  - **Terminal Workspace:** Issues a `TerminalWorkspacePanelRequest` with `{ targetId: "git", intent: "reveal", nonce }`. `resolveTerminalWorkspacePanelActivation` distinguishes `intent: "reveal"` (unconditionally foregrounds and activates the target panel without closing) from `intent: "toggle"` (which closes when already active). Existing shortcut calls retain `intent: "toggle"`.
+  - **Compact IDE:** Activates `setRequestedCompactSurface("git")` directly, keeping editor tab mounts and unsaved buffer content intact for return navigation.
+- **Root-Readiness and Nonce Consumption:**
+  - `WorkspaceGitPanel` receives `revealRequest` and matches it against `targetRef`. If the requested root differs from `historyView.rootId`, it sets the root first (`historyView.setRootId(revealRequest.rootId)`) and resets scope, deferring nonce consumption until roots load and the matching root becomes active.
+  - Once the matching root is active and confirmed in `historyView.rootOptions`, the panel consumes the nonce (`lastConsumedNonceRef`), invokes `onRevealRequestConsumed(nonce)` to clear the request in `WorkspacePage`, clears the normal history selection (`historyView.clearSelectedCommit()`), and mounts local `inspectionState`.
+  - Replay protection: stale nonces from previous requests cannot override newer requests or active inspection.
+- **Inspection Selection vs History Selection Isolation:**
+  - `WorkspaceGitPanel` maintains `inspectionState = { owner, targetKey, rootId, hash, nonce }` locally, completely decoupled from `useGitHistoryView`'s normal history log selection.
+  - Inspected commits absent from the currently loaded 200 log entries (e.g. older commits, branch filter exclusion, or detached commits) are loaded by exact OID via `useGitCommitDetails` without walking or fetching entire repository history.
+  - When the inspected hash is outside the active log view, `outsideViewNotice` is displayed: `"Commit opened from annotation; outside current history view"`.
+  - Filter and pagination changes in history view retain active inspection; switching target, root, or disconnecting owner generation clears inspection.
+  - Selecting any real log entry in the history tree exits inspect mode (`setInspectionState(null)`) and transitions back to normal history selection with canonical action capabilities.
+- **Discriminated `CommitDetailsPanel` Contract:**
+  - Props enforce a strict compile-time and runtime discriminated union: `CommitDetailsPanelProps = CommitDetailsPanelHistoryProps | CommitDetailsPanelInspectProps`.
+  - **History Mode (`mode: "history"`):** Requires canonical `commit: GitLogEntry` and exposes mutation callbacks (`onCherryPickSelectedChanges`, `onRevertSelectedChanges`, `onDropSelectedChanges`). Eligibility is governed by real repository state; no synthetic flags.
+  - **Inspect Mode (`mode: "inspect"`):** Requires exact `commitHash: string` and optional `outsideViewNotice?: boolean`. Mutation callbacks are completely omitted from the interface, enforcing read-only behavior at compile time and runtime.
+  - **Data Fetching:** Commit details are queried via `useGitCommitDetails(target, hash, root, enabled)` with `staleTime: Infinity` (immutable commits). File entries are queried via `useGitCommitFiles(target, hash, root)`.
+  - **Rendering:** Displays full commit subject and full commit message body in a scrollable, wrapped text view (`<pre>` React text node escaping; no Markdown/HTML evaluation). Author name, copyable full SHA-1 hash, and author date/timezone formatted via `formatGitCommitAuthorTimestamp(timestampSeconds, timezoneOffsetMinutes)` (normalizing author epoch and timezone display). Double-clicking a file entry opens the historical diff view (`onFileDoubleClick`).
+
 ## Federated Search
 
 Search has two explicit scopes in `SearchPanel`:
@@ -226,5 +253,7 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 | Git edit and leased publication | `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `hooks/use-git-squash.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
 | Git blame client and buffer lifecycle | `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame.ts`, `packages/ui/src/stores/editor.ts` |
 | Git blame API client and transport | `packages/ui/src/api/client.ts`, `packages/ui/src/api/ws-transport.ts`, `packages/ui/src/api/queries.ts` |
+| Git commit reveal and panel intent | `packages/ui/src/lib/git-commit-reveal.ts`, `packages/ui/src/lib/terminal-workspace-panel.ts`, `packages/ui/src/components/pages/WorkspacePage.tsx`, `packages/ui/src/components/templates/TerminalWorkspaceShell.tsx` |
+| Git commit inspection and details panel | `packages/ui/src/components/organisms/CommitDetailsPanel.tsx`, `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/api/queries.ts` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

@@ -65,7 +65,7 @@ Run once after relevant integrated edits settle; adjust test filenames only if i
 | `server` | `cargo test git_blame` | Native bounded attribution/regressions |
 | `server` | `cargo test --test git_blame_api` | Actual HTTP auth/target/body/worker/commit read integration |
 | repo root | `pnpm --filter @dam-hopper/ui exec vitest run src/hooks/use-editor-git-blame.test.tsx src/lib/editor-git-blame.test.ts` | New freshness/line/range behavior |
-| repo root | `pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/WorkspaceGitPanel.blame.test.tsx` | Exact inspection vs history mode races |
+| repo root | `pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/WorkspaceGitPanelBlame.test.tsx` | Exact inspection vs history mode races |
 | repo root | `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/editor-git-blame.browser.tsx` | Real Monaco component assertions |
 | repo root | `pnpm --filter @dam-hopper/ui test:e2e:typecheck` | Application scenario types |
 | repo root | `E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e editor-git-blame/editor-git-blame.spec.ts` | Authenticated built-app journey + local captures |

@@ -61,19 +61,14 @@ export function computeVisibleBlameRows({
   const layoutInfo = editor.getLayoutInfo();
   const viewportHeight = layoutInfo.height;
 
-  let lineHeight =
-    typeof layoutInfo?.lineHeight === "number" && layoutInfo.lineHeight > 0
-      ? layoutInfo.lineHeight
-      : 0;
-  if (!lineHeight || lineHeight < 1) {
-    try {
-      lineHeight = editor.getOption(
-        // @ts-expect-error EditorOption enum lookup
-        editor.constructor?.EditorOption?.lineHeight ?? 66,
-      );
-    } catch {
-      lineHeight = 19;
-    }
+  let lineHeight = 0;
+  try {
+    lineHeight = editor.getOption(
+      // @ts-expect-error EditorOption enum lookup
+      editor.constructor?.EditorOption?.lineHeight ?? 66,
+    );
+  } catch {
+    lineHeight = 19;
   }
   if (!lineHeight || lineHeight < 1) lineHeight = 19;
 

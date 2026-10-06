@@ -1062,6 +1062,7 @@ export function GitPage() {
                 <div className="w-full md:w-[35%] h-[45%] md:h-full min-h-0 shrink-0">
                   <Suspense fallback={GIT_PANEL_FALLBACK}>
                     <CommitDetailsPanel
+                      mode="history"
                       project={selectedProjectName}
                       target={selectedTarget?.target}
                       root={historyView.rootId}

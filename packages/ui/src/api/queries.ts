@@ -1369,10 +1369,13 @@ export function useGitCommitDetails(
   target: ProjectTargetInput,
   hash: string,
   root?: string,
+  enabled = true,
 ) {
-  return useQuery<GitCommitDetails>(
-    gitCommitDetailsQueryOptions(target, hash, root),
-  );
+  const options = gitCommitDetailsQueryOptions(target, hash, root);
+  return useQuery<GitCommitDetails>({
+    ...options,
+    enabled: options.enabled && enabled,
+  });
 }
 
 export function useGitConflicts(target: ProjectTargetInput, root?: string) {

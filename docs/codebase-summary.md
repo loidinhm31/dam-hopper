@@ -80,6 +80,7 @@ The workflow tracking subsystem (`server/src/workflow/` and `docs/workflow-api.m
 - **Cognito Mode:** Ephemeral in-browser visual screen mask and 38-event input guard using event capture. CSS uses Heavy Blur `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)`.
 - **Idle Suspend:** Server coordinator uses a privileged Unix-socket helper (`dam-hopper-idle-suspend-helper`), systemd integration, bounded policies (`empty-fleet`, `agent-activity`), and sysfs RTC wakealarm checks. See [Terminal Idle-Suspend Security](./terminal-idle-suspend-security.md).
 - **Encrypted Uploads:** OPAQUE PAKE password exchange and chunked AES-256-GCM writes over WebSocket transport.
+- **Git Blame & Commit Reveal:** Native libgit2 blame attribution (`/api/git/{project}/blame`) mapped to Monaco gutter annotations, with typed `GitCommitRevealRequest` routing to `WorkspaceGitPanel` across IDE, terminal, and compact surfaces, displaying exact commit bodies and changed files via `CommitDetailsPanel` in read-only inspect mode.
 
 ## Test and Deployment Boundaries
 

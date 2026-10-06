@@ -93,6 +93,8 @@ The shared controller supplies persisted VCS-root and history-branch choices plu
 
 Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Viewing an inactive local branch allows commit-message edits and squash via branch-qualified snapshots and CAS ref locking; non-rewrite actions like cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
 
+
+Commit details inspection from editor blame annotations operates independently of the loaded log history via the discriminated inspect mode in `CommitDetailsPanel`. The panel consumes typed reveal requests (`GitCommitRevealRequest`) by exact OID after verifying target and root readiness, mounting a dedicated local inspection state without mutating history-view pagination or branch filters. Inspected commits outside the loaded 200 rows display an explicit notice while remaining fully inspectable without fetching entire repository logs.
 Validation recorded 71/71 tests and a clean typecheck; Git page integration and consecutive-commit squash are described below.
 
 ## Standalone Git page integration
