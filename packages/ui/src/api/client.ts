@@ -144,6 +144,11 @@ import type {
   UnlinkResourceRequest,
 } from "./workflow-types.js";
 export * from "./workflow-types.js";
+export * from "./project-plans-types.js";
+import type {
+  PlanFoldersResponse,
+  SelectedPlanResponse,
+} from "./project-plans-types.js";
 
 export class ApiRequestError extends Error {
   constructor(
@@ -2724,7 +2729,7 @@ export function createApiClient(
       read: (
         target: ProjectTargetInput,
         path: string,
-        opts?: { offset?: number; len?: number },
+        opts?: { offset?: number; len?: number; mode?: "plan-document" },
       ) => {
         const wire = toWireTarget(target);
         const fsTrans = transport as unknown as FsTransportSeam;
@@ -2772,21 +2777,28 @@ export function createApiClient(
           expectedMtime,
         });
       },
-      subscribeTree: (target: ProjectTargetInput, path: string) => {
+      subscribeTree: (
+        target: ProjectTargetInput,
+        path: string,
+        opts?: { watchOnly?: boolean },
+      ) => {
         const wire = toWireTarget(target);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsSubscribeTree === "function") {
-          return fsTrans.fsSubscribeTree(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
-            path,
-          ) as Promise<number>;
+          return (
+            fsTrans.fsSubscribeTree(
+              {
+                profileId: owner.profileId,
+                project: wire.project,
+                worktreePath: wire.worktreePath,
+              },
+              path,
+              opts,
+            ) as Promise<number | { sub_id: number }>
+          ).then((r) => (typeof r === "number" ? r : r.sub_id));
         }
         return transport
-          .invoke<{ sub_id: number }>("fs:subscribeTree", { ...wire, path })
+          .invoke<{ sub_id: number }>("fs:subscribeTree", { ...wire, path, ...opts })
           .then((r) => r.sub_id);
       },
       unsubscribeTree: (sub_id: number) => {
@@ -2805,6 +2817,18 @@ export function createApiClient(
         }
         return transport.onEvent(`fs:${sub_id}`, (payload) =>
           cb(payload as FsEventDto),
+        );
+      },
+      onFsOverflow: (sub_id: number, cb: (message: string) => void) => {
+        const fsTrans = transport as unknown as FsTransportSeam;
+        if (typeof fsTrans.onFsOverflow === "function") {
+          return fsTrans.onFsOverflow(sub_id, cb) as () => void;
+        }
+        if (typeof transport.onFsOverflow === "function") {
+          return transport.onFsOverflow(sub_id, cb);
+        }
+        return transport.onEvent(`fs:overflow:${sub_id}`, (payload) =>
+          cb(String(payload)),
         );
       },
       uploadFile: (
@@ -2895,6 +2919,18 @@ export function createApiClient(
         }
         return transport.invoke<FsOpResult>(`fs:${op}`, params);
       },
+    },
+    plans: {
+      folders: (target: ProjectTargetInput, path?: string) =>
+        transport.invoke<PlanFoldersResponse>("plans:folders", {
+          target: toWireTarget(target),
+          path,
+        }),
+      read: (target: ProjectTargetInput, planPath: string) =>
+        transport.invoke<SelectedPlanResponse>("plans:read", {
+          target: toWireTarget(target),
+          planPath,
+        }),
     },
     tunnels: {
       list: () => transport.invoke<TunnelInfo[]>("tunnel:list"),
@@ -3475,7 +3511,7 @@ export interface ApiClient {
     read: (
       target: ProjectTargetInput,
       path: string,
-      opts?: { offset?: number; len?: number },
+      opts?: { offset?: number; len?: number; mode?: "plan-document" },
     ) => Promise<FsReadResponse>;
     writeFile: (
       target: ProjectTargetInput,
@@ -3486,9 +3522,14 @@ export interface ApiClient {
     subscribeTree: (
       target: ProjectTargetInput,
       path: string,
+      opts?: { watchOnly?: boolean },
     ) => Promise<number>;
     unsubscribeTree: (sub_id: number) => Promise<boolean>;
     onEvent: (sub_id: number, cb: (event: FsEventDto) => void) => () => void;
+    onFsOverflow?: (
+      sub_id: number,
+      cb: (message: string) => void,
+    ) => () => void;
     uploadFile: (
       target: ProjectTargetInput,
       dir: string,
@@ -3514,6 +3555,16 @@ export interface ApiClient {
       op: "delete" | "rename" | "mkdir" | "create_file",
       params: Record<string, unknown>,
     ) => Promise<FsOpResult>;
+  };
+  plans: {
+    folders: (
+      target: ProjectTargetInput,
+      path?: string,
+    ) => Promise<PlanFoldersResponse>;
+    read: (
+      target: ProjectTargetInput,
+      planPath: string,
+    ) => Promise<SelectedPlanResponse>;
   };
   tunnels: {
     list: () => Promise<TunnelInfo[]>;
@@ -3628,6 +3679,7 @@ interface FsTransportSeam {
   fsSubscribeTree?: (...args: unknown[]) => unknown;
   fsUnsubscribeTree?: (...args: unknown[]) => unknown;
   onFsEvent?: (...args: unknown[]) => unknown;
+  onFsOverflow?: (...args: unknown[]) => unknown;
   fsUploadFile?: (...args: unknown[]) => unknown;
   fsOp?: (...args: unknown[]) => unknown;
 }
@@ -3669,6 +3721,13 @@ const defaultAmbientTransport: Transport = {
     (getTransport() as unknown as FsTransportSeam).fsUploadFile?.(...args),
   fsOp: (...args: unknown[]) =>
     (getTransport() as unknown as FsTransportSeam).fsOp?.(...args),
+  onFsOverflow: (sub_id: number, cb: (message: string) => void) => {
+    const t = getTransport();
+    if (typeof t.onFsOverflow === "function") {
+      return t.onFsOverflow(sub_id, cb);
+    }
+    return () => {};
+  },
 };
 
 export const api = createApiClient(
