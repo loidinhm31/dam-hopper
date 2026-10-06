@@ -205,6 +205,32 @@ impl FsSubsystem {
         Self::subscribe_with_key(&mut inner, watcher_key, filter_abs_path)
     }
 
+    /// Subscribe strictly to events within an actual directory under a server-resolved project target.
+    /// Sets `WatcherKey.root` to `directory_abs_path`.
+    pub fn subscribe_target_directory(
+        &self,
+        target: &ResolvedProjectTarget,
+        directory_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
+        let sandbox = inner.sandbox.as_ref().ok_or(FsError::Unavailable)?;
+        let configured_root = sandbox
+            .project_root(target.project())
+            .ok_or(FsError::NotFound)?;
+        if configured_root != *target.configured_root()
+            || !target.available()
+            || !directory_abs_path.starts_with(target.target_path())
+        {
+            return Err(FsError::PathEscape);
+        }
+        let watcher_key = WatcherKey {
+            project: target.project().to_owned(),
+            target_key: target.target_key().to_owned(),
+            root: directory_abs_path.clone(),
+        };
+        Self::subscribe_with_key(&mut inner, watcher_key, directory_abs_path)
+    }
+
     fn subscribe_with_key(
         inner: &mut Inner,
         watcher_key: WatcherKey,

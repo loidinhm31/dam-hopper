@@ -74,6 +74,8 @@ pub enum AppError {
 
     #[error(transparent)]
     AgentStatusIntegration(#[from] crate::agent_status::IntegrationError),
+    #[error(transparent)]
+    Plans(#[from] crate::plans::PlansError),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -94,6 +96,7 @@ impl AppError {
     pub fn status_code(&self) -> u16 {
         match self {
             AppError::Workflow(error) => error.status_code(),
+            AppError::Plans(err) => err.status_code(),
             AppError::ConfigNotFound(_)
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
@@ -134,6 +137,7 @@ impl AppError {
     pub fn api_code(&self) -> Option<&'static str> {
         match self {
             AppError::Workflow(error) => Some(error.api_code()),
+            AppError::Plans(err) => Some(err.api_code()),
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
             AppError::WorktreeDirty(_) => Some("WORKTREE_DIRTY"),
             AppError::IdleSuspendHandoffInProgress(_) => Some("idleSuspendHandoffInProgress"),

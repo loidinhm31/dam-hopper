@@ -730,12 +730,14 @@ async fn handle_socket(
                 project,
                 worktree_path,
                 path,
+                watch_only,
             } => {
                 let result = do_fs_subscribe(
                     req_id,
                     &project,
                     worktree_path.as_deref(),
                     &path,
+                    watch_only,
                     &state,
                     pty_tx.clone(),
                     fs_tx.clone(),
@@ -766,6 +768,7 @@ async fn handle_socket(
                 path,
                 offset,
                 len,
+                read_mode,
             } => {
                 let result = do_fs_read(
                     req_id,
@@ -774,6 +777,7 @@ async fn handle_socket(
                     &path,
                     offset,
                     len,
+                    read_mode.as_deref(),
                     &state,
                 )
                 .await;
@@ -2093,8 +2097,224 @@ async fn do_fs_read(
     path: &str,
     offset: Option<u64>,
     len: Option<u64>,
+    read_mode: Option<&str>,
     state: &AppState,
 ) -> ServerMsg {
+    if let Some(mode) = read_mode {
+        if mode != "plan-document" {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("UNSUPPORTED_READ_MODE".into()),
+            };
+        }
+        if offset.is_some() || len.is_some() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("RANGE_NOT_ALLOWED".into()),
+            };
+        }
+        let is_md = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !is_md {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("INVALID_EXTENSION".into()),
+            };
+        }
+
+        let target_ref = ProjectTargetRef {
+            project: project.to_owned(),
+            worktree_path: worktree_path.map(str::to_owned),
+        };
+        let target = match state.resolve_project_target(&target_ref).await {
+            Ok(t) => t,
+            Err(e) => {
+                let (code, _) = map_fs_resolution_error(e);
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some(code),
+                };
+            }
+        };
+        if !target.available() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("TARGET_UNAVAILABLE".into()),
+            };
+        }
+        let root_path = target.target_path().to_path_buf();
+        let initial_root_id = match secure_path::directory_identity(&root_path) {
+            Ok(id) => id,
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("FS_UNAVAILABLE".into()),
+                };
+            }
+        };
+
+        let rel_path = path.trim_start_matches('/');
+        let p = std::path::Path::new(rel_path);
+        if p.is_absolute()
+            || p.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("PATH_REJECTED".into()),
+            };
+        }
+
+        let snap = match secure_path::read_regular_snapshot(&root_path, p, 64 * 1024) {
+            Ok(s) => s,
+            Err(crate::fs::FsError::TooLarge(_)) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("TOO_LARGE".into()),
+                };
+            }
+            Err(crate::fs::FsError::Conflict) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("CONFLICT".into()),
+                };
+            }
+            Err(crate::fs::FsError::NotFound) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("NOT_FOUND".into()),
+                };
+            }
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("READ_FAILED".into()),
+                };
+            }
+        };
+
+        if snap.bytes.contains(&0) || std::str::from_utf8(&snap.bytes).is_err() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("INVALID_DOCUMENT".into()),
+            };
+        }
+
+        let current_root_id = match secure_path::directory_identity(target.target_path()) {
+            Ok(id) => id,
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("TARGET_CHANGED".into()),
+                };
+            }
+        };
+        if current_root_id != initial_root_id {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("TARGET_CHANGED".into()),
+            };
+        }
+
+        let encoded = BASE64.encode(&snap.bytes);
+        return ServerMsg::FsReadResult {
+            req_id,
+            ok: true,
+            mime: Some("text/markdown".into()),
+            binary: false,
+            mtime: Some(snap.mtime_secs),
+            size: Some(snap.size_bytes),
+            data: Some(encoded),
+            code: None,
+        };
+    }
     let abs = match resolve_abs_path(project, worktree_path, path, state).await {
         Ok(p) => p,
         Err((code, _message)) => {
@@ -2885,6 +3105,7 @@ async fn do_fs_subscribe(
     project: &str,
     worktree_path: Option<&str>,
     path: &str,
+    watch_only: Option<bool>,
     state: &AppState,
     pty_tx: mpsc::Sender<WireMsg>,
     fs_tx: mpsc::Sender<WireMsg>,
@@ -2892,27 +3113,51 @@ async fn do_fs_subscribe(
 ) -> Result<(), (String, String)> {
     let (target, abs_path) = resolve_target_path(project, worktree_path, path, state).await?;
 
-    let (sub_id, fs_rx) = state
-        .fs
-        .subscribe_target_tree(&target, abs_path.clone())
-        .map_err(|e| match e {
-            crate::fs::FsError::NotFound => (
-                "PROJECT_NOT_FOUND".to_string(),
-                format!("Project not found: {project}"),
-            ),
-            crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
-            _ => ("WATCHER_ERROR".to_string(), e.to_string()),
-        })?;
+    let is_watch_only = watch_only.unwrap_or(false);
+    let (sub_id, fs_rx) = if is_watch_only {
+        let meta = tokio::fs::metadata(&abs_path)
+            .await
+            .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
+        if !meta.is_dir() {
+            return Err(("PATH_REJECTED".to_string(), "path is not a directory".to_string()));
+        }
+        state
+            .fs
+            .subscribe_target_directory(&target, abs_path.clone())
+            .map_err(|e| match e {
+                crate::fs::FsError::NotFound => (
+                    "PROJECT_NOT_FOUND".to_string(),
+                    format!("Project not found: {project}"),
+                ),
+                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+            })?
+    } else {
+        state
+            .fs
+            .subscribe_target_tree(&target, abs_path.clone())
+            .map_err(|e| match e {
+                crate::fs::FsError::NotFound => (
+                    "PROJECT_NOT_FOUND".to_string(),
+                    format!("Project not found: {project}"),
+                ),
+                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+            })?
+    };
 
-    debug!(sub_id, project, target_key = %target.target_key(), path, "fs:subscribe_tree");
+    debug!(sub_id, project, target_key = %target.target_key(), path, is_watch_only, "fs:subscribe_tree");
 
     let mut registration = FsSubscriptionGuard::new(state.fs.clone(), sub_id);
-    let snap_path = abs_path.clone();
-    let nodes = tokio::task::spawn_blocking(move || tree_snapshot_sync(&snap_path))
-        .await
-        .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
-        .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?;
-
+    let nodes = if is_watch_only {
+        vec![]
+    } else {
+        let snap_path = abs_path.clone();
+        tokio::task::spawn_blocking(move || tree_snapshot_sync(&snap_path))
+            .await
+            .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
+            .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?
+    };
     let snap = ServerMsg::TreeSnapshot {
         req_id,
         sub_id,
@@ -2997,7 +3242,18 @@ async fn pump_fs_events(
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                warn!(sub_id, dropped = n, "fs broadcast lagged");
+                warn!(sub_id, dropped = n, "fs broadcast lagged — dropping subscription");
+                let overflow = ServerMsg::FsOverflow {
+                    sub_id,
+                    message: format!(
+                        "FS event broadcast lagged ({} events dropped); subscription dropped",
+                        n
+                    ),
+                };
+                if let Ok(json) = serde_json::to_string(&overflow) {
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
+                }
+                break;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

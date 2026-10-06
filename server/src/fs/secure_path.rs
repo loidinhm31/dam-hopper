@@ -58,6 +58,35 @@ pub(crate) fn directory_identity(path: &Path) -> Result<DirectoryIdentity, FsErr
     }
 }
 
+
+/// Snapshot of a regular file's bytes and descriptor metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RegularFileSnapshot {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) size_bytes: u64,
+    pub(crate) mtime_secs: i64,
+    pub(crate) mtime_nanos: u32,
+    pub(crate) modified_at: Option<String>,
+}
+
+/// Result of probing a path without following symlinks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileMarkerKind {
+    RegularFile { size: u64, mtime_secs: i64 },
+    Symlink,
+    Directory,
+    Other,
+    NotFound,
+}
+
+/// Immediate directory entry representation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImmediateDirEntry {
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) is_symlink: bool,
+    pub(crate) is_regular_file: bool,
+}
 #[cfg(unix)]
 mod unix {
     use std::fs::File;
@@ -411,6 +440,193 @@ mod unix {
 
         Ok(())
     }
+    pub fn probe_file_marker(
+        root: &Path,
+        relative: &Path,
+    ) -> Result<super::FileMarkerKind, FsError> {
+        if relative.as_os_str().is_empty() {
+            let parent = open_directory(root)?;
+            let _ = identity_from_fd(&parent)?;
+            return Ok(super::FileMarkerKind::Directory);
+        }
+        let parent_path = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = match open_parent(root, parent_path, None) {
+            Ok(p) => p,
+            Err(FsError::NotFound) => return Ok(super::FileMarkerKind::NotFound),
+            Err(e) => return Err(e),
+        };
+        let name = match component_name(relative) {
+            Ok(n) => n,
+            Err(_) => return Ok(super::FileMarkerKind::NotFound),
+        };
+        match stat_at(&parent, &name) {
+            Ok(stat) => {
+                let mode = stat.st_mode & libc::S_IFMT;
+                if mode == libc::S_IFLNK {
+                    Ok(super::FileMarkerKind::Symlink)
+                } else if mode == libc::S_IFDIR {
+                    Ok(super::FileMarkerKind::Directory)
+                } else if mode == libc::S_IFREG {
+                    Ok(super::FileMarkerKind::RegularFile {
+                        size: stat.st_size as u64,
+                        mtime_secs: stat.st_mtime,
+                    })
+                } else {
+                    Ok(super::FileMarkerKind::Other)
+                }
+            }
+            Err(FsError::NotFound) => Ok(super::FileMarkerKind::NotFound),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn read_immediate_dir(
+        root: &Path,
+        relative: &Path,
+        max_entries: usize,
+    ) -> Result<(Vec<super::ImmediateDirEntry>, bool), FsError> {
+        let dir_fd = open_parent(root, relative, None)?;
+        let dup_fd = unsafe { libc::dup(dir_fd.as_raw_fd()) };
+        if dup_fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let dir_ptr = unsafe { libc::fdopendir(dup_fd) };
+        if dir_ptr.is_null() {
+            unsafe { libc::close(dup_fd) };
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+
+        let mut entries = Vec::new();
+        let mut complete = true;
+        let mut visited = 0;
+
+        loop {
+            let entry = unsafe { libc::readdir(dir_ptr) };
+            if entry.is_null() {
+                break;
+            }
+            let d_name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            let bytes = d_name.to_bytes();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            visited += 1;
+            if visited > max_entries {
+                complete = false;
+                break;
+            }
+            let name_str = match std::str::from_utf8(bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => continue,
+            };
+            let d_type = unsafe { (*entry).d_type };
+            let (is_dir, is_symlink, is_regular_file) = if d_type == libc::DT_DIR {
+                (true, false, false)
+            } else if d_type == libc::DT_LNK {
+                (false, true, false)
+            } else if d_type == libc::DT_REG {
+                (false, false, true)
+            } else {
+                if let Ok(st) = stat_at(&dir_fd, d_name) {
+                    let mode = st.st_mode & libc::S_IFMT;
+                    (
+                        mode == libc::S_IFDIR,
+                        mode == libc::S_IFLNK,
+                        mode == libc::S_IFREG,
+                    )
+                } else {
+                    (false, false, false)
+                }
+            };
+            entries.push(super::ImmediateDirEntry {
+                name: name_str,
+                is_dir,
+                is_symlink,
+                is_regular_file,
+            });
+        }
+        unsafe { libc::closedir(dir_ptr) };
+        Ok((entries, complete))
+    }
+
+    pub fn read_regular_snapshot(
+        root: &Path,
+        relative: &Path,
+        max_bytes: u64,
+    ) -> Result<super::RegularFileSnapshot, FsError> {
+        let parent_path = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = open_parent(root, parent_path, None)?;
+        let name = component_name(relative)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let ret = unsafe { libc::fstat(owned_fd.as_raw_fd(), stat.as_mut_ptr()) };
+        if ret < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let stat = unsafe { stat.assume_init() };
+        if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
+        }
+        if (stat.st_size as u64) > max_bytes {
+            return Err(FsError::TooLarge(stat.st_size as u64));
+        }
+        let mut file = File::from(owned_fd);
+        use std::io::Read;
+        let mut buffer = Vec::new();
+        Read::take(&mut file, max_bytes + 1)
+            .read_to_end(&mut buffer)
+            .map_err(io_error)?;
+        if buffer.len() as u64 > max_bytes {
+            return Err(FsError::TooLarge(buffer.len() as u64));
+        }
+        let mut post_stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let ret = unsafe { libc::fstat(file.as_raw_fd(), post_stat.as_mut_ptr()) };
+        if ret < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        let post_stat = unsafe { post_stat.assume_init() };
+        if (post_stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
+        }
+        if post_stat.st_size != stat.st_size || post_stat.st_mtime != stat.st_mtime {
+            return Err(FsError::Conflict);
+        }
+        #[cfg(target_os = "linux")]
+        if post_stat.st_mtime_nsec != stat.st_mtime_nsec {
+            return Err(FsError::Conflict);
+        }
+
+        let mtime_secs = stat.st_mtime;
+        #[cfg(target_os = "linux")]
+        let mtime_nanos = stat.st_mtime_nsec as u32;
+        #[cfg(not(target_os = "linux"))]
+        let mtime_nanos = 0u32;
+
+        let modified_at = chrono::DateTime::from_timestamp(mtime_secs, mtime_nanos)
+            .map(|dt| dt.to_rfc3339());
+
+        Ok(super::RegularFileSnapshot {
+            bytes: buffer,
+            size_bytes: stat.st_size as u64,
+            mtime_secs,
+            mtime_nanos,
+            modified_at,
+        })
+    }
 }
 
 #[cfg(not(unix))]
@@ -583,6 +799,128 @@ mod unix {
         }
         Ok(())
     }
+
+    pub fn probe_file_marker(
+        root: &Path,
+        relative: &Path,
+    ) -> Result<super::FileMarkerKind, FsError> {
+        let target = root.join(relative);
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    Ok(super::FileMarkerKind::Symlink)
+                } else if meta.file_type().is_dir() {
+                    Ok(super::FileMarkerKind::Directory)
+                } else if meta.file_type().is_file() {
+                    let mtime_secs = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    Ok(super::FileMarkerKind::RegularFile {
+                        size: meta.len(),
+                        mtime_secs,
+                    })
+                } else {
+                    Ok(super::FileMarkerKind::Other)
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(super::FileMarkerKind::NotFound),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(FsError::PermissionDenied),
+            Err(e) => Err(FsError::Io(e)),
+        }
+    }
+
+    pub fn read_immediate_dir(
+        root: &Path,
+        relative: &Path,
+        max_entries: usize,
+    ) -> Result<(Vec<super::ImmediateDirEntry>, bool), FsError> {
+        let target = root.join(relative);
+        let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
+        if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+            return Err(FsError::PathEscape);
+        }
+        let read_dir = std::fs::read_dir(&target).map_err(FsError::Io)?;
+        let mut entries = Vec::new();
+        let mut complete = true;
+        let mut visited = 0;
+        for entry_res in read_dir {
+            let entry = entry_res.map_err(FsError::Io)?;
+            let file_name = entry.file_name();
+            let name_str = match file_name.to_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if name_str == "." || name_str == ".." {
+                continue;
+            }
+            visited += 1;
+            if visited > max_entries {
+                complete = false;
+                break;
+            }
+            let file_type = entry.file_type().map_err(FsError::Io)?;
+            entries.push(super::ImmediateDirEntry {
+                name: name_str,
+                is_dir: file_type.is_dir(),
+                is_symlink: file_type.is_symlink(),
+                is_regular_file: file_type.is_file(),
+            });
+        }
+        Ok((entries, complete))
+    }
+
+    pub fn read_regular_snapshot(
+        root: &Path,
+        relative: &Path,
+        max_bytes: u64,
+    ) -> Result<super::RegularFileSnapshot, FsError> {
+        let target = root.join(relative);
+        let meta = std::fs::symlink_metadata(&target).map_err(FsError::Io)?;
+        if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
+        }
+        if meta.len() > max_bytes {
+            return Err(FsError::TooLarge(meta.len()));
+        }
+        let initial_mtime = meta.modified().map_err(FsError::Io)?;
+        let mut file = std::fs::File::open(&target).map_err(FsError::Io)?;
+        let mut buffer = Vec::new();
+        use std::io::Read;
+        Read::take(&mut file, max_bytes + 1)
+            .read_to_end(&mut buffer)
+            .map_err(FsError::Io)?;
+        if buffer.len() as u64 > max_bytes {
+            return Err(FsError::TooLarge(buffer.len() as u64));
+        }
+        let post_meta = file.metadata().map_err(FsError::Io)?;
+        if post_meta.file_type().is_symlink() || !post_meta.file_type().is_file() {
+            return Err(FsError::MutationRefused(
+                "target is not a regular file".into(),
+            ));
+        }
+        if post_meta.len() != meta.len() || post_meta.modified().map_err(FsError::Io)? != initial_mtime {
+            return Err(FsError::Conflict);
+        }
+        let mtime_dur = initial_mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let mtime_secs = mtime_dur.as_secs() as i64;
+        let mtime_nanos = mtime_dur.subsec_nanos();
+        let modified_at = chrono::DateTime::from_timestamp(mtime_secs, mtime_nanos)
+            .map(|dt| dt.to_rfc3339());
+        Ok(super::RegularFileSnapshot {
+            bytes: buffer,
+            size_bytes: post_meta.len(),
+            mtime_secs,
+            mtime_nanos,
+            modified_at,
+        })
+    }
 }
 
 pub(crate) async fn persist_temp(
@@ -644,6 +982,29 @@ pub(crate) fn replace_regular_file_if_bytes_match(
         replacement_bytes,
         fsync,
     )
+}
+
+pub(crate) fn probe_file_marker(
+    root: &Path,
+    relative: &Path,
+) -> Result<FileMarkerKind, FsError> {
+    unix::probe_file_marker(root, relative)
+}
+
+pub(crate) fn read_immediate_dir(
+    root: &Path,
+    relative: &Path,
+    max_entries: usize,
+) -> Result<(Vec<ImmediateDirEntry>, bool), FsError> {
+    unix::read_immediate_dir(root, relative, max_entries)
+}
+
+pub(crate) fn read_regular_snapshot(
+    root: &Path,
+    relative: &Path,
+    max_bytes: u64,
+) -> Result<RegularFileSnapshot, FsError> {
+    unix::read_regular_snapshot(root, relative, max_bytes)
 }
 
 #[cfg(all(test, unix))]
@@ -846,5 +1207,63 @@ mod tests {
         std::os::unix::fs::symlink(&outside_file, root.join("symlink.txt")).unwrap();
         let err_sym = read_regular_file_bounded(&root, std::path::Path::new("symlink.txt"), 100);
         assert!(err_sym.is_err());
+    }
+
+    #[test]
+    fn read_regular_snapshot_and_probing() {
+        use super::{probe_file_marker, read_immediate_dir, read_regular_snapshot, FileMarkerKind};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let plans_dir = root.join("plans");
+        std::fs::create_dir_all(&plans_dir).unwrap();
+
+        let plan_file = plans_dir.join("plan.md");
+        std::fs::write(&plan_file, b"# Test Plan").unwrap();
+
+        // Probe directory
+        let marker_dir = probe_file_marker(&root, std::path::Path::new("plans")).unwrap();
+        assert_eq!(marker_dir, FileMarkerKind::Directory);
+
+        // Probe regular file
+        let marker_file =
+            probe_file_marker(&root, std::path::Path::new("plans/plan.md")).unwrap();
+        assert!(matches!(marker_file, FileMarkerKind::RegularFile { .. }));
+
+        // Probe non-existent
+        let marker_none =
+            probe_file_marker(&root, std::path::Path::new("plans/absent.md")).unwrap();
+        assert_eq!(marker_none, FileMarkerKind::NotFound);
+
+        // Probe symlink
+        let outside_file = outside.join("target.md");
+        std::fs::write(&outside_file, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside_file, plans_dir.join("sym.md")).unwrap();
+        let marker_sym = probe_file_marker(&root, std::path::Path::new("plans/sym.md")).unwrap();
+        assert_eq!(marker_sym, FileMarkerKind::Symlink);
+
+        // Read regular snapshot
+        let snap =
+            read_regular_snapshot(&root, std::path::Path::new("plans/plan.md"), 1024).unwrap();
+        assert_eq!(snap.bytes, b"# Test Plan");
+        assert_eq!(snap.size_bytes, 11);
+        assert!(snap.modified_at.is_some());
+
+        // Read snapshot of symlink must fail
+        let err_sym =
+            read_regular_snapshot(&root, std::path::Path::new("plans/sym.md"), 1024);
+        assert!(err_sym.is_err());
+
+        // Read immediate dir
+        let (entries, complete) =
+            read_immediate_dir(&root, std::path::Path::new("plans"), 100).unwrap();
+        assert!(complete);
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"plan.md"));
+        assert!(names.contains(&"sym.md"));
     }
 }

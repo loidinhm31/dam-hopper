@@ -36,6 +36,8 @@ pub enum ClientMsg {
         #[serde(default)]
         worktree_path: Option<String>,
         path: String,
+        #[serde(default, rename = "watchOnly")]
+        watch_only: Option<bool>,
     },
     #[serde(rename = "fs:unsubscribe_tree")]
     FsUnsubTree { sub_id: u64 },
@@ -50,6 +52,8 @@ pub enum ClientMsg {
         path: String,
         offset: Option<u64>,
         len: Option<u64>,
+        #[serde(default, rename = "readMode")]
+        read_mode: Option<String>,
     },
 
     // FS — write protocol (begin → chunk* → commit)
