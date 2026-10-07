@@ -1225,6 +1225,43 @@ function channelToEndpoint(
         url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/diff?${params}`,
       };
     }
+    case "git:commitDetails": {
+      const d = data as {
+        project: string;
+        hash: string;
+        worktreePath?: string;
+        root?: string;
+      };
+      const params = new URLSearchParams();
+      setWorktreePath(params, d);
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/commit/${encodeURIComponent(d.hash)}/details${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:blame": {
+      const d = data as {
+        project: string;
+        path: string;
+        content: string;
+        snapshotId: string;
+        modelVersion: number;
+        worktreePath?: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/blame`,
+        body: {
+          path: d.path,
+          content: d.content,
+          snapshotId: d.snapshotId,
+          modelVersion: d.modelVersion,
+          ...(d.worktreePath !== undefined ? { worktreePath: d.worktreePath } : {}),
+        },
+      };
+    }
     case "git:cherryPickCommitFiles": {
       const d = data as {
         project: string;

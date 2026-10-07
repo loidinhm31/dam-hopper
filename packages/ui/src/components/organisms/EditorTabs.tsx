@@ -46,6 +46,8 @@ import {
   type ProjectTargetInput,
 } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
+import type { GitCommitRevealRequest } from "@/lib/git-commit-reveal.js";
 import {
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
@@ -69,13 +71,21 @@ const HtmlHost = lazy(() =>
   })),
 );
 
+export interface EditorTabsProps {
+  project: string | null;
+  target?: ProjectTargetInput;
+  sourceActive?: boolean;
+  onRevealGitCommit?: (request: GitCommitRevealRequest) => void;
+  onRevealCommit?: (commitHash: string, rootId: string) => void;
+}
+
 export function EditorTabs({
   project,
   target,
-}: {
-  project: string | null;
-  target?: ProjectTargetInput;
-}) {
+  sourceActive = true,
+  onRevealGitCommit,
+  onRevealCommit: onRevealCommitProp,
+}: EditorTabsProps) {
   const targetRef = normalizeProjectTarget(
     target ?? project ?? { project: "" },
   );
@@ -242,6 +252,48 @@ export function EditorTabs({
   useEffect(() => {
     activeKeyRef.current = activeTab?.key;
   }, [activeTab?.key]);
+
+  const revealNonceRef = useRef(1);
+  const activeProfileId =
+    activeTab?.target?.profileId ?? targetRef.profileId ?? "";
+  const connectionSnapshot = useConnectionSnapshot(activeProfileId);
+
+  const handleRevealCommit = (commitHash: string, rootId: string) => {
+    if (!activeTab || !activeTab.targetAvailable || !activeTab.path) {
+      return;
+    }
+    if (!commitHash || !rootId) {
+      return;
+    }
+    if (!connectionSnapshot || connectionSnapshot.status !== "connected") {
+      return;
+    }
+    if (
+      activeTab.resourceBinding?.serverUrl &&
+      connectionSnapshot.serverUrl !== activeTab.resourceBinding.serverUrl
+    ) {
+      return;
+    }
+
+    if (onRevealGitCommit) {
+      const nonce = ++revealNonceRef.current;
+      const request: GitCommitRevealRequest = {
+        nonce,
+        owner: {
+          profileId: connectionSnapshot.owner.profileId,
+          generation: connectionSnapshot.owner.generation,
+        },
+        target: activeTab.target,
+        rootId,
+        hash: commitHash,
+      };
+      onRevealGitCommit(request);
+    }
+    onRevealCommitProp?.(commitHash, rootId);
+  };
+
+  const isTabActive = Boolean(activeTab && activeTab.key === activeKey);
+  const effectiveSourceActive = Boolean(sourceActive && isTabActive);
   // Auto-hydrate active tab if content is not loaded
   useEffect(() => {
     if (activeTab?.hydrated && !activeTab.loading) {
@@ -520,6 +572,8 @@ export function EditorTabs({
                 }
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
+                sourceActive={effectiveSourceActive}
+                onRevealCommit={handleRevealCommit}
               />
             </Suspense>
           ) : isHtmlFile(activeTab.name) ? (
@@ -547,6 +601,8 @@ export function EditorTabs({
                 }
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
+                sourceActive={effectiveSourceActive}
+                onRevealCommit={handleRevealCommit}
               />
             </Suspense>
           ) : (
@@ -574,6 +630,8 @@ export function EditorTabs({
                 onEditorReady={setActiveEditor}
                 lineChanges={activeLineChanges}
                 onGitIndicatorClick={openActiveDiff}
+                sourceActive={effectiveSourceActive}
+                onRevealCommit={handleRevealCommit}
               />
             </Suspense>
           )}

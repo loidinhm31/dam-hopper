@@ -22,13 +22,15 @@ use tower_http::{
 
 /// 10 MB — generous for config/settings payloads, blocks accidental multi-GB uploads.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+/// 32 MB — allocated for git blame payloads containing serialized source buffers.
+const GIT_BLAME_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 use crate::state::AppState;
 
 use super::{
     advisor as advisor_api, agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
-    browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_diff,
-    host_actions, idle_suspend, media_session, plans as plans_api,
+    browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git,
+    git_blame, git_diff, host_actions, idle_suspend, media_session, plans as plans_api,
     port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel,
     usage, usage_sessions, workflow, workspace, ws,
 };
@@ -233,6 +235,15 @@ pub fn build_router_with_web_dir_and_origins(
         .route(
             "/api/git/{project}/commit/{hash}/diff",
             get(git_diff::get_commit_file_diff),
+        )
+        .route(
+            "/api/git/{project}/blame",
+            post(git_blame::blame_route)
+                .layer(DefaultBodyLimit::max(GIT_BLAME_MAX_BODY_BYTES)),
+        )
+        .route(
+            "/api/git/{project}/commit/{hash}/details",
+            get(git::get_commit_details_route),
         )
         .route(
             "/api/git/{project}/commit/{hash}/cherry-pick-files",

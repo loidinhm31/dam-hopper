@@ -37,6 +37,12 @@ impl From<crate::plans::PlansError> for ApiError {
     }
 }
 
+impl From<crate::error::GitBlameError> for ApiError {
+    fn from(error: crate::error::GitBlameError) -> Self {
+        Self(crate::error::AppError::GitBlame(error))
+    }
+}
+
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,

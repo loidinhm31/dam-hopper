@@ -29,13 +29,14 @@ function FloatingPanelHarness() {
     {
       nonce: 1,
       targetId: "git",
+      intent: "toggle",
     },
   );
   const requestNonce = useRef(1);
 
   const requestTool = (targetId: TerminalWorkspacePanelRequest["targetId"]) => {
     requestNonce.current += 1;
-    setToolRequest({ nonce: requestNonce.current, targetId });
+    setToolRequest({ nonce: requestNonce.current, targetId, intent: "toggle" });
   };
 
   return (

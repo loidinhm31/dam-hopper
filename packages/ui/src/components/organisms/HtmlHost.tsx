@@ -38,6 +38,8 @@ export interface HtmlHostProps {
   onViewStateChange: (vs: unknown, targetKey?: string) => void;
   lineChanges?: GitLineChange[];
   onGitIndicatorClick?: () => void;
+  sourceActive?: boolean;
+  onRevealCommit?: (commitHash: string, rootId: string) => void;
 }
 
 const MODES: { id: HtmlMode; label: string }[] = [
@@ -67,10 +69,15 @@ export function HtmlHost({
   onViewStateChange,
   lineChanges,
   onGitIndicatorClick,
+  sourceActive,
+  onRevealCommit,
 }: HtmlHostProps) {
   const [mode, setMode] = useState<HtmlMode>(
     () => initialMode ?? loadHtmlViewMode(),
   );
+
+  const isSourcePaneActive =
+    (sourceActive ?? true) && (mode === "edit" || mode === "split");
 
   useEffect(() => {
     function handleModeEvent(e: Event) {
@@ -138,6 +145,8 @@ export function HtmlHost({
                 onViewStateChange={onViewStateChange}
                 lineChanges={lineChanges}
                 onGitIndicatorClick={onGitIndicatorClick}
+                sourceActive={isSourcePaneActive}
+                onRevealCommit={onRevealCommit}
               />
             </Suspense>
           </div>

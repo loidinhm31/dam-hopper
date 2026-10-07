@@ -74,6 +74,18 @@ pnpm --filter @dam-hopper/ui test:e2e:typecheck
 ./scripts/run-all-tests.sh
 ```
 
+### Feature Scenarios and Qualification Recipes
+
+```bash
+# Feature: Editor Git Blame and Commit Reveal (Phases 01–07)
+cd server && cargo test git_blame
+cd server && cargo test --test git_blame_api
+pnpm --filter @dam-hopper/ui exec vitest run src/hooks/use-editor-git-blame.test.tsx src/lib/editor-git-blame.test.ts
+pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/WorkspaceGitPanelBlame.test.tsx
+pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/editor-git-blame.browser.tsx
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e editor-git-blame/editor-git-blame.spec.ts
+```
+
 ---
 
 ## 4. Isolated Application Services

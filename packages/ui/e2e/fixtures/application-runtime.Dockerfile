@@ -12,5 +12,7 @@ COPY server/examples/application_e2e_seed.rs ./examples/application_e2e_seed.rs
 RUN cargo build --release --features vendored --example application_e2e_seed
 
 FROM ${BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 
 COPY --from=seed-builder /build/target/release/examples/application_e2e_seed /usr/local/bin/application_e2e_seed

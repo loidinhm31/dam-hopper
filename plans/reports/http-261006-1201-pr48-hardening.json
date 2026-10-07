@@ -1,0 +1,362 @@
+{
+  "origin": "http://127.0.0.1:35045",
+  "results": [
+    {
+      "path": "/api/git/guard/blame",
+      "status": 413,
+      "response": {
+        "error": "Blame content or response exceeds size limit: HEAD baseline blob size (5242881 bytes) exceeds limit of 5242880 bytes",
+        "code": "GIT_BLAME_TOO_LARGE"
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 413,
+      "response": {
+        "error": "Blame content or response exceeds size limit: HEAD baseline blob size (5242881 bytes) exceeds limit of 5242880 bytes",
+        "code": "GIT_BLAME_TOO_LARGE"
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 415,
+      "response": {
+        "error": "File is binary or has unsupported object mode: HEAD baseline blob is binary",
+        "code": "GIT_BLAME_UNSUPPORTED_FILE"
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 415,
+      "response": {
+        "error": "File is binary or has unsupported object mode: HEAD baseline blob is binary",
+        "code": "GIT_BLAME_UNSUPPORTED_FILE"
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 415,
+      "response": {
+        "error": "File is binary or has unsupported object mode: HEAD baseline is not a regular file",
+        "code": "GIT_BLAME_UNSUPPORTED_FILE"
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 200,
+      "response": {
+        "snapshotId": "live-eol",
+        "modelVersion": 2,
+        "rootId": ".",
+        "rootRelativePath": "lf.txt",
+        "baseCommitOid": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+        "bufferLineCount": 3,
+        "status": "ready",
+        "ranges": [
+          {
+            "startLine": 1,
+            "lineCount": 2,
+            "commitIndex": 0
+          },
+          {
+            "startLine": 3,
+            "lineCount": 1,
+            "commitIndex": null
+          }
+        ],
+        "commits": [
+          {
+            "hash": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+            "authorName": "Review Author",
+            "authorEmail": "review@example.com",
+            "authorTimestamp": 1791260975,
+            "authorTimezoneOffsetMinutes": 420,
+            "subject": "Guard baselines"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 200,
+      "response": {
+        "snapshotId": "live-eol",
+        "modelVersion": 2,
+        "rootId": ".",
+        "rootRelativePath": "lf.txt",
+        "baseCommitOid": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+        "bufferLineCount": 3,
+        "status": "ready",
+        "ranges": [
+          {
+            "startLine": 1,
+            "lineCount": 2,
+            "commitIndex": 0
+          },
+          {
+            "startLine": 3,
+            "lineCount": 1,
+            "commitIndex": null
+          }
+        ],
+        "commits": [
+          {
+            "hash": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+            "authorName": "Review Author",
+            "authorEmail": "review@example.com",
+            "authorTimestamp": 1791260975,
+            "authorTimezoneOffsetMinutes": 420,
+            "subject": "Guard baselines"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 200,
+      "response": {
+        "snapshotId": "live-eol",
+        "modelVersion": 2,
+        "rootId": ".",
+        "rootRelativePath": "crlf.txt",
+        "baseCommitOid": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+        "bufferLineCount": 3,
+        "status": "uncommitted",
+        "ranges": [
+          {
+            "startLine": 1,
+            "lineCount": 3,
+            "commitIndex": null
+          }
+        ],
+        "commits": []
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 200,
+      "response": {
+        "snapshotId": "live-eol",
+        "modelVersion": 2,
+        "rootId": ".",
+        "rootRelativePath": "lf.txt",
+        "baseCommitOid": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+        "bufferLineCount": 3,
+        "status": "ready",
+        "ranges": [
+          {
+            "startLine": 1,
+            "lineCount": 1,
+            "commitIndex": 0
+          },
+          {
+            "startLine": 2,
+            "lineCount": 2,
+            "commitIndex": null
+          }
+        ],
+        "commits": [
+          {
+            "hash": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+            "authorName": "Review Author",
+            "authorEmail": "review@example.com",
+            "authorTimestamp": 1791260975,
+            "authorTimezoneOffsetMinutes": 420,
+            "subject": "Guard baselines"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/git/inspect/roots",
+      "status": 200,
+      "response": [
+        {
+          "rootId": ".",
+          "path": ".",
+          "absolutePath": "/tmp/dam-hopper-pr48-hardening-Ds6iPL/inspect",
+          "kind": "primary",
+          "status": {
+            "projectName": ".",
+            "branch": "main",
+            "isClean": true,
+            "ahead": 0,
+            "behind": 0,
+            "staged": 0,
+            "modified": 0,
+            "untracked": 0,
+            "hasStash": false,
+            "lastCommit": {
+              "hash": "31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040",
+              "message": "SHA256 details",
+              "date": "Thu, 1 Jan 2026 20:04:05 +0000"
+            }
+          },
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "path": "/api/git/inspect/log",
+      "status": 200,
+      "response": [
+        {
+          "hash": "31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040",
+          "parents": [
+            "1de5c1b09ab3cd2891ed7185504bf2f057f3a9ce7092b7e9dd4cabc0b81ed032"
+          ],
+          "authorName": "Review Author",
+          "authorEmail": "review@example.com",
+          "timestamp": 1767297845,
+          "message": "SHA256 details",
+          "refs": [
+            "HEAD -> main"
+          ],
+          "isPushed": false
+        },
+        {
+          "hash": "1de5c1b09ab3cd2891ed7185504bf2f057f3a9ce7092b7e9dd4cabc0b81ed032",
+          "parents": [],
+          "authorName": "Review Author",
+          "authorEmail": "review@example.com",
+          "timestamp": 1767297845,
+          "message": "SHA256 initial",
+          "refs": [],
+          "isPushed": false
+        }
+      ]
+    },
+    {
+      "path": "/api/git/inspect/commit/1de5c1b09ab3cd2891ed7185504bf2f057f3a9ce7092b7e9dd4cabc0b81ed032/details",
+      "status": 200,
+      "response": {
+        "hash": "1de5c1b09ab3cd2891ed7185504bf2f057f3a9ce7092b7e9dd4cabc0b81ed032",
+        "authorName": "Review Author",
+        "authorEmail": "review@example.com",
+        "authorTimestamp": 1767297845,
+        "authorTimezoneOffsetMinutes": 420,
+        "committerName": "Integration Committer",
+        "committerEmail": "integrator@example.com",
+        "committerTimestamp": 1767432906,
+        "committerTimezoneOffsetMinutes": -330,
+        "subject": "SHA256 initial",
+        "fullMessage": "SHA256 initial\n\nInitial full body.\n"
+      }
+    },
+    {
+      "path": "/api/git/inspect/commit/1de5c1b09ab3cd2891ed7185504bf2f057f3a9ce7092b7e9dd4cabc0b81ed032/files",
+      "status": 200,
+      "response": [
+        {
+          "path": "inspection.txt",
+          "status": "added",
+          "staged": false,
+          "additions": 1,
+          "deletions": 0,
+          "rootId": ".",
+          "rootPath": "."
+        }
+      ]
+    },
+    {
+      "path": "/api/git/inspect/commit/31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040/details",
+      "status": 200,
+      "response": {
+        "hash": "31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040",
+        "authorName": "Review Author",
+        "authorEmail": "review@example.com",
+        "authorTimestamp": 1767297845,
+        "authorTimezoneOffsetMinutes": 420,
+        "committerName": "Integration Committer",
+        "committerEmail": "integrator@example.com",
+        "committerTimestamp": 1767432906,
+        "committerTimezoneOffsetMinutes": -330,
+        "subject": "SHA256 details",
+        "fullMessage": "SHA256 details\n\nExact metadata and historical diff.\n"
+      }
+    },
+    {
+      "path": "/api/git/inspect/commit/31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040/files",
+      "status": 200,
+      "response": [
+        {
+          "path": "inspection.txt",
+          "status": "modified",
+          "staged": false,
+          "additions": 1,
+          "deletions": 1,
+          "rootId": ".",
+          "rootPath": "."
+        }
+      ]
+    },
+    {
+      "path": "/api/git/inspect/commit/31db968529b3c5d06958b79769b95a7d427f7963c6983fcf979493bc9e798040/diff?path=inspection.txt",
+      "status": 200,
+      "response": {
+        "path": "inspection.txt",
+        "original": "first\n",
+        "modified": "second\n",
+        "language": "plaintext",
+        "hunks": [
+          {
+            "index": 0,
+            "oldStart": 1,
+            "oldLines": 1,
+            "newStart": 1,
+            "newLines": 1,
+            "header": "@@ -1 +1 @@"
+          }
+        ],
+        "lineChanges": [
+          {
+            "kind": "modified",
+            "line": 1,
+            "length": 1,
+            "oldStart": 1,
+            "oldLines": 1,
+            "newStart": 1,
+            "newLines": 1
+          }
+        ],
+        "isBinary": false
+      }
+    },
+    {
+      "path": "/api/git/guard/blame",
+      "status": 200,
+      "response": {
+        "snapshotId": "live-crlf-lf-baseline",
+        "modelVersion": 3,
+        "rootId": ".",
+        "rootRelativePath": "lf.txt",
+        "baseCommitOid": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+        "bufferLineCount": 3,
+        "status": "ready",
+        "ranges": [
+          {
+            "startLine": 1,
+            "lineCount": 2,
+            "commitIndex": 0
+          },
+          {
+            "startLine": 3,
+            "lineCount": 1,
+            "commitIndex": null
+          }
+        ],
+        "commits": [
+          {
+            "hash": "0efb2f8082e5a746cc359ff2a01ccee339c3a177",
+            "authorName": "Review Author",
+            "authorEmail": "review@example.com",
+            "authorTimestamp": 1791260975,
+            "authorTimezoneOffsetMinutes": 420,
+            "subject": "Guard baselines"
+          }
+        ]
+      }
+    }
+  ],
+  "repositoryUnchanged": true
+}

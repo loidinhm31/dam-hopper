@@ -119,6 +119,10 @@ import type {
   TerminalWorkspacePanelControls,
   TerminalWorkspacePanelRequest,
 } from "@/lib/terminal-workspace-panel.js";
+import {
+  isGitCommitRevealRequestMatchingTarget,
+  type GitCommitRevealRequest,
+} from "@/lib/git-commit-reveal.js";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { resolveRevealActiveFileOutcome } from "@/lib/reveal-active-file.js";
 import { resolveSearchMatchTarget } from "@/lib/search-replace-next.js";
@@ -403,6 +407,8 @@ export default function WorkspacePage() {
     useState<ActivateToolRequest | null>(null);
   const [terminalWorkspacePanelRequest, setTerminalWorkspacePanelRequest] =
     useState<TerminalWorkspacePanelRequest | null>(null);
+  const [gitCommitRevealRequest, setGitCommitRevealRequest] =
+    useState<GitCommitRevealRequest | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
   const browserDebugHost = useBrowserDebugHost();
@@ -802,7 +808,11 @@ export default function WorkspacePage() {
     selectedProject?.project ??
     activeProject ??
     (projects.length > 0 ? projects[0].name : null);
-  const projectTargetInput = selectedProject ?? projectName;
+  const projectTargetInput =
+    selectedProject ??
+    (projectName && activeProfileId
+      ? { profileId: activeProfileId, project: projectName }
+      : projectName);
   const projectTarget = useProjectTarget(projectTargetInput);
 
   const closeTerminalDiagnosticsMenu = useCallback(() => {
@@ -1004,7 +1014,11 @@ export default function WorkspacePage() {
       if (targetId === "advisor" && !isAdvisorVisible) return;
       const nonce = ++panelShortcutNonceRef.current;
       if (workspaceMode === "terminal") {
-        setTerminalWorkspacePanelRequest({ nonce, targetId });
+        setTerminalWorkspacePanelRequest({
+          nonce,
+          targetId,
+          intent: "toggle",
+        });
         return;
       }
       const request: ActivateToolRequest = {
@@ -1027,6 +1041,58 @@ export default function WorkspacePage() {
 
   const focusEmbeddedBrowserAddress = useCallback(() => {
     queueMicrotask(() => document.getElementById("browser-debug-url")?.focus());
+  }, []);
+
+  const handleRevealGitCommit = useCallback(
+    (request: GitCommitRevealRequest) => {
+      const currentOwner = workspaceConnection
+        ? {
+            profileId: workspaceConnection.owner.profileId,
+            generation: workspaceConnection.owner.generation,
+          }
+        : null;
+      if (
+        !isGitCommitRevealRequestMatchingTarget(
+          request,
+          currentOwner,
+          projectTarget?.target,
+        ) ||
+        !projectTarget?.available
+      ) {
+        return;
+      }
+
+      const nonce = ++panelShortcutNonceRef.current;
+      if (workspaceMode === "terminal") {
+        setTerminalWorkspacePanelRequest({
+          nonce,
+          targetId: "git",
+          intent: "reveal",
+        });
+      } else if (isCompactWorkspace) {
+        setRequestedCompactSurface("git");
+      } else {
+        setIdeBottomToolRequest({
+          nonce,
+          toolId: "git",
+        });
+      }
+
+      setGitCommitRevealRequest(request);
+    },
+    [
+      isCompactWorkspace,
+      projectTarget,
+      setRequestedCompactSurface,
+      workspaceConnection,
+      workspaceMode,
+    ],
+  );
+
+  const handleGitCommitRevealConsumed = useCallback((nonce: number) => {
+    setGitCommitRevealRequest((current) =>
+      current?.nonce === nonce ? null : current,
+    );
   }, []);
 
   const handleOpenTunnelInBrowser = useCallback(
@@ -1151,6 +1217,7 @@ export default function WorkspacePage() {
       setIdeBottomToolRequest(null);
       setIdeRightTopToolRequest(null);
       setTerminalWorkspacePanelRequest(null);
+      setGitCommitRevealRequest(null);
       setRequestedCompactSurface((current) =>
         resolveActiveCompactSurfaceId(
           current,
@@ -1171,6 +1238,7 @@ export default function WorkspacePage() {
       setIdeBottomToolRequest(null);
       setIdeRightTopToolRequest(null);
       setTerminalWorkspacePanelRequest(null);
+      setGitCommitRevealRequest(null);
       setRequestedCompactSurface((activeSurface) =>
         resolveActiveCompactSurfaceId(
           activeSurface,
@@ -1973,6 +2041,8 @@ export default function WorkspacePage() {
             project={projectName}
             target={projectTarget?.target}
             available={projectTarget?.available}
+            revealRequest={gitCommitRevealRequest}
+            onRevealRequestConsumed={handleGitCommitRevealConsumed}
           />
         </Suspense>
       ) : (
@@ -2115,6 +2185,8 @@ export default function WorkspacePage() {
               project={projectName}
               target={projectTarget?.target}
               available={projectTarget?.available}
+              revealRequest={gitCommitRevealRequest}
+              onRevealRequestConsumed={handleGitCommitRevealConsumed}
             />
           </Suspense>
         ) : (
@@ -2181,12 +2253,14 @@ export default function WorkspacePage() {
       icon: GitMerge,
       content: projectName ? (
         <Suspense fallback={<PanelFallback label="Loading Git…" />}>
-          <WorkspaceGitPanel
-            key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
-            project={projectName}
-            target={projectTarget?.target}
-            available={projectTarget?.available}
-          />
+        <WorkspaceGitPanel
+          key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+          project={projectName}
+          target={projectTarget?.target}
+          available={projectTarget?.available}
+          revealRequest={gitCommitRevealRequest}
+          onRevealRequestConsumed={handleGitCommitRevealConsumed}
+        />
         </Suspense>
       ) : (
         renderCompactPlaceholder("Select a project to see Git status")
@@ -2312,6 +2386,8 @@ export default function WorkspacePage() {
               key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
               project={projectName}
               target={projectTarget?.target}
+              sourceActive={activeCompactSurface === "editor"}
+              onRevealGitCommit={handleRevealGitCommit}
             />
           </Suspense>
         ),
@@ -2346,6 +2422,8 @@ export default function WorkspacePage() {
       projectTarget,
       compactAdvisorSurface,
       isAdvisorVisible,
+      activeCompactSurface,
+      handleRevealGitCommit,
     ],
   );
 
@@ -2411,6 +2489,7 @@ export default function WorkspacePage() {
       setTerminalWorkspacePanelRequest({
         nonce: ++panelShortcutNonceRef.current,
         targetId: "advisor",
+        intent: "toggle",
       });
     } else {
       setIdeRightTopToolRequest({
@@ -2495,6 +2574,8 @@ export default function WorkspacePage() {
               key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
               project={projectName}
               target={projectTarget?.target}
+              sourceActive={terminalFilePanelOpen}
+              onRevealGitCommit={handleRevealGitCommit}
             />
           </Suspense>
         }
@@ -2515,6 +2596,7 @@ export default function WorkspacePage() {
       terminalFileTreeResizeHandleProps,
       terminalFileTreeWidth,
       projectTarget,
+      handleRevealGitCommit,
     ],
   );
 
@@ -2655,6 +2737,8 @@ export default function WorkspacePage() {
                 key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
                 project={projectName}
                 target={projectTarget?.target}
+                sourceActive={true}
+                onRevealGitCommit={handleRevealGitCommit}
               />
             </Suspense>
           }

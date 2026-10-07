@@ -1,1 +1,0 @@
-/home/loidinh/.omp/agent/evcrate/scripts/worktree.cjs

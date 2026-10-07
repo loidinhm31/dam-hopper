@@ -65,6 +65,7 @@ import type {
   KnownWorkspacesResponse,
   DiscoverResponse,
   ApiClient,
+  GitCommitDetails,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
@@ -166,7 +167,7 @@ function fsTreeQueryKey(normalized: {
     : ["fs-tree", normalized.project, projectTargetCacheKey(normalized)];
 }
 
-function gitQueryKey(
+export function gitQueryKey(
   prefix: string,
   target: ProjectTargetInput,
   ...parts: unknown[]
@@ -891,11 +892,13 @@ export function gitHistoryQueryPrefixes(
         ? [
             gitQueryKey("git-commit-files", normalized, rootKey, hash),
             gitQueryKey("git-commit-message", normalized, rootKey, hash),
+            gitQueryKey("git-commit-details", normalized, rootKey, hash),
             gitQueryKey("git-commit-file-diff", normalized, rootKey, hash),
           ]
         : [
             gitQueryKey("git-commit-files", normalized, rootKey),
             gitQueryKey("git-commit-message", normalized, rootKey),
+            gitQueryKey("git-commit-details", normalized, rootKey),
             gitQueryKey("git-commit-file-diff", normalized, rootKey),
           ],
   };
@@ -1333,6 +1336,45 @@ export function useGitCommitFileDiff(
       getBoundApiClient(owner).git.commitFileDiff(normalized, hash, path, root),
     enabled: !!normalized.project && !!hash && !!path,
     staleTime: Infinity, // historical diffs are immutable
+  });
+}
+
+export function gitCommitDetailsQueryKey(
+  target: ProjectTargetInput,
+  hash: string,
+  root?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const rootKey = gitRootKey(root);
+  return gitQueryKey("git-commit-details", normalized, rootKey, hash);
+}
+
+export function gitCommitDetailsQueryOptions(
+  target: ProjectTargetInput,
+  hash: string,
+  root?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  return {
+    queryKey: gitCommitDetailsQueryKey(normalized, hash, root),
+    queryFn: () =>
+      getBoundApiClient(owner).git.commitDetails(normalized, hash, root),
+    enabled: !!normalized.project && !!hash,
+    staleTime: Infinity,
+  };
+}
+
+export function useGitCommitDetails(
+  target: ProjectTargetInput,
+  hash: string,
+  root?: string,
+  enabled = true,
+) {
+  const options = gitCommitDetailsQueryOptions(target, hash, root);
+  return useQuery<GitCommitDetails>({
+    ...options,
+    enabled: options.enabled && enabled,
   });
 }
 

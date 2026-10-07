@@ -843,6 +843,23 @@ pub async fn get_commit_message_route(
     }))
 }
 
+pub async fn get_commit_details_route(
+    State(state): State<AppState>,
+    Path((project, hash)): Path<(String, String)>,
+    Query(query): Query<crate::git::types::GitCommitDetailsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_target_path(&state, &project, query.worktree_path).await?;
+    let root =
+        resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
+    let details = tokio::task::spawn_blocking(move || {
+        crate::git::get_commit_details(&root.root_path, &hash)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from)?;
+    Ok(Json(details))
+}
+
 pub async fn edit_commit_message_route(
     State(state): State<AppState>,
     Path((project, hash)): Path<(String, String)>,

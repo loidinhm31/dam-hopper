@@ -225,8 +225,8 @@ export function useProjectPlans(
     normalizedPlan,
     normalizedBrowse,
     normalizedDoc,
-    selectedPlanQuery.data?.watchPaths,
-    foldersQuery.data?.watchPaths,
+    selectedPlanQuery.data,
+    foldersQuery.data,
   ]);
 
   // ── Watch Set Lifecycle & Reconciliation ──────────────────────────────────

@@ -1154,3 +1154,53 @@ describe("editor store reconcileTabFreshness", () => {
     expect(updated?.error).toBeUndefined();
   });
 });
+describe("blameEnabled session toggle and persistence exclusion", () => {
+  it("toggles blameEnabled in memory via setBlameEnabled", () => {
+    const tab: Tab = {
+      ...makeTab("alpha", "src/code.ts"),
+      blameEnabled: false,
+    };
+    useEditorStore.setState({ tabs: [tab] });
+
+    useEditorStore.getState().setBlameEnabled(tab.key, true);
+    expect(useEditorStore.getState().tabs[0]?.blameEnabled).toBe(true);
+
+    useEditorStore.getState().setBlameEnabled(tab.key, false);
+    expect(useEditorStore.getState().tabs[0]?.blameEnabled).toBe(false);
+  });
+
+  it("normalizes blameEnabled to false when hydrating tabs without the property", () => {
+    const rawPersisted = {
+      tabs: [
+        {
+          key: "alpha::src/code.ts",
+          project: "alpha",
+          path: "src/code.ts",
+          tier: "normal",
+        },
+      ],
+      activeKeys: {},
+    };
+
+    const migrated = migrateEditorState(rawPersisted);
+    expect(migrated.tabs[0]?.blameEnabled).toBe(false);
+  });
+
+  it("normalizes blameEnabled to false during migrateEditorState even if raw state supplies true", () => {
+    const rawPersisted = {
+      tabs: [
+        {
+          key: "alpha::src/code.ts",
+          project: "alpha",
+          path: "src/code.ts",
+          tier: "normal",
+          blameEnabled: true,
+        },
+      ],
+      activeKeys: {},
+    };
+
+    const migrated = migrateEditorState(rawPersisted);
+    expect(migrated.tabs[0]?.blameEnabled).toBe(false);
+  });
+});

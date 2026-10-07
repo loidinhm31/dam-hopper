@@ -977,8 +977,37 @@ pub fn commit_files(project_path: &Path, message: &str, amend: bool) -> Result<S
 
 /// List all files changed in a specific commit.
 pub fn get_commit_files(project_path: &Path, hash: &str) -> Result<Vec<DiffFileEntry>, AppError> {
+    let trimmed_hash = hash.trim();
+    if (trimmed_hash.len() != 40 && trimmed_hash.len() != 64)
+        || !trimmed_hash.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(AppError::InvalidInput(format!(
+            "invalid commit hash: must be a full 40-character or 64-character OID, got '{hash}'"
+        )));
+    }
+
+    if trimmed_hash.len() == 40 {
+        match get_commit_files_libgit2(project_path, trimmed_hash) {
+            Ok(entries) => return Ok(entries),
+            Err(AppError::Git(msg))
+                if msg.contains("unsupported") || msg.contains("failed to open repository") =>
+            {
+                // Fall back to CLI
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    get_commit_files_cli(project_path, trimmed_hash)
+}
+
+fn get_commit_files_libgit2(
+    project_path: &Path,
+    trimmed_hash: &str,
+) -> Result<Vec<DiffFileEntry>, AppError> {
     let repo = open_repo(project_path)?;
-    let oid = git2::Oid::from_str(hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let oid =
+        git2::Oid::from_str(trimmed_hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
     let commit = repo
         .find_commit(oid)
         .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -987,8 +1016,6 @@ pub fn get_commit_files(project_path: &Path, hash: &str) -> Result<Vec<DiffFileE
         .tree()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
-    // Diff against parent(s). For merges, we diff against the first parent.
-    // For root commits, we diff against an empty tree.
     let parent_tree = if commit.parent_count() > 0 {
         Some(
             commit
@@ -1011,6 +1038,194 @@ pub fn get_commit_files(project_path: &Path, hash: &str) -> Result<Vec<DiffFileE
     Ok(entries)
 }
 
+fn get_commit_files_cli(
+    project_path: &Path,
+    trimmed_hash: &str,
+) -> Result<Vec<DiffFileEntry>, AppError> {
+    use std::collections::HashMap;
+    use std::process::Command;
+
+    let type_output = Command::new("git")
+        .args(["--no-replace-objects", "-c", "safe.directory=*"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .arg("cat-file")
+        .arg("-t")
+        .arg(trimmed_hash)
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git: {e}")))?;
+
+    if !type_output.status.success() {
+        if !project_path.exists() {
+            return Err(AppError::GitNotFound(
+                project_path.to_string_lossy().into_owned(),
+            ));
+        }
+        return Err(AppError::Git(format!("commit not found: {trimmed_hash}")));
+    }
+
+    let obj_type = String::from_utf8_lossy(&type_output.stdout)
+        .trim()
+        .to_string();
+    if obj_type != "commit" {
+        return Err(AppError::Git(format!(
+            "object {trimmed_hash} is not a commit (type: {obj_type})"
+        )));
+    }
+
+    let numstat_output = Command::new("git")
+        .args([
+            "--no-replace-objects",
+            "--literal-pathspecs",
+            "-c",
+            "safe.directory=*",
+            "-c",
+            "diff.external=",
+        ])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args([
+            "show",
+            "--numstat",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--format=",
+            "-z",
+            "-M",
+            trimmed_hash,
+        ])
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git show --numstat: {e}")))?;
+
+    let mut numstats: HashMap<String, (usize, usize)> = HashMap::new();
+    if numstat_output.status.success() {
+        let raw = numstat_output.stdout;
+        let parts: Vec<&[u8]> = raw.split(|&b| b == 0).collect();
+        let mut i = 0;
+        while i < parts.len() {
+            let chunk = parts[i];
+            if chunk.is_empty() {
+                i += 1;
+                continue;
+            }
+            let line = String::from_utf8_lossy(chunk);
+            i += 1;
+            let cols: Vec<&str> = line.split('\t').collect();
+            if cols.len() >= 3 && !cols[2].is_empty() {
+                let adds = cols[0].parse::<usize>().unwrap_or(0);
+                let dels = cols[1].parse::<usize>().unwrap_or(0);
+                let p = cols[2].to_string();
+                numstats.insert(p, (adds, dels));
+            } else if cols.len() >= 2 && line.ends_with('\t') {
+                let adds = cols[0].parse::<usize>().unwrap_or(0);
+                let dels = cols[1].parse::<usize>().unwrap_or(0);
+                if i >= parts.len() {
+                    break;
+                }
+                i += 1;
+                if i >= parts.len() {
+                    break;
+                }
+                let new_p = String::from_utf8_lossy(parts[i]).to_string();
+                i += 1;
+                numstats.insert(new_p, (adds, dels));
+            }
+        }
+    }
+
+    let name_status_output = Command::new("git")
+        .args([
+            "--no-replace-objects",
+            "--literal-pathspecs",
+            "-c",
+            "safe.directory=*",
+            "-c",
+            "diff.external=",
+        ])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args([
+            "show",
+            "--name-status",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--format=",
+            "-z",
+            "-M",
+            trimmed_hash,
+        ])
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git show --name-status: {e}")))?;
+    if !name_status_output.status.success() {
+        return Err(AppError::Git(format!(
+            "failed to inspect commit files: {trimmed_hash}"
+        )));
+    }
+
+    let mut entries = Vec::new();
+    let raw = name_status_output.stdout;
+    let parts: Vec<&[u8]> = raw.split(|&b| b == 0).collect();
+    let mut i = 0;
+    while i < parts.len() {
+        let chunk = parts[i];
+        if chunk.is_empty() {
+            i += 1;
+            continue;
+        }
+        let status_raw = String::from_utf8_lossy(chunk).to_string();
+        i += 1;
+        if i >= parts.len() {
+            break;
+        }
+
+        let (status, old_path, path) = if status_raw.starts_with('R') || status_raw.starts_with('C')
+        {
+            let old_p = String::from_utf8_lossy(parts[i]).to_string();
+            i += 1;
+            if i >= parts.len() {
+                break;
+            }
+            let new_p = String::from_utf8_lossy(parts[i]).to_string();
+            i += 1;
+            let status = if status_raw.starts_with('R') {
+                "renamed"
+            } else {
+                "copied"
+            };
+            (status, Some(old_p), new_p)
+        } else {
+            let p = String::from_utf8_lossy(parts[i]).to_string();
+            i += 1;
+            let status = match status_raw.chars().next() {
+                Some('A') => "added",
+                Some('D') => "deleted",
+                Some('M') => "modified",
+                Some('T') => "modified",
+                Some('U') => "conflicted",
+                _ => "unknown",
+            };
+            (status, None, p)
+        };
+
+        let (adds, dels) = numstats.get(&path).copied().unwrap_or((0, 0));
+        entries.push(DiffFileEntry {
+            path,
+            status: status.to_string(),
+            staged: false,
+            additions: adds,
+            deletions: dels,
+            old_path,
+            root_id: None,
+            root_path: None,
+            submodule: None,
+        });
+    }
+
+    Ok(entries)
+}
+
 /// Return original (parent) blob + commit blob for Monaco DiffEditor.
 pub fn get_commit_file_diff(
     project_path: &Path,
@@ -1018,8 +1233,38 @@ pub fn get_commit_file_diff(
     hash: &str,
 ) -> Result<FileDiffContent, AppError> {
     safe_join(project_path, rel_path)?;
+    let trimmed_hash = hash.trim();
+    if (trimmed_hash.len() != 40 && trimmed_hash.len() != 64)
+        || !trimmed_hash.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(AppError::InvalidInput(format!(
+            "invalid commit hash: must be a full 40-character or 64-character OID, got '{hash}'"
+        )));
+    }
+
+    if trimmed_hash.len() == 40 {
+        match get_commit_file_diff_libgit2(project_path, rel_path, trimmed_hash) {
+            Ok(content) => return Ok(content),
+            Err(AppError::Git(msg))
+                if msg.contains("unsupported") || msg.contains("failed to open repository") =>
+            {
+                // Fall back to CLI
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    get_commit_file_diff_cli(project_path, rel_path, trimmed_hash)
+}
+
+fn get_commit_file_diff_libgit2(
+    project_path: &Path,
+    rel_path: &str,
+    trimmed_hash: &str,
+) -> Result<FileDiffContent, AppError> {
     let repo = open_repo(project_path)?;
-    let oid = git2::Oid::from_str(hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let oid =
+        git2::Oid::from_str(trimmed_hash).map_err(|e| AppError::InvalidInput(e.to_string()))?;
     let commit = repo
         .find_commit(oid)
         .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -1028,7 +1273,6 @@ pub fn get_commit_file_diff(
         .tree()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
-    // Target blob: the file in the requested commit
     let target_bytes = match tree.get_path(Path::new(rel_path)) {
         Ok(entry) => {
             let blob = repo
@@ -1036,10 +1280,9 @@ pub fn get_commit_file_diff(
                 .map_err(|e| AppError::Git(e.message().to_string()))?;
             Some(blob.content().to_vec())
         }
-        Err(_) => None, // File doesn't exist in this commit
+        Err(_) => None,
     };
 
-    // Original blob: the file in the parent commit
     let parent_tree = if commit.parent_count() > 0 {
         commit
             .parent(0)
@@ -1085,7 +1328,6 @@ pub fn get_commit_file_diff(
     let original = original_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
     let modified = target_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
 
-    // Compute hunks for this commit
     let mut opts = DiffOptions::new();
     opts.pathspec(rel_path);
     let diff = repo
@@ -1106,6 +1348,173 @@ pub fn get_commit_file_diff(
         }
     } else {
         (vec![], vec![])
+    };
+
+    Ok(FileDiffContent {
+        path: rel_path.to_string(),
+        original,
+        modified,
+        language: detect_language(rel_path),
+        hunks,
+        line_changes,
+        is_binary: false,
+    })
+}
+
+fn get_commit_file_diff_cli(
+    project_path: &Path,
+    rel_path: &str,
+    trimmed_hash: &str,
+) -> Result<FileDiffContent, AppError> {
+    use std::process::Command;
+
+    let type_output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
+        .arg("cat-file")
+        .arg("-t")
+        .arg(trimmed_hash)
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git: {e}")))?;
+
+    if !type_output.status.success() {
+        let stderr = String::from_utf8_lossy(&type_output.stderr);
+        if stderr.contains("not a git repository") {
+            return Err(AppError::GitNotFound(
+                project_path.to_string_lossy().into_owned(),
+            ));
+        }
+        return Err(AppError::Git(format!("commit not found: {trimmed_hash}")));
+    }
+
+    let obj_type = String::from_utf8_lossy(&type_output.stdout)
+        .trim()
+        .to_string();
+    if obj_type != "commit" {
+        return Err(AppError::Git(format!(
+            "object {trimmed_hash} is not a commit (type: {obj_type})"
+        )));
+    }
+
+    let target_output = Command::new("git")
+        .args(["--no-replace-objects", "-c", "safe.directory=*"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .arg("cat-file")
+        .arg("-p")
+        .arg(format!("{trimmed_hash}:{rel_path}"))
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git cat-file target: {e}")))?;
+
+    let target_bytes = if target_output.status.success() {
+        Some(target_output.stdout)
+    } else {
+        None
+    };
+
+    let parent_output = Command::new("git")
+        .args(["--no-replace-objects", "-c", "safe.directory=*"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("-q")
+        .arg(format!("{trimmed_hash}^"))
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(format!("failed to spawn git rev-parse parent: {e}")))?;
+
+    let original_bytes = if parent_output.status.success() {
+        let parent_hash = String::from_utf8_lossy(&parent_output.stdout)
+            .trim()
+            .to_string();
+        let orig_output = Command::new("git")
+            .args(["--no-replace-objects", "-c", "safe.directory=*"])
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .arg("cat-file")
+            .arg("-p")
+            .arg(format!("{parent_hash}:{rel_path}"))
+            .current_dir(project_path)
+            .output()
+            .map_err(|e| AppError::Git(format!("failed to spawn git cat-file parent: {e}")))?;
+        if orig_output.status.success() {
+            Some(orig_output.stdout)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let is_binary_original = original_bytes
+        .as_deref()
+        .map(is_binary_content)
+        .unwrap_or(false);
+    let is_binary_target = target_bytes
+        .as_deref()
+        .map(is_binary_content)
+        .unwrap_or(false);
+    let is_binary = is_binary_original || is_binary_target;
+
+    if is_binary {
+        return Ok(FileDiffContent {
+            path: rel_path.to_string(),
+            original: None,
+            modified: None,
+            language: detect_language(rel_path),
+            hunks: vec![],
+            line_changes: vec![],
+            is_binary: true,
+        });
+    }
+
+    let original = original_bytes
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).into_owned());
+    let modified = target_bytes
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).into_owned());
+
+    let (hunks, line_changes) = match (original_bytes.as_deref(), target_bytes.as_deref()) {
+        (Some(old_b), Some(new_b)) => {
+            let mut opts = DiffOptions::new();
+            opts.pathspec(rel_path);
+            let patch = git2::Patch::from_buffers(
+                old_b,
+                Some(Path::new(rel_path)),
+                new_b,
+                Some(Path::new(rel_path)),
+                Some(&mut opts),
+            )
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+            extract_patch_metadata(&patch)?
+        }
+        (None, Some(new_b)) => {
+            let mut opts = DiffOptions::new();
+            opts.pathspec(rel_path);
+            let patch = git2::Patch::from_buffers(
+                &[],
+                Some(Path::new(rel_path)),
+                new_b,
+                Some(Path::new(rel_path)),
+                Some(&mut opts),
+            )
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+            extract_patch_metadata(&patch)?
+        }
+        (Some(old_b), None) => {
+            let mut opts = DiffOptions::new();
+            opts.pathspec(rel_path);
+            let patch = git2::Patch::from_buffers(
+                old_b,
+                Some(Path::new(rel_path)),
+                &[],
+                Some(Path::new(rel_path)),
+                Some(&mut opts),
+            )
+            .map_err(|e| AppError::Git(e.message().to_string()))?;
+            extract_patch_metadata(&patch)?
+        }
+        (None, None) => (vec![], vec![]),
     };
 
     Ok(FileDiffContent {

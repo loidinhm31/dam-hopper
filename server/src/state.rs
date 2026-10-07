@@ -137,6 +137,8 @@ pub struct AppState {
     pub advisor_service: Arc<crate::advisor::AdvisorService>,
     /// Serializes advisor settings updates and disk synchronization.
     pub advisor_settings_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Global admission semaphore for concurrent native git blame operations (2 permits).
+    pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -433,6 +435,7 @@ impl AppState {
                 crate::api::agent_status::resolve_effective_home(),
             )),
             advisor_settings_lock: Arc::new(tokio::sync::Mutex::new(())),
+            git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         })
     }
     /// Override the advisor service handle (used for testing or custom source injection).

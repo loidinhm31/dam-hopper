@@ -1,0 +1,86 @@
+{
+  "recordedAt": "2026-10-06T05:25:56.907Z",
+  "scope": "Final reviewed source bytes after typed-Monaco dead-fallback removal; complements forced final image build",
+  "files": [
+    {
+      "path": "Dockerfile",
+      "sha256": "719a9260f7d311af222ea9382d71097b11e1bd818017faac84515c3147196592"
+    },
+    {
+      "path": "server/src/git/blame.rs",
+      "sha256": "f7fd38fc30195770ca51ea0c89a7a74dd707910c66bf02a1c77658e308cdf3c4"
+    },
+    {
+      "path": "server/src/git/types.rs",
+      "sha256": "117cb7219ea5f2f6010376a797bc0cc8db08dd1cc74e9a59fd8ad1e34956ad74"
+    },
+    {
+      "path": "server/src/git/commit_details.rs",
+      "sha256": "4ca36d49d8c7a9204b2bdf01a91a160393b0a285c3697b35055b3c1a4df3b259"
+    },
+    {
+      "path": "server/src/git/diff.rs",
+      "sha256": "09009421677666c363d870b9a351a59d640da96ad687c9eec57b61d2ba858e1e"
+    },
+    {
+      "path": "server/src/git/repository.rs",
+      "sha256": "5ddea8d4657eba978846f4515ad7a96e7c7c75274ca7bc657b050b318b8b8d34"
+    },
+    {
+      "path": "server/tests/git_blame_api.rs",
+      "sha256": "b029321837f32558a6ddd53c9901c31dbb8fc8b94c334d6ea5eb53aede1e67bc"
+    },
+    {
+      "path": "server/tests/git_sha256_inspection.rs",
+      "sha256": "2e15d12cee956a66652f561e83ea6454032f7668d9351fb965c723c6da17c2d4"
+    },
+    {
+      "path": "packages/ui/src/api/client.ts",
+      "sha256": "213ce03ac6524df7d608e871db377f7dfa3bce65a39323bdac5fd9a8e86b7e26"
+    },
+    {
+      "path": "packages/ui/src/hooks/use-editor-git-blame.ts",
+      "sha256": "fc0965de60d531499a3f803b84cb1d8cf070ef39b325c3ac298f9164aa6f38db"
+    },
+    {
+      "path": "packages/ui/src/hooks/use-blame-gutter-wheel-sync.ts",
+      "sha256": "fe0862982fab548ee508400371348c4c0b40aa00e1192b03c35133889389cc8b"
+    },
+    {
+      "path": "packages/ui/src/lib/editor-git-blame.ts",
+      "sha256": "23527b60223c0301eba2c85eb779cbe7a6296179b5fb1cdca1ee07978c525bdd"
+    },
+    {
+      "path": "packages/ui/src/lib/editor-git-blame-gutter-layout.ts",
+      "sha256": "79d2be1e458510b77fb82c804a18a82b4d33ab172069b2b778118fd9fcc18df3"
+    },
+    {
+      "path": "packages/ui/src/components/molecules/EditorGitBlameRow.tsx",
+      "sha256": "ec6a599ab8cb3e695d207c069e6d874a798e5572620448605049893a6ccbf0a6"
+    },
+    {
+      "path": "packages/ui/src/components/organisms/MonacoHost.tsx",
+      "sha256": "459f7e58fcc1b22b55e35a15ea8316eced4b7df03c17f936ca805e8e84a72fcf"
+    },
+    {
+      "path": "packages/ui/src/components/organisms/EditorGitBlameGutter.tsx",
+      "sha256": "b9cc568558fe4eb1543fb1f2a710ad25339b0c8e004cbc53077de3bf32bafcb9"
+    },
+    {
+      "path": "packages/ui/src/components/organisms/EditorGitBlameContextMenu.tsx",
+      "sha256": "244121e4f2c01941de5f0846301a6ad1c4ba7f94380ac37d5586c840d81a4b61"
+    },
+    {
+      "path": "packages/ui/src/components/organisms/CommitDetailsPanel.tsx",
+      "sha256": "eca6cbf712bdeaece6231d31f6eaf1076b0ac5ff7d81f77081b60b803d28f2b1"
+    },
+    {
+      "path": "packages/ui/browser-tests/editor-git-blame.browser.tsx",
+      "sha256": "73b3cdf5b26114db373b67fbd379c1185c45f20d80ce9628423ead998fdcbaf8"
+    },
+    {
+      "path": "packages/ui/e2e/editor-git-blame/editor-git-blame.spec.ts",
+      "sha256": "50b7330f21ccfa1abb74135d1dd4415b48453aa45b8aed499a731ed82fe977d8"
+    }
+  ]
+}

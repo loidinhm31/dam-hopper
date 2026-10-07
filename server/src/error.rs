@@ -76,6 +76,68 @@ pub enum AppError {
     AgentStatusIntegration(#[from] crate::agent_status::IntegrationError),
     #[error(transparent)]
     Plans(#[from] crate::plans::PlansError),
+    #[error(transparent)]
+    GitBlame(#[from] GitBlameError),
+}
+
+#[derive(Debug, Error)]
+pub enum GitBlameError {
+    #[error("Invalid blame input: {0}")]
+    InvalidInput(String),
+
+    #[error("Blame content or response exceeds size limit: {0}")]
+    TooLarge(String),
+
+    #[error("File is binary or has unsupported object mode: {0}")]
+    UnsupportedFile(String),
+
+    #[error("Repository revision or root mapping changed during blame")]
+    StaleRevision,
+
+    #[error("Blame workers are busy")]
+    Busy,
+
+    #[error("Commit not found: {0}")]
+    CommitNotFound(String),
+
+    #[error("Commit object exceeds size limit: {0}")]
+    CommitTooLarge(String),
+
+    #[error("Git error: {0}")]
+    Git(String),
+}
+
+impl GitBlameError {
+    pub fn status_code(&self) -> u16 {
+        match self {
+            Self::InvalidInput(_) => 400,
+            Self::CommitNotFound(_) => 404,
+            Self::StaleRevision => 409,
+            Self::TooLarge(_) | Self::CommitTooLarge(_) => 413,
+            Self::UnsupportedFile(_) => 415,
+            Self::Busy => 503,
+            Self::Git(_) => 500,
+        }
+    }
+
+    pub fn api_code(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidInput(_) => Some("GIT_BLAME_INVALID_INPUT"),
+            Self::TooLarge(_) => Some("GIT_BLAME_TOO_LARGE"),
+            Self::UnsupportedFile(_) => Some("GIT_BLAME_UNSUPPORTED_FILE"),
+            Self::StaleRevision => Some("GIT_BLAME_STALE_REVISION"),
+            Self::Busy => Some("GIT_BLAME_BUSY"),
+            Self::CommitNotFound(_) => Some("GIT_COMMIT_NOT_FOUND"),
+            Self::CommitTooLarge(_) => Some("GIT_COMMIT_TOO_LARGE"),
+            Self::Git(_) => None,
+        }
+    }
+}
+
+impl From<git2::Error> for GitBlameError {
+    fn from(err: git2::Error) -> Self {
+        Self::Git(err.message().to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -97,6 +159,7 @@ impl AppError {
         match self {
             AppError::Workflow(error) => error.status_code(),
             AppError::Plans(err) => err.status_code(),
+            AppError::GitBlame(error) => error.status_code(),
             AppError::ConfigNotFound(_)
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
@@ -138,6 +201,7 @@ impl AppError {
         match self {
             AppError::Workflow(error) => Some(error.api_code()),
             AppError::Plans(err) => Some(err.api_code()),
+            AppError::GitBlame(error) => error.api_code(),
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
             AppError::WorktreeDirty(_) => Some("WORKTREE_DIRTY"),
             AppError::IdleSuspendHandoffInProgress(_) => Some("idleSuspendHandoffInProgress"),
