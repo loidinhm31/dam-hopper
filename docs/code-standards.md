@@ -78,11 +78,13 @@ See the [Agent Status contract](./architecture/agent-status.md).
 
 ## Git, auth, and transport security
 
-- Derive actor identity and role from validated server authentication state; never trust request-body actor or role claims.
+- Derive actor identity and role from validated server authentication state; never trust request-body actor or role claims, and never treat the server's `server-token` JWT signing secret as a client bearer credential.
+- Keep MongoDB as the default authentication store (`DAM_HOPPER_LITE_MODE` unset, empty, `false`, or `0`) and select SQLite lite mode strictly via `DAM_HOPPER_LITE_MODE` (`true` or `1`, trim/case-insensitive) with optional `DAM_HOPPER_AUTH_SQLITE_PATH` (default `auth.db` in global config; production uses absolute local storage). Enforce one server process per local SQLite auth file, forbid network/shared filesystems, never auto-detect or fall back between backends, and fail startup on invalid `DAM_HOPPER_LITE_MODE` values or SQLite initialization failure. Production authenticated mode requires a valid dedicated 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE`.
+- Keep `POST /api/auth/register` disabled by default (`user` role, `auth_version = 0`) with no automatic first-user `admin` rights or public promotion endpoint; unapproved login returns `401 ACCOUNT_DISABLED` until an operator approves and, when intended, promotes the account via the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
 - Use exact allowed origins for credentialed browser requests. Keep auth/session cookies, bearer credentials, tickets, and encryption material out of URLs and logs.
 - Bind one-shot media/file capabilities to actor, profile client namespace, target, purpose, and revision/incarnation; revalidate after asynchronous work.
 - OPAQUE/AES encrypted writes must use one captured owner transport for authentication, encryption flow, and final write. Do not downgrade stale operations to plaintext or another profile.
-- Development `--no-auth` must be bound to loopback and must never be described as a production option. Native Advisor remains forbidden under this mode.
+- Development `--no-auth` must be bound to loopback, is never SQLite lite mode, and must never be described as a production option. Native Advisor remains forbidden under `--no-auth`.
 
 ## Testing and delivery
 
@@ -94,8 +96,8 @@ See the [Agent Status contract](./architecture/agent-status.md).
   - **Tier 1 — Rust Backend Tests (`cargo test`):** Unit and integration suites against real filesystems and repositories; avoid mocks for Git CAS, PTY, and SQLite persistence.
   - **Tier 2 — Frontend Unit Tests (Vitest jsdom):** Headless execution of stores, reducers, hooks, and data utilities under `packages/ui/src/**/*.test.{ts,tsx}`.
   - **Tier 3 — Browser Component Regressions (Vitest Browser Mode):** Headless Chromium suites under `packages/ui/browser-tests/**/*.browser.{ts,tsx}` on ports 15173 and 15174 for focused DOM/xterm/advisor component verification.
-  - **Tier 4 — Application E2E Journeys (`@playwright/test`):** Full end-to-end user journeys under `packages/ui/e2e/**/*.spec.ts` against built web SPAs, production server containers, and real MongoDB instances.
-- **Deterministic Auth Seeding:** Application E2E tests bootstrap sessions using the canonical `application_e2e_seed` tool and browser `storageState`, preventing test coupling to login UI flows. `--no-auth` must not be used for authenticated application journeys.
+  - **Tier 4 — Application E2E Journeys (`@playwright/test`):** Full end-to-end user journeys under `packages/ui/e2e/**/*.spec.ts` against built web SPAs and production server containers with real MongoDB instances or isolated SQLite lite mode (`authBackend: "sqlite"`, starting no MongoDB container).
+- **Deterministic Auth Seeding:** Application E2E tests bootstrap sessions using the canonical `application_e2e_seed` tool (supporting both MongoDB and `--sqlite-path` / `DAM_HOPPER_AUTH_SQLITE_PATH`) and browser `storageState`, preventing test coupling to login UI flows. `--no-auth` must not be used for authenticated application journeys.
 - **Visual Evidence Capture Policy (`capture-policy.ts`):** E2E evidence must capture the complete viewport (1440x900 default, 320px narrow dock), validate PNG IHDR dimensions, and colocate machine-readable `evidence.json` and human `review.md` records in `packages/ui/e2e/<case>/`. Visual capture is disabled by default in CI (`CI=true` / `E2E_CAPTURE=0`) for functional parity without artifact bloat. Green automation does not bypass mandatory human visual review.
 - **Version Alignment (13-File Invariant):** Repository version bumps require synchronizing 13 distinct version files across Cargo manifests, npm manifests, Tauri configs, and installer metadata. Localized utilities like `apps/native/scripts/bump-version.js` update only 4 native files and must always be validated against `node deploy/release/check-version-alignment.mjs`.
 

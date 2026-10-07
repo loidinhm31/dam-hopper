@@ -43,8 +43,8 @@ On success, returns HTTP `200 OK`:
 { "ok": true }
 ```
 
-**Account Approval Invariant**:
-All newly registered accounts are created in a disabled state (`is_enabled: false` / `0`). An operator must approve the account out-of-band via database updates before login can proceed (see [Operator Account Approval Runbook](../configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook)).
+**Account Approval & First-User Governance Invariant**:
+Every newly registered account is created disabled (`is_enabled = 0` in SQLite; `isEnabled: false` in MongoDB) with role `user` and `auth_version = 0` (`authVersion: 0`). Registration **never** grants automatic first-user `admin` rights, and there is no public admin-promotion API. An operator must locally approve the account—and, when intended, promote it to `admin`—using the **Development profile** or **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](../configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) before login can proceed.
 
 Attempting to call `POST /api/auth/login` on an unapproved account fails immediately with `HTTP 401 Unauthorized`:
 
@@ -54,6 +54,8 @@ Attempting to call `POST /api/auth/login` on an unapproved account fails immedia
   "error": "Account is disabled. Contact an administrator."
 }
 ```
+
+After operator approval, the next `POST /api/auth/login` for an account without an enrolled factor returns `enrollmentRequired`, and the user completes MFA setup via `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` below.
 
 ### `POST /api/auth/login`
 
@@ -92,7 +94,7 @@ When `--no-auth` is enabled, login skips account and MFA challenge requirements,
 }
 ```
 
-The development response also sets the auth cookie. `--no-auth` is strictly rejected in production environments (`RUST_ENV=production` or `ENVIRONMENT=production`) and whenever an active database connection is present (`AppState` verifies `auth_store.is_some()`). Server startup skips database initialization (both MongoDB and SQLite) under `--no-auth`, so database environment variables alone do not reject `--no-auth` unless production mode is set.
+The development response also sets the auth cookie. `--no-auth` is a loopback-only development bypass—**never** authenticated SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`, which enforces the full registration, operator approval, and TOTP MFA flow above). `--no-auth` is strictly rejected in production environments (`RUST_ENV=production` or `ENVIRONMENT=production`) and whenever an active authentication store is initialized (`AppState` verifies `auth_store.is_some()`). Server startup skips database initialization (both MongoDB and SQLite) under `--no-auth`, so database environment variables alone do not reject `--no-auth` unless production mode is set.
 
 ### `POST /api/auth/mfa/setup`
 

@@ -19,7 +19,7 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
    - Run via `pnpm --filter @dam-hopper/ui test:browser`.
 4. **Application E2E User Journeys (Playwright Test):**
    - Real end-to-end browser journeys under `packages/ui/e2e/**/*.spec.ts` using `@playwright/test` 1.61.1.
-   - Interacts with built SPA web application (`apps/web`) and production server (`dam-hopper-server`) inside isolated Docker/Podman containers with real MongoDB instances.
+   - Interacts with built SPA web application (`apps/web`) and production server (`dam-hopper-server`) inside isolated Docker/Podman containers against real MongoDB instances (default) or isolated SQLite lite mode (`authBackend: "sqlite"`, which starts no MongoDB container).
    - Run via `pnpm --filter @dam-hopper/ui test:e2e`.
 
 ---
@@ -32,7 +32,7 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
 | **Frontend Unit** | Vitest (jsdom) | `packages/ui/src/**/*.test.{ts,tsx}` | Node.js / jsdom | `pnpm --filter @dam-hopper/ui test` | State reducers, hooks, pure helpers, data models |
 | **Browser Component Regressions** | Vitest Browser Mode | `packages/ui/browser-tests/**/*.browser.{ts,tsx}` (excl. advisor routing) | Headless Chromium, port 15173 | `pnpm --filter @dam-hopper/ui test:browser` | Focused component lifecycle, xterm geometry, media tickets |
 | **Specialized Component** | Vitest Browser Mode | `packages/ui/browser-tests/advisor-routing.browser.tsx` | Headless Chromium, port 15174, loopback Axum | `pnpm --filter @dam-hopper/ui test:browser` | Backend-backed component regression (not application E2E) |
-| **Application E2E Journeys** | `@playwright/test` | `packages/ui/e2e/**/*.spec.ts` | Headless Chromium, containerized web SPA + production server + MongoDB | `pnpm --filter @dam-hopper/ui test:e2e` | Full application user journeys, layout bounds, auth seed |
+| **Application E2E Journeys** | `@playwright/test` | `packages/ui/e2e/**/*.spec.ts` | Headless Chromium, containerized web SPA + production server (MongoDB default or SQLite lite mode) | `pnpm --filter @dam-hopper/ui test:e2e` | Full application user journeys, layout bounds, auth seed |
 | **E2E Service Probes** | `@playwright/test` | `packages/ui/e2e/fixtures/application-services.spec.ts` | Docker / Podman container runtime | `pnpm --filter @dam-hopper/ui test:e2e:probes` | Container lifecycle, health checks, isolation, cleanup |
 
 ### Discovery Invariants
@@ -84,6 +84,10 @@ pnpm --filter @dam-hopper/ui exec vitest run src/hooks/use-editor-git-blame.test
 pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/WorkspaceGitPanelBlame.test.tsx
 pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/editor-git-blame.browser.tsx
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e editor-git-blame/editor-git-blame.spec.ts
+
+# Feature: SQLite Authentication Lite Mode (Application E2E)
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts
 ```
 
 ---
@@ -98,7 +102,7 @@ Application E2E tests interact with authentic production binaries rather than sy
   - Layers the canonical preauthenticated seed executable (`application_e2e_seed`) compiled in the `server-builder` stage.
   - Image freshness is managed automatically by `packages/ui/e2e/fixtures/image-builder.ts` using source fingerprinting (`dam-hopper.source-fingerprint` label).
 - **Service Isolation:**
-  - Each test suite instance receives a private container network (`bridge`), a dedicated MongoDB container (`mongo:8.2`), and an application container running `dam-hopper-server`.
+  - Each test suite instance receives a private container network (`bridge`) and an application container running `dam-hopper-server`. By default, `startApplicationServices` starts a dedicated MongoDB container (`mongo:8.2`); when invoked with `startApplicationServices({ authBackend: "sqlite" })`, it starts **no MongoDB container** and configures the server container with `DAM_HOPPER_LITE_MODE=true`, `DAM_HOPPER_AUTH_SQLITE_PATH` (default `/e2e/home/.config/dam-hopper/auth.db`), and `DAM_HOPPER_MFA_KEY_FILE=/e2e/home/mfa.key`.
   - Loopback port allocation is dynamic; no host database ports are shared or bound.
   - Test files, configurations, and effective home directories are mounted inside a transient `/e2e` container tree.
 - **Effective HOME & Environment Protection:**
@@ -106,7 +110,7 @@ Application E2E tests interact with authentic production binaries rather than sy
   - Runner workstation `$HOME` and user personal settings are never mounted, protecting against host configuration leakage or poisoning.
 
 ### Deterministic Auth Seeding
-- The `application_e2e_seed` binary initializes MongoDB auth collections, creates an enabled `admin` user, creates an active session, and signs V2 token claims using the fixture server token.
+- The `application_e2e_seed` binary initializes the selected auth backend (MongoDB collections by default, or SQLite via `--sqlite-path` / `DAM_HOPPER_AUTH_SQLITE_PATH`), creates an enabled `admin` user and active session, and signs V2 token claims using the fixture server token.
 - Playwright browser contexts are pre-seeded via `storageState` with production `localStorage` keys:
   - `damhopper_server_profiles`: Array containing the fixture profile.
   - `damhopper_active_profile_id`: ID of the fixture profile.
@@ -122,7 +126,7 @@ Application E2E tests interact with authentic production binaries rather than sy
 
 ## 5. Application E2E Journeys
 
-Three comprehensive application journeys validate end-to-end user workflows:
+Application E2E journeys validate end-to-end user workflows across containerized services:
 
 1. **Privacy Mode Heavy Blur (`packages/ui/e2e/privacy-heavy-blur/privacy-heavy-blur.spec.ts` — A04):**
    - Navigates through actual `apps/web` entry, switches to `/settings`, configures Heavy Blur.
@@ -141,6 +145,11 @@ Three comprehensive application journeys validate end-to-end user workflows:
    - Drags the native dock divider to narrow legal width (320px).
    - Validates horizontal bounding box containment, lack of horizontal clipping, and vertical scrollability.
 
+4. **SQLite Auth Lite Mode (`packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):**
+   - Starts isolated application services with `authBackend: "sqlite"` (starting no MongoDB container) and seeds an enabled `admin` session via `application_e2e_seed`.
+   - Verifies unauthenticated `GET /api/projects` returns `401`, while bearer-authenticated `GET /api/auth/status` reports `authenticated: true`, `user: "admin"`, `role: "admin"`, and omits `devMode`.
+   - Verifies `POST /api/auth/register` with JSON `{ "username", "password" }` returns `200` `{ "ok": true }` and that subsequent `POST /api/auth/login` for that unapproved account returns `401` with `code: "ACCOUNT_DISABLED"`.
+   - Navigates through `/settings` (exercising the Native Advisor admin toggle) and `/workspace` (opening Advisor configuration) and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
 ---
 
 ## 6. Visual Evidence Authenticity & Governance
@@ -218,20 +227,21 @@ Three comprehensive application journeys validate end-to-end user workflows:
 
 ## 8. Workflow Coverage Matrix & Ranked Gaps
 
-### Current Coverage Classification
+### Baseline Rollout Classification
+
+The table below records the baseline suite classification from the initial 4-tier runner rollout (PR #44); subsequent feature deliveries add targeted journeys (including `editor-git-blame/editor-git-blame.spec.ts` and `sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):
 
 | Category | Suite Count | Declared Tests | Test Type | Status |
 |---|---|---|---|---|
 | UI Unit Tests | ~302 files | 2,305 tests | Vitest jsdom | Active / Required |
 | Browser Component Regressions | 52 suites | 254 tests | Vitest Browser Mode (Chromium, 15173) | Active / Required |
 | Specialized Backend Component | 1 suite | 5 tests | Vitest Browser Mode (Chromium, 15174) | Active / Required |
-| Application E2E Journeys | 3 suites | 3 tests | Playwright Test (Isolated App + DB) | Active / Required |
+| Application E2E Journeys | 3 baseline suites (+ feature specs) | 3+ tests | Playwright Test (Isolated App + MongoDB or SQLite) | Active / Required |
 | E2E Fixture Lifecycle Probes | 1 suite | 7 tests | Playwright Test (Container Lifecycle) | Active / Required |
 
 ### Ranked Integrated Workflow Gaps
 
-The three application journeys establish the foundational runner, container lifecycle, and evidence pipeline across all 53 browser component suites.
-
+The foundational application journeys establish the runner, container lifecycle, and evidence pipeline across the browser component and E2E suites.
 The following workflows represent documented gaps in full-application E2E coverage. While component, utility, or manual qualifications exist, they are not application-level Playwright tests:
 
 | Priority | Workflow Area | Existing Targeted Coverage | Missing Application E2E Acceptance |

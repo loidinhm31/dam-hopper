@@ -216,12 +216,15 @@ the release manager's managed lifecycle list covers the helper service itself.
    EOF
    sudo chmod 600 /etc/dam-hopper/server.env
    ```
+   `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite storage with no automatic fallback to MongoDB and fatal startup on SQLite initialization failure; it is never the loopback-only `--no-auth` development bypass. Exactly one server process may use one local SQLite auth file (never network/shared filesystems).
 
 5. **Explicitly activate the release:**
    ```bash
    sudo dam-hopper start
    ```
 
+6. **Provision and approve the first account (post-activation):**
+   `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) and never grants automatic first-user `admin` rights; login returns `401 ACCOUNT_DISABLED` until local operator approval. From the API host, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register against `http://127.0.0.1:4801`, inspect and approve/promote the account in `/var/lib/dam-hopper/auth.db` via `sqlite3` (or `mongosh` for MongoDB), and complete first-login TOTP MFA enrollment (`enrollmentRequired`) via the [Authentication API](./api/authentication.md).
 ### 5.2 Release Activation Gate
 
 The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lock/dam-hopper/deploy.lock`:

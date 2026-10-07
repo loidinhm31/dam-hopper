@@ -61,26 +61,25 @@ origin.
 
 DamHopper provides two production-grade authenticated storage backends within the same compiled binary:
 
-1. **MongoDB (Default)**: Selected when `DAM_HOPPER_LITE_MODE` is unset, empty, `false`, or `0`. Connects to `MONGODB_URI` (database `MONGODB_DATABASE`, default `damHopper`).
-2. **SQLite Lite Mode**: Selected when `DAM_HOPPER_LITE_MODE` is set to `true`, `1`, `TRUE`, or any case-insensitive variant. Completely removes the MongoDB service requirement while preserving full security parity (Argon2id password hashing, mandatory AES-256-GCM encrypted MFA, session management, and role-based access control).
+1. **MongoDB (Default)**: Selected when `DAM_HOPPER_LITE_MODE` is unset, empty, `false`, or `0` (case-insensitive after trimming). Connects to `MONGODB_URI` (database `MONGODB_DATABASE`, default `damHopper`).
+2. **SQLite Lite Mode**: Selected when `DAM_HOPPER_LITE_MODE` is set to `true` or `1` (case-insensitive after trimming). Removes the MongoDB service requirement while preserving full security parity (password hashing, mandatory AES-256-GCM encrypted MFA, session management, and role-based access control).
 
-Any unrecognized or invalid boolean value (e.g. `DAM_HOPPER_LITE_MODE=invalid`) causes an immediate startup error and refuses to start.
+Any other nonempty `DAM_HOPPER_LITE_MODE` value (e.g. `DAM_HOPPER_LITE_MODE=invalid`) fails startup immediately. There is no automatic backend detection or fallback between MongoDB and SQLite.
 
 ### Dotenv Precedence and Path Resolution
 
 - **Dotenv Precedence**: `dotenv::dotenv()` only populates variables not already present in the process environment. Pre-existing system environment variables (such as those supplied by systemd `EnvironmentFile=/etc/dam-hopper/server.env` or exported in the host shell) take precedence over values in working directory `.env` files.
-- **Path Resolution**: Relative paths specified in `DAM_HOPPER_AUTH_SQLITE_PATH` resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path (e.g. `/var/lib/dam-hopper/auth.db`).
-- **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server automatically defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%APPDATA%\dam-hopper\auth.db` on Windows).
+- **Path Resolution (`DAM_HOPPER_AUTH_SQLITE_PATH`)**: Applies only when SQLite lite mode is selected. Relative paths resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path on local persistent storage (e.g. `/var/lib/dam-hopper/auth.db`).
+- **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%APPDATA%\dam-hopper\auth.db` on Windows).
   - **Subsystem Isolation**: `auth.db` is strictly dedicated to authentication, credentials, and session state. It is completely isolated from PTY/IDE session state (`~/.config/dam-hopper/sessions.db`) and telemetry state (`~/.config/dam-hopper/telemetry.db`).
 
 ### Production Safety Guards
 
 - **Production Mode Enforcement**: When running in production (`RUST_ENV=production` or `ENVIRONMENT=production`), the server enforces strict backend readiness:
-  - If MongoDB is selected, `MONGODB_URI` must be provided, reachable, and authenticated.
-  - If SQLite lite mode is selected, the configured database file and parent directory must be writable and accessible. Startup aborts immediately if database initialization or migration fails.
-  - In both backends, `DAM_HOPPER_MFA_KEY_FILE` pointing to a valid 32-byte key file with strict owner-only permissions (`0600`) is mandatory.
-- **Development Auth Bypass (`--no-auth`)**: The `--no-auth` CLI flag (or `DAM_HOPPER_NO_AUTH=1`) is a local development mechanism that bypasses authentication and issues a mock token. **It is never a synonym for lite mode.** As a failsafe, the server unconditionally refuses to start with `--no-auth` if `MONGODB_URI` is set or if running in production mode.
-
+  - If MongoDB is selected, `MONGODB_URI` and `MONGODB_DATABASE` must be provided, reachable, and authenticated.
+  - If SQLite lite mode is selected, the configured database file and parent directory must be writable and accessible. SQLite open or migration failure is always fatal and aborts startup immediately.
+  - In both backends, `DAM_HOPPER_MFA_KEY_FILE` pointing to a valid dedicated 32-byte key file with strict owner-only permissions (`0600` on Unix) is mandatory.
+- **Development Auth Bypass (`--no-auth`)**: The `--no-auth` CLI flag (or `DAM_HOPPER_NO_AUTH=1`) is a separate loopback development bypass that skips authentication store initialization and issues a development token. **It is never SQLite lite mode.** The server refuses to start with `--no-auth` if an authentication store is initialized or if running in production mode.
 ### Deployment Limits: Single Server Process per Auth File
 
 **Validated deployment limit: exactly one server process per local auth file.**
@@ -94,53 +93,107 @@ SQLite operates in WAL mode (`PRAGMA journal_mode = WAL`) and supports concurren
 
 ### Default-Disabled Registration Policy
 
-When users register via `POST /api/auth/register`, accounts are created with `is_enabled = 0` (MongoDB `isEnabled: false`). Until an operator explicitly activates the account:
-- Any login attempt returns `HTTP 401 Unauthorized` with error payload:
+`POST /api/auth/register` accepts JSON `{ "username", "password" }`, returns `{ "ok": true }`, and creates a `user` account disabled (`is_enabled = 0` in SQLite; `isEnabled: false` in MongoDB) with `auth_version = 0` (`authVersion: 0`). Until an operator explicitly approves the account:
+- Any `POST /api/auth/login` attempt returns `HTTP 401 Unauthorized` with error payload:
   ```json
   {
     "code": "ACCOUNT_DISABLED",
     "error": "Account is disabled. Contact an administrator."
   }
   ```
-- There is **no automatic first-user administrator promotion** and **no public admin promotion API**.
-- Account approval and role assignment require direct operator database access.
+- Registration **never grants automatic first-user administrator rights**, and there is **no public admin promotion API**.
+- An operator must locally approve the account in the database and, when intended, promote it to `admin`.
+- After operator approval, a password login for an account with no enrolled factor returns `state: "enrollmentRequired"`; completion uses `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` in [Authentication API](../api/authentication.md). Never use the server's `server-token` JWT signing secret as a client credential.
 
-### SQLite Operator Procedure (`sqlite3`)
+### Development profile
 
-Connect to the configured SQLite auth database using the CLI (setting a busy timeout to gracefully handle concurrent server activity):
+Use this flow when running a local authenticated SQLite server on `http://127.0.0.1:4801` (for example with `DAM_HOPPER_LITE_MODE=true` and default `~/.config/dam-hopper/auth.db` or `%APPDATA%\dam-hopper\auth.db` on Windows, or an explicit local `DAM_HOPPER_AUTH_SQLITE_PATH`). `--no-auth` is a separate loopback bypass and never exercises SQLite lite mode.
+
+#### 1. Register the Account Against Local `http://127.0.0.1:4801`
+Replace `ReplaceWithStrongPassword!` with a real strong secret before executing:
 ```bash
-sqlite3 /var/lib/dam-hopper/auth.db -cmd ".timeout 5000"
+curl -sS -X POST http://127.0.0.1:4801/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"ReplaceWithStrongPassword!"}'
 ```
-#### 1. Inspect Pending Accounts
+The response is `{"ok":true}`. The account is created as a disabled standard user (`role = 'user'`, `is_enabled = 0`, `auth_version = 0`) without automatic first-user admin rights. Calling `POST /api/auth/login` before approval returns `401 ACCOUNT_DISABLED`.
+
+#### 2. Inspect, Approve, and Promote in SQLite (`sqlite3`)
+Open the local SQLite auth database (substitute your explicit `DAM_HOPPER_AUTH_SQLITE_PATH` or `%APPDATA%\dam-hopper\auth.db` on Windows) with a busy timeout:
+```bash
+sqlite3 ~/.config/dam-hopper/auth.db -cmd ".timeout 5000"
+```
+Inspect the pending row in `auth_users`:
 ```sql
 SELECT id, username, is_enabled, role, auth_version, mfa_enrolled_at_ms
 FROM auth_users
-WHERE username = '<target-username>';
+WHERE username = 'admin';
 ```
-Record the immutable 24-character hexadecimal `id` and current `auth_version`.
-
-#### 2. Approve and Promote to Administrator
-Execute an immediate conditional update matching the verified `id` and observed `auth_version`:
+Record the immutable 24-character hexadecimal `id` and observed `auth_version` (`0` on initial registration). Run a `BEGIN IMMEDIATE` conditional update matching both `id` and `auth_version` (use `role = 'admin'` to promote to administrator, or `role = 'user'` to approve as a standard user), and check `SELECT changes();` before committing:
 ```sql
 BEGIN IMMEDIATE;
 UPDATE auth_users
 SET is_enabled = 1, role = 'admin'
 WHERE id = '<verified-24-hex-id>' AND auth_version = <observed-auth_version>;
--- Verify that exactly 1 row changed before committing:
 SELECT changes();
-COMMIT;
 ```
-*Safety check*: If `changes()` returns `0`, another operator or transaction altered the row. Issue `ROLLBACK;`, re-read the account state, and repeat.
+Verify the interactive output of `SELECT changes();` before closing the transaction:
+- Only after observing **`1`**, issue:
+  ```sql
+  COMMIT;
+  ```
+- If `SELECT changes();` returns **`0`**, do **not** commit; issue `ROLLBACK;` and re-run the `SELECT` query above to inspect the current row before retrying:
+  ```sql
+  ROLLBACK;
+  ```
 
-#### 3. Approve as Standard User
+#### 3. Complete First Login and TOTP Enrollment
+Call `POST http://127.0.0.1:4801/api/auth/login` with the registered username and password. Because no MFA factor is enrolled yet (`mfa_enrolled_at_ms` is `NULL`), login returns `enrollmentRequired`; finish enrollment with `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` per [Authentication API](../api/authentication.md).
+
+### Deployment profile
+
+On a production deployment (such as `dam-hopper-api.service` listening on port `4801` with `DAM_HOPPER_LITE_MODE=true`, `DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db`, and a valid 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key`), execute the registration and SQLite approval commands directly from the API host against its local loopback endpoint (`http://127.0.0.1:4801`).
+
+#### 1. Register From the API Host Against `http://127.0.0.1:4801`
+Replace `<target-username>` (e.g. `admin`) and replace `ReplaceWithStrongPassword!` with a real strong secret before executing:
+```bash
+curl -sS -X POST http://127.0.0.1:4801/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"<target-username>","password":"ReplaceWithStrongPassword!"}'
+```
+The response is `{"ok":true}`. The account starts disabled (`is_enabled = 0`, `role = 'user'`, `auth_version = 0`) and never receives automatic first-user `admin` rights; login attempts return `401 ACCOUNT_DISABLED` until approved below.
+
+#### 2. Inspect, Approve, and Promote on the API Host (`sqlite3`)
+Connect to the configured local SQLite database on the API host as the service user so file ownership remains intact:
+```bash
+sudo -u <API_USER> sqlite3 /var/lib/dam-hopper/auth.db -cmd ".timeout 5000"
+```
+Inspect the pending account:
+```sql
+SELECT id, username, is_enabled, role, auth_version, mfa_enrolled_at_ms
+FROM auth_users
+WHERE username = '<target-username>';
+```
+Record the verified 24-character hexadecimal `id` and observed `auth_version`. Execute a `BEGIN IMMEDIATE` conditional update matching both `id` and `auth_version` (setting `role = 'admin'` for an administrator or `role = 'user'` for a standard account), and only `COMMIT` after `SELECT changes();` returns `1`:
 ```sql
 BEGIN IMMEDIATE;
 UPDATE auth_users
-SET is_enabled = 1, role = 'user'
+SET is_enabled = 1, role = 'admin' -- or role = 'user' for a standard user
 WHERE id = '<verified-24-hex-id>' AND auth_version = <observed-auth_version>;
-COMMIT;
+SELECT changes();
 ```
+Verify the interactive output of `SELECT changes();` before closing the transaction:
+- Only after observing **`1`**, issue:
+  ```sql
+  COMMIT;
+  ```
+- If `SELECT changes();` returns **`0`**, do **not** commit; issue `ROLLBACK;` and re-read `auth_users` before retrying:
+  ```sql
+  ROLLBACK;
+  ```
 
+#### 3. Complete First Login and TOTP Enrollment
+After approval, the user's next `POST /api/auth/login` returns `enrollmentRequired`; complete TOTP setup and confirmation via the MFA endpoints documented in [Authentication API](../api/authentication.md).
 ### MongoDB Operator Procedure (`mongosh`)
 
 Connect via `mongosh` to the configured MongoDB database:
@@ -239,7 +292,7 @@ When a user loses their authenticator app or secret in SQLite lite mode, an oper
    FROM auth_users
    WHERE id = '<verified-24-hex-id>';
    ```
-3. Execute the atomic MFA reset transaction:
+3. Start the interactive MFA reset transaction and check the affected row count before committing:
    ```sql
    BEGIN IMMEDIATE;
    UPDATE auth_users
@@ -253,13 +306,20 @@ When a user loses their authenticator app or secret in SQLite lite mode, an oper
        mfa_attempt_window_started_at_ms = NULL,
        mfa_blocked_until_ms = NULL
    WHERE id = '<verified-24-hex-id>' AND auth_version = <observed-auth_version>;
-   -- Verify that exactly 1 row changed before committing:
    SELECT changes();
-   COMMIT;
    ```
+4. Inspect the interactive output of `SELECT changes();`:
+   - Only after observing **`1`**, commit the transaction:
+     ```sql
+     COMMIT;
+     ```
+   - If `SELECT changes();` returns **`0`**, abort the transaction immediately and re-read `auth_users` before retrying:
+     ```sql
+     ROLLBACK;
+     ```
 
 **Verification & Invariants:**
-1. **Single Row Guarantee**: Ensure exactly one row is updated (`SELECT changes();` is `1`). If `0`, rollback immediately.
+1. **Single Row Guarantee**: Only run `COMMIT;` after verifying `SELECT changes();` returned `1`. If it returned `0`, run `ROLLBACK;`, re-read `auth_users`, and do not retry blindly.
 2. **Immediate Invalidation via Version Bump**: The `auth_version` increment instantly invalidates all active sessions in `auth_sessions` and outstanding challenges in `auth_challenges`. Background sweeps clean up expired sessions; no manual row deletion is required.
 3. **Schema Constraint Compliance**: The `auth_users` table enforces a STRICT CHECK constraint requiring all 5 confirmed factor fields (`mfa_secret_ciphertext`, `mfa_nonce`, `mfa_key_id`, `mfa_enrolled_at_ms`, `mfa_last_accepted_step`) to be NULL simultaneously when MFA is cleared. Attempt rate-limiting fields are reset to clean defaults.
 4. **Credential Preservation**: Password hash (`password_hash`), account enablement (`is_enabled`), and assigned role (`role`) remain intact.

@@ -108,9 +108,11 @@ EOF
 sudo chmod 600 /etc/dam-hopper/server.env
 ```
 
-*Deployment Limit*: Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network filesystems.
+*Deployment & Auth Invariants*:
+- `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite mode with no automatic fallback to MongoDB; SQLite initialization failure is fatal. It is **never** a synonym for the loopback-only `--no-auth` development bypass.
+- Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network/shared filesystems.
 
-### Step 5: Activate the Release
+### Step 5: Activate the Release and Provision the First Account
 
 Explicitly activate the staged candidate:
 
@@ -120,6 +122,7 @@ sudo dam-hopper start
 
 The `start` command installs concrete systemd units, reloads `systemd`, starts configured services, and enforces a strict health gate: a 20-second startup deadline followed by 20 consecutive 500 ms health probes over a 10-second stability window. If health checks fail, the manager aborts activation and keeps prior units running.
 
+**First-Account Provisioning (Post-Activation):** DamHopper never creates a default administrator or auto-promotes the first registrant. `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) that returns `401 ACCOUNT_DISABLED` on login until an operator approves it. After `sudo dam-hopper start` succeeds, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register from the API host against `http://127.0.0.1:4801`, approve and promote the account via `sqlite3` (or `mongosh`), and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never use the server's `server-token` signing secret as a client credential.
 ### Rollback and Recovery
 
 ```bash
@@ -186,6 +189,8 @@ dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper
 dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
 ```
 
+For authenticated SQLite lite mode on Windows (`$env:DAM_HOPPER_LITE_MODE="true"`, defaulting to `%APPDATA%\dam-hopper\auth.db` when `DAM_HOPPER_AUTH_SQLITE_PATH` is unset; one server process per local auth file), register and approve your first account using the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+
 ### Upgrading on Windows
 
 Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server executable while preserving your existing `dam-hopper.toml`:
@@ -250,10 +255,11 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 
 ### Strict Security Constraints for `--no-auth`
 
+`--no-auth` is a local loopback development bypass—**never** SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`). For authenticated local SQLite development and first-account approval, follow the **Development profile** in [Server Environment and Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+
 1. **Loopback Only (`127.0.0.1`):** The server binary defaults to binding `0.0.0.0`. When running with `--no-auth`, **always pass `--host 127.0.0.1`**. Never bind `--no-auth` to a public IP, LAN, or untrusted network.
 2. **Forbidden in Production:** Server startup aborts if `RUST_ENV=production` or `ENVIRONMENT=production` is detected while `--no-auth` is active.
-3. **Database Guard:** If MongoDB is connected and initialized (`db.is_some()`), `--no-auth` mode is rejected.
-4. **Feature Gates:**
+3. **Database Guard:** If an authentication store is initialized (`auth_store.is_some()`), `--no-auth` mode is rejected.
    - **Native Advisor:** All `/api/advisor/*` endpoints are denied (`NoAuthForbidden`). Advisor requires authenticated admin access.
    - **Host Actions:** Host lifecycle actions return `403 FORBIDDEN` (`actionsDisabledNoAuth`).
    - **Idle Suspend:** Timing configuration and manual force-sleep endpoints return `403 FORBIDDEN` (`idleSuspendTimingDisabledNoAuth`).
@@ -265,4 +271,5 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 - [Linux Systemd & Operations Guide](./linux-systemd.md) — Production units, cgroups, tmpfiles, and security sandbox.
 - [Windows Release Packaging](./windows-release-packaging.md) — Windows asset structure, deterministic ZIP layout, and attestation.
 - [Configuration Guide Index](./configuration/index.md) — TOML registry schema, server options, and profiles.
+- [Server Environment and Authentication](./configuration/server-environment-auth.md) — `DAM_HOPPER_LITE_MODE`, `DAM_HOPPER_AUTH_SQLITE_PATH`, `DAM_HOPPER_MFA_KEY_FILE`, and the canonical first-account operator runbook.
 - [Authentication API](./api/authentication.md) — Session tokens, TOTP MFA, and credentials specification.
