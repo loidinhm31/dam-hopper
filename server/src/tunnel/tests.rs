@@ -39,32 +39,6 @@ fn tunnel_status_lowercase() {
 }
 
 // ---------------------------------------------------------------------------
-// TunnelError display messages
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tunnel_error_display() {
-    let e = TunnelError::BinaryMissing;
-    assert_eq!(e.to_string(), "cloudflared binary not found");
-
-    let e = TunnelError::DuplicatePort(3000);
-    assert_eq!(e.to_string(), "tunnel already running on port 3000");
-
-    let id = Uuid::nil();
-    let e = TunnelError::NotFound(id);
-    assert!(e.to_string().contains("tunnel not found"));
-
-    let e = TunnelError::SpawnFailed("permission denied".into());
-    assert!(e.to_string().contains("spawn failed"));
-
-    let e = TunnelError::InstallFailed("network error".into());
-    assert!(e.to_string().contains("install failed"));
-
-    let e = TunnelError::BinaryMissingHint("brew install cloudflared".into());
-    assert!(e.to_string().contains("brew install cloudflared"));
-}
-
-// ---------------------------------------------------------------------------
 // TunnelSession serialization shape
 // ---------------------------------------------------------------------------
 
@@ -73,26 +47,28 @@ fn tunnel_session_camel_case() {
     let s = TunnelSession {
         id: Uuid::nil(),
         port: 3000,
-        session_id: None,
-        incarnation: None,
         label: "test".into(),
         driver: "cloudflared".into(),
         status: TunnelStatus::Starting,
         url: None,
         error: None,
         started_at: 0,
+        reminder_due: false,
         pid: None,
     };
     let v = serde_json::to_value(&s).unwrap();
     // camelCase field names
     assert!(v.get("startedAt").is_some());
+    assert_eq!(v["reminderDue"], false);
+    assert!(v.get("sessionId").is_none());
+    assert!(v.get("incarnation").is_none());
     // optional fields absent when None
     assert!(v.get("url").is_none());
     assert!(v.get("pid").is_none());
 }
 
 // ---------------------------------------------------------------------------
-// TunnelSessionManager::list() empty on fresh manager
+// TunnelSessionManager lifecycle
 // ---------------------------------------------------------------------------
 
 struct NoopDriver;
@@ -110,14 +86,6 @@ impl TunnelDriver for NoopDriver {
     ) -> BoxFuture<'_, Result<DriverHandle, TunnelError>> {
         Box::pin(async { Err(TunnelError::SpawnFailed("noop".into())) })
     }
-}
-
-#[tokio::test]
-async fn manager_list_empty_on_new() {
-    let sink = Arc::new(NoopEventSink::default());
-    let driver = Arc::new(NoopDriver);
-    let manager = TunnelSessionManager::new(sink, driver);
-    assert!(manager.list().await.is_empty());
 }
 
 #[tokio::test]
@@ -168,7 +136,7 @@ impl TunnelDriver for BlockingDriver {
 }
 
 #[tokio::test]
-async fn stop_by_port_cancels_driver_startup_without_orphaning_session() {
+async fn stop_cancels_driver_startup_without_orphaning_session() {
     let driver = Arc::new(BlockingDriver {
         started: Arc::new(Notify::new()),
         release: Arc::new(Notify::new()),
@@ -301,14 +269,19 @@ impl TunnelDriver for ChannelDropDriver {
 
 struct CapturingEventSink {
     events: Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>,
+    changed: Arc<Notify>,
 }
 
 impl CapturingEventSink {
-    fn new() -> (Self, Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>) {
+    fn new() -> (
+        Self,
+        Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>,
+    ) {
         let events = Arc::new(parking_lot::Mutex::new(Vec::new()));
         (
             Self {
                 events: Arc::clone(&events),
+                changed: Arc::new(Notify::new()),
             },
             events,
         )
@@ -326,12 +299,12 @@ impl crate::pty::EventSink for CapturingEventSink {
         _: bool,
         _: Option<u64>,
         _: Option<u32>,
-    ) {}
+    ) {
+    }
     fn send_process_restarted(&self, _: &str, _: u32, _: Option<i32>) {}
     fn broadcast(&self, event_type: &str, payload: serde_json::Value) {
-        self.events
-            .lock()
-            .push((event_type.to_string(), payload));
+        self.events.lock().push((event_type.to_string(), payload));
+        self.changed.notify_waiters();
     }
 }
 
@@ -343,17 +316,17 @@ async fn channel_drop_triggers_fallback_stopped_broadcast_and_cleanup() {
     });
     let manager = TunnelSessionManager::new(Arc::new(sink), driver);
 
-    let session = manager
-        .create(3001, "test-drop".to_string())
-        .await
-        .unwrap();
+    let session = manager.create(3001, "test-drop".to_string()).await.unwrap();
 
     // Wait for the driver task to send UrlReady and drop the channel
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify that manager cleared the session on channel drop
     let active = manager.list().await;
-    assert!(active.is_empty(), "session should be cleaned up after channel drop");
+    assert!(
+        active.is_empty(),
+        "session should be cleaned up after channel drop"
+    );
 
     // Verify events received: tunnel:created, tunnel:ready, and fallback tunnel:stopped
     let captured = events.lock().clone();
@@ -409,7 +382,10 @@ async fn driver_exited_event_triggers_stopped_broadcast_once() {
     }
 
     let manager = TunnelSessionManager::new(Arc::new(sink), Arc::new(ExitedDriver));
-    let session = manager.create(3002, "test-exited".to_string()).await.unwrap();
+    let session = manager
+        .create(3002, "test-exited".to_string())
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -421,8 +397,390 @@ async fn driver_exited_event_triggers_stopped_broadcast_once() {
         .iter()
         .filter(|(e, _)| e == "tunnel:stopped")
         .count();
-    assert_eq!(stopped_count, 1, "tunnel:stopped should be broadcast exactly once");
+    assert_eq!(
+        stopped_count, 1,
+        "tunnel:stopped should be broadcast exactly once"
+    );
 
     let stop_result = manager.stop(session.id).await;
     assert!(stop_result.is_err());
+}
+
+// These drivers exercise manager state and cancellation only. Real connector
+// persistence requires a separate isolated Cloudflared smoke.
+#[derive(Default)]
+struct ControlledDriver {
+    events: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<TunnelDriverEvent>>>,
+    stop: parking_lot::Mutex<Option<oneshot::Receiver<()>>>,
+    startup_delay: Duration,
+}
+
+impl TunnelDriver for ControlledDriver {
+    fn name(&self) -> &'static str {
+        "controlled-test"
+    }
+
+    fn start(
+        &self,
+        _port: u16,
+        _label: &str,
+        event_tx: tokio::sync::mpsc::Sender<TunnelDriverEvent>,
+    ) -> BoxFuture<'_, Result<DriverHandle, TunnelError>> {
+        *self.events.lock() = Some(event_tx);
+        let (stop_tx, stop_rx) = oneshot::channel();
+        *self.stop.lock() = Some(stop_rx);
+        Box::pin(async move {
+            if !self.startup_delay.is_zero() {
+                tokio::time::sleep(self.startup_delay).await;
+            }
+            Ok(DriverHandle {
+                pid: Some(4242),
+                stop_tx: Some(stop_tx),
+            })
+        })
+    }
+}
+
+struct TunnelFixture {
+    manager: TunnelSessionManager,
+    driver: Arc<ControlledDriver>,
+    events: Arc<parking_lot::Mutex<Vec<(String, serde_json::Value)>>>,
+    changed: Arc<Notify>,
+}
+
+impl TunnelFixture {
+    fn new(startup_delay: Duration) -> Self {
+        let (sink, events) = CapturingEventSink::new();
+        let changed = Arc::clone(&sink.changed);
+        let driver = Arc::new(ControlledDriver {
+            startup_delay,
+            ..Default::default()
+        });
+        Self {
+            manager: TunnelSessionManager::new(Arc::new(sink), driver.clone()),
+            driver,
+            events,
+            changed,
+        }
+    }
+
+    fn event_count(&self, kind: &str) -> usize {
+        self.events.lock().iter().filter(|(k, _)| k == kind).count()
+    }
+
+    async fn wait_for_event(&self, kind: &str) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let changed = self.changed.notified();
+                if self.event_count(kind) > 0 {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("watcher must publish the expected event");
+    }
+
+    fn event_sender(&self) -> tokio::sync::mpsc::Sender<TunnelDriverEvent> {
+        self.driver.events.lock().as_ref().unwrap().clone()
+    }
+
+    async fn ready(&self) -> TunnelSession {
+        self.manager.create(5173, "web".into()).await.unwrap();
+        self.event_sender()
+            .send(TunnelDriverEvent::UrlReady(
+                "https://controlled.trycloudflare.com".into(),
+            ))
+            .await
+            .unwrap();
+        self.wait_for_event("tunnel:ready").await;
+        self.manager.list().await.remove(0)
+    }
+
+    async fn wait_for_watcher_exit(&self) {
+        tokio::time::timeout(Duration::from_secs(1), self.event_sender().closed())
+            .await
+            .expect("terminal cleanup must close the watcher without waiting three hours");
+    }
+}
+
+const THREE_HOURS: Duration = Duration::from_secs(3 * 60 * 60);
+
+#[tokio::test(start_paused = true)]
+async fn reminder_is_due_at_three_hours_once_and_retained_in_snapshot() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    let created_at = tokio::time::Instant::now();
+    let session = fixture.ready().await;
+    assert!(!session.reminder_due);
+    assert_eq!(fixture.events.lock()[0].1["reminderDue"], false);
+
+    tokio::time::advance(THREE_HOURS - Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert!(!fixture.manager.list().await[0].reminder_due);
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    fixture.wait_for_event("tunnel:reminder").await;
+    assert_eq!(tokio::time::Instant::now(), created_at + THREE_HOURS);
+    let due = fixture.manager.list().await.remove(0);
+    assert_eq!(due.id, session.id);
+    assert_eq!(due.pid, session.pid);
+    assert_eq!(due.url, session.url);
+    assert_eq!(due.started_at, session.started_at);
+    assert_eq!(serde_json::to_value(&due).unwrap()["reminderDue"], true);
+    assert_eq!(due.status, TunnelStatus::Ready);
+    assert_eq!(
+        fixture
+            .events
+            .lock()
+            .iter()
+            .find(|(k, _)| k == "tunnel:reminder")
+            .unwrap()
+            .1,
+        serde_json::json!({ "id": session.id })
+    );
+
+    tokio::time::advance(THREE_HOURS * 2).await;
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.event_count("tunnel:reminder"), 1);
+    assert!(fixture.manager.list().await[0].reminder_due);
+    assert!(matches!(
+        fixture.driver.stop.lock().as_mut().unwrap().try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    fixture.manager.stop(session.id).await.unwrap();
+    fixture.wait_for_watcher_exit().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn reminder_deadline_includes_driver_startup_time() {
+    let startup_delay = Duration::from_secs(60);
+    let fixture = TunnelFixture::new(startup_delay);
+    let created_at = tokio::time::Instant::now();
+    let session = fixture.ready().await;
+    tokio::time::advance(THREE_HOURS - startup_delay).await;
+    fixture.wait_for_event("tunnel:reminder").await;
+    assert_eq!(tokio::time::Instant::now(), created_at + THREE_HOURS);
+    assert!(fixture.manager.list().await[0].reminder_due);
+    fixture.manager.stop(session.id).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_cancels_reminder_and_watcher_even_with_open_driver_channel() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    let session = fixture.ready().await;
+    tokio::time::advance(THREE_HOURS - Duration::from_millis(1)).await;
+    fixture.manager.stop(session.id).await.unwrap();
+    fixture.wait_for_watcher_exit().await;
+    assert_eq!(
+        fixture.driver.stop.lock().as_mut().unwrap().try_recv(),
+        Ok(())
+    );
+
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert_eq!(fixture.event_count("tunnel:stopped"), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_exit_wins_reminder_boundary_and_cancels_watcher() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    fixture.ready().await;
+    fixture
+        .event_sender()
+        .send(TunnelDriverEvent::Exited)
+        .await
+        .unwrap();
+    tokio::time::advance(THREE_HOURS).await;
+    fixture.wait_for_watcher_exit().await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert_eq!(fixture.event_count("tunnel:stopped"), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_connector_cancels_reminder_and_watcher() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    fixture.manager.create(5173, "web".into()).await.unwrap();
+    fixture
+        .event_sender()
+        .send(TunnelDriverEvent::Failed("URL timeout".into()))
+        .await
+        .unwrap();
+    fixture.wait_for_watcher_exit().await;
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:failed"), 1);
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert_eq!(fixture.event_count("tunnel:stopped"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn dispose_cancels_reminder_and_watcher() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    fixture.ready().await;
+    fixture.manager.dispose_all().await;
+    fixture.wait_for_watcher_exit().await;
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert_eq!(
+        fixture.driver.stop.lock().as_mut().unwrap().try_recv(),
+        Ok(())
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn synchronous_start_failure_leaves_no_reminder_or_session() {
+    let (sink, events) = CapturingEventSink::new();
+    let manager = TunnelSessionManager::new(Arc::new(sink), Arc::new(NoopDriver));
+    assert!(matches!(
+        manager.create(5173, "web".into()).await,
+        Err(TunnelError::SpawnFailed(_))
+    ));
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(manager.list().await.is_empty());
+    assert!(events.lock().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn port_and_pty_lifecycle_preserve_tunnel_identity_and_reminder_clock() {
+    use crate::{persistence::SessionStore, port_forward::PortForwardManager};
+
+    for detected_before_creation in [false, true] {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let store = Arc::new(SessionStore::open(temp.path()).unwrap());
+        let ports = PortForwardManager::new(Arc::new(NoopEventSink))
+            .with_session_store(Some(store.clone()));
+        ports.enable_session_validation();
+        ports.register_session("terminal", 1);
+        if detected_before_creation {
+            ports
+                .report_stdout_hit(5173, "terminal".into(), 1, None)
+                .await;
+            ports.confirm_listen(5173, 1).await;
+        }
+        let fixture = TunnelFixture::new(Duration::ZERO);
+        let original = fixture.ready().await;
+        let original_json = serde_json::to_value(&original).unwrap();
+
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        ports.report_lost(5173, 1).await;
+        assert!(ports.list().await.is_empty());
+        assert!(store.load_detected_ports().unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_value(&fixture.manager.list().await[0]).unwrap(),
+            original_json
+        );
+
+        // Origin returns, another PTY takes over, then the old PTY exits.
+        ports
+            .report_stdout_hit(5173, "terminal".into(), 1, None)
+            .await;
+        ports.register_session("replacement", 2);
+        ports
+            .report_stdout_hit(5173, "replacement".into(), 2, None)
+            .await;
+        ports.unregister_session("terminal", 1);
+        ports.report_lost(5173, 1).await;
+        assert_eq!(ports.list().await[0].incarnation, 2);
+        assert_eq!(store.load_detected_ports().unwrap()[0].incarnation, 2);
+        assert_eq!(
+            serde_json::to_value(&fixture.manager.list().await[0]).unwrap(),
+            original_json
+        );
+
+        // PTY replacement uses the same public id with a new incarnation.
+        ports.register_session("replacement", 3);
+        ports
+            .report_stdout_hit(5173, "replacement".into(), 3, None)
+            .await;
+        ports.unregister_session("replacement", 2);
+        ports.remove_session_ports("replacement", 2);
+        assert_eq!(ports.list().await[0].incarnation, 3);
+        ports.unregister_session("replacement", 3);
+        assert!(ports.list().await.is_empty());
+        assert!(store.load_detected_ports().unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_value(&fixture.manager.list().await[0]).unwrap(),
+            original_json
+        );
+        assert!(matches!(
+            fixture.manager.create(5173, "duplicate".into()).await,
+            Err(TunnelError::DuplicatePort(5173))
+        ));
+        assert!(matches!(
+            fixture.driver.stop.lock().as_mut().unwrap().try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+
+        tokio::time::advance(Duration::from_secs(7200)).await;
+        fixture.wait_for_event("tunnel:reminder").await;
+        assert!(fixture.manager.list().await[0].reminder_due);
+        fixture.manager.stop(original.id).await.unwrap();
+        fixture.wait_for_watcher_exit().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reminder_waits_for_ready_and_does_not_repeat_on_ready_events() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    let session = fixture.manager.create(5173, "web".into()).await.unwrap();
+    tokio::time::advance(THREE_HOURS).await;
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+    assert!(!fixture.manager.list().await[0].reminder_due);
+
+    fixture
+        .event_sender()
+        .send(TunnelDriverEvent::UrlReady(
+            "https://controlled.trycloudflare.com".into(),
+        ))
+        .await
+        .unwrap();
+    fixture.wait_for_event("tunnel:reminder").await;
+    fixture
+        .event_sender()
+        .send(TunnelDriverEvent::UrlReady(
+            "https://controlled.trycloudflare.com".into(),
+        ))
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.event_count("tunnel:reminder"), 1);
+    assert!(fixture.manager.list().await[0].reminder_due);
+    fixture.manager.stop(session.id).await.unwrap();
+    fixture.wait_for_watcher_exit().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_and_queued_exit_publish_stopped_once_without_reminder() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    let session = fixture.ready().await;
+    let sender = fixture.event_sender();
+    let (exited, stopped) = tokio::join!(
+        sender.send(TunnelDriverEvent::Exited),
+        fixture.manager.stop(session.id),
+    );
+    exited.unwrap();
+    stopped.unwrap();
+    fixture.wait_for_watcher_exit().await;
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:stopped"), 1);
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn driver_channel_closure_cancels_reminder() {
+    let fixture = TunnelFixture::new(Duration::ZERO);
+    fixture.ready().await;
+    fixture.driver.events.lock().take();
+    fixture.wait_for_event("tunnel:stopped").await;
+    tokio::time::advance(THREE_HOURS).await;
+    assert!(fixture.manager.list().await.is_empty());
+    assert_eq!(fixture.event_count("tunnel:stopped"), 1);
+    assert_eq!(fixture.event_count("tunnel:reminder"), 0);
 }

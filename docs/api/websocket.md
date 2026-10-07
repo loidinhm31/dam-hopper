@@ -64,6 +64,16 @@ represented by `worktreePath` session metadata.
   - `conflict=true` if server detected mtime mismatch; client shows ConflictDialog (overwrite or reload)
   - `new_mtime` sent on success for next save guard
 
+**Tunnel Lifecycle Events:**
+
+- `{ kind: "tunnel:created", payload: <tunnel snapshot> }` — includes required `reminderDue: false`; no PTY ownership fields. See [Quick Tunnel REST contract](system-services.md#cloudflared-quick-tunnels).
+- `{ kind: "tunnel:ready", payload: { id, url } }`.
+- `{ kind: "tunnel:failed", payload: { id, error } }`.
+- `{ kind: "tunnel:stopped", payload: { id } }`.
+- `{ kind: "tunnel:reminder", payload: { id } }` — once when an active ready tunnel reaches three hours from creation. Does not stop or expire the tunnel.
+
+The server retains `reminderDue: true` in `GET /api/tunnels` for reconnect/reload catch-up. Client subscriptions/cache changes use the emitting connection's profile and generation; delayed events cannot target its replacement. Quick tunnels persist through origin/terminal loss but not Cloudflared or DamHopper termination.
+
 **Git Events:**
 
 - Server broadcasts `{ kind: "git:progress", project, step, percent }` during clone/push/pull

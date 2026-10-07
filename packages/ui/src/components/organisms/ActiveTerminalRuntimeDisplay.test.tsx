@@ -149,6 +149,7 @@ describe("ActiveTerminalRuntimeDisplay", () => {
           status: "ready",
           url: "https://demo.trycloudflare.com",
           startedAt: 1,
+          reminderDue: false,
         },
       },
     ];

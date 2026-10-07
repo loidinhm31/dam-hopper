@@ -19,10 +19,12 @@ vi.mock("@/api/connections.js", async (importOriginal) => {
   };
 });
 
+const mockProfiles: never[] = [];
 vi.mock("@/api/server-config.js", () => ({
   getServerUrl: () => "http://localhost:4801",
   buildAuthHeaders: () => ({}),
   getActiveProfile: () => null,
+  getProfiles: () => mockProfiles,
   migrateToProfiles: vi.fn(),
   normalizeServerUrl: (url: string) => url,
   getAuthToken: () => null,

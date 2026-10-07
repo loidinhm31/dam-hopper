@@ -2,12 +2,17 @@ import { useCallback, useEffect, useState, type SetStateAction } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTransport, getTransportGeneration } from "../api/transport.js";
 import { getActiveProfileId } from "../api/server-config.js";
-import { getTransport as getBoundTransport, getConnectionSnapshot } from "../api/connections.js";
+import {
+  getTransport as getBoundTransport,
+  useConnectionSnapshot,
+  isCurrentConnection,
+} from "../api/connections.js";
 import { profileTunnelsQueryKey } from "../api/query-client.js";
 import type { ConnectionRef, ProfileId } from "../api/ownership.js";
 import { subscribeIpc, hasWsStatus } from "./use-sse.js";
 import { useTransportGeneration } from "./use-transport-generation.js";
 import type { TunnelInfo } from "../api/client.js";
+import { subscribeTunnelCacheEvents } from "./tunnel-cache-events.js";
 
 export interface InstallState {
   status: "idle" | "installing" | "done" | "error";
@@ -29,10 +34,14 @@ export function useTunnels(options?: {
   const qc = useQueryClient();
   const transportGeneration = useTransportGeneration();
   const transport = getTransport();
-  const profileId = options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId() ?? "default";
-  const snap = getConnectionSnapshot(profileId);
-  const conn: ConnectionRef = options?.owner ?? snap?.owner ?? { profileId, generation: 0 };
-  const boundTransport = getBoundTransport(conn) ?? transport;
+  const profileId =
+    options?.owner?.profileId ??
+    options?.profileId ??
+    getActiveProfileId() ??
+    "default";
+  const snap = useConnectionSnapshot(profileId);
+  const conn: ConnectionRef = options?.owner ??
+    snap?.owner ?? { profileId, generation: 0 };
 
   const [installStateSnapshot, setInstallStateSnapshot] = useState<{
     generation: number;
@@ -60,55 +69,11 @@ export function useTunnels(options?: {
 
   const query = useQuery({
     queryKey: profileTunnelsQueryKey(conn),
-    queryFn: () => boundTransport.invoke<TunnelInfo[]>("tunnel:list"),
+    enabled: isCurrentConnection(conn),
+    queryFn: () => getBoundTransport(conn).invoke<TunnelInfo[]>("tunnel:list"),
   });
 
-  // Patch cache in-place from WS push events — no round-trip
-  useEffect(() => {
-    const unsubs = [
-      subscribeIpc("tunnel:created", (event) => {
-        const next = event.data as TunnelInfo;
-        const eventProfileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const eventSnap = getConnectionSnapshot(eventProfileId);
-        const eventConn = eventSnap?.owner ?? { profileId: eventProfileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(eventConn), (prev = []) =>
-          prev.some((t) => t.id === next.id) ? prev : [...prev, next],
-        );
-      }),
-      subscribeIpc("tunnel:ready", (event) => {
-        const { id, url } = event.data as { id: string; url: string };
-        const eventProfileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const eventSnap = getConnectionSnapshot(eventProfileId);
-        const eventConn = eventSnap?.owner ?? { profileId: eventProfileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(eventConn), (prev = []) =>
-          prev.map((t) =>
-            t.id === id ? { ...t, status: "ready" as const, url } : t,
-          ),
-        );
-      }),
-      subscribeIpc("tunnel:failed", (event) => {
-        const { id, error } = event.data as { id: string; error: string };
-        const eventProfileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const eventSnap = getConnectionSnapshot(eventProfileId);
-        const eventConn = eventSnap?.owner ?? { profileId: eventProfileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(eventConn), (prev = []) =>
-          prev.map((t) =>
-            t.id === id ? { ...t, status: "failed" as const, error } : t,
-          ),
-        );
-      }),
-      subscribeIpc("tunnel:stopped", (event) => {
-        const { id } = event.data as { id: string };
-        const eventProfileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const eventSnap = getConnectionSnapshot(eventProfileId);
-        const eventConn = eventSnap?.owner ?? { profileId: eventProfileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(eventConn), (prev = []) =>
-          prev.filter((t) => t.id !== id),
-        );
-      }),
-    ];
-    return () => unsubs.forEach((fn) => fn());
-  }, [qc, transportGeneration]);
+  useEffect(() => subscribeTunnelCacheEvents(qc), [qc]);
 
   // Install progress events
   useEffect(() => {
@@ -216,37 +181,30 @@ export function useTunnels(options?: {
 
   const createTunnel = useCallback(
     async (port: number, label: string) => {
-      await transport.invoke("tunnel:create", { port, label });
-      // WS tunnel:created patches the list; no manual invalidate needed
+      await getBoundTransport(conn).invoke("tunnel:create", { port, label });
+      if (isCurrentConnection(conn))
+        void qc.invalidateQueries({ queryKey: profileTunnelsQueryKey(conn) });
     },
-    [transport],
+    [conn, qc],
   );
 
   const stopTunnel = useCallback(
     async (id: string) => {
-      // Optimistic remove with rollback on failure
-      const mutationProfileId = getActiveProfileId();
-      const snapshot = qc.getQueryData<TunnelInfo[]>(["tunnels"]);
-      qc.setQueryData<TunnelInfo[]>(["tunnels"], (prev = []) =>
+      await getBoundTransport(conn).invoke("tunnel:stop", { id });
+      await qc.cancelQueries({
+        queryKey: profileTunnelsQueryKey(conn),
+        exact: true,
+      });
+      if (!isCurrentConnection(conn)) return;
+      qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(conn), (prev = []) =>
         prev.filter((t) => t.id !== id),
       );
-      try {
-        await transport.invoke("tunnel:stop", { id });
-      } catch (e) {
-        if (
-          getActiveProfileId() === mutationProfileId &&
-          getTransport() === transport
-        ) {
-          qc.setQueryData(["tunnels"], snapshot);
-        }
-        throw e;
-      }
     },
-    [qc, transport],
+    [conn, qc],
   );
 
   return {
-    tunnels: query.data ?? [],
+    tunnels: isCurrentConnection(conn) ? (query.data ?? []) : [],
     isLoading: query.isLoading,
     error: query.error,
     createTunnel,

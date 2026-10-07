@@ -36,6 +36,7 @@ import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
+import { TunnelReminderBanner } from "@/components/organisms/TunnelReminderBanner.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { useCognitoModeInputGuard } from "@/hooks/use-cognito-mode-input-guard.js";
 import { CognitoModeOverlay } from "@/components/organisms/CognitoModeOverlay.js";
@@ -360,12 +361,14 @@ export function DamHopperApp() {
               data-cognito-mode-content=""
               inert={cognitoActive ? true : undefined}
               aria-hidden={cognitoActive ? "true" : undefined}
-              className="contents"
+              className="app-screen-height flex flex-col overflow-hidden"
             >
               <AndroidChromeKeyboardNotice />
               <PassphrasePrompt />
               <FreshResetBanner />
               <LegacyDeepLinkNotice />
+              <TunnelReminderBanner />
+              <div className="app-route-viewport min-h-0 flex-1">
               <Routes>
               <Route
                 path="/"
@@ -446,6 +449,7 @@ export function DamHopperApp() {
                 />
               ) : null}
             </Routes>
+              </div>
             </div>
           </BrowserRouter>
         </AndroidChromeInputPolicyProvider>

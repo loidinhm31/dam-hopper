@@ -47,6 +47,7 @@ describe("PortsPanel", () => {
           status: "ready",
           url: "https://demo.trycloudflare.com",
           startedAt: 1,
+          reminderDue: false,
         },
       },
     ];
@@ -69,5 +70,34 @@ describe("PortsPanel", () => {
 
     expect(markup).not.toContain("in embedded Browser");
     expect(markup).toContain('href="https://demo.trycloudflare.com"');
+  });
+
+  it("keeps URL and Stop available without inventing a terminal action for untracked origins", () => {
+    mockPorts = [
+      {
+        port: 8080,
+        profileId: "default",
+        project: "api",
+        state: "unknown",
+        sessionId: null,
+        tunnel: {
+          id: "tunnel-untracked",
+          port: 8080,
+          label: "api",
+          driver: "cloudflared",
+          status: "ready",
+          url: "https://api.trycloudflare.com",
+          startedAt: 1,
+          reminderDue: true,
+        },
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<PortsPanel />);
+    expect(markup).toContain('href="https://api.trycloudflare.com"');
+    expect(markup).toContain('aria-label="Stop tunnel"');
+    expect(markup).not.toContain(
+      'aria-label="Kill terminal session for :8080"',
+    );
   });
 });

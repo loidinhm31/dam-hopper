@@ -430,9 +430,16 @@ interface TerminalPanelProps {
 
 **Purpose:** Combined panel for port detection, tunnel management, and confirmed session kill control for detected ports.
 
-**Data flow:** `usePorts()` preserves `sessionId` on detected rows and exposes `killPortSession(sessionId)` so the panel can terminate the owning terminal session without direct process handling.
+**Data flow:** `usePorts()` scopes port/tunnel snapshots, incarnation fences, events, and captured actions to profile/generation. Detected rows retain `sessionId` for confirmed terminal Kill; tunnel-only rows remain origin untracked with URL/Stop but no invented terminal action. Origin or PTY loss never stops an explicit tunnel.
 
 **Terminal workspace:** The same `PortsPanel` is available in a floating Terminal workspace overlay through its configurable shortcut, so detected ports and tunnel actions remain available without switching back to IDE mode.
+
+### TunnelReminderBanner
+
+**Location:** `packages/ui/src/components/organisms/TunnelReminderBanner.tsx`; mounted globally in the shared web/native app inside the Cognito inert boundary.
+
+**Behavior:** The server's three-hour `reminderDue` snapshot and `tunnel:reminder` event drive profile/port/URL reminders, not a browser timer. Dismiss persists per profile/tunnel in browser sessionStorage without stopping the connector. Stop captures the rendered connection generation, reports failure with Retry, and cannot rebind after reconnect. Cognito hides reminders; stacked reminders scroll within a bounded area and route shells consume the remaining viewport.
+
 
 ### PaneContainer
 

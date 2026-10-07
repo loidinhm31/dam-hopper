@@ -1,5 +1,10 @@
 # 2026-10-07
 
+- **Persistent Quick Tunnels and three-hour exposure reminder.** Origin listener loss/reopen, PTY exit/Kill/replacement, and detected-owner changes no longer stop explicit Cloudflared forwards or reset their PID/ID/URL/start time. Stop, connector exit, and DamHopper shutdown still clean up; no automatic restart or server-restart restoration.
+  - Server-owned monotonic deadline retains required `reminderDue` in REST and emits one `tunnel:reminder`, without expiry. Shared UI catches up after reconnect/reload, offers browser-session Dismiss and captured-profile Stop, hides under Cognito, and retains origin-untracked tunnel rows.
+  - Public exposure warning covers replacement services binding the same port. Snapshot/event ordering and profile-scoped incarnation fences prevent stale updates and cross-server collisions; stacked reminders reserve bounded viewport space.
+  - Exercised verification and platform limits: [implementation plan](../plans/261007-1052-cloudflared-persistence-reminder/plan.md). Linux/web qualification does not imply native desktop runtime or human visual approval.
+
 - **PR #49 review remediation.** Hardened strict Windows traversal with native rooted handles; snapshots validate descriptor timestamps/identity, named entries, and ancestors. Folder response limiting now uses linear byte accounting. Corrected progress identity matching, unreadable-progress authority, short GFM rows, labelled completion prose, and Current status precedence. Repaired watch settlement/rebinding/recovery and truthful coverage limits; added precise target-relative watch-only events. Background overview failures preserve manual drafts; local document links decode once; Retry performs a read.
   - Strengthened the application journey with actual atomic replacement, automatic refresh assertions, typed draft preservation, and client-visible target isolation.
   - Verification and platform limits recorded in the [remediation plan](../plans/261007-0904-pr49-review-remediation/plan.md). Windows runtime and human visual approval are not implied by Linux tests or cross-compilation.

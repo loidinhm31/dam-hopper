@@ -50,6 +50,7 @@ describe("useBrowserDebug tunnel lifecycle", () => {
           status: "ready",
           url: "https://example.trycloudflare.com",
           startedAt: 0,
+          reminderDue: false,
         },
       ])
       .mockResolvedValue([]);
@@ -197,6 +198,7 @@ describe("useBrowserDebug tunnel lifecycle", () => {
       status: "ready",
       url: "https://snapshot.trycloudflare.com",
       startedAt: 1,
+      reminderDue: false,
     };
 
     let accepted = false;
@@ -228,6 +230,7 @@ describe("useBrowserDebug tunnel lifecycle", () => {
       status: "starting",
       url: "https://snapshot.trycloudflare.com",
       startedAt: 1,
+      reminderDue: false,
     };
 
     let accepted = true;
