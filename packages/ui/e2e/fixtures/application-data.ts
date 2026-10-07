@@ -1,5 +1,4 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -11,6 +10,8 @@ export {
   type StorageStateOptions,
   type PlaywrightStorageState,
 } from "./application-storage-state.js";
+export { seedPlanFixtures } from "./plan-fixtures.js";
+import { seedPlanFixtures } from "./plan-fixtures.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,7 +21,9 @@ export interface SeedTreeConfig {
   serverToken?: string;
   workspaceName?: string;
   projectName?: string;
+  secondaryProjectName?: string;
   mfaKeyHex?: string;
+  seedPlans?: boolean;
 }
 
 export interface SeedTreeResult {
@@ -29,6 +32,7 @@ export interface SeedTreeResult {
   mfaKeyHex: string;
   workspaceName: string;
   projectName: string;
+  secondaryProjectName: string;
   seedDigest: string;
   dispose: () => Promise<void>;
 }
@@ -58,6 +62,8 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
   const mfaKeyHex = config.mfaKeyHex ?? randomBytes(32).toString("hex");
   const workspaceName = config.workspaceName ?? "e2e-workspace";
   const projectName = config.projectName ?? "fixture-project";
+  const secondaryProjectName = config.secondaryProjectName ?? "fixture-worktree-project";
+  const seedPlans = config.seedPlans ?? true;
 
   const homeDir = path.join(hostStagingDir, "home");
   const configDir = path.join(homeDir, ".config", "dam-hopper");
@@ -66,14 +72,15 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
   const advisorEvaluationsDir = path.join(evcrateDir, "advisor-evaluations");
   const workspaceDir = path.join(hostStagingDir, "workspace");
   const projectDir = path.join(workspaceDir, projectName);
+  const secondaryProjectDir = path.join(workspaceDir, secondaryProjectName);
 
   await fs.mkdir(configDir, { recursive: true });
   await fs.mkdir(advisorHistoryDir, { recursive: true });
   await fs.mkdir(advisorEvaluationsDir, { recursive: true });
   await fs.mkdir(projectDir, { recursive: true });
+  await fs.mkdir(secondaryProjectDir, { recursive: true });
   await fs.mkdir(path.join(hostStagingDir, "logs"), { recursive: true });
   await fs.mkdir(path.join(hostStagingDir, "tmp"), { recursive: true });
-
   // 1. Server token file in ~/.config/dam-hopper/server-token
   await fs.writeFile(path.join(configDir, "server-token"), serverToken + "\n", { mode: 0o600 });
 
@@ -102,9 +109,14 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
   // 5. Fixture workspace project files
   await fs.writeFile(path.join(projectDir, "README.md"), `# ${projectName}\nDeterministic E2E project workspace.\n`);
   await fs.writeFile(path.join(projectDir, "sample.txt"), "Hello from E2E isolated environment.\n");
+  await fs.writeFile(path.join(secondaryProjectDir, "README.md"), `# ${secondaryProjectName}\nSecondary target workspace.\n`);
+
+  if (seedPlans) {
+    await seedPlanFixtures(projectDir, secondaryProjectDir);
+  }
 
   // 6. Root dam-hopper.toml for the container
-  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n`;
+  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
   await fs.writeFile(path.join(hostStagingDir, "dam-hopper.toml"), tomlContent);
   const seedDigest = createHash("sha256")
     .update(serverToken)
@@ -126,5 +138,6 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
     }
   };
 
-  return { hostStagingDir, serverToken, mfaKeyHex, workspaceName, projectName, seedDigest, dispose };
+  return { hostStagingDir, serverToken, mfaKeyHex, workspaceName, projectName, secondaryProjectName, seedDigest, dispose };
 }
+

@@ -36,6 +36,8 @@ pub enum ClientMsg {
         #[serde(default)]
         worktree_path: Option<String>,
         path: String,
+        #[serde(default, rename = "watchOnly")]
+        watch_only: Option<bool>,
     },
     #[serde(rename = "fs:unsubscribe_tree")]
     FsUnsubTree { sub_id: u64 },
@@ -50,6 +52,8 @@ pub enum ClientMsg {
         path: String,
         offset: Option<u64>,
         len: Option<u64>,
+        #[serde(default, rename = "readMode")]
+        read_mode: Option<String>,
     },
 
     // FS — write protocol (begin → chunk* → commit)
@@ -199,7 +203,6 @@ pub enum ClientMsg {
     // Auth — explicit key eviction (defense-in-depth; 16-entry cap is the primary guard)
     #[serde(rename = "auth:session_remove")]
     AuthSessionRemove { session_id: String },
-
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +220,12 @@ pub struct FsEventDto {
     /// Rename source path, `null` for non-rename events.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// Target-relative destination for watch-only subscriptions; "." is the target itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_relative_path: Option<String>,
+    /// Target-relative rename source when it is inside the same subscription target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_relative_from: Option<String>,
 }
 
 impl From<FsEvent> for FsEventDto {
@@ -225,6 +234,8 @@ impl From<FsEvent> for FsEventDto {
             kind: format!("{:?}", ev.kind).to_lowercase(),
             path: ev.path.to_string_lossy().replace('\\', "/"),
             from: ev.from.map(|p| p.to_string_lossy().replace('\\', "/")),
+            target_relative_path: None,
+            target_relative_from: None,
         }
     }
 }
@@ -522,7 +533,6 @@ pub enum ServerMsg {
         session_id: String,
         incarnation: u64,
     },
-
 }
 
 /// Wire message — either a JSON text frame, raw binary frame, or close signal.

@@ -88,6 +88,50 @@ The `WorkflowService` manages hierarchical plans, phases, tasks (max depth 3), w
 
 See [Workflow API Specification](./workflow-api.md).
 
+### Project Plans Dashboard (Implemented)
+
+**Implemented and qualified 2026-10-07.** See the
+[frozen contracts](../plans/261006-1653-project-plans-dashboard/contracts.md) and
+[implementation plan](../plans/261006-1653-project-plans-dashboard/plan.md).
+
+- Extends current Plan surface with folder-first selection, then one selected plan's Overview,
+  Timeline, and read-only documents; preserves separate SQLite manual tracking.
+- Resolves configured project / registered worktree on server; browses immediate
+  folders under fixed `plans/`, reading plan/progress only after explicit selection.
+- `plan.md` supplies metadata and the complete declared phase inventory, including
+  valid short GFM rows. Presence of `progress.md` opts into its current report;
+  unreadable progress retains historical evidence but makes current phase
+  completion unknown. Conflicting/duplicate phase identity claims cannot complete
+  another phase. Explicit Current status columns take precedence over Status.
+- Progress is an administrative report, not verified completion or permission to
+  execute. The dashboard never calls controllers, runs agents, or updates files.
+- Selected Timeline uses explicit planned/actual ranges, creation milestones, or
+  Undated state. No mtime/effort duration inference, cross-plan Board, or bulk status load.
+- Scopes requests, queries, document links, and watcher cleanup to the captured
+  profile, connection generation, and project/worktree target.
+- Reuses native Rust API / auth / filesystem boundaries and shared React rendering;
+  no database import, Node sidecar, iframe, or second terminal lifecycle.
+- Strict bounded `plan-document` reads use rooted descriptors/native Windows
+  handles, reject linked ancestors, and validate file identity, modification/change
+  timestamps, named entries, and pinned ancestors before publishing a snapshot.
+  Atomic replacement during a read reports changed without an automatic retry.
+- Folder responses retain a whole sorted prefix under the 2 MiB JSON limit using
+  bounded linear size accounting, not repeated full-response trimming.
+- Owner-bound `watchOnly` subscriptions cover existing navigation ancestors and
+  selected document parents, not all children. Registration/rebinding is serialized;
+  coverage is live only after installation and a fresh authoritative read.
+  Missing directories are covered through their existing parents; requirements
+  beyond the 33-watch cap remain explicitly degraded. Reconcile retries missing
+  watches rather than clearing the warning optimistically.
+  Shared server watchers use pinned directory identities and exact generation
+  leases; a retained Explorer subscription cannot force plans onto an old-inode
+  watcher or release a replacement generation.
+- Reuses Markdown / GFM / Mermaid; local images show notices, no media integration.
+  Local document paths are URI-decoded once before containment checks; document
+  Retry requests the failed path again.
+- Linux runtime exercised. Windows strict source/tests cross-compiled in an
+  isolated harness; full cross-target build requires native MSVC tools. Windows
+  runtime remains explicitly unqualified until tested on Windows.
 ## Telemetry & OTLP Analytics
 
 <a id="codex-otel-usage-analytics"></a>

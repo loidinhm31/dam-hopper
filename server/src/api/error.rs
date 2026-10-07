@@ -31,6 +31,12 @@ impl From<crate::agent_status::IntegrationError> for ApiError {
         Self(crate::error::AppError::AgentStatusIntegration(error))
     }
 }
+impl From<crate::plans::PlansError> for ApiError {
+    fn from(error: crate::plans::PlansError) -> Self {
+        Self(crate::error::AppError::Plans(error))
+    }
+}
+
 impl From<crate::error::GitBlameError> for ApiError {
     fn from(error: crate::error::GitBlameError) -> Self {
         Self(crate::error::AppError::GitBlame(error))

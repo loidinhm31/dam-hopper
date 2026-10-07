@@ -31,6 +31,10 @@ export interface FsEventDto {
   kind: string;
   path: string;
   from?: string;
+  /** Watch-only event identity relative to its captured target root ("." for root-self). */
+  targetRelativePath?: string;
+  /** Rename source relative to the same captured target, when within it. */
+  targetRelativeFrom?: string;
 }
 
 /** Entry returned by GET /api/fs/list */

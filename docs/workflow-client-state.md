@@ -174,6 +174,26 @@ selection, filters, drafts, focus, pending action presentation, and elapsed
 clock ticks. Workflow hooks must not read or write `useSearchParams`, Zustand
 workflow stores, localStorage, terminal registries, or editor state.
 
+## Project plans client queries and types
+
+The file-backed project plans dashboard client operates alongside workflow state:
+- Types (`packages/ui/src/api/project-plans-types.ts`): wire models for `PlanFoldersResponse`, `SelectedPlanResponse`, `FilePlan`, `FilePlanPhase`, `PlanDocuments`, `PlanDates`, `Diagnostic`, and `PlanCoverageState`.
+- Query keys (`packages/ui/src/api/project-plans-queries.ts`): strictly scoped to `['profile', profileId, generation, 'plans', ...]` preventing ambient fallback or cross-profile cache leakage.
+- Hook (`packages/ui/src/hooks/use-project-plans.ts`): orchestrates folder queries, selected plan queries, document fetching, and real-time filesystem watcher subscriptions (`watchOnly` mode), preserving isolation from manual tracking (`['workflow', ...]`).
+- Watch lifetimes are scoped to owner/generation, target, and required paths rather
+  than DTO reference identity. Settled saves reset churn accounting. Structural
+  replacement rebinds affected handles; pending registration/overflow work cannot
+  overwrite an owned subscription. A post-install read must start after installation,
+  including when the initial no-data request was already pending.
+- Missing `plans/` is a live parent-only empty state. More than 33 required watches
+  reports incomplete coverage with uncovered paths. Refresh/Reconcile repairs
+  registrations and refetches selected data/documents; it does not promise live
+  coverage until the required set is installed.
+- Server watcher sharing includes directory object identity, target, and pathname.
+  Each generation pins its directory object; cleanup consumes the exact generation
+  lease. Root replacement/deletion can install a new watcher while Explorer still
+  holds the old one.
+
 ## Verification
 
 Verification recorded on 2026-09-02 confirmed 51/51 targeted UI tests passing:

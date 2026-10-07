@@ -564,6 +564,15 @@ Primary backend files:
   bounded manual agent harness links.
 - `server/src/workflow/observation_tests.rs` — observation and lifecycle behavioral coverage.
 - Domain, store, and API routes in `server/src/workflow/` and `server/src/api/workflow/` own the public REST contract.
+## Project plans filesystem API boundary
+
+The filesystem-backed plan reader is distinct from the SQLite workflow service:
+- Filesystem plans are read-only, source-grounded artifacts discovered under fixed `plans/` in the configured project or registered worktree. They are never imported into SQLite, mutated by the server, or masqueraded as `ItemDto`.
+- `GET /api/plans/folders?project={name}&worktreePath={path}&path={relPath}` provides folder-first containment-checked immediate directory entries with resource bounding (`MAX_VISITED_ENTRIES = 5000`).
+- `GET /api/plans?project={name}&worktreePath={path}&planPath={relPlanPath}` reads the selected plan's `plan.md` and optional `progress.md`, projecting reported phase status, diagnostics, and timeline ranges.
+- Document content reads use the bounded filesystem read API with `mode="plan-document"` (`GET /api/fs/read` or RPC `fs.read`), strictly limited to 64 KiB, UTF-8 text, and containment within the target project or worktree.
+- Manual tracking (`/api/workflow/*`) and file plans (`/api/plans/*`) operate independently in both backend service boundaries and frontend query caches.
+
 ## Boundaries and follow-up
 
 Workflow writes remain separate from terminal WebSocket messages. Authoritative

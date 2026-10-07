@@ -1,5 +1,4 @@
 import {
-  Activity,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -70,7 +69,33 @@ export function WorkflowContextRibbon({
   }
 
   if (isUnavailable) {
-    return <div className="flex h-9 w-full items-center gap-2 px-3 text-xs bg-[var(--color-surface)]/80 border-b border-[var(--color-border)] text-[var(--color-text-muted)]" role="status" aria-label="Workflow unavailable for this profile"><Layers className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Workflow tracking is unavailable for this profile.</span></div>;
+    return (
+      <div
+        ref={triggerRef}
+        className="flex h-9 w-full items-center justify-between gap-2 px-3 text-xs bg-[var(--color-surface)]/80 border-b border-[var(--color-border)] text-[var(--color-text-muted)] cursor-pointer select-none"
+        role="status"
+        aria-label="Workflow unavailable for this profile"
+        tabIndex={0}
+        aria-expanded={isOpen}
+        aria-controls="workflow-context-deck"
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Layers className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Workflow tracking is unavailable for this profile.</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0 text-[11px]">
+          <span>Plans</span>
+          {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        </div>
+      </div>
+    );
   }
 
   if (error) {
@@ -80,16 +105,43 @@ export function WorkflowContextRibbon({
         className="flex h-9 w-full items-center justify-between gap-2 px-3 text-xs bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/30 text-[var(--color-danger)]"
         role="alert"
       >
-        <div className="flex items-center gap-1.5 truncate">
+        <div
+          ref={triggerRef}
+          className="flex min-w-0 flex-1 items-center gap-1.5 truncate cursor-pointer select-none"
+          onClick={onToggle}
+          role="button"
+          tabIndex={0}
+          aria-expanded={isOpen}
+          aria-controls="workflow-context-deck"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggle();
+            }
+          }}
+        >
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">Workflow error: {errorMsg}</span>
         </div>
-        {onRetry && (
-          <Button type="button" variant="ghost" size="sm" onClick={onRetry} className="h-6 gap-1 px-2 text-xs">
-            <RefreshCw className="h-3 w-3" />
-            Retry
+        <div className="flex items-center gap-1 shrink-0">
+          {onRetry && (
+            <Button type="button" variant="ghost" size="sm" onClick={onRetry} className="h-6 gap-1 px-2 text-xs">
+              <RefreshCw className="h-3 w-3" />
+              Retry
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+            aria-label={isOpen ? "Collapse workflow deck" : "Expand workflow deck"}
+            className="h-6 w-6 p-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </Button>
-        )}
+        </div>
       </div>
     );
   }

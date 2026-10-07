@@ -9,7 +9,10 @@ import {
 } from "./container-client.js";
 import { createSeedTree, type SeedTreeResult } from "./application-data.js";
 import { waitForHealth, verifyServiceSafety } from "./application-readiness.js";
-import { ensureApplicationImagesBuilt, APP_IMAGE_NAME } from "./image-builder.js";
+import {
+  ensureApplicationImagesBuilt,
+  APP_IMAGE_NAME,
+} from "./image-builder.js";
 
 export interface ApplicationServicesConfig {
   databaseName?: string;
@@ -31,7 +34,10 @@ export interface ApplicationServices {
   readonly databaseName: string;
   readonly serverToken: string;
   readonly seedDigest: string;
+  readonly secondaryProjectName: string;
   readContainerFile(filePath: string): Promise<string>;
+  writeContainerFile(filePath: string, content: string): Promise<void>;
+  statContainerFile(filePath: string): Promise<{ mtime: string; size: number }>;
   readPolicyFile(): Promise<unknown>;
   fetchApi(endpoint: string, init?: RequestInit): Promise<Response>;
   dispose(): Promise<void>;
@@ -58,7 +64,10 @@ export async function startApplicationServices(
   const appContainerId = `dam-hopper-app-${testId}`;
   const databaseName = config.databaseName ?? `dam_hopper_e2e_${testId}`;
   const username = config.username ?? "admin";
-  const mongoImage = config.mongoImage ?? process.env.E2E_MONGO_IMAGE ?? "docker.io/library/mongo:8.2";
+  const mongoImage =
+    config.mongoImage ??
+    process.env.E2E_MONGO_IMAGE ??
+    "docker.io/library/mongo:8.2";
   const appImage = config.appImage ?? APP_IMAGE_NAME;
   if (!config.appImage) {
     await ensureApplicationImagesBuilt();
@@ -108,11 +117,14 @@ export async function startApplicationServices(
       mongoImage,
     ]);
     ownedContainers.push(mongoContainerId);
-    const { promise: mongoDelay, resolve: resolveMongo } = Promise.withResolvers<void>();
+    const { promise: mongoDelay, resolve: resolveMongo } =
+      Promise.withResolvers<void>();
     setTimeout(resolveMongo, 1500);
     await mongoDelay;
 
-    const portArg = config.port ? `127.0.0.1:${config.port}:4800` : "127.0.0.1::4800";
+    const portArg = config.port
+      ? `127.0.0.1:${config.port}:4800`
+      : "127.0.0.1::4800";
     await runEngine([
       "run",
       "-d",
@@ -138,7 +150,12 @@ export async function startApplicationServices(
       "/e2e/home/mfa.key",
       "/e2e/home/.config/dam-hopper/server-token",
     ]);
-
+    const unreadableDocPath = `/e2e/workspace/${seedTree.projectName}/plans/bulk/unreadable-doc.txt`;
+    await execInContainer(appContainerId, [
+      "sh",
+      "-c",
+      `if [ -f "${unreadableDocPath}" ]; then chmod 0000 "${unreadableDocPath}"; fi`,
+    ]);
     const seedRaw = await execInContainer(appContainerId, [
       "/usr/local/bin/application_e2e_seed",
       "--mongodb-uri",
@@ -183,8 +200,13 @@ export async function startApplicationServices(
     try {
       await waitForHealth(appOrigin);
     } catch (healthErr) {
-      const serverLog = await execInContainer(appContainerId, ["cat", "/e2e/logs/server.log"]).catch(() => "failed to read server log");
-      throw new Error(`${(healthErr as Error).message}\nServer log:\n${serverLog}`);
+      const serverLog = await execInContainer(appContainerId, [
+        "cat",
+        "/e2e/logs/server.log",
+      ]).catch(() => "failed to read server log");
+      throw new Error(
+        `${(healthErr as Error).message}\nServer log:\n${serverLog}`,
+      );
     }
 
     await verifyServiceSafety(appOrigin, seedOutput.token);
@@ -201,8 +223,39 @@ export async function startApplicationServices(
       databaseName,
       serverToken: seedTree.serverToken,
       seedDigest: seedTree.seedDigest,
+      secondaryProjectName: seedTree.secondaryProjectName,
       readContainerFile(filePath: string): Promise<string> {
         return execInContainer(appContainerId, ["cat", filePath]);
+      },
+      async writeContainerFile(
+        filePath: string,
+        content: string,
+      ): Promise<void> {
+        const b64 = Buffer.from(content, "utf-8").toString("base64");
+        await execInContainer(appContainerId, [
+          "sh",
+          "-c",
+          'temporary=$(mktemp "$1.e2e-XXXXXX") && trap \'rm -f "$temporary"\' EXIT && printf "%s" "$2" | base64 -d > "$temporary" && mv -f "$temporary" "$1"',
+          "write-atomic",
+          filePath,
+          b64,
+        ]);
+      },
+      // Relies on GNU stat format flags (-c "%y\t%s") inside the container Linux runtime to capture full-resolution mtime.
+      async statContainerFile(
+        filePath: string,
+      ): Promise<{ mtime: string; size: number }> {
+        const raw = await execInContainer(appContainerId, [
+          "stat",
+          "-c",
+          "%y\t%s",
+          filePath,
+        ]);
+        const [mtimeStr, sizeStr] = raw.trim().split("\t");
+        return {
+          mtime: mtimeStr ?? "",
+          size: Number.parseInt(sizeStr ?? "0", 10),
+        };
       },
       async readPolicyFile(): Promise<unknown> {
         const raw = await execInContainer(appContainerId, [
@@ -216,10 +269,13 @@ export async function startApplicationServices(
         if (!headers.has("Authorization")) {
           headers.set("Authorization", `Bearer ${seedOutput.token}`);
         }
-        return fetch(`${appOrigin}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`, {
-          ...init,
-          headers,
-        });
+        return fetch(
+          `${appOrigin}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`,
+          {
+            ...init,
+            headers,
+          },
+        );
       },
       async dispose(): Promise<void> {
         process.off("SIGINT", signalHandler);

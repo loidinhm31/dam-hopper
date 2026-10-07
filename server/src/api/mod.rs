@@ -22,6 +22,7 @@ pub mod idle_suspend;
 pub mod media_session;
 mod media_stream_headers;
 mod media_stream_response;
+pub mod plans;
 pub mod port_forward;
 pub mod resource_events;
 pub mod router;

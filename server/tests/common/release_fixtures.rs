@@ -55,7 +55,6 @@ pub fn create_test_manifest_and_archive() -> (ReleaseManifest, Vec<u8>) {
             &f11_data[..],
             0o755,
         ),
-
         ("systemd/dam-hopper-api.service", false, &f4_data[..], 0o644),
         ("systemd/dam-hopper-web.service", false, &f5_data[..], 0o644),
         (

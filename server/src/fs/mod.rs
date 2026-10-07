@@ -43,7 +43,7 @@ pub use video_ticket::{
     VideoTicketRecord,
 };
 pub use watcher::FsWatcherManager;
-use watcher::WatcherKey;
+use watcher::{WatcherKey, WatcherLease};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -70,8 +70,8 @@ pub struct TreeNode {
 }
 
 struct SubInfo {
-    /// Immutable project + target identity used to release the watcher.
-    watcher_key: WatcherKey,
+    /// Exact directory watcher generation owned by this subscription.
+    watcher_lease: WatcherLease,
     /// Absolute path prefix used to filter broadcast events.
     filter_prefix: PathBuf,
 }
@@ -130,13 +130,13 @@ impl FsSubsystem {
         };
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.sandbox = sandbox;
-        let watcher_keys: Vec<WatcherKey> = inner
+        let watcher_leases: Vec<WatcherLease> = inner
             .subs
             .drain()
-            .map(|(_, info)| info.watcher_key)
+            .map(|(_, info)| info.watcher_lease)
             .collect();
-        for watcher_key in watcher_keys {
-            inner.watcher_mgr.release(&watcher_key);
+        for watcher_lease in watcher_leases {
+            inner.watcher_mgr.release(&watcher_lease);
         }
     }
 
@@ -205,21 +205,44 @@ impl FsSubsystem {
         Self::subscribe_with_key(&mut inner, watcher_key, filter_abs_path)
     }
 
+    /// Subscribe strictly to events within an actual directory under a server-resolved project target.
+    /// Sets `WatcherKey.root` to `directory_abs_path`.
+    pub fn subscribe_target_directory(
+        &self,
+        target: &ResolvedProjectTarget,
+        directory_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
+        let sandbox = inner.sandbox.as_ref().ok_or(FsError::Unavailable)?;
+        let configured_root = sandbox
+            .project_root(target.project())
+            .ok_or(FsError::NotFound)?;
+        if configured_root != *target.configured_root()
+            || !target.available()
+            || !directory_abs_path.starts_with(target.target_path())
+        {
+            return Err(FsError::PathEscape);
+        }
+        let watcher_key = WatcherKey {
+            project: target.project().to_owned(),
+            target_key: target.target_key().to_owned(),
+            root: directory_abs_path.clone(),
+        };
+        Self::subscribe_with_key(&mut inner, watcher_key, directory_abs_path)
+    }
+
     fn subscribe_with_key(
         inner: &mut Inner,
         watcher_key: WatcherKey,
         filter_abs_path: PathBuf,
     ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
-        let rx = inner
-            .watcher_mgr
-            .subscribe(&watcher_key)
-            .map_err(|e| FsError::Io(std::io::Error::other(e)))?;
+        let (watcher_lease, rx) = inner.watcher_mgr.subscribe(&watcher_key)?;
         let sub_id = inner.next_sub_id;
         inner.next_sub_id += 1;
         inner.subs.insert(
             sub_id,
             SubInfo {
-                watcher_key,
+                watcher_lease,
                 filter_prefix: filter_abs_path,
             },
         );
@@ -230,7 +253,7 @@ impl FsSubsystem {
     pub fn unsubscribe_tree(&self, sub_id: u64) {
         let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
         if let Some(info) = inner.subs.remove(&sub_id) {
-            inner.watcher_mgr.release(&info.watcher_key);
+            inner.watcher_mgr.release(&info.watcher_lease);
         }
     }
 
@@ -330,6 +353,188 @@ mod tests {
 
         assert_eq!(fs.watcher_refcount(&alpha), 0);
         fs.unsubscribe_tree(sub_id);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn replaced_root_watch_only_receives_events_while_generic_old_generation_remains_leased()
+    {
+        use crate::workspace_target::ResolvedProjectTarget;
+        use std::time::Duration;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let old_root = tmp.path().join("repo-old");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let target = ResolvedProjectTarget::from_parts(
+            "project".into(),
+            root.clone(),
+            root.clone(),
+            "root".into(),
+            true,
+            true,
+            None,
+        );
+        let fs = FsSubsystem::new(vec![("project".into(), root.clone())]);
+        let (old_generic, _old_rx) = fs.subscribe_target_tree(&target, root.clone()).unwrap();
+        let (old_watch_only, _old_watch_rx) = fs
+            .subscribe_target_directory(&target, root.clone())
+            .unwrap();
+        assert_eq!(fs.watcher_refcount(&root), 2);
+
+        std::fs::rename(&root, &old_root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        fs.unsubscribe_tree(old_watch_only);
+        assert_eq!(fs.watcher_refcount(&root), 1);
+        let (new_watch_only, mut new_rx) = fs
+            .subscribe_target_directory(&target, root.clone())
+            .unwrap();
+        let (new_generic, mut new_generic_rx) =
+            fs.subscribe_target_tree(&target, root.clone()).unwrap();
+        assert_eq!(fs.watcher_refcount(&root), 3);
+
+        let file = root.join("first-new-generation.txt");
+        std::fs::write(&file, "replacement root").unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let event = new_rx.recv().await.unwrap();
+                if event.path == file {
+                    break event;
+                }
+            }
+        })
+        .await
+        .expect("new watch-only lease must receive an actual replacement-root event");
+        assert!(matches!(
+            event.kind,
+            super::event::FsEventKind::Created | super::event::FsEventKind::Modified
+        ));
+
+        // Releasing a still-held Explorer lease must not decrement the new generation.
+        fs.unsubscribe_tree(old_generic);
+        fs.unsubscribe_tree(old_watch_only);
+        assert_eq!(fs.watcher_refcount(&root), 2);
+        let file = root.join("after-old-release.txt");
+        std::fs::write(&file, "old generation released").unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if new_rx.recv().await.unwrap().path == file {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("old generation release must preserve replacement watch-only delivery");
+
+        fs.unsubscribe_tree(new_watch_only);
+        assert_eq!(fs.watcher_refcount(&root), 1);
+        let file = root.join("remaining-new-generic.txt");
+        std::fs::write(&file, "new generic still owns its watcher").unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if new_generic_rx.recv().await.unwrap().path == file {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("new generic lease must survive release of the new watch-only lease");
+        fs.unsubscribe_tree(new_generic);
+        assert_eq!(fs.watcher_refcount(&root), 0);
+    }
+
+    // Windows directory deletion stays pending until all notify/native handles close.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deleted_root_recreation_gets_live_watch_only_generation_with_old_generic_lease() {
+        use crate::workspace_target::ResolvedProjectTarget;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let target = ResolvedProjectTarget::from_parts(
+            "project".into(),
+            root.clone(),
+            root.clone(),
+            "root".into(),
+            true,
+            true,
+            None,
+        );
+        let fs = FsSubsystem::new(vec![("project".into(), root.clone())]);
+        let (old_generic, _old_rx) = fs.subscribe_target_tree(&target, root.clone()).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let (new_watch_only, mut new_rx) = fs
+            .subscribe_target_directory(&target, root.clone())
+            .unwrap();
+        assert_eq!(fs.watcher_refcount(&root), 2);
+        for (name, release_old) in [
+            ("after-recreate.txt", false),
+            ("after-old-release.txt", true),
+        ] {
+            if release_old {
+                fs.unsubscribe_tree(old_generic);
+                assert_eq!(fs.watcher_refcount(&root), 1);
+            }
+            let file = root.join(name);
+            std::fs::write(&file, "recreated root event").unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if new_rx.recv().await.unwrap().path == file {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect(
+                "recreated root must deliver real events despite the deleted generic generation",
+            );
+        }
+        fs.unsubscribe_tree(old_generic);
+        assert_eq!(fs.watcher_refcount(&root), 1);
+        fs.unsubscribe_tree(new_watch_only);
+        assert_eq!(fs.watcher_refcount(&root), 0);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn reinit_sandbox_releases_overlapping_directory_generations_without_touching_new_leases()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let fs = FsSubsystem::new(vec![("project".into(), root.clone())]);
+        let (old_sub, mut old_rx) = fs.subscribe_tree("project", root.clone()).unwrap();
+        std::fs::rename(&root, tmp.path().join("repo-old")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let (replacement_sub, mut replacement_rx) =
+            fs.subscribe_tree("project", root.clone()).unwrap();
+        assert_eq!(fs.watcher_refcount(&root), 2);
+        fs.reinit_sandbox(vec![("project".into(), root.clone())]);
+        assert_eq!(fs.watcher_refcount(&root), 0);
+        for rx in [&mut old_rx, &mut replacement_rx] {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if matches!(
+                        rx.recv().await,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed)
+                    ) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("sandbox clear must close every directory generation");
+        }
+        let (current_sub, _current_rx) = fs.subscribe_tree("project", root.clone()).unwrap();
+        fs.unsubscribe_tree(old_sub);
+        fs.unsubscribe_tree(replacement_sub);
+        assert_eq!(fs.watcher_refcount(&root), 1);
+        fs.unsubscribe_tree(current_sub);
+        assert_eq!(fs.watcher_refcount(&root), 0);
     }
 
     #[test]

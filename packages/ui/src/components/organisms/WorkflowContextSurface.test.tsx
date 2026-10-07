@@ -8,6 +8,11 @@ import { ApiRequestError, api, type ApiClient } from "@/api/client.js";
 import * as connections from "@/api/connections.js";
 import type { OverviewDto } from "@/api/workflow-dto-types.js";
 import { WorkflowContextSurface } from "./WorkflowContextSurface.js";
+import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+
+vi.mock("@/hooks/use-compact-workspace.js", () => ({
+  useCompactWorkspace: vi.fn(() => false),
+}));
 
 const mockOverview: OverviewDto = {
   workspace: { id: "ws-1", name: "Default" },
@@ -76,6 +81,7 @@ describe("WorkflowContextSurface", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    vi.mocked(useCompactWorkspace).mockReturnValue(false);
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
     window.HTMLElement.prototype.hasPointerCapture = vi.fn();
     window.HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -86,7 +92,7 @@ describe("WorkflowContextSurface", () => {
     root = createRoot(container);
     queryClient = new QueryClient({
       defaultOptions: {
-        queries: { retry: false },
+        queries: { retry: false, retryDelay: 0 },
       },
     });
   });
@@ -114,7 +120,9 @@ describe("WorkflowContextSurface", () => {
     expect(container.querySelector("#workflow-context-deck")).toBeNull();
 
     // Toggle ribbon
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
@@ -143,9 +151,127 @@ describe("WorkflowContextSurface", () => {
         "Workflow tracking is unavailable for this profile.",
       );
     });
-    expect(container.querySelector("#workflow-context-deck")).toBeNull();
-    expect(container.querySelector("button")).toBeNull();
   });
+
+  it.each([
+    ["desktop", "capture"],
+    ["desktop", "edit"],
+    ["desktop", "note"],
+    ["mobile", "capture"],
+    ["mobile", "edit"],
+    ["mobile", "note"],
+  ] as const)(
+    "preserves typed %s %s drafts across overview failure and recovery",
+    async (layout, form) => {
+      vi.mocked(useCompactWorkspace).mockReturnValue(layout === "mobile");
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <WorkflowContextSurface
+              target={{ project: "hopper-core" }}
+              isOpen={true}
+            />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain("Workflow Context UI"),
+      );
+
+      const surface = document.querySelector(
+        layout === "mobile" ? '[role="dialog"]' : "#workflow-context-deck",
+      )!;
+      expect(surface).not.toBeNull();
+      if (form === "capture") {
+        const addPlan = Array.from(surface.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "New Plan",
+        );
+        expect(addPlan).toBeDefined();
+        await act(async () => addPlan!.click());
+      } else {
+        const planRow = Array.from(
+          surface.querySelectorAll<HTMLElement>('[role="button"]'),
+        ).find((row) => row.textContent?.includes("Workflow Context UI"))!;
+        expect(planRow).not.toBeNull();
+        await act(async () => planRow.click());
+        const openForm =
+          form === "edit"
+            ? surface.querySelector<HTMLButtonElement>(
+                'button[aria-label="Edit item"]',
+              )
+            : Array.from(surface.querySelectorAll("button")).find(
+                (button) => button.textContent?.trim() === "Note",
+              );
+        expect(openForm).toBeDefined();
+        await act(async () => openForm!.click());
+      }
+
+      const selectors =
+        form === "capture"
+          ? ["#wf-cap-title", "#wf-cap-summary"]
+          : form === "edit"
+            ? ["#wf-edit-title", "#wf-edit-summary"]
+            : ['textarea[aria-label="Note content"]'];
+      const fields = selectors.map(
+        (selector) =>
+          surface.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+            selector,
+          )!,
+      );
+      const drafts = fields.map((_, index) => `Unsaved ${form} draft ${index}`);
+      act(() => {
+        fields.forEach((field, index) => {
+          expect(field).not.toBeNull();
+          const prototype =
+            field.tagName === "INPUT"
+              ? HTMLInputElement.prototype
+              : HTMLTextAreaElement.prototype;
+          Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(
+            field,
+            drafts[index],
+          );
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+          field.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      });
+
+      const overviewRequest = vi.mocked(api.workflow.overview);
+      const requestsBeforeFailure = overviewRequest.mock.calls.length;
+      overviewRequest.mockRejectedValue(
+        new ApiRequestError("Transient overview failure", 503),
+      );
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+      await vi.waitFor(() =>
+        expect(surface.textContent).toContain("Manual workflow refresh failed"),
+      );
+      expect(overviewRequest.mock.calls.length).toBeGreaterThan(
+        requestsBeforeFailure,
+      );
+      selectors.forEach((selector, index) => {
+        expect(surface.querySelector(selector)).toBe(fields[index]);
+        expect(fields[index].value).toBe(drafts[index]);
+      });
+
+      overviewRequest.mockResolvedValue({
+        ...mockOverview,
+        serverTime: "2026-09-01T12:01:00.000Z",
+      });
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+      await vi.waitFor(() =>
+        expect(surface.textContent).not.toContain(
+          "Manual workflow refresh failed",
+        ),
+      );
+      selectors.forEach((selector, index) => {
+        expect(surface.querySelector(selector)).toBe(fields[index]);
+        expect(fields[index].value).toBe(drafts[index]);
+      });
+    },
+  );
 
   it("handles keyboard shortcut Mod+Shift+W to toggle surface", async () => {
     await act(async () => {
@@ -200,13 +326,17 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Select the plan row to display selected item bar
-    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    const planRow = container.querySelector(
+      '#workflow-context-deck [role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       planRow?.click();
     });
@@ -217,7 +347,7 @@ describe("WorkflowContextSurface", () => {
 
     // Trigger status change via the Select in WorkflowSelectedItemBar
     const statusSelectTrigger = Array.from(
-      container.querySelectorAll('#workflow-context-deck button'),
+      container.querySelectorAll("#workflow-context-deck button"),
     ).find((b) => b.getAttribute("role") === "combobox") as HTMLElement;
 
     if (statusSelectTrigger) {
@@ -227,7 +357,7 @@ describe("WorkflowContextSurface", () => {
     }
 
     // Directly test the action call
-    const actions = (await import("@/hooks/use-workflow-surface-actions.js"));
+    const actions = await import("@/hooks/use-workflow-surface-actions.js");
     expect(actions).toBeDefined();
   });
   it("deletes a selected item and auto-deselects it", async () => {
@@ -250,13 +380,17 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Select the plan row to display selected item bar
-    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    const planRow = container.querySelector(
+      '#workflow-context-deck [role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       planRow?.click();
     });
@@ -266,7 +400,9 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Click the delete button in WorkflowSelectedItemBar
-    const deleteBtn = container.querySelector('button[title="Delete item"]') as HTMLButtonElement;
+    const deleteBtn = container.querySelector(
+      'button[title="Delete item"]',
+    ) as HTMLButtonElement;
     expect(deleteBtn).not.toBeNull();
 
     await act(async () => {
@@ -306,13 +442,17 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Select the plan row to display selected item bar
-    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    const planRow = container.querySelector(
+      '#workflow-context-deck [role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       planRow?.click();
     });
@@ -322,14 +462,20 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Click edit button in WorkflowSelectedItemBar
-    const editBtn = container.querySelector('button[title="Edit item"]') as HTMLButtonElement;
+    const editBtn = container.querySelector(
+      'button[title="Edit item"]',
+    ) as HTMLButtonElement;
     expect(editBtn).not.toBeNull();
     await act(async () => {
       editBtn.click();
     });
 
-    const titleInput = container.querySelector("#wf-edit-title") as HTMLInputElement;
-    const summaryTextarea = container.querySelector("#wf-edit-summary") as HTMLTextAreaElement;
+    const titleInput = container.querySelector(
+      "#wf-edit-title",
+    ) as HTMLInputElement;
+    const summaryTextarea = container.querySelector(
+      "#wf-edit-summary",
+    ) as HTMLTextAreaElement;
     expect(titleInput).not.toBeNull();
     expect(summaryTextarea).not.toBeNull();
 
@@ -369,11 +515,13 @@ describe("WorkflowContextSurface", () => {
   });
 
   it("deletes a note from selected item and triggers api.workflow.deleteNote", async () => {
-    const deleteNoteSpy = vi.spyOn(api.workflow, "deleteNote").mockResolvedValue({
-      resource: { id: "n-1", deletedAt: "2026-09-01T12:05:00.000Z" },
-      replayed: false,
-      eventId: "ev-del-note-1",
-    });
+    const deleteNoteSpy = vi
+      .spyOn(api.workflow, "deleteNote")
+      .mockResolvedValue({
+        resource: { id: "n-1", deletedAt: "2026-09-01T12:05:00.000Z" },
+        replayed: false,
+        eventId: "ev-del-note-1",
+      });
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -387,13 +535,17 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Select the plan row to display selected item bar
-    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    const planRow = container.querySelector(
+      '#workflow-context-deck [role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       planRow?.click();
     });
@@ -404,7 +556,9 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Click delete note button in WorkflowSelectedItemBar
-    const deleteNoteBtn = container.querySelector('button[title="Delete note"]') as HTMLButtonElement;
+    const deleteNoteBtn = container.querySelector(
+      'button[title="Delete note"]',
+    ) as HTMLButtonElement;
     expect(deleteNoteBtn).not.toBeNull();
     await act(async () => {
       deleteNoteBtn.click();
@@ -420,7 +574,9 @@ describe("WorkflowContextSurface", () => {
 
   it("reactively displays newly created plan without requiring page refresh", async () => {
     let currentOverview = mockOverview;
-    vi.spyOn(api.workflow, "overview").mockImplementation(async () => currentOverview);
+    vi.spyOn(api.workflow, "overview").mockImplementation(
+      async () => currentOverview,
+    );
     vi.spyOn(api.workflow, "createItem").mockImplementation(async (req) => {
       const newItem = {
         id: "plan-created-2",
@@ -455,7 +611,9 @@ describe("WorkflowContextSurface", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-test" }} />
+          <WorkflowContextSurface
+            target={{ project: "hopper-core", profileId: "prof-test" }}
+          />
         </QueryClientProvider>,
       );
     });
@@ -465,21 +623,25 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Open quick capture via "+ Plan" button in deck
-    const addPlanBtn = Array.from(container.querySelectorAll("#workflow-context-deck button")).find(
-      (b) => b.textContent?.includes("Plan"),
-    ) as HTMLButtonElement;
+    const addPlanBtn = Array.from(
+      container.querySelectorAll("#workflow-context-deck button"),
+    ).find((b) => b.textContent?.includes("Plan")) as HTMLButtonElement;
     expect(addPlanBtn).not.toBeNull();
     await act(async () => {
       addPlanBtn.click();
     });
 
-    const titleInput = container.querySelector("#wf-cap-title") as HTMLInputElement;
+    const titleInput = container.querySelector(
+      "#wf-cap-title",
+    ) as HTMLInputElement;
     expect(titleInput).not.toBeNull();
     act(() => {
       const titleSetter = Object.getOwnPropertyDescriptor(
@@ -491,7 +653,9 @@ describe("WorkflowContextSurface", () => {
       titleInput.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    const submitBtn = container.querySelector('form[aria-label="Create workflow item"] button[type="submit"]') as HTMLButtonElement;
+    const submitBtn = container.querySelector(
+      'form[aria-label="Create workflow item"] button[type="submit"]',
+    ) as HTMLButtonElement;
     expect(submitBtn).not.toBeNull();
     await act(async () => {
       submitBtn.click();
@@ -505,7 +669,9 @@ describe("WorkflowContextSurface", () => {
 
   it("reactively removes deleted plan from UI without requiring page refresh", async () => {
     let currentOverview = mockOverview;
-    vi.spyOn(api.workflow, "overview").mockImplementation(async () => currentOverview);
+    vi.spyOn(api.workflow, "overview").mockImplementation(
+      async () => currentOverview,
+    );
     vi.spyOn(api.workflow, "deleteItem").mockImplementation(async () => {
       currentOverview = {
         ...currentOverview,
@@ -521,7 +687,9 @@ describe("WorkflowContextSurface", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-test" }} />
+          <WorkflowContextSurface
+            target={{ project: "hopper-core", profileId: "prof-test" }}
+          />
         </QueryClientProvider>,
       );
     });
@@ -531,13 +699,17 @@ describe("WorkflowContextSurface", () => {
     });
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Select plan row to show action bar
-    const planRow = container.querySelector('#workflow-context-deck [role="button"]') as HTMLElement;
+    const planRow = container.querySelector(
+      '#workflow-context-deck [role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       planRow?.click();
     });
@@ -546,7 +718,9 @@ describe("WorkflowContextSurface", () => {
       expect(container.textContent).toContain("Selected: Workflow Context UI");
     });
 
-    const deleteBtn = container.querySelector('button[title="Delete item"]') as HTMLButtonElement;
+    const deleteBtn = container.querySelector(
+      'button[title="Delete item"]',
+    ) as HTMLButtonElement;
     expect(deleteBtn).not.toBeNull();
     await act(async () => {
       deleteBtn.click();
@@ -582,7 +756,11 @@ describe("WorkflowContextSurface", () => {
               { item: newItem, notes: [], activeSessions: [], children: [] },
             ],
           };
-          return { resource: newItem, replayed: false, eventId: "ev-prof-create" };
+          return {
+            resource: newItem,
+            replayed: false,
+            eventId: "ev-prof-create",
+          };
         }),
       },
     };
@@ -611,7 +789,9 @@ describe("WorkflowContextSurface", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <WorkflowContextSurface target={{ project: "hopper-core", profileId: "prof-scoped" }} />
+          <WorkflowContextSurface
+            target={{ project: "hopper-core", profileId: "prof-scoped" }}
+          />
         </QueryClientProvider>,
       );
     });
@@ -622,20 +802,24 @@ describe("WorkflowContextSurface", () => {
     expect(mockProfileApi.workflow.overview).toHaveBeenCalled();
 
     // Open deck
-    const ribbonTrigger = container.querySelector('[role="button"]') as HTMLElement;
+    const ribbonTrigger = container.querySelector(
+      '[role="button"]',
+    ) as HTMLElement;
     await act(async () => {
       ribbonTrigger?.click();
     });
 
     // Open quick capture via "+ Plan" button in deck
-    const addPlanBtn = Array.from(container.querySelectorAll("#workflow-context-deck button")).find(
-      (b) => b.textContent?.includes("Plan"),
-    ) as HTMLButtonElement;
+    const addPlanBtn = Array.from(
+      container.querySelectorAll("#workflow-context-deck button"),
+    ).find((b) => b.textContent?.includes("Plan")) as HTMLButtonElement;
     await act(async () => {
       addPlanBtn.click();
     });
 
-    const titleInput = container.querySelector("#wf-cap-title") as HTMLInputElement;
+    const titleInput = container.querySelector(
+      "#wf-cap-title",
+    ) as HTMLInputElement;
     act(() => {
       const titleSetter = Object.getOwnPropertyDescriptor(
         HTMLInputElement.prototype,
@@ -646,7 +830,9 @@ describe("WorkflowContextSurface", () => {
       titleInput.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    const submitBtn = container.querySelector('form[aria-label="Create workflow item"] button[type="submit"]') as HTMLButtonElement;
+    const submitBtn = container.querySelector(
+      'form[aria-label="Create workflow item"] button[type="submit"]',
+    ) as HTMLButtonElement;
     await act(async () => {
       submitBtn.click();
     });

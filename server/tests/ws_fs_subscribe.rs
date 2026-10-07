@@ -617,3 +617,138 @@ async fn root_and_worktree_reads_and_watchers_are_isolated_on_one_connection() {
     );
     ws.close(None).await.unwrap();
 }
+
+#[tokio::test]
+async fn test_ws_fs_read_strict_plan_document_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_test_state(&tmp);
+    let addr = spawn_server(state).await;
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+
+    let doc_path = tmp.path().join("doc.md");
+    std::fs::write(&doc_path, "# Strict Doc").unwrap();
+    let txt_path = tmp.path().join("notes.txt");
+    std::fs::write(&txt_path, "plain notes").unwrap();
+
+    // 1. Success strict read
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 100,
+            "project": "test-project",
+            "path": "doc.md",
+            "readMode": "plan-document"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let res1 = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(res1["kind"], "fs:read_result");
+    assert_eq!(res1["ok"], true);
+    assert_eq!(res1["mime"], "text/markdown");
+    let bytes = BASE64.decode(res1["data"].as_str().unwrap()).unwrap();
+    assert_eq!(bytes, b"# Strict Doc");
+
+    // 2. Range not allowed
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 101,
+            "project": "test-project",
+            "path": "doc.md",
+            "offset": 0,
+            "len": 5,
+            "readMode": "plan-document"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let res2 = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(res2["ok"], false);
+    assert_eq!(res2["code"], "RANGE_NOT_ALLOWED");
+
+    // 3. Non-.md extension rejected
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 102,
+            "project": "test-project",
+            "path": "notes.txt",
+            "readMode": "plan-document"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let res3 = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(res3["ok"], false);
+    assert_eq!(res3["code"], "INVALID_EXTENSION");
+
+    // 4. Unsupported read mode
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:read",
+            "req_id": 103,
+            "project": "test-project",
+            "path": "doc.md",
+            "readMode": "unsupported"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let res4 = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(res4["ok"], false);
+    assert_eq!(res4["code"], "UNSUPPORTED_READ_MODE");
+
+    ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_ws_fs_subscribe_watch_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_test_state(&tmp);
+    let addr = spawn_server(state).await;
+    let url = format!("ws://127.0.0.1:{}/ws?token={}", addr.port(), test_jwt());
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+
+    let watched_dir = tmp.path().join("watched");
+    std::fs::create_dir_all(&watched_dir).unwrap();
+    std::fs::write(watched_dir.join("existing.txt"), "hello").unwrap();
+
+    // Subscribe with watchOnly: true
+    ws.send(Message::Text(
+        json!({
+            "kind": "fs:subscribe_tree",
+            "req_id": 200,
+            "project": "test-project",
+            "path": "watched",
+            "watchOnly": true
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let snap = next_json(&mut ws, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(snap["kind"], "fs:tree_snapshot");
+    // watchOnly must return empty nodes array!
+    assert_eq!(snap["nodes"], serde_json::json!([]));
+    let sub_id = snap["sub_id"].as_u64().unwrap();
+
+    // Write inside watched directory
+    std::fs::write(watched_dir.join("new_file.txt"), "new content").unwrap();
+    let ev = next_json(&mut ws, Duration::from_secs(5)).await.expect("fs:event");
+    assert_eq!(ev["kind"], "fs:event");
+    assert_eq!(ev["sub_id"], sub_id);
+
+    ws.close(None).await.unwrap();
+}

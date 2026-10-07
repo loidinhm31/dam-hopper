@@ -730,12 +730,14 @@ async fn handle_socket(
                 project,
                 worktree_path,
                 path,
+                watch_only,
             } => {
                 let result = do_fs_subscribe(
                     req_id,
                     &project,
                     worktree_path.as_deref(),
                     &path,
+                    watch_only,
                     &state,
                     pty_tx.clone(),
                     fs_tx.clone(),
@@ -766,6 +768,7 @@ async fn handle_socket(
                 path,
                 offset,
                 len,
+                read_mode,
             } => {
                 let result = do_fs_read(
                     req_id,
@@ -774,6 +777,7 @@ async fn handle_socket(
                     &path,
                     offset,
                     len,
+                    read_mode.as_deref(),
                     &state,
                 )
                 .await;
@@ -2093,8 +2097,224 @@ async fn do_fs_read(
     path: &str,
     offset: Option<u64>,
     len: Option<u64>,
+    read_mode: Option<&str>,
     state: &AppState,
 ) -> ServerMsg {
+    if let Some(mode) = read_mode {
+        if mode != "plan-document" {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("UNSUPPORTED_READ_MODE".into()),
+            };
+        }
+        if offset.is_some() || len.is_some() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("RANGE_NOT_ALLOWED".into()),
+            };
+        }
+        let is_md = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !is_md {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("INVALID_EXTENSION".into()),
+            };
+        }
+
+        let target_ref = ProjectTargetRef {
+            project: project.to_owned(),
+            worktree_path: worktree_path.map(str::to_owned),
+        };
+        let target = match state.resolve_project_target(&target_ref).await {
+            Ok(t) => t,
+            Err(e) => {
+                let (code, _) = map_fs_resolution_error(e);
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some(code),
+                };
+            }
+        };
+        if !target.available() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("TARGET_UNAVAILABLE".into()),
+            };
+        }
+        let root_path = target.target_path().to_path_buf();
+        let initial_root_id = match secure_path::directory_identity(&root_path) {
+            Ok(id) => id,
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("FS_UNAVAILABLE".into()),
+                };
+            }
+        };
+
+        let rel_path = path.trim_start_matches('/');
+        let p = std::path::Path::new(rel_path);
+        if p.is_absolute()
+            || p.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("PATH_REJECTED".into()),
+            };
+        }
+
+        let snap = match secure_path::read_regular_snapshot(&root_path, p, 64 * 1024) {
+            Ok(s) => s,
+            Err(crate::fs::FsError::TooLarge(_)) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("TOO_LARGE".into()),
+                };
+            }
+            Err(crate::fs::FsError::Conflict) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("CONFLICT".into()),
+                };
+            }
+            Err(crate::fs::FsError::NotFound) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("NOT_FOUND".into()),
+                };
+            }
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("READ_FAILED".into()),
+                };
+            }
+        };
+
+        if snap.bytes.contains(&0) || std::str::from_utf8(&snap.bytes).is_err() {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("INVALID_DOCUMENT".into()),
+            };
+        }
+
+        let current_root_id = match secure_path::directory_identity(target.target_path()) {
+            Ok(id) => id,
+            Err(_) => {
+                return ServerMsg::FsReadResult {
+                    req_id,
+                    ok: false,
+                    mime: None,
+                    binary: false,
+                    mtime: None,
+                    size: None,
+                    data: None,
+                    code: Some("TARGET_CHANGED".into()),
+                };
+            }
+        };
+        if current_root_id != initial_root_id {
+            return ServerMsg::FsReadResult {
+                req_id,
+                ok: false,
+                mime: None,
+                binary: false,
+                mtime: None,
+                size: None,
+                data: None,
+                code: Some("TARGET_CHANGED".into()),
+            };
+        }
+
+        let encoded = BASE64.encode(&snap.bytes);
+        return ServerMsg::FsReadResult {
+            req_id,
+            ok: true,
+            mime: Some("text/markdown".into()),
+            binary: false,
+            mtime: Some(snap.mtime_secs),
+            size: Some(snap.size_bytes),
+            data: Some(encoded),
+            code: None,
+        };
+    }
     let abs = match resolve_abs_path(project, worktree_path, path, state).await {
         Ok(p) => p,
         Err((code, _message)) => {
@@ -2885,6 +3105,7 @@ async fn do_fs_subscribe(
     project: &str,
     worktree_path: Option<&str>,
     path: &str,
+    watch_only: Option<bool>,
     state: &AppState,
     pty_tx: mpsc::Sender<WireMsg>,
     fs_tx: mpsc::Sender<WireMsg>,
@@ -2892,27 +3113,54 @@ async fn do_fs_subscribe(
 ) -> Result<(), (String, String)> {
     let (target, abs_path) = resolve_target_path(project, worktree_path, path, state).await?;
 
-    let (sub_id, fs_rx) = state
-        .fs
-        .subscribe_target_tree(&target, abs_path.clone())
-        .map_err(|e| match e {
-            crate::fs::FsError::NotFound => (
-                "PROJECT_NOT_FOUND".to_string(),
-                format!("Project not found: {project}"),
-            ),
-            crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
-            _ => ("WATCHER_ERROR".to_string(), e.to_string()),
-        })?;
+    let is_watch_only = watch_only.unwrap_or(false);
+    let (sub_id, fs_rx) = if is_watch_only {
+        let meta = tokio::fs::metadata(&abs_path)
+            .await
+            .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
+        if !meta.is_dir() {
+            return Err((
+                "PATH_REJECTED".to_string(),
+                "path is not a directory".to_string(),
+            ));
+        }
+        state
+            .fs
+            .subscribe_target_directory(&target, abs_path.clone())
+            .map_err(|e| match e {
+                crate::fs::FsError::NotFound => (
+                    "PROJECT_NOT_FOUND".to_string(),
+                    format!("Project not found: {project}"),
+                ),
+                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+            })?
+    } else {
+        state
+            .fs
+            .subscribe_target_tree(&target, abs_path.clone())
+            .map_err(|e| match e {
+                crate::fs::FsError::NotFound => (
+                    "PROJECT_NOT_FOUND".to_string(),
+                    format!("Project not found: {project}"),
+                ),
+                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+            })?
+    };
 
-    debug!(sub_id, project, target_key = %target.target_key(), path, "fs:subscribe_tree");
+    debug!(sub_id, project, target_key = %target.target_key(), path, is_watch_only, "fs:subscribe_tree");
 
     let mut registration = FsSubscriptionGuard::new(state.fs.clone(), sub_id);
-    let snap_path = abs_path.clone();
-    let nodes = tokio::task::spawn_blocking(move || tree_snapshot_sync(&snap_path))
-        .await
-        .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
-        .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?;
-
+    let nodes = if is_watch_only {
+        vec![]
+    } else {
+        let snap_path = abs_path.clone();
+        tokio::task::spawn_blocking(move || tree_snapshot_sync(&snap_path))
+            .await
+            .map_err(|e| ("INTERNAL".to_string(), e.to_string()))?
+            .map_err(|e| ("SNAPSHOT_ERROR".to_string(), e.to_string()))?
+    };
     let snap = ServerMsg::TreeSnapshot {
         req_id,
         sub_id,
@@ -2926,10 +3174,20 @@ async fn do_fs_subscribe(
         .map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
     let filter_prefix = abs_path.clone();
+    let event_target_root = is_watch_only.then(|| target.target_path().to_path_buf());
     let fs = state.fs.clone();
     registration.disarm();
     let handle = tokio::spawn(async move {
-        pump_fs_events(sub_id, fs_rx, filter_prefix, fs_tx, pty_tx, fs).await;
+        pump_fs_events(
+            sub_id,
+            fs_rx,
+            filter_prefix,
+            event_target_root,
+            fs_tx,
+            pty_tx,
+            fs,
+        )
+        .await;
     });
 
     fs_pumps.insert(sub_id, handle);
@@ -2944,6 +3202,7 @@ async fn pump_fs_events(
     sub_id: u64,
     mut rx: tokio::sync::broadcast::Receiver<crate::fs::FsEvent>,
     filter_prefix: std::path::PathBuf,
+    event_target_root: Option<std::path::PathBuf>,
     fs_tx: mpsc::Sender<WireMsg>,
     pty_tx: mpsc::Sender<WireMsg>,
     fs: crate::fs::FsSubsystem,
@@ -2961,7 +3220,26 @@ async fn pump_fs_events(
                     continue;
                 }
 
-                let dto: FsEventDto = ev.into();
+                let (target_relative_path, target_relative_from) =
+                    if let Some(root) = event_target_root.as_ref() {
+                        // Captured from the validated subscription target, not inferred
+                        // from event filenames: root-self events must remain distinguishable.
+                        let relative = |path: &std::path::Path| {
+                            path.strip_prefix(root).ok().map(|path| {
+                                if path.as_os_str().is_empty() {
+                                    ".".to_owned()
+                                } else {
+                                    path.to_string_lossy().replace('\\', "/")
+                                }
+                            })
+                        };
+                        (relative(&ev.path), ev.from.as_deref().and_then(relative))
+                    } else {
+                        (None, None)
+                    };
+                let mut dto: FsEventDto = ev.into();
+                dto.target_relative_path = target_relative_path;
+                dto.target_relative_from = target_relative_from;
                 let msg = ServerMsg::FsEventMsg { sub_id, event: dto };
                 let json = match serde_json::to_string(&msg) {
                     Ok(j) => j,
@@ -2997,7 +3275,22 @@ async fn pump_fs_events(
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                warn!(sub_id, dropped = n, "fs broadcast lagged");
+                warn!(
+                    sub_id,
+                    dropped = n,
+                    "fs broadcast lagged — dropping subscription"
+                );
+                let overflow = ServerMsg::FsOverflow {
+                    sub_id,
+                    message: format!(
+                        "FS event broadcast lagged ({} events dropped); subscription dropped",
+                        n
+                    ),
+                };
+                if let Ok(json) = serde_json::to_string(&overflow) {
+                    let _ = pty_tx.send(WireMsg::Text(json)).await;
+                }
+                break;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
@@ -3120,6 +3413,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fs_event_pump_preserves_absolute_paths_and_watch_only_target_identity() {
+        for watch_only in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("repo");
+            std::fs::create_dir(&root).unwrap();
+            let fs = FsSubsystem::new(vec![("project".into(), root.clone())]);
+            let (sub_id, _watcher_rx) = fs.subscribe_tree("project", root.clone()).unwrap();
+            let (event_tx, event_rx) = broadcast::channel(8);
+            let (fs_tx, mut fs_rx) = mpsc::channel(8);
+            let (pty_tx, _pty_rx) = mpsc::channel(1);
+            let pump = tokio::spawn(pump_fs_events(
+                sub_id,
+                event_rx,
+                root.clone(),
+                watch_only.then(|| root.clone()),
+                fs_tx,
+                pty_tx,
+                fs.clone(),
+            ));
+            let cases = [
+                (
+                    FsEvent {
+                        kind: FsEventKind::Removed,
+                        path: root.clone(),
+                        from: None,
+                    },
+                    Some("."),
+                    None,
+                ),
+                (
+                    FsEvent {
+                        kind: FsEventKind::Renamed,
+                        path: root.join("plans"),
+                        from: Some(root.join("replacement")),
+                    },
+                    Some("plans"),
+                    Some("replacement"),
+                ),
+                (
+                    FsEvent {
+                        kind: FsEventKind::Renamed,
+                        path: tmp.path().join("outside"),
+                        from: Some(root.join("plans")),
+                    },
+                    None,
+                    Some("plans"),
+                ),
+            ];
+            for (event, relative_path, relative_from) in cases {
+                let absolute_path = event.path.to_string_lossy().replace('\\', "/");
+                let absolute_from = event
+                    .from
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"));
+                event_tx.send(event).unwrap();
+                let message = tokio::time::timeout(std::time::Duration::from_secs(1), fs_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let WireMsg::Text(json) = message else {
+                    panic!("expected filesystem wire event");
+                };
+                let message: serde_json::Value = serde_json::from_str(&json).unwrap();
+                assert_eq!(message["kind"], "fs:event");
+                assert_eq!(message["sub_id"], sub_id);
+                let event = &message["event"];
+                assert_eq!(event["path"], absolute_path);
+                assert_eq!(
+                    event.get("from").and_then(|value| value.as_str()),
+                    absolute_from.as_deref()
+                );
+                assert_eq!(
+                    event
+                        .get("targetRelativePath")
+                        .and_then(|value| value.as_str()),
+                    if watch_only { relative_path } else { None }
+                );
+                assert_eq!(
+                    event
+                        .get("targetRelativeFrom")
+                        .and_then(|value| value.as_str()),
+                    if watch_only { relative_from } else { None }
+                );
+                // Absent metadata is omitted, never published as null.
+                assert!(!event
+                    .get("targetRelativePath")
+                    .is_some_and(|value| value.is_null()));
+                assert!(!event
+                    .get("targetRelativeFrom")
+                    .is_some_and(|value| value.is_null()));
+            }
+            drop(event_tx);
+            tokio::time::timeout(std::time::Duration::from_secs(1), pump)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(fs.watcher_refcount(&root), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn fs_event_overflow_releases_subscription() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -3133,6 +3527,7 @@ mod tests {
             sub_id,
             event_rx,
             root.clone(),
+            None,
             fs_tx,
             pty_tx,
             fs.clone(),

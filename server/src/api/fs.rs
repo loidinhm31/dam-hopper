@@ -83,6 +83,8 @@ pub struct ReadParams {
     pub path: String,
     pub offset: Option<u64>,
     pub len: Option<u64>,
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -159,6 +161,79 @@ pub async fn read(
     State(state): State<AppState>,
     Query(params): Query<ReadParams>,
 ) -> Result<Response, ApiError> {
+    if let Some(mode) = &params.mode {
+        if mode != "plan-document" {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "unsupported read mode".into(),
+            )));
+        }
+        if params.offset.is_some() || params.len.is_some() {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "range reads not allowed in plan-document mode".into(),
+            )));
+        }
+        let is_md = std::path::Path::new(&params.path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !is_md {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "plan-document mode requires a .md file".into(),
+            )));
+        }
+
+        let target_ref = target_ref(params.project, params.worktree_path);
+        let target = state
+            .resolve_project_target(&target_ref)
+            .await
+            .map_err(ApiError::from)?;
+        if !target.available() {
+            return Err(ApiError::from(AppError::WorkspaceTarget(
+                crate::workspace_target::WorkspaceTargetError::UnavailableTarget,
+            )));
+        }
+        let root_path = target.target_path().to_path_buf();
+        let initial_root_id = crate::fs::secure_path::directory_identity(&root_path)
+            .map_err(|_| ApiError::from(AppError::Unavailable("filesystem unavailable".into())))?;
+
+        let rel_path = params.path.trim_start_matches('/');
+        let p = std::path::Path::new(rel_path);
+        if p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(ApiError::from(AppError::Fs(crate::fs::FsError::PathEscape)));
+        }
+
+        let snap = crate::fs::secure_path::read_regular_snapshot(&root_path, p, 64 * 1024)
+            .map_err(|e| match e {
+                crate::fs::FsError::TooLarge(_) => ApiError::from(AppError::Fs(e)),
+                crate::fs::FsError::Conflict => {
+                    ApiError::from(AppError::Conflict("document changed during read".into()))
+                }
+                crate::fs::FsError::NotFound => {
+                    ApiError::from(AppError::NotFound("document not found".into()))
+                }
+                _ => ApiError::from(AppError::Fs(e)),
+            })?;
+
+        if snap.bytes.contains(&0) || std::str::from_utf8(&snap.bytes).is_err() {
+            return Err(ApiError::from(AppError::InvalidInput(
+                "file contains invalid UTF-8 or null byte".into(),
+            )));
+        }
+
+        let current_root_id = crate::fs::secure_path::directory_identity(target.target_path())
+            .map_err(|_| ApiError::from(AppError::Conflict("target replaced".into())))?;
+        if current_root_id != initial_root_id {
+            return Err(ApiError::from(AppError::Conflict("target replaced".into())));
+        }
+
+        return Ok((
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/markdown")],
+            snap.bytes,
+        )
+            .into_response());
+    }
     let resolved = resolve(
         &state,
         &target_ref(params.project, params.worktree_path),

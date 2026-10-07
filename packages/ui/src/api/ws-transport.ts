@@ -731,6 +731,61 @@ function channelToEndpoint(
       if (d.scope === "workspace") params.set("scope", "workspace");
       return { method: "GET", url: `/api/fs/search-paths?${params}` };
     }
+    case "fs:read": {
+      const d = data as {
+        project?: string;
+        worktreePath?: string | null;
+        path: string;
+        offset?: number;
+        len?: number;
+        mode?: string;
+      };
+      const params = new URLSearchParams({ path: d.path });
+      if (d.project != null) params.set("project", d.project);
+      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
+      if (d.offset != null) params.set("offset", String(d.offset));
+      if (d.len != null) params.set("len", String(d.len));
+      if (d.mode != null) params.set("mode", d.mode);
+      return { method: "GET", url: `/api/fs/read?${params.toString()}` };
+    }
+
+    // Plans
+    case "plans:folders": {
+      const d = data as {
+        target?: unknown;
+        project?: string;
+        worktreePath?: string | null;
+        path?: string;
+      };
+      const target = restTargetFields(d.target ?? d);
+      const params = new URLSearchParams({ project: target.project });
+      setWorktreePath(params, target);
+      if (d.path != null && d.path !== "") {
+        params.set("path", d.path);
+      }
+      return {
+        method: "GET",
+        url: `/api/plans/folders?${params.toString()}`,
+      };
+    }
+    case "plans:read": {
+      const d = data as {
+        target?: unknown;
+        project?: string;
+        worktreePath?: string | null;
+        planPath?: string;
+      };
+      const target = restTargetFields(d.target ?? d);
+      const params = new URLSearchParams({
+        project: target.project,
+        planPath: d.planPath ?? "",
+      });
+      setWorktreePath(params, target);
+      return {
+        method: "GET",
+        url: `/api/plans?${params.toString()}`,
+      };
+    }
 
     // Agent Store
     case "agent-store:list": {
@@ -3132,6 +3187,7 @@ export class WsTransport implements Transport {
   fsSubscribeTree(
     target: ProjectTargetInput,
     path: string,
+    opts?: { watchOnly?: boolean },
   ): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
@@ -3147,6 +3203,7 @@ export class WsTransport implements Transport {
             req_id,
             ...wsTargetFields(target),
             path,
+            ...(opts?.watchOnly ? { watchOnly: true } : {}),
           }),
         );
       } else {
@@ -3176,7 +3233,7 @@ export class WsTransport implements Transport {
   fsRead(
     target: ProjectTargetInput,
     path: string,
-    opts?: { offset?: number; len?: number },
+    opts?: { offset?: number; len?: number; mode?: "plan-document" },
   ): Promise<FsReadResponse> {
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
@@ -3194,6 +3251,7 @@ export class WsTransport implements Transport {
             path,
             offset: opts?.offset,
             len: opts?.len,
+            ...(opts?.mode ? { readMode: opts.mode } : {}),
           }),
         );
       } else {

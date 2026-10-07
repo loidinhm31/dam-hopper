@@ -30,7 +30,7 @@ use crate::state::AppState;
 use super::{
     advisor as advisor_api, agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
     browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git,
-    git_blame, git_diff, host_actions, idle_suspend, media_session,
+    git_blame, git_diff, host_actions, idle_suspend, media_session, plans as plans_api,
     port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel,
     usage, usage_sessions, workflow, workspace, ws,
 };
@@ -476,6 +476,8 @@ pub fn build_router_with_web_dir_and_origins(
             post(settings::import_workspace_settings)
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(1024 * 1024)),
         )
+        .route("/api/plans/folders", get(plans_api::get_plan_folders))
+        .route("/api/plans", get(plans_api::get_selected_plan))
         .merge(workflow_routes)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

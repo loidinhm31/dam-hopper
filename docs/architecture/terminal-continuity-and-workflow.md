@@ -55,9 +55,9 @@ The profile owner is captured before terminal work crosses an async boundary:
 3. Launch, rename, close/remove, kill, config update, and query invalidation resolve the target profile's `ConnectionSnapshot`, then call `getApi(snapshot.owner)` or the corresponding bound transport. Input, attach, replay, resize, and history insertion use the transport captured by the panel, not whichever profile is focused later.
 4. `createApiClient(owner, transport)` keeps the existing method groups but binds them to one owner and transport. Qualified project targets are checked against `owner.profileId` before projecting to the server wire shape; `profileId` is never spread into server project payloads. Server-local terminal IDs remain payload values on the already-bound client.
 5. `WsTransport` retains endpoint, profile, auth token, and generation for its lifetime. REST and WebSocket callbacks are discarded or aborted when that generation is retired. A profile reconnect rebinds subscriptions and reads; it never replays terminal input, resize, create, kill, remove, or rename.
+6. `ProjectPlansDashboard` adheres to this same owner-bound model: plan queries and filesystem watching are strictly fenced by `ConnectionRef` (`profileId`, `generation`) and `ProjectTargetRef` (`project`, `worktreePath`). Switching between File plans and Manual tracking, or navigating between different terminal panels and editor tabs, maintains terminal session continuity and does not disrupt background terminal processes.
 
 A focus change A → B → A is navigation only. It does not reconnect, create, kill, remove, or migrate a terminal. Disconnect/logout/profile removal locally retires the generation and detaches the UI; it does not delete remote PTYs. The active profile may change while a background profile's xterm continues receiving its owner-bound output.
-
 ## 3. Browser-Local Continuity Schemas
 
 ### 3.1 `terminal-layout:v3`

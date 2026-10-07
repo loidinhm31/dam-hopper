@@ -78,6 +78,12 @@ root so the next overview supplies authoritative values; failed mutations do
 not perform optimistic cache writes. The surface has no workflow URL or
 localStorage persistence and does not introduce a new API or DTO.
 
+Background overview failures with retained data display an error banner without
+unmounting manual capture, edit, or note forms. A successful empty overview still
+counts as retained data. Initial failures with no successful snapshot display the
+unavailable state. Desktop and compact layouts preserve typed drafts through
+background error/recovery and File plans / Manual tracking mode switches.
+
 For the complete component architecture and keyboard/focus contracts, see the
 [Frontend Components index](./frontend-components.md) and
 [System Architecture](./system-architecture.md#workflow-tracking-engine).
@@ -204,25 +210,22 @@ blocked indicator is shown for blocked/running attention. Loading renders a
 skeleton and errors expose Retry. The ribbon opens/closes the context region
 and offers New Plan only when no active item is selected.
 
-### Desktop deck
+### Desktop deck and dual-mode plans surface
 
 `WorkflowContextDeck` renders only while open as a non-modal `role="region"`
-with `id="workflow-context-deck"`. Its current height utilities are
-`min-h-[320px]`, `h-[360px]`, and `max-h-[440px]`. At `md` it uses two columns;
-at `lg` it uses project, work, and execution columns
-(`220px 1fr 300px`). The Projects pane is hidden below `lg`. The desktop
-deck listens for Escape to close and does not install a focus trap.
+with `id="workflow-context-deck"`. It features a dual-mode header allowing the user
+to toggle between **File plans** (`ProjectPlansDashboard`) and **Manual tracking** (the SQLite workflow tree):
+- **File plans view**: renders `ProjectPlansDashboard` scoped to the current project/worktree target, offering folder-first navigation, selected plan overview/timeline, and document viewers. It is kept mounted in the DOM via CSS `hidden` when switching to Manual tracking to preserve active folder navigation and selected plan state.
+- **Manual tracking view**: retains the classic 3-pane layout (`220px 1fr 300px` at `lg`). It is kept mounted in the DOM via CSS `hidden` when switching to File plans to preserve user drafts and quick-capture forms.
+The desktop deck listens for Escape to close and does not install a focus trap.
 
 ### Mobile sheet
 
 `WorkflowContextSheet` uses a bottom Radix Dialog with safe-area-bottom
-padding and segmented navigation for `projects`, `items`, and `execution`.
-Project selection returns to the Items segment. The current implementation
-uses `h-[35dvh]` when collapsed and `h-[90dvh]` when expanded, with a drag
-handle/toggle. Segment controls use `h-11` with `min-h-[44px]`; browser-level
-touch target, overscroll, focus-return, and geometry qualification remain outside
-the unit-tested contract.
-
+padding and segmented navigation for `projects`, `items`, and `execution`. When viewing items,
+it provides the same dual-mode toggle between File plans and Manual tracking.
+The current implementation uses `h-[35dvh]` when collapsed and `h-[90dvh]` when expanded, with a drag
+handle/toggle. Segment controls use `h-11` with `min-h-[44px]`.
 ### Items, capture, and sessions
 
 The item tree renders root Plans, recursive Phase/Task children, and
