@@ -487,6 +487,7 @@ describe("TerminalRuntimeNavigatorItem", () => {
       status: "ready" as const,
       url: "https://demo.trycloudflare.com",
       startedAt: 1,
+      reminderDue: false,
     };
     renderItem(
       {
@@ -518,4 +519,5 @@ describe("TerminalRuntimeNavigatorItem", () => {
       expect.objectContaining({ id: tunnel.id, status: "ready" }),
     );
   });
+
 });

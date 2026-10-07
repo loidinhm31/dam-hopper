@@ -9,12 +9,13 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { getTransport, getTransportGeneration } from "../api/transport.js";
 import { getActiveProfileId, getProfiles, subscribeToProfileChanges, type ServerProfile } from "../api/server-config.js";
-import { getTransport as getBoundTransport, getConnectionSnapshot } from "../api/connections.js";
+import { getTransport as getBoundTransport, getConnectionSnapshot, isCurrentConnection, subscribeConnections } from "../api/connections.js";
 import { profilePortsQueryKey, profileTunnelsQueryKey } from "../api/query-client.js";
 import type { ConnectionRef, ProfileId } from "../api/ownership.js";
 import { subscribeIpc, hasWsStatus } from "./use-sse.js";
 import { useTransportGeneration } from "./use-transport-generation.js";
 import type { TunnelInfo, DetectedPort } from "../api/client.js";
+import { subscribeTunnelCacheEvents } from "./tunnel-cache-events.js";
 import {
   acceptsTerminalPortIncarnation,
   confirmTerminalPortIncarnation,
@@ -41,7 +42,7 @@ export interface PortEntry {
   profileId: string;
   port: number;
   project: string | null;
-  state: "provisional" | "listening" | "lost";
+  state: "provisional" | "listening" | "lost" | "unknown";
   sessionId: string | null;
   incarnation?: number;
   /** Active tunnel for this port, or null if none. */
@@ -53,12 +54,12 @@ export function portEntryKey(entry: PortEntry): string {
 }
 
 /** Reject delayed port events before they can seed an empty query cache. */
-export function acceptsDetectedPortEvent(port: DetectedPort): boolean {
+export function acceptsDetectedPortEvent(port: DetectedPort, profileId: ProfileId): boolean {
   return (
     !!port &&
     typeof port.session_id === "string" &&
     Number.isSafeInteger(port.incarnation) &&
-    acceptsTerminalPortIncarnation(port.session_id, port.port, port.incarnation)
+    acceptsTerminalPortIncarnation({ profileId, id: port.session_id }, port.port, port.incarnation)
   );
 }
 
@@ -128,18 +129,31 @@ export function usePorts(options?: {
     return [{ id: active || "default" }];
   }, [ownerProfileId, explicitProfileId, aggregate, profiles]);
 
+  useSyncExternalStore(
+    subscribeConnections,
+    () => targetProfiles.map(({ id }) => {
+      const snapshot = getConnectionSnapshot(id);
+      return `${id}:${snapshot?.owner.generation ?? 0}:${snapshot?.status ?? "disconnected"}`;
+    }).join("|"),
+    () => "",
+  );
+  const targetOwners = targetProfiles.map(({ id }) =>
+    options?.owner?.profileId === id
+      ? options.owner
+      : getConnectionSnapshot(id)?.owner ?? { profileId: id, generation: 0 },
+  );
   const portQueries = useQueries({
     queries: targetProfiles.map((p) => {
-      const snap = getConnectionSnapshot(p.id);
-      const conn: ConnectionRef = snap?.owner ?? { profileId: p.id, generation: 0 };
-      const t = getBoundTransport(conn) ?? transport;
+      const conn = targetOwners.find((owner) => owner.profileId === p.id)!;
       return {
         queryKey: profilePortsQueryKey(conn),
+        enabled: isCurrentConnection(conn),
         queryFn: async () => {
-          const resp = await t.invoke<{ ports: DetectedPort[] }>("port:list");
+          const resp = await getBoundTransport(conn).invoke<{ ports: DetectedPort[] }>("port:list");
+          if (!isCurrentConnection(conn)) return [];
           for (const port of resp.ports) {
             confirmTerminalPortIncarnation(
-              port.session_id,
+              { profileId: conn.profileId, id: port.session_id },
               port.port,
               port.incarnation,
             );
@@ -152,12 +166,11 @@ export function usePorts(options?: {
 
   const tunnelQueries = useQueries({
     queries: targetProfiles.map((p) => {
-      const snap = getConnectionSnapshot(p.id);
-      const conn: ConnectionRef = snap?.owner ?? { profileId: p.id, generation: 0 };
-      const t = getBoundTransport(conn) ?? transport;
+      const conn = targetOwners.find((owner) => owner.profileId === p.id)!;
       return {
         queryKey: profileTunnelsQueryKey(conn),
-        queryFn: () => t.invoke<TunnelInfo[]>("tunnel:list"),
+        enabled: isCurrentConnection(conn),
+        queryFn: () => getBoundTransport(conn).invoke<TunnelInfo[]>("tunnel:list"),
       };
     }),
   });
@@ -167,6 +180,7 @@ export function usePorts(options?: {
     const result: PortEntry[] = [];
     for (let i = 0; i < targetProfiles.length; i++) {
       const profileId = targetProfiles[i].id;
+      if (!isCurrentConnection(targetOwners[i])) continue;
       const detected: DetectedPort[] = (portQueries[i]?.data as DetectedPort[] | undefined) ?? [];
       const tunnels: TunnelInfo[] = (tunnelQueries[i]?.data as TunnelInfo[] | undefined) ?? [];
       const tunnelByPort = new Map<number, TunnelInfo>(tunnels.map((t: TunnelInfo) => [t.port, t]));
@@ -190,7 +204,7 @@ export function usePorts(options?: {
             profileId,
             port: t.port,
             project: t.label,
-            state: "listening",
+            state: "unknown",
             sessionId: null,
             tunnel: t,
           });
@@ -203,11 +217,11 @@ export function usePorts(options?: {
   useEffect(() => {
     const unsubs = [
       subscribeIpc("port:discovered", (event) => {
+        if (!event.profileId || event.generation === undefined) return;
+        const conn = { profileId: event.profileId, generation: event.generation };
+        if (!isCurrentConnection(conn)) return;
         const port = event.data as DetectedPort;
-        if (!acceptsDetectedPortEvent(port)) return;
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
+        if (!acceptsDetectedPortEvent(port, conn.profileId)) return;
         qc.setQueryData<DetectedPort[]>(profilePortsQueryKey(conn), (prev = []) => {
           const existing = prev.find((p) => p.port === port.port && p.session_id === port.session_id);
           if (
@@ -240,10 +254,10 @@ export function usePorts(options?: {
         ) {
           return;
         }
-        retireTerminalPortIncarnation(session_id, port, incarnation);
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
+        if (!event.profileId || event.generation === undefined) return;
+        const conn = { profileId: event.profileId, generation: event.generation };
+        if (!isCurrentConnection(conn)) return;
+        retireTerminalPortIncarnation({ profileId: conn.profileId, id: session_id }, port, incarnation);
         qc.setQueryData<DetectedPort[]>(profilePortsQueryKey(conn), (prev = []) =>
           prev.filter((p) => p.port !== port || p.session_id !== session_id || p.incarnation !== incarnation),
         );
@@ -252,52 +266,7 @@ export function usePorts(options?: {
     return () => unsubs.forEach((fn) => fn());
   }, [qc, transportGeneration]);
 
-  // Tunnel push events — patch ["tunnels"] cache in-place
-  useEffect(() => {
-    const unsubs = [
-      subscribeIpc("tunnel:created", (event) => {
-        const next = event.data as TunnelInfo;
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(conn), (prev = []) =>
-          prev.some((t) => t.id === next.id) ? prev : [...prev, next],
-        );
-      }),
-      subscribeIpc("tunnel:ready", (event) => {
-        const { id, url } = event.data as { id: string; url: string };
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(conn), (prev = []) =>
-          prev.map((t) =>
-            t.id === id ? { ...t, status: "ready" as const, url } : t,
-          ),
-        );
-      }),
-      subscribeIpc("tunnel:failed", (event) => {
-        const { id, error } = event.data as { id: string; error: string };
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(conn), (prev = []) =>
-          prev.map((t) =>
-            t.id === id ? { ...t, status: "failed" as const, error } : t,
-          ),
-        );
-      }),
-      subscribeIpc("tunnel:stopped", (event) => {
-        const { id } = event.data as { id: string };
-        const profileId = event.profileId ?? getActiveProfileId() ?? "default";
-        const snap = getConnectionSnapshot(profileId);
-        const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-        qc.setQueryData<TunnelInfo[]>(profileTunnelsQueryKey(conn), (prev = []) =>
-          prev.filter((t) => t.id !== id),
-        );
-      }),
-    ];
-    return () => unsubs.forEach((fn) => fn());
-  }, [qc, transportGeneration]);
+  useEffect(() => subscribeTunnelCacheEvents(qc), [qc]);
 
   // Install progress events
   useEffect(() => {
@@ -402,41 +371,39 @@ export function usePorts(options?: {
 
   const createTunnel = useCallback(
     async (port: number, label: string, targetProfileId?: string) => {
-      const profileId = targetProfileId ?? options?.profileId ?? getActiveProfileId() ?? "default";
-      const snap = getConnectionSnapshot(profileId);
-      const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-      const t = getBoundTransport(conn) ?? transport;
-      await t.invoke("tunnel:create", { port, label });
-      void qc.invalidateQueries({ queryKey: profileTunnelsQueryKey(conn) });
+      const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();
+      const conn = targetOwners.find((owner) => owner.profileId === profileId);
+      if (!conn || !isCurrentConnection(conn)) throw new Error("Connection changed or disconnected");
+      await getBoundTransport(conn).invoke("tunnel:create", { port, label });
+      if (isCurrentConnection(conn)) void qc.invalidateQueries({ queryKey: profileTunnelsQueryKey(conn) });
     },
-    [options?.profileId, qc, transport],
+    [options?.owner?.profileId, options?.profileId, qc, targetOwners],
   );
 
   const stopTunnel = useCallback(
     async (id: string, targetProfileId?: string) => {
-      const profileId = targetProfileId ?? options?.profileId ?? getActiveProfileId() ?? "default";
-      const snap = getConnectionSnapshot(profileId);
-      const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-      const t = getBoundTransport(conn) ?? transport;
-      await t.invoke("tunnel:stop", { id });
-      void qc.invalidateQueries({ queryKey: profileTunnelsQueryKey(conn) });
+      const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();
+      const conn = targetOwners.find((owner) => owner.profileId === profileId);
+      if (!conn || !isCurrentConnection(conn)) throw new Error("Connection changed or disconnected");
+      await getBoundTransport(conn).invoke("tunnel:stop", { id });
+      if (isCurrentConnection(conn)) void qc.invalidateQueries({ queryKey: profileTunnelsQueryKey(conn) });
     },
-    [options?.profileId, qc, transport],
+    [options?.owner?.profileId, options?.profileId, qc, targetOwners],
   );
 
   const killPortSession = useCallback(
     async (sessionId: string, targetProfileId?: string) => {
-      const profileId = targetProfileId ?? options?.profileId ?? getActiveProfileId() ?? "default";
-      const snap = getConnectionSnapshot(profileId);
-      const conn: ConnectionRef = snap?.owner ?? { profileId, generation: 0 };
-      const t = getBoundTransport(conn) ?? transport;
-      await t.invoke("terminal:kill", sessionId);
+      const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();
+      const conn = targetOwners.find((owner) => owner.profileId === profileId);
+      if (!conn || !isCurrentConnection(conn)) throw new Error("Connection changed or disconnected");
+      await getBoundTransport(conn).invoke("terminal:kill", sessionId);
+      if (!isCurrentConnection(conn)) return;
       await Promise.all([
         qc.invalidateQueries({ queryKey: profilePortsQueryKey(conn) }),
         qc.invalidateQueries({ queryKey: ["terminal-sessions"] }),
       ]);
     },
-    [options?.profileId, qc, transport],
+    [options?.owner?.profileId, options?.profileId, qc, targetOwners],
   );
 
   return {

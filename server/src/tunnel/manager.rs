@@ -3,17 +3,27 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{mpsc, oneshot, Notify, RwLock};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::pty::EventSink;
 
 use super::{
-    driver::{DriverHandle, TunnelDriver, TunnelDriverEvent},
+    driver::{TunnelDriver, TunnelDriverEvent},
     error::TunnelError,
     installer::TunnelInstaller,
     session::{TunnelSession, TunnelStatus},
 };
+
+const REMINDER_DELAY: Duration = Duration::from_secs(3 * 60 * 60);
+
+struct TunnelHandle {
+    stop_tx: Option<oneshot::Sender<()>>,
+    // Dropping the handle cancels the watcher even if the driver keeps its
+    // event channel open during shutdown.
+    _cancel_watcher: oneshot::Sender<()>,
+}
 
 /// Resets the `installing` flag on drop — ensures cleanup even on task panic.
 struct InstallGuard(Arc<AtomicBool>);
@@ -38,7 +48,7 @@ impl Drop for TunnelStartGuard {
 #[derive(Clone)]
 pub struct TunnelSessionManager {
     sessions: Arc<RwLock<HashMap<Uuid, TunnelSession>>>,
-    handles: Arc<RwLock<HashMap<Uuid, DriverHandle>>>,
+    handles: Arc<RwLock<HashMap<Uuid, TunnelHandle>>>,
     /// Stop requests that won the race while a Starting driver had not yet
     /// returned its handle. The creator consumes the marker and terminates
     /// the returned driver instead of publishing an orphaned session.
@@ -122,32 +132,20 @@ impl TunnelSessionManager {
     /// Create a new tunnel session. Returns 409-equivalent if a session for
     /// the same port is already in Starting or Ready state.
     pub async fn create(&self, port: u16, label: String) -> Result<TunnelSession, TunnelError> {
-        self.create_for_owner(port, label, None).await
-    }
-
-    /// Create a tunnel associated with the concrete PTY incarnation that
-    /// exposed its port. Owner metadata lets automatic port cleanup avoid
-    /// stopping a replacement tunnel that reused the same numeric port.
-    pub async fn create_for_owner(
-        &self,
-        port: u16,
-        label: String,
-        owner: Option<(String, u64)>,
-    ) -> Result<TunnelSession, TunnelError> {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now().timestamp_millis();
+        let reminder_deadline = Instant::now() + REMINDER_DELAY;
 
         let session = TunnelSession {
             id,
             port,
-            session_id: owner.as_ref().map(|(session_id, _)| session_id.clone()),
-            incarnation: owner.as_ref().map(|(_, incarnation)| *incarnation),
             label: label.clone(),
             driver: self.driver.name().to_owned(),
             status: TunnelStatus::Starting,
             url: None,
             error: None,
             started_at: now,
+            reminder_due: false,
             pid: None,
         };
 
@@ -201,7 +199,14 @@ impl TunnelSessionManager {
         // Install the handle while the pending-stop marker is held. A stop
         // request can then either observe this handle or leave a marker that
         // the next creator check consumes, but never miss the Starting window.
-        self.handles.write().await.insert(id, handle);
+        let (cancel_watcher, watcher_cancelled) = oneshot::channel();
+        self.handles.write().await.insert(
+            id,
+            TunnelHandle {
+                stop_tx: handle.stop_tx,
+                _cancel_watcher: cancel_watcher,
+            },
+        );
 
         // Update pid in map + local copy before broadcast so clients receive accurate pid.
         if let Some(p) = pid {
@@ -210,8 +215,6 @@ impl TunnelSessionManager {
                 s.pid = Some(p);
             }
         }
-        drop(pending_stops);
-
         let mut broadcast_session = session.clone();
         broadcast_session.pid = pid;
         self.sink.broadcast(
@@ -221,11 +224,14 @@ impl TunnelSessionManager {
                 serde_json::Value::Null
             }),
         );
+        drop(pending_stops);
 
         // Spawn watcher: receives driver events → mutates session + broadcasts
         tokio::spawn(watch_events(
             id,
             event_rx,
+            watcher_cancelled,
+            reminder_deadline,
             Arc::clone(&self.sessions),
             Arc::clone(&self.handles),
             Arc::clone(&self.sink),
@@ -257,7 +263,7 @@ impl TunnelSessionManager {
         }
 
         // A Starting session has no handle yet. Keep this marker until
-        // create_for_owner() receives the driver handle and stops it.
+        // create() receives the driver handle and stops it.
         if !had_handle && removed_session {
             pending_stops.insert(id);
         } else {
@@ -270,53 +276,12 @@ impl TunnelSessionManager {
             let _ = tx.send(());
         }
 
-        self.sink
-            .broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
+        if removed_session {
+            self.sink
+                .broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
+        }
 
         Ok(())
-    }
-
-    /// Stop all unowned tunnels for a specific port. This remains available
-    /// for callers that explicitly manage tunnels by port; automatic port
-    /// lifecycle cleanup uses the owner-aware method below.
-    pub async fn stop_by_port(&self, port: u16) {
-        let ids: Vec<Uuid> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .values()
-                .filter(|s| s.port == port && s.session_id.is_none())
-                .map(|s| s.id)
-                .collect()
-        };
-
-        for id in ids {
-            if let Err(e) = self.stop(id).await {
-                tracing::warn!(error = %e, id = %id, port, "Failed to auto-stop tunnel for lost port");
-            }
-        }
-    }
-
-    /// Stop a tunnel only when its recorded PTY owner still matches the
-    /// incarnation whose detected port was lost.
-    pub async fn stop_by_port_for_owner(&self, port: u16, session_id: &str, incarnation: u64) {
-        let ids: Vec<Uuid> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .values()
-                .filter(|s| {
-                    s.port == port
-                        && s.session_id.as_deref() == Some(session_id)
-                        && s.incarnation == Some(incarnation)
-                })
-                .map(|s| s.id)
-                .collect()
-        };
-
-        for id in ids {
-            if let Err(e) = self.stop(id).await {
-                tracing::warn!(error = %e, id = %id, port, "Failed to auto-stop tunnel for lost port");
-            }
-        }
     }
 
     pub async fn list(&self) -> Vec<TunnelSession> {
@@ -377,80 +342,67 @@ impl TunnelSessionManager {
 async fn watch_events(
     id: Uuid,
     mut event_rx: mpsc::Receiver<TunnelDriverEvent>,
+    mut cancelled: oneshot::Receiver<()>,
+    reminder_deadline: Instant,
     sessions: Arc<RwLock<HashMap<Uuid, TunnelSession>>>,
-    handles: Arc<RwLock<HashMap<Uuid, DriverHandle>>>,
+    handles: Arc<RwLock<HashMap<Uuid, TunnelHandle>>>,
     sink: Arc<dyn EventSink>,
 ) {
-    while let Some(event) = event_rx.recv().await {
+    let deadline = tokio::time::sleep_until(reminder_deadline);
+    tokio::pin!(deadline);
+    let mut deadline_elapsed = false;
+    loop {
+        // Cancellation and queued terminal events win over a simultaneous
+        // deadline. The timer belongs to this watcher, not a detached task.
+        let event = tokio::select! {
+            biased;
+            // The caller dropping the handle owns registry cleanup.
+            _ = &mut cancelled => return,
+            event = event_rx.recv() => event,
+            _ = &mut deadline, if !deadline_elapsed => {
+                deadline_elapsed = true;
+                None
+            }
+        };
+        let mut active = sessions.write().await;
+        let Some(session) = active.get_mut(&id) else {
+            break;
+        };
         match event {
-            TunnelDriverEvent::UrlReady(url) => {
-                {
-                    let mut s = sessions.write().await;
-                    if let Some(sess) = s.get_mut(&id) {
-                        sess.status = TunnelStatus::Ready;
-                        sess.url = Some(url.clone());
-                    }
-                }
+            Some(TunnelDriverEvent::UrlReady(url)) => {
+                session.status = TunnelStatus::Ready;
+                session.url = Some(url.clone());
                 sink.broadcast("tunnel:ready", serde_json::json!({ "id": id, "url": url }));
             }
-            TunnelDriverEvent::Failed(msg) => {
-                {
-                    let mut s = sessions.write().await;
-                    if let Some(sess) = s.get_mut(&id) {
-                        sess.status = TunnelStatus::Failed;
-                        sess.error = Some(msg.clone());
-                    }
-                }
+            Some(TunnelDriverEvent::Failed(error)) => {
+                active.remove(&id);
                 sink.broadcast(
                     "tunnel:failed",
-                    serde_json::json!({ "id": id, "error": msg }),
+                    serde_json::json!({ "id": id, "error": error }),
                 );
-                // Sessions are ephemeral — removed after terminal state.
-                // Clients receive the event; REST list won't return failed sessions.
                 break;
             }
-            TunnelDriverEvent::Exited => {
-                // Only broadcast tunnel:stopped if stop() hasn't already removed+broadcast it.
-                let should_broadcast = {
-                    let mut s = sessions.write().await;
-                    if let Some(sess) = s.get_mut(&id) {
-                        if matches!(sess.status, TunnelStatus::Starting | TunnelStatus::Ready) {
-                            sess.status = TunnelStatus::Stopped;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false // already removed by stop()
-                    }
-                };
-                if should_broadcast {
-                    sink.broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
-                }
+            Some(TunnelDriverEvent::Exited) => {
+                active.remove(&id);
+                sink.broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
                 break;
             }
-        }
-    }
-    // Fallback if the channel closed without an explicit terminal event (Failed/Exited).
-    // Transition only active Starting/Ready sessions to Stopped and broadcast once.
-    let should_broadcast_fallback = {
-        let mut s = sessions.write().await;
-        if let Some(sess) = s.get_mut(&id) {
-            if matches!(sess.status, TunnelStatus::Starting | TunnelStatus::Ready) {
-                sess.status = TunnelStatus::Stopped;
-                true
-            } else {
-                false
+            None if event_rx.is_closed() && event_rx.is_empty() => {
+                active.remove(&id);
+                sink.broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
+                break;
             }
-        } else {
-            false
+            None => {}
         }
-    };
-    if should_broadcast_fallback {
-        sink.broadcast("tunnel:stopped", serde_json::json!({ "id": id }));
+        if session.status == TunnelStatus::Ready && !session.reminder_due && deadline_elapsed {
+            session.reminder_due = true;
+            // Keep transition + broadcast under the session lock: stop/dispose
+            // cannot remove the session and then receive a late reminder.
+            sink.broadcast("tunnel:reminder", serde_json::json!({ "id": id }));
+        }
     }
 
-    // Cleanup orphaned entries; stop() may have already removed them — that is fine.
+    // stop()/dispose_all() may already have removed these entries.
     handles.write().await.remove(&id);
     sessions.write().await.remove(&id);
 }

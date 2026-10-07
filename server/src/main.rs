@@ -656,7 +656,6 @@ async fn main() -> anyhow::Result<()> {
     // ── Port forward manager ──────────────────────────────────────────────────
     let port_forward_manager = std::sync::Arc::new(
         PortForwardManager::new(std::sync::Arc::new(event_sink.clone()))
-            .with_tunnel_manager(tunnel_manager.clone())
             .with_session_store(session_store.clone()),
     );
     port_forward_manager.enable_session_validation();

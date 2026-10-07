@@ -54,6 +54,7 @@ vi.mock("@/hooks/use-sse.js", () => ({
   resetTransportListeners: vi.fn(),
   installTransportBridge: vi.fn(),
   removeProfileListeners: vi.fn(),
+  subscribeIpc: vi.fn(() => () => {}),
 }));
 vi.mock("@/hooks/use-browser-shortcut-guard.js", () => ({
   useBrowserShortcutGuard: () => {},

@@ -181,19 +181,6 @@ async fn linux_poll_loop(pfm: Arc<PortForwardManager>) {
                 pfm.report_lost(*port, *incarnation).await;
             }
         }
-
-        // Manual tunnels do not have a PTY-owned discovered-port entry. Keep
-        // them in the same loss monitor, but require one observed listening
-        // sample before a later missing sample stops the ownerless tunnel.
-        pfm.sync_ownerless_tunnel_ports().await;
-        let ownerless = pfm.ownerless_tunnel_ports().await;
-        for (id, port, observed_listen) in ownerless {
-            if listening.contains(&port) {
-                pfm.confirm_ownerless_tunnel_listen(id, port).await;
-            } else if observed_listen {
-                pfm.report_ownerless_tunnel_lost(id, port).await;
-            }
-        }
     }
 }
 

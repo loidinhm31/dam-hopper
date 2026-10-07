@@ -336,10 +336,6 @@ export type DistributionMatrix = Record<
 export interface TunnelInfo {
   id: string;
   port: number;
-  /** Owning PTY session, when the tunnel was created for a terminal port. */
-  sessionId?: string;
-  /** Concrete PTY identity used to reject stale ownership updates. */
-  incarnation?: number;
   label: string;
   driver: string;
   status: "starting" | "ready" | "failed" | "stopped";
@@ -347,6 +343,7 @@ export interface TunnelInfo {
   error?: string;
   startedAt: number;
   pid?: number;
+  reminderDue: boolean;
 }
 
 export interface BrowserSelectionV1 {

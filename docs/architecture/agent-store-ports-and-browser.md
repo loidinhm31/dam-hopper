@@ -37,11 +37,17 @@ The semantic detected-port identity is:
 (profileId, port, terminalId, incarnation)
 ```
 
-`PortEntry` carries `profileId`, `port`, `sessionId`, and PTY `incarnation`. Therefore equal numeric ports, equal raw terminal IDs, and equal project names from different servers remain separate rows. Tunnel-only rows have no PTY identity and are still kept under their profile. Tunnel identity is `(profileId, tunnelId)`; a tunnel is joined to a detected port only within the same owner.
+`PortEntry` carries `profileId`, `port`, `sessionId`, and PTY `incarnation`. Equal numeric ports, raw terminal IDs, and project names from different servers remain separate rows. Tunnel-only rows have no PTY identity and use `state: "unknown"` / origin untracked, never an invented listening state. Tunnel identity is `(profileId, tunnelId)`; joins stay within one owner.
 
-Port push events use the event's `profileId` to patch that profile's query cache. Incarnation admission rejects delayed observations and `port:lost` removes only the matching `(sessionId, port, incarnation)` row. Reconnects invalidate the affected owner's port/tunnel data and re-list it; one profile's missed event or error cannot clear another profile's rows.
+Port and tunnel push events require the emitting `profileId` and connection generation; stale/ownerless callbacks cannot rebind to a current or ambient transport. Incarnation acceptance, confirmation, and retirement use profile-qualified terminal references. `port:lost` removes only the exact terminal/port/incarnation row. Connection subscriptions re-list current owners; disconnected profiles are not queried or rendered as live.
 
-Create/stop tunnel, kill terminal-port session, and cloudflared installation capture the target profile before invoking transport. Manual ownerless tunnel operations require an explicit profile. Server-side port detection and tunnel platform constraints remain unchanged.
+Create/Stop and terminal Kill capture the rendered owner, resolve its transport only at invocation, and guard post-await cache changes against reconnect. Existing Cloudflared installation behavior is unchanged.
+
+Explicit tunnels have no PTY ownership fields. Origin-port loss/reopen, PTY exit/Kill/replacement, and another terminal reporting that port preserve the Cloudflared connector, URL, ID, and `startedAt`. Stop, connector exit/failure, and DamHopper shutdown still clean up. Tunnels are process-memory state, not restored after server restart; no automatic connector restart.
+
+At three hours from creation, the server sets required `reminderDue: boolean` and broadcasts `tunnel:reminder` once. The global shared reminder catches up from REST, includes profile/port/URL, and offers Dismiss or Stop without expiring the tunnel. Dismissal is per profile/tunnel/browser session, backed by sessionStorage with memory fallback. Stop uses the captured generation; late REST snapshots are cancelled before reminder/Stop reconciliation. Cognito hides the reminder; stacked reminders scroll within a bounded area while routes retain the remaining viewport height.
+
+Public exposure persists until Stop: an offline origin normally returns 502, and a later service binding the same port becomes publicly reachable. Quick Tunnel URLs last only for the connector's lifetime.
 
 ## 3. Browser Target Trust
 

@@ -15,10 +15,6 @@ pub enum TunnelStatus {
 pub struct TunnelSession {
     pub id: Uuid,
     pub port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub incarnation: Option<u64>,
     pub label: String,
     pub driver: String,
     pub status: TunnelStatus,
@@ -27,6 +23,7 @@ pub struct TunnelSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub started_at: i64,
+    pub reminder_due: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
 }

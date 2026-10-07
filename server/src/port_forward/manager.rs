@@ -8,8 +8,6 @@ use std::time::Duration;
 use crate::persistence::SessionStore;
 use crate::port_forward::detector::port_is_safe;
 use crate::pty::EventSink;
-use crate::tunnel::TunnelSessionManager;
-use uuid::Uuid;
 
 use super::session::{DetectedPort, DetectedVia, PortState};
 
@@ -17,28 +15,18 @@ use super::session::{DetectedPort, DetectedVia, PortState};
 const MAX_TRACKED_PORTS: usize = 100;
 const SEEDED_PORT_GRACE: Duration = Duration::from_secs(10);
 
-#[derive(Clone, Copy)]
-struct OwnerlessTunnelPort {
-    port: u16,
-    observed_listen: bool,
-}
-
 /// In-memory registry of ports detected in active PTY sessions.
 ///
 /// `Clone` is cheap — backed by `Arc`.
 #[derive(Clone)]
 pub struct PortForwardManager {
     ports: Arc<RwLock<HashMap<u16, DetectedPort>>>,
-    /// Ownerless tunnel ports awaiting their first listening observation.
-    /// Entries are synchronized from the tunnel manager by the proc poller.
-    ownerless_tunnel_ports: Arc<RwLock<HashMap<Uuid, OwnerlessTunnelPort>>>,
     /// Concrete PTY identities that are currently allowed to report stdout.
     /// The registry is enabled by production wiring; direct unit-test managers
     /// keep the legacy open reporting behavior unless they opt in.
     active_sessions: Arc<RwLock<HashMap<String, u64>>>,
     session_validation_enabled: Arc<AtomicBool>,
     sink: Arc<dyn EventSink>,
-    tunnel_manager: Option<TunnelSessionManager>,
     session_store: Option<Arc<SessionStore>>,
 }
 
@@ -46,82 +34,16 @@ impl PortForwardManager {
     pub fn new(sink: Arc<dyn EventSink>) -> Self {
         Self {
             ports: Arc::new(RwLock::new(HashMap::new())),
-            ownerless_tunnel_ports: Arc::new(RwLock::new(HashMap::new())),
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             session_validation_enabled: Arc::new(AtomicBool::new(false)),
             sink,
-            tunnel_manager: None,
             session_store: None,
         }
-    }
-
-    pub fn with_tunnel_manager(mut self, tunnel_manager: TunnelSessionManager) -> Self {
-        self.tunnel_manager = Some(tunnel_manager);
-        self
     }
 
     pub fn with_session_store(mut self, session_store: Option<Arc<SessionStore>>) -> Self {
         self.session_store = session_store;
         self
-    }
-
-    /// Synchronize the loss monitor with currently registered ownerless
-    /// tunnels. A tunnel must be observed listening once before a missing
-    /// port is treated as a loss; this avoids stopping a tunnel while its
-    /// driver is still starting.
-    pub async fn sync_ownerless_tunnel_ports(&self) {
-        let Some(tunnel_manager) = &self.tunnel_manager else {
-            return;
-        };
-        let active_ports: HashMap<Uuid, u16> = tunnel_manager
-            .list()
-            .await
-            .into_iter()
-            .filter(|session| session.session_id.is_none())
-            .map(|session| (session.id, session.port))
-            .collect();
-        let mut tracked = self.ownerless_tunnel_ports.write().unwrap();
-        tracked.retain(|id, _| active_ports.contains_key(id));
-        for (id, port) in active_ports {
-            tracked.entry(id).or_insert(OwnerlessTunnelPort {
-                port,
-                observed_listen: false,
-            });
-        }
-    }
-
-    pub async fn ownerless_tunnel_ports(&self) -> Vec<(Uuid, u16, bool)> {
-        self.ownerless_tunnel_ports
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(id, state)| (*id, state.port, state.observed_listen))
-            .collect()
-    }
-
-    pub async fn confirm_ownerless_tunnel_listen(&self, id: Uuid, port: u16) {
-        if let Some(state) = self.ownerless_tunnel_ports.write().unwrap().get_mut(&id) {
-            if state.port == port {
-                state.observed_listen = true;
-            }
-        }
-    }
-
-    pub async fn report_ownerless_tunnel_lost(&self, id: Uuid, port: u16) {
-        let tracked = self
-            .ownerless_tunnel_ports
-            .read()
-            .unwrap()
-            .get(&id)
-            .is_some_and(|state| state.port == port);
-        if tracked {
-            self.ownerless_tunnel_ports.write().unwrap().remove(&id);
-            if let Some(tunnel_manager) = &self.tunnel_manager {
-                if let Err(error) = tunnel_manager.stop(id).await {
-                    tracing::debug!(%error, %id, port, "Ownerless tunnel already stopped");
-                }
-            }
-        }
     }
 
     /// Enables fail-closed stdout ownership checks for production PTY readers.
@@ -145,19 +67,8 @@ impl PortForwardManager {
     /// Removes a producer only if it still owns the public session id. An old
     /// reader must not unregister a newer replacement. Port state is cleaned
     /// by concrete incarnation as well, so replacement/EOF cannot leave stale
-    /// API, SQLite, or tunnel-owner entries behind.
+    /// API or SQLite entries behind.
     pub fn unregister_session(&self, session_id: &str, incarnation: u64) {
-        self.unregister_session_with_runtime(session_id, incarnation, None);
-    }
-
-    /// Synchronous lifecycle callers can provide the Tokio handle captured by
-    /// a PTY reader so tunnel cleanup is still scheduled off the reader thread.
-    pub fn unregister_session_with_runtime(
-        &self,
-        session_id: &str,
-        incarnation: u64,
-        runtime: Option<&tokio::runtime::Handle>,
-    ) {
         {
             let mut active_sessions = self.active_sessions.write().unwrap();
             if active_sessions.get(session_id).copied() == Some(incarnation) {
@@ -165,8 +76,7 @@ impl PortForwardManager {
             }
         }
 
-        let removed = self.remove_session_ports_sync(session_id, incarnation);
-        self.schedule_tunnel_cleanup(session_id, removed, runtime);
+        self.remove_session_ports(session_id, incarnation);
     }
 
     /// Called when stdout regex fires: inserts Provisional entry and broadcasts
@@ -194,7 +104,7 @@ impl PortForwardManager {
         } else {
             None
         };
-        let (maybe_payload, replaced_owner) = {
+        let payload = {
             let mut ports = self.ports.write().unwrap();
             if ports.get(&port).is_some_and(|entry| {
                 entry.session_id == session_id && entry.incarnation == incarnation
@@ -250,7 +160,7 @@ impl PortForwardManager {
                     );
                 }
             }
-            (Some(payload), replaced_owner)
+            payload
         }; // write lock released
 
         // The active-session read lock also serializes lifecycle unregister
@@ -259,15 +169,7 @@ impl PortForwardManager {
         // incarnation; if cleanup wins first, validation cannot pass.
         drop(_active_sessions);
 
-        if let Some(payload) = maybe_payload {
-            self.sink.broadcast("port:discovered", payload);
-            if let (Some(tm), Some((old_session_id, old_incarnation))) =
-                (&self.tunnel_manager, replaced_owner)
-            {
-                tm.stop_by_port_for_owner(port, &old_session_id, old_incarnation)
-                    .await;
-            }
-        }
+        self.sink.broadcast("port:discovered", payload);
     }
 
     /// Called by proc poller: upgrades Provisional → Listening.
@@ -337,28 +239,16 @@ impl PortForwardManager {
                         );
                     }
                 }
-                let owner = (entry.session_id.clone(), entry.incarnation);
-                (
-                    serde_json::json!({
-                        "port": entry.port,
-                        "session_id": &entry.session_id,
-                        "incarnation": entry.incarnation,
-                    }),
-                    owner,
-                )
+                serde_json::json!({
+                    "port": entry.port,
+                    "session_id": &entry.session_id,
+                    "incarnation": entry.incarnation,
+                })
             })
         }; // write lock released
 
-        if let Some((payload, (owner_session_id, owner_incarnation))) = maybe_lost {
+        if let Some(payload) = maybe_lost {
             self.sink.broadcast("port:lost", payload);
-
-            // Auto-cleanup tunnel if it exists for this port
-            if let Some(tm) = &self.tunnel_manager {
-                tm.stop_by_port_for_owner(port, &owner_session_id, owner_incarnation)
-                    .await;
-                // Also clean up legacy/manual tunnels that have no PTY owner.
-                tm.stop_by_port(port).await;
-            }
         }
     }
 
@@ -427,7 +317,7 @@ impl PortForwardManager {
         seeded
     }
 
-    fn remove_session_ports_sync(&self, session_id: &str, incarnation: u64) -> Vec<(u16, u64)> {
+    pub fn remove_session_ports(&self, session_id: &str, incarnation: u64) {
         let removed = {
             let mut ports = self.ports.write().unwrap();
             let matching = ports
@@ -463,60 +353,6 @@ impl PortForwardManager {
                 }),
             );
         }
-
-        removed
-    }
-
-    pub async fn remove_session_ports(&self, session_id: &str, incarnation: u64) {
-        let removed = self.remove_session_ports_sync(session_id, incarnation);
-        self.stop_removed_tunnels(session_id, &removed).await;
-    }
-
-    async fn stop_removed_tunnels(&self, session_id: &str, removed: &[(u16, u64)]) {
-        if let Some(tm) = &self.tunnel_manager {
-            for (port, entry_incarnation) in removed {
-                tm.stop_by_port_for_owner(port.to_owned(), session_id, *entry_incarnation)
-                    .await;
-                tm.stop_by_port(*port).await;
-            }
-        }
-    }
-
-    fn schedule_tunnel_cleanup(
-        &self,
-        session_id: &str,
-        removed: Vec<(u16, u64)>,
-        runtime: Option<&tokio::runtime::Handle>,
-    ) {
-        let Some(tm) = self.tunnel_manager.clone() else {
-            return;
-        };
-        let Some(handle) = runtime
-            .cloned()
-            .or_else(|| tokio::runtime::Handle::try_current().ok())
-        else {
-            return;
-        };
-        let session_id = session_id.to_string();
-        for (port, entry_incarnation) in removed {
-            let tm = tm.clone();
-            let session_id = session_id.clone();
-            handle.spawn(async move {
-                tm.stop_by_port_for_owner(port, &session_id, entry_incarnation)
-                    .await;
-                tm.stop_by_port(port).await;
-            });
-        }
-    }
-
-    /// Returns the concrete PTY owner of a currently tracked port so tunnel
-    /// sessions can be cleaned up without conflating reused public ids.
-    pub async fn owner_for_port(&self, port: u16) -> Option<(String, u64)> {
-        self.ports
-            .read()
-            .unwrap()
-            .get(&port)
-            .map(|entry| (entry.session_id.clone(), entry.incarnation))
     }
 }
 
@@ -524,35 +360,8 @@ impl PortForwardManager {
 mod tests {
     use super::*;
     use crate::pty::event_sink::NoopEventSink;
-    use crate::tunnel::{DriverHandle, TunnelDriver, TunnelDriverEvent, TunnelError};
     use std::time::Instant;
     use tempfile::NamedTempFile;
-
-    struct RunningTunnelDriver {
-        event_senders: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<TunnelDriverEvent>>>>,
-    }
-
-    impl TunnelDriver for RunningTunnelDriver {
-        fn name(&self) -> &'static str {
-            "test"
-        }
-
-        fn start(
-            &self,
-            _port: u16,
-            _label: &str,
-            event_tx: tokio::sync::mpsc::Sender<TunnelDriverEvent>,
-        ) -> crate::tunnel::driver::BoxFuture<'_, Result<DriverHandle, TunnelError>> {
-            self.event_senders.lock().unwrap().push(event_tx);
-            Box::pin(async {
-                let (stop_tx, _stop_rx) = tokio::sync::oneshot::channel();
-                Ok(DriverHandle {
-                    pid: None,
-                    stop_tx: Some(stop_tx),
-                })
-            })
-        }
-    }
 
     fn manager_with_store() -> (PortForwardManager, Arc<SessionStore>, NamedTempFile) {
         let temp = NamedTempFile::new().unwrap();
@@ -718,104 +527,5 @@ mod tests {
         assert!(current.is_empty());
         let persisted = store.load_detected_ports().unwrap();
         assert!(persisted.is_empty());
-    }
-
-    #[tokio::test]
-    async fn lost_port_stops_ownerless_tunnel() {
-        let tunnel_manager = crate::tunnel::TunnelSessionManager::new(
-            Arc::new(NoopEventSink),
-            Arc::new(RunningTunnelDriver {
-                event_senders: Arc::new(std::sync::Mutex::new(Vec::new())),
-            }),
-        );
-        let manager = PortForwardManager::new(Arc::new(NoopEventSink))
-            .with_tunnel_manager(tunnel_manager.clone());
-
-        tunnel_manager
-            .create(5173, "manual".to_string())
-            .await
-            .unwrap();
-        assert_eq!(tunnel_manager.list().await.len(), 1);
-
-        // Discovery alone does not mean the port was lost; a manually-created
-        // ownerless tunnel must remain usable while the process is listening.
-        manager
-            .report_stdout_hit(5173, "session-a".to_string(), 1, None)
-            .await;
-        assert_eq!(tunnel_manager.list().await.len(), 1);
-
-        manager.report_lost(5173, 1).await;
-
-        assert!(tunnel_manager.list().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn ownerless_tunnel_loss_monitor_requires_initial_listen() {
-        let tunnel_manager = crate::tunnel::TunnelSessionManager::new(
-            Arc::new(NoopEventSink),
-            Arc::new(RunningTunnelDriver {
-                event_senders: Arc::new(std::sync::Mutex::new(Vec::new())),
-            }),
-        );
-        let manager = PortForwardManager::new(Arc::new(NoopEventSink))
-            .with_tunnel_manager(tunnel_manager.clone());
-
-        tunnel_manager
-            .create(8080, "manual".to_string())
-            .await
-            .unwrap();
-        let tunnel_id = tunnel_manager.list().await[0].id;
-        manager.sync_ownerless_tunnel_ports().await;
-        assert_eq!(
-            manager.ownerless_tunnel_ports().await,
-            vec![(tunnel_id, 8080, false)]
-        );
-
-        // A missing port before the first listening observation is not a loss.
-        manager.sync_ownerless_tunnel_ports().await;
-        assert_eq!(tunnel_manager.list().await.len(), 1);
-
-        manager
-            .confirm_ownerless_tunnel_listen(tunnel_id, 8080)
-            .await;
-        assert_eq!(
-            manager.ownerless_tunnel_ports().await,
-            vec![(tunnel_id, 8080, true)]
-        );
-        manager.report_ownerless_tunnel_lost(tunnel_id, 8080).await;
-        assert!(tunnel_manager.list().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn stale_ownerless_loss_does_not_stop_same_port_replacement() {
-        let tunnel_manager = crate::tunnel::TunnelSessionManager::new(
-            Arc::new(NoopEventSink),
-            Arc::new(RunningTunnelDriver {
-                event_senders: Arc::new(std::sync::Mutex::new(Vec::new())),
-            }),
-        );
-        let manager = PortForwardManager::new(Arc::new(NoopEventSink))
-            .with_tunnel_manager(tunnel_manager.clone());
-
-        let old = tunnel_manager
-            .create(8080, "old".to_string())
-            .await
-            .unwrap();
-        manager.sync_ownerless_tunnel_ports().await;
-        manager
-            .confirm_ownerless_tunnel_listen(old.id, old.port)
-            .await;
-        tunnel_manager.stop(old.id).await.unwrap();
-
-        let replacement = tunnel_manager
-            .create(8080, "replacement".to_string())
-            .await
-            .unwrap();
-        manager.sync_ownerless_tunnel_ports().await;
-        manager.report_ownerless_tunnel_lost(old.id, old.port).await;
-
-        let active = tunnel_manager.list().await;
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, replacement.id);
     }
 }
