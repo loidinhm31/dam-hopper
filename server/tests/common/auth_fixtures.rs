@@ -30,8 +30,9 @@ pub const DEFAULT_MFA_KEY: [u8; 32] = [0x55u8; 32];
 
 pub struct AuthTestFixture {
     pub app: Router,
-    pub db: Database,
-    pub db_name: String,
+    pub db: Option<Database>,
+    pub db_name: Option<String>,
+    pub sqlite_path: Option<std::path::PathBuf>,
     pub store: AuthStore,
     pub clock: Arc<MockClock>,
     pub raw_mfa_key: [u8; 32],
@@ -121,14 +122,92 @@ impl AuthTestFixture {
 
         Some(Self {
             app,
-            db,
-            db_name,
+            db: Some(db),
+            db_name: Some(db_name),
+            sqlite_path: None,
             store,
             clock,
             raw_mfa_key: DEFAULT_MFA_KEY,
             tmp_dir: tmp,
             state,
         })
+    }
+
+    /// Create an authenticated SQLite fixture (lite mode). File-backed, independent
+    /// of MongoDB, never skips.
+    pub async fn new_sqlite() -> Self {
+        let tmp = tempdir().unwrap();
+        let workspace_root = tmp.path().to_path_buf();
+        let db_path = workspace_root.join("auth.db");
+        let store = AuthStore::open_sqlite(&db_path)
+            .await
+            .expect("open sqlite test store");
+
+        let (event_sink, _rx) = BroadcastEventSink::new(512);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+
+        let config = DamHopperConfig {
+            workspace: WorkspaceInfo {
+                name: "test-workspace-sqlite".into(),
+                root: workspace_root.display().to_string(),
+            },
+            server: ServerConfig::default(),
+            agent_store: None,
+            projects: vec![],
+            features: FeaturesConfig::default(),
+            config_path: workspace_root.join("dam-hopper.toml"),
+        };
+
+        let global_config = GlobalConfig::default();
+        let store_path = workspace_root.join(".dam-hopper/agent-store");
+        let agent_store = dam_hopper_server::agent_store::AgentStoreService::new(store_path);
+        let fs = FsSubsystem::new(vec![]);
+        let tunnel_manager = super::make_tunnel_manager(&event_sink);
+        let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
+
+        let state = AppState::new(
+            workspace_root,
+            config,
+            global_config,
+            pty_manager,
+            agent_store,
+            event_sink,
+            TEST_JWT_SECRET.to_string(),
+            fs,
+            Some(store.clone()),
+            false,
+            tunnel_manager,
+            None,
+            ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+            diagnostics,
+            TelemetryRuntime::new(),
+        )
+        .expect("Failed to create AppState for SQLite fixture");
+
+        let mfa_key = MfaEncryptionKey::new(DEFAULT_MFA_KEY, "test-mfa-fixture-key");
+        let clock = Arc::new(MockClock::new(Utc::now()));
+
+        let auth_service = Arc::new(AuthService::new(
+            Some(store.clone()),
+            Some(mfa_key),
+            clock.clone(),
+        ));
+
+        let state = state.with_auth_service(auth_service);
+        state.host_resource_events.start();
+        let app = build_router(state.clone());
+
+        Self {
+            app,
+            db: None,
+            db_name: None,
+            sqlite_path: Some(db_path),
+            store,
+            clock,
+            raw_mfa_key: DEFAULT_MFA_KEY,
+            tmp_dir: tmp,
+            state,
+        }
     }
 
     /// Create a mandatory test fixture. Unlike `new()`, panics if MongoDB is not reachable.
@@ -158,11 +237,10 @@ impl AuthTestFixture {
             mfa_attempt_count: 0,
             mfa_blocked_until: None,
         };
-        self.db
-            .collection::<UserRecord>("users")
-            .insert_one(&user)
+        self.store
+            .create_user(user.clone())
             .await
-            .expect("insert user");
+            .expect("insert user via store");
         user
     }
 
@@ -200,12 +278,146 @@ impl AuthTestFixture {
             mfa_attempt_count: 0,
             mfa_blocked_until: None,
         };
-        self.db
-            .collection::<UserRecord>("users")
-            .insert_one(&user)
+        self.store
+            .create_user(user.clone())
             .await
-            .expect("insert enrolled user");
+            .expect("insert enrolled user via store");
         user
+    }
+    pub async fn insert_user_record(&self, user: UserRecord) {
+        self.store
+            .create_user(user)
+            .await
+            .expect("insert user record via store");
+    }
+
+    /// Access the MongoDB database, panicking if this fixture uses SQLite.
+    pub fn db(&self) -> &Database {
+        self.db
+            .as_ref()
+            .expect("AuthTestFixture is not using MongoDB")
+    }
+
+    /// Return the path to the SQLite authentication database if in lite mode.
+    pub fn sqlite_path(&self) -> Option<&std::path::Path> {
+        self.sqlite_path.as_deref()
+    }
+
+    /// Open an independent connection to the SQLite database (simulates operator sqlite3).
+    pub fn sqlite_conn(&self) -> rusqlite::Connection {
+        let path = self
+            .sqlite_path
+            .as_ref()
+            .expect("AuthTestFixture is not using SQLite");
+        let conn = rusqlite::Connection::open(path).expect("open independent sqlite connection");
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .expect("set busy timeout");
+        conn
+    }
+
+    /// Retrieve immutable user ID (24 hex characters) from the store.
+    pub async fn get_user_id(&self, username: &str) -> String {
+        let user = self
+            .store
+            .get_user(username)
+            .await
+            .expect("store lookup")
+            .expect("user exists");
+        user.id.expect("immutable user id").to_hex()
+    }
+
+    /// Operator approval: sets `is_enabled = true`.
+    pub async fn operator_approve(&self, username: &str) -> usize {
+        if let Some(sqlite_path) = &self.sqlite_path {
+            let conn = rusqlite::Connection::open(sqlite_path).unwrap();
+            conn.execute(
+                "UPDATE auth_users SET is_enabled = 1 WHERE username = ?1 AND is_enabled = 0",
+                [username],
+            )
+            .expect("operator approve sqlite")
+        } else if let Some(db) = &self.db {
+            let res = db
+                .collection::<UserRecord>("users")
+                .update_one(
+                    mongodb::bson::doc! { "username": username },
+                    mongodb::bson::doc! { "$set": { "isEnabled": true } },
+                )
+                .await
+                .expect("operator approve mongo");
+            res.modified_count as usize
+        } else {
+            panic!("No active backend in fixture");
+        }
+    }
+
+    /// Operator role assignment: updates role.
+    pub async fn operator_promote(&self, username: &str, role: UserRole) -> usize {
+        let role_str = match role {
+            UserRole::Admin => "admin",
+            UserRole::User => "user",
+        };
+        if let Some(sqlite_path) = &self.sqlite_path {
+            let conn = rusqlite::Connection::open(sqlite_path).unwrap();
+            conn.execute(
+                "UPDATE auth_users SET role = ?1 WHERE username = ?2",
+                rusqlite::params![role_str, username],
+            )
+            .expect("operator promote sqlite")
+        } else if let Some(db) = &self.db {
+            let res = db
+                .collection::<UserRecord>("users")
+                .update_one(
+                    mongodb::bson::doc! { "username": username },
+                    mongodb::bson::doc! { "$set": { "role": role_str } },
+                )
+                .await
+                .expect("operator promote mongo");
+            res.modified_count as usize
+        } else {
+            panic!("No active backend in fixture");
+        }
+    }
+
+    /// Operator recovery MFA reset: atomic version increment and MFA factor removal.
+    pub async fn operator_reset_mfa(&self, username: &str, expected_auth_version: i64) -> usize {
+        if let Some(sqlite_path) = &self.sqlite_path {
+            let conn = rusqlite::Connection::open(sqlite_path).unwrap();
+            conn.execute(
+                "UPDATE auth_users \
+                 SET auth_version = auth_version + 1, \
+                     mfa_secret_ciphertext = NULL, \
+                     mfa_nonce = NULL, \
+                     mfa_key_id = NULL, \
+                     mfa_enrolled_at_ms = NULL, \
+                     mfa_last_accepted_step = NULL, \
+                     mfa_attempt_window_started_at_ms = NULL, \
+                     mfa_attempt_count = 0, \
+                     mfa_blocked_until_ms = NULL \
+                 WHERE username = ?1 AND auth_version = ?2",
+                rusqlite::params![username, expected_auth_version],
+            )
+            .expect("operator reset mfa sqlite")
+        } else if let Some(db) = &self.db {
+            let res = db
+                .collection::<UserRecord>("users")
+                .update_one(
+                    mongodb::bson::doc! { "username": username, "authVersion": expected_auth_version },
+                    mongodb::bson::doc! {
+                        "$inc": { "authVersion": 1 },
+                        "$unset": {
+                            "mfa": "",
+                            "mfaAttemptWindowStartedAt": "",
+                            "mfaAttemptCount": "",
+                            "mfaBlockedUntil": ""
+                        }
+                    },
+                )
+                .await
+                .expect("operator reset mfa mongo");
+            res.modified_count as usize
+        } else {
+            panic!("No active backend in fixture");
+        }
     }
 
     pub async fn create_session(
@@ -252,16 +464,20 @@ impl AuthTestFixture {
     }
 
     pub async fn cleanup(&self) {
-        let _ = self.db.drop().await;
+        if let Some(db) = &self.db {
+            let _ = db.drop().await;
+        }
     }
 }
 impl Drop for AuthTestFixture {
     fn drop(&mut self) {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let db = self.db.clone();
-            handle.spawn(async move {
-                let _ = db.drop().await;
-            });
+        if let Some(db) = &self.db {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let db = db.clone();
+                handle.spawn(async move {
+                    let _ = db.drop().await;
+                });
+            }
         }
     }
 }

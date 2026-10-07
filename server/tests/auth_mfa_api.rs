@@ -31,33 +31,66 @@ const TEST_SECRET: &str = "test-jwt-secret-key-32-bytes-long!";
 #[allow(dead_code)]
 struct TestFixture {
     app: axum::Router,
-    db: mongodb::Database,
+    db: Option<mongodb::Database>,
+    db_path: std::path::PathBuf,
     store: AuthStore,
     clock: Arc<MockClock>,
     raw_mfa_key: [u8; 32],
+    _tmp: tempfile::TempDir,
+}
+
+impl TestFixture {
+    async fn increment_auth_version(&self, username: &str) {
+        if let Some(db) = &self.db {
+            db.collection::<mongodb::bson::Document>("users")
+                .update_one(
+                    mongodb::bson::doc! { "username": username },
+                    mongodb::bson::doc! { "$inc": { "authVersion": 1 } },
+                )
+                .await
+                .unwrap();
+        } else {
+            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            conn.execute(
+                "UPDATE auth_users SET auth_version = auth_version + 1 WHERE username = ?1",
+                [username],
+            )
+            .unwrap();
+        }
+    }
 }
 
 async fn setup_fixture() -> Option<TestFixture> {
-    let uri = std::env::var("TEST_MONGODB_URI")
-        .unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
-    let client = match mongodb::Client::with_uri_str(&uri).await {
-        Ok(c) => c,
-        Err(_) => return None,
-    };
-
-    let db_name = format!("test_mfa_api_{}", uuid::Uuid::new_v4().simple());
-    let db = client.database(&db_name);
-    if db.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_err() {
-        return None;
-    }
-
-    let store = AuthStore::from_mongo(db.clone());
-    let _ = store.init_indexes().await;
-
     let tmp = tempdir().unwrap();
     let workspace_root = tmp.path().to_path_buf();
+    let db_path = workspace_root.join("auth.db");
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+
+    let (store, db) = if let Ok(uri) = std::env::var("TEST_MONGODB_URI") {
+        let client = match mongodb::Client::with_uri_str(&uri).await {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+        let db_name = format!("test_mfa_api_{}", uuid::Uuid::new_v4().simple());
+        let db = client.database(&db_name);
+        if db
+            .run_command(mongodb::bson::doc! { "ping": 1 })
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        let store = AuthStore::from_mongo(db.clone());
+        let _ = store.init_indexes().await;
+        (store, Some(db))
+    } else {
+        let store = match AuthStore::open_sqlite(&db_path).await {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        (store, None)
+    };
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
@@ -113,9 +146,11 @@ async fn setup_fixture() -> Option<TestFixture> {
     Some(TestFixture {
         app,
         db,
+        db_path,
         store,
         clock,
         raw_mfa_key,
+        _tmp: tmp,
     })
 }
 
@@ -140,12 +175,7 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(test_user)
-        .await
-        .unwrap();
+    fixture.store.create_user(test_user).await.unwrap();
 
     // 2. Login with wrong password -> 401 INVALID_CREDENTIALS
     let bad_login_req = Request::builder()
@@ -162,7 +192,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(bad_login_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "INVALID_CREDENTIALS");
 
@@ -181,10 +213,18 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(login_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers().get(header::SET_COOKIE).is_none(), "No cookie should be issued before MFA");
-    assert_eq!(resp.headers().get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert!(
+        resp.headers().get(header::SET_COOKIE).is_none(),
+        "No cookie should be issued before MFA"
+    );
+    assert_eq!(
+        resp.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["state"], "enrollmentRequired");
     assert_eq!(json["authProtocol"], AUTH_PROTOCOL_VERSION);
@@ -205,7 +245,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(setup_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let secret_base32 = json["secret"].as_str().unwrap().to_string();
     let otpauth_uri = json["otpauthUri"].as_str().unwrap().to_string();
@@ -228,7 +270,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(repeat_setup_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let repeat_json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(repeat_json["secret"], secret_base32);
 
@@ -247,7 +291,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(bad_confirm_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "INVALID_MFA_CODE");
 
@@ -278,7 +324,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     assert!(cookie_hdr.contains("damhopper-auth="));
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["state"], "authenticated");
     let session_jwt = json["token"].as_str().unwrap().to_string();
@@ -297,7 +345,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(status_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["authenticated"], true);
     assert_eq!(json["user"], "alice");
@@ -318,7 +368,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(login_req2).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["state"], "mfaRequired");
     let login_challenge_token = json["challengeToken"].as_str().unwrap().to_string();
@@ -336,9 +388,16 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
             .unwrap(),
         ))
         .unwrap();
-    let resp = fixture.app.clone().oneshot(replayed_verify_req).await.unwrap();
+    let resp = fixture
+        .app
+        .clone()
+        .oneshot(replayed_verify_req)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "REPLAYED_MFA_CODE");
 
@@ -361,7 +420,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(valid_verify_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["state"], "authenticated");
     let session2_jwt = json["token"].as_str().unwrap().to_string();
@@ -373,9 +434,16 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .header(header::AUTHORIZATION, format!("Bearer {session2_jwt}"))
         .body(Body::empty())
         .unwrap();
-    let resp = fixture.app.clone().oneshot(stepup_challenge_req).await.unwrap();
+    let resp = fixture
+        .app
+        .clone()
+        .oneshot(stepup_challenge_req)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let stepup_token = json["challengeToken"].as_str().unwrap().to_string();
 
@@ -396,9 +464,16 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
             .unwrap(),
         ))
         .unwrap();
-    let resp = fixture.app.clone().oneshot(stepup_verify_req).await.unwrap();
+    let resp = fixture
+        .app
+        .clone()
+        .oneshot(stepup_verify_req)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let rotated_jwt = json["token"].as_str().unwrap().to_string();
 
@@ -411,7 +486,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(old_jwt_status).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "SESSION_REVOKED");
 
@@ -435,7 +512,9 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(stale_status_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["authenticated"], false);
     assert_eq!(json["code"], "MFA_REQUIRED");
@@ -451,7 +530,12 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(logout_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let cookie_clear = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+    let cookie_clear = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cookie_clear.contains("Max-Age=0"));
 
     // After logout, token is revoked
@@ -461,9 +545,16 @@ async fn test_full_enrollment_and_login_mfa_lifecycle() {
         .header(header::AUTHORIZATION, format!("Bearer {rotated_jwt}"))
         .body(Body::empty())
         .unwrap();
-    let resp = fixture.app.clone().oneshot(post_logout_status).await.unwrap();
+    let resp = fixture
+        .app
+        .clone()
+        .oneshot(post_logout_status)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "SESSION_REVOKED");
 }
@@ -515,7 +606,9 @@ async fn test_login_edge_cases_disabled_and_unregistered() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "INVALID_CREDENTIALS");
 
@@ -533,12 +626,7 @@ async fn test_login_edge_cases_disabled_and_unregistered() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(disabled_user)
-        .await
-        .unwrap();
+    fixture.store.create_user(disabled_user).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -554,7 +642,9 @@ async fn test_login_edge_cases_disabled_and_unregistered() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "ACCOUNT_DISABLED");
 }
@@ -592,12 +682,7 @@ async fn test_step_up_rejected_when_session_expired() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(user)
-        .await
-        .unwrap();
+    fixture.store.create_user(user).await.unwrap();
 
     // Login and get MFA challenge
     let login_req = Request::builder()
@@ -614,7 +699,9 @@ async fn test_step_up_rejected_when_session_expired() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(login_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let challenge_token = json["challengeToken"].as_str().unwrap();
 
@@ -637,7 +724,9 @@ async fn test_step_up_rejected_when_session_expired() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(verify_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let token = json["token"].as_str().unwrap().to_string();
 
@@ -653,7 +742,9 @@ async fn test_step_up_rejected_when_session_expired() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(status_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "SESSION_EXPIRED");
 
@@ -666,7 +757,9 @@ async fn test_step_up_rejected_when_session_expired() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(challenge_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "SESSION_EXPIRED");
 }
@@ -703,7 +796,9 @@ async fn test_status_with_legacy_v1_jwt_is_rejected() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(status_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "AUTH_REQUIRED");
 }
@@ -728,12 +823,7 @@ async fn test_concurrent_enrollment_cas_failure() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(user)
-        .await
-        .unwrap();
+    fixture.store.create_user(user).await.unwrap();
 
     // 1. Login to get enrollment challenge
     let login_req = Request::builder()
@@ -750,7 +840,9 @@ async fn test_concurrent_enrollment_cas_failure() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(login_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let challenge_token = json["challengeToken"].as_str().unwrap().to_string();
 
@@ -768,22 +860,17 @@ async fn test_concurrent_enrollment_cas_failure() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(setup_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let secret_base32 = json["secret"].as_str().unwrap().to_string();
     let secret_raw = TotpEngine::base32_to_secret(&secret_base32).unwrap();
-    let valid_code = TotpEngine::generate_code_at(&secret_raw, fixture.clock.now().timestamp() as u64).unwrap();
+    let valid_code =
+        TotpEngine::generate_code_at(&secret_raw, fixture.clock.now().timestamp() as u64).unwrap();
 
     // 3. Simulate concurrent reset or competing setup that increments authVersion
-    fixture
-        .db
-        .collection::<mongodb::bson::Document>("users")
-        .update_one(
-            mongodb::bson::doc! { "username": "dave" },
-            mongodb::bson::doc! { "$inc": { "authVersion": 1 } },
-        )
-        .await
-        .unwrap();
+    fixture.increment_auth_version("dave").await;
 
     // 4. Confirmation should fail with 401 CHALLENGE_EXPIRED or 409 CONFLICT
     let confirm_req = Request::builder()
@@ -825,12 +912,7 @@ async fn test_mfa_rate_limiting_locks_out_after_10_failed_attempts() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(user)
-        .await
-        .unwrap();
+    fixture.store.create_user(user).await.unwrap();
 
     // Submit wrong password or wrong code to hit rate limits
     for _ in 0..10 {
@@ -866,7 +948,9 @@ async fn test_mfa_rate_limiting_locks_out_after_10_failed_attempts() {
     let resp = fixture.app.clone().oneshot(locked_login).await.unwrap();
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(resp.headers().get(header::RETRY_AFTER).is_some());
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "RATE_LIMITED");
 }
@@ -904,12 +988,7 @@ async fn test_consumed_challenge_cannot_be_reused_to_mint_another_session() {
         mfa_attempt_count: 0,
         mfa_blocked_until: None,
     };
-    fixture
-        .db
-        .collection::<UserRecord>("users")
-        .insert_one(user)
-        .await
-        .unwrap();
+    fixture.store.create_user(user).await.unwrap();
 
     // Login -> get challenge token
     let login_req = Request::builder()
@@ -926,13 +1005,16 @@ async fn test_consumed_challenge_cannot_be_reused_to_mint_another_session() {
         .unwrap();
     let resp = fixture.app.clone().oneshot(login_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     let challenge_token = json["challengeToken"].as_str().unwrap().to_string();
 
     // Advance clock 30s and submit valid code
     fixture.clock.advance(ChronoDuration::seconds(30));
-    let code_1 = TotpEngine::generate_code_at(&raw_secret, fixture.clock.now().timestamp() as u64).unwrap();
+    let code_1 =
+        TotpEngine::generate_code_at(&raw_secret, fixture.clock.now().timestamp() as u64).unwrap();
 
     let verify_req_1 = Request::builder()
         .method("POST")
@@ -951,7 +1033,8 @@ async fn test_consumed_challenge_cannot_be_reused_to_mint_another_session() {
 
     // Now advance clock another 30s and try reusing the SAME challenge token with a fresh valid code
     fixture.clock.advance(ChronoDuration::seconds(30));
-    let code_2 = TotpEngine::generate_code_at(&raw_secret, fixture.clock.now().timestamp() as u64).unwrap();
+    let code_2 =
+        TotpEngine::generate_code_at(&raw_secret, fixture.clock.now().timestamp() as u64).unwrap();
 
     let verify_req_2 = Request::builder()
         .method("POST")
@@ -967,7 +1050,9 @@ async fn test_consumed_challenge_cannot_be_reused_to_mint_another_session() {
         .unwrap();
     let resp_2 = fixture.app.clone().oneshot(verify_req_2).await.unwrap();
     assert_eq!(resp_2.status(), StatusCode::UNAUTHORIZED);
-    let body_2 = axum::body::to_bytes(resp_2.into_body(), usize::MAX).await.unwrap();
+    let body_2 = axum::body::to_bytes(resp_2.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json_2: Value = serde_json::from_slice(&body_2).unwrap();
     assert_eq!(json_2["code"], "CHALLENGE_EXPIRED");
 }

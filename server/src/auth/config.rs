@@ -120,7 +120,19 @@ fn resolve_sqlite_path(
         Some(raw) => raw.to_str().ok_or(AuthConfigError::NonUnicodePath)?.trim(),
     };
     if text.is_empty() {
-        return Ok(context.config_dir.join(DEFAULT_SQLITE_FILE));
+        let default_dir = context.config_dir;
+        let default_path =
+            if let Some(suffix) = default_dir.to_str().and_then(|s| s.strip_prefix("~/")) {
+                let home = context.home.ok_or_else(|| {
+                    AuthConfigError::Unresolvable("home directory is unavailable for '~/'".into())
+                })?;
+                home.join(suffix).join(DEFAULT_SQLITE_FILE)
+            } else if default_dir.is_absolute() {
+                default_dir.join(DEFAULT_SQLITE_FILE)
+            } else {
+                context.cwd.join(default_dir).join(DEFAULT_SQLITE_FILE)
+            };
+        return Ok(default_path);
     }
     if text.contains('\0') {
         return Err(AuthConfigError::UnsupportedPath("contains a NUL byte"));
@@ -242,6 +254,24 @@ mod tests {
                 Ok(sqlite("/home/u/.config/dam-hopper/auth.db"))
             );
         }
+    }
+
+    #[test]
+    fn relative_and_tilde_config_dir_defaults_resolve_to_absolute_paths() {
+        let home = Path::new("/home/u");
+        let cwd = Path::new("/work/dir");
+        // Relative config dir (e.g. from relative XDG_CONFIG_HOME) resolves against CWD
+        let rel_ctx = ctx(Some(home), cwd, Path::new("custom/config"));
+        assert_eq!(
+            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, &rel_ctx),
+            Ok(sqlite("/work/dir/custom/config/auth.db"))
+        );
+        // Tilde-prefixed config dir resolves against HOME
+        let tilde_ctx = ctx(Some(home), cwd, Path::new("~/custom/config"));
+        assert_eq!(
+            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, &tilde_ctx),
+            Ok(sqlite("/home/u/custom/config/auth.db"))
+        );
     }
 
     #[test]

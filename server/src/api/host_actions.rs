@@ -110,10 +110,17 @@ pub async fn approve_intent(
         request.password.zeroize();
         return action_error(error);
     }
-    if auth::verify_actor_credentials(&state, &actor, &request.username, &mut request.password)
-        .await
-        .is_err()
+    if let Err(err) =
+        auth::verify_actor_credentials(&state, &actor, &request.username, &mut request.password)
+            .await
     {
+        if err == auth::CredentialVerificationError::StorageFailure {
+            return action_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "storageUnavailable",
+                "authentication storage failure during re-authentication",
+            );
+        }
         state
             .host_actions
             .record_reauth_failure(&actor.subject, ip.as_deref())

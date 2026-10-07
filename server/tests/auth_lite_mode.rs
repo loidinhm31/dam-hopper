@@ -576,7 +576,255 @@ async fn storage_failure_denies_admin_actor_and_reauthentication_consumers() {
     let mut password = "pw".to_string();
     assert_eq!(
         verify_actor_credentials(&lite.state, &actor, "root", &mut password).await,
-        Err(CredentialVerificationError::InvalidCredentials)
+        Err(CredentialVerificationError::StorageFailure)
     );
     assert!(password.is_empty(), "password zeroized on the failure path");
+}
+
+#[tokio::test]
+async fn stale_account_version_and_operator_mfa_reset_invalidates_active_jwt_and_challenges() {
+    let lite = lite().await;
+    assert_eq!(
+        register(&lite.app, "frank", "Password123!").await.0,
+        StatusCode::OK
+    );
+
+    // Operator approves account
+    let conn = operator(&lite.db_path);
+    let user_id: String = conn
+        .query_row(
+            "SELECT id FROM auth_users WHERE username = 'frank'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE auth_users SET is_enabled = 1 WHERE id = ?1",
+        [&user_id],
+    )
+    .unwrap();
+
+    // Issue session and JWT with auth_version 0
+    let token = bearer_for(&lite, "frank").await;
+
+    // Initially valid on protected route
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Create a challenge with auth_version 0
+    let now = Utc::now();
+    let chal = dam_hopper_server::auth::model::AuthChallenge {
+        id: "chal-frank-1".into(),
+        username: "frank".into(),
+        auth_version: 0,
+        purpose: dam_hopper_server::auth::model::ChallengePurpose::LoginMfa,
+        created_at: chrono_to_bson(now),
+        expires_at: chrono_to_bson(now + ChronoDuration::seconds(300)),
+        attempts: 0,
+        consumed_at: None,
+        pending_secret_ciphertext: None,
+        pending_secret_nonce: None,
+        pending_secret_key_id: None,
+        session_id: None,
+        credential_version: None,
+    };
+    lite.store.create_challenge(chal).await.unwrap();
+
+    // Operator executes atomic recovery reset: bumps auth_version to 1
+    let affected = conn
+        .execute(
+            "UPDATE auth_users \
+             SET auth_version = auth_version + 1, \
+                 mfa_secret_ciphertext = NULL, \
+                 mfa_nonce = NULL, \
+                 mfa_key_id = NULL, \
+                 mfa_enrolled_at_ms = NULL, \
+                 mfa_last_accepted_step = NULL, \
+                 mfa_attempt_window_started_at_ms = NULL, \
+                 mfa_attempt_count = 0, \
+                 mfa_blocked_until_ms = NULL \
+             WHERE id = ?1 AND auth_version = 0",
+            [&user_id],
+        )
+        .unwrap();
+    assert_eq!(affected, 1, "operator reset affected 1 row");
+
+    // 1. Old JWT is immediately rejected because token claims auth_version (0) < user auth_version (1)
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 2. Status endpoint also rejects old token
+    let (status, _) = get(&lite.app, "/api/auth/status", &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Attach MFA key to state so /api/auth/login can issue challenge
+    let mfa_key = dam_hopper_server::auth::MfaEncryptionKey::new([0x55; 32], "test-mfa");
+    let auth_svc = Arc::new(dam_hopper_server::auth::AuthService::new(
+        Some(lite.store.clone()),
+        Some(mfa_key),
+        Arc::new(dam_hopper_server::auth::policy::SystemClock),
+    ));
+    let login_app = build_router(lite.state.with_auth_service(auth_svc));
+
+    // 3. User can log in again with password and receives enrollmentRequired
+    let login_resp = login_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "username": "frank", "password": "Password123!" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(login_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["state"], "enrollmentRequired");
+}
+
+#[tokio::test]
+async fn account_disable_and_deletion_invalidates_live_session() {
+    let lite = lite().await;
+    assert_eq!(register(&lite.app, "grace", "pw").await.0, StatusCode::OK);
+
+    let conn = operator(&lite.db_path);
+    conn.execute(
+        "UPDATE auth_users SET is_enabled = 1 WHERE username = 'grace'",
+        [],
+    )
+    .unwrap();
+
+    let token = bearer_for(&lite, "grace").await;
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Disabling the account immediately denies the live session
+    conn.execute(
+        "UPDATE auth_users SET is_enabled = 0 WHERE username = 'grace'",
+        [],
+    )
+    .unwrap();
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Re-enabling restores access for the unrevoked session
+    conn.execute(
+        "UPDATE auth_users SET is_enabled = 1 WHERE username = 'grace'",
+        [],
+    )
+    .unwrap();
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Deleting the account permanently invalidates access
+    conn.execute("DELETE FROM auth_users WHERE username = 'grace'", [])
+        .unwrap();
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn session_revocation_denies_token() {
+    let lite = lite().await;
+    assert_eq!(register(&lite.app, "heidi", "pw").await.0, StatusCode::OK);
+    operator(&lite.db_path)
+        .execute_batch("UPDATE auth_users SET is_enabled = 1 WHERE username = 'heidi'")
+        .unwrap();
+
+    let now = Utc::now();
+    let expires = now + ChronoDuration::days(30);
+    let sess_id = "sess-heidi-custom";
+    let session = AuthSession {
+        id: sess_id.to_string(),
+        username: "heidi".to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        issued_at: chrono_to_bson(now),
+        expires_at: chrono_to_bson(expires),
+        mfa_verified_at: chrono_to_bson(now),
+        revoked_at: None,
+    };
+    lite.store.create_session(session).await.unwrap();
+    let claims = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: "heidi".to_string(),
+        sid: sess_id.to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: now.timestamp() as usize,
+        exp: expires.timestamp() as usize,
+    };
+    let token = claims.encode(JWT_SECRET).unwrap();
+
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Revoke the session
+    assert!(lite
+        .store
+        .revoke_session(sess_id, Utc::now())
+        .await
+        .unwrap());
+
+    // Access denied after revocation
+    let (status, _) = get(&lite.app, "/api/projects", &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn registration_validation_edge_cases() {
+    let lite = lite().await;
+
+    // Missing body fields
+    let resp = lite
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Missing password -> 401 Unauthorized
+    let resp = lite
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "username": "valid_user" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Missing username -> 401 Unauthorized
+    let resp = lite
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "password": "valid_pass" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }

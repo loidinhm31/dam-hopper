@@ -631,6 +631,299 @@ async fn garbage_file_fails_startup_and_runtime_errors_do_not_authorize() {
     assert!(store.get_session("s1").await.is_err());
 }
 
+#[tokio::test]
+async fn auth_users_id_immutable_trigger_aborts_update() {
+    let (_dir, path) = db_path();
+    let store = AuthStore::open_sqlite(&path).await.unwrap();
+    store.create_user(user("alice")).await.unwrap();
+    let original = store.get_user("alice").await.unwrap().unwrap();
+    let original_id = original.id.unwrap().to_hex();
+
+    let conn = Connection::open(&path).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE auth_users SET id = '111111111111111111111111' WHERE username = 'alice'",
+            [],
+        )
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("auth_users.id is immutable"),
+        "trigger abort must explain id immutability: {msg}"
+    );
+
+    let reloaded = store.get_user("alice").await.unwrap().unwrap();
+    assert_eq!(reloaded.id.unwrap().to_hex(), original_id);
+}
+
+#[tokio::test]
+async fn operator_local_sql_recovery_and_role_management() {
+    let (_dir, path) = db_path();
+    let store = AuthStore::open_sqlite(&path).await.unwrap();
+    let mut u = user("operator_user");
+    u.is_enabled = false;
+    store.create_user(u).await.unwrap();
+    let created = store.get_user("operator_user").await.unwrap().unwrap();
+    let user_id = created.id.unwrap().to_hex();
+    assert!(!created.is_enabled);
+    assert_eq!(created.role, UserRole::User);
+    assert_eq!(created.auth_version, 0);
+
+    let conn = Connection::open(&path).unwrap();
+
+    // 1. Operator approval via checked SQL:
+    let approved = conn
+        .execute(
+            "UPDATE auth_users SET is_enabled = 1 WHERE id = ?1 AND is_enabled = 0",
+            [&user_id],
+        )
+        .unwrap();
+    assert_eq!(approved, 1, "exactly one row approved");
+    let repeat = conn
+        .execute(
+            "UPDATE auth_users SET is_enabled = 1 WHERE id = ?1 AND is_enabled = 0",
+            [&user_id],
+        )
+        .unwrap();
+    assert_eq!(repeat, 0, "idempotent predicate returns 0 rows");
+
+    // 2. Operator role assignment via checked SQL:
+    let promoted = conn
+        .execute(
+            "UPDATE auth_users SET role = 'admin' WHERE id = ?1",
+            [&user_id],
+        )
+        .unwrap();
+    assert_eq!(promoted, 1);
+
+    // 3. User enrolls MFA
+    assert!(store
+        .confirm_enrollment("operator_user", 0, mfa(10))
+        .await
+        .unwrap());
+    let enrolled = store.get_user("operator_user").await.unwrap().unwrap();
+    assert!(enrolled.mfa.is_some());
+
+    // 4. Operator recovery: atomic conditional reset using immutable ID and expected auth_version
+    let reset = conn
+        .execute(
+            "UPDATE auth_users \
+             SET auth_version = auth_version + 1, \
+                 mfa_secret_ciphertext = NULL, \
+                 mfa_nonce = NULL, \
+                 mfa_key_id = NULL, \
+                 mfa_enrolled_at_ms = NULL, \
+                 mfa_last_accepted_step = NULL, \
+                 mfa_attempt_window_started_at_ms = NULL, \
+                 mfa_attempt_count = 0, \
+                 mfa_blocked_until_ms = NULL \
+             WHERE id = ?1 AND auth_version = ?2",
+            rusqlite::params![&user_id, 0],
+        )
+        .unwrap();
+    assert_eq!(reset, 1, "recovery reset successfully updated 1 row");
+
+    // Verify user in store
+    let after_reset = store.get_user("operator_user").await.unwrap().unwrap();
+    assert!(after_reset.mfa.is_none());
+    assert_eq!(after_reset.auth_version, 1);
+    assert_eq!(after_reset.role, UserRole::Admin);
+    assert!(after_reset.is_enabled);
+
+    // 5. Stale reset predicate returns 0 rows (expected version was 0, now 1)
+    let stale_reset = conn
+        .execute(
+            "UPDATE auth_users \
+             SET auth_version = auth_version + 1 \
+             WHERE id = ?1 AND auth_version = 0",
+            [&user_id],
+        )
+        .unwrap();
+    assert_eq!(stale_reset, 0);
+}
+
+#[tokio::test]
+async fn schema_strict_constraints_reject_invalid_data() {
+    let (_dir, path) = db_path();
+    let _store = AuthStore::open_sqlite(&path).await.unwrap();
+    let conn = Connection::open(&path).unwrap();
+
+    // Invalid id length (23 chars instead of 24)
+    let err = conn.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role, auth_version, mfa_attempt_count) \
+         VALUES ('12345678901234567890123', 'bad_id', 'h', 1, 'user', 0, 0)",
+        [],
+    );
+    assert!(err.is_err(), "invalid id length must be rejected");
+
+    // Invalid id characters (non-hex uppercase or non-hex char)
+    let err = conn.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role, auth_version, mfa_attempt_count) \
+         VALUES ('12345678901234567890123Z', 'bad_id2', 'h', 1, 'user', 0, 0)",
+        [],
+    );
+    assert!(err.is_err(), "non-hex id must be rejected");
+
+    // Invalid is_enabled value
+    let err = conn.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role, auth_version, mfa_attempt_count) \
+         VALUES ('0123456789abcdef01234567', 'bad_bool', 'h', 2, 'user', 0, 0)",
+        [],
+    );
+    assert!(err.is_err(), "invalid is_enabled must be rejected");
+
+    // Invalid role
+    let err = conn.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role, auth_version, mfa_attempt_count) \
+         VALUES ('0123456789abcdef01234567', 'bad_role', 'h', 1, 'superuser', 0, 0)",
+        [],
+    );
+    assert!(err.is_err(), "invalid role must be rejected");
+
+    // Partial MFA (secret without nonce)
+    let err = conn.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role, auth_version, mfa_secret_ciphertext, mfa_attempt_count) \
+         VALUES ('0123456789abcdef01234567', 'bad_mfa', 'h', 1, 'user', 0, 'secret', 0)",
+        [],
+    );
+    assert!(err.is_err(), "partial MFA factor must be rejected");
+
+    // Invalid challenge purpose
+    let err = conn.execute(
+        "INSERT INTO auth_challenges (id, username, auth_version, purpose, created_at_ms, expires_at_ms, attempts) \
+         VALUES ('ch1', 'alice', 0, 'invalidPurpose', 1000, 2000, 0)",
+        [],
+    );
+    assert!(err.is_err(), "invalid challenge purpose must be rejected");
+}
+
+#[tokio::test]
+async fn exact_case_sensitive_usernames_are_distinct() {
+    let (_dir, path) = db_path();
+    let store = AuthStore::open_sqlite(&path).await.unwrap();
+    store.create_user(user("UserBob")).await.unwrap();
+    store.create_user(user("userbob")).await.unwrap();
+    store.create_user(user("USERBOB")).await.unwrap();
+
+    let u1 = store.get_user("UserBob").await.unwrap().unwrap();
+    let u2 = store.get_user("userbob").await.unwrap().unwrap();
+    let u3 = store.get_user("USERBOB").await.unwrap().unwrap();
+
+    assert_eq!(u1.username, "UserBob");
+    assert_eq!(u2.username, "userbob");
+    assert_eq!(u3.username, "USERBOB");
+    assert_ne!(u1.id, u2.id);
+    assert_ne!(u2.id, u3.id);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_user_creation_with_same_username_has_one_winner() {
+    let (_dir, path) = db_path();
+    let (a, b) = pair(&path).await;
+
+    let mut tasks = Vec::new();
+    for i in 0..8 {
+        let store = if i % 2 == 0 { a.clone() } else { b.clone() };
+        tasks.push(tokio::spawn(async move {
+            store.create_user(user("concurrent_user")).await
+        }));
+    }
+    let mut wins = 0;
+    let mut dups = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(()) => wins += 1,
+            Err(StoreError::DuplicateUsername(_)) => dups += 1,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+    }
+    assert_eq!(wins, 1, "exactly one creator wins");
+    assert_eq!(dups, 7, "all other creators receive DuplicateUsername");
+}
+
+#[tokio::test]
+async fn injected_clock_exact_deadline_boundary_denials() {
+    let (_dir, path) = db_path();
+    let store = AuthStore::open_sqlite(&path).await.unwrap();
+
+    // 1. Challenge lifetime boundary (CHALLENGE_LIFETIME_SECS = 300)
+    let c_issued = t0();
+    let c_expires = c_issued + Duration::seconds(CHALLENGE_LIFETIME_SECS);
+    store
+        .create_challenge(challenge(
+            "c_boundary",
+            "alice",
+            ChallengePurpose::Enroll,
+            c_issued,
+        ))
+        .await
+        .unwrap();
+
+    // 1 ms before deadline: consume succeeds
+    assert!(
+        store
+            .consume_challenge(
+                "c_boundary",
+                ChallengePurpose::Enroll,
+                c_expires - Duration::milliseconds(1),
+            )
+            .await
+            .unwrap(),
+        "consume 1ms before deadline must succeed"
+    );
+
+    // Fresh challenge for exact deadline check
+    store
+        .create_challenge(challenge(
+            "c_exact",
+            "alice",
+            ChallengePurpose::Enroll,
+            c_issued,
+        ))
+        .await
+        .unwrap();
+
+    // At exact deadline (now == expires_at): consume fails (expires_at > now required)
+    assert!(
+        !store
+            .consume_challenge("c_exact", ChallengePurpose::Enroll, c_expires,)
+            .await
+            .unwrap(),
+        "consume at exact deadline must fail"
+    );
+
+    // 2. Session 30-day absolute expiry boundary
+    let s_issued = t0();
+    let s_expires = s_issued + Duration::days(30);
+    store
+        .create_session(session("s_boundary", "alice", s_issued, s_expires))
+        .await
+        .unwrap();
+
+    // 1 ms before 30-day expiry: advance_session_mfa succeeds
+    let advanced = store
+        .advance_session_mfa("s_boundary", 1, s_expires - Duration::milliseconds(1))
+        .await
+        .unwrap();
+    assert!(advanced.is_some(), "step-up 1ms before expiry must succeed");
+
+    // Fresh session for exact deadline check
+    store
+        .create_session(session("s_exact", "alice", s_issued, s_expires))
+        .await
+        .unwrap();
+
+    // At exact expiry (now == expires_at): advance_session_mfa fails
+    let advanced_exact = store
+        .advance_session_mfa("s_exact", 1, s_expires)
+        .await
+        .unwrap();
+    assert!(
+        advanced_exact.is_none(),
+        "step-up at exact session expiry must fail"
+    );
+}
+
 #[cfg(unix)]
 mod unix_file_safety {
     use super::*;
