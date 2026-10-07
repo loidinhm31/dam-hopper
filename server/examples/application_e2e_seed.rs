@@ -6,7 +6,6 @@
 //!
 //! Outputs the generated credentials and token as JSON to stdout.
 
-use std::io::{self, Read};
 use chrono::Utc;
 use clap::Parser;
 use dam_hopper_server::auth::model::{
@@ -15,9 +14,13 @@ use dam_hopper_server::auth::model::{
 use dam_hopper_server::auth::policy::{AUTH_PROTOCOL_VERSION, SESSION_LIFETIME_SECS};
 use dam_hopper_server::auth::store::AuthStore;
 use serde::{Deserialize, Serialize};
+use std::io::{self, Read};
 
 #[derive(Parser, Debug)]
-#[command(name = "application_e2e_seed", about = "E2E MongoDB and session seeder")]
+#[command(
+    name = "application_e2e_seed",
+    about = "E2E MongoDB / SQLite and session seeder"
+)]
 struct Args {
     /// MongoDB connection URI (e.g. mongodb://mongo:27017)
     #[arg(long, env = "MONGODB_URI")]
@@ -27,7 +30,9 @@ struct Args {
     #[arg(long, env = "MONGODB_DATABASE")]
     database: Option<String>,
 
-    /// Server token / JWT secret
+    /// SQLite database file path for lite mode seeding
+    #[arg(long, env = "DAM_HOPPER_AUTH_SQLITE_PATH")]
+    sqlite_path: Option<String>,
     #[arg(long, env = "SERVER_TOKEN")]
     server_token: Option<String>,
 
@@ -46,8 +51,9 @@ struct Args {
 
 #[derive(Debug, Deserialize)]
 struct StdinConfig {
-    mongodb_uri: String,
-    database: String,
+    mongodb_uri: Option<String>,
+    database: Option<String>,
+    sqlite_path: Option<String>,
     server_token: String,
     username: Option<String>,
     session_id: Option<String>,
@@ -67,39 +73,34 @@ struct SeedOutput {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let (mongodb_uri, database, server_token, username, session_id) = if args.stdin {
+    let (mongodb_uri, database, sqlite_path, server_token, username, session_id) = if args.stdin {
         let mut input = String::new();
         io::stdin().read_to_string(&mut input)?;
         let parsed: StdinConfig = serde_json::from_str(&input)?;
         (
-            parsed.mongodb_uri,
-            parsed.database,
+            parsed.mongodb_uri.or(args.mongodb_uri),
+            parsed.database.or(args.database),
+            parsed.sqlite_path.or(args.sqlite_path),
             parsed.server_token,
             parsed.username.unwrap_or(args.username),
             parsed.session_id.or(args.session_id),
         )
     } else {
-        let uri = args
-            .mongodb_uri
-            .ok_or_else(|| anyhow::anyhow!("Missing --mongodb-uri or MONGODB_URI"))?;
-        let db = args
-            .database
-            .ok_or_else(|| anyhow::anyhow!("Missing --database or MONGODB_DATABASE"))?;
         let token = args
             .server_token
             .ok_or_else(|| anyhow::anyhow!("Missing --server-token or SERVER_TOKEN"))?;
-        (uri, db, token, args.username, args.session_id)
+        (
+            args.mongodb_uri,
+            args.database,
+            args.sqlite_path,
+            token,
+            args.username,
+            args.session_id,
+        )
     };
 
     let session_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let server_token = server_token.trim().to_string();
-
-    let client_options = mongodb::options::ClientOptions::parse(&mongodb_uri).await?;
-    let client = mongodb::Client::with_options(client_options)?;
-    let db = client.database(&database);
-
-    let auth_store = AuthStore::from_mongo(db.clone());
-    auth_store.init_indexes().await?;
 
     let now = Utc::now();
     let expires_at = now + chrono::Duration::seconds(SESSION_LIFETIME_SECS);
@@ -120,12 +121,6 @@ async fn main() -> anyhow::Result<()> {
         mfa_blocked_until: None,
     };
 
-    let users_col = db.collection::<UserRecord>("users");
-    let _ = users_col
-        .delete_many(mongodb::bson::doc! { "username": &username })
-        .await;
-    users_col.insert_one(user).await?;
-
     let session = AuthSession {
         id: session_id.clone(),
         username: username.clone(),
@@ -137,12 +132,37 @@ async fn main() -> anyhow::Result<()> {
         revoked_at: None,
     };
 
-    let sessions_col = db.collection::<AuthSession>("authSessions");
-    let _ = sessions_col
-        .delete_many(mongodb::bson::doc! { "_id": &session_id })
-        .await;
-    sessions_col.insert_one(session).await?;
+    let database = if let Some(sqlite_path) = sqlite_path.filter(|s| !s.trim().is_empty()) {
+        let auth_store = AuthStore::open_sqlite(std::path::Path::new(&sqlite_path)).await?;
+        let _ = auth_store.create_user(user).await?;
+        auth_store.create_session(session).await?;
+        sqlite_path
+    } else {
+        let mongodb_uri =
+            mongodb_uri.ok_or_else(|| anyhow::anyhow!("Missing --mongodb-uri or MONGODB_URI"))?;
+        let database =
+            database.ok_or_else(|| anyhow::anyhow!("Missing --database or MONGODB_DATABASE"))?;
 
+        let client_options = mongodb::options::ClientOptions::parse(&mongodb_uri).await?;
+        let client = mongodb::Client::with_options(client_options)?;
+        let db = client.database(&database);
+
+        let auth_store = AuthStore::from_mongo(db.clone());
+        auth_store.init_indexes().await?;
+
+        let users_col = db.collection::<UserRecord>("users");
+        let _ = users_col
+            .delete_many(mongodb::bson::doc! { "username": &username })
+            .await;
+        users_col.insert_one(user).await?;
+
+        let sessions_col = db.collection::<AuthSession>("authSessions");
+        let _ = sessions_col
+            .delete_many(mongodb::bson::doc! { "_id": &session_id })
+            .await;
+        sessions_col.insert_one(session).await?;
+        database
+    };
     let claims = AuthClaims {
         v: AUTH_PROTOCOL_VERSION,
         sub: username.clone(),

@@ -15,6 +15,8 @@ import {
 } from "./image-builder.js";
 
 export interface ApplicationServicesConfig {
+  authBackend?: "mongo" | "sqlite";
+  sqlitePath?: string;
   databaseName?: string;
   username?: string;
   mongoImage?: string;
@@ -59,10 +61,17 @@ export async function startApplicationServices(
   config: ApplicationServicesConfig = {},
 ): Promise<ApplicationServices> {
   const testId = randomUUID().slice(0, 8);
+  const authBackend = config.authBackend ?? "mongo";
+  const sqlitePath =
+    config.sqlitePath ?? "/e2e/home/.config/dam-hopper/auth.db";
   const networkId = `dam-hopper-net-${testId}`;
-  const mongoContainerId = `dam-hopper-mongo-${testId}`;
+  const mongoContainerId =
+    authBackend === "sqlite" ? "" : `dam-hopper-mongo-${testId}`;
   const appContainerId = `dam-hopper-app-${testId}`;
-  const databaseName = config.databaseName ?? `dam_hopper_e2e_${testId}`;
+  const databaseName =
+    authBackend === "sqlite"
+      ? sqlitePath
+      : (config.databaseName ?? `dam_hopper_e2e_${testId}`);
   const username = config.username ?? "admin";
   const mongoImage =
     config.mongoImage ??
@@ -105,23 +114,24 @@ export async function startApplicationServices(
     await runEngine(["network", "create", networkId]);
     ownedNetwork = networkId;
 
-    await runEngine([
-      "run",
-      "-d",
-      "--name",
-      mongoContainerId,
-      "--network",
-      networkId,
-      "--network-alias",
-      "mongo",
-      mongoImage,
-    ]);
-    ownedContainers.push(mongoContainerId);
-    const { promise: mongoDelay, resolve: resolveMongo } =
-      Promise.withResolvers<void>();
-    setTimeout(resolveMongo, 1500);
-    await mongoDelay;
-
+    if (authBackend === "mongo") {
+      await runEngine([
+        "run",
+        "-d",
+        "--name",
+        mongoContainerId,
+        "--network",
+        networkId,
+        "--network-alias",
+        "mongo",
+        mongoImage,
+      ]);
+      ownedContainers.push(mongoContainerId);
+      const { promise: mongoDelay, resolve: resolveMongo } =
+        Promise.withResolvers<void>();
+      setTimeout(resolveMongo, 1500);
+      await mongoDelay;
+    }
     const portArg = config.port
       ? `127.0.0.1:${config.port}:4800`
       : "127.0.0.1::4800";
@@ -146,6 +156,13 @@ export async function startApplicationServices(
     await copyToContainer(seedTree.hostStagingDir, appContainerId, "/e2e");
     await execInContainer(appContainerId, [
       "chmod",
+      "0700",
+      "/e2e/home",
+      "/e2e/home/.config",
+      "/e2e/home/.config/dam-hopper",
+    ]);
+    await execInContainer(appContainerId, [
+      "chmod",
       "0600",
       "/e2e/home/mfa.key",
       "/e2e/home/.config/dam-hopper/server-token",
@@ -156,18 +173,45 @@ export async function startApplicationServices(
       "-c",
       `if [ -f "${unreadableDocPath}" ]; then chmod 0000 "${unreadableDocPath}"; fi`,
     ]);
-    const seedRaw = await execInContainer(appContainerId, [
-      "/usr/local/bin/application_e2e_seed",
-      "--mongodb-uri",
-      "mongodb://mongo:27017",
-      "--database",
-      databaseName,
-      "--server-token",
-      seedTree.serverToken,
-      "--username",
-      username,
-    ]);
+    const seedArgs =
+      authBackend === "sqlite"
+        ? [
+            "/usr/local/bin/application_e2e_seed",
+            "--sqlite-path",
+            sqlitePath,
+            "--server-token",
+            seedTree.serverToken,
+            "--username",
+            username,
+          ]
+        : [
+            "/usr/local/bin/application_e2e_seed",
+            "--mongodb-uri",
+            "mongodb://mongo:27017",
+            "--database",
+            databaseName,
+            "--server-token",
+            seedTree.serverToken,
+            "--username",
+            username,
+          ];
+    const seedRaw = await execInContainer(appContainerId, seedArgs);
     const seedOutput = JSON.parse(seedRaw) as SeedOutput;
+
+    const authEnvArgs =
+      authBackend === "sqlite"
+        ? [
+            "-e",
+            "DAM_HOPPER_LITE_MODE=true",
+            "-e",
+            `DAM_HOPPER_AUTH_SQLITE_PATH=${sqlitePath}`,
+          ]
+        : [
+            "-e",
+            "MONGODB_URI=mongodb://mongo:27017",
+            "-e",
+            `MONGODB_DATABASE=${databaseName}`,
+          ];
 
     await runEngine([
       "exec",
@@ -182,10 +226,7 @@ export async function startApplicationServices(
       "XDG_STATE_HOME=/e2e/home/.local/state",
       "-e",
       "TMPDIR=/e2e/tmp",
-      "-e",
-      "MONGODB_URI=mongodb://mongo:27017",
-      "-e",
-      `MONGODB_DATABASE=${databaseName}`,
+      ...authEnvArgs,
       "-e",
       "DAM_HOPPER_MFA_KEY_FILE=/e2e/home/mfa.key",
       appContainerId,
