@@ -42,9 +42,14 @@ export function ProjectPlansDashboard({
 }: ProjectPlansDashboardProps) {
   const [browsePath, setBrowsePath] = useState<string>("plans");
   const [selectedPlanPath, setSelectedPlanPath] = useState<string | null>(null);
-  const [selectedDocumentPath, setSelectedDocumentPath] = useState<string | null>(null);
-  const [activeViewTab, setActiveViewTab] = useState<DashboardViewTab>("overview");
-  const [lastNavigatedFrom, setLastNavigatedFrom] = useState<string | null>(null);
+  const [selectedDocumentPath, setSelectedDocumentPath] = useState<
+    string | null
+  >(null);
+  const [activeViewTab, setActiveViewTab] =
+    useState<DashboardViewTab>("overview");
+  const [lastNavigatedFrom, setLastNavigatedFrom] = useState<string | null>(
+    null,
+  );
 
   // Hook queries folders, selected plan, document content, and monitors filesystem
   const effectiveDocumentPath = useMemo(() => {
@@ -125,7 +130,8 @@ export function ProjectPlansDashboard({
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span>
-                Coverage {coverage.status}: {coverage.reason || "Filesystem watching unsettled"}
+                Coverage {coverage.status}:{" "}
+                {coverage.reason || "Filesystem watching unsettled"}
               </span>
             </div>
             <Button
@@ -222,7 +228,11 @@ export function ProjectPlansDashboard({
             aria-label="Refresh plan"
           >
             <RefreshCw
-              className={cn("h-3.5 w-3.5", isSelectedPlanLoading && "animate-spin text-[var(--color-primary)]")}
+              className={cn(
+                "h-3.5 w-3.5",
+                isSelectedPlanLoading &&
+                  "animate-spin text-[var(--color-primary)]",
+              )}
             />
           </Button>
         </div>
@@ -337,6 +347,7 @@ export function ProjectPlansDashboard({
             isDocumentLoading={isDocumentLoading}
             documentError={documentError}
             onNavigateDocument={handleDocumentNavigation}
+            onRetryDocument={refresh}
           />
         )}
       </div>

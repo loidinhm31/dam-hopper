@@ -45,13 +45,18 @@ export function WorkflowContextSurface({
 }: WorkflowContextSurfaceProps) {
   const isCompact = useCompactWorkspace();
   const [localIsOpen, setLocalIsOpen] = useState(false);
-  const [selectedTarget, setSelectedTarget] = useState<ProjectTargetRef | null>(target ?? null);
+  const [selectedTarget, setSelectedTarget] = useState<ProjectTargetRef | null>(
+    target ?? null,
+  );
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState(false);
   const workflowTriggerRef = useRef<HTMLDivElement | null>(null);
   const [quickCaptureKind, setQuickCaptureKind] = useState<ItemKind>("plan");
-  const [quickCaptureParentId, setQuickCaptureParentId] = useState<string | null>(null);
-  const [mobileSegment, setMobileSegment] = useState<MobileWorkflowSegment>("items");
+  const [quickCaptureParentId, setQuickCaptureParentId] = useState<
+    string | null
+  >(null);
+  const [mobileSegment, setMobileSegment] =
+    useState<MobileWorkflowSegment>("items");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [plansMode, setPlansMode] = useState<WorkflowPlansMode>("manual");
   const isOpen = controlledIsOpen ?? localIsOpen;
@@ -74,8 +79,12 @@ export function WorkflowContextSurface({
   const overviewForSurface = isUnavailable ? undefined : overview;
 
   const activeProfileId = effectiveTarget.profileId || getActiveProfileId();
-  const connSnap = activeProfileId ? getConnectionSnapshot(activeProfileId) : null;
-  const owner = connSnap?.owner ?? (activeProfileId ? { profileId: activeProfileId, generation: 1 } : null);
+  const connSnap = activeProfileId
+    ? getConnectionSnapshot(activeProfileId)
+    : null;
+  const owner =
+    connSnap?.owner ??
+    (activeProfileId ? { profileId: activeProfileId, generation: 1 } : null);
   const { plans, standaloneTasks } = filterOverviewByTarget(
     overviewForSurface,
     effectiveTarget,
@@ -85,10 +94,7 @@ export function WorkflowContextSurface({
     effectiveTarget,
   );
   const runningSession = selectRunningSessionForItem(activeNode);
-  const attention = selectAttentionSummary(
-    overviewForSurface,
-    effectiveTarget,
-  );
+  const attention = selectAttentionSummary(overviewForSurface, effectiveTarget);
   useEffect(() => {
     if (!isUnavailable) return;
     setSelectedItemId(null);
@@ -108,7 +114,10 @@ export function WorkflowContextSurface({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (matchesWorkflowToggleShortcut(e) && isWorkflowShortcutOwner(e.target)) {
+      if (
+        matchesWorkflowToggleShortcut(e) &&
+        isWorkflowShortcutOwner(e.target)
+      ) {
         e.preventDefault();
         setIsOpen(!isOpen);
       }
@@ -127,7 +136,10 @@ export function WorkflowContextSurface({
     return () => clearInterval(timer);
   }, [attention.hasRunningSessions]);
 
-  const handleOpenQuickCapture = (kind: ItemKind = "plan", parentId: string | null = null) => {
+  const handleOpenQuickCapture = (
+    kind: ItemKind = "plan",
+    parentId: string | null = null,
+  ) => {
     setQuickCaptureKind(kind);
     setQuickCaptureParentId(parentId);
     setIsQuickCaptureOpen(true);
@@ -148,7 +160,8 @@ export function WorkflowContextSurface({
     selectedItemId,
     selectedTarget,
     onSelectTarget: handleSelectTarget,
-    onSelectItem: (item: { id: string } | null) => setSelectedItemId(item?.id ?? null),
+    onSelectItem: (item: { id: string } | null) =>
+      setSelectedItemId(item?.id ?? null),
     onStatusChange: actions.handleStatusChange,
     onDeleteItem: handleDeleteItem,
     onEditItem: actions.handleUpdateItem,
@@ -172,6 +185,7 @@ export function WorkflowContextSurface({
     onPlansModeChange: setPlansMode,
     isManualUnavailable: isUnavailable,
     manualError: error,
+    hasManualData: overviewForSurface !== undefined,
   };
   return (
     <div
@@ -200,7 +214,9 @@ export function WorkflowContextSurface({
         <WorkflowContextSheet
           isOpen={isOpen}
           onOpenChange={setIsOpen}
-          onCloseAutoFocus={() => restoreWorkflowFocus(workflowTriggerRef.current)}
+          onCloseAutoFocus={() =>
+            restoreWorkflowFocus(workflowTriggerRef.current)
+          }
           activeSegment={mobileSegment}
           onSegmentChange={setMobileSegment}
           {...sharedProps}
@@ -209,7 +225,9 @@ export function WorkflowContextSurface({
         <WorkflowContextDeck
           isOpen={isOpen}
           onClose={() => setIsOpen(false)}
-          onCloseAutoFocus={() => restoreWorkflowFocus(workflowTriggerRef.current)}
+          onCloseAutoFocus={() =>
+            restoreWorkflowFocus(workflowTriggerRef.current)
+          }
           {...sharedProps}
         />
       )}

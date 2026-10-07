@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { ProjectTargetRef } from "@/api/client.js";
 import { WorkflowContextDeck } from "./WorkflowContextDeck.js";
+import { WorkflowContextSheet } from "./WorkflowContextSheet.js";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -70,8 +71,12 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
       );
     });
 
-    const fileTab = container?.querySelector('button[role="tab"][aria-selected="false"]');
-    const manualTab = container?.querySelector('button[role="tab"][aria-selected="true"]');
+    const fileTab = container?.querySelector(
+      'button[role="tab"][aria-selected="false"]',
+    );
+    const manualTab = container?.querySelector(
+      'button[role="tab"][aria-selected="true"]',
+    );
 
     expect(container?.textContent).toContain("File plans");
     expect(container?.textContent).toContain("Manual tracking");
@@ -104,7 +109,9 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     });
 
     // In manual mode with isQuickCaptureOpen, the title input is rendered
-    const input = container?.querySelector("#wf-cap-title") as HTMLInputElement | null;
+    const input = container?.querySelector(
+      "#wf-cap-title",
+    ) as HTMLInputElement | null;
     expect(input).not.toBeNull();
 
     // Type a draft into the quick capture input
@@ -123,9 +130,9 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     expect(input?.value).toBe("Draft for a new feature plan");
 
     // Click "File plans" tab to switch mode
-    const fileTab = Array.from(container?.querySelectorAll('button[role="tab"]') ?? []).find(
-      (b) => b.textContent?.includes("File plans"),
-    );
+    const fileTab = Array.from(
+      container?.querySelectorAll('button[role="tab"]') ?? [],
+    ).find((b) => b.textContent?.includes("File plans"));
     expect(fileTab).not.toBeNull();
 
     act(() => {
@@ -138,14 +145,16 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     expect(manualContainer).not.toBeNull();
 
     // Input must still exist in the DOM with the typed draft preserved!
-    const preservedInput = container?.querySelector("#wf-cap-title") as HTMLInputElement | null;
+    const preservedInput = container?.querySelector(
+      "#wf-cap-title",
+    ) as HTMLInputElement | null;
     expect(preservedInput).not.toBeNull();
     expect(preservedInput?.value).toBe("Draft for a new feature plan");
 
     // Click back to "Manual tracking" tab
-    const manualTab = Array.from(container?.querySelectorAll('button[role="tab"]') ?? []).find(
-      (b) => b.textContent?.includes("Manual tracking"),
-    );
+    const manualTab = Array.from(
+      container?.querySelectorAll('button[role="tab"]') ?? [],
+    ).find((b) => b.textContent?.includes("Manual tracking"));
     act(() => {
       manualTab?.click();
     });
@@ -154,6 +163,44 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     expect(manualTab?.getAttribute("aria-selected")).toBe("true");
     expect(input?.value).toBe("Draft for a new feature plan");
   });
+
+  it.each(["desktop", "mobile"] as const)(
+    "shows an explicit initial error without mounting empty %s forms",
+    (layout) => {
+      const props = {
+        isOpen: true,
+        target: mockTarget,
+        projects: [],
+        plans: [],
+        standaloneTasks: [],
+        sessions: [],
+        onSelectTarget: vi.fn(),
+        onSelectItem: vi.fn(),
+        isQuickCaptureOpen: true,
+        onCreateItem: vi.fn(),
+        manualError: new Error("Initial overview request failed"),
+        hasManualData: false,
+      };
+      act(() => {
+        root?.render(
+          <QueryClientProvider client={qc}>
+            {layout === "desktop" ? (
+              <WorkflowContextDeck {...props} onClose={vi.fn()} />
+            ) : (
+              <WorkflowContextSheet {...props} onOpenChange={vi.fn()} />
+            )}
+          </QueryClientProvider>,
+        );
+      });
+      expect(document.body.textContent).toContain(
+        "Manual workflow error: Initial overview request failed",
+      );
+      expect(document.querySelector("#wf-cap-title")).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "Showing previously loaded data",
+      );
+    },
+  );
 
   it("keeps File plans reachable when manual workflow is unavailable", () => {
     act(() => {
@@ -178,15 +225,15 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     });
 
     // Since isManualUnavailable is true, default mode initializes to "files"
-    const fileTab = Array.from(container?.querySelectorAll('button[role="tab"]') ?? []).find(
-      (b) => b.textContent?.includes("File plans"),
-    );
+    const fileTab = Array.from(
+      container?.querySelectorAll('button[role="tab"]') ?? [],
+    ).find((b) => b.textContent?.includes("File plans"));
     expect(fileTab?.getAttribute("aria-selected")).toBe("true");
 
     // Switch to manual tracking to see panel-local unavailable notice
-    const manualTab = Array.from(container?.querySelectorAll('button[role="tab"]') ?? []).find(
-      (b) => b.textContent?.includes("Manual tracking"),
-    );
+    const manualTab = Array.from(
+      container?.querySelectorAll('button[role="tab"]') ?? [],
+    ).find((b) => b.textContent?.includes("Manual tracking"));
     act(() => {
       manualTab?.click();
     });
@@ -219,6 +266,8 @@ describe("WorkflowPlansIntegration — Deck & Sheet mode switch and draft preser
     });
 
     expect(container?.textContent).toContain("No configured project selected");
-    expect(container?.textContent).toContain("Select a configured project or worktree");
+    expect(container?.textContent).toContain(
+      "Select a configured project or worktree",
+    );
   });
 });

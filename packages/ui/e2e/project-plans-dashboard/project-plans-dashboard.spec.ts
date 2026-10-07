@@ -16,7 +16,8 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     authenticatedPage: page,
   }) => {
     // 1. Initial integrity baseline: inspect plan file bytes, mtime, and size before reads
-    const planFilePath = "/e2e/workspace/fixture-project/plans/261001-sample/plan.md";
+    const planFilePath =
+      "/e2e/workspace/fixture-project/plans/261001-sample/plan.md";
     const initialPlanBytes = await appServices.readContainerFile(planFilePath);
     const initialPlanStat = await appServices.statContainerFile(planFilePath);
     expect(initialPlanStat.size).toBeGreaterThan(0);
@@ -27,10 +28,14 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     await expect(topNav).toBeVisible({ timeout: 15_000 });
 
     // 3. Open Workflow Context Deck
-    const workflowBar = page.locator("[aria-label='Workflow Context Bar']").first();
+    const workflowBar = page
+      .locator("[aria-label='Workflow Context Bar']")
+      .first();
     await expect(workflowBar).toBeVisible({ timeout: 15_000 });
 
-    const expandBtn = page.locator("button[aria-label='Expand workflow deck']").first();
+    const expandBtn = page
+      .locator("button[aria-label='Expand workflow deck']")
+      .first();
     if (await expandBtn.isVisible()) {
       await expandBtn.click();
     } else {
@@ -48,17 +53,25 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     await expect(folderList).toBeVisible({ timeout: 15_000 });
 
     // Verify immediate folder entries are present without plan status badges
-    const sampleFolderItem = page.locator("button[role='listitem']:has-text('261001-sample')").first();
+    const sampleFolderItem = page
+      .locator("button[role='listitem']:has-text('261001-sample')")
+      .first();
     await expect(sampleFolderItem).toBeVisible();
 
-    const undatedFolderItem = page.locator("button[role='listitem']:has-text('261002-undated')").first();
+    const undatedFolderItem = page
+      .locator("button[role='listitem']:has-text('261002-undated')")
+      .first();
     await expect(undatedFolderItem).toBeVisible();
 
-    const bulkFolderItem = page.locator("button[role='listitem']:has-text('bulk')").first();
+    const bulkFolderItem = page
+      .locator("button[role='listitem']:has-text('bulk')")
+      .first();
     await expect(bulkFolderItem).toBeVisible();
 
     // 6. Test folder filter input
-    const filterInput = page.locator("input[placeholder='Filter folders by name...']").first();
+    const filterInput = page
+      .locator("input[placeholder='Filter folders by name...']")
+      .first();
     await expect(filterInput).toBeVisible();
     await filterInput.fill("sample");
     await expect(sampleFolderItem).toBeVisible();
@@ -71,14 +84,20 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     // 7. Select plan: click 261001-sample
     await sampleFolderItem.click();
 
-    const planDashboard = page.locator("[aria-label='Selected Project Plan Dashboard']").first();
+    const planDashboard = page
+      .locator("[aria-label='Selected Project Plan Dashboard']")
+      .first();
     await expect(planDashboard).toBeVisible({ timeout: 15_000 });
 
     // Verify reported status: "in-progress" (progress.md opts in over plan.md pending)
-    const statusBadge = planDashboard.locator("span:has-text('in-progress')").first();
+    const statusBadge = planDashboard
+      .locator("span:has-text('in-progress')")
+      .first();
     await expect(statusBadge).toBeVisible();
 
-    // Verify Overview tab shows 5 phases completed
+    await expect(
+      planDashboard.getByText("Declared:", { exact: false }),
+    ).toHaveText("Declared: 5");
     const overviewTabBtn = page.locator("button:has-text('Overview')").first();
     await expect(overviewTabBtn).toBeVisible();
 
@@ -92,25 +111,35 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     await expect(timelineTabBtn).toBeVisible();
     await timelineTabBtn.click();
 
-    const timelineContainer = page.locator("[aria-label='Selected Plan Timeline']").first();
+    const timelineContainer = page
+      .locator("[aria-label='Selected Plan Timeline']")
+      .first();
     await expect(timelineContainer).toBeVisible({ timeout: 10_000 });
 
     // 10. Inspect Documents tab with markdown, mermaid, and local image notice
-    const documentsTabBtn = page.locator("button:has-text('Documents')").first();
+    const documentsTabBtn = page
+      .locator("button:has-text('Documents')")
+      .first();
     await expect(documentsTabBtn).toBeVisible();
     await documentsTabBtn.click();
 
-    const docViewer = page.locator("[aria-label='Plan Document Viewer']").first();
+    const docViewer = page
+      .locator("[aria-label='Plan Document Viewer']")
+      .first();
     await expect(docViewer).toBeVisible({ timeout: 10_000 });
 
     // Switch to evidence.md document
-    const evidenceDocBtn = page.locator("button:has-text('evidence.md')").first();
+    const evidenceDocBtn = page
+      .locator("button:has-text('evidence.md')")
+      .first();
     if (await evidenceDocBtn.isVisible()) {
       await evidenceDocBtn.click();
     }
 
     // 11. Navigate back to folders
-    const backBtn = page.locator("button[aria-label='Back to folder browser']").first();
+    const backBtn = page
+      .locator("button[aria-label='Back to folder browser']")
+      .first();
     await expect(backBtn).toBeVisible();
     await backBtn.click();
 
@@ -121,56 +150,121 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     await bulkFolderItem.click();
 
     // Wait for bulk folder listing
-    const plan001 = page.locator("button[role='listitem']:has-text('plan-001')").first();
+    const plan001 = page
+      .locator("button[role='listitem']:has-text('plan-001')")
+      .first();
     await expect(plan001).toBeVisible({ timeout: 15_000 });
 
     // Return to root plans via breadcrumbs
-    const plansCrumb = page.locator("nav[aria-label='Folder breadcrumbs'] button:has-text('plans')").first();
+    const plansCrumb = page
+      .locator("nav[aria-label='Folder breadcrumbs'] button:has-text('plans')")
+      .first();
     await expect(plansCrumb).toBeVisible();
     await plansCrumb.click();
     await expect(sampleFolderItem).toBeVisible({ timeout: 10_000 });
 
-    // 13. Test atomic replacement and refresh
+    // 13. Atomic replacement must refresh the selected plan without a manual refresh.
     await sampleFolderItem.click();
     await expect(planDashboard).toBeVisible();
-
-    // Fixture writer replaces progress atomically
-    const updatedProgress = `# Current Progress — Sample Feature Plan\n\n**Plan:** [plan.md](./plan.md)\n**Published:** 2026-10-06\n**Current status:** Completed (All verified)\n\n## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n| [01 — Phase 1](./phase-01.md) | Completed |\n`;
+    const selectedStatus = planDashboard
+      .locator("span")
+      .filter({ hasText: /^in-progress$/ })
+      .first();
+    await expect(selectedStatus).toBeVisible();
+    const updatedProgress = `# Current Progress — Sample Feature Plan\n\n**Plan:** [plan.md](./plan.md)\n**Published:** 2026-10-06\n**Current status:** Completed (All verified)\n\n## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n${[1, 2, 3, 4, 5].map((number) => `| [0${number} — Phase ${number}](./phase-0${number}.md) | Completed |`).join("\n")}\n`;
     await appServices.writeContainerFile(
       "/e2e/workspace/fixture-project/plans/261001-sample/progress.md",
       updatedProgress,
     );
+    await expect(selectedStatus).toBeHidden();
+    await expect(
+      planDashboard
+        .locator("span")
+        .filter({ hasText: /^completed$/ })
+        .first(),
+    ).toBeVisible();
+    await expect(
+      planDashboard.getByText("Completed:", { exact: false }),
+    ).toHaveText("Completed: 5");
 
-    // Refresh plan
-    const refreshBtn = page.locator("button[aria-label='Refresh plan']").first();
-    await expect(refreshBtn).toBeVisible();
-    await refreshBtn.click();
-
-    // 14. Switch to Manual Tracking tab and verify draft/state preservation
-    const manualTabBtn = page.locator("button:has-text('Manual tracking')").first();
-    await expect(manualTabBtn).toBeVisible();
+    // 14. A real unsaved manual draft survives File plans / Manual tracking switches.
+    const manualTabBtn = page
+      .getByRole("tab", { name: "Manual tracking", exact: true })
+      .first();
     await manualTabBtn.click();
-
-    // Return to File plans
+    await page
+      .getByRole("button", { name: "New Plan", exact: true })
+      .first()
+      .click();
+    const draftTitle = page.locator("#wf-cap-title").first();
+    await draftTitle.fill("Preserve this unsaved dashboard draft");
     await deckHeader.click();
     await expect(planDashboard).toBeVisible();
-
-    // 15. Verify secondary project isolation via API
-    const secResp = await appServices.fetchApi(
-      `/api/plans?project=${encodeURIComponent(appServices.secondaryProjectName)}&planPath=plans/261001-sample`,
+    await manualTabBtn.click();
+    await expect(draftTitle).toHaveValue(
+      "Preserve this unsaved dashboard draft",
     );
-    expect(secResp.status).toBe(200);
-    const secJson = await secResp.json();
-    expect(secJson.plan.id).toBe("plans/261001-sample");
-    expect(secJson.plan.phases.length).toBe(1);
+    await page
+      .getByRole("button", { name: "Cancel", exact: true })
+      .first()
+      .click();
+    await deckHeader.click();
+
+    // 15. Same relative plan path must display the selected target's actual inventory.
+    await page
+      .locator("header")
+      .getByRole("combobox")
+      .filter({ hasText: /fixture-project|Select project/ })
+      .first()
+      .click();
+    await page
+      .getByRole("option")
+      .filter({ hasText: appServices.secondaryProjectName })
+      .click();
+    if (await backBtn.isVisible()) await backBtn.click();
+    await expect(sampleFolderItem).toBeVisible();
+    await sampleFolderItem.click();
+    await expect(
+      planDashboard.getByText("Declared:", { exact: false }),
+    ).toHaveText("Declared: 1");
+    await expect(
+      planDashboard.getByText("Completed:", { exact: false }),
+    ).toHaveText("Completed: 1");
+    await page
+      .locator("header")
+      .getByRole("combobox")
+      .filter({ hasText: appServices.secondaryProjectName })
+      .first()
+      .click();
+    await page
+      .getByRole("option")
+      .filter({ hasText: "fixture-project" })
+      .click();
+    if (await backBtn.isVisible()) await backBtn.click();
+    await expect(sampleFolderItem).toBeVisible();
+    await sampleFolderItem.click();
+    await expect(
+      planDashboard.getByText("Declared:", { exact: false }),
+    ).toHaveText("Declared: 5");
+    await expect(
+      planDashboard.getByText("Completed:", { exact: false }),
+    ).toHaveText("Completed: 5");
 
     // 17. Responsive viewport qualification: compact mobile (390x844)
     await page.setViewportSize({ width: 390, height: 844 });
-    const mobileExpandBtn = page.locator("button[aria-label='Expand workflow deck']").first();
-    const mobileFilePlansTab = page.locator("button[role='tab']:has-text('File plans')").first();
-    const mobileSampleItem = page.locator("button[role='listitem']:has-text('261001-sample')").first();
+    const mobileExpandBtn = page
+      .locator("button[aria-label='Expand workflow deck']")
+      .first();
+    const mobileFilePlansTab = page
+      .locator("button[role='tab']:has-text('File plans')")
+      .first();
+    const mobileSampleItem = page
+      .locator("button[role='listitem']:has-text('261001-sample')")
+      .first();
 
-    await expect(mobileExpandBtn.or(planDashboard).or(mobileFilePlansTab).first()).toBeVisible({ timeout: 10_000 });
+    await expect(
+      mobileExpandBtn.or(planDashboard).or(mobileFilePlansTab).first(),
+    ).toBeVisible({ timeout: 10_000 });
     if (await mobileExpandBtn.isVisible()) {
       await mobileExpandBtn.click();
     }
@@ -188,7 +282,9 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
 
     // 18. Responsive viewport qualification: narrow docked (320px)
     await page.setViewportSize({ width: 320, height: 800 });
-    await expect(mobileExpandBtn.or(planDashboard).or(mobileFilePlansTab).first()).toBeVisible({ timeout: 10_000 });
+    await expect(
+      mobileExpandBtn.or(planDashboard).or(mobileFilePlansTab).first(),
+    ).toBeVisible({ timeout: 10_000 });
     if (await mobileExpandBtn.isVisible()) {
       await mobileExpandBtn.click();
     }

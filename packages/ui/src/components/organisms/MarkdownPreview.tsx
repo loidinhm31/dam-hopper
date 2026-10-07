@@ -27,7 +27,11 @@ export function extractTextFromChildren(children: ReactNode): string {
   }
   if (React.isValidElement<{ children?: ReactNode }>(children)) {
     const childProps = children.props;
-    if (childProps && typeof childProps === "object" && "children" in childProps) {
+    if (
+      childProps &&
+      typeof childProps === "object" &&
+      "children" in childProps
+    ) {
       return extractTextFromChildren(childProps.children);
     }
   }
@@ -51,29 +55,37 @@ export function resolveTargetRelativePath(
   baseDocumentPath: string,
   relativePath: string,
 ): LinkResolutionResult {
-  if (!relativePath || relativePath.includes("\0")) {
-    return { ok: false, error: "Invalid path: null byte or empty" };
+  if (!relativePath) {
+    return { ok: false, error: "Invalid path: empty" };
   }
+  const hashIndex = relativePath.indexOf("#");
+  const encodedPath =
+    hashIndex >= 0 ? relativePath.slice(0, hashIndex) : relativePath;
+  const fragment =
+    hashIndex >= 0 ? relativePath.slice(hashIndex + 1) : undefined;
+  let pathPart: string;
   try {
-    decodeURIComponent(relativePath);
+    pathPart = decodeURIComponent(encodedPath);
   } catch {
     return { ok: false, error: "Malformed URI encoding" };
   }
 
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(relativePath)) {
+  if (pathPart.includes("\0")) {
+    return { ok: false, error: "Invalid path: null byte" };
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(pathPart)) {
     return { ok: false, error: "Unsafe URI scheme" };
   }
-
-  if (relativePath.startsWith("/") || relativePath.startsWith("\\")) {
-    return { ok: false, error: "Absolute path rejected" };
+  if (pathPart.startsWith("/") || pathPart.includes("\\")) {
+    return { ok: false, error: "Absolute path or backslash rejected" };
   }
-
-  const hashIndex = relativePath.indexOf("#");
-  const pathPart = hashIndex >= 0 ? relativePath.slice(0, hashIndex) : relativePath;
-  const fragment = hashIndex >= 0 ? relativePath.slice(hashIndex + 1) : undefined;
-
   if (!pathPart) {
-    return { ok: true, resolvedPath: baseDocumentPath, fragment, isMarkdown: true };
+    return {
+      ok: true,
+      resolvedPath: baseDocumentPath,
+      fragment,
+      isMarkdown: true,
+    };
   }
 
   const baseComponents = baseDocumentPath.split("/").filter(Boolean);
@@ -88,7 +100,10 @@ export function resolveTargetRelativePath(
     if (comp === ".") continue;
     if (comp === "..") {
       if (stack.length === 0) {
-        return { ok: false, error: "Path traversal escape above target root rejected" };
+        return {
+          ok: false,
+          error: "Path traversal escape above target root rejected",
+        };
       }
       stack.pop();
     } else {
@@ -103,7 +118,11 @@ export function resolveTargetRelativePath(
   return { ok: true, resolvedPath, fragment, isMarkdown };
 }
 
-export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPreviewProps) {
+export function MarkdownPreview({
+  content,
+  className,
+  linkPolicy,
+}: MarkdownPreviewProps) {
   return (
     <div
       className={cn(
@@ -117,7 +136,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h1: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h1 id={id || undefined} className="text-2xl font-bold mb-4 mt-6 pb-2 border-b border-[var(--color-border)] text-[var(--color-text)]">
+              <h1
+                id={id || undefined}
+                className="text-2xl font-bold mb-4 mt-6 pb-2 border-b border-[var(--color-border)] text-[var(--color-text)]"
+              >
                 {children}
               </h1>
             );
@@ -125,7 +147,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h2: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h2 id={id || undefined} className="text-xl font-semibold mb-3 mt-5 pb-1 border-b border-[var(--color-border)] text-[var(--color-text)]">
+              <h2
+                id={id || undefined}
+                className="text-xl font-semibold mb-3 mt-5 pb-1 border-b border-[var(--color-border)] text-[var(--color-text)]"
+              >
                 {children}
               </h2>
             );
@@ -133,7 +158,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h3: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h3 id={id || undefined} className="text-lg font-semibold mb-2 mt-4 text-[var(--color-text)]">
+              <h3
+                id={id || undefined}
+                className="text-lg font-semibold mb-2 mt-4 text-[var(--color-text)]"
+              >
                 {children}
               </h3>
             );
@@ -141,7 +169,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h4: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h4 id={id || undefined} className="text-base font-semibold mb-2 mt-3 text-[var(--color-text)]">
+              <h4
+                id={id || undefined}
+                className="text-base font-semibold mb-2 mt-3 text-[var(--color-text)]"
+              >
                 {children}
               </h4>
             );
@@ -149,7 +180,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h5: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h5 id={id || undefined} className="text-sm font-semibold mb-1 mt-2 text-[var(--color-text)]">
+              <h5
+                id={id || undefined}
+                className="text-sm font-semibold mb-1 mt-2 text-[var(--color-text)]"
+              >
                 {children}
               </h5>
             );
@@ -157,7 +191,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
           h6: ({ children }) => {
             const id = slugifyHeading(extractTextFromChildren(children));
             return (
-              <h6 id={id || undefined} className="text-xs font-semibold mb-1 mt-2 text-[var(--color-text-muted)]">
+              <h6
+                id={id || undefined}
+                className="text-xs font-semibold mb-1 mt-2 text-[var(--color-text-muted)]"
+              >
                 {children}
               </h6>
             );
@@ -335,7 +372,10 @@ export function MarkdownPreview({ content, className, linkPolicy }: MarkdownPrev
                   aria-label={`Local image reference: ${alt || src}`}
                   className="inline-flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text-muted)] my-2"
                 >
-                  <ImageIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <ImageIcon
+                    className="h-3.5 w-3.5 shrink-0"
+                    aria-hidden="true"
+                  />
                   <span>[Image: {alt || src}]</span>
                 </span>
               );

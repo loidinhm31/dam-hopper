@@ -760,7 +760,6 @@ impl MediaTicketStore {
         true
     }
 
-
     /// Rechecks a ticket-only media capability after async validation.
     pub(crate) fn finalize_ticket_and_touch(
         &self,
@@ -981,7 +980,10 @@ impl MediaTicketStore {
             let should_revoke = if let Some(sid) = session_id {
                 ticket.auth_session_id.as_deref() == Some(sid)
             } else {
-                ticket.binding.as_ref().is_some_and(|b| b.actor_subject == actor)
+                ticket
+                    .binding
+                    .as_ref()
+                    .is_some_and(|b| b.actor_subject == actor)
             };
             !should_revoke
         });
@@ -1248,7 +1250,8 @@ mod tests {
             ));
         }
         for actor in 0..(FORMER_GLOBAL_SESSION_LIMIT - FORMER_PER_ACTOR_SESSION_LIMIT) {
-            let cid = MediaClientId::parse(&format!("00000000-0000-4000-8000-{actor:012x}")).unwrap();
+            let cid =
+                MediaClientId::parse(&format!("00000000-0000-4000-8000-{actor:012x}")).unwrap();
             assert!(matches!(
                 store.establish_session(&format!("actor-{actor}"), &cid, None),
                 MediaSessionIssue::Issued(_)
@@ -1347,7 +1350,8 @@ mod tests {
             ));
         }
         for actor in 0..FORMER_GLOBAL_SESSION_LIMIT {
-            let cid = MediaClientId::parse(&format!("00000000-0000-4000-8000-{actor:012x}")).unwrap();
+            let cid =
+                MediaClientId::parse(&format!("00000000-0000-4000-8000-{actor:012x}")).unwrap();
             assert!(matches!(
                 store.establish_session(&format!("actor-{actor}"), &cid, None),
                 MediaSessionIssue::Issued(_)
@@ -1549,7 +1553,12 @@ mod tests {
                 .unwrap(),
         );
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false
+            )
             .is_some());
 
         // B's cookie does not authorize A's ticket
@@ -1561,19 +1570,32 @@ mod tests {
                 .unwrap(),
         );
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false
+            )
             .is_none());
 
         // Leftover fixed v1 cookie does not authorize A's ticket
         headers.clear();
         headers.insert(
             axum::http::header::COOKIE,
-            format!("damhopper-media-session={}", issued_a.session.token.as_str())
-                .parse()
-                .unwrap(),
+            format!(
+                "damhopper-media-session={}",
+                issued_a.session.token.as_str()
+            )
+            .parse()
+            .unwrap(),
         );
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false
+            )
             .is_none());
 
         // Duplicate cookies for A fail closed
@@ -1589,19 +1611,34 @@ mod tests {
             .unwrap(),
         );
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false
+            )
             .is_none());
 
         // Ticket-only allowed-origin fallback succeeds without cookie
         headers.clear();
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, true)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                true
+            )
             .is_some());
 
         // Revoking client A revokes A's ticket and session, but B remains intact
         store.revoke_sessions_and_tickets_for_client("actor", &client_a);
         assert!(store
-            .authorize_stream(&issued_a.ticket.ticket, MediaTicketKind::Video, &headers, true)
+            .authorize_stream(
+                &issued_a.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                true
+            )
             .is_none());
 
         headers.insert(
@@ -1611,7 +1648,12 @@ mod tests {
                 .unwrap(),
         );
         assert!(store
-            .authorize_stream(&issued_b.ticket.ticket, MediaTicketKind::Image, &headers, false)
+            .authorize_stream(
+                &issued_b.ticket.ticket,
+                MediaTicketKind::Image,
+                &headers,
+                false
+            )
             .is_some());
     }
 
@@ -1655,7 +1697,12 @@ mod tests {
         );
 
         let auth = store
-            .authorize_stream(&issued.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false,
+            )
             .expect("Stream must be authorized");
         assert_eq!(auth.auth_session_id.as_deref(), Some("sess-1"));
         assert_eq!(auth.auth_version, Some(1));
@@ -1690,7 +1737,12 @@ mod tests {
         // Revoking by session revokes tickets and sessions
         store.revoke_by_actor_or_session("actor", Some("sess-1"));
         assert!(store
-            .authorize_stream(&issued.ticket.ticket, MediaTicketKind::Video, &headers, false)
+            .authorize_stream(
+                &issued.ticket.ticket,
+                MediaTicketKind::Video,
+                &headers,
+                false
+            )
             .is_none());
     }
 }

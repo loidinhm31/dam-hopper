@@ -58,13 +58,7 @@ pub fn parse_plan(
                 "Referenced progress.md does not exist in target",
             );
         }
-        (
-            PlanDates::default(),
-            None,
-            None,
-            Vec::new(),
-            false,
-        )
+        (PlanDates::default(), None, None, Vec::new(), false)
     } else if let Some(text) = progress_text.as_deref() {
         parse_progress_document(progress_doc.path, text, &mut diagnostics)
     } else {
@@ -76,13 +70,7 @@ pub fn parse_plan(
             None,
             "Progress document is present but unreadable or invalid",
         );
-        (
-            PlanDates::default(),
-            None,
-            None,
-            Vec::new(),
-            false,
-        )
+        (PlanDates::default(), None, None, Vec::new(), false)
     };
 
     // 5. Reconcile Phase status and evidence
@@ -175,10 +163,7 @@ fn validate_document_snapshot(
             DIAG_DOCUMENT_TOO_LARGE,
             Some(doc.path),
             None,
-            format!(
-                "Document exceeds 64 KiB limit (got {} bytes)",
-                bytes.len()
-            ),
+            format!("Document exceeds 64 KiB limit (got {} bytes)", bytes.len()),
         );
         return None;
     }
@@ -294,14 +279,24 @@ fn parse_plan_document(
             past_first_h1 = true;
             sections.title_from_heading = Some(trimmed.trim_start_matches('#').trim().to_string());
         } else if in_phases_section {
-            if trimmed.starts_with('|') {
-                sections.phases_table_lines.push((line_num, line.to_string()));
-            } else if !trimmed.is_empty() && !sections.phases_table_lines.is_empty() {
+            if (sections.phases_table_lines.len() >= 2 && is_gfm_table_body_line(line))
+                || (sections.phases_table_lines.len() < 2 && trimmed.contains('|'))
+            {
+                sections
+                    .phases_table_lines
+                    .push((line_num, line.to_string()));
+            } else if !sections.phases_table_lines.is_empty()
+                && (sections.phases_table_lines.len() >= 2 || !trimmed.is_empty())
+            {
                 // Table ended
                 in_phases_section = false;
             }
         } else if in_metadata_region {
-            if past_first_h1 && !trimmed.is_empty() && current_first_p.is_empty() && !trimmed.starts_with('#') {
+            if past_first_h1
+                && !trimmed.is_empty()
+                && current_first_p.is_empty()
+                && !trimmed.starts_with('#')
+            {
                 current_first_p.push(trimmed.to_string());
             }
             sections.metadata_lines.push((line_num, line.to_string()));
@@ -340,7 +335,14 @@ fn parse_plan_document(
     let final_title = fm_title.or(sections.title_from_heading.clone());
     let final_desc = fm_desc.or(sections.desc_from_heading.clone());
 
-    (metadata, final_title, final_desc, fm_status, dates, sections)
+    (
+        metadata,
+        final_title,
+        final_desc,
+        fm_status,
+        dates,
+        sections,
+    )
 }
 
 /// Parse YAML frontmatter content with strict validation.
@@ -505,7 +507,14 @@ fn parse_yaml_frontmatter(
                 }
             }
             "created" => {
-                parse_yaml_date(path, "created", v, start_line, &mut dates.created, diagnostics);
+                parse_yaml_date(
+                    path,
+                    "created",
+                    v,
+                    start_line,
+                    &mut dates.created,
+                    diagnostics,
+                );
             }
             "planned_start" | "plannedStart" => {
                 parse_yaml_date(
@@ -568,9 +577,7 @@ fn parse_yaml_frontmatter(
 
 fn compute_json_depth(val: &Value) -> usize {
     match val {
-        Value::Object(map) => {
-            1 + map.values().map(compute_json_depth).max().unwrap_or(0)
-        }
+        Value::Object(map) => 1 + map.values().map(compute_json_depth).max().unwrap_or(0),
         Value::Array(arr) => 1 + arr.iter().map(compute_json_depth).max().unwrap_or(0),
         _ => 1,
     }
@@ -636,7 +643,11 @@ fn parse_standalone_dates_and_status(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (line_num, line) in lines {
-        let trimmed = line.trim().trim_start_matches('-').trim_start_matches('*').trim();
+        let trimmed = line
+            .trim()
+            .trim_start_matches('-')
+            .trim_start_matches('*')
+            .trim();
         // Remove markdown bold/italic
         let clean = trimmed.replace("**", "").replace("__", "");
         let parts: Vec<&str> = clean.splitn(2, ':').collect();
@@ -650,32 +661,68 @@ fn parse_standalone_dates_and_status(
             match label.as_str() {
                 "created" => {
                     if dates.created.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.created, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.created,
+                            diagnostics,
+                        );
                     }
                 }
                 "planned start" => {
                     if dates.planned_start.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.planned_start, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.planned_start,
+                            diagnostics,
+                        );
                     }
                 }
                 "planned end" => {
                     if dates.planned_end.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.planned_end, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.planned_end,
+                            diagnostics,
+                        );
                     }
                 }
                 "actual start" | "started" => {
                     if dates.actual_start.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.actual_start, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.actual_start,
+                            diagnostics,
+                        );
                     }
                 }
                 "actual end" | "completed" => {
                     if dates.actual_end.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.actual_end, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.actual_end,
+                            diagnostics,
+                        );
                     }
                 }
                 "published" => {
                     if dates.published.is_none() {
-                        try_set_date_evidence(path, *line_num, value, &mut dates.published, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            *line_num,
+                            value,
+                            &mut dates.published,
+                            diagnostics,
+                        );
                     }
                 }
                 _ => {}
@@ -718,7 +765,10 @@ fn try_set_date_evidence(
 /// Strict Gregorian YYYY-MM-DD or RFC3339 with explicit timezone normalized to UTC.
 fn parse_date_value(s: &str) -> Result<(String, DatePrecision), &'static str> {
     let trimmed = s.trim();
-    if trimmed.len() == 10 && trimmed.chars().nth(4) == Some('-') && trimmed.chars().nth(7) == Some('-') {
+    if trimmed.len() == 10
+        && trimmed.chars().nth(4) == Some('-')
+        && trimmed.chars().nth(7) == Some('-')
+    {
         if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
             return Ok((date.format("%Y-%m-%d").to_string(), DatePrecision::Day));
         }
@@ -879,6 +929,7 @@ fn parse_gfm_table(
     let mut num_col = None;
     let mut phase_col = None;
     let mut status_col = None;
+    let mut current_col = None;
     let mut detail_col = None;
 
     for (idx, cell) in header_cells.iter().enumerate() {
@@ -887,12 +938,15 @@ fn parse_gfm_table(
             num_col = Some(idx);
         } else if norm == "phase" || norm == "name" || norm == "title" {
             phase_col = Some(idx);
-        } else if norm == "status" || norm == "current status" {
+        } else if norm == "current status" {
+            current_col = Some(idx);
+        } else if norm == "status" {
             status_col = Some(idx);
         } else if norm == "detail" || norm == "link" || norm == "path" {
             detail_col = Some(idx);
         }
     }
+    let status_col = current_col.or(status_col);
 
     // Verify delimiter row
     let delimiter_cells = tokenize_table_row(&table_lines[1].1);
@@ -908,11 +962,9 @@ fn parse_gfm_table(
 
     let mut rows = Vec::new();
     for (line_num, line_str) in &table_lines[2..] {
-        let cells = tokenize_table_row(line_str);
-        if cells.len() != header_cells.len() {
-            // Irregular row length
-            continue;
-        }
+        let mut cells = tokenize_table_row(line_str);
+        // GFM fills missing trailing body cells and ignores excess cells.
+        cells.resize(header_cells.len(), String::new());
 
         let raw_num_str = num_col.and_then(|idx| cells.get(idx)).map(|s| s.trim());
         let raw_phase_str = phase_col
@@ -963,10 +1015,134 @@ fn parse_gfm_table(
     Ok(rows)
 }
 
+// After a header/delimiter, even a bare cell is a GFM row. Blank lines and
+// interrupting block starts terminate the table instead of becoming inventory.
+fn is_gfm_table_body_line(line: &str) -> bool {
+    let text = line.trim();
+    if text.is_empty()
+        || text.starts_with('>')
+        || text.starts_with("```")
+        || text.starts_with("~~~")
+    {
+        return false;
+    }
+    let hashes = text.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes)
+        && (text.len() == hashes || text[hashes..].starts_with(char::is_whitespace))
+    {
+        return false;
+    }
+    let mut chars = text.chars();
+    if matches!(chars.next(), Some('-' | '+' | '*'))
+        && chars.next().is_some_and(char::is_whitespace)
+    {
+        return false;
+    }
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    if (1..=9).contains(&digits) {
+        let suffix = &text[digits..];
+        if (suffix.starts_with('.') || suffix.starts_with(')'))
+            && suffix[1..].starts_with(char::is_whitespace)
+        {
+            return false;
+        }
+    }
+    let mut marks = text.chars().filter(|c| !c.is_whitespace());
+    if let Some(first @ ('-' | '*' | '_')) = marks.next() {
+        let mut count = 1;
+        let uniform = marks.all(|mark| {
+            count += 1;
+            mark == first
+        });
+        if uniform && count >= 3 {
+            return false;
+        }
+    }
+    // HTML block openers also interrupt tables; ordinary inline content does not.
+    if text.starts_with("<!--") || text.starts_with("<?") || text.starts_with("<!") {
+        return false;
+    }
+    let tag = text
+        .trim_start_matches('<')
+        .trim_start_matches('/')
+        .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        .next()
+        .unwrap_or("");
+    !text.starts_with('<')
+        || !matches!(
+            tag.to_ascii_lowercase().as_str(),
+            "address"
+                | "article"
+                | "aside"
+                | "base"
+                | "blockquote"
+                | "body"
+                | "caption"
+                | "center"
+                | "col"
+                | "colgroup"
+                | "dd"
+                | "details"
+                | "dialog"
+                | "dir"
+                | "div"
+                | "dl"
+                | "dt"
+                | "fieldset"
+                | "figcaption"
+                | "figure"
+                | "footer"
+                | "form"
+                | "frame"
+                | "frameset"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "head"
+                | "header"
+                | "hr"
+                | "html"
+                | "iframe"
+                | "legend"
+                | "li"
+                | "link"
+                | "main"
+                | "menu"
+                | "menuitem"
+                | "nav"
+                | "noframes"
+                | "ol"
+                | "optgroup"
+                | "option"
+                | "p"
+                | "param"
+                | "pre"
+                | "script"
+                | "search"
+                | "section"
+                | "source"
+                | "style"
+                | "summary"
+                | "table"
+                | "tbody"
+                | "td"
+                | "tfoot"
+                | "th"
+                | "thead"
+                | "title"
+                | "tr"
+                | "track"
+                | "ul"
+        )
+}
+
 /// Tokenize table row taking into account backslash escaping and code spans.
 fn tokenize_table_row(line: &str) -> Vec<String> {
     let trimmed = line.trim();
-    if !trimmed.starts_with('|') {
+    if trimmed.is_empty() {
         return Vec::new();
     }
 
@@ -976,8 +1152,10 @@ fn tokenize_table_row(line: &str) -> Vec<String> {
     let mut escaped = false;
     let mut chars = trimmed.chars().peekable();
 
-    // Skip leading '|'
-    chars.next();
+    // Leading and trailing edge pipes are optional in GFM.
+    if trimmed.starts_with('|') {
+        chars.next();
+    }
 
     while let Some(c) = chars.next() {
         if escaped {
@@ -1041,7 +1219,10 @@ fn extract_clean_title(text: &str) -> String {
 
 fn is_phase_number_prefix(prefix: &str) -> bool {
     let lower = prefix.trim().to_lowercase();
-    let rest = lower.strip_prefix("phase").map(|s| s.trim()).unwrap_or(&lower);
+    let rest = lower
+        .strip_prefix("phase")
+        .map(|s| s.trim())
+        .unwrap_or(&lower);
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
@@ -1188,9 +1369,11 @@ fn parse_progress_document(
                 in_reconciliation_section = false;
             }
         } else if in_reconciliation_section {
-            if trimmed.starts_with('|') {
+            if (table_lines.len() >= 2 && is_gfm_table_body_line(line))
+                || (table_lines.len() < 2 && trimmed.contains('|'))
+            {
                 table_lines.push((line_num, line.to_string()));
-            } else if !trimmed.is_empty() && !table_lines.is_empty() {
+            } else if !table_lines.is_empty() && (table_lines.len() >= 2 || !trimmed.is_empty()) {
                 in_reconciliation_section = false;
             }
         } else if in_metadata_region {
@@ -1204,25 +1387,72 @@ fn parse_progress_document(
                 match label.as_str() {
                     "current status" => {
                         let parsed = parse_status_cell(val);
-                        current_scalar = Some((parsed, val.to_string(), line_num));
+                        if parsed != PlanStatus::Unknown {
+                            current_scalar = Some((parsed, val.to_string(), line_num));
+                        } else if let Some((st, raw)) = parse_completion_summary_sentence(val) {
+                            if st == PlanStatus::Unknown {
+                                add_diagnostic(
+                                    diagnostics,
+                                    DIAG_UNSUPPORTED_STATUS,
+                                    Some(path),
+                                    Some(line_num),
+                                    format!(
+                                        "Unsupported or negated completion summary prose: {raw}"
+                                    ),
+                                );
+                            }
+                            summary = Some((st, raw, line_num));
+                        } else {
+                            current_scalar = Some((parsed, val.to_string(), line_num));
+                        }
                     }
                     "published" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.published, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            line_num,
+                            val,
+                            &mut dates.published,
+                            diagnostics,
+                        );
                     }
                     "created" => {
                         try_set_date_evidence(path, line_num, val, &mut dates.created, diagnostics);
                     }
                     "planned start" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.planned_start, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            line_num,
+                            val,
+                            &mut dates.planned_start,
+                            diagnostics,
+                        );
                     }
                     "planned end" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.planned_end, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            line_num,
+                            val,
+                            &mut dates.planned_end,
+                            diagnostics,
+                        );
                     }
                     "actual start" | "started" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.actual_start, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            line_num,
+                            val,
+                            &mut dates.actual_start,
+                            diagnostics,
+                        );
                     }
                     "actual end" | "completed" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.actual_end, diagnostics);
+                        try_set_date_evidence(
+                            path,
+                            line_num,
+                            val,
+                            &mut dates.actual_end,
+                            diagnostics,
+                        );
                     }
                     _ => {}
                 }
@@ -1275,20 +1505,22 @@ fn parse_reconciliation_table(table_lines: &[(usize, String)]) -> Result<Vec<Pro
 
     let mut phase_col = None;
     let mut current_col = None;
+    let mut status_col = None;
     let mut captured_col = None;
 
     for (idx, cell) in header_cells.iter().enumerate() {
         let norm = cell.trim().to_lowercase();
         if norm == "phase" || norm == "name" || norm == "#" {
             phase_col = Some(idx);
-        } else if norm == "current status" || norm == "status" {
-            if current_col.is_none() {
-                current_col = Some(idx);
-            }
+        } else if norm == "current status" {
+            current_col = Some(idx);
+        } else if norm == "status" {
+            status_col = Some(idx);
         } else if norm == "captured status" {
             captured_col = Some(idx);
         }
     }
+    let current_col = current_col.or(status_col);
 
     let delimiter_cells = tokenize_table_row(&table_lines[1].1);
     if delimiter_cells.len() != header_cells.len() {
@@ -1297,10 +1529,8 @@ fn parse_reconciliation_table(table_lines: &[(usize, String)]) -> Result<Vec<Pro
 
     let mut rows = Vec::new();
     for (line_num, line_str) in &table_lines[2..] {
-        let cells = tokenize_table_row(line_str);
-        if cells.len() != header_cells.len() {
-            continue;
-        }
+        let mut cells = tokenize_table_row(line_str);
+        cells.resize(header_cells.len(), String::new());
 
         let raw_phase = phase_col
             .and_then(|idx| cells.get(idx))
@@ -1337,26 +1567,51 @@ fn parse_reconciliation_table(table_lines: &[(usize, String)]) -> Result<Vec<Pro
 /// Parse corroborated All phases completion summary grammar.
 fn parse_completion_summary_sentence(s: &str) -> Option<(PlanStatus, String)> {
     let lower = s.to_lowercase();
-    // Check for negations or unsupported conditionals
-    if lower.contains(" not ")
-        || lower.contains(" never ")
-        || lower.contains(" cannot ")
-        || lower.contains(" if ")
-        || lower.contains(" unless ")
-        || lower.contains(" pending ")
-    {
-        return Some((PlanStatus::Unknown, s.to_string()));
+    let normalized = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !normalized.contains("all phases") && !normalized.contains("plan execution") {
+        return None;
     }
 
-    if lower.contains("all phases") && (lower.contains("complete") || lower.contains("done")) {
-        return Some((PlanStatus::Completed, s.to_string()));
-    }
-
-    if lower.contains("plan execution complete") {
-        return Some((PlanStatus::Completed, s.to_string()));
-    }
-
-    None
+    // Accept the entire supported claim, not completion substrings or an
+    // otherwise valid claim embedded in negated/conditional/extra prose.
+    let sentence = normalized.strip_suffix('.').unwrap_or(&normalized);
+    let valid = if sentence == "plan execution complete" {
+        true
+    } else {
+        let sentence = sentence
+            .strip_suffix(". plan execution complete")
+            .unwrap_or(sentence);
+        if let Some(rest) = sentence.strip_prefix("all phases ") {
+            let rest = if rest.starts_with('(') {
+                rest.find(')').and_then(|close| {
+                    extract_summary_phase_numbers(sentence).ok()?;
+                    rest[close + 1..].strip_prefix(' ')
+                })
+            } else {
+                Some(rest)
+            };
+            rest.is_some_and(|rest| {
+                let rest = rest.strip_prefix("are ").unwrap_or(rest);
+                matches!(
+                    rest,
+                    "complete"
+                        | "completed"
+                        | "complete with durable task sealing"
+                        | "completed with durable task sealing"
+                )
+            })
+        } else {
+            false
+        }
+    };
+    Some((
+        if valid {
+            PlanStatus::Completed
+        } else {
+            PlanStatus::Unknown
+        },
+        s.to_string(),
+    ))
 }
 
 /// Reconcile declared phases with progress rows and calculate overall status.
@@ -1425,8 +1680,23 @@ fn reconcile_statuses(
 
     // Progress authority
     if !progress_valid {
+        let mut phases = declared_phases;
+        for phase in &mut phases {
+            let status = &mut phase.reported_status;
+            for evidence in &status.evidence {
+                status.captured.push(StatusEvidence {
+                    value: status.value,
+                    raw: status.raw.clone().unwrap_or_default(),
+                    evidence: evidence.clone(),
+                });
+            }
+            status.value = PlanStatus::Unknown;
+            status.authority = PlanAuthority::Progress;
+            status.raw = None;
+            status.evidence.clear();
+        }
         return (
-            declared_phases,
+            phases,
             ReportedStatus {
                 value: PlanStatus::Unknown,
                 authority: PlanAuthority::Progress,
@@ -1443,37 +1713,63 @@ fn reconcile_statuses(
 
     // Match progress rows to declared phases
     let mut updated_phases = declared_phases;
+    let mut phase_matches = vec![None; updated_phases.len()];
+    let mut phase_conflicts = vec![false; updated_phases.len()];
     let mut matched_progress_indices = HashSet::new();
 
-    for phase in &mut updated_phases {
-        let mut matched_idx = None;
-
-        // 1. Try matching by phase path
-        if let Some(path) = &phase.path {
-            for (idx, p_row) in progress_rows.iter().enumerate() {
-                if let Some(p_link) = &p_row.phase_link {
-                    if p_link == path {
-                        matched_idx = Some(idx);
-                        break;
-                    }
+    // Resolve all identity hints before projecting any row. A row has exactly one
+    // consumer; inconsistent hints and duplicate claims invalidate affected phases.
+    for (idx, row) in progress_rows.iter().enumerate() {
+        let by_link = row.phase_link.as_ref().and_then(|link| {
+            updated_phases
+                .iter()
+                .position(|phase| phase.path.as_ref() == Some(link))
+        });
+        let by_number = row.phase_number.and_then(|number| {
+            updated_phases
+                .iter()
+                .position(|phase| phase.number == Some(number))
+        });
+        let matched_phase = if row.phase_link.is_some() && row.phase_number.is_some() {
+            if by_link.is_none() || by_link != by_number {
+                for phase_idx in [by_link, by_number].into_iter().flatten() {
+                    phase_conflicts[phase_idx] = true;
                 }
+                add_diagnostic(
+                    diagnostics,
+                    DIAG_STATUS_CONFLICT,
+                    Some(progress_path),
+                    Some(row.line),
+                    "Progress row phase link and number do not identify the same declared phase",
+                );
+                continue;
+            }
+            by_link
+        } else if row.phase_link.is_some() {
+            by_link
+        } else {
+            by_number
+        };
+
+        if let Some(phase_idx) = matched_phase {
+            if phase_matches[phase_idx].is_some() {
+                phase_conflicts[phase_idx] = true;
+                add_diagnostic(
+                    diagnostics,
+                    DIAG_STATUS_CONFLICT,
+                    Some(progress_path),
+                    Some(row.line),
+                    "Multiple progress rows identify the same declared phase",
+                );
+            } else {
+                phase_matches[phase_idx] = Some(idx);
+                matched_progress_indices.insert(idx);
             }
         }
+    }
 
-        // 2. Try matching by phase number
-        if matched_idx.is_none() {
-            if let Some(num) = phase.number {
-                for (idx, p_row) in progress_rows.iter().enumerate() {
-                    if p_row.phase_number == Some(num) {
-                        matched_idx = Some(idx);
-                        break;
-                    }
-                }
-            }
-        }
-
-        if let Some(idx) = matched_idx {
-            matched_progress_indices.insert(idx);
+    for (phase_idx, phase) in updated_phases.iter_mut().enumerate() {
+        if let Some(idx) = phase_matches[phase_idx] {
             let p_row = &progress_rows[idx];
 
             let mut captured = Vec::new();
@@ -1490,7 +1786,11 @@ fn reconcile_statuses(
             }
 
             phase.reported_status = ReportedStatus {
-                value: p_row.current_status,
+                value: if phase_conflicts[phase_idx] {
+                    PlanStatus::Conflict
+                } else {
+                    p_row.current_status
+                },
                 authority: PlanAuthority::Progress,
                 raw: Some(p_row.raw_current.clone()),
                 evidence: vec![SourceRef {
@@ -1510,7 +1810,11 @@ fn reconcile_statuses(
                 format!("Declared phase '{}' unreported in progress.md", phase.id),
             );
             phase.reported_status = ReportedStatus {
-                value: PlanStatus::Unknown,
+                value: if phase_conflicts[phase_idx] {
+                    PlanStatus::Conflict
+                } else {
+                    PlanStatus::Unknown
+                },
                 authority: PlanAuthority::Progress,
                 raw: None,
                 evidence: Vec::new(),
@@ -1538,12 +1842,14 @@ fn reconcile_statuses(
     // Determine overall reported status
     let mut overall_value = if let Some((sum_st, sum_raw, line)) = progress_summary.as_ref() {
         if *sum_st == PlanStatus::Completed {
-            let range_matches = if let Some(sum_nums) = extract_summary_phase_numbers(sum_raw) {
-                let declared_nums: HashSet<u32> =
-                    updated_phases.iter().filter_map(|p| p.number).collect();
-                sum_nums == declared_nums && declared_nums.len() == updated_phases.len()
-            } else {
-                true
+            let range_matches = match extract_summary_phase_numbers(sum_raw) {
+                Ok(Some(sum_nums)) => {
+                    let declared_nums: HashSet<u32> =
+                        updated_phases.iter().filter_map(|p| p.number).collect();
+                    sum_nums == declared_nums && declared_nums.len() == updated_phases.len()
+                }
+                Ok(None) => true,
+                Err(()) => false,
             };
 
             // Corroborate: every declared current phase must independently report complete
@@ -1698,7 +2004,10 @@ fn compute_completion(phases: &[FilePlanPhase], inventory_valid: bool) -> PlanCo
             }
             PlanStatus::Unknown => unknown += 1,
             PlanStatus::Conflict => conflicted += 1,
-            PlanStatus::Pending | PlanStatus::InProgress | PlanStatus::Cancelled | PlanStatus::Blocked => {
+            PlanStatus::Pending
+            | PlanStatus::InProgress
+            | PlanStatus::Cancelled
+            | PlanStatus::Blocked => {
                 recognized += 1;
             }
         }
@@ -1904,45 +2213,51 @@ fn has_duplicate_yaml_keys_or_aliases(content: &str) -> Option<&'static str> {
     None
 }
 
-fn extract_summary_phase_numbers(s: &str) -> Option<HashSet<u32>> {
-    let open = s.find('(')?;
-    let close = s[open..].find(')')? + open;
-    let inner = s[open + 1..close].trim();
-    if inner.is_empty() {
-        return None;
+fn extract_summary_phase_numbers(s: &str) -> Result<Option<HashSet<u32>>, ()> {
+    let Some(open) = s.find('(') else {
+        return if s.contains(')') { Err(()) } else { Ok(None) };
+    };
+    let close = s[open..].find(')').ok_or(())? + open;
+    let inner = s[open + 1..close].trim().to_lowercase();
+    if inner.is_empty() || inner.contains('(') || s[close + 1..].contains(['(', ')']) {
+        return Err(());
+    }
+
+    fn number(value: &str) -> Result<u32, ()> {
+        let value = value.trim();
+        let value = value.strip_prefix("phase ").unwrap_or(value).trim();
+        if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
+            return Err(());
+        }
+        let number = value.parse::<u32>().map_err(|_| ())?;
+        if number == 0 {
+            return Err(());
+        }
+        Ok(number)
     }
 
     let mut nums = HashSet::new();
     if let Some((left, right)) = inner.split_once('–').or_else(|| inner.split_once('-')) {
-        let start = extract_number_from_text(left)?;
-        let end = extract_number_from_text(right)?;
-        if start == 0 || end < start || end > MAX_DECLARED_PHASE_ROWS as u32 {
-            return Some(HashSet::new());
+        let start = number(left)?;
+        let end = number(right)?;
+        if end
+            .checked_sub(start)
+            .and_then(|span| span.checked_add(1))
+            .map_or(true, |count| count > MAX_DECLARED_PHASE_ROWS as u32)
+        {
+            return Err(());
         }
-        for n in start..=end {
-            nums.insert(n);
-        }
-        return Some(nums);
-    }
-
-    for part in inner.split(',') {
-        for sub in part.split("and") {
-            let trimmed = sub.trim();
-            if !trimmed.is_empty() {
-                if let Some(n) = extract_number_from_text(trimmed) {
-                    if n > 0 {
-                        nums.insert(n);
-                    }
+        nums.extend(start..=end);
+    } else {
+        for part in inner.split(',') {
+            for sub in part.split(" and ") {
+                if !nums.insert(number(sub)?) || nums.len() > MAX_DECLARED_PHASE_ROWS {
+                    return Err(());
                 }
             }
         }
     }
-
-    if nums.is_empty() {
-        None
-    } else {
-        Some(nums)
-    }
+    Ok(Some(nums))
 }
 
 fn add_diagnostic(

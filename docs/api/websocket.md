@@ -38,9 +38,10 @@ represented by `worktreePath` session metadata.
 
 **File Tree Subscription:**
 
-- `{ kind: "fs:subscribe_tree", req_id, project, path }` — start watching directory tree; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`
-- `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching
-- `{ kind: "fs:event", sub_id, event: { kind, path, from? } }` — server pushes FS changes (created|modified|deleted|renamed)
+- `{ kind: "fs:subscribe_tree", req_id, project, path, worktreePath?, watchOnly? }` — start watching a validated directory; server responds with `{ kind: "fs:tree_snapshot", sub_id, nodes: [...] }`. `watchOnly: true` skips the unused tree snapshot and uses strict rooted directory validation.
+- `{ kind: "fs:unsubscribe_tree", sub_id }` — stop watching.
+- `{ kind: "fs:event", sub_id, event: { kind, path, from?, targetRelativePath?, targetRelativeFrom? } }` — server pushes changes (`created|modified|removed|renamed`). `path` and `from` remain absolute. Watch-only subscriptions additionally include target-relative endpoints inside the captured validated project/worktree root; `"."` identifies the root itself, and outside-target endpoints are omitted. Generic subscriptions omit these additional fields.
+- The plans client uses relative structural identity to rebind replaced directory/root handles even when the listing DTO is unchanged. Legacy events without relative identity conservatively rebind the emitting subtree.
 
 **File Read:**
 
@@ -49,6 +50,7 @@ represented by `worktreePath` session metadata.
   - Server responds: `{ kind: "fs:read_result", req_id, ok, binary, mime?, mtime?, size?, data?, code? }`
   - `data` is base64-encoded content (text or binary), max 100MB
   - If `ok=false` and `code="TOO_LARGE"`: file exceeds cap; use range reads (LargeFileViewer)
+  - `readMode: "plan-document"` selects a strict bounded Markdown snapshot (64 KiB), rejecting linked traversal and returning conflict when descriptor, named-entry, or ancestor identity changes during the read.
 
 **File Write:**
 

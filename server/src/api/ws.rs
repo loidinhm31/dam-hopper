@@ -3119,7 +3119,10 @@ async fn do_fs_subscribe(
             .await
             .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
         if !meta.is_dir() {
-            return Err(("PATH_REJECTED".to_string(), "path is not a directory".to_string()));
+            return Err((
+                "PATH_REJECTED".to_string(),
+                "path is not a directory".to_string(),
+            ));
         }
         state
             .fs
@@ -3171,10 +3174,20 @@ async fn do_fs_subscribe(
         .map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
     let filter_prefix = abs_path.clone();
+    let event_target_root = is_watch_only.then(|| target.target_path().to_path_buf());
     let fs = state.fs.clone();
     registration.disarm();
     let handle = tokio::spawn(async move {
-        pump_fs_events(sub_id, fs_rx, filter_prefix, fs_tx, pty_tx, fs).await;
+        pump_fs_events(
+            sub_id,
+            fs_rx,
+            filter_prefix,
+            event_target_root,
+            fs_tx,
+            pty_tx,
+            fs,
+        )
+        .await;
     });
 
     fs_pumps.insert(sub_id, handle);
@@ -3189,6 +3202,7 @@ async fn pump_fs_events(
     sub_id: u64,
     mut rx: tokio::sync::broadcast::Receiver<crate::fs::FsEvent>,
     filter_prefix: std::path::PathBuf,
+    event_target_root: Option<std::path::PathBuf>,
     fs_tx: mpsc::Sender<WireMsg>,
     pty_tx: mpsc::Sender<WireMsg>,
     fs: crate::fs::FsSubsystem,
@@ -3206,7 +3220,26 @@ async fn pump_fs_events(
                     continue;
                 }
 
-                let dto: FsEventDto = ev.into();
+                let (target_relative_path, target_relative_from) =
+                    if let Some(root) = event_target_root.as_ref() {
+                        // Captured from the validated subscription target, not inferred
+                        // from event filenames: root-self events must remain distinguishable.
+                        let relative = |path: &std::path::Path| {
+                            path.strip_prefix(root).ok().map(|path| {
+                                if path.as_os_str().is_empty() {
+                                    ".".to_owned()
+                                } else {
+                                    path.to_string_lossy().replace('\\', "/")
+                                }
+                            })
+                        };
+                        (relative(&ev.path), ev.from.as_deref().and_then(relative))
+                    } else {
+                        (None, None)
+                    };
+                let mut dto: FsEventDto = ev.into();
+                dto.target_relative_path = target_relative_path;
+                dto.target_relative_from = target_relative_from;
                 let msg = ServerMsg::FsEventMsg { sub_id, event: dto };
                 let json = match serde_json::to_string(&msg) {
                     Ok(j) => j,
@@ -3242,7 +3275,11 @@ async fn pump_fs_events(
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                warn!(sub_id, dropped = n, "fs broadcast lagged — dropping subscription");
+                warn!(
+                    sub_id,
+                    dropped = n,
+                    "fs broadcast lagged — dropping subscription"
+                );
                 let overflow = ServerMsg::FsOverflow {
                     sub_id,
                     message: format!(
@@ -3376,6 +3413,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fs_event_pump_preserves_absolute_paths_and_watch_only_target_identity() {
+        for watch_only in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("repo");
+            std::fs::create_dir(&root).unwrap();
+            let fs = FsSubsystem::new(vec![("project".into(), root.clone())]);
+            let (sub_id, _watcher_rx) = fs.subscribe_tree("project", root.clone()).unwrap();
+            let (event_tx, event_rx) = broadcast::channel(8);
+            let (fs_tx, mut fs_rx) = mpsc::channel(8);
+            let (pty_tx, _pty_rx) = mpsc::channel(1);
+            let pump = tokio::spawn(pump_fs_events(
+                sub_id,
+                event_rx,
+                root.clone(),
+                watch_only.then(|| root.clone()),
+                fs_tx,
+                pty_tx,
+                fs.clone(),
+            ));
+            let cases = [
+                (
+                    FsEvent {
+                        kind: FsEventKind::Removed,
+                        path: root.clone(),
+                        from: None,
+                    },
+                    Some("."),
+                    None,
+                ),
+                (
+                    FsEvent {
+                        kind: FsEventKind::Renamed,
+                        path: root.join("plans"),
+                        from: Some(root.join("replacement")),
+                    },
+                    Some("plans"),
+                    Some("replacement"),
+                ),
+                (
+                    FsEvent {
+                        kind: FsEventKind::Renamed,
+                        path: tmp.path().join("outside"),
+                        from: Some(root.join("plans")),
+                    },
+                    None,
+                    Some("plans"),
+                ),
+            ];
+            for (event, relative_path, relative_from) in cases {
+                let absolute_path = event.path.to_string_lossy().replace('\\', "/");
+                let absolute_from = event
+                    .from
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"));
+                event_tx.send(event).unwrap();
+                let message = tokio::time::timeout(std::time::Duration::from_secs(1), fs_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let WireMsg::Text(json) = message else {
+                    panic!("expected filesystem wire event");
+                };
+                let message: serde_json::Value = serde_json::from_str(&json).unwrap();
+                assert_eq!(message["kind"], "fs:event");
+                assert_eq!(message["sub_id"], sub_id);
+                let event = &message["event"];
+                assert_eq!(event["path"], absolute_path);
+                assert_eq!(
+                    event.get("from").and_then(|value| value.as_str()),
+                    absolute_from.as_deref()
+                );
+                assert_eq!(
+                    event
+                        .get("targetRelativePath")
+                        .and_then(|value| value.as_str()),
+                    if watch_only { relative_path } else { None }
+                );
+                assert_eq!(
+                    event
+                        .get("targetRelativeFrom")
+                        .and_then(|value| value.as_str()),
+                    if watch_only { relative_from } else { None }
+                );
+                // Absent metadata is omitted, never published as null.
+                assert!(!event
+                    .get("targetRelativePath")
+                    .is_some_and(|value| value.is_null()));
+                assert!(!event
+                    .get("targetRelativeFrom")
+                    .is_some_and(|value| value.is_null()));
+            }
+            drop(event_tx);
+            tokio::time::timeout(std::time::Duration::from_secs(1), pump)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(fs.watcher_refcount(&root), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn fs_event_overflow_releases_subscription() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -3389,6 +3527,7 @@ mod tests {
             sub_id,
             event_rx,
             root.clone(),
+            None,
             fs_tx,
             pty_tx,
             fs.clone(),

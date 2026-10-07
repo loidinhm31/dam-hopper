@@ -229,12 +229,14 @@ pub fn scan_plan_folders(
         PlanFolderKind::Group
     };
 
-    let (raw_entries, complete) =
-        match secure_path::read_immediate_dir(root, Path::new(&normalized_path), MAX_VISITED_ENTRIES)
-        {
-            Ok(res) => res,
-            Err(e) => return Err(PlansError::from(e)),
-        };
+    let (raw_entries, complete) = match secure_path::read_immediate_dir(
+        root,
+        Path::new(&normalized_path),
+        MAX_VISITED_ENTRIES,
+    ) {
+        Ok(res) => res,
+        Err(e) => return Err(PlansError::from(e)),
+    };
 
     let entries_visited = raw_entries.len();
     let mut limits_reached = Vec::new();
@@ -280,28 +282,56 @@ pub fn scan_plan_folders(
         diagnostics: Vec::new(),
     };
 
-    let mut json_bytes =
-        serde_json::to_vec(&response).map_err(|_| PlansError::ReadFailed)?;
-    if json_bytes.len() > MAX_JSON_BYTES {
-        if !response
+    if json_byte_len(&response)? > MAX_JSON_BYTES {
+        response
             .listing
             .limits_reached
-            .contains(&"response-bytes".to_string())
-        {
-            response
-                .listing
-                .limits_reached
-                .push("response-bytes".to_string());
-        }
+            .push("response-bytes".to_string());
         response.listing.complete = false;
-        while json_bytes.len() > MAX_JSON_BYTES && !response.folders.is_empty() {
-            response.folders.pop();
-            json_bytes =
-                serde_json::to_vec(&response).map_err(|_| PlansError::ReadFailed)?;
+
+        // Count the final envelope and each retained whole entry once. This includes
+        // JSON escaping and commas without allocating or repeatedly encoding prefixes.
+        let mut folders = std::mem::take(&mut response.folders);
+        let mut bytes = json_byte_len(&response)?;
+        if bytes > MAX_JSON_BYTES {
+            return Err(PlansError::ResponseTooLarge);
         }
+        let mut retained = 0;
+        for folder in &folders {
+            let entry_bytes = json_byte_len(folder)? + usize::from(retained > 0);
+            if entry_bytes > MAX_JSON_BYTES - bytes {
+                break;
+            }
+            bytes += entry_bytes;
+            retained += 1;
+        }
+        folders.truncate(retained);
+        response.folders = folders;
     }
 
     Ok(response)
+}
+
+fn json_byte_len(value: &impl serde::Serialize) -> Result<usize, PlansError> {
+    struct ByteCounter(usize);
+
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("JSON byte count overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value).map_err(|_| PlansError::ReadFailed)?;
+    Ok(counter.0)
 }
 
 pub fn read_selected_plan(
@@ -320,7 +350,9 @@ pub fn read_selected_plan(
             return Err(PlansError::NotFound("plan directory not found"));
         }
         Ok(FileMarkerKind::Symlink) => {
-            return Err(PlansError::PathRejected("symlink plan directory not allowed"));
+            return Err(PlansError::PathRejected(
+                "symlink plan directory not allowed",
+            ));
         }
         _ => return Err(PlansError::PathRejected("plan path is not a directory")),
     }
@@ -452,8 +484,7 @@ pub fn read_selected_plan(
         modified_at: progress_modified,
     };
 
-    let mut file_plan =
-        crate::plans::parser::parse_plan(&normalized_path, &plan_doc, &prog_doc);
+    let mut file_plan = crate::plans::parser::parse_plan(&normalized_path, &plan_doc, &prog_doc);
 
     if let Some(diag) = progress_diag {
         if !file_plan
@@ -475,8 +506,7 @@ pub fn read_selected_plan(
         diagnostics,
     };
 
-    let json_bytes =
-        serde_json::to_vec(&response).map_err(|_| PlansError::ReadFailed)?;
+    let json_bytes = serde_json::to_vec(&response).map_err(|_| PlansError::ReadFailed)?;
     if json_bytes.len() > MAX_JSON_BYTES {
         return Err(PlansError::ResponseTooLarge);
     }

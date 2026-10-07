@@ -104,8 +104,14 @@ fn test_bold_done_and_parenthesized_qualifier() {
     let parsed = parse_plan("plans/p", &plan_doc, &progress_doc);
 
     assert_eq!(parsed.phases.len(), 3);
-    assert_eq!(parsed.phases[0].reported_status.value, PlanStatus::Completed);
-    assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::InProgress);
+    assert_eq!(
+        parsed.phases[0].reported_status.value,
+        PlanStatus::Completed
+    );
+    assert_eq!(
+        parsed.phases[1].reported_status.value,
+        PlanStatus::InProgress
+    );
     assert_eq!(parsed.phases[2].reported_status.value, PlanStatus::Pending);
     assert_eq!(parsed.reported_status.value, PlanStatus::InProgress);
     assert_eq!(parsed.reported_status.authority, PlanAuthority::Plan);
@@ -136,9 +142,15 @@ fn test_reordered_columns_in_progress() {
     let parsed = parse_plan("plans/reorder", &plan_doc, &progress_doc);
 
     assert_eq!(parsed.phases.len(), 1);
-    assert_eq!(parsed.phases[0].reported_status.value, PlanStatus::Completed);
+    assert_eq!(
+        parsed.phases[0].reported_status.value,
+        PlanStatus::Completed
+    );
     assert_eq!(parsed.phases[0].reported_status.captured.len(), 1);
-    assert_eq!(parsed.phases[0].reported_status.captured[0].value, PlanStatus::Pending);
+    assert_eq!(
+        parsed.phases[0].reported_status.captured[0].value,
+        PlanStatus::Pending
+    );
 }
 
 #[test]
@@ -171,7 +183,10 @@ All phases complete with durable task sealing. Plan execution complete.
     let parsed_conflict = parse_plan("plans/s", &plan_doc, &prog_conflict);
 
     assert_eq!(parsed_conflict.reported_status.value, PlanStatus::Conflict);
-    assert!(parsed_conflict.diagnostics.iter().any(|d| d.code == DIAG_STATUS_CONFLICT));
+    assert!(parsed_conflict
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_STATUS_CONFLICT));
 
     // Case B: Summary with negation -> unsupported prose / unknown
     let progress_neg_md = r#"# Progress
@@ -216,8 +231,14 @@ See [progress.md](./progress.md) for details.
 
     assert_eq!(parsed.reported_status.value, PlanStatus::Conflict);
     assert_eq!(parsed.reported_status.authority, PlanAuthority::Plan);
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_PROGRESS_MISSING));
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_STATUS_CONFLICT));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_PROGRESS_MISSING));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_STATUS_CONFLICT));
 }
 
 #[test]
@@ -249,9 +270,15 @@ fn test_unmatched_and_unreported_phases() {
 
     // Phase 02 is declared in plan but unreported in progress -> unknown
     assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::Unknown);
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_PHASE_UNREPORTED));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_PHASE_UNREPORTED));
     // Phase 03 is in progress but undeclared in plan -> unmatched diagnostic
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_PHASE_UNMATCHED));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_PHASE_UNMATCHED));
 }
 
 #[test]
@@ -270,7 +297,10 @@ fn test_rejected_absolute_link() {
 
     let parsed = parse_plan("plans/link", &plan_doc, &progress_doc);
 
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_LINK_REJECTED));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_LINK_REJECTED));
 }
 
 #[test]
@@ -298,20 +328,45 @@ actual_start: 2026-10-03
     let parsed = parse_plan("plans/d", &plan_doc, &progress_doc);
 
     // Created from plan
-    assert_eq!(parsed.dates.created.as_ref().map(|d| d.value.as_str()), Some("2026-10-01"));
-    assert_eq!(parsed.dates.created.as_ref().map(|d| d.precision), Some(DatePrecision::Day));
+    assert_eq!(
+        parsed.dates.created.as_ref().map(|d| d.value.as_str()),
+        Some("2026-10-01")
+    );
+    assert_eq!(
+        parsed.dates.created.as_ref().map(|d| d.precision),
+        Some(DatePrecision::Day)
+    );
 
     // Planned from plan
-    assert_eq!(parsed.dates.planned_start.as_ref().map(|d| d.value.as_str()), Some("2026-10-02"));
-    assert_eq!(parsed.dates.planned_end.as_ref().map(|d| d.value.as_str()), Some("2026-10-10"));
+    assert_eq!(
+        parsed
+            .dates
+            .planned_start
+            .as_ref()
+            .map(|d| d.value.as_str()),
+        Some("2026-10-02")
+    );
+    assert_eq!(
+        parsed.dates.planned_end.as_ref().map(|d| d.value.as_str()),
+        Some("2026-10-10")
+    );
 
     // Actual start conflict -> suppressed
     assert!(parsed.dates.actual_start.is_none());
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_DATE_CONFLICT));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_DATE_CONFLICT));
 
     // Published from progress with instant precision
-    assert_eq!(parsed.dates.published.as_ref().map(|d| d.value.as_str()), Some("2026-10-06T12:00:00+00:00"));
-    assert_eq!(parsed.dates.published.as_ref().map(|d| d.precision), Some(DatePrecision::Instant));
+    assert_eq!(
+        parsed.dates.published.as_ref().map(|d| d.value.as_str()),
+        Some("2026-10-06T12:00:00+00:00")
+    );
+    assert_eq!(
+        parsed.dates.published.as_ref().map(|d| d.precision),
+        Some(DatePrecision::Instant)
+    );
 }
 
 #[test]
@@ -327,7 +382,10 @@ planned_start: 2026-02-29
 
     let parsed = parse_plan("plans/leap", &plan_doc, &progress_doc);
     assert!(parsed.dates.planned_start.is_none());
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_INVALID_DATE));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_DATE));
 }
 
 #[test]
@@ -343,7 +401,10 @@ fn test_document_size_limit_and_nul_byte_rejection() {
     };
     let progress_doc = make_absent_snapshot("plans/nul/progress.md");
     let parsed_nul = parse_plan("plans/nul", &nul_doc, &progress_doc);
-    assert!(parsed_nul.diagnostics.iter().any(|d| d.code == DIAG_INVALID_DOCUMENT));
+    assert!(parsed_nul
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_DOCUMENT));
 
     // 2. Oversize document (> 64 KiB)
     let oversize_bytes = vec![b'a'; 65537];
@@ -355,7 +416,10 @@ fn test_document_size_limit_and_nul_byte_rejection() {
         modified_at: None,
     };
     let parsed_big = parse_plan("plans/big", &oversize_doc, &progress_doc);
-    assert!(parsed_big.diagnostics.iter().any(|d| d.code == DIAG_DOCUMENT_TOO_LARGE));
+    assert!(parsed_big
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_DOCUMENT_TOO_LARGE));
 }
 
 #[test]
@@ -385,7 +449,10 @@ planned_end: 2026-10-01
     let plan_doc = make_readable_snapshot("plans/rev/plan.md", plan_md);
     let progress_doc = make_absent_snapshot("plans/rev/progress.md");
     let parsed = parse_plan("plans/rev", &plan_doc, &progress_doc);
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_INVALID_DATE && d.message.contains("start is after end")));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_DATE && d.message.contains("start is after end")));
 
     // Case B: mixed precision (Day start, Instant end)
     let plan_mixed = r#"---
@@ -397,7 +464,10 @@ actual_end: 2026-10-15T12:00:00Z
 "#;
     let plan_doc_mixed = make_readable_snapshot("plans/mix/plan.md", plan_mixed);
     let parsed_mixed = parse_plan("plans/mix", &plan_doc_mixed, &progress_doc);
-    assert!(parsed_mixed.diagnostics.iter().any(|d| d.code == DIAG_INVALID_DATE && d.message.contains("mixed date precision")));
+    assert!(parsed_mixed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_DATE && d.message.contains("mixed date precision")));
 }
 
 #[test]
@@ -408,9 +478,7 @@ fn test_tags_limit_and_metadata_bounds() {
         tags_yaml.push_str(&format!("  - tag_{i}\n"));
     }
     let huge_p = "x".repeat(5000);
-    let plan_md = format!(
-        "---\npriority: \"{huge_p}\"\n{tags_yaml}---\n\n# Tags Test\n"
-    );
+    let plan_md = format!("---\npriority: \"{huge_p}\"\n{tags_yaml}---\n\n# Tags Test\n");
     let plan_doc = make_readable_snapshot("plans/tags/plan.md", &plan_md);
     let progress_doc = make_absent_snapshot("plans/tags/progress.md");
 
@@ -418,7 +486,10 @@ fn test_tags_limit_and_metadata_bounds() {
     assert_eq!(parsed.metadata.tags.len(), 32);
     assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_SCAN_LIMIT));
     assert!(parsed.metadata.priority.is_none());
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_FIELD_TOO_LARGE));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_FIELD_TOO_LARGE));
 }
 
 #[test]
@@ -426,7 +497,9 @@ fn test_diagnostics_cap_at_32() {
     // Plan with invalid links on 40 rows
     let mut table = String::from("| # | Phase | Status | Detail |\n|---|---|---|---|\n");
     for i in 1..=40 {
-        table.push_str(&format!("| {i:02} | P{i} | Pending | [link](https://bad.com/{i}) |\n"));
+        table.push_str(&format!(
+            "| {i:02} | P{i} | Pending | [link](https://bad.com/{i}) |\n"
+        ));
     }
     let plan_md = format!("# Many Diags\n\n## Phases\n\n{table}");
     let plan_doc = make_readable_snapshot("plans/cap/plan.md", &plan_md);
@@ -449,7 +522,10 @@ title: "Second"
     let plan_doc = make_readable_snapshot("plans/dup/plan.md", plan_dup);
     let progress_doc = make_absent_snapshot("plans/dup/progress.md");
     let parsed = parse_plan("plans/dup", &plan_doc, &progress_doc);
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_INVALID_METADATA));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_METADATA));
 
     let plan_alias = r#"---
 base: &anchor "val"
@@ -460,7 +536,10 @@ other: *anchor
 "#;
     let alias_doc = make_readable_snapshot("plans/alias/plan.md", plan_alias);
     let parsed_alias = parse_plan("plans/alias", &alias_doc, &progress_doc);
-    assert!(parsed_alias.diagnostics.iter().any(|d| d.code == DIAG_INVALID_METADATA));
+    assert!(parsed_alias
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_INVALID_METADATA));
 }
 
 #[test]
@@ -491,7 +570,10 @@ All phases (01–05) are completed.
     let prog_doc = make_readable_snapshot("plans/rng/progress.md", prog_bad_range);
     let parsed = parse_plan("plans/rng", &plan_doc, &prog_doc);
     assert_eq!(parsed.reported_status.value, PlanStatus::Conflict);
-    assert!(parsed.diagnostics.iter().any(|d| d.code == DIAG_STATUS_CONFLICT));
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_STATUS_CONFLICT));
 
     // Negated summary emits DIAG_UNSUPPORTED_STATUS
     let prog_neg = r#"# Progress
@@ -508,7 +590,10 @@ All phases are not complete.
     let prog_neg_doc = make_readable_snapshot("plans/rng/progress.md", prog_neg);
     let parsed_neg = parse_plan("plans/rng", &plan_doc, &prog_neg_doc);
     assert_eq!(parsed_neg.reported_status.value, PlanStatus::Unknown);
-    assert!(parsed_neg.diagnostics.iter().any(|d| d.code == DIAG_UNSUPPORTED_STATUS));
+    assert!(parsed_neg
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DIAG_UNSUPPORTED_STATUS));
 }
 
 #[test]
@@ -531,7 +616,14 @@ fn test_relative_escape_and_scheme_links_rejected() {
     assert_eq!(parsed.phases[0].id, "phase:1");
     assert!(parsed.phases[1].path.is_none());
     assert_eq!(parsed.phases[1].id, "phase:2");
-    assert_eq!(parsed.diagnostics.iter().filter(|d| d.code == DIAG_LINK_REJECTED).count(), 2);
+    assert_eq!(
+        parsed
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == DIAG_LINK_REJECTED)
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -551,4 +643,383 @@ fn test_multi_bracket_cell_link_extraction() {
     assert_eq!(parsed.phases.len(), 1);
     assert_eq!(parsed.phases[0].path.as_deref(), Some("phase-01.md"));
     assert_eq!(parsed.phases[0].id, "phase-01.md");
+}
+
+#[test]
+fn test_progress_identity_hints_and_duplicate_rows_never_complete_wrong_phases() {
+    let plan_md = "# Identity\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Completed | [One](./one.md) |\n\
+        | 2 | Two | Completed | [Two](./two.md) |\n\
+        | 3 | Three | Pending | [Three](./three.md) |\n";
+    let plan_doc = make_readable_snapshot("plans/identity/plan.md", plan_md);
+    for rows in [
+        "| [02](./one.md) | Completed |\n",
+        "| [01](./missing.md) | Completed |\n| 2 | Pending |\n",
+        "| [99](./one.md) | Completed |\n| 2 | Pending |\n",
+        "| [01](./one.md) | Completed |\n| 1 | Pending |\n| 2 | Pending |\n",
+        "| 1 | Pending |\n| [01](./one.md) | Completed |\n| 2 | Pending |\n",
+        "| 1 | Completed |\n| 1 | Completed |\n| 2 | Pending |\n",
+    ] {
+        let progress_md = format!(
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Current status |\n|---|---|\n{rows}| 3 | Completed |\n"
+        );
+        let progress_doc = make_readable_snapshot("plans/identity/progress.md", &progress_md);
+        let parsed = parse_plan("plans/identity", &plan_doc, &progress_doc);
+        assert_eq!(parsed.phases.len(), 3, "{rows}");
+        assert_eq!(parsed.phases[0].id, "one.md");
+        assert_eq!(
+            parsed.phases[0].reported_status.value,
+            PlanStatus::Conflict,
+            "{rows}"
+        );
+        assert_ne!(
+            parsed.phases[1].reported_status.value,
+            PlanStatus::Completed,
+            "{rows}"
+        );
+        assert_eq!(
+            parsed.phases[2].reported_status.value,
+            PlanStatus::Completed,
+            "{rows}"
+        );
+        assert_eq!(parsed.completion.declared, Some(3));
+        assert_eq!(parsed.completion.completed, 1);
+        assert_eq!(parsed.completion.fraction, Some(1.0 / 3.0));
+        assert_ne!(
+            parsed.reported_status.value,
+            PlanStatus::Completed,
+            "{rows}"
+        );
+        assert!(parsed
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DIAG_STATUS_CONFLICT));
+        assert!(parsed
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DIAG_PHASE_UNMATCHED));
+    }
+
+    // Agreeing hints, link-only, and number-only each consume one distinct row.
+    let progress_md = "# Progress\n\n## Phase Reconciliation\n\n\
+        | Phase | Current status |\n|---|---|\n\
+        | [01](./one.md) | Completed |\n\
+        | [Two](./two.md) | Completed |\n\
+        | 3 | Completed |\n";
+    let progress_doc = make_readable_snapshot("plans/identity/progress.md", progress_md);
+    let parsed = parse_plan("plans/identity", &plan_doc, &progress_doc);
+    assert_eq!(parsed.completion.completed, 3);
+    assert_eq!(parsed.completion.fraction, Some(1.0));
+    assert_eq!(parsed.reported_status.value, PlanStatus::Completed);
+    assert!(parsed.diagnostics.is_empty());
+}
+
+#[test]
+fn test_unreadable_progress_retains_inventory_and_captured_plan_evidence_only() {
+    let plan_md = "# Frozen\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Completed | [One](./one.md) |\n\
+        | 2 | Two | Completed | [Two](./two.md) |\n";
+    let plan_doc = make_readable_snapshot("plans/frozen/plan.md", plan_md);
+    for state in [
+        PlanDocumentState::Unreadable,
+        PlanDocumentState::Invalid,
+        PlanDocumentState::Oversize,
+        PlanDocumentState::Changed,
+        PlanDocumentState::Readable,
+    ] {
+        let progress_doc = DocumentSnapshot {
+            path: "plans/frozen/progress.md",
+            state,
+            bytes: Some(b"# Progress\0invalid"),
+            size_bytes: Some(18),
+            modified_at: None,
+        };
+        let parsed = parse_plan("plans/frozen", &plan_doc, &progress_doc);
+        assert_eq!(
+            parsed.reported_status.value,
+            PlanStatus::Unknown,
+            "{state:?}"
+        );
+        assert_eq!(parsed.reported_status.authority, PlanAuthority::Progress);
+        assert_eq!(parsed.phases.len(), 2);
+        for (index, phase) in parsed.phases.iter().enumerate() {
+            assert_eq!(phase.number, Some(index as u32 + 1));
+            assert_eq!(
+                phase.path.as_deref(),
+                Some(if index == 0 { "one.md" } else { "two.md" })
+            );
+            assert_eq!(phase.reported_status.value, PlanStatus::Unknown);
+            assert_eq!(phase.reported_status.authority, PlanAuthority::Progress);
+            assert!(phase.reported_status.raw.is_none());
+            assert!(phase.reported_status.evidence.is_empty());
+            assert_eq!(phase.reported_status.captured.len(), 1);
+            let captured = &phase.reported_status.captured[0];
+            assert_eq!(captured.value, PlanStatus::Completed);
+            assert_eq!(captured.raw, "Completed");
+            assert_eq!(captured.evidence.path, "plans/frozen/plan.md");
+            assert_eq!(captured.evidence.line_start, 7 + index);
+        }
+        assert_eq!(parsed.completion.declared, Some(2));
+        assert_eq!(parsed.completion.completed, 0);
+        assert_eq!(parsed.completion.unknown, 2);
+        assert_eq!(parsed.completion.fraction, None);
+        assert!(parsed
+            .diagnostics
+            .iter()
+            .any(|d| d.code == DIAG_PROGRESS_UNREADABLE));
+    }
+}
+
+#[test]
+fn test_short_gfm_rows_preserve_declared_and_current_denominators() {
+    let plan_md = "# Short rows\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Completed | [One](./one.md) |\n\
+        2 | Two | Pending\n\
+        | 3 | Three\n";
+    let plan_doc = make_readable_snapshot("plans/short/plan.md", plan_md);
+    let absent = make_absent_snapshot("plans/short/progress.md");
+    let parsed = parse_plan("plans/short", &plan_doc, &absent);
+    assert_eq!(parsed.phases.len(), 3);
+    assert_eq!(parsed.phases[1].id, "phase:2");
+    assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::Pending);
+    assert_eq!(parsed.phases[2].reported_status.value, PlanStatus::Unknown);
+    assert_eq!(parsed.completion.declared, Some(3));
+    assert_eq!(parsed.completion.completed, 1);
+    assert_eq!(parsed.completion.unknown, 1);
+    assert_eq!(parsed.completion.fraction, Some(1.0 / 3.0));
+    assert!(parsed.diagnostics.is_empty());
+
+    let progress_md = "# Progress\n\n## Phase Reconciliation\n\n\
+        | Phase | Current status | Captured status | Detail |\n|---|---|---|---|\n\
+        | 1 | Completed | Pending | Sealed |\n\
+        2 | Pending\n\
+        | 3\n";
+    let progress_doc = make_readable_snapshot("plans/short/progress.md", progress_md);
+    let parsed = parse_plan("plans/short", &plan_doc, &progress_doc);
+    assert_eq!(parsed.phases.len(), 3);
+    assert_eq!(
+        parsed.phases[0].reported_status.captured[0].value,
+        PlanStatus::Pending
+    );
+    assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::Pending);
+    assert_eq!(parsed.phases[2].reported_status.value, PlanStatus::Unknown);
+    assert_eq!(parsed.completion.fraction, Some(1.0 / 3.0));
+    assert!(parsed.diagnostics.is_empty());
+}
+
+#[test]
+fn test_explicit_current_status_column_wins_in_both_orders_and_when_empty() {
+    let plan_md = "# Columns\n\n## Phases\n\n\
+        | # | Phase | Status |\n|---|---|---|\n| 1 | One | Pending |\n";
+    let plan_doc = make_readable_snapshot("plans/columns/plan.md", plan_md);
+    for (header, row, expected, fraction) in [
+        (
+            "Phase | Status | Current status",
+            "1 | Pending | Completed",
+            PlanStatus::Completed,
+            Some(1.0),
+        ),
+        (
+            "Phase | Current status | Status",
+            "1 | Completed | Pending",
+            PlanStatus::Completed,
+            Some(1.0),
+        ),
+        (
+            "Phase | Status | Current status",
+            "1 | Completed",
+            PlanStatus::Unknown,
+            None,
+        ),
+        (
+            "Phase | Status",
+            "1 | Completed",
+            PlanStatus::Completed,
+            Some(1.0),
+        ),
+    ] {
+        let delimiter = vec!["---"; header.split('|').count()].join("|");
+        let plan_table =
+            format!("# Columns\n\n## Phases\n\n| {header} |\n|{delimiter}|\n| {row} |\n");
+        let table_doc = make_readable_snapshot("plans/columns/plan.md", &plan_table);
+        let absent = make_absent_snapshot("plans/columns/progress.md");
+        let fallback = parse_plan("plans/columns", &table_doc, &absent);
+        assert_eq!(
+            fallback.phases[0].reported_status.value, expected,
+            "{header}"
+        );
+        assert_eq!(fallback.completion.fraction, fraction, "{header}");
+        let progress_md = format!(
+            "# Progress\n\n## Phase Reconciliation\n\n| {header} |\n|{delimiter}|\n| {row} |\n"
+        );
+        let progress_doc = make_readable_snapshot("plans/columns/progress.md", &progress_md);
+        let parsed = parse_plan("plans/columns", &plan_doc, &progress_doc);
+        assert_eq!(parsed.phases[0].reported_status.value, expected, "{header}");
+        assert_eq!(parsed.reported_status.value, expected, "{header}");
+        assert_eq!(parsed.completion.fraction, fraction, "{header}");
+    }
+}
+
+#[test]
+fn test_labelled_completion_prose_uses_corroboration_range_and_negation_checks() {
+    let plan_md = "# Summary\n\n## Phases\n\n\
+        | # | Phase | Status |\n|---|---|---|\n\
+        | 1 | One | Pending |\n| 2 | Two | Pending |\n";
+    let plan_doc = make_readable_snapshot("plans/labelled/plan.md", plan_md);
+    for (value, second_status, expected, diagnostic) in [
+        ("All phases (Phase 01–02) completed with durable task sealing. Plan execution complete.", "Completed", PlanStatus::Completed, None),
+        ("All phases (Phase 01 and Phase 02) are completed.", "Completed", PlanStatus::Completed, None),
+        ("Plan execution complete.", "Completed", PlanStatus::Completed, None),
+        ("All phases (01–03) completed.", "Completed", PlanStatus::Conflict, Some(DIAG_STATUS_CONFLICT)),
+        ("All phases (01–02) completed.", "Pending", PlanStatus::Conflict, Some(DIAG_STATUS_CONFLICT)),
+        ("All phases (01–02) completed.", "", PlanStatus::Conflict, Some(DIAG_STATUS_CONFLICT)),
+        ("All phases are not complete.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases complete if verification passes.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (01–02) incomplete.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("Not all phases (01–02) completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (Phase 01–bogus) completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (01–02oops) completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases () completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (01 and bogus) completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (02–01) completed.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (01–02) completed. Not really.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("All phases (01–02) completed unless verification fails.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        ("Plan execution incomplete.", "Completed", PlanStatus::Unknown, Some(DIAG_UNSUPPORTED_STATUS)),
+        // Explicit administrative scalars remain independent of phase completion.
+        ("Completed", "Pending", PlanStatus::Completed, None),
+        ("Completed (not independently verified)", "Pending", PlanStatus::Completed, None),
+    ] {
+        let progress_md = format!(
+            "# Progress\n\n**Current status:** {value}\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n\
+             | 1 | Completed |\n| 2 | {second_status} |\n"
+        );
+        let progress_doc = make_readable_snapshot("plans/labelled/progress.md", &progress_md);
+        let parsed = parse_plan("plans/labelled", &plan_doc, &progress_doc);
+        assert_eq!(parsed.reported_status.value, expected, "{value} / {second_status}");
+        assert_eq!(parsed.reported_status.raw.as_deref(), Some(value));
+        assert_eq!(parsed.reported_status.evidence[0].line_start, 3);
+        if let Some(code) = diagnostic {
+            assert!(parsed.diagnostics.iter().any(|d| d.code == code), "{value}");
+        } else {
+            assert!(parsed.diagnostics.is_empty(), "{value}");
+        }
+    }
+}
+
+#[test]
+fn test_gfm_optional_edge_pipes_preserve_short_inventory() {
+    for (header, delimiter) in [
+        ("| # | Phase | Status | Detail |", "|---|---|---|---|"),
+        ("# | Phase | Status | Detail", "---|---|---|---"),
+    ] {
+        let text = format!(
+            "# Mixed edges\n\n## Phases\n\n{header}\n{delimiter}\n\
+             | 1 | One | Completed | [One](./one.md) |\n2 | Two | Pending\n"
+        );
+        let plan = make_readable_snapshot("plans/mixed/plan.md", &text);
+        let progress = make_absent_snapshot("plans/mixed/progress.md");
+        let parsed = parse_plan("plans/mixed", &plan, &progress);
+        assert_eq!(parsed.phases.len(), 2);
+        assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::Pending);
+        assert_eq!(parsed.completion.declared, Some(2));
+        assert_eq!(parsed.completion.completed, 1);
+        assert_eq!(parsed.completion.fraction, Some(0.5));
+        assert!(parsed.diagnostics.is_empty());
+    }
+}
+
+#[test]
+fn test_bare_gfm_cells_preserve_inventory_and_table_block_termination() {
+    for terminator in [
+        "\n",
+        "> Outside\n",
+        "### Outside\n",
+        "- Outside\n",
+        "```\n",
+        "---\n",
+        "<div>\n",
+    ] {
+        let text = format!(
+            "# Bare cells\n\n## Phases\n\n| # | Phase | Status | Detail |\n|---|---|---|---|\n\
+             | 1 | One | Completed | [One](./one.md) |\n2\n{terminator}3\n"
+        );
+        let plan_doc = make_readable_snapshot("plans/bare/plan.md", &text);
+        let absent = make_absent_snapshot("plans/bare/progress.md");
+        let parsed = parse_plan("plans/bare", &plan_doc, &absent);
+        assert_eq!(parsed.phases.len(), 2, "{terminator}");
+        assert_eq!(parsed.phases[1].id, "phase:2");
+        assert_eq!(parsed.phases[1].reported_status.value, PlanStatus::Unknown);
+        assert_eq!(parsed.completion.declared, Some(2));
+        assert_eq!(parsed.completion.completed, 1);
+        assert_eq!(parsed.completion.unknown, 1);
+        assert_eq!(parsed.completion.fraction, Some(0.5));
+        assert!(parsed.diagnostics.is_empty());
+
+        let progress_text = format!(
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Current status | Detail |\n|---|---|---|\n\
+             | 1 | Completed | Done |\n2\n{terminator}3\n"
+        );
+        let progress_doc = make_readable_snapshot("plans/bare/progress.md", &progress_text);
+        let parsed = parse_plan("plans/bare", &plan_doc, &progress_doc);
+        assert_eq!(parsed.completion.declared, Some(2));
+        assert_eq!(parsed.completion.completed, 1);
+        assert_eq!(parsed.completion.unknown, 1);
+        assert_eq!(parsed.completion.fraction, Some(0.5));
+        assert!(parsed.diagnostics.is_empty(), "{terminator}");
+    }
+}
+
+#[test]
+fn test_summary_high_phase_identifiers_and_bounded_range_cardinality() {
+    for (numbers, restriction, expected) in [
+        (vec![129], "Phase 129", PlanStatus::Completed),
+        (vec![129, 130], "129–130", PlanStatus::Completed),
+        (
+            vec![129, 300],
+            "Phase 129 and Phase 300",
+            PlanStatus::Completed,
+        ),
+        (vec![u32::MAX], "4294967295", PlanStatus::Completed),
+        (
+            vec![u32::MAX - 1, u32::MAX],
+            "4294967294–4294967295",
+            PlanStatus::Completed,
+        ),
+        ((129..=256).collect(), "129–256", PlanStatus::Completed),
+        (vec![129, 130], "129–257", PlanStatus::Unknown),
+        (vec![1], "1–4294967295", PlanStatus::Unknown),
+        (vec![129], "0–129", PlanStatus::Unknown),
+    ] {
+        let mut plan_text = "# Identifiers\n\n## Phases\n\n\
+            | # | Phase | Status |\n|---|---|---|\n"
+            .to_string();
+        let mut progress_text = format!(
+            "# Progress\n\nCurrent status: All phases ({restriction}) completed.\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n"
+        );
+        for number in &numbers {
+            plan_text.push_str(&format!("| {number} | Phase {number} | Pending |\n"));
+            progress_text.push_str(&format!("| {number} | Completed |\n"));
+        }
+        let plan_doc = make_readable_snapshot("plans/ids/plan.md", &plan_text);
+        let progress_doc = make_readable_snapshot("plans/ids/progress.md", &progress_text);
+        let parsed = parse_plan("plans/ids", &plan_doc, &progress_doc);
+        assert_eq!(parsed.reported_status.value, expected, "{restriction}");
+        assert_eq!(parsed.completion.completed as usize, numbers.len());
+        assert_eq!(parsed.completion.fraction, Some(1.0));
+        if expected == PlanStatus::Unknown {
+            assert!(parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.code == DIAG_UNSUPPORTED_STATUS));
+        } else {
+            assert!(parsed.diagnostics.is_empty(), "{restriction}");
+        }
+    }
 }

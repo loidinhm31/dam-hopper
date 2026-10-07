@@ -48,10 +48,30 @@ export interface WorkflowContextDeckProps {
   onStartSession?: (startedAt: string, itemId?: string | null) => void;
   onEndSession?: (sessionId: string, endedAt: string) => void;
   onAbandonSession?: (sessionId: string) => void;
-  onLinkResource?: (sessionId: string, req: { resourceType: ResourceLinkType; externalId: string; harnessLabel?: string; runId?: string }) => void;
-  onUnlinkResource?: (sessionId: string, resourceType: ResourceLinkType, externalId: string) => void;
+  onLinkResource?: (
+    sessionId: string,
+    req: {
+      resourceType: ResourceLinkType;
+      externalId: string;
+      harnessLabel?: string;
+      runId?: string;
+    },
+  ) => void;
+  onUnlinkResource?: (
+    sessionId: string,
+    resourceType: ResourceLinkType,
+    externalId: string,
+  ) => void;
   onOpenTerminal?: (sessionId: string) => void;
-  onCreateItem?: (item: { target: ProjectTargetRef; kind: ItemKind; title: string; summary?: string; status: ItemStatus; parentId?: string | null; startSessionImmediately?: boolean }) => Promise<void> | void;
+  onCreateItem?: (item: {
+    target: ProjectTargetRef;
+    kind: ItemKind;
+    title: string;
+    summary?: string;
+    status: ItemStatus;
+    parentId?: string | null;
+    startSessionImmediately?: boolean;
+  }) => Promise<void> | void;
   isQuickCaptureOpen?: boolean;
   onOpenQuickCapture?: (kind?: ItemKind, parentId?: string | null) => void;
   onCloseQuickCapture?: () => void;
@@ -63,6 +83,7 @@ export interface WorkflowContextDeckProps {
   onPlansModeChange?: (mode: WorkflowPlansMode) => void;
   isManualUnavailable?: boolean;
   manualError?: Error | string | null;
+  hasManualData?: boolean;
 }
 export function WorkflowContextDeck({
   isOpen,
@@ -101,6 +122,7 @@ export function WorkflowContextDeck({
   onPlansModeChange,
   isManualUnavailable = false,
   manualError = null,
+  hasManualData = false,
 }: WorkflowContextDeckProps) {
   const [localPlansMode, setLocalPlansMode] = useState<WorkflowPlansMode>(
     isManualUnavailable ? "files" : "manual",
@@ -132,7 +154,9 @@ export function WorkflowContextDeck({
   const effectiveTarget = selectedTarget ?? target ?? { project: "default" };
   const rawRealTarget = selectedTarget ?? target ?? null;
   const realTarget =
-    rawRealTarget && rawRealTarget.project && rawRealTarget.project !== "default"
+    rawRealTarget &&
+    rawRealTarget.project &&
+    rawRealTarget.project !== "default"
       ? rawRealTarget
       : null;
 
@@ -209,111 +233,140 @@ export function WorkflowContextDeck({
       </div>
 
       {/* File plans view (kept mounted to preserve state) */}
-      <div className={cn("flex-1 min-h-0 overflow-hidden", activeMode !== "files" && "hidden")}>
-          {realTarget ? (
-            <ProjectPlansDashboard
-              key={dashboardKey}
-              owner={owner}
-              target={realTarget}
-              enabled={isOpen && activeMode === "files"}
-            />
-          ) : (
-            <div
-              role="status"
-              className="flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
-            >
-              <FolderGit2 className="h-7 w-7 opacity-60" />
-              <span className="font-medium text-[var(--color-text)]">
-                No configured project selected
-              </span>
-              <p className="max-w-sm">
-                Select a configured project or worktree to browse its <code className="bg-[var(--color-surface-2)] px-1 rounded">plans/</code> folder.
-              </p>
-            </div>
-          )}
+      <div
+        className={cn(
+          "flex-1 min-h-0 overflow-hidden",
+          activeMode !== "files" && "hidden",
+        )}
+      >
+        {realTarget ? (
+          <ProjectPlansDashboard
+            key={dashboardKey}
+            owner={owner}
+            target={realTarget}
+            enabled={isOpen && activeMode === "files"}
+          />
+        ) : (
+          <div
+            role="status"
+            className="flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
+          >
+            <FolderGit2 className="h-7 w-7 opacity-60" />
+            <span className="font-medium text-[var(--color-text)]">
+              No configured project selected
+            </span>
+            <p className="max-w-sm">
+              Select a configured project or worktree to browse its{" "}
+              <code className="bg-[var(--color-surface-2)] px-1 rounded">
+                plans/
+              </code>{" "}
+              folder.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Manual tracking view (kept mounted to preserve drafts) */}
       <div
         className={cn(
-          "grid flex-1 grid-cols-1 overflow-hidden p-3 gap-3 md:grid-cols-2 lg:grid-cols-[220px_1fr_300px]",
+          "flex flex-col flex-1 min-h-0 overflow-hidden p-3 gap-3",
           activeMode !== "manual" && "hidden",
         )}
       >
-        {isManualUnavailable ? (
-          <div
-            role="status"
-            className="col-span-full flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
-          >
-            <Layers className="h-7 w-7 opacity-60" />
-            <span className="font-medium text-[var(--color-text)]">
-              Manual workflow tracking is unavailable for this profile.
-            </span>
-          </div>
-        ) : manualError ? (
+        {manualError && hasManualData && !isManualUnavailable && (
           <div
             role="alert"
-            className="col-span-full flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-danger)]"
+            className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-danger)]"
           >
-            <AlertCircle className="h-7 w-7 shrink-0" />
-            <span className="font-medium">
-              Manual workflow error: {typeof manualError === "string" ? manualError : manualError.message}
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>
+              Manual workflow refresh failed:{" "}
+              {typeof manualError === "string"
+                ? manualError
+                : manualError.message}
+              . Showing previously loaded data; unsaved drafts are preserved.
             </span>
           </div>
-        ) : (
-          <>
-        <div className="hidden h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3 lg:block">
-          <WorkflowProjectList
-            projects={projects}
-            selectedTarget={selectedTarget}
-            onSelectTarget={onSelectTarget}
-          />
-        </div>
-
-        <div className="h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3">
-          {isQuickCaptureOpen && onCreateItem ? (
-            <WorkflowQuickCapture
-              target={effectiveTarget}
-              initialKind={quickCaptureKind}
-              initialParentId={quickCaptureParentId}
-              onSubmit={async (item) => {
-                await onCreateItem(item);
-                onCloseQuickCapture?.();
-              }}
-              onCancel={onCloseQuickCapture}
-            />
+        )}
+        <div className="grid flex-1 min-h-0 grid-cols-1 overflow-hidden gap-3 md:grid-cols-2 lg:grid-cols-[220px_1fr_300px]">
+          {isManualUnavailable ? (
+            <div
+              role="status"
+              className="col-span-full flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-text-muted)]"
+            >
+              <Layers className="h-7 w-7 opacity-60" />
+              <span className="font-medium text-[var(--color-text)]">
+                Manual workflow tracking is unavailable for this profile.
+              </span>
+            </div>
+          ) : manualError && !hasManualData ? (
+            <div
+              role="alert"
+              className="col-span-full flex flex-col items-center justify-center h-full p-6 text-center gap-2 text-xs text-[var(--color-danger)]"
+            >
+              <AlertCircle className="h-7 w-7 shrink-0" />
+              <span className="font-medium">
+                Manual workflow error:{" "}
+                {typeof manualError === "string"
+                  ? manualError
+                  : manualError.message}
+              </span>
+            </div>
           ) : (
-            <WorkflowItemList
-              plans={plans}
-              standaloneTasks={standaloneTasks}
-              selectedItemId={selectedItemId}
-              onSelectItem={onSelectItem}
-              onStatusChange={onStatusChange}
-              onDeleteItem={onDeleteItem}
-              onEditItem={onEditItem}
-              onAddNote={onAddNote}
-              onDeleteNote={onDeleteNote}
-              onOpenQuickCapture={onOpenQuickCapture}
-            />
+            <>
+              <div className="hidden h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3 lg:block">
+                <WorkflowProjectList
+                  projects={projects}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                />
+              </div>
+
+              <div className="h-full overflow-hidden border-r border-[var(--color-border)]/60 pr-3">
+                {isQuickCaptureOpen && onCreateItem ? (
+                  <WorkflowQuickCapture
+                    target={effectiveTarget}
+                    initialKind={quickCaptureKind}
+                    initialParentId={quickCaptureParentId}
+                    onSubmit={async (item) => {
+                      await onCreateItem(item);
+                      onCloseQuickCapture?.();
+                    }}
+                    onCancel={onCloseQuickCapture}
+                  />
+                ) : (
+                  <WorkflowItemList
+                    plans={plans}
+                    standaloneTasks={standaloneTasks}
+                    selectedItemId={selectedItemId}
+                    onSelectItem={onSelectItem}
+                    onStatusChange={onStatusChange}
+                    onDeleteItem={onDeleteItem}
+                    onEditItem={onEditItem}
+                    onAddNote={onAddNote}
+                    onDeleteNote={onDeleteNote}
+                    onOpenQuickCapture={onOpenQuickCapture}
+                  />
+                )}
+              </div>
+
+              <div className="h-full overflow-hidden">
+                <WorkflowExecutionList
+                  sessions={sessions}
+                  links={links}
+                  nowMs={nowMs}
+                  selectedItemId={selectedItemId}
+                  onStartSession={onStartSession}
+                  onEndSession={onEndSession}
+                  onAbandonSession={onAbandonSession}
+                  onLinkResource={onLinkResource}
+                  onUnlinkResource={onUnlinkResource}
+                  onOpenTerminal={onOpenTerminal}
+                />
+              </div>
+            </>
           )}
         </div>
-
-        <div className="h-full overflow-hidden">
-          <WorkflowExecutionList
-            sessions={sessions}
-            links={links}
-            nowMs={nowMs}
-            selectedItemId={selectedItemId}
-            onStartSession={onStartSession}
-            onEndSession={onEndSession}
-            onAbandonSession={onAbandonSession}
-            onLinkResource={onLinkResource}
-            onUnlinkResource={onUnlinkResource}
-            onOpenTerminal={onOpenTerminal}
-          />
-        </div>
-          </>
-        )}
       </div>
     </section>
   );

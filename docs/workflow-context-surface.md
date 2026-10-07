@@ -78,6 +78,12 @@ root so the next overview supplies authoritative values; failed mutations do
 not perform optimistic cache writes. The surface has no workflow URL or
 localStorage persistence and does not introduce a new API or DTO.
 
+Background overview failures with retained data display an error banner without
+unmounting manual capture, edit, or note forms. A successful empty overview still
+counts as retained data. Initial failures with no successful snapshot display the
+unavailable state. Desktop and compact layouts preserve typed drafts through
+background error/recovery and File plans / Manual tracking mode switches.
+
 For the complete component architecture and keyboard/focus contracts, see the
 [Frontend Components index](./frontend-components.md) and
 [System Architecture](./system-architecture.md#workflow-tracking-engine).

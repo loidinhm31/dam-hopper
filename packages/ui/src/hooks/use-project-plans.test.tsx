@@ -128,6 +128,7 @@ describe("useProjectPlans hook", () => {
   let activeSubIdCounter = 100;
   let subscribedPaths: string[] = [];
   let unsubscribedIds: number[] = [];
+  let watchPathsById: Map<number, string> = new Map();
   let eventCallbacks: Map<number, (ev: unknown) => void> = new Map();
   let overflowCallbacks: Map<number, (msg: string) => void> = new Map();
 
@@ -155,6 +156,7 @@ describe("useProjectPlans hook", () => {
     activeSubIdCounter = 100;
     subscribedPaths = [];
     unsubscribedIds = [];
+    watchPathsById.clear();
     eventCallbacks.clear();
     overflowCallbacks.clear();
 
@@ -169,6 +171,7 @@ describe("useProjectPlans hook", () => {
       fsSubscribeTree: vi.fn(async (_target, path) => {
         const sub_id = ++activeSubIdCounter;
         subscribedPaths.push(path);
+        watchPathsById.set(sub_id, path);
         return { sub_id };
       }),
       fsUnsubscribeTree: vi.fn((sub_id: number) => {
@@ -252,6 +255,32 @@ describe("useProjectPlans hook", () => {
     };
   }
 
+  function emitForPath(
+    path: string,
+    event: {
+      kind: string;
+      path: string;
+      from?: string;
+      targetRelativePath?: string;
+      targetRelativeFrom?: string;
+    },
+  ) {
+    const relative = (absolute: string | undefined) =>
+      absolute === "/workspace"
+        ? "."
+        : absolute?.startsWith("/workspace/")
+          ? absolute.substring("/workspace/".length)
+          : undefined;
+    const wireEvent = {
+      targetRelativePath: relative(event.path),
+      targetRelativeFrom: relative(event.from),
+      ...event,
+    };
+    for (const [id, callback] of Array.from(eventCallbacks)) {
+      if (watchPathsById.get(id) === path) callback(wireEvent);
+    }
+  }
+
   it("reports unsupported coverage and disables queries when disabled or missing owner", async () => {
     const harness = renderHookHelper({
       enabled: false,
@@ -299,6 +328,273 @@ describe("useProjectPlans hook", () => {
     );
     expect(harness.result.coverage.status).toBe("live");
     expect(harness.result.foldersData).toEqual(mockFoldersData);
+  });
+
+  it("fetches a distinct post-install snapshot rather than accepting a delayed initial response", async () => {
+    vi.useFakeTimers();
+    try {
+      const initialRead = Promise.withResolvers<PlanFoldersResponse>();
+      const installation = Promise.withResolvers<{ sub_id: number }>();
+      let snapshot = mockFoldersData;
+      vi.mocked(mockClient.plans.folders)
+        .mockImplementationOnce(() => initialRead.promise)
+        .mockImplementation(async () => snapshot);
+      const subscribe = mockTransport.fsSubscribeTree;
+      mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+        if (path === "plans") {
+          subscribedPaths.push(path);
+          watchPathsById.set(902, path);
+          return installation.promise;
+        }
+        return subscribe(target, path, opts);
+      });
+      const options = {
+        owner: mockOwner,
+        target: mockTarget,
+        client: mockClient,
+        transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      expect(harness.result.foldersData).toBeUndefined();
+      expect(vi.mocked(mockClient.plans.folders).mock.calls).toHaveLength(1);
+
+      // This save has no listener yet. The first request still holds the old DTO.
+      snapshot = {
+        ...mockFoldersData,
+        folders: [{ path: "plans/after-install", name: "after-install" }],
+      };
+      await act(async () => {
+        installation.resolve({ sub_id: 902 });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(vi.mocked(mockClient.plans.folders).mock.calls).toHaveLength(2);
+      expect(harness.result.foldersData?.folders[0].name).toBe("after-install");
+      expect(harness.result.coverage.status).toBe("live");
+      await act(async () => {
+        initialRead.resolve(mockFoldersData);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(harness.result.foldersData?.folders[0].name).toBe("after-install");
+      expect(harness.result.coverage.status).toBe("live");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves navigation handles for unrelated root saves but rebinds plans replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      let snapshot = mockPlanData;
+      vi.mocked(mockClient.plans.read).mockImplementation(async () => snapshot);
+      const options = {
+        owner: mockOwner,
+        target: mockTarget,
+        selectedPlanPath: "plans/261006-plan-a",
+        client: mockClient,
+        transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const originalIds = Array.from(eventCallbacks.keys());
+      const rootId = originalIds.find((id) => watchPathsById.get(id) === ".")!;
+      const descendantIds = originalIds.filter((id) => id !== rootId);
+      const registrations = subscribedPaths.length;
+      snapshot = {
+        ...mockPlanData,
+        plan: { ...mockPlanData.plan, title: "Fresh root save" },
+      };
+      await act(async () => {
+        emitForPath(".", {
+          kind: "renamed",
+          path: "/workspace/README.md",
+          from: "/workspace/README.tmp",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.selectedPlanData?.plan.title).toBe(
+        "Fresh root save",
+      );
+      expect(subscribedPaths).toHaveLength(registrations);
+      expect(Array.from(eventCallbacks.keys())).toEqual(originalIds);
+      expect(unsubscribedIds).toEqual([]);
+
+      await act(async () => {
+        emitForPath(".", {
+          kind: "renamed",
+          path: "/workspace/plans",
+          from: "/workspace/replacement",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(eventCallbacks.has(rootId)).toBe(true);
+      expect(descendantIds.every((id) => !eventCallbacks.has(id))).toBe(true);
+      expect(unsubscribedIds.sort()).toEqual(descendantIds.sort());
+      expect(eventCallbacks.size).toBe(3);
+      expect(harness.result.coverage.status).toBe("live");
+      snapshot = {
+        ...snapshot,
+        plan: { ...snapshot.plan, title: "Fresh replacement" },
+      };
+      await act(async () => {
+        emitForPath("plans/261006-plan-a", {
+          kind: "modified",
+          path: "/workspace/plans/261006-plan-a/plan.md",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.selectedPlanData?.plan.title).toBe(
+        "Fresh replacement",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["relative metadata", "legacy event"] as const)(
+    "rebinds target-root self replacement with %s despite an identical snapshot and observes later replacement edits",
+    async (wireMode) => {
+      vi.useFakeTimers();
+      try {
+        let snapshot = mockPlanData;
+        vi.mocked(mockClient.plans.read).mockImplementation(
+          async () => snapshot,
+        );
+        const options = {
+          owner: mockOwner,
+          target: mockTarget,
+          selectedPlanPath: "plans/261006-plan-a",
+          client: mockClient,
+          transport: mockTransport,
+        };
+        const harness = renderHookHelper(options);
+        await harness.render(options);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const originalData = harness.result.selectedPlanData;
+        const originalIds = Array.from(eventCallbacks.keys());
+        const rootId = originalIds.find(
+          (id) => watchPathsById.get(id) === ".",
+        )!;
+        await act(async () => {
+          eventCallbacks.get(rootId)!({
+            kind: "removed",
+            path: "/workspace/repo",
+            ...(wireMode === "relative metadata"
+              ? { targetRelativePath: "." }
+              : {}),
+          });
+          await vi.advanceTimersByTimeAsync(60);
+        });
+        expect(harness.result.selectedPlanData).toBe(originalData);
+        expect(unsubscribedIds.sort()).toEqual(originalIds.sort());
+        expect(
+          originalIds.every(
+            (id) => !eventCallbacks.has(id) && !overflowCallbacks.has(id),
+          ),
+        ).toBe(true);
+        expect(eventCallbacks.size).toBe(3);
+        expect(harness.result.coverage.status).toBe("live");
+        snapshot = {
+          ...snapshot,
+          plan: { ...snapshot.plan, title: "Replacement root edit" },
+        };
+        await act(async () => {
+          emitForPath("plans/261006-plan-a", {
+            kind: "modified",
+            path: "/workspace/repo/plans/261006-plan-a/progress.md",
+            targetRelativePath: "plans/261006-plan-a/progress.md",
+          });
+          await vi.advanceTimersByTimeAsync(60);
+        });
+        expect(harness.result.selectedPlanData?.plan.title).toBe(
+          "Replacement root edit",
+        );
+        expect(harness.result.coverage.status).toBe("live");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("covers a known missing plans root via its parent and installs the directory when created", async () => {
+    vi.useFakeTimers();
+    try {
+      let snapshot: PlanFoldersResponse = {
+        ...mockFoldersData,
+        folderState: "missing",
+        folders: [],
+        watchPaths: ["."],
+        listing: { ...mockFoldersData.listing, entriesVisited: 0 },
+      };
+      let plansExists = false;
+      vi.mocked(mockClient.plans.folders).mockImplementation(
+        async () => snapshot,
+      );
+      const subscribe = mockTransport.fsSubscribeTree;
+      mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+        if (path === "plans" && !plansExists)
+          throw new Error("directory absent");
+        return subscribe(target, path, opts);
+      });
+      const options = {
+        owner: mockOwner,
+        target: mockTarget,
+        client: mockClient,
+        transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(harness.result.foldersData?.folderState).toBe("missing");
+      expect(harness.result.coverage.status).toBe("live");
+      expect(eventCallbacks.size).toBe(1);
+      const attemptsBefore = vi
+        .mocked(mockTransport.fsSubscribeTree)
+        .mock.calls.filter(([, path]) => path === "plans").length;
+      await act(async () => {
+        await harness.result.refresh();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        vi
+          .mocked(mockTransport.fsSubscribeTree)
+          .mock.calls.filter(([, path]) => path === "plans"),
+      ).toHaveLength(attemptsBefore);
+      expect(harness.result.coverage.status).toBe("live");
+
+      plansExists = true;
+      snapshot = mockFoldersData;
+      await act(async () => {
+        emitForPath(".", { kind: "created", path: "/workspace/plans" });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.foldersData?.folderState).toBe("present");
+      expect(harness.result.coverage.status).toBe("live");
+      expect(
+        Array.from(eventCallbacks.keys()).some(
+          (id) => watchPathsById.get(id) === "plans",
+        ),
+      ).toBe(true);
+      snapshot = { ...mockFoldersData, folders: [] };
+      await act(async () => {
+        emitForPath("plans", {
+          kind: "modified",
+          path: "/workspace/plans/progress.md",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.foldersData?.folders).toEqual([]);
+      expect(harness.result.coverage.status).toBe("live");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("switches to selected plan and reconciles watch set", async () => {
@@ -412,50 +708,464 @@ describe("useProjectPlans hook", () => {
     expect(unsubscribedIds).toContain(firstSubId);
   });
 
-  it("limits excessive churn to degraded coverage and recovers with manual refresh", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+  it("keeps separated, fully settled saves fresh without exhausting a lifetime churn allowance", async () => {
+    vi.useFakeTimers();
     try {
-      const harness = renderHookHelper({
-        enabled: true,
+      let folders = mockFoldersData;
+      vi.mocked(mockClient.plans.folders).mockImplementation(
+        async () => folders,
+      );
+      const options = {
         owner: mockOwner,
         target: mockTarget,
-        browsePath: "plans",
         client: mockClient,
         transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
       });
 
-      await harness.render({
-        enabled: true,
-        owner: mockOwner,
-        target: mockTarget,
-        browsePath: "plans",
-        client: mockClient,
-        transport: mockTransport,
-      });
-
-      const firstSubId = Array.from(eventCallbacks.keys())[0];
-      const eventFn = eventCallbacks.get(firstSubId)!;
-
-      // Fire 4 rapid event bursts past MAX_CHURN_RECONCILE_PASSES (3)
-      for (let i = 0; i < 4; i++) {
+      for (let save = 1; save <= 6; save += 1) {
+        folders = {
+          ...mockFoldersData,
+          folders: [{ path: `plans/save-${save}`, name: `save-${save}` }],
+          listing: { ...mockFoldersData.listing, entriesVisited: 1 },
+        };
         await act(async () => {
-          eventFn({ kind: "modify" });
+          emitForPath("plans", {
+            kind: "modified",
+            path: "/workspace/plans/progress.md",
+          });
           await vi.advanceTimersByTimeAsync(60);
         });
+        expect(harness.result.foldersData?.folders[0].name).toBe(
+          `save-${save}`,
+        );
+        expect(harness.result.coverage.status).toBe("live");
       }
+      expect(subscribedPaths).toEqual([".", "plans"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
+  it("bounds consecutive unsettled passes and manual refresh resumes actual watching", async () => {
+    vi.useFakeTimers();
+    try {
+      const options = {
+        owner: mockOwner,
+        target: mockTarget,
+        client: mockClient,
+        transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const pendingReads: Array<PromiseWithResolvers<PlanFoldersResponse>> = [];
+      vi.mocked(mockClient.plans.folders).mockImplementation(() => {
+        const deferred = Promise.withResolvers<PlanFoldersResponse>();
+        pendingReads.push(deferred);
+        return deferred.promise;
+      });
+      await act(async () => {
+        emitForPath("plans", {
+          kind: "modified",
+          path: "/workspace/plans/progress.md",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      for (let pass = 0; pass < 3; pass += 1) {
+        expect(pendingReads.length).toBe(pass + 1);
+        await act(async () => {
+          emitForPath("plans", {
+            kind: "modified",
+            path: "/workspace/plans/progress.md",
+          });
+          pendingReads[pass].resolve(mockFoldersData);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
       expect(harness.result.coverage.status).toBe("degraded");
-      expect(harness.result.coverage.reason).toContain("Excessive filesystem churn");
+      expect(harness.result.coverage.reason).toContain(
+        "Excessive filesystem churn",
+      );
 
-      // Manual refresh resets churn and recovers to live
+      vi.mocked(mockClient.plans.folders).mockResolvedValue(mockFoldersData);
       await act(async () => {
         await harness.result.refresh();
       });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(harness.result.coverage.status).toBe("live");
 
+      const updated = { ...mockFoldersData, folders: [] };
+      vi.mocked(mockClient.plans.folders).mockResolvedValue(updated);
+      await act(async () => {
+        emitForPath("plans", {
+          kind: "modified",
+          path: "/workspace/plans/progress.md",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.foldersData?.folders).toEqual([]);
       expect(harness.result.coverage.status).toBe("live");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    {
+      kind: "renamed",
+      path: "/workspace/retired",
+      from: "/workspace/plans/group",
+    },
+    {
+      kind: "renamed",
+      path: "/workspace/plans/group",
+      from: "/workspace/replacement",
+    },
+    { kind: "removed", path: "/workspace/plans/group" },
+    { kind: "created", path: "/workspace/plans/group" },
+  ])(
+    "rebinds replaced descendants after $kind even when the listing is identical",
+    async (event) => {
+      vi.useFakeTimers();
+      try {
+        let listing: PlanFoldersResponse = {
+          ...mockFoldersData,
+          path: "plans/group",
+          folders: [{ path: "plans/group/a", name: "a" }],
+          listing: { ...mockFoldersData.listing, entriesVisited: 1 },
+          watchPaths: [".", "plans", "plans/group"],
+        };
+        vi.mocked(mockClient.plans.folders).mockImplementation(
+          async () => listing,
+        );
+        const options = {
+          owner: mockOwner,
+          target: mockTarget,
+          browsePath: "plans/group",
+          client: mockClient,
+          transport: mockTransport,
+        };
+        const harness = renderHookHelper(options);
+        await harness.render(options);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const originalData = harness.result.foldersData;
+        const oldId = Array.from(eventCallbacks.keys()).find(
+          (id) => watchPathsById.get(id) === "plans/group",
+        )!;
+        const readsBefore = vi.mocked(mockClient.plans.folders).mock.calls
+          .length;
+
+        await act(async () => {
+          emitForPath("plans", event);
+          await vi.advanceTimersByTimeAsync(60);
+        });
+        expect(harness.result.foldersData).toBe(originalData);
+        expect(unsubscribedIds).toContain(oldId);
+        expect(eventCallbacks.has(oldId)).toBe(false);
+        expect(overflowCallbacks.has(oldId)).toBe(false);
+        expect(
+          vi.mocked(mockClient.plans.folders).mock.calls.length,
+        ).toBeGreaterThan(readsBefore);
+        expect(harness.result.coverage.status).toBe("live");
+        const replacementId = Array.from(eventCallbacks.keys()).find(
+          (id) => watchPathsById.get(id) === "plans/group",
+        )!;
+        expect(replacementId).not.toBe(oldId);
+
+        listing = {
+          ...listing,
+          folders: [...listing.folders, { path: "plans/group/b", name: "b" }],
+          listing: { ...listing.listing, entriesVisited: 2 },
+        };
+        await act(async () => {
+          eventCallbacks.get(replacementId)!({
+            kind: "created",
+            path: "/workspace/plans/group/b",
+          });
+          await vi.advanceTimersByTimeAsync(60);
+        });
+        expect(
+          harness.result.foldersData?.folders.map((folder) => folder.name),
+        ).toEqual(["a", "b"]);
+        expect(harness.result.coverage.status).toBe("live");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("manual recovery retries failed required handles and does not claim live while failure persists", async () => {
+    const subscribe = mockTransport.fsSubscribeTree;
+    let failPlans = true;
+    mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+      if (path === "plans" && failPlans)
+        throw new Error("transient watch failure");
+      return subscribe(target, path, opts);
+    });
+    const options = {
+      owner: mockOwner,
+      target: mockTarget,
+      client: mockClient,
+      transport: mockTransport,
+    };
+    const harness = renderHookHelper(options);
+    await harness.render(options);
+    expect(harness.result.coverage.status).toBe("degraded");
+    expect(harness.result.coverage.failedWatchPaths).toEqual(["plans"]);
+
+    await act(async () => {
+      await harness.result.refresh();
+    });
+    expect(harness.result.coverage.status).toBe("degraded");
+    expect(harness.result.coverage.failedWatchPaths).toEqual(["plans"]);
+    failPlans = false;
+    await act(async () => {
+      await harness.result.refresh();
+    });
+    expect(harness.result.coverage.status).toBe("live");
+    expect(
+      Array.from(eventCallbacks.keys()).some(
+        (id) => watchPathsById.get(id) === "plans",
+      ),
+    ).toBe(true);
+
+    const updated = { ...mockFoldersData, folders: [] };
+    vi.mocked(mockClient.plans.folders).mockResolvedValue(updated);
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        emitForPath("plans", {
+          kind: "modified",
+          path: "/workspace/plans/progress.md",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(harness.result.foldersData?.folders).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serializes overflow during pending setup and retires every exact subscription and listener", async () => {
+    const pendingPlans = Promise.withResolvers<{ sub_id: number }>();
+    const subscribe = mockTransport.fsSubscribeTree;
+    mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+      if (path === "plans") {
+        subscribedPaths.push(path);
+        watchPathsById.set(900, path);
+        return pendingPlans.promise;
+      }
+      return subscribe(target, path, opts);
+    });
+    const options = {
+      owner: mockOwner,
+      target: mockTarget,
+      client: mockClient,
+      transport: mockTransport,
+    };
+    const harness = renderHookHelper(options);
+    await harness.render(options);
+    const rootId = Array.from(overflowCallbacks.keys())[0];
+    expect(harness.result.coverage.status).toBe("reconciling");
+    await act(async () => {
+      overflowCallbacks.get(rootId)!("queue full");
+    });
+    expect(subscribedPaths.filter((path) => path === "plans")).toHaveLength(1);
+
+    await act(async () => {
+      pendingPlans.resolve({ sub_id: 900 });
+    });
+    expect(harness.result.coverage.status).toBe("live");
+    expect(subscribedPaths.filter((path) => path === "plans")).toHaveLength(1);
+    expect(eventCallbacks.size).toBe(2);
+    expect(overflowCallbacks.size).toBe(2);
+    await act(async () => {
+      root.unmount();
+    });
+    expect(unsubscribedIds.sort()).toEqual(
+      Array.from(watchPathsById.keys()).sort(),
+    );
+    expect(new Set(unsubscribedIds).size).toBe(unsubscribedIds.length);
+    expect(eventCallbacks.size).toBe(0);
+    expect(overflowCallbacks.size).toBe(0);
+  });
+
+  it("retires a replaced directory registration that completes late and refetches after its replacement installs", async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingGroup = Promise.withResolvers<{ sub_id: number }>();
+      let listing: PlanFoldersResponse = {
+        ...mockFoldersData,
+        path: "plans/group",
+        watchPaths: [".", "plans", "plans/group"],
+      };
+      vi.mocked(mockClient.plans.folders).mockImplementation(
+        async () => listing,
+      );
+      const subscribe = mockTransport.fsSubscribeTree;
+      let firstGroup = true;
+      mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+        if (path === "plans/group" && firstGroup) {
+          firstGroup = false;
+          subscribedPaths.push(path);
+          watchPathsById.set(901, path);
+          return pendingGroup.promise;
+        }
+        return subscribe(target, path, opts);
+      });
+      const options = {
+        owner: mockOwner,
+        target: mockTarget,
+        browsePath: "plans/group",
+        client: mockClient,
+        transport: mockTransport,
+      };
+      const harness = renderHookHelper(options);
+      await harness.render(options);
+      await act(async () => {
+        emitForPath("plans", {
+          kind: "renamed",
+          path: "/workspace/plans/group",
+          from: "/workspace/replacement",
+        });
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(
+        subscribedPaths.filter((path) => path === "plans/group"),
+      ).toHaveLength(1);
+
+      listing = {
+        ...listing,
+        folders: [{ path: "plans/group/new", name: "new" }],
+      };
+      await act(async () => {
+        pendingGroup.resolve({ sub_id: 901 });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(unsubscribedIds).toContain(901);
+      expect(eventCallbacks.has(901)).toBe(false);
+      expect(overflowCallbacks.has(901)).toBe(false);
+      expect(
+        subscribedPaths.filter((path) => path === "plans/group"),
+      ).toHaveLength(2);
+      expect(harness.result.coverage.status).toBe("live");
+      expect(harness.result.foldersData?.folders[0].name).toBe("new");
+      await act(async () => {
+        root.unmount();
+      });
+      expect(unsubscribedIds.sort()).toEqual(
+        Array.from(watchPathsById.keys()).sort(),
+      );
+      expect(eventCallbacks.size).toBe(0);
+      expect(overflowCallbacks.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects late generation setup on its owning transport without publishing stale coverage", async () => {
+    const pendingPlans = Promise.withResolvers<{ sub_id: number }>();
+    const subscribe = mockTransport.fsSubscribeTree;
+    mockTransport.fsSubscribeTree = vi.fn(async (target, path, opts) => {
+      if (path === "plans") return pendingPlans.promise;
+      return subscribe(target, path, opts);
+    });
+    const options = {
+      owner: mockOwner,
+      target: mockTarget,
+      client: mockClient,
+      transport: mockTransport,
+    };
+    const harness = renderHookHelper(options);
+    await harness.render(options);
+    const oldIds = Array.from(eventCallbacks.keys());
+    const replacementOwner = { ...mockOwner, generation: 2 };
+    const replacementUnsubscribe = vi.fn();
+    const replacementTransport = {
+      ...mockTransport,
+      fsSubscribeTree: vi.fn(async () => ({ sub_id: ++activeSubIdCounter })),
+      fsUnsubscribeTree: replacementUnsubscribe,
+    };
+    __setConnectionSnapshotForTests(mockOwner.profileId, {
+      owner: replacementOwner,
+      status: "connected",
+      serverUrl: "http://127.0.0.1:4801",
+      transport: replacementTransport,
+      api: mockClient,
+    });
+    await harness.render({
+      ...options,
+      owner: replacementOwner,
+      transport: replacementTransport,
+    });
+    expect(harness.result.coverage.status).toBe("live");
+    await act(async () => {
+      pendingPlans.resolve({ sub_id: 999 });
+    });
+    expect(harness.result.coverage.status).toBe("live");
+    expect(unsubscribedIds).toEqual(expect.arrayContaining([...oldIds, 999]));
+    expect(replacementUnsubscribe).not.toHaveBeenCalledWith(999);
+    expect(eventCallbacks.has(999)).toBe(false);
+    expect(oldIds.every((id) => !eventCallbacks.has(id))).toBe(true);
+    await act(async () => {
+      root.unmount();
+    });
+    expect(eventCallbacks.size).toBe(0);
+    expect(overflowCallbacks.size).toBe(0);
+  });
+
+  it("reports all uncovered requirements when a deep plan and external document exceed the watch cap", async () => {
+    const parts = [
+      "plans",
+      ...Array.from({ length: 31 }, (_, index) => `level-${index}`),
+    ];
+    const planPath = parts.join("/");
+    const watchPaths = [
+      ".",
+      ...parts.map((_, index) => parts.slice(0, index + 1).join("/")),
+    ];
+    vi.mocked(mockClient.plans.read).mockResolvedValue({
+      ...mockPlanData,
+      plan: { ...mockPlanData.plan, id: planPath },
+      watchPaths,
+    });
+    const options = {
+      owner: mockOwner,
+      target: mockTarget,
+      selectedPlanPath: planPath,
+      selectedDocumentPath: "evidence/nested/notes.md",
+      client: mockClient,
+      transport: mockTransport,
+    };
+    const harness = renderHookHelper(options);
+    await harness.render(options);
+    expect(harness.result.coverage.status).toBe("degraded");
+    expect(harness.result.coverage.reason).toContain("exceed limit 33");
+    expect(harness.result.coverage.failedWatchPaths).toEqual([
+      "evidence",
+      "evidence/nested",
+    ]);
+    expect(eventCallbacks.size).toBe(33);
+    await act(async () => {
+      await harness.result.refresh();
+    });
+    expect(harness.result.coverage.status).toBe("degraded");
+    expect(harness.result.coverage.failedWatchPaths).toEqual([
+      "evidence",
+      "evidence/nested",
+    ]);
   });
 
   it("cleans up active subscriptions on unmount", async () => {

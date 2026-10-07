@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Transport } from "../api/transport.js";
+import type { FsEventDto } from "../api/fs-types.js";
 import type { ApiClient } from "../api/client.js";
 import {
   type ConnectionRef,
@@ -16,14 +17,12 @@ import {
 } from "../api/client.js";
 import {
   getTransport as getBoundTransport,
-  getApi,
   isCurrentConnection,
 } from "../api/connections.js";
 import {
   type PlanFoldersResponse,
   type SelectedPlanResponse,
   type PlanCoverageState,
-  type PlanCoverageStatus,
 } from "../api/project-plans-types.js";
 import {
   planFoldersQueryKey,
@@ -87,7 +86,7 @@ interface FsWatchSubscriptionSeam {
     opts?: { watchOnly?: boolean },
   ) => Promise<number | { sub_id: number }>;
   fsUnsubscribeTree?: (sub_id: number) => void | Promise<unknown>;
-  onFsEvent?: (sub_id: number, cb: (ev: unknown) => void) => () => void;
+  onFsEvent?: (sub_id: number, cb: (ev: FsEventDto) => void) => () => void;
   onFsOverflow?: (sub_id: number, cb: (msg: string) => void) => () => void;
 }
 
@@ -181,9 +180,7 @@ export function useProjectPlans(
     reason: isEnabled ? null : "Target or connection not ready",
   }));
 
-  // Churn pass counter and timer refs
-  const churnPassesRef = useRef(0);
-  const churnTimerRef = useRef<number | null>(null);
+  const reconcileRef = useRef<(() => Promise<void>) | null>(null);
 
   // ── Watch Paths Computation ───────────────────────────────────────────────
 
@@ -192,33 +189,31 @@ export function useProjectPlans(
     const paths = new Set<string>();
     paths.add(".");
 
-    if (normalizedPlan && selectedPlanQuery.data?.watchPaths) {
-      for (const p of selectedPlanQuery.data.watchPaths) {
-        paths.add(p);
+    const addAncestors = (path: string) => {
+      let current = "";
+      for (const part of path.split("/").filter(Boolean)) {
+        current = current ? `${current}/${part}` : part;
+        paths.add(current);
       }
-    } else if (foldersQuery.data?.watchPaths) {
-      for (const p of foldersQuery.data.watchPaths) {
-        paths.add(p);
-      }
+    };
+    const serverPaths = normalizedPlan
+      ? selectedPlanQuery.data?.watchPaths
+      : foldersQuery.data?.watchPaths;
+    if (serverPaths) {
+      for (const path of serverPaths) paths.add(path);
     } else {
-      // Fallback before server response lands: watch requested ancestors
-      const requested = normalizedPlan ?? normalizedBrowse;
-      const parts = requested.split("/").filter(Boolean);
-      let cur = "";
-      for (const part of parts) {
-        cur = cur ? `${cur}/${part}` : part;
-        paths.add(cur);
-      }
+      // Until the snapshot arrives, cover requested ancestors. Afterwards the
+      // server advertises only existing directories (e.g. "." for missing plans).
+      addAncestors(normalizedPlan ?? normalizedBrowse);
     }
 
-    // Add document parent if outside current set
+    // Non-recursive watches also need every document ancestor to notice replacement.
     if (normalizedDoc) {
       const slashIdx = normalizedDoc.lastIndexOf("/");
-      const docParent = slashIdx > 0 ? normalizedDoc.substring(0, slashIdx) : ".";
-      paths.add(docParent);
+      if (slashIdx > 0) addAncestors(normalizedDoc.substring(0, slashIdx));
     }
 
-    return Array.from(paths).slice(0, MAX_ACTIVE_WATCH_PATHS);
+    return Array.from(paths);
   }, [
     isEnabled,
     normalizedTarget,
@@ -229,18 +224,53 @@ export function useProjectPlans(
     foldersQuery.data,
   ]);
 
+  // Key the lifetime by paths, not DTO identity: data-only updates keep handles.
+  const desiredWatchPathsKey = JSON.stringify(desiredWatchPaths);
+
+  const invalidate = useCallback(async () => {
+    if (
+      !isEnabled ||
+      !owner ||
+      !normalizedTarget ||
+      !isCurrentConnection(owner)
+    )
+      return;
+    const queryKeys = [
+      normalizedPlan
+        ? selectedPlanQueryKey(owner, normalizedTarget, normalizedPlan)
+        : planFoldersQueryKey(owner, normalizedTarget, normalizedBrowse),
+    ];
+    if (normalizedDoc) {
+      queryKeys.push(
+        planDocumentQueryKey(owner, normalizedTarget, normalizedDoc),
+      );
+    }
+    await Promise.all(
+      queryKeys.map((queryKey) =>
+        qc.invalidateQueries({ queryKey, exact: true }),
+      ),
+    );
+  }, [
+    isEnabled,
+    owner,
+    normalizedTarget,
+    normalizedBrowse,
+    normalizedPlan,
+    normalizedDoc,
+    qc,
+  ]);
+
   // ── Watch Set Lifecycle & Reconciliation ──────────────────────────────────
 
   useEffect(() => {
     if (!isEnabled || !owner || !normalizedTarget) {
       setCoverage({
         status: "unsupported",
-        reason: isEnabled ? null : "Dashboard disabled or connection inactive",
+        reason: "Dashboard disabled or connection inactive",
       });
       return;
     }
 
-    let isDisposed = false;
     let originatingTransport: Transport;
     try {
       originatingTransport = customTransport ?? getBoundTransport(owner);
@@ -253,7 +283,11 @@ export function useProjectPlans(
     }
 
     const seam = originatingTransport as unknown as FsWatchSubscriptionSeam;
-    if (typeof seam.fsSubscribeTree !== "function") {
+    if (
+      typeof seam.fsSubscribeTree !== "function" ||
+      typeof seam.fsUnsubscribeTree !== "function" ||
+      typeof seam.onFsEvent !== "function"
+    ) {
       setCoverage({
         status: "degraded",
         reason: "Transport does not support watchOnly tree subscriptions",
@@ -261,177 +295,251 @@ export function useProjectPlans(
       return;
     }
 
-    setCoverage((prev) =>
-      prev.status === "live" ? prev : { status: "reconciling", reason: null },
+    let isDisposed = false;
+    const isCurrent = () => !isDisposed && isCurrentConnection(owner);
+    const requiredPaths: string[] = JSON.parse(desiredWatchPathsKey);
+    // Keep the complete requirement; exceeding the cap is explicitly incomplete.
+    const targetPaths = requiredPaths.filter(
+      (_, index) => index < MAX_ACTIVE_WATCH_PATHS,
     );
-
-    // Track active subscriptions for this effect lifetime on originating transport
     const activeSubs = new Map<
       string,
       { subId: number; cleanupEvent: () => void; cleanupOverflow: () => void }
     >();
+    const pendingSubs = new Map<string, Promise<boolean>>();
+    const stalePaths = new Set<string>();
+    let timer: number | null = null;
+    let reconciliation: Promise<void> | null = null;
+    let requested = false;
+    let eventVersion = 0;
+    let churnPasses = 0;
+    let paused = false;
 
-    const invalidateActiveQueries = () => {
-      if (isDisposed) return;
-      if (normalizedPlan) {
-        void qc.invalidateQueries({
-          queryKey: selectedPlanQueryKey(owner, normalizedTarget, normalizedPlan),
-        });
-        if (normalizedDoc) {
-          void qc.invalidateQueries({
-            queryKey: planDocumentQueryKey(owner, normalizedTarget, normalizedDoc),
-          });
-        }
-      } else {
-        void qc.invalidateQueries({
-          queryKey: planFoldersQueryKey(owner, normalizedTarget, normalizedBrowse),
-        });
+    const unsubscribe = (subId: number) => {
+      try {
+        void Promise.resolve(seam.fsUnsubscribeTree!(subId)).catch(() => {});
+      } catch {
+        // Cleanup remains on the creating transport, even after owner retirement.
       }
     };
-
-    const scheduleCoalescedInvalidation = () => {
-      if (isDisposed) return;
-      if (churnPassesRef.current >= MAX_CHURN_RECONCILE_PASSES) {
-        setCoverage({
-          status: "degraded",
-          reason: "Excessive filesystem churn; paused automatic reconciliation",
-        });
-        return;
+    const retire = (path: string) => {
+      const sub = activeSubs.get(path);
+      if (!sub) return;
+      activeSubs.delete(path);
+      try {
+        sub.cleanupEvent();
+      } catch {
+        /* Continue cleaning the other resources. */
       }
+      try {
+        sub.cleanupOverflow();
+      } catch {
+        /* Continue cleaning the remote handle. */
+      }
+      unsubscribe(sub.subId);
+    };
 
-      clearTimeout(churnTimerRef.current ?? undefined);
-      churnTimerRef.current = window.setTimeout(() => {
-        churnTimerRef.current = null;
-        if (isDisposed) return;
-        churnPassesRef.current += 1;
-        invalidateActiveQueries();
+    const publishCoverage = () => {
+      if (!isCurrent() || paused) return;
+      const missing = requiredPaths.filter(
+        (path) => !activeSubs.has(path) || stalePaths.has(path),
+      );
+      setCoverage(
+        missing.length > 0
+          ? {
+              status: "degraded",
+              reason:
+                requiredPaths.length > MAX_ACTIVE_WATCH_PATHS
+                  ? `Incomplete watch coverage: ${requiredPaths.length} required paths exceed limit ${MAX_ACTIVE_WATCH_PATHS}`
+                  : "Incomplete watch coverage; refresh to retry missing registrations",
+              failedWatchPaths: missing,
+            }
+          : { status: "live", reason: null },
+      );
+    };
+
+    const schedule = () => {
+      if (!isCurrent() || paused) return;
+      clearTimeout(timer ?? undefined);
+      timer = window.setTimeout(() => {
+        timer = null;
+        void requestReconciliation();
       }, CHURN_COALESCE_MS);
     };
 
-    const handleOverflow = (overflowSubId: number, msg: string) => {
-      if (isDisposed) return;
-      // Dispose affected handle
-      for (const [watchedPath, sub] of activeSubs.entries()) {
-        if (sub.subId === overflowSubId) {
-          sub.cleanupEvent();
-          sub.cleanupOverflow();
-          seam.fsUnsubscribeTree?.(overflowSubId);
-          activeSubs.delete(watchedPath);
-          break;
+    const handleEvent = (watchedPath: string, event: FsEventDto) => {
+      if (!isCurrent()) return;
+      eventVersion += 1;
+      if (["created", "removed", "renamed"].includes(event.kind)) {
+        const relativePaths = [
+          event.targetRelativePath,
+          event.targetRelativeFrom,
+        ].filter((path): path is string => path !== undefined);
+        // The server captures the validated target root. Absolute event paths
+        // cannot distinguish root-self from a child, so never infer that identity.
+        // Older transports without metadata safely rebind the emitting subtree.
+        const affected =
+          relativePaths.length > 0 ? relativePaths : [watchedPath];
+        for (const path of targetPaths) {
+          if (
+            affected.some(
+              (changed) =>
+                changed === "." ||
+                path === changed ||
+                path.startsWith(`${changed}/`),
+            )
+          ) {
+            stalePaths.add(path);
+            retire(path);
+          }
         }
+        publishCoverage();
       }
-
-      setCoverage({
-        status: "reconciling",
-        reason: `Filesystem event buffer overflow: ${msg}`,
-      });
-      invalidateActiveQueries();
-      void reconcileWatches();
+      schedule();
     };
 
-    const registerWatch = async (path: string): Promise<boolean> => {
-      if (isDisposed || activeSubs.has(path)) return true;
-      try {
-        const subResult = await seam.fsSubscribeTree!(
-          normalizedTarget,
-          path,
-          { watchOnly: true },
-        );
-        const subId =
-          typeof subResult === "number" ? subResult : subResult.sub_id;
-
-        if (isDisposed) {
-          // Late completion: unsubscribe immediately on originating transport
-          seam.fsUnsubscribeTree?.(subId);
-          return false;
-        }
-
-        const cleanupEvent =
-          typeof seam.onFsEvent === "function"
-            ? seam.onFsEvent(subId, () => {
-                scheduleCoalescedInvalidation();
-              })
-            : () => {};
-
-        const cleanupOverflow =
-          typeof seam.onFsOverflow === "function"
-            ? seam.onFsOverflow(subId, (msg) => {
-                handleOverflow(subId, msg);
-              })
-            : () => {};
-
-        activeSubs.set(path, { subId, cleanupEvent, cleanupOverflow });
-        return true;
-      } catch (err) {
-        if (!isDisposed) {
-          setCoverage({
-            status: "degraded",
-            reason: `Watch failed for ${path}: ${err instanceof Error ? err.message : String(err)}`,
-            failedWatchPaths: [path],
+    const registerWatch = (path: string): Promise<boolean> => {
+      if (!isCurrent()) return Promise.resolve(false);
+      if (activeSubs.has(path)) return Promise.resolve(true);
+      const pending = pendingSubs.get(path);
+      if (pending) return pending;
+      const registration = (async () => {
+        let subId: number | undefined;
+        let cleanupEvent: (() => void) | undefined;
+        let cleanupOverflow: (() => void) | undefined;
+        try {
+          const result = await Promise.resolve().then(() =>
+            seam.fsSubscribeTree!(normalizedTarget, path, { watchOnly: true }),
+          );
+          subId = typeof result === "number" ? result : result.sub_id;
+          if (!isCurrent() || stalePaths.has(path)) {
+            unsubscribe(subId);
+            return false;
+          }
+          const registeredId = subId;
+          cleanupEvent = seam.onFsEvent!(subId, (event) => {
+            if (activeSubs.get(path)?.subId === registeredId)
+              handleEvent(path, event);
           });
+          cleanupOverflow =
+            seam.onFsOverflow?.(subId, () => {
+              if (!isCurrent() || activeSubs.get(path)?.subId !== registeredId)
+                return;
+              retire(path);
+              eventVersion += 1;
+              void requestReconciliation();
+            }) ?? (() => {});
+          activeSubs.set(path, { subId, cleanupEvent, cleanupOverflow });
+          return true;
+        } catch {
+          try {
+            cleanupEvent?.();
+          } catch {
+            /* Continue cleaning. */
+          }
+          try {
+            cleanupOverflow?.();
+          } catch {
+            /* Continue cleaning. */
+          }
+          if (subId !== undefined) unsubscribe(subId);
+          return false;
+        } finally {
+          pendingSubs.delete(path);
         }
-        return false;
+      })();
+      pendingSubs.set(path, registration);
+      return registration;
+    };
+
+    const reconcile = async () => {
+      while (requested && isCurrent() && !paused) {
+        requested = false;
+        setCoverage({ status: "reconciling", reason: null });
+        const startingVersion = eventVersion;
+        for (const path of stalePaths) retire(path);
+        stalePaths.clear();
+        const toAdd = targetPaths.filter((path) => !activeSubs.has(path));
+        for (
+          let index = 0;
+          index < toAdd.length && isCurrent();
+          index += MAX_CONCURRENT_REGISTRATIONS
+        ) {
+          await Promise.all(
+            toAdd
+              .slice(index, index + MAX_CONCURRENT_REGISTRATIONS)
+              .map(registerWatch),
+          );
+        }
+        if (!isCurrent()) return;
+        // Invalidation alone may reuse an initial no-data request that predates
+        // installation. Cancel that scoped request before starting the snapshot.
+        const queryKeys = [
+          normalizedPlan
+            ? selectedPlanQueryKey(owner, normalizedTarget, normalizedPlan)
+            : planFoldersQueryKey(owner, normalizedTarget, normalizedBrowse),
+        ];
+        if (normalizedDoc) {
+          queryKeys.push(
+            planDocumentQueryKey(owner, normalizedTarget, normalizedDoc),
+          );
+        }
+        await Promise.all(
+          queryKeys.map((queryKey) =>
+            qc.cancelQueries({ queryKey, exact: true }),
+          ),
+        );
+        if (!isCurrent()) return;
+        await invalidate();
+        if (!isCurrent()) return;
+        if (eventVersion !== startingVersion) {
+          requested = true;
+          churnPasses += 1;
+          if (churnPasses >= MAX_CHURN_RECONCILE_PASSES) {
+            paused = true;
+            setCoverage({
+              status: "degraded",
+              reason:
+                "Excessive filesystem churn; paused automatic reconciliation",
+              failedWatchPaths: requiredPaths.filter(
+                (path) => !activeSubs.has(path),
+              ),
+            });
+          }
+        } else {
+          // Successful/quiescent settlement is not a lifetime churn allowance.
+          churnPasses = 0;
+        }
+        publishCoverage();
       }
     };
 
-    const reconcileWatches = async () => {
-      if (isDisposed) return;
-      const targetPaths = desiredWatchPaths;
-      const toAdd = targetPaths.filter((p) => !activeSubs.has(p));
-      const toRemove = Array.from(activeSubs.keys()).filter(
-        (p) => !targetPaths.includes(p),
-      );
-
-      // Add new watches before removing obsolete ones (bounded queue)
-      let allAdditionsOk = true;
-      for (let i = 0; i < toAdd.length; i += MAX_CONCURRENT_REGISTRATIONS) {
-        if (isDisposed) return;
-        const chunk = toAdd.slice(i, i + MAX_CONCURRENT_REGISTRATIONS);
-        const results = await Promise.all(chunk.map((p) => registerWatch(p)));
-        if (results.some((ok) => !ok)) {
-          allAdditionsOk = false;
-        }
+    const requestReconciliation = (): Promise<void> => {
+      if (!isCurrent() || paused) return Promise.resolve();
+      requested = true;
+      if (!reconciliation) {
+        reconciliation = reconcile().finally(() => {
+          reconciliation = null;
+        });
       }
-
-      if (isDisposed) return;
-
-      // Remove obsolete watches
-      for (const p of toRemove) {
-        const sub = activeSubs.get(p);
-        if (sub) {
-          sub.cleanupEvent();
-          sub.cleanupOverflow();
-          seam.fsUnsubscribeTree?.(sub.subId);
-          activeSubs.delete(p);
-        }
-      }
-
-      if (!isDisposed && allAdditionsOk) {
-        setCoverage({ status: "live", reason: null });
-        // Authoritative refetch after additions closes registration races
-        if (toAdd.length > 0) {
-          invalidateActiveQueries();
-        }
-      }
+      return reconciliation;
     };
-
-    void reconcileWatches();
+    const refreshWatches = () => {
+      paused = false;
+      churnPasses = 0;
+      clearTimeout(timer ?? undefined);
+      timer = null;
+      return requestReconciliation();
+    };
+    reconcileRef.current = refreshWatches;
+    void requestReconciliation();
 
     return () => {
       isDisposed = true;
-      clearTimeout(churnTimerRef.current ?? undefined);
-      churnTimerRef.current = null;
-      // Detach listeners and unsubscribe all exact IDs on originating transport
-      for (const [, sub] of activeSubs) {
-        try {
-          sub.cleanupEvent();
-          sub.cleanupOverflow();
-          seam.fsUnsubscribeTree?.(sub.subId);
-        } catch {
-          // Ignore synchronous cleanup errors during unmount
-        }
-      }
-      activeSubs.clear();
+      if (reconcileRef.current === refreshWatches) reconcileRef.current = null;
+      clearTimeout(timer ?? undefined);
+      for (const path of activeSubs.keys()) retire(path);
+      // Pending registrations observe disposal and retire their exact late IDs.
     };
   }, [
     isEnabled,
@@ -441,59 +549,21 @@ export function useProjectPlans(
     normalizedBrowse,
     normalizedPlan,
     normalizedDoc,
-    desiredWatchPaths,
+    desiredWatchPathsKey,
     customTransport,
+    invalidate,
   ]);
 
   // ── Manual Actions ────────────────────────────────────────────────────────
 
   const refresh = useCallback(async () => {
-    churnPassesRef.current = 0;
-    clearTimeout(churnTimerRef.current ?? undefined);
-    churnTimerRef.current = null;
-    if (owner && normalizedTarget) {
-      setCoverage({ status: "reconciling", reason: null });
-      if (normalizedPlan) {
-        await qc.refetchQueries({
-          queryKey: selectedPlanQueryKey(owner, normalizedTarget, normalizedPlan),
-          exact: true,
-        });
-        if (normalizedDoc) {
-          await qc.refetchQueries({
-            queryKey: planDocumentQueryKey(owner, normalizedTarget, normalizedDoc),
-            exact: true,
-          });
-        }
-      } else {
-        await qc.refetchQueries({
-          queryKey: planFoldersQueryKey(owner, normalizedTarget, normalizedBrowse),
-          exact: true,
-        });
-      }
-      setCoverage({ status: "live", reason: null });
+    if (reconcileRef.current) {
+      await reconcileRef.current();
+    } else {
+      // Data can still be explicitly refreshed when transport coverage is unsupported.
+      await invalidate();
     }
-  }, [
-    owner,
-    normalizedTarget,
-    normalizedBrowse,
-    normalizedPlan,
-    normalizedDoc,
-    qc,
-  ]);
-
-  const invalidate = useCallback(async () => {
-    if (owner && normalizedTarget) {
-      if (normalizedPlan) {
-        await qc.invalidateQueries({
-          queryKey: selectedPlanQueryKey(owner, normalizedTarget, normalizedPlan),
-        });
-      } else {
-        await qc.invalidateQueries({
-          queryKey: planFoldersQueryKey(owner, normalizedTarget, normalizedBrowse),
-        });
-      }
-    }
-  }, [owner, normalizedTarget, normalizedBrowse, normalizedPlan, qc]);
+  }, [invalidate]);
 
   return {
     foldersData: foldersQuery.data,

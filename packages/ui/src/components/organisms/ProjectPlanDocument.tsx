@@ -23,6 +23,7 @@ export interface ProjectPlanDocumentProps {
   isDocumentLoading: boolean;
   documentError: Error | null;
   onNavigateDocument: (documentPath: string) => void;
+  onRetryDocument: () => void;
   className?: string;
 }
 
@@ -33,6 +34,7 @@ export function ProjectPlanDocument({
   isDocumentLoading,
   documentError,
   onNavigateDocument,
+  onRetryDocument,
   className,
 }: ProjectPlanDocumentProps) {
   const planDoc = plan.documents.plan;
@@ -61,7 +63,8 @@ export function ProjectPlanDocument({
           >
             <Info className="h-4 w-4 shrink-0 text-[var(--color-primary)]" />
             <span>
-              Document is absent. Progress tracking has not been opted into or this document does not exist.
+              Document is absent. Progress tracking has not been opted into or
+              this document does not exist.
             </span>
           </div>
         );
@@ -72,7 +75,10 @@ export function ProjectPlanDocument({
             className="flex items-center gap-2 rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-xs text-[var(--color-danger)]"
           >
             <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>Document is unreadable (permission denied, unreadable file, or invalid UTF-8).</span>
+            <span>
+              Document is unreadable (permission denied, unreadable file, or
+              invalid UTF-8).
+            </span>
           </div>
         );
       case "oversize":
@@ -82,7 +88,10 @@ export function ProjectPlanDocument({
             className="flex items-center gap-2 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-warning)]"
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>Document exceeds size limit (64 KiB maximum allowed for decisive documents).</span>
+            <span>
+              Document exceeds size limit (64 KiB maximum allowed for decisive
+              documents).
+            </span>
           </div>
         );
       case "changed":
@@ -92,7 +101,10 @@ export function ProjectPlanDocument({
             className="flex items-center gap-2 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-warning)]"
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>Document was modified or replaced concurrently during read. Refresh to reload.</span>
+            <span>
+              Document was modified or replaced concurrently during read.
+              Refresh to reload.
+            </span>
           </div>
         );
       case "invalid":
@@ -162,7 +174,10 @@ export function ProjectPlanDocument({
           {isCustomLocalDoc && (
             <div className="flex items-center gap-1.5 bg-[var(--color-surface)] px-2 py-0.5 rounded border border-[var(--color-border)] text-xs">
               <span className="text-[var(--color-text-muted)]">Viewing:</span>
-              <span className="font-mono truncate max-w-[200px]" title={currentDocumentPath}>
+              <span
+                className="font-mono truncate max-w-[200px]"
+                title={currentDocumentPath}
+              >
                 {currentDocumentPath}
               </span>
               <Button
@@ -190,21 +205,34 @@ export function ProjectPlanDocument({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/20 px-3 py-1.5 text-[11px] text-[var(--color-text-muted)]">
         <div className="flex items-center gap-3">
           <span>
-            Path: <strong className="font-mono text-[var(--color-text)]">{currentDocumentPath}</strong>
+            Path:{" "}
+            <strong className="font-mono text-[var(--color-text)]">
+              {currentDocumentPath}
+            </strong>
           </span>
-          {currentDocMeta?.sizeBytes !== null && currentDocMeta?.sizeBytes !== undefined && (
-            <span>
-              Size: <strong className="text-[var(--color-text)]">{currentDocMeta.sizeBytes} B</strong>
-            </span>
-          )}
+          {currentDocMeta?.sizeBytes !== null &&
+            currentDocMeta?.sizeBytes !== undefined && (
+              <span>
+                Size:{" "}
+                <strong className="text-[var(--color-text)]">
+                  {currentDocMeta.sizeBytes} B
+                </strong>
+              </span>
+            )}
           {currentDocMeta?.modifiedAt && (
             <span>
-              Modified: <strong className="text-[var(--color-text)]">{currentDocMeta.modifiedAt}</strong>
+              Modified:{" "}
+              <strong className="text-[var(--color-text)]">
+                {currentDocMeta.modifiedAt}
+              </strong>
             </span>
           )}
         </div>
         <div>
-          Authority: <strong className="text-[var(--color-text)]">{plan.reportedStatus.authority}</strong>
+          Authority:{" "}
+          <strong className="text-[var(--color-text)]">
+            {plan.reportedStatus.authority}
+          </strong>
         </div>
       </div>
 
@@ -237,7 +265,7 @@ export function ProjectPlanDocument({
               type="button"
               variant="secondary"
               size="sm"
-              onClick={() => onNavigateDocument(currentDocumentPath)}
+              onClick={onRetryDocument}
               className="mt-2 text-xs"
             >
               Retry

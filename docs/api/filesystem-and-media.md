@@ -56,6 +56,27 @@ workspace-aware transports; the browser's **All connected profiles** mode
 performs one owner-bound request per eligible profile and applies a 500-match
 aggregate cap.
 
+### Read-only project plans
+
+**GET /api/plans/folders?project=NAME&path=REL[&worktreePath=PATH]**
+browses immediate directories under fixed `plans/`. It returns `folderState`,
+folder entries, bounded listing coverage/diagnostics, and existing `watchPaths`.
+A missing `plans/` directory is an empty state covered by the target-root watch.
+The final JSON is limited to 2 MiB; truncation retains whole sorted entries.
+
+**GET /api/plans?project=NAME&planPath=REL[&worktreePath=PATH]**
+reads one selected plan. `plan.md` declares metadata and phase inventory;
+present `progress.md` opts into reported current status. Unreadable/changed
+progress never silently falls back to historical completed phases. Identity
+conflicts and duplicate progress rows remain diagnostic; completion is unknown
+when decisive current evidence is unavailable.
+
+`GET /api/fs/read` with `mode=plan-document`, and WebSocket `fs:read` with
+`readMode: "plan-document"`, are bounded strict UTF-8 Markdown reads
+(64 KiB). Rooted no-follow traversal rejects linked ancestors/leafs. Changes to
+the opened file, named entry, or pinned ancestors during snapshot publication
+produce conflict/changed state without automatic retry.
+
 ### Session-Bound Media Capabilities (v2)
 
 Image preview and video playback/download use opaque ticket URLs and a

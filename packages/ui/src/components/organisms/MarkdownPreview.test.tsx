@@ -9,7 +9,9 @@ import {
 describe("MarkdownPreview link policy and security", () => {
   describe("slugifyHeading", () => {
     it("converts heading text to valid lowercase hyphenated id", () => {
-      expect(slugifyHeading("Context Links & Scope")).toBe("context-links-scope");
+      expect(slugifyHeading("Context Links & Scope")).toBe(
+        "context-links-scope",
+      );
       expect(slugifyHeading("  Trim Spaces  ")).toBe("trim-spaces");
       expect(slugifyHeading("Phase 04 — Dashboard")).toBe("phase-04-dashboard");
     });
@@ -42,10 +44,7 @@ describe("MarkdownPreview link policy and security", () => {
     });
 
     it("rejects path traversal escaping above target root", () => {
-      const res = resolveTargetRelativePath(
-        "plan.md",
-        "../../outside.md",
-      );
+      const res = resolveTargetRelativePath("plan.md", "../../outside.md");
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error).toContain("Path traversal escape");
@@ -53,10 +52,7 @@ describe("MarkdownPreview link policy and security", () => {
     });
 
     it("rejects unsafe URI schemes like javascript: or file:", () => {
-      const res = resolveTargetRelativePath(
-        "plan.md",
-        "javascript:alert(1)",
-      );
+      const res = resolveTargetRelativePath("plan.md", "javascript:alert(1)");
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error).toBe("Unsafe URI scheme");
@@ -64,18 +60,63 @@ describe("MarkdownPreview link policy and security", () => {
     });
 
     it("rejects null bytes in path", () => {
-      const res = resolveTargetRelativePath(
-        "plan.md",
-        "phase\0.md",
-      );
+      const res = resolveTargetRelativePath("plan.md", "phase\0.md");
       expect(res.ok).toBe(false);
     });
 
-    it("marks non-markdown local files as isMarkdown: false", () => {
-      const res = resolveTargetRelativePath(
-        "plans/plan.md",
-        "./diagram.png",
+    it("decodes filename characters once without treating an encoded hash as a fragment", () => {
+      expect(
+        resolveTargetRelativePath(
+          "plans/feature/plan.md",
+          "./phase%20%231.md#details",
+        ),
+      ).toEqual({
+        ok: true,
+        resolvedPath: "plans/feature/phase #1.md",
+        fragment: "details",
+        isMarkdown: true,
+      });
+      expect(
+        resolveTargetRelativePath("plans/feature/plan.md", "./phase%2520.md"),
+      ).toEqual({
+        ok: true,
+        resolvedPath: "plans/feature/phase%20.md",
+        fragment: undefined,
+        isMarkdown: true,
+      });
+    });
+
+    it.each([
+      "%6Aavascript%3Aalert(1)",
+      "%66ile%3Asecret.md",
+      "%2Fetc/secret.md",
+      "%5Cserver/share.md",
+      "./folder%5Csecret.md",
+      "./phase%00.md",
+      "%2E%2E/%2E%2E/%2E%2E/secret.md",
+      "./phase%GG.md",
+    ])("rejects unsafe decoded path %s", (path) => {
+      expect(resolveTargetRelativePath("plans/feature/plan.md", path).ok).toBe(
+        false,
       );
+    });
+
+    it("resolves decoded traversal only inside the target", () => {
+      expect(
+        resolveTargetRelativePath(
+          "plans/feature/plan.md",
+          "%2E%2E/%2E%2E/docs/guide%20one.md",
+        ),
+      ).toEqual({
+        ok: true,
+        resolvedPath: "docs/guide one.md",
+        fragment: undefined,
+        isMarkdown: true,
+      });
+    });
+
+    it("marks non-markdown local files as isMarkdown: false", () => {
+      const res = resolveTargetRelativePath("plans/plan.md", "./diagram.png");
       expect(res.ok).toBe(true);
       if (res.ok) {
         expect(res.isMarkdown).toBe(false);
@@ -125,6 +166,14 @@ describe("MarkdownPreview link policy and security", () => {
       expect(html).toContain("See Asset");
       expect(html).toContain("Non-Markdown local links are not supported");
       expect(html).not.toContain('href="./image.png"');
+    });
+
+    it("keeps local links unchanged without a link policy", () => {
+      const html = renderToStaticMarkup(
+        <MarkdownPreview content="[Phase](./phase%20one.md)" />,
+      );
+      expect(html).toContain('href="./phase%20one.md"');
+      expect(html).not.toContain("Unsafe link");
     });
 
     it("renders local images as accessible notices without image fetch", () => {

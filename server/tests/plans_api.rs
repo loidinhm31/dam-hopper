@@ -445,6 +445,7 @@ status: in-progress
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn test_selected_plan_read_symlink_progress() {
     let (ctx, app) = setup_test_app();
     let feat_dir = ctx.project_dir.join("plans").join("feature-c");
@@ -455,6 +456,12 @@ title: "Feature C"
 status: completed
 ---
 # Feature C
+
+## Phases
+
+| # | Phase | Status | Detail |
+|---|---|---|---|
+| 01 | Captured complete | Completed | [Phase](./phase-01.md) |
 "#;
     std::fs::write(feat_dir.join("plan.md"), plan_md_content).unwrap();
 
@@ -475,6 +482,17 @@ status: completed
     assert_eq!(plan["documents"]["progress"]["state"], "unreadable");
     assert_eq!(plan["reportedStatus"]["authority"], "progress");
     assert_eq!(plan["reportedStatus"]["value"], "unknown");
+    assert_eq!(plan["phases"].as_array().unwrap().len(), 1);
+    assert_eq!(plan["phases"][0]["id"], "phase-01.md");
+    assert_eq!(plan["phases"][0]["reportedStatus"]["value"], "unknown");
+    assert_eq!(plan["phases"][0]["reportedStatus"]["authority"], "progress");
+    let captured = &plan["phases"][0]["reportedStatus"]["captured"][0];
+    assert_eq!(captured["value"], "completed");
+    assert_eq!(captured["evidence"]["path"], "plans/feature-c/plan.md");
+    assert_eq!(plan["completion"]["declared"], 1);
+    assert_eq!(plan["completion"]["completed"], 0);
+    assert_eq!(plan["completion"]["unknown"], 1);
+    assert!(plan["completion"]["fraction"].is_null());
 
     let diags = plan["diagnostics"].as_array().unwrap();
     assert!(diags.iter().any(|d| d["code"] == "PROGRESS_UNREADABLE"));
@@ -540,10 +558,7 @@ async fn test_strict_rest_fs_read_plan_document() {
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(
-        res.headers().get("content-type").unwrap(),
-        "text/markdown"
-    );
+    assert_eq!(res.headers().get("content-type").unwrap(), "text/markdown");
     let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -580,4 +595,268 @@ async fn test_strict_rest_fs_read_plan_document() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_selected_plan_projection_review_boundaries() {
+    let (ctx, app) = setup_test_app();
+    let folder = ctx.project_dir.join("plans").join("projection");
+    std::fs::create_dir_all(&folder).unwrap();
+    let two_phases = "# Projection\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Pending | [One](./one.md) |\n\
+        | 2 | Two | Pending | [Two](./two.md) |\n";
+    let one_phase = "# Projection\n\n## Phases\n\n\
+        | # | Phase | Status |\n|---|---|---|\n| 1 | One | Pending |\n";
+    for (plan_md, progress_md, status, phase_statuses, completed, fraction, diagnostic) in [
+        (
+            two_phases,
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Current status |\n|---|---|\n| [02](./one.md) | Completed |\n",
+            "unknown",
+            vec!["conflict", "conflict"],
+            0,
+            None,
+            Some("STATUS_CONFLICT"),
+        ),
+        (
+            two_phases,
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Current status |\n|---|---|\n\
+             | 1 | Completed |\n| [01](./one.md) | Completed |\n| 2 | Pending |\n",
+            "unknown",
+            vec!["conflict", "pending"],
+            0,
+            Some(0.0),
+            Some("STATUS_CONFLICT"),
+        ),
+        (
+            "# Projection\n\n## Phases\n\n\
+             | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+             | 1 | One | Completed | [One](./one.md) |\n| 2 | Two | Pending |\n",
+            "",
+            "unknown",
+            vec!["unknown", "unknown"],
+            0,
+            None,
+            Some("PHASE_UNREPORTED"),
+        ),
+        (
+            one_phase,
+            "# Progress\n\n**Current status:** All phases (Phase 01) completed \
+             with durable task sealing. Plan execution complete.\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n| 1 | Completed |\n",
+            "completed",
+            vec!["completed"],
+            1,
+            Some(1.0),
+            None,
+        ),
+        (
+            one_phase,
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Status | Current status |\n|---|---|---|\n| 1 | Pending | Completed |\n",
+            "completed",
+            vec!["completed"],
+            1,
+            Some(1.0),
+            None,
+        ),
+        (
+            two_phases,
+            "# Progress\n\n## Phase Reconciliation\n\n\
+             | Phase | Current status | Captured status | Detail |\n|---|---|---|---|\n\
+             | 1 | Completed | Pending | Sealed |\n2 | Pending\n",
+            "in-progress",
+            vec!["completed", "pending"],
+            1,
+            Some(0.5),
+            None,
+        ),
+        (
+            two_phases,
+            "# Progress\n\n**Current status:** All phases (01–02) incomplete.\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n\
+             | 1 | Completed |\n2 | Completed\n",
+            "unknown",
+            vec!["completed", "completed"],
+            2,
+            Some(1.0),
+            Some("UNSUPPORTED_STATUS"),
+        ),
+        (
+            two_phases,
+            "# Progress\n\n**Current status:** All phases (Phase 01–bogus) completed.\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n\
+             | 1 | Completed |\n2 | Completed\n",
+            "unknown",
+            vec!["completed", "completed"],
+            2,
+            Some(1.0),
+            Some("UNSUPPORTED_STATUS"),
+        ),
+    ] {
+        std::fs::write(folder.join("plan.md"), plan_md).unwrap();
+        std::fs::write(folder.join("progress.md"), progress_md).unwrap();
+        let req = Request::builder()
+            .uri("/api/plans?project=test-proj&planPath=plans/projection")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = json_response(res).await;
+        let plan = &json["plan"];
+        assert_eq!(plan["reportedStatus"]["value"], status, "{progress_md}");
+        assert_eq!(plan["reportedStatus"]["authority"], "progress");
+        let phases = plan["phases"].as_array().unwrap();
+        assert_eq!(phases.len(), phase_statuses.len());
+        for (phase, expected) in phases.iter().zip(&phase_statuses) {
+            assert_eq!(phase["reportedStatus"]["value"], *expected, "{progress_md}");
+            assert_eq!(phase["reportedStatus"]["authority"], "progress");
+        }
+        assert_eq!(plan["completion"]["declared"], phase_statuses.len());
+        assert_eq!(plan["completion"]["completed"], completed);
+        assert_eq!(plan["completion"]["fraction"], serde_json::json!(fraction));
+        if let Some(code) = diagnostic {
+            assert!(plan["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["code"] == code));
+        } else {
+            assert!(plan["diagnostics"].as_array().unwrap().is_empty());
+        }
+    }
+
+    // The exact short-inventory reproduction also works without a progress opt-in.
+    std::fs::remove_file(folder.join("progress.md")).unwrap();
+    std::fs::write(
+        folder.join("plan.md"),
+        "# Projection\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Completed | [One](./one.md) |\n2 | Two | Pending\n",
+    )
+    .unwrap();
+    let req = Request::builder()
+        .uri("/api/plans?project=test-proj&planPath=plans/projection")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = json_response(res).await;
+    assert_eq!(json["plan"]["completion"]["declared"], 2);
+    assert_eq!(json["plan"]["completion"]["completed"], 1);
+    assert_eq!(json["plan"]["completion"]["fraction"], 0.5);
+    assert_eq!(json["plan"]["reportedStatus"]["value"], "in-progress");
+    assert!(json["plan"]["diagnostics"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_plan_folders_response_byte_limit_retains_maximal_whole_sorted_prefix() {
+    let (ctx, app) = setup_test_app();
+    let mut path = "plans".to_string();
+    for index in 0..12 {
+        path.push('/');
+        path.push_str(&format!("{index:02}{}", "a".repeat(158)));
+    }
+    let folder = ctx.project_dir.join(&path);
+    std::fs::create_dir_all(&folder).unwrap();
+    let names: Vec<String> = (0..1500)
+        .map(|index| format!("{index:04}-{}-\"\\\n-é", "b".repeat(48)))
+        .collect();
+    for name in &names {
+        std::fs::create_dir(folder.join(name)).unwrap();
+    }
+    let req = Request::builder()
+        .uri(format!("/api/plans/folders?project=test-proj&path={path}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let max_bytes = 2 * 1024 * 1024;
+    assert!(bytes.len() <= max_bytes);
+    let mut json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["listing"]["complete"], false);
+    assert_eq!(json["listing"]["entriesVisited"], 1500);
+    assert_eq!(
+        json["listing"]["limitsReached"],
+        serde_json::json!(["response-bytes"])
+    );
+    let retained = json["folders"].as_array().unwrap().len();
+    assert!(retained > 0 && retained < names.len());
+    for (entry, name) in json["folders"].as_array().unwrap().iter().zip(&names) {
+        assert_eq!(entry["name"], *name);
+        assert_eq!(entry["path"], format!("{path}/{name}"));
+    }
+    // The envelope/flag/comma/escaped-entry accounting must use the whole budget:
+    // adding the very next entry would exceed it, with no partial entry emitted.
+    let next = &names[retained];
+    json["folders"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": next,
+            "path": format!("{path}/{next}"),
+        }));
+    assert!(serde_json::to_vec(&json).unwrap().len() > max_bytes);
+}
+
+#[tokio::test]
+async fn test_selected_plan_bare_table_cell_and_high_phase_numbers() {
+    let (ctx, app) = setup_test_app();
+    let folder = ctx.project_dir.join("plans").join("sparse");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("plan.md"),
+        "# Bare\n\n## Phases\n\n\
+        | # | Phase | Status | Detail |\n|---|---|---|---|\n\
+        | 1 | One | Completed | [One](./one.md) |\n2\n",
+    )
+    .unwrap();
+    let req = Request::builder()
+        .uri("/api/plans?project=test-proj&planPath=plans/sparse")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = json_response(res).await;
+    assert_eq!(json["plan"]["completion"]["declared"], 2);
+    assert_eq!(json["plan"]["completion"]["completed"], 1);
+    assert_eq!(json["plan"]["completion"]["unknown"], 1);
+    assert_eq!(json["plan"]["completion"]["fraction"], 0.5);
+    assert_eq!(
+        json["plan"]["phases"][1]["reportedStatus"]["value"],
+        "unknown"
+    );
+
+    for (numbers, restriction) in [(vec![129], "Phase 129"), (vec![129, 130], "129–130")] {
+        let mut plan = "# Sparse\n\n## Phases\n\n\
+            | # | Phase | Status |\n|---|---|---|\n"
+            .to_string();
+        let mut progress = format!(
+            "# Progress\n\nCurrent status: All phases ({restriction}) completed.\n\n\
+             ## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n"
+        );
+        for number in &numbers {
+            plan.push_str(&format!("| {number} | Phase {number} | Pending |\n"));
+            progress.push_str(&format!("| {number} | Completed |\n"));
+        }
+        std::fs::write(folder.join("plan.md"), plan).unwrap();
+        std::fs::write(folder.join("progress.md"), progress).unwrap();
+        let req = Request::builder()
+            .uri("/api/plans?project=test-proj&planPath=plans/sparse")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = json_response(res).await;
+        assert_eq!(json["plan"]["reportedStatus"]["value"], "completed");
+        assert_eq!(json["plan"]["completion"]["declared"], numbers.len());
+        assert_eq!(json["plan"]["completion"]["fraction"], 1.0);
+        assert!(json["plan"]["diagnostics"].as_array().unwrap().is_empty());
+    }
 }

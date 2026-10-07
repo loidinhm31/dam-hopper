@@ -36,8 +36,9 @@ impl<'de> Deserialize<'de> for MediaClientId {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        MediaClientId::parse(&s)
-            .ok_or_else(|| serde::de::Error::custom("invalid mediaClientId: must be a valid UUIDv4"))
+        MediaClientId::parse(&s).ok_or_else(|| {
+            serde::de::Error::custom("invalid mediaClientId: must be a valid UUIDv4")
+        })
     }
 }
 
@@ -208,7 +209,8 @@ mod tests {
             token: first,
         };
         assert!(!format!("{:?}", lease.binding).contains(lease.token.as_str()));
-        let cookie_name = format!("{MEDIA_SESSION_COOKIE_PREFIX}9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d");
+        let cookie_name =
+            format!("{MEDIA_SESSION_COOKIE_PREFIX}9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d");
         assert_eq!(
             media_session_cookie(&lease),
             format!(
@@ -231,9 +233,7 @@ mod tests {
 
         headers.insert(
             COOKIE,
-            format!("{cookie_name}={}", token.as_str())
-                .parse()
-                .unwrap(),
+            format!("{cookie_name}={}", token.as_str()).parse().unwrap(),
         );
         assert_eq!(
             media_session_from_headers_for_client(&headers, &client_id),
@@ -250,9 +250,13 @@ mod tests {
         // Duplicate cookies for same client_id returns Duplicate
         headers.insert(
             COOKIE,
-            format!("{cookie_name}={}; {cookie_name}={}", token.as_str(), token.as_str())
-                .parse()
-                .unwrap(),
+            format!(
+                "{cookie_name}={}; {cookie_name}={}",
+                token.as_str(),
+                token.as_str()
+            )
+            .parse()
+            .unwrap(),
         );
         assert_eq!(
             media_session_from_headers_for_client(&headers, &client_id),
@@ -263,9 +267,13 @@ mod tests {
         let other_client = MediaClientId::parse("11111111-1111-4111-8111-111111111111").unwrap();
         headers.insert(
             COOKIE,
-            format!("damhopper-media-session={}; {cookie_name}={}", token.as_str(), token.as_str())
-                .parse()
-                .unwrap(),
+            format!(
+                "damhopper-media-session={}; {cookie_name}={}",
+                token.as_str(),
+                token.as_str()
+            )
+            .parse()
+            .unwrap(),
         );
         assert_eq!(
             media_session_from_headers_for_client(&headers, &client_id),

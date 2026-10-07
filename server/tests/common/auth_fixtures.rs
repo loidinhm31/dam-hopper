@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use axum::Router;
-use bcrypt::{DEFAULT_COST, hash};
+use bcrypt::{hash, DEFAULT_COST};
 use chrono::Utc;
 use dam_hopper_server::api::build_router;
 use dam_hopper_server::auth::model::{
-    AuthSession, MfaConfirmed, UserRecord, UserRole, chrono_to_bson,
+    chrono_to_bson, AuthSession, MfaConfirmed, UserRecord, UserRole,
 };
 use dam_hopper_server::auth::policy::MockClock;
 use dam_hopper_server::auth::secret::MfaEncryptionKey;
@@ -23,7 +23,7 @@ use dam_hopper_server::telemetry::TelemetryRuntime;
 use mongodb::Database;
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
-use tempfile::{TempDir, tempdir};
+use tempfile::{tempdir, TempDir};
 
 pub const TEST_JWT_SECRET: &str = "test-jwt-secret-key-32-bytes-long!";
 pub const DEFAULT_MFA_KEY: [u8; 32] = [0x55u8; 32];

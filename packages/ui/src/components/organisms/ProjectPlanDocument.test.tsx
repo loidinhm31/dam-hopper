@@ -67,6 +67,7 @@ describe("ProjectPlanDocument", () => {
         isDocumentLoading={false}
         documentError={null}
         onNavigateDocument={vi.fn()}
+        onRetryDocument={vi.fn()}
       />,
     );
 
@@ -86,6 +87,7 @@ describe("ProjectPlanDocument", () => {
         isDocumentLoading={false}
         documentError={null}
         onNavigateDocument={vi.fn()}
+        onRetryDocument={vi.fn()}
       />,
     );
 
@@ -113,6 +115,7 @@ describe("ProjectPlanDocument", () => {
         isDocumentLoading={false}
         documentError={null}
         onNavigateDocument={vi.fn()}
+        onRetryDocument={vi.fn()}
       />,
     );
 
@@ -128,6 +131,7 @@ describe("ProjectPlanDocument", () => {
         isDocumentLoading={true}
         documentError={null}
         onNavigateDocument={vi.fn()}
+        onRetryDocument={vi.fn()}
       />,
     );
 
@@ -142,6 +146,7 @@ describe("ProjectPlanDocument", () => {
         isDocumentLoading={false}
         documentError={new Error("Failed to load document")}
         onNavigateDocument={vi.fn()}
+        onRetryDocument={vi.fn()}
       />,
     );
 

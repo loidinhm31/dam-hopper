@@ -66,15 +66,23 @@ pub(crate) struct WindowsFileIdentity {
 #[cfg(windows)]
 pub(crate) fn windows_file_identity(path: &Path) -> std::io::Result<WindowsFileIdentity> {
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
-    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)?;
+    windows_file_identity_from_handle(&file)
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_file_identity_from_handle(
+    file: &std::fs::File,
+) -> std::io::Result<WindowsFileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     let success = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
     if success == 0 {
