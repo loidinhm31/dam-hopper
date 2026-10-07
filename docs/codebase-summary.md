@@ -41,7 +41,7 @@ The initial scan counted **2,046 eligible text files and 411,852 physical lines 
 | `workflow/` | 17 | 3,888 | Workflow domain engine, PTY observation, SQLite persistence |
 | `persistence/` | 13 | 2,844 | SQLite session persistence, migrations 001–010, restore worker |
 | `config/` | 9 | 2,749 | Multi-stage config resolution, global config, schema |
-| `auth/` | 6 | 1,392 | MongoDB authentication, V2 session policy, AES-256-GCM TOTP |
+| `auth/` | 12 | 3,070 | Authentication core: MongoDB & SQLite lite mode, V2 policy, AES-256-GCM TOTP |
 | `port_forward/` | 5 | 1,206 | Linux `/proc/net/tcp` scanner, stdout port sniffing |
 | `host_actions/` | 6 | 1,090 | Host remediation actions (currently `helperNotEnrolled`) |
 | `tunnel/` | 7 | 847 | Cloudflared quick tunnels with Host rewrite |

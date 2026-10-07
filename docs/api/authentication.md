@@ -17,6 +17,7 @@ All MFA endpoints validate their challenge or session credential directly; a cha
 
 | Method and Path | Request | Success |
 | --- | --- | --- |
+| `POST /api/auth/register` | `{ "username", "password" }` | `{ "ok": true }`; created disabled pending operator approval |
 | `POST /api/auth/login` | `{ "username", "password" }` | Enrollment or login-MFA challenge; no session token in normal mode |
 | `POST /api/auth/mfa/setup` | `{ "challengeToken" }` | TOTP secret and provisioning details |
 | `POST /api/auth/mfa/confirm` | `{ "challengeToken", "code" }` | Authenticated session after first enrollment |
@@ -24,10 +25,35 @@ All MFA endpoints validate their challenge or session credential directly; a cha
 | `POST /api/auth/mfa/challenge` | Bearer token or `damhopper-auth` cookie; empty body | Step-up challenge |
 | `GET /api/auth/status` | Bearer token or `damhopper-auth` cookie | Current session state and deadlines |
 | `POST /api/auth/logout` | Bearer token or `damhopper-auth` cookie (optional) | Revoke session when supplied; clear cookie |
-
 The MFA route group enforces a `16 KiB` request body limit (`router.rs:56`). `setup`, `confirm`, and `verify` accept JSON bodies; `challenge` has no request body. MFA challenge handles expire after 5 minutes and are single-purpose. Setup can be fetched repeatedly with the same pending enrollment challenge and returns the same secret.
 
 ## Login and Enrollment
+
+### `POST /api/auth/register`
+
+Registers a new username and password against the active storage backend (MongoDB or SQLite lite mode):
+
+```json
+{ "username": "alice", "password": "<password>" }
+```
+
+On success, returns HTTP `200 OK`:
+
+```json
+{ "ok": true }
+```
+
+**Account Approval Invariant**:
+All newly registered accounts are created in a disabled state (`is_enabled: false` / `0`). An operator must approve the account out-of-band via database updates before login can proceed (see [Operator Account Approval Runbook](../configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook)).
+
+Attempting to call `POST /api/auth/login` on an unapproved account fails immediately with `HTTP 401 Unauthorized`:
+
+```json
+{
+  "code": "ACCOUNT_DISABLED",
+  "error": "Account is disabled. Contact an administrator."
+}
+```
 
 ### `POST /api/auth/login`
 
@@ -66,7 +92,7 @@ When `--no-auth` is enabled, login skips account and MFA challenge requirements,
 }
 ```
 
-The development response also sets the auth cookie. `--no-auth` is strictly rejected in production environments (`RUST_ENV=production` or `ENVIRONMENT=production`) and whenever an active database connection is present (`AppState` verifies `db.is_some()`). Server startup skips MongoDB initialization under `--no-auth`, so MongoDB environment variables alone do not reject `--no-auth`.
+The development response also sets the auth cookie. `--no-auth` is strictly rejected in production environments (`RUST_ENV=production` or `ENVIRONMENT=production`) and whenever an active database connection is present (`AppState` verifies `auth_store.is_some()`). Server startup skips database initialization (both MongoDB and SQLite) under `--no-auth`, so database environment variables alone do not reject `--no-auth` unless production mode is set.
 
 ### `POST /api/auth/mfa/setup`
 
@@ -227,7 +253,7 @@ When rate limits or lockout windows apply, `retryAfter` is included in seconds a
 - `MFA_REQUIRED` (401): 10-day MFA freshness deadline elapsed
 - `SESSION_EXPIRED` (401): 30-day absolute session lifetime elapsed
 - `SESSION_REVOKED` (401): Session revoked or credentials rotated
-- `ACCOUNT_DISABLED` (401): User account disabled
+- `ACCOUNT_DISABLED` (401): User account disabled (including newly registered accounts pending operator approval)
 - `CHALLENGE_EXPIRED` (400): 5-minute challenge deadline elapsed
 - `CHALLENGE_LIMIT_EXCEEDED` (429): Max 5 attempts exceeded for challenge
 - `ACCOUNT_LOCKED` (429): 10 failed attempts triggered 10-minute cooldown
@@ -255,6 +281,6 @@ The UI keeps enrollment challenges and TOTP setup values in the current interact
 
 ## Related Documentation
 
-- [Authentication State, Cryptography, and Session Policy](../architecture/authentication-state-and-cryptography.md) — MongoDB persistence, AES-256-GCM encryption, TOTP CAS, and policy bounds
+- [Authentication State, Cryptography, and Session Policy](../architecture/authentication-state-and-cryptography.md) — Backend storage (MongoDB or SQLite lite mode), AES-256-GCM encryption, TOTP CAS, and policy bounds
 - [API Reference](../api-reference.md#authentication) — Server-wide route index
 - [Server Environment and Authentication](../configuration/server-environment-auth.md) — Configuration and operator recovery runbook

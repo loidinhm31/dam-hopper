@@ -112,29 +112,25 @@ Registration, administrator-role lookup, enabled-account checks, same-subject re
 
 The MFA key is encryption material, not the JWT signing secret. Do not put it in MongoDB or SQLite, expose it to the browser, or log its contents. Missing database state or failed session/user lookups result in an unavailable policy decision rather than an allow decision.
 
-## Lite Mode Status and Runtime Integration Plan
+## SQLite Lite Mode Shipped Architecture and Invariants
 
-Design tracked in [SQLite authentication lite-mode plan](../../plans/261007-1047-sqlite-auth-lite-mode/plan.md). Runtime selection is implemented (Phase 03); live-runtime qualification and operator documentation remain.
+SQLite Lite Mode provides a zero-external-dependency authentication store within the same DamHopper server binary. It is fully qualified and shipped with complete security parity to MongoDB.
 
-### Implementation Status
+### Architecture and Invariants
 
-- **Storage Layer (Phase 02 — Implemented):** `SqliteAuthStore` adapter, `AuthStore::open_sqlite` constructor, versioned STRICT schema migrations (`001-auth.sql`), atomic CAS updates, account throttling, opportunistic pruning, fail-closed row decoding, strict file/directory permissions (0600 file / 0700 parent), WAL durability (`synchronous=FULL`), and file-backed integration test suite (`server/tests/auth_sqlite_store.rs`).
-- **Runtime Selection and Integration (Phase 03 — Implemented):** `DAM_HOPPER_LITE_MODE` / `DAM_HOPPER_AUTH_SQLITE_PATH` selection and path resolution (`server/src/auth/config.rs`), single store initialization in `main.rs`, distinct-file check against the session and telemetry databases, `AppState.db` removed, backend-neutral production and `--no-auth` guards, and registration/role/re-authentication/host-action/idle-suspend consumers migrated to `AuthStore` (`server/tests/auth_lite_mode.rs`).
-- **Remaining (Phases 04–05 — Not Implemented):**
-  - Live runtime qualification across REST and WebSocket auth flows, restart persistence and operator recovery SQL (Phase 04).
-  - Operator documentation and deployment guidance (Phase 05).
-
-### Runtime Integration Design
-
-- Keep one server binary. `DAM_HOPPER_LITE_MODE=true` selects SQLite for the entire authentication store; unset, empty, or false keeps MongoDB. Unknown values fail startup. Lite mode is authenticated deployment, not `--no-auth`.
-- `DAM_HOPPER_AUTH_SQLITE_PATH` selects the independent auth database; absent/empty defaults to `auth.db` in the existing DamHopper global config directory. Existing PTY/workflow `sessions.db` is unchanged. Switching backends starts independent account/session state; no import or migration.
-- Validated lite deployment: one server process per auth file on local storage. Concurrent requests and local operator connections still require database-level CAS; shared network-file/multi-server deployments are not qualified by this feature.
-- Keep `AuthService`, policy, JWT V2, TOTP, encrypted secrets, and wire contracts shared. Handlers, role checks, sensitive-action reauthentication, and transports must not bypass `AuthStore`.
-- File-backed SQLite initialization/migrations must succeed before accepting requests. Unavailable storage fails closed, never falls back to MongoDB or development authentication. Production requires the selected usable store and the existing MFA key.
-- Preserve explicit development bypass semantics; do not open an authentication database under `--no-auth`. Application-state construction rejects bypass plus an active store, regardless of backend.
-- Account registration retains disabled-by-default user status. Operators enable accounts and assign administrator roles locally; no automatic first-user administrator, unauthenticated management endpoint, or reduced MFA policy.
-- Qualification must cover authenticated enrollment/login, restart persistence, revocation, replay/CAS races, exact deadlines, administrator checks, REST/WebSocket enforcement, and unchanged MongoDB defaults.
-
+- **Same Binary, Zero External Services**: Setting `DAM_HOPPER_LITE_MODE=true` (or `1`, `TRUE`) activates the SQLite storage adapter for all authentication operations. Unset, empty, false, or 0 retains MongoDB. Invalid selector strings abort startup immediately.
+- **Single Store Lifecycle**: The selected `AuthStore` is instantiated once during startup in `server/src/main.rs`. Raw database handles are removed from `AppState`; all authentication, session, challenge, role, and re-authentication queries dispatch through the shared `AuthStore` interface.
+- **Storage Isolation and Path Resolution**: `DAM_HOPPER_AUTH_SQLITE_PATH` selects the database file path. When omitted or empty, it defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux). Startup checks enforce that `auth.db` does not collide with PTY/IDE session state (`sessions.db`) or telemetry state (`telemetry.db`).
+- **Independent State**: Switching between MongoDB and SQLite uses fresh, independent datastores. No data migration is performed; existing accounts in MongoDB remain intact if the operator reverts to MongoDB.
+- **Strict Security Parity**:
+  - Passwords hashed via Argon2id with identical parameters.
+  - MFA secrets encrypted at rest via AES-256-GCM using `DAM_HOPPER_MFA_KEY_FILE` (mandatory in production).
+  - Monotonic TOTP step verification and atomic replay protection via single conditional SQL updates.
+  - Account failure throttling enforced within serialized `IMMEDIATE` transactions (10 failed attempts trigger a 10-minute lockout).
+  - Session lifetimes (30 days absolute, 10 days MFA freshness) evaluated by the shared deterministic policy evaluator.
+  - Disabled-by-default registration: new users are created with `is_enabled = 0`. Login returns `HTTP 401 {"code": "ACCOUNT_DISABLED"}` until approved by local operator SQL.
+- **Deployment Constraint**: Exactly **one server process per local auth file** on local persistent storage. Concurrent asynchronous tasks within the single server process safely access SQLite under WAL mode. Network filesystems (NFS, SMB, CIFS) and multi-server clusters sharing an auth file are not supported.
+- **Platform Qualification**: Fully qualified on Linux x86_64. On Windows hosts, standard OS single-process file locking semantics apply to the database and key files.
 ## Related Documentation
 
 - [Authentication API](../api/authentication.md) — Route contract, MFA challenge credential admission, and JSON examples

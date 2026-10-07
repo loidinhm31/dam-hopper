@@ -67,7 +67,8 @@ dam-hopper status --json
 
 ### Step 4: Configure Production Environment & MFA Key
 
-In production authenticated mode (`RUST_ENV=production` or `ENVIRONMENT=production` with MongoDB configured), a dedicated 32-byte encryption key is **mandatory** for encrypting TOTP MFA secrets at rest via AES-256-GCM (`DAM_HOPPER_MFA_KEY_FILE`). Server startup fails closed if this key is missing or contains group/world permission bits (`mode & 0o077 != 0` on Unix; `chmod 600` recommended).
+In production authenticated mode (`RUST_ENV=production` or `ENVIRONMENT=production` with either MongoDB or SQLite lite mode configured), a dedicated 32-byte encryption key is **mandatory** for encrypting TOTP MFA secrets at rest via AES-256-GCM (`DAM_HOPPER_MFA_KEY_FILE`). Server startup fails closed if this key is missing or contains group/world permission bits (`mode & 0o077 != 0` on Unix; `chmod 600` recommended).
+
 ```bash
 # 1. Create config directory
 sudo mkdir -p /etc/dam-hopper
@@ -76,18 +77,38 @@ sudo mkdir -p /etc/dam-hopper
 openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
 sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
 sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
+```
 
-# 3. Configure /etc/dam-hopper/server.env
-sudo tee -a /etc/dam-hopper/server.env <<EOF
+#### Option A: Default MongoDB Mode
+Configure `/etc/dam-hopper/server.env` with MongoDB connection parameters:
+```bash
+sudo tee /etc/dam-hopper/server.env <<EOF
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DATABASE=damHopper
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
 DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
 EOF
-
-# 4. Lock down environment file permissions
 sudo chmod 600 /etc/dam-hopper/server.env
 ```
+
+#### Option B: SQLite Lite Mode (No MongoDB Required)
+Configure `/etc/dam-hopper/server.env` with SQLite lite mode:
+```bash
+# Create private persistent state directory for auth.db
+sudo mkdir -p /var/lib/dam-hopper
+sudo chown <API_USER>:<API_GROUP> /var/lib/dam-hopper
+sudo chmod 700 /var/lib/dam-hopper
+
+sudo tee /etc/dam-hopper/server.env <<EOF
+DAM_HOPPER_LITE_MODE=true
+DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db
+DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
+DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
+EOF
+sudo chmod 600 /etc/dam-hopper/server.env
+```
+
+*Deployment Limit*: Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network filesystems.
 
 ### Step 5: Activate the Release
 

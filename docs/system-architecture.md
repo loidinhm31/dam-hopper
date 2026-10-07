@@ -190,7 +190,7 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 
 ## Authentication, Privacy, and Capability Boundaries
 
-- Normal server requests use validated session authentication and role checks. Production MFA keys and cookies are server-configured; see [Authentication API](./api/authentication.md) and [Server Environment & Authentication](./configuration/server-environment-auth.md).
+- Normal server requests use validated session authentication and role checks across MongoDB or SQLite lite mode backends. Production MFA keys and cookies are server-configured; see [Authentication API](./api/authentication.md), [Authentication State & Cryptography](./architecture/authentication-state-and-cryptography.md), and [Server Environment & Authentication](./configuration/server-environment-auth.md).
 - Credentialed browser requests use explicit allowed origins. `--no-auth` is a development bypass only; bind it to `127.0.0.1`, never to an untrusted public network interface. Native Advisor remains forbidden in that mode.
 - Filesystem and media operations validate resolved targets and bound data. Opaque media tickets bind actor, client namespace, target, file identity/version, kind, purpose, and incarnation; cleanup stays with the original owner.
 - Encrypted uploads use OPAQUE PAKE exchange and chunked AES-256-GCM over the WebSocket transport. One captured profile/generation transport owns authentication and final write; no plaintext or alternate-owner fallback is allowed.

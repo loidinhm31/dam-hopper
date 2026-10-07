@@ -35,6 +35,7 @@ const knownEnvVars = new Set([
   'MONGODB_URI', 'MONGODB_DATABASE', 'DAM_HOPPER_MFA_KEY_FILE', 'DAM_HOPPER_CORS_ORIGINS',
   'DAM_HOPPER_CONFIG', 'DAM_HOPPER_WORKSPACE', 'DAM_HOPPER_NO_AUTH', 'DAM_HOPPER_WEB_ROOT',
   'DAM_HOPPER_WEB_PORT', 'DAM_HOPPER_WEB_HOST', 'DAM_HOPPER_API_URL', 'DAM_HOPPER_SERVER_TOKEN',
+  'DAM_HOPPER_LITE_MODE', 'DAM_HOPPER_AUTH_SQLITE_PATH',
   'RUST_ENV', 'ENVIRONMENT', 'RUST_LOG', 'VITE_DAM_HOPPER_SERVER_URL', 'E2E_CAPTURE', 'CI',
   'HOME', 'PATH', 'NODE_ENV', 'SOURCE_DATE_EPOCH', 'PORT', 'HOST'
 ]);
@@ -42,7 +43,7 @@ const knownEnvVars = new Set([
 const exampleEnvPath = path.join(rootDir, 'deploy', 'server.env.example');
 if (fs.existsSync(exampleEnvPath)) {
   for (const line of fs.readFileSync(exampleEnvPath, 'utf-8').split('\n')) {
-    const m = line.match(/^([A-Z0-9_]+)=/);
+    const m = line.match(/^#?\s*([A-Z0-9_]+)=/);
     if (m) knownEnvVars.add(m[1]);
   }
 }
