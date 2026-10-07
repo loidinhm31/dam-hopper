@@ -398,7 +398,9 @@ async fn test_no_auth_with_mongodb_fails() {
     let mongodb_client = mongodb::Client::with_uri_str("mongodb://fake")
         .await
         .unwrap();
-    let mock_db = Some(mongodb_client.database("test"));
+    let mock_db = Some(dam_hopper_server::auth::AuthStore::from_mongo(
+        mongodb_client.database("test"),
+    ));
 
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
@@ -427,8 +429,8 @@ async fn test_no_auth_with_mongodb_fails() {
     if let Err(e) = result {
         let err_msg = e.to_string();
         assert!(
-            err_msg.contains("no-auth cannot be used when MongoDB is configured"),
-            "Error message should mention MongoDB conflict. Got: {}",
+            err_msg.contains("no-auth cannot be used when an authentication store is configured"),
+            "Error message should mention the authentication store conflict. Got: {}",
             err_msg
         );
     }
@@ -563,8 +565,8 @@ async fn test_production_missing_mongodb_fails() {
     if let Err(e) = result {
         let err_msg = e.to_string();
         assert!(
-            err_msg.contains("MongoDB configuration") && err_msg.contains("required in production"),
-            "Error message should mention MongoDB required in production. Got: {}",
+            err_msg.contains("authentication store is required in production"),
+            "Error message should mention the authentication store requirement. Got: {}",
             err_msg
         );
     }

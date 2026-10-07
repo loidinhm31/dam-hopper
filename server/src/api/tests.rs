@@ -1891,6 +1891,7 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project failed")
+    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
 }
 
 fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> AppState {
@@ -1958,6 +1959,7 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_roots failed")
+    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
 }
 
 #[tokio::test]
@@ -2095,6 +2097,7 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_env_file failed")
+    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
 }
 
 fn make_state_with_project_root_env_file(
@@ -2139,6 +2142,7 @@ fn make_state_with_project_root_env_file(
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_root_env_file failed")
+    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
 }
 
 #[test]
@@ -7987,41 +7991,63 @@ async fn idle_suspend_force_suspend_payload_validation_and_bounds() {
     assert!(read_result.is_err());
 }
 #[tokio::test]
-async fn idle_suspend_force_suspend_disabled_actor_rejected() {
+async fn idle_suspend_actor_gate_uses_selected_store_account_state() {
+    use crate::api::auth::AuthenticatedActor;
+    use crate::api::idle_suspend::verify_enabled_actor;
+    use crate::auth::{AuthService, AuthStore, UserRecord, UserRole};
+
+    fn account(username: &str, is_enabled: bool) -> UserRecord {
+        UserRecord {
+            id: None,
+            username: username.to_string(),
+            password_hash: String::new(),
+            is_enabled,
+            role: UserRole::User,
+            auth_version: 0,
+            mfa: None,
+            mfa_attempt_window_started_at: None,
+            mfa_attempt_count: 0,
+            mfa_blocked_until: None,
+        }
+    }
+    async fn gate(
+        state: &AppState,
+        subject: &str,
+    ) -> Result<AuthenticatedActor, axum::response::Response> {
+        verify_enabled_actor(
+            state,
+            Some(&AuthenticatedActor::new(subject, None)),
+            "disabledNoAuth",
+            "no-auth",
+            "authentication required",
+            "enabled account required",
+        )
+        .await
+    }
+
     let tmp = tempfile::tempdir().unwrap();
-    let mut state = make_state(&tmp);
+    let store = AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
+    store.create_user(account("enabled-actor", true)).await.unwrap();
+    store.create_user(account("disabled-actor", false)).await.unwrap();
+    let state = make_state(&tmp)
+        .with_auth_service(Arc::new(AuthService::with_system_clock(Some(store), None)));
 
-    let mut client_options = mongodb::options::ClientOptions::parse("mongodb://127.0.0.1:27999")
-        .await
-        .unwrap();
-    client_options.server_selection_timeout = Some(std::time::Duration::from_millis(50));
-    let client = mongodb::Client::with_options(client_options).unwrap();
-    state.db = Some(client.database("test"));
+    assert_eq!(gate(&state, "enabled-actor").await.unwrap().subject, "enabled-actor");
 
-    let router = build_router(state);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/api/system/idle-suspend/v1/force-suspend")
-        .header("Content-Type", "application/json")
-        .header("Cookie", auth_cookie())
-        .header("Origin", "http://127.0.0.1:4801")
-        .header("Host", "127.0.0.1:4801")
-        .body(Body::from(
-            serde_json::json!({
-                "wakeAfterSeconds": 0,
-                "force": false
-            })
-            .to_string(),
-        ))
-        .unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["code"], "actorDisabled");
+    for subject in ["disabled-actor", "unknown-actor"] {
+        let resp = gate(&state, subject).await.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{subject}");
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "actorDisabled", "{subject}");
+    }
+
+    // Without a selected store there is no authority to consult: unavailable, not a default account.
+    let no_store = make_state(&tmp)
+        .with_auth_service(Arc::new(AuthService::with_system_clock(None, None)));
+    let resp = gate(&no_store, "enabled-actor").await.unwrap_err();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

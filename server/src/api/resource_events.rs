@@ -1138,7 +1138,7 @@ pub(crate) mod tests {
             event_sink,
             signing_secret.clone(),
             fs,
-            Some(db.clone()),
+            Some(store.clone()),
             false,
             tunnel_manager,
             None,

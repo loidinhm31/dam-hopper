@@ -118,7 +118,7 @@ pub async fn verify_enabled_actor(
         ));
     }
 
-    if state.db.is_none() {
+    if state.auth_service.store().is_none() {
         return Err(idle_suspend_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             IdleSuspendErrorCode::AuthenticationUnavailable.as_code_str(),
@@ -134,7 +134,7 @@ pub async fn verify_enabled_actor(
         ));
     };
 
-    if !auth::is_enabled_user(state.db.as_ref(), &actor.subject).await {
+    if !auth::is_enabled_user(state.auth_service.store(), &actor.subject).await {
         return Err(idle_suspend_error_response(
             StatusCode::FORBIDDEN,
             IdleSuspendErrorCode::ActorDisabled.as_code_str(),

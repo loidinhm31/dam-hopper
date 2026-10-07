@@ -87,7 +87,7 @@ async fn setup_fixture() -> Option<TestFixture> {
         event_sink,
         TEST_SECRET.to_string(),
         fs,
-        Some(db.clone()),
+        Some(store.clone()),
         false, // normal auth mode
         tunnel_manager,
         None,

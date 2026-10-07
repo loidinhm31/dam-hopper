@@ -96,7 +96,7 @@ impl AuthTestFixture {
             event_sink,
             TEST_JWT_SECRET.to_string(),
             fs,
-            Some(db.clone()),
+            Some(store.clone()),
             false,
             tunnel_manager,
             None,

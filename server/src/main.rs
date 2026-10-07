@@ -489,6 +489,65 @@ mod tests {
     }
 }
 
+/// Open the environment-selected authentication store exactly once.
+///
+/// Must run after every `.env` file has been loaded. A selected SQLite store
+/// that cannot be opened is fatal; there is never a fallback to MongoDB, and
+/// MongoDB settings are ignored in lite mode.
+async fn init_auth_store(
+    session_db_path: &std::path::Path,
+    telemetry_db_path: &str,
+) -> anyhow::Result<Option<dam_hopper_server::auth::AuthStore>> {
+    use dam_hopper_server::auth::{AuthBackendConfig, AuthStore};
+
+    let backend = AuthBackendConfig::from_env()
+        .map_err(|e| anyhow::anyhow!("FATAL: invalid authentication backend configuration: {e}"))?;
+    match backend {
+        AuthBackendConfig::Sqlite { path } => {
+            let telemetry_path =
+                dam_hopper_server::telemetry::runtime::telemetry_path(telemetry_db_path);
+            AuthBackendConfig::Sqlite { path: path.clone() }
+                .ensure_distinct_from(&[
+                    ("session", session_db_path),
+                    ("telemetry", telemetry_path.as_path()),
+                ])
+                .map_err(|e| anyhow::anyhow!("FATAL: {e}"))?;
+            let store = AuthStore::open_sqlite(&path).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "FATAL: cannot open SQLite authentication database {}: {e}",
+                    path.display()
+                )
+            })?;
+            tracing::info!(path = %path.display(), "Authentication backend: SQLite (lite mode)");
+            Ok(Some(store))
+        }
+        AuthBackendConfig::Mongo => {
+            let (Ok(uri), Ok(name)) = (
+                std::env::var("MONGODB_URI"),
+                std::env::var("MONGODB_DATABASE"),
+            ) else {
+                if std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                    || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+                {
+                    anyhow::bail!(
+                        "FATAL: an authentication store is required in production environment. Set MONGODB_URI and MONGODB_DATABASE, or enable lite mode with DAM_HOPPER_LITE_MODE=true."
+                    );
+                }
+                tracing::warn!("MongoDB not configured — running without database");
+                return Ok(None);
+            };
+            tracing::info!(%name, "Connecting to MongoDB...");
+            let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
+            let client = mongodb::Client::with_options(client_options)?;
+            let store = AuthStore::from_mongo(client.database(&name));
+            if let Err(e) = store.init_indexes().await {
+                tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
+            }
+            Ok(Some(store))
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Early hook reporting dispatch before dotenv/tracing/global config/db.
@@ -727,33 +786,11 @@ async fn main() -> anyhow::Result<()> {
     let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
     let fs = FsSubsystem::new(project_roots(&config));
 
-    let db = if cli.no_auth {
+    let auth_store = if cli.no_auth {
         None
-    } else if let (Ok(uri), Ok(name)) = (
-        std::env::var("MONGODB_URI"),
-        std::env::var("MONGODB_DATABASE"),
-    ) {
-        tracing::info!(%name, "Connecting to MongoDB...");
-        let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
-        let client = mongodb::Client::with_options(client_options)?;
-        Some(client.database(&name))
     } else {
-        if std::env::var("RUST_ENV").unwrap_or_default() == "production"
-            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-        {
-            anyhow::bail!(
-                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment."
-            );
-        }
-        tracing::warn!("MongoDB not configured — running without database");
-        None
+        init_auth_store(&db_path, &config.server.telemetry.db_path).await?
     };
-    if let Some(database) = &db {
-        let auth_store = dam_hopper_server::auth::AuthStore::from_mongo(database.clone());
-        if let Err(e) = auth_store.init_indexes().await {
-            tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
-        }
-    }
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
     let opaque_server_setup =
@@ -773,7 +810,7 @@ async fn main() -> anyhow::Result<()> {
         event_sink,
         token,
         fs,
-        db,
+        auth_store,
         cli.no_auth,
         tunnel_manager,
         Some(port_forward_manager.clone()),

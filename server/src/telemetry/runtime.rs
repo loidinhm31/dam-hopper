@@ -388,7 +388,7 @@ fn apply_retention(handle: &TelemetryHandle, config: &TelemetryConfig) -> Result
         .map_err(|_| "Usage retention operation failed".to_string())
 }
 
-pub(crate) fn telemetry_path(value: &str) -> std::path::PathBuf {
+pub fn telemetry_path(value: &str) -> std::path::PathBuf {
     if value == "~" {
         return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     }

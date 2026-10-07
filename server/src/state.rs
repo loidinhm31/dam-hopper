@@ -73,8 +73,6 @@ pub struct AppState {
     pub image_stream_tickets: ImageStreamTicketStore,
     /// Serializes sandbox replacement against video ticket issuance.
     pub workspace_context_guard: Arc<RwLock<()>>,
-    /// MongoDB Database, if configured
-    pub db: Option<mongodb::Database>,
     /// Dev mode: skip authentication checks
     pub no_auth: bool,
     /// Exact origins allowed for credentialed CORS and cross-origin media/WS.
@@ -244,7 +242,8 @@ impl AppState {
     /// Create new AppState with production safety validation for no-auth mode.
     ///
     /// Returns `Err` if:
-    /// - `no_auth` is enabled with MongoDB configured (security risk)
+    /// - `no_auth` is enabled with an authentication store configured (MongoDB or SQLite lite mode)
+    /// - `no_auth` is disabled in production without a store, or a store without an MFA key
     /// - `no_auth` is enabled in production environment (detected via RUST_ENV or ENVIRONMENT)
     pub fn new(
         workspace_dir: PathBuf,
@@ -255,7 +254,7 @@ impl AppState {
         event_sink: BroadcastEventSink,
         jwt_secret: String,
         fs: FsSubsystem,
-        db: Option<mongodb::Database>,
+        auth_store: Option<crate::auth::AuthStore>,
         no_auth: bool,
         tunnel_manager: TunnelSessionManager,
         port_forward_manager: Option<Arc<PortForwardManager>>,
@@ -280,20 +279,21 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("."));
         let host_actions = HostActionService::new(host_action_config_dir);
 
+        let production = std::env::var("RUST_ENV").unwrap_or_default() == "production"
+            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production";
+
         // Production safety guards for no-auth mode
         if no_auth {
-            // Prevent accidental deployment with no-auth + MongoDB configured
-            if db.is_some() {
+            // Prevent accidental deployment with no-auth + an authentication store configured
+            if auth_store.is_some() {
                 anyhow::bail!(
-                    "FATAL: --no-auth cannot be used when MongoDB is configured (MONGODB_URI is set).\n\
+                    "FATAL: --no-auth cannot be used when an authentication store is configured (MongoDB or SQLite lite mode).\n\
                      This combination is unsafe and forbidden."
                 );
             }
 
             // Check for production environment indicators
-            if std::env::var("RUST_ENV").unwrap_or_default() == "production"
-                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-            {
+            if production {
                 anyhow::bail!(
                     "FATAL: --no-auth is not allowed in production environment.\n\
                      Set RUST_ENV or ENVIRONMENT to 'development' for local dev."
@@ -311,13 +311,10 @@ impl AppState {
             ));
 
             tracing::error!("⚠️  NO-AUTH mode enabled — authentication bypassed");
-        } else if db.is_none()
-            && (std::env::var("RUST_ENV").unwrap_or_default() == "production"
-                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production")
-        {
+        } else if auth_store.is_none() && production {
             anyhow::bail!(
-                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment.\n\
-                 Set MONGODB_URI and MONGODB_DATABASE or use development mode for local dev."
+                "FATAL: an authentication store is required in production environment.\n\
+                 Set MONGODB_URI and MONGODB_DATABASE, or enable lite mode with DAM_HOPPER_LITE_MODE=true."
             );
         }
 
@@ -367,26 +364,20 @@ impl AppState {
                     None
                 }
             });
-        let auth_store = db.as_ref().map(|database| crate::auth::AuthStore::from_mongo(database.clone()));
         let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
             let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;
             Some(key)
-        } else if !no_auth && db.is_some() && (
-            std::env::var("RUST_ENV").unwrap_or_default() == "production"
-            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-        ) {
+        } else if !no_auth && auth_store.is_some() && production {
             anyhow::bail!(
                 "FATAL: DAM_HOPPER_MFA_KEY_FILE is required in production authenticated mode."
             );
         } else {
             None
         };
-        let auth_service = if let Some(store) = auth_store {
-            Arc::new(crate::auth::AuthService::with_system_clock(Some(store), mfa_key))
-        } else {
-            Arc::new(crate::auth::AuthService::new_mock_default().0)
-        };
+        // The selected store is the only authentication authority: without one the
+        // service reports authentication unavailable rather than inventing an account.
+        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
 
         Ok(Self {
             workspace_dir,
@@ -403,7 +394,6 @@ impl AppState {
             video_stream_tickets,
             image_stream_tickets,
             workspace_context_guard: Arc::new(RwLock::new(())),
-            db,
             no_auth,
             cors_origins: Arc::new(Vec::new()),
             tunnel_manager,

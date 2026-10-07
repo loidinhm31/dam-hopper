@@ -71,6 +71,7 @@ fn make_test_state(tmp: &TempDir, initial_toml: &str) -> AppState {
         TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))
 }
 
 #[tokio::test]

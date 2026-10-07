@@ -60,6 +60,7 @@ fn make_state(tmp: &tempfile::TempDir) -> AppState {
         dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap()
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))
 }
 
 fn auth_cookie() -> String {
