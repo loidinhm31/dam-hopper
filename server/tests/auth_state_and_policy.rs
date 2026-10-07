@@ -428,7 +428,7 @@ async fn test_mongodb_auth_store_cas_and_indexes() {
         return;
     }
 
-    let store = dam_hopper_server::auth::AuthStore::new(db.clone());
+    let store = dam_hopper_server::auth::AuthStore::from_mongo(db.clone());
 
     // 1. Duplicate check before index creation
     let users_col = db.collection::<mongodb::bson::Document>("users");
@@ -604,5 +604,103 @@ async fn test_mongodb_auth_store_cas_and_indexes() {
     assert!(user.mfa_blocked_until.is_none());
 
     // Clean up test DB
+    let _ = db.drop().await;
+}
+
+fn registered_user(username: &str, id: Option<mongodb::bson::oid::ObjectId>) -> UserRecord {
+    UserRecord {
+        id,
+        username: username.to_string(),
+        password_hash: "$2b$12$hashed".to_string(),
+        is_enabled: false,
+        role: UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    }
+}
+
+#[tokio::test]
+async fn test_mongodb_create_user_generates_id_and_reports_username_conflict_only() {
+    use dam_hopper_server::auth::{AuthStore, StoreError};
+
+    let uri = std::env::var("TEST_MONGODB_URI")
+        .unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
+    let client = match mongodb::Client::with_uri_str(&uri).await {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("Skipping MongoDB integration test: cannot connect to {uri}");
+            return;
+        }
+    };
+    let db = client.database(&format!("test_auth_{}", uuid::Uuid::new_v4().simple()));
+    if db.run_command(mongodb::bson::doc! { "ping": 1 }).await.is_err() {
+        eprintln!("Skipping MongoDB integration test: ping failed on {uri}");
+        return;
+    }
+    let store = AuthStore::from_mongo(db.clone());
+
+    // Conflict outcome holds with and without the unique index in place.
+    for with_index in [false, true] {
+        if with_index {
+            store.init_indexes().await.expect("indexes on clean collection");
+        }
+        let name = format!("carol-{with_index}");
+        store.create_user(registered_user(&name, None)).await.unwrap();
+        let stored = store.get_user(&name).await.unwrap().expect("user persisted");
+        assert!(stored.id.is_some(), "ObjectId generated when absent");
+        assert!(!stored.is_enabled && stored.auth_version == 0);
+
+        let again = store.create_user(registered_user(&name, None)).await;
+        assert!(matches!(again, Err(StoreError::DuplicateUsername(_))), "got {again:?}");
+        db.collection::<UserRecord>("users")
+            .delete_many(mongodb::bson::doc! {})
+            .await
+            .unwrap();
+    }
+
+    // Duplicate `_id` is a storage error, never masked as a username conflict.
+    let shared_id = mongodb::bson::oid::ObjectId::new();
+    store.create_user(registered_user("dave", Some(shared_id))).await.unwrap();
+    let collision = store.create_user(registered_user("erin", Some(shared_id))).await;
+    assert!(matches!(collision, Err(StoreError::Mongo(_))), "got {collision:?}");
+    assert!(store.get_user("erin").await.unwrap().is_none());
+
+    // Concurrent registrations of one username: the index arbitrates, one winner.
+    let users = db.collection::<UserRecord>("users");
+    users.delete_many(mongodb::bson::doc! {}).await.unwrap();
+    let attempts = (0..8).map(|_| store.create_user(registered_user("frank", None)));
+    let results = futures_util::future::join_all(attempts).await;
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "{results:?}");
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| matches!(e, StoreError::DuplicateUsername(_))),
+        "{results:?}"
+    );
+
+    // A collision on an unrelated unique index is a storage error, not a username conflict.
+    users.delete_many(mongodb::bson::doc! {}).await.unwrap();
+    users
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(mongodb::bson::doc! { "authVersion": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .unique(true)
+                        .name("other_username_1".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+    store.create_user(registered_user("gina", None)).await.unwrap();
+    let unrelated = store.create_user(registered_user("hank", None)).await;
+    assert!(matches!(unrelated, Err(StoreError::Mongo(_))), "got {unrelated:?}");
+
     let _ = db.drop().await;
 }

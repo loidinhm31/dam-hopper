@@ -749,7 +749,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     if let Some(database) = &db {
-        let auth_store = dam_hopper_server::auth::AuthStore::new(database.clone());
+        let auth_store = dam_hopper_server::auth::AuthStore::from_mongo(database.clone());
         if let Err(e) = auth_store.init_indexes().await {
             tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
         }

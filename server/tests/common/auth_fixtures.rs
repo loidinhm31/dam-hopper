@@ -58,7 +58,7 @@ impl AuthTestFixture {
             return None;
         }
 
-        let store = AuthStore::new(db.clone());
+        let store = AuthStore::from_mongo(db.clone());
         if let Err(e) = store.init_indexes().await {
             eprintln!("Warning: failed to init indexes on {}: {:?}", db_name, e);
         }

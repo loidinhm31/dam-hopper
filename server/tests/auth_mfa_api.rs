@@ -51,7 +51,7 @@ async fn setup_fixture() -> Option<TestFixture> {
         return None;
     }
 
-    let store = AuthStore::new(db.clone());
+    let store = AuthStore::from_mongo(db.clone());
     let _ = store.init_indexes().await;
 
     let tmp = tempdir().unwrap();

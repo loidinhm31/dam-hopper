@@ -18,7 +18,8 @@ Session issuance and every protected REST admission enforce the 30-day absolute 
 | Path | Responsibility |
 | --- | --- |
 | `server/src/auth/model.rs` | User, MFA, session, challenge, V2 claims, and policy decision records |
-| `server/src/auth/store.rs` | MongoDB collections, indexes, account/challenge attempts, session operations, and compare-and-swap (CAS) mutations |
+| `server/src/auth/store.rs` | Shared `AuthStore` facade: backend dispatch, error type, user insertion (`create_user`), and test qualification hooks |
+| `server/src/auth/store/mongo.rs` | Private MongoDB adapter: collections, indexes, account/challenge attempts, session operations, and compare-and-swap (CAS) mutations |
 | `server/src/auth/policy.rs` | Injectable clock, deadline calculation, session decision table, challenge readiness, and throttle constants |
 | `server/src/auth/secret.rs` | MFA key-file loading and AES-256-GCM secret encryption/decryption |
 | `server/src/auth/totp.rs` | Secret generation/encoding, `otpauth://` URI construction, TOTP verification, and replay check |
@@ -54,7 +55,7 @@ Policy bounds are fixed in `policy.rs`:
 
 `AuthDecision` distinguishes full access, MFA-required step-up, full-login-required, and unavailable state. MongoDB TTL indexes support cleanup; request-time policy checks enforce expiries independently of TTL deletion.
 
-`AuthStore` provides conditional enrollment confirmation, monotonic accepted-step advancement, one-time challenge consumption, session MFA revision advancement, and session revocation. Index setup checks for duplicate usernames before requesting a unique username index, and requests username lookup plus expiry TTL indexes for sessions and challenges. TTL deletion is garbage collection only; request-time checks enforce authorization deadlines.
+`AuthStore` is a facade over a private backend adapter (currently MongoDB, constructed with `AuthStore::from_mongo`); no raw database handle is exposed through it. It provides user insertion, conditional enrollment confirmation, monotonic accepted-step advancement, one-time challenge consumption, session MFA revision advancement, and session revocation. `create_user` is a plain insert that generates the immutable `_id` when absent and reports a username conflict as `StoreError::DuplicateUsername`; other write failures stay storage errors. Index setup checks for duplicate usernames before requesting a unique username index, and requests username lookup plus expiry TTL indexes for sessions and challenges. TTL deletion is garbage collection only; request-time checks enforce authorization deadlines.
 
 ## Cryptography and TOTP
 
@@ -68,9 +69,23 @@ Challenge handles are generated from 32 random bytes and returned as hex; only t
 
 ## Startup and Operational Boundary
 
-When MongoDB is configured, `main.rs` constructs `AuthStore` and requests index initialization; returned initialization errors are logged as warnings and do not abort startup. `AppState::new` constructs the shared service and loads `DAM_HOPPER_MFA_KEY_FILE` when configured. Production mode is identified by `RUST_ENV=production` or `ENVIRONMENT=production`; production startup requires MongoDB and the MFA key, and rejects the development bypass (`--no-auth`).
+When MongoDB is configured, `main.rs` constructs `AuthStore` through `AuthStore::from_mongo` and requests index initialization; returned initialization errors are logged as warnings and do not abort startup. `AppState::new` constructs the shared service and loads `DAM_HOPPER_MFA_KEY_FILE` when configured. Production mode is identified by `RUST_ENV=production` or `ENVIRONMENT=production`; production startup requires MongoDB and the MFA key, and rejects the development bypass (`--no-auth`).
 
 The MFA key is encryption material, not the JWT signing secret. Do not put it in MongoDB, expose it to the browser, or log its contents. Missing database state or failed session/user lookups result in an unavailable policy decision rather than an allow decision.
+
+## Proposed Lite Mode — Planning Only
+
+**Not implemented.** Design tracked in [SQLite authentication lite-mode plan](../../plans/261007-1047-sqlite-auth-lite-mode/plan.md). Current MongoDB behavior above remains authoritative until implementation and qualification.
+
+- Keep one server binary. `DAM_HOPPER_LITE_MODE=true` selects SQLite for the entire authentication store; unset, empty, or false keeps MongoDB. Unknown values fail startup. Lite mode is authenticated deployment, not `--no-auth`.
+- `DAM_HOPPER_AUTH_SQLITE_PATH` selects the independent auth database; absent/empty defaults to `auth.db` in the existing DamHopper global config directory. Existing PTY/workflow `sessions.db` is unchanged. Switching backends starts independent account/session state; no import or migration.
+- Validated lite deployment: one server process per auth file on local storage. Concurrent requests and local operator connections still require database-level CAS; shared network-file/multi-server deployments are not qualified by this feature.
+- Keep `AuthService`, policy, JWT V2, TOTP, encrypted secrets, and wire contracts shared. `AuthStore` dispatches to MongoDB or SQLite adapters; handlers, role checks, sensitive-action reauthentication, and transports must not bypass it.
+- SQLite stores typed user, session, and challenge columns, with exact username uniqueness and millisecond UTC timestamps. Conditional writes preserve challenge single use, TOTP monotonicity, session revisions, account reset, and persisted throttling. Blocking database work runs outside Tokio executor threads.
+- File-backed SQLite initialization/migrations must succeed before accepting requests. Unavailable storage fails closed, never falls back to MongoDB or development authentication. Production requires the selected usable store and the existing MFA key.
+- Preserve explicit development bypass semantics; do not open an authentication database under `--no-auth`. Application-state construction rejects bypass plus an active store, regardless of backend.
+- Account registration retains disabled-by-default user status. Operators enable accounts and assign administrator roles locally; no automatic first-user administrator, unauthenticated management endpoint, or reduced MFA policy.
+- Qualification must cover authenticated enrollment/login, restart persistence, revocation, replay/CAS races, exact deadlines, administrator checks, REST/WebSocket enforcement, and unchanged MongoDB defaults.
 
 ## Related Documentation
 

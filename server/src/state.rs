@@ -367,7 +367,7 @@ impl AppState {
                     None
                 }
             });
-        let auth_store = db.as_ref().map(|database| crate::auth::AuthStore::new(database.clone()));
+        let auth_store = db.as_ref().map(|database| crate::auth::AuthStore::from_mongo(database.clone()));
         let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
             let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;

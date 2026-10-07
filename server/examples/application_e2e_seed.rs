@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let client = mongodb::Client::with_options(client_options)?;
     let db = client.database(&database);
 
-    let auth_store = AuthStore::new(db.clone());
+    let auth_store = AuthStore::from_mongo(db.clone());
     auth_store.init_indexes().await?;
 
     let now = Utc::now();
