@@ -4,7 +4,10 @@ import * as path from "node:path";
 /**
  * Seeds deterministic plan fixtures matching Phase 05 qualification contract.
  */
-export async function seedPlanFixtures(primaryProjectDir: string, secondaryProjectDir?: string): Promise<void> {
+export async function seedPlanFixtures(
+  primaryProjectDir: string,
+  secondaryProjectDir?: string,
+): Promise<void> {
   const plansDir = path.join(primaryProjectDir, "plans");
   await fs.mkdir(plansDir, { recursive: true });
 
@@ -153,15 +156,21 @@ created: 2026-10-05
     const folderName = `plan-${String(i).padStart(3, "0")}`;
     const childDir = path.join(bulkDir, folderName);
     await fs.mkdir(childDir, { recursive: true });
-    await fs.writeFile(path.join(childDir, "plan.md"), `# Plan ${folderName}\n`);
+    await fs.writeFile(
+      path.join(childDir, "plan.md"),
+      `# Plan ${folderName}\n`,
+    );
   }
-  // Unreadable document inside bulk directory
+  // Unreadable document inside bulk directory (permissions restricted inside container post-copy)
   const unreadablePath = path.join(bulkDir, "unreadable-doc.txt");
-  await fs.writeFile(unreadablePath, "Cannot read\n", { mode: 0o000 });
-
+  await fs.writeFile(unreadablePath, "Cannot read\n");
   // 7. Secondary project plan with same relative path plans/261001-sample but different report
   if (secondaryProjectDir) {
-    const secSampleDir = path.join(secondaryProjectDir, "plans", "261001-sample");
+    const secSampleDir = path.join(
+      secondaryProjectDir,
+      "plans",
+      "261001-sample",
+    );
     await fs.mkdir(secSampleDir, { recursive: true });
     await fs.writeFile(
       path.join(secSampleDir, "plan.md"),

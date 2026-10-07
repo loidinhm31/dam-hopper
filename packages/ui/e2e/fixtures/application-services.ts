@@ -150,7 +150,12 @@ export async function startApplicationServices(
       "/e2e/home/mfa.key",
       "/e2e/home/.config/dam-hopper/server-token",
     ]);
-
+    const unreadableDocPath = `/e2e/workspace/${seedTree.projectName}/plans/bulk/unreadable-doc.txt`;
+    await execInContainer(appContainerId, [
+      "sh",
+      "-c",
+      `if [ -f "${unreadableDocPath}" ]; then chmod 0000 "${unreadableDocPath}"; fi`,
+    ]);
     const seedRaw = await execInContainer(appContainerId, [
       "/usr/local/bin/application_e2e_seed",
       "--mongodb-uri",
