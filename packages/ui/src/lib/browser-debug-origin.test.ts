@@ -13,6 +13,7 @@ const readyTunnel: TunnelInfo = {
   status: "ready",
   url: "https://example.trycloudflare.com",
   startedAt: 0,
+  reminderDue: false,
 };
 
 describe("resolveBrowserDebugTarget", () => {

@@ -3367,7 +3367,7 @@ fn reader_thread(
     }
 
     if let Some(pfm) = &port_forward_manager {
-        pfm.unregister_session_with_runtime(&session_id, incarnation, rt_handle.as_ref());
+        pfm.unregister_session(&session_id, incarnation);
     }
 
     if let Some(status) = &agent_status {

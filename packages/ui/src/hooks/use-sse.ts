@@ -84,7 +84,6 @@ export function asHostIdleSuspendChangedEvent(
   return null;
 }
 
-
 export interface TerminalTargetUnavailableEvent {
   sessionId: string;
   incarnation: number;
@@ -182,7 +181,10 @@ function dispatch(type: string, data: unknown, owner?: ConnectionRef) {
 }
 
 /** Relay the active WebSocket status through the stable listener bus. */
-export function publishTransportStatus(status: unknown, owner?: ConnectionRef): void {
+export function publishTransportStatus(
+  status: unknown,
+  owner?: ConnectionRef,
+): void {
   if (typeof status === "string" && IPC_STATUSES.has(status as IpcStatus)) {
     dispatch("transport:status", status, owner);
   }
@@ -201,6 +203,7 @@ const PUSH_EVENT_CHANNELS = [
   "tunnel:ready",
   "tunnel:failed",
   "tunnel:stopped",
+  "tunnel:reminder",
   "install:progress",
   "install:done",
   "install:failed",
@@ -425,7 +428,10 @@ interface PendingHistoryInvalidation {
   owner: ConnectionRef;
   qc: QueryClient;
 }
-const pendingHistoryInvalidations = new Map<string, PendingHistoryInvalidation>();
+const pendingHistoryInvalidations = new Map<
+  string,
+  PendingHistoryInvalidation
+>();
 let historyInvalidationScheduled = false;
 const qcIds = new WeakMap<QueryClient, number>();
 let nextQcId = 1;
@@ -439,7 +445,10 @@ function getQcId(qc: QueryClient): number {
   return id;
 }
 
-function scheduleHistoryInvalidation(owner: ConnectionRef, qc: QueryClient): void {
+function scheduleHistoryInvalidation(
+  owner: ConnectionRef,
+  qc: QueryClient,
+): void {
   const key = `${owner.profileId}@${owner.generation}::${getQcId(qc)}`;
   pendingHistoryInvalidations.set(key, { owner, qc });
   if (!historyInvalidationScheduled) {
@@ -450,7 +459,8 @@ function scheduleHistoryInvalidation(owner: ConnectionRef, qc: QueryClient): voi
       pendingHistoryInvalidations.clear();
 
       const isVisible =
-        typeof document === "undefined" || document.visibilityState === "visible";
+        typeof document === "undefined" ||
+        document.visibilityState === "visible";
       for (const item of drain) {
         if (!isCurrentConnection(item.owner)) continue;
         const source = getHostResourceSource(item.owner, item.qc);
@@ -472,12 +482,15 @@ export function initTransportListeners(): void {
     initialized = true;
     for (const channel of PUSH_EVENT_CHANNELS) {
       if (
-        (channel === "host:alertChanged" || channel === "host:alertsInvalidated") &&
+        (channel === "host:alertChanged" ||
+          channel === "host:alertsInvalidated") &&
         ownerBridgeTransports.has(transport)
       ) {
         continue;
       }
-      const unsub = transport.onEvent(channel, (data) => dispatch(channel, data));
+      const unsub = transport.onEvent(channel, (data) =>
+        dispatch(channel, data),
+      );
       unsubscribers.push(unsub);
     }
     if (hasWsStatus(transport)) {
@@ -574,7 +587,11 @@ export function installTransportBridge(
                 canUseResourceRest(owner, qc)
               ) {
                 void qc.invalidateQueries({
-                  queryKey: profileQueryKey(owner, "system", "resource-snapshot"),
+                  queryKey: profileQueryKey(
+                    owner,
+                    "system",
+                    "resource-snapshot",
+                  ),
                 });
               }
             }

@@ -25,6 +25,20 @@ A client-side diagnostics ring provides local troubleshooting. It is written by 
 
 This snapshot is client-side only and does not expose a backend export endpoint.
 
+## Cloudflared Quick Tunnels
+
+- `GET /api/tunnels` — current process-memory tunnel snapshots.
+- `POST /api/tunnels` — `{ "port": 3000, "label": "web" }`; `201` with initial snapshot. Duplicate active port returns `409`; missing Cloudflared returns `503`.
+- `DELETE /api/tunnels/{id}` — explicit Stop; `204`, or `404` for unknown ID.
+- `GET /api/tunnels/install` — `{ "installing": false, "installed": true }`.
+- `POST /api/tunnels/install` — installer start; `202`, or `409` already installing.
+
+Snapshot fields: `id`, `port`, `label`, `driver`, `status`, `startedAt` (UTC Unix milliseconds), required `reminderDue: boolean`, optional `url`, `pid`, and `error`. Status is `starting`, `ready`, or `failed`. No terminal ownership `sessionId` / `incarnation` fields.
+
+Origin-port closure/reopen and PTY exit/removal/replacement never stop a tunnel or reset its identity/start time. Explicit Stop, actual connector exit/failure, and server shutdown remain terminal. No automatic restart or restoration across DamHopper restart. Closed origin normally returns 502 through the still-live URL; a replacement service binding that port becomes public until Stop.
+
+`reminderDue` starts false, becomes true once at three hours after creation using server monotonic time, and stays true in live REST snapshots. It is a reminder, not expiry. The `tunnel:reminder` WebSocket event can be missed while disconnected; re-list on reconnect/reload. Dismiss is client/browser-session state only, not an API mutation or connector Stop.
+
 ## Browser Debug Artifacts
 
 Authenticated, ephemeral storage for a browser-debug selection and optional screenshot. Artifacts are scoped to a live PTY terminal; no read or list endpoint exists.

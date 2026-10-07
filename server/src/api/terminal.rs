@@ -320,7 +320,7 @@ pub async fn remove_session(
 ) -> Result<impl IntoResponse, ApiError> {
     let removed_incarnation = state.pty_manager.remove(&id).map_err(ApiError::from_app)?;
     if let (Some(pfm), Some(incarnation)) = (&state.port_forward_manager, removed_incarnation) {
-        pfm.remove_session_ports(&id, incarnation).await;
+        pfm.remove_session_ports(&id, incarnation);
     }
     Ok((StatusCode::NO_CONTENT, ()))
 }

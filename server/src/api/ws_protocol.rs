@@ -417,6 +417,8 @@ pub enum ServerMsg {
         status: String,
         #[serde(rename = "startedAt")]
         started_at: i64,
+        #[serde(rename = "reminderDue")]
+        reminder_due: bool,
     },
 
     #[serde(rename = "tunnel:ready")]
@@ -427,6 +429,9 @@ pub enum ServerMsg {
 
     #[serde(rename = "tunnel:stopped")]
     TunnelStopped { id: String },
+
+    #[serde(rename = "tunnel:reminder")]
+    TunnelReminder { id: String },
 
     // FS — upload results
     #[serde(rename = "fs:upload_begin_ok")]
@@ -676,6 +681,7 @@ mod tests {
             driver: "cloudflared".to_string(),
             status: "starting".to_string(),
             started_at: 1714000000000,
+            reminder_due: false,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["kind"], "tunnel:created");
@@ -684,6 +690,7 @@ mod tests {
         assert_eq!(json["label"], "frontend");
         assert_eq!(json["status"], "starting");
         assert_eq!(json["startedAt"], 1714000000000i64);
+        assert_eq!(json["reminderDue"], false);
     }
 
     #[test]
@@ -717,5 +724,16 @@ mod tests {
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["kind"], "tunnel:stopped");
         assert_eq!(json["id"], "abc-123");
+    }
+
+    #[test]
+    fn test_tunnel_reminder_serialization() {
+        let msg = ServerMsg::TunnelReminder {
+            id: "abc-123".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&msg).unwrap(),
+            serde_json::json!({ "kind": "tunnel:reminder", "id": "abc-123" })
+        );
     }
 }

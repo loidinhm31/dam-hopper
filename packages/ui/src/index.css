@@ -109,6 +109,11 @@
   height: var(--app-viewport-height);
 }
 
+/* Route shells share the viewport with global exposure reminders. */
+.app-route-viewport > .app-screen-height {
+  height: 100%;
+}
+
 .xterm {
   overscroll-behavior: contain;
 }

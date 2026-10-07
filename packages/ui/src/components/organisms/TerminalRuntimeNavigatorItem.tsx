@@ -68,7 +68,7 @@ function RuntimePortChip({
     <div className="flex items-center gap-1 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)]">
       <Radio className="h-3 w-3 shrink-0" />
       <span className="font-mono text-[var(--color-text)]">:{port.port}</span>
-      <span>{port.tunnelStatus ?? port.state}</span>
+      <span>{port.tunnelStatus ?? (port.state === "unknown" ? "origin untracked" : port.state)}</span>
       {readyTunnelUrl && onOpenTunnelInBrowser ? (
         <button
           type="button"

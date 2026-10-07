@@ -43,7 +43,7 @@ function WarningBanner({ onDismiss }: { onDismiss: () => void }) {
       role="alert"
       className="bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs p-2 rounded mx-2 mb-1"
     >
-      Public URL — anyone with the link can reach your port. Stop when done.
+      Public URL — anyone with the link can reach your port. Exposure persists until explicitly stopped even if the origin port or terminal closes.
       <button
         onClick={onDismiss}
         className="ml-2 underline hover:no-underline transition-all"
@@ -259,24 +259,47 @@ function PortRow({
               lost
             </span>
           )}
+          {entry.state === "unknown" && (
+            <span
+              title="Origin untracked — tunnel remains active while origin port/terminal is not detected"
+              className="text-[10px] bg-slate-500/15 text-[var(--color-text-muted)] px-1 rounded shrink-0"
+            >
+              origin untracked
+            </span>
+          )}
           {isReady && (
             <span className="shrink-0 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold">
               PUBLIC
+            </span>
+          )}
+          {entry.tunnel?.reminderDue && (
+            <span
+              title="Active for over 3 hours. Public exposure persists until stopped."
+              className="shrink-0 text-[10px] bg-amber-500/25 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium"
+            >
+              3h reminder
             </span>
           )}
         </div>
 
         {/* Tunnel URL (State C) */}
         {isReady && entry.tunnel?.url && (
-          <a
-            href={entry.tunnel.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={entry.tunnel.url}
-            className="ml-3.5 block truncate max-w-[180px] text-[var(--color-primary)] hover:underline text-[11px]"
-          >
-            {entry.tunnel.url.replace(/^https?:\/\//, "")}
-          </a>
+          <div className="ml-3.5 flex flex-wrap items-center gap-1.5">
+            <a
+              href={entry.tunnel.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={entry.tunnel.url}
+              className="block truncate max-w-[180px] text-[var(--color-primary)] hover:underline text-[11px]"
+            >
+              {entry.tunnel.url.replace(/^https?:\/\//, "")}
+            </a>
+            {entry.state === "unknown" && (
+              <span className="text-[10px] text-[var(--color-text-muted)]">
+                · Exposure persists until stopped
+              </span>
+            )}
+          </div>
         )}
 
         {/* State B: starting */}
