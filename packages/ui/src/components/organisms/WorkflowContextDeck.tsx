@@ -208,9 +208,8 @@ export function WorkflowContextDeck({
         </Button>
       </div>
 
-      {/* File plans view */}
-      {activeMode === "files" && (
-        <div className="flex-1 min-h-0 overflow-hidden">
+      {/* File plans view (kept mounted to preserve state) */}
+      <div className={cn("flex-1 min-h-0 overflow-hidden", activeMode !== "files" && "hidden")}>
           {realTarget ? (
             <ProjectPlansDashboard
               key={dashboardKey}
@@ -232,8 +231,7 @@ export function WorkflowContextDeck({
               </p>
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {/* Manual tracking view (kept mounted to preserve drafts) */}
       <div

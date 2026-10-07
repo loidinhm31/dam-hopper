@@ -224,9 +224,8 @@ export function WorkflowContextSheet({
                 </button>
               </div>
 
-              {/* File plans tab */}
-              {plansMode === "files" && (
-                <div className="flex-1 min-h-0 overflow-hidden">
+              {/* File plans tab (kept mounted to preserve state) */}
+              <div className={cn("flex-1 min-h-0 overflow-hidden", plansMode !== "files" && "hidden")}>
                   {effectiveTarget && effectiveTarget.project && effectiveTarget.project !== "default" ? (
                     <ProjectPlansDashboard
                       key={`${owner?.profileId ?? "none"}:${owner?.generation ?? 0}:${effectiveTarget.project}:${effectiveTarget.worktreePath ?? ""}`}
@@ -248,8 +247,7 @@ export function WorkflowContextSheet({
                       </p>
                     </div>
                   )}
-                </div>
-              )}
+              </div>
 
               {/* Manual tracking tab (kept mounted to preserve drafts) */}
               <div className={cn("flex-1 min-h-0 overflow-hidden", plansMode !== "manual" && "hidden")}>

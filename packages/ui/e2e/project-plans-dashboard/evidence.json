@@ -1,0 +1,50 @@
+{
+  "run_id": "e2e-run-1791331119674-7a923ccf",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-06T23:58:39.674Z",
+  "completed_at": "2026-10-06T23:58:47.846Z",
+  "case_name": "project-plans-dashboard",
+  "route": "/workspace",
+  "git_head": "e56cb5cc0f6ad58b61b5b4f5c7f6a77ca4eb4920",
+  "source_fingerprint": "5436d95e3c0f1ae32cc4eaef9f131ae2dde34339c88da6d6ded41cab2c3564c4",
+  "seed_digest": "e37ffcbcd4e058242aac05494b40cace18c59405b33d7037ef2aae8ef372e58a",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "634bf249dcf5a1907edc740674e4050eff43688dc38cf231b9cb91cd302c5822",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "mobile",
+      "file_name": "mobile.png",
+      "sha256": "b603a55ac7cf0b3e6fc38cc0bf1819cdf79c6841d5ff48dc561509602e779a1e",
+      "dimensions": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "checkpoint": "narrow",
+      "file_name": "narrow.png",
+      "sha256": "9803c7c7a469811159d5acfff3e015274c7096010e6974477da73af4ec59157a",
+      "dimensions": {
+        "width": 320,
+        "height": 800
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

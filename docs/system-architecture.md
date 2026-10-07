@@ -88,6 +88,33 @@ The `WorkflowService` manages hierarchical plans, phases, tasks (max depth 3), w
 
 See [Workflow API Specification](./workflow-api.md).
 
+### Project Plans Dashboard (Implemented)
+
+**Implemented and qualified 2026-10-07.** See the
+[frozen contracts](../plans/261006-1653-project-plans-dashboard/contracts.md) and
+[implementation plan](../plans/261006-1653-project-plans-dashboard/plan.md).
+
+- Extends current Plan surface with folder-first selection, then one selected plan's Overview,
+  Timeline, and read-only documents; preserves separate SQLite manual tracking.
+- Resolves configured project / registered worktree on server; browses immediate
+  folders under fixed `plans/`, reading plan/progress only after explicit selection.
+- `plan.md` supplies metadata and phase inventory. Presence of `progress.md`
+  opts into its reported current status; otherwise labels plan-derived fallback.
+  Invalid or conflicting progress reports unknown diagnostic state, not a silent stale fallback.
+- Progress is an administrative report, not verified completion or permission to
+  execute. The dashboard never calls controllers, runs agents, or updates files.
+- Selected Timeline uses explicit planned/actual ranges, creation milestones, or
+  Undated state. No mtime/effort duration inference, cross-plan Board, or bulk status load.
+- Scopes requests, queries, document links, and watcher cleanup to the captured
+  profile, connection generation, and project/worktree target.
+- Reuses native Rust API / auth / filesystem boundaries and shared React rendering;
+  no database import, Node sidecar, iframe, or second terminal lifecycle.
+- Narrow filesystem extensions: strict bounded `plan-document` reads share rooted descriptor
+  snapshots; `watchOnly` subscriptions watch the actual validated directory and skip unused tree snapshots.
+- Watches only current navigation ancestors / selected directory, not all children.
+  Reuses Markdown / GFM / Mermaid; local images show notices, no media integration.
+- Implemented cross-platform Unix/Windows code with preserved builds; Linux
+  runtime qualified, Windows runtime explicitly unqualified until tested on Windows.
 ## Telemetry & OTLP Analytics
 
 <a id="codex-otel-usage-analytics"></a>

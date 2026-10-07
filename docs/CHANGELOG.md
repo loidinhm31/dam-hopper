@@ -1,3 +1,11 @@
+# 2026-10-07
+
+- **Project Plans Dashboard with Progress Opt-In — full qualification and documentation complete (Phases 01–05).** Delivered folder-first navigation, reported progress opt-in, selected plan timeline, and read-only markdown/mermaid/local-asset documents across Rust server and React UI:
+  - **Native backend read API & parser bounds:** Strict containment-checked endpoints at `GET /api/plans/folders` and `GET /api/plans`, enforcing parser resource limits (`64 KiB` per document, 5000 visited entries) and projecting reported phase progress with fallback labels when `progress.md` is absent or unparseable.
+  - **Owner-bound client queries & real-time refresh:** Query keys scoped by `['profile', profileId, generation, 'plans', ...]` preventing ambient transport fallback. Server-side `watchOnly` directory subscriptions trigger targeted cache invalidation without reading sibling content.
+  - **Responsive dual-mode UI surface:** Integrated `ProjectPlansDashboard` into `WorkflowContextDeck` and `WorkflowContextSheet` with dual "File plans" and "Manual tracking" tabs, preserving in-progress manual tracking drafts and terminal continuity when browsing file plans.
+  - **Comprehensive verification & Linux runtime proof:** 13/13 Rust API tests, 33/33 Vitest unit tests, 4/4 integration tests, 5/5 Chromium browser interaction tests, and complete Playwright E2E journey passed with 100% success rate. Windows runtime explicitly unqualified until tested on Windows.
+
 # 2026-10-05
 
 - **Documentation reorganization and architecture consolidation.** Restructured repository documentation following source code audit:

@@ -31,7 +31,10 @@ export interface ApplicationServices {
   readonly databaseName: string;
   readonly serverToken: string;
   readonly seedDigest: string;
+  readonly secondaryProjectName: string;
   readContainerFile(filePath: string): Promise<string>;
+  writeContainerFile(filePath: string, content: string): Promise<void>;
+  statContainerFile(filePath: string): Promise<{ mtime: string; size: number }>;
   readPolicyFile(): Promise<unknown>;
   fetchApi(endpoint: string, init?: RequestInit): Promise<Response>;
   dispose(): Promise<void>;
@@ -201,8 +204,26 @@ export async function startApplicationServices(
       databaseName,
       serverToken: seedTree.serverToken,
       seedDigest: seedTree.seedDigest,
+      secondaryProjectName: seedTree.secondaryProjectName,
       readContainerFile(filePath: string): Promise<string> {
         return execInContainer(appContainerId, ["cat", filePath]);
+      },
+      async writeContainerFile(filePath: string, content: string): Promise<void> {
+        const b64 = Buffer.from(content, "utf-8").toString("base64");
+        await execInContainer(appContainerId, [
+          "sh",
+          "-c",
+          `printf "%s" "${b64}" | base64 -d > "${filePath}"`,
+        ]);
+      },
+      // Relies on GNU stat format flags (-c "%y\t%s") inside the container Linux runtime to capture full-resolution mtime.
+      async statContainerFile(filePath: string): Promise<{ mtime: string; size: number }> {
+        const raw = await execInContainer(appContainerId, ["stat", "-c", "%y\t%s", filePath]);
+        const [mtimeStr, sizeStr] = raw.trim().split("\t");
+        return {
+          mtime: mtimeStr ?? "",
+          size: Number.parseInt(sizeStr ?? "0", 10),
+        };
       },
       async readPolicyFile(): Promise<unknown> {
         const raw = await execInContainer(appContainerId, [

@@ -174,6 +174,13 @@ selection, filters, drafts, focus, pending action presentation, and elapsed
 clock ticks. Workflow hooks must not read or write `useSearchParams`, Zustand
 workflow stores, localStorage, terminal registries, or editor state.
 
+## Project plans client queries and types
+
+The file-backed project plans dashboard client operates alongside workflow state:
+- Types (`packages/ui/src/api/project-plans-types.ts`): wire models for `PlanFoldersResponse`, `SelectedPlanResponse`, `FilePlan`, `FilePlanPhase`, `PlanDocuments`, `PlanDates`, `Diagnostic`, and `PlanCoverageState`.
+- Query keys (`packages/ui/src/api/project-plans-queries.ts`): strictly scoped to `['profile', profileId, generation, 'plans', ...]` preventing ambient fallback or cross-profile cache leakage.
+- Hook (`packages/ui/src/hooks/use-project-plans.ts`): orchestrates folder queries, selected plan queries, document fetching, and real-time filesystem watcher subscriptions (`watchOnly` mode), preserving isolation from manual tracking (`['workflow', ...]`).
+
 ## Verification
 
 Verification recorded on 2026-09-02 confirmed 51/51 targeted UI tests passing:
