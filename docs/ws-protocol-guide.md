@@ -607,4 +607,4 @@ On conflict:
   Auth close is a WebSocket close frame, not a JSON `kind` message.
 - Revocation observed by the watcher can take up to seven seconds to close an
   existing socket. Inbound dispatch/commit checks the local session lease/
-  deadline, not MongoDB per frame; the watcher covers persisted revocation.
+  deadline, not the auth store per frame; the watcher covers persisted revocation.

@@ -51,7 +51,7 @@ pub async fn capabilities(State(state): State<AppState>) -> impl IntoResponse {
     Json(
         state
             .host_actions
-            .capabilities(state.no_auth, state.db.is_some()),
+            .capabilities(state.no_auth, state.auth_service.store().is_some()),
     )
 }
 
@@ -110,10 +110,17 @@ pub async fn approve_intent(
         request.password.zeroize();
         return action_error(error);
     }
-    if auth::verify_actor_credentials(&state, &actor, &request.username, &mut request.password)
-        .await
-        .is_err()
+    if let Err(err) =
+        auth::verify_actor_credentials(&state, &actor, &request.username, &mut request.password)
+            .await
     {
+        if err == auth::CredentialVerificationError::StorageFailure {
+            return action_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "storageUnavailable",
+                "authentication storage failure during re-authentication",
+            );
+        }
         state
             .host_actions
             .record_reauth_failure(&actor.subject, ip.as_deref())
@@ -224,7 +231,7 @@ async fn enabled_actor(
             "host actions are disabled in no-auth mode",
         )));
     }
-    if state.db.is_none() {
+    if state.auth_service.store().is_none() {
         return Err(Box::new(action_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "reauthUnavailable",
@@ -238,7 +245,7 @@ async fn enabled_actor(
             "authentication is required",
         ))
     })?;
-    if !auth::is_enabled_user(state.db.as_ref(), &actor.subject).await {
+    if !auth::is_enabled_user(state.auth_service.store(), &actor.subject).await {
         return Err(Box::new(action_response(
             StatusCode::FORBIDDEN,
             "actorDisabled",
@@ -251,7 +258,7 @@ async fn enabled_actor(
 fn helper_available(state: &AppState) -> Result<(), Box<Response>> {
     if state
         .host_actions
-        .capabilities(state.no_auth, state.db.is_some())
+        .capabilities(state.no_auth, state.auth_service.store().is_some())
         .available
     {
         Ok(())

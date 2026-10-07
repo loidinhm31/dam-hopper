@@ -184,7 +184,8 @@ wake_after_seconds = {}
         diagnostics,
         TelemetryRuntime::new(),
     )
-    .expect("AppState::new");
+    .expect("AppState::new")
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
 
     TestFixture {
         _tmp: tmp,
@@ -301,7 +302,8 @@ agent_executables = [{}]
         diagnostics,
         TelemetryRuntime::new(),
     )
-    .expect("AppState::new");
+    .expect("AppState::new")
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
 
     if quiet < 60 || wake < 60 {
         let mut timing_guard = state.idle_suspend_timing.write().await;

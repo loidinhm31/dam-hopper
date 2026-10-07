@@ -1,3 +1,4 @@
+pub mod config;
 pub mod model;
 pub mod policy;
 pub mod secret;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
+pub use config::{AuthBackendConfig, AuthConfigError};
 pub use model::*;
 pub use policy::*;
 pub use secret::*;

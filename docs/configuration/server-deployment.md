@@ -27,6 +27,23 @@ cargo build --release
   --host 127.0.0.1
 ```
 
+### Authenticated SQLite Lite Mode Launch
+
+To run without a MongoDB service, opt into SQLite lite mode via environment variables:
+
+```bash
+DAM_HOPPER_LITE_MODE=true \
+DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db \
+DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key \
+./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4801 \
+  --host 127.0.0.1
+```
+
+**Storage, Isolation & First-Account Invariants:**
+- **Authenticated Mode (Not `--no-auth`)**: `DAM_HOPPER_LITE_MODE=true` (or `1`, case-insensitive) selects authenticated SQLite storage with no automatic fallback to MongoDB and fatal startup on SQLite initialization failure. `--no-auth` is a separate loopback-only development bypass, never SQLite lite mode.
+- **Private Persistent Directory**: Ensure the directory containing `auth.db` (e.g. `/var/lib/dam-hopper`) is strictly owned by the server process user with mode `0700`, and provide a valid dedicated 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE` in production.
+- **Single Process Constraint**: Exactly **one server process per local auth file**. Do not run multiple DamHopper server processes pointing to the same SQLite auth file. Network filesystems (NFS, SMB, CIFS) are not supported.
+- **First Account Approval & Promotion**: `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) and never grants automatic first-user `admin` rights (`POST /api/auth/login` returns `401 ACCOUNT_DISABLED` until approved). After starting the server, follow the **Development profile** or **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register against `http://127.0.0.1:4801`, approve/promote the account in SQLite, and complete TOTP MFA enrollment ([Authentication API](../api/authentication.md)).
 ### Dedicated release web host (`dam-hopper-web`)
 
 Build and run the second Cargo binary with a selected immutable web root:

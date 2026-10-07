@@ -122,7 +122,7 @@ DamHopper enforces strict separation between immutable release assets, durable m
 /etc/dam-hopper/             # 0755 root:root (Installer/host config; API gate reads legacy only)
 ├── host.toml                # 0644 root:root (Recorded deployment role and allowed web origins)
 ├── host-config.json         # 0644 root:root (Committed public runtime config)
-├── server.env               # 0600 root:root (Optional production env: MONGODB_*, DAM_HOPPER_MFA_KEY_FILE)
+├── server.env               # 0600 root:root (Optional production env: MONGODB_URI/DATABASE or DAM_HOPPER_LITE_MODE, DAM_HOPPER_MFA_KEY_FILE)
 ├── mfa-encryption.key       # 0600 API UID:GID (Dedicated 32-byte AES-256-GCM TOTP encryption key)
 └── dam-hopper.toml          # 0644 root:root (Optional read-only legacy migration source)
 /etc/systemd/system/
@@ -179,11 +179,11 @@ the release manager's managed lifecycle list covers the helper service itself.
 
 4. **Configure production environment & MFA key (`server` or `both` roles):**
 
-   In production authenticated mode (`RUST_ENV=production` with MongoDB configured), `DAM_HOPPER_MFA_KEY_FILE` is mandatory:
+   In production authenticated mode (`RUST_ENV=production` with either MongoDB or SQLite lite mode configured), `DAM_HOPPER_MFA_KEY_FILE` is mandatory:
    - Must contain exactly 32 raw bytes, 64 hex characters, or 44 Base64 characters.
    - File permissions must be strictly mode `0600`, regular file only (symlinks or group/world bits are rejected).
    - Dedicated to encrypting confirmed and pending TOTP secrets at rest via AES-256-GCM.
-   - Must be backed up separately from MongoDB and deployed to all server instances.
+   - Must be backed up separately from the database and deployed to all server instances.
 
    ```bash
    # Generate dedicated 32-byte key (64 hex characters)
@@ -191,9 +191,11 @@ the release manager's managed lifecycle list covers the helper service itself.
    openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
    sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
    sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
+   ```
 
-   # Configure /etc/dam-hopper/server.env
-   sudo tee -a /etc/dam-hopper/server.env <<EOF
+   ##### Option A: MongoDB Configuration (Default)
+   ```bash
+   sudo tee /etc/dam-hopper/server.env <<EOF
    MONGODB_URI=mongodb://127.0.0.1:27017
    MONGODB_DATABASE=damHopper
    DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
@@ -201,11 +203,28 @@ the release manager's managed lifecycle list covers the helper service itself.
    sudo chmod 600 /etc/dam-hopper/server.env
    ```
 
+   ##### Option B: SQLite Lite Mode (Alternative, no MongoDB required)
+   ```bash
+   sudo mkdir -p /var/lib/dam-hopper
+   sudo chown <API_USER>:<API_GROUP> /var/lib/dam-hopper
+   sudo chmod 700 /var/lib/dam-hopper
+
+   sudo tee /etc/dam-hopper/server.env <<EOF
+   DAM_HOPPER_LITE_MODE=true
+   DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db
+   DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
+   EOF
+   sudo chmod 600 /etc/dam-hopper/server.env
+   ```
+   `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite storage with no automatic fallback to MongoDB and fatal startup on SQLite initialization failure; it is never the loopback-only `--no-auth` development bypass. Exactly one server process may use one local SQLite auth file (never network/shared filesystems).
+
 5. **Explicitly activate the release:**
    ```bash
    sudo dam-hopper start
    ```
 
+6. **Provision and approve the first account (post-activation):**
+   `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) and never grants automatic first-user `admin` rights; login returns `401 ACCOUNT_DISABLED` until local operator approval. From the API host, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register against `http://127.0.0.1:4801`, inspect and approve/promote the account in `/var/lib/dam-hopper/auth.db` via `sqlite3` (or `mongosh` for MongoDB), and complete first-login TOTP MFA enrollment (`enrollmentRequired`) via the [Authentication API](./api/authentication.md).
 ### 5.2 Release Activation Gate
 
 The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lock/dam-hopper/deploy.lock`:

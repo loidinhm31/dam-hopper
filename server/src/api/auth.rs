@@ -8,21 +8,19 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use bcrypt::{hash, verify, DEFAULT_COST};
-use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-use crate::api::auth_mfa::{
-    auth_error_response, no_store_json_response, LoginChallengeResponse,
-};
+use crate::api::auth_mfa::{auth_error_response, no_store_json_response, LoginChallengeResponse};
 use crate::auth::model::{
     bson_to_chrono, chrono_to_bson, AuthChallenge, AuthClaims, AuthDecision, ChallengePurpose,
+    UserRecord,
 };
 use crate::auth::policy::{
     check_account_throttle, compute_mfa_due_at, AUTH_PROTOCOL_VERSION, CHALLENGE_LIFETIME_SECS,
 };
 use crate::auth::totp::TotpEngine;
-use crate::auth::AuthService;
+use crate::auth::{AuthService, AuthStore, StoreError};
 use crate::state::AppState;
 
 pub const AUTH_COOKIE: &str = "damhopper-auth";
@@ -37,7 +35,11 @@ struct ErrorBody {
 }
 
 pub(crate) fn auth_cookie_header(value: &str, clear: bool) -> String {
-    let max_age = if clear { "; Max-Age=0" } else { "; Max-Age=2592000" };
+    let max_age = if clear {
+        "; Max-Age=0"
+    } else {
+        "; Max-Age=2592000"
+    };
     format!("{AUTH_COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/{max_age}")
 }
 
@@ -119,7 +121,6 @@ impl AuthenticatedActor {
 #[derive(Clone, Debug)]
 pub struct VerifiedAuthClaims(pub AuthClaims);
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CredentialMechanism {
@@ -134,6 +135,7 @@ pub enum CredentialVerificationError {
     InvalidCredentials,
     AccountDisabled,
     ActorMismatch,
+    StorageFailure,
 }
 
 /// Extract bearer token slice from `Authorization: Bearer <token>` header if present.
@@ -162,7 +164,6 @@ fn extract_token<'a>(request: &'a Request, jar: &'a CookieJar) -> Option<String>
     extract_token_and_mechanism(request, jar).map(|(token, _)| token)
 }
 
-
 // ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
@@ -178,7 +179,9 @@ pub(crate) async fn authenticate_request(
 ) -> Result<Request, Response> {
     // Dev mode has a fixed actor so ticket binding remains identical to production.
     if state.no_auth {
-        request.extensions_mut().insert(AuthenticatedActor::dev_user());
+        request
+            .extensions_mut()
+            .insert(AuthenticatedActor::dev_user());
         request
             .extensions_mut()
             .insert(CredentialMechanism::NoAuthDev);
@@ -231,7 +234,12 @@ pub(crate) async fn authenticate_request(
             } else {
                 "AUTH_REQUIRED"
             };
-            Err(auth_error_response(StatusCode::UNAUTHORIZED, code, reason, None))
+            Err(auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                code,
+                reason,
+                None,
+            ))
         }
         AuthDecision::Unavailable { reason } => Err(auth_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -330,41 +338,29 @@ pub struct LoginBody {
 
 pub use crate::auth::model::UserRole;
 
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct User {
-    pub username: String,
-    pub password_hash: String,
-    pub is_enabled: bool,
-    #[serde(default)]
-    pub role: UserRole,
-    #[serde(default)]
-    pub auth_version: i64,
-}
-
-/// Verify an enabled MongoDB user without minting or refreshing a session.
-/// The supplied password is wiped before this function returns.
+/// Verify an enabled user through the selected store without minting or
+/// refreshing a session. The supplied password is wiped before this returns.
 pub async fn verify_enabled_user(
-    db: Option<&mongodb::Database>,
+    store: Option<&AuthStore>,
     username: &str,
     password: &mut String,
 ) -> Result<UserRole, CredentialVerificationError> {
-    let result = match db {
+    let result = match store {
         None => Err(CredentialVerificationError::AuthenticationUnavailable),
-        Some(db) => {
-            let collection = db.collection::<User>("users");
-            match collection.find_one(doc! { "username": username }).await {
-                Ok(Some(user)) if verify(&mut *password, &user.password_hash).unwrap_or(false) => {
-                    if user.is_enabled {
-                        Ok(user.role)
-                    } else {
-                        Err(CredentialVerificationError::AccountDisabled)
-                    }
+        Some(store) => match store.get_user(username).await {
+            Ok(Some(user)) if verify(&mut *password, &user.password_hash).unwrap_or(false) => {
+                if user.is_enabled {
+                    Ok(user.role)
+                } else {
+                    Err(CredentialVerificationError::AccountDisabled)
                 }
-                _ => Err(CredentialVerificationError::InvalidCredentials),
             }
-        }
+            Ok(Some(_)) | Ok(None) => Err(CredentialVerificationError::InvalidCredentials),
+            Err(e) => {
+                tracing::error!(error = %e, username = %username, "Failed to retrieve user from auth store");
+                Err(CredentialVerificationError::StorageFailure)
+            }
+        },
     };
     password.zeroize();
     result
@@ -372,32 +368,26 @@ pub async fn verify_enabled_user(
 
 /// Check a JWT subject is still an enabled account without accepting a password.
 /// Sensitive action reads and intent admission call this before using actor data.
-pub async fn is_enabled_user(db: Option<&mongodb::Database>, username: &str) -> bool {
-    let Some(db) = db else {
+pub async fn is_enabled_user(store: Option<&AuthStore>, username: &str) -> bool {
+    let Some(store) = store else {
         return false;
     };
-    db.collection::<User>("users")
-        .find_one(doc! { "username": username })
+    store
+        .get_user(username)
         .await
         .ok()
         .flatten()
         .is_some_and(|user| user.is_enabled)
 }
 
-/// Get the enabled user's role from MongoDB.
-/// Returns None if MongoDB is unavailable, user does not exist, or account is disabled.
-pub async fn get_user_role(db: Option<&mongodb::Database>, username: &str) -> Option<UserRole> {
-    let db = db?;
-    let collection = db.collection::<User>("users");
-    let user = collection
-        .find_one(doc! { "username": username })
-        .await
-        .ok()?
-        .filter(|u| u.is_enabled)?;
-    Some(user.role)
+/// Get the enabled user's role from the selected store.
+/// Returns None if the store is unavailable, the user does not exist, or the account is disabled.
+pub async fn get_user_role(store: Option<&AuthStore>, username: &str) -> Option<UserRole> {
+    let user = store?.get_user(username).await.ok()??;
+    user.is_enabled.then_some(user.role)
 }
 
-/// Middleware that enforces the MongoDB administrator role on protected routes.
+/// Middleware that enforces the administrator role on protected routes.
 /// Denies --no-auth mode and accounts without the admin role.
 pub async fn require_admin(
     State(state): State<AppState>,
@@ -420,8 +410,10 @@ pub async fn require_admin(
         return unauthorized();
     };
 
-    let role = match get_user_role(state.db.as_ref(), &actor.subject).await {
-        Some(r) => Some(r),
+    // A configured store is the sole authority: a missing account or storage
+    // error denies and never falls through to an explicit test mock.
+    let role = match state.auth_service.store() {
+        Some(store) => get_user_role(Some(store), &actor.subject).await,
         None => state
             .auth_service
             .mock_user()
@@ -452,19 +444,31 @@ pub async fn verify_actor_credentials(
         password.zeroize();
         return Err(CredentialVerificationError::ActorMismatch);
     }
-    verify_enabled_user(state.db.as_ref(), username, password).await.map(|_| ())
+    verify_enabled_user(state.auth_service.store(), username, password)
+        .await
+        .map(|_| ())
 }
 
-/// POST /api/auth/register — registers a user in mongodb
+fn register_error(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(ErrorBody {
+            error: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+/// POST /api/auth/register — registers a disabled `user` account in the selected store.
+///
+/// Approval and role assignment stay an operator action; success is reported
+/// only after the store has actually inserted the account.
 pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Response {
-    let Some(db) = &state.db else {
-        return (
+    let Some(store) = state.auth_service.store() else {
+        return register_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: "MongoDB not configured, cannot register".into(),
-            }),
-        )
-            .into_response();
+            "Authentication storage not configured, cannot register",
+        );
     };
 
     let Some(username) = body.username else {
@@ -473,33 +477,41 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>
     let Some(password) = body.password else {
         return unauthorized();
     };
+    let password = zeroize::Zeroizing::new(password);
 
-    let collection = db.collection::<User>("users");
-
-    if let Ok(Some(_)) = collection.find_one(doc! { "username": &username }).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: "User already exists".into(),
-            }),
-        )
-            .into_response();
-    }
-
-    let password_hash = hash(&password, DEFAULT_COST).unwrap_or_default();
-    let new_user = User {
+    let password_hash = match hash(password.as_str(), DEFAULT_COST) {
+        Ok(hash) => hash,
+        Err(error) => {
+            tracing::error!(%error, "Registration password hashing failed");
+            return register_error(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed");
+        }
+    };
+    let new_user = UserRecord {
+        id: None,
         username,
         password_hash,
         is_enabled: false,
         role: UserRole::User,
         auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
     };
-    let _ = collection.insert_one(new_user).await;
-
-    Json(serde_json::json!({ "ok": true })).into_response()
+    match store.create_user(new_user).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(StoreError::DuplicateUsername(_)) => {
+            register_error(StatusCode::BAD_REQUEST, "User already exists")
+        }
+        Err(error) => {
+            tracing::error!(%error, "Registration storage failure");
+            register_error(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed")
+        }
+    }
 }
 
-/// POST /api/auth/login — authenticates via mongodb or fallback to token, returns JWT
+/// POST /api/auth/login — password login against the selected `AuthStore` (MongoDB or SQLite);
+/// `--no-auth` returns a development token without credentials.
 pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody>) -> Response {
     // Explicit dev mode (--no-auth): return token immediately without credentials check
     if state.no_auth {
@@ -542,10 +554,9 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
             })),
         )
             .into_response();
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return response;
     }
 
@@ -559,7 +570,8 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
     };
     let mut password = zeroize::Zeroizing::new(raw_password);
 
-    let (Some(store), Some(mfa_key)) = (state.auth_service.store(), state.auth_service.mfa_key()) else {
+    let (Some(store), Some(mfa_key)) = (state.auth_service.store(), state.auth_service.mfa_key())
+    else {
         return auth_error_response(
             StatusCode::UNAUTHORIZED,
             "INVALID_CREDENTIALS",
@@ -630,7 +642,11 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         let (ciphertext, nonce) = match mfa_key.encrypt(&username, "enrollment-pending", &secret) {
             Ok(enc) => enc,
             Err(e) => {
-                tracing::error!("Failed to encrypt pending MFA secret for {}: {}", username, e);
+                tracing::error!(
+                    "Failed to encrypt pending MFA secret for {}: {}",
+                    username,
+                    e
+                );
                 return auth_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL_ERROR",
@@ -657,7 +673,11 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
         };
 
         if let Err(e) = store.create_challenge(challenge).await {
-            tracing::error!("Failed to persist enrollment challenge for {}: {}", username, e);
+            tracing::error!(
+                "Failed to persist enrollment challenge for {}: {}",
+                username,
+                e
+            );
             return auth_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "AUTH_UNAVAILABLE",
@@ -738,10 +758,8 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
         })),
     )
         .into_response();
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
@@ -759,10 +777,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
             "authProtocol": AUTH_PROTOCOL_VERSION,
         }))
         .into_response();
-        resp.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return resp;
     }
 
@@ -778,10 +794,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
             })),
         )
             .into_response();
-        resp.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return resp;
     };
 
@@ -797,10 +811,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
             })),
         )
             .into_response();
-        resp.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return resp;
     };
 
@@ -825,13 +837,14 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
                 })),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
-        AuthDecision::MfaRequired { session, mfa_due_at } => {
+        AuthDecision::MfaRequired {
+            session,
+            mfa_due_at,
+        } => {
             let expires_at = bson_to_chrono(session.expires_at);
             let mut resp = (
                 StatusCode::UNAUTHORIZED,
@@ -847,10 +860,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
                 })),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
         AuthDecision::FullLoginRequired { reason } => {
@@ -877,10 +888,8 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
                 })),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
         AuthDecision::Unavailable { reason } => {
@@ -895,12 +904,9 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Requ
                 })),
             )
                 .into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
     }
 }
-

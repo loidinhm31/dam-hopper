@@ -58,10 +58,13 @@ DAM_HOPPER_PORT="4800"
 DAM_HOPPER_CORS_ORIGINS="https://loidinhm31.github.io"
 RUST_LOG="info"
 
-# Optional MongoDB auth.
+# Optional authentication storage:
+# MongoDB default:
 MONGODB_URI="mongodb://localhost:27017"
 MONGODB_DATABASE="dam_hopper"
-```
+# Or SQLite lite mode (uncomment to enable):
+# DAM_HOPPER_LITE_MODE="true"
+# DAM_HOPPER_AUTH_SQLITE_PATH="/var/lib/dam-hopper/auth.db"
 
 Restart after changes only during an approved legacy recovery:
 

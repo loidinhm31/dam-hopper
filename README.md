@@ -70,6 +70,15 @@ Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to
 
 > **Security:** `--no-auth` bypasses authentication and is strictly for isolated local development. Never expose it to a LAN, the public Internet, or an untrusted network. The server binary defaults to `--host 0.0.0.0`; always pass `--host 127.0.0.1` for local development. The convenience scripts `pnpm dev:server` and `pnpm dev:server:no-auth` bind `0.0.0.0:4803` with `--no-auth`; do not execute them on public or untrusted networks. Native Advisor endpoints are unavailable in `--no-auth` mode.
 
+### Authenticated Local Development (SQLite Lite Mode)
+
+MongoDB is the default authentication store, while setting `DAM_HOPPER_LITE_MODE=true` (or `1`, case-insensitive) selects SQLite lite mode (`DAM_HOPPER_AUTH_SQLITE_PATH` defaults to `~/.config/dam-hopper/auth.db`; exactly one server process may use one local SQLite auth file, and `--no-auth` is a separate loopback bypass, never lite mode).
+
+To provision a first account under the **Development profile**:
+1. Start `dam-hopper-server` on loopback (for example `--host 127.0.0.1 --port 4801` with `DAM_HOPPER_LITE_MODE=true`).
+2. Register via `POST http://127.0.0.1:4801/api/auth/register` with JSON `{ "username", "password" }`. It returns `{ "ok": true }` and creates a disabled `user` account (`auth_version = 0`) without automatic first-user `admin` rights; login returns `401 ACCOUNT_DISABLED` until approved.
+3. Follow the canonical **Development profile** SQLite inspection, approval, and `admin` promotion sequence in [Server Environment and Authentication](./docs/configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook), then log in to receive `enrollmentRequired` and complete TOTP MFA via the [Authentication API](./docs/api/authentication.md).
+
 ## Common Commands
 
 | Command | Action |
@@ -94,6 +103,7 @@ Start at [the documentation index](./docs/README.md). Key references:
 - [Project Roadmap](./docs/project-roadmap.md)
 - [Configuration Guide](./docs/configuration/index.md)
 - [API Reference](./docs/api-reference.md)
+- [Server Environment and Authentication](./docs/configuration/server-environment-auth.md)
 - [Authentication API](./docs/api/authentication.md)
 - [Linux Systemd Operations](./docs/linux-systemd.md)
 - [Windows Release Packaging](./docs/windows-release-packaging.md)

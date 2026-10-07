@@ -15,7 +15,7 @@ Use this index to find maintained product, architecture, API, development, and o
 - [Code standards](./code-standards.md) — Rust, React, transport, ownership, testing, and security practices.
 - [Testing guide](./testing.md) — test suites and development verification.
 - [Frontend components](./frontend-components.md) — shared UI composition and lifecycle.
-- [Configuration guide](./configuration-guide.md) and [configuration index](./configuration/index.md) — project, UI, and server configuration.
+- [Configuration guide](./configuration-guide.md), [configuration index](./configuration/index.md), and [server environment and authentication](./configuration/server-environment-auth.md) — project, UI, and server configuration, SQLite lite mode, and the canonical first-account operator approval runbook.
 - [API reference](./api-reference.md), [authentication API](./api/authentication.md), [workflow API](./workflow-api.md), and [WebSocket protocol](./ws-protocol-guide.md).
 
 ## Feature architecture and guides

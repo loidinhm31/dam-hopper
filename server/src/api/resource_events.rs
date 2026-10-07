@@ -1016,7 +1016,7 @@ pub(crate) mod tests {
             .await
             .expect("Failed to ping test MongoDB");
 
-        let store = AuthStore::new(db.clone());
+        let store = AuthStore::from_mongo(db.clone());
         let _ = store.init_indexes().await;
 
         let xdg_dir = qual_dir.join("xdg");
@@ -1138,7 +1138,7 @@ pub(crate) mod tests {
             event_sink,
             signing_secret.clone(),
             fs,
-            Some(db.clone()),
+            Some(store.clone()),
             false,
             tunnel_manager,
             None,

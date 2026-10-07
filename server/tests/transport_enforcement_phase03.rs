@@ -56,7 +56,7 @@ async fn setup_fixture() -> Option<TestFixture> {
         return None;
     }
 
-    let store = AuthStore::new(db.clone());
+    let store = AuthStore::from_mongo(db.clone());
     let _ = store.init_indexes().await;
 
     let tmp = tempdir().unwrap();
@@ -92,7 +92,7 @@ async fn setup_fixture() -> Option<TestFixture> {
         event_sink,
         TEST_SECRET.to_string(),
         fs,
-        Some(db.clone()),
+        Some(store.clone()),
         false, // authenticated mode
         tunnel_manager,
         None,

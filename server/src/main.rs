@@ -186,7 +186,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
         },
         IntegrationTarget::Codex(args) => match args.action {
             NativeIntegrationAction::Install(action_args) => {
-                let report = dam_hopper_server::agent_status::install_codex(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::install_codex(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -198,7 +199,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
                 }
             }
             NativeIntegrationAction::Status(action_args) => {
-                let report = dam_hopper_server::agent_status::check_codex_status(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::check_codex_status(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -216,7 +218,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
                 }
             }
             NativeIntegrationAction::Uninstall(action_args) => {
-                let report = dam_hopper_server::agent_status::uninstall_codex(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::uninstall_codex(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -236,7 +239,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
         },
         IntegrationTarget::Claude(args) => match args.action {
             NativeIntegrationAction::Install(action_args) => {
-                let report = dam_hopper_server::agent_status::install_claude(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::install_claude(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -248,7 +252,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
                 }
             }
             NativeIntegrationAction::Status(action_args) => {
-                let report = dam_hopper_server::agent_status::check_claude_status(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::check_claude_status(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -266,7 +271,8 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
                 }
             }
             NativeIntegrationAction::Uninstall(action_args) => {
-                let report = dam_hopper_server::agent_status::uninstall_claude(&action_args.agent_dir)?;
+                let report =
+                    dam_hopper_server::agent_status::uninstall_claude(&action_args.agent_dir)?;
                 if action_args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
@@ -486,6 +492,128 @@ mod tests {
                 }),
             }))
         ));
+    }
+
+    #[tokio::test]
+    async fn init_auth_store_lite_mode_opens_sqlite_and_honors_precedence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("auth.db");
+        let session_path = tmp.path().join("sessions.db");
+        let telemetry_str = tmp.path().join("telemetry.db").display().to_string();
+
+        // 1. Lite mode with explicit path opens SQLite
+        std::env::set_var("DAM_HOPPER_LITE_MODE", "true");
+        std::env::set_var("DAM_HOPPER_AUTH_SQLITE_PATH", &db_path);
+        // Even if bad MongoDB vars are set, lite mode ignores them
+        std::env::set_var("MONGODB_URI", "invalid://uri");
+        std::env::set_var("MONGODB_DATABASE", "ignored_db");
+        std::env::remove_var("RUST_ENV");
+        std::env::remove_var("ENVIRONMENT");
+
+        let store = super::init_auth_store(&session_path, &telemetry_str)
+            .await
+            .unwrap()
+            .expect("sqlite store opened");
+        assert!(db_path.exists());
+        drop(store);
+
+        // 2. Production without MFA key fails before opening SQLite file
+        let prod_db_path = tmp.path().join("prod_auth.db");
+        std::env::set_var("DAM_HOPPER_AUTH_SQLITE_PATH", &prod_db_path);
+        std::env::set_var("RUST_ENV", "production");
+        std::env::remove_var("DAM_HOPPER_MFA_KEY_FILE");
+
+        let err = match super::init_auth_store(&session_path, &telemetry_str).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected init_auth_store to fail in production without MFA key"),
+        };
+        assert!(
+            err.to_string()
+                .contains("DAM_HOPPER_MFA_KEY_FILE is required"),
+            "{err}"
+        );
+        assert!(
+            !prod_db_path.exists(),
+            "SQLite file must not be created on failed MFA key check"
+        );
+
+        // Cleanup env vars
+        std::env::remove_var("DAM_HOPPER_LITE_MODE");
+        std::env::remove_var("DAM_HOPPER_AUTH_SQLITE_PATH");
+        std::env::remove_var("MONGODB_URI");
+        std::env::remove_var("MONGODB_DATABASE");
+        std::env::remove_var("RUST_ENV");
+    }
+}
+
+/// Open the environment-selected authentication store exactly once.
+///
+/// Must run after every `.env` file has been loaded. A selected SQLite store
+/// that cannot be opened is fatal; there is never a fallback to MongoDB, and
+/// MongoDB settings are ignored in lite mode.
+async fn init_auth_store(
+    session_db_path: &std::path::Path,
+    telemetry_db_path: &str,
+) -> anyhow::Result<Option<dam_hopper_server::auth::AuthStore>> {
+    use dam_hopper_server::auth::{AuthBackendConfig, AuthStore};
+
+    let backend = AuthBackendConfig::from_env()
+        .map_err(|e| anyhow::anyhow!("FATAL: invalid authentication backend configuration: {e}"))?;
+    match backend {
+        AuthBackendConfig::Sqlite { path } => {
+            let production = std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                || std::env::var("ENVIRONMENT").unwrap_or_default() == "production";
+            if production && std::env::var_os("DAM_HOPPER_MFA_KEY_FILE").is_none() {
+                anyhow::bail!(
+                    "FATAL: DAM_HOPPER_MFA_KEY_FILE is required in production authenticated mode."
+                );
+            }
+            if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
+                dam_hopper_server::auth::MfaEncryptionKey::from_file(&key_path).map_err(|e| {
+                    anyhow::anyhow!("FATAL: Failed to load MFA key from {key_path}: {e}")
+                })?;
+            }
+            let telemetry_path =
+                dam_hopper_server::telemetry::runtime::telemetry_path(telemetry_db_path);
+            AuthBackendConfig::Sqlite { path: path.clone() }
+                .ensure_distinct_from(&[
+                    ("session", session_db_path),
+                    ("telemetry", telemetry_path.as_path()),
+                ])
+                .map_err(|e| anyhow::anyhow!("FATAL: {e}"))?;
+            let store = AuthStore::open_sqlite(&path).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "FATAL: cannot open SQLite authentication database {}: {e}",
+                    path.display()
+                )
+            })?;
+            tracing::info!(path = %path.display(), "Authentication backend: SQLite (lite mode)");
+            Ok(Some(store))
+        }
+        AuthBackendConfig::Mongo => {
+            let (Ok(uri), Ok(name)) = (
+                std::env::var("MONGODB_URI"),
+                std::env::var("MONGODB_DATABASE"),
+            ) else {
+                if std::env::var("RUST_ENV").unwrap_or_default() == "production"
+                    || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+                {
+                    anyhow::bail!(
+                        "FATAL: an authentication store is required in production environment. Set MONGODB_URI and MONGODB_DATABASE, or enable lite mode with DAM_HOPPER_LITE_MODE=true."
+                    );
+                }
+                tracing::warn!("MongoDB not configured — running without database");
+                return Ok(None);
+            };
+            tracing::info!(%name, "Connecting to MongoDB...");
+            let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
+            let client = mongodb::Client::with_options(client_options)?;
+            let store = AuthStore::from_mongo(client.database(&name));
+            if let Err(e) = store.init_indexes().await {
+                tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
+            }
+            Ok(Some(store))
+        }
     }
 }
 
@@ -726,33 +854,11 @@ async fn main() -> anyhow::Result<()> {
     let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
     let fs = FsSubsystem::new(project_roots(&config));
 
-    let db = if cli.no_auth {
+    let auth_store = if cli.no_auth {
         None
-    } else if let (Ok(uri), Ok(name)) = (
-        std::env::var("MONGODB_URI"),
-        std::env::var("MONGODB_DATABASE"),
-    ) {
-        tracing::info!(%name, "Connecting to MongoDB...");
-        let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
-        let client = mongodb::Client::with_options(client_options)?;
-        Some(client.database(&name))
     } else {
-        if std::env::var("RUST_ENV").unwrap_or_default() == "production"
-            || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-        {
-            anyhow::bail!(
-                "FATAL: MongoDB configuration (MONGODB_URI and MONGODB_DATABASE) is required in production environment."
-            );
-        }
-        tracing::warn!("MongoDB not configured — running without database");
-        None
+        init_auth_store(&db_path, &config.server.telemetry.db_path).await?
     };
-    if let Some(database) = &db {
-        let auth_store = dam_hopper_server::auth::AuthStore::new(database.clone());
-        if let Err(e) = auth_store.init_indexes().await {
-            tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
-        }
-    }
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
     let opaque_server_setup =
@@ -772,7 +878,7 @@ async fn main() -> anyhow::Result<()> {
         event_sink,
         token,
         fs,
-        db,
+        auth_store,
         cli.no_auth,
         tunnel_manager,
         Some(port_forward_manager.clone()),
@@ -922,8 +1028,8 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let force_close_token = CancellationToken::new();
     let force_close_token_for_shutdown = force_close_token.clone();
-    let listener = ForceCloseListener::new(listener, force_close_token)
-        .tap_io(|_: &mut ForceCloseIo| {});
+    let listener =
+        ForceCloseListener::new(listener, force_close_token).tap_io(|_: &mut ForceCloseIo| {});
 
     let host_resource_events_shutdown = state.host_resource_events.clone();
 
@@ -943,7 +1049,9 @@ async fn main() -> anyhow::Result<()> {
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            tracing::warn!("HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed");
+            tracing::warn!(
+                "HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed"
+            );
             force.cancel();
         });
 
@@ -959,7 +1067,9 @@ async fn main() -> anyhow::Result<()> {
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            tracing::warn!("HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed");
+            tracing::warn!(
+                "HTTP drain deadline (10 s) reached; forcing remaining HTTP connections closed"
+            );
             force.cancel();
         });
 

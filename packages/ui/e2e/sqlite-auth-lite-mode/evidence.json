@@ -1,0 +1,32 @@
+{
+  "run_id": "e2e-run-1791379023313-91118f90",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-07T13:17:03.313Z",
+  "completed_at": "2026-10-07T13:17:09.395Z",
+  "case_name": "sqlite-auth-lite-mode",
+  "route": "/workspace",
+  "git_head": "8203e01c7be7be78314ba950a6dc51237ddbbacc",
+  "source_fingerprint": "fbc5d6d11501bab92d70e85087ad6420a07dc3b07afa346964868ad41c17f284",
+  "seed_digest": "d8de725aa4edcd8415180ad2d2f96d9e3de67a069596ab2b750226a75f7f94aa",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "98dafa4a4ed6ba51ae41a67901c474af8eaad4aa80b93375475ceabde02fdf01",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

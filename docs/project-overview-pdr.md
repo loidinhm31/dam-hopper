@@ -11,7 +11,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 ## Product principles
 
 1. **Owner-scoped operation:** Asynchronous requests capture `{ profileId, generation }`; results from retired generations cannot update current state.
-2. **Safe defaults:** Authentication is the normal server mode; Native Advisor is off by default and administrator-only. Development `--no-auth` is loopback-only and does not unlock Advisor.
+2. **Safe defaults:** Authentication is the normal server mode (MongoDB by default, or environment-selected SQLite lite mode via `DAM_HOPPER_LITE_MODE=true` with no automatic backend fallback); new accounts registered via `POST /api/auth/register` start disabled (`user` role, `auth_version = 0`) and require local operator approval and explicit `admin` promotion. Native Advisor is off by default and administrator-only. Development `--no-auth` is a separate loopback-only bypass and does not unlock Advisor.
 3. **Conservative semantics:** A terminal going quiet or an agent turn ending is not proof that work succeeded. Unknown or stale state remains explicit.
 4. **Bounded work and disclosure:** API work, uploads, histories, previews, and diagnostic output are bounded; secrets and user content are excluded from routine logs and agent-status reports.
 5. **Explicit destructive intent:** History rewriting and publication are separate operations protected by snapshot checks and exact-OID leases.
@@ -26,7 +26,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 | PR-003 | Git operations, history edits, search, squash, and publication | Implemented. Rewrites and contiguous squashes operate on active and inactive local branches via captured branch/HEAD CAS; leased publication is separate, exact-OID-bound, and supports inactive target branches. |
 | PR-004 | Sandboxed file explorer and IDE file operations | Implemented with bounded reads and target-aware operations. |
 | PR-005 | Agent Store distribution and import | Current product functionality; not the retired plugin platform. |
-| PR-006 | REST authentication, MFA, sessions, and authorization | Implemented; production auth and key configuration are covered by the [Authentication API](./api/authentication.md). |
+| PR-006 | REST authentication, MFA, sessions, and authorization | Implemented across default MongoDB and environment-selected SQLite lite mode (`DAM_HOPPER_LITE_MODE`, `DAM_HOPPER_AUTH_SQLITE_PATH`), with mandatory production `DAM_HOPPER_MFA_KEY_FILE`, disabled-by-default registration (`401 ACCOUNT_DISABLED` until local operator approval), and operator-only `admin` promotion. See [Authentication API](./api/authentication.md), [Server Environment & Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook), and [Authentication State & Cryptography](./architecture/authentication-state-and-cryptography.md). |
 | PR-007 | Multi-server profile workbench | Implemented. Each connection and client state is profile/generation scoped. |
 | PR-007A | Profile-qualified files, editor, search, and Git | Implemented; [Workbench Files, Editor, Search, and Git Architecture](./architecture/workbench-files-editor-and-git.md). |
 | PR-007B | Native profile scope and platform integration | Linux-focused implementation complete; Windows native S13 runtime qualification remains separate. |
@@ -86,8 +86,8 @@ See [Native Advisor architecture](./architecture/native-advisor.md) and [Advisor
   1. Rust backend unit and integration tests (`cargo test`).
   2. Frontend unit tests under jsdom (Vitest).
   3. Real-browser component regression suites under Chromium (Vitest Browser Mode, ports 15173/15174).
-  4. Application E2E user journeys (`@playwright/test`) testing built SPAs against containerized production servers and MongoDB.
-- Application E2E journeys enforce deterministic auth seeding via `application_e2e_seed` and browser context `storageState`.
+  4. Application E2E user journeys (`@playwright/test`) testing built SPAs against containerized production servers with default MongoDB containers or isolated SQLite lite mode (`authBackend: "sqlite"`, starting no MongoDB container).
+- Application E2E journeys enforce deterministic auth seeding via `application_e2e_seed` (for both MongoDB and SQLite) and browser context `storageState`.
 - Visual evidence capture is governed by `capture-policy.ts` (full-viewport captures, PNG IHDR validation, colocated metadata, and human review governance in `review.md`).
 
 See the [Testing guide](./testing.md).

@@ -1,10 +1,10 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{header, Request, StatusCode};
 use chrono::Duration as ChronoDuration;
-use dam_hopper_server::auth::Clock;
 use dam_hopper_server::auth::model::{AuthClaims, UserRecord};
 use dam_hopper_server::auth::policy::{MFA_VALIDITY_SECS, SESSION_LIFETIME_SECS};
 use dam_hopper_server::auth::totp::TotpEngine;
+use dam_hopper_server::auth::Clock;
 use mongodb::bson::doc;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -1038,7 +1038,7 @@ async fn test_a21_a22_mongodb_atomic_recovery_reset() {
     // Update user: $unset mfa and throttling, $inc authVersion by 1
     // Filter must match expected authVersion (1)
     let update_res = fixture
-        .db
+        .db()
         .collection::<UserRecord>("users")
         .update_one(
             doc! { "username": "bob_a21", "authVersion": 1 },
@@ -1150,7 +1150,7 @@ async fn test_a21_a22_mongodb_atomic_recovery_reset() {
 
     // 6. Test A22: Reset attempt with stale/wrong version predicate mutates 0 rows
     let stale_reset = fixture
-        .db
+        .db()
         .collection::<UserRecord>("users")
         .update_one(
             doc! { "username": "bob_a21", "authVersion": 1 },
@@ -1223,7 +1223,7 @@ async fn test_smoke_end_to_end_real_tcp_ws_deadline_and_recovery() {
 
     // Operator approves user in MongoDB (sets isEnabled: true)
     fixture
-        .db
+        .db()
         .collection::<UserRecord>("users")
         .update_one(
             doc! { "username": "smoke_eval_user" },
@@ -1407,7 +1407,7 @@ async fn test_smoke_end_to_end_real_tcp_ws_deadline_and_recovery() {
 
     // 13. Perform atomic MongoDB reset recovery while connected
     let reset_res = fixture
-        .db
+        .db()
         .collection::<UserRecord>("users")
         .update_one(
             doc! { "username": "smoke_eval_user", "authVersion": 0 },

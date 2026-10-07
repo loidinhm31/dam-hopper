@@ -123,6 +123,7 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))
 }
 
 async fn spawn_server(state: AppState) -> SocketAddr {
