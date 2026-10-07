@@ -4,12 +4,16 @@
 //! stay private to this module tree. Test qualification hooks fire once here,
 //! never per adapter.
 mod mongo;
+mod sqlite;
+
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use mongodb::Database;
 use thiserror::Error;
 
 use self::mongo::MongoAuthStore;
+use self::sqlite::SqliteAuthStore;
 use super::model::{AuthChallenge, AuthSession, ChallengePurpose, MfaConfirmed, UserRecord};
 
 #[derive(Debug, Error)]
@@ -18,6 +22,12 @@ pub enum StoreError {
     Mongo(#[from] mongodb::error::Error),
     #[error("BSON serialization/deserialization failed: {0}")]
     Bson(#[from] mongodb::bson::ser::Error),
+    #[error("SQLite operation failed: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("Authentication storage I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Authentication storage unavailable: {0}")]
+    Unavailable(String),
     #[error("Duplicate username constraint violation detected: {0}")]
     DuplicateUsername(String),
     #[error("State inconsistency: {0}")]
@@ -28,6 +38,7 @@ pub enum StoreError {
 #[derive(Clone)]
 enum Backend {
     Mongo(MongoAuthStore),
+    Sqlite(SqliteAuthStore),
 }
 
 /// Authentication store; every operation dispatches to the selected backend.
@@ -44,10 +55,23 @@ impl AuthStore {
         }
     }
 
-    /// Initialize backend schema/indexes.
+    /// Store backed by a private SQLite file, created and migrated on open.
+    ///
+    /// Fails (never falls back to another backend) when the path is unsafe,
+    /// unwritable, not an authentication database, corrupt, or from a newer
+    /// schema version. Each call opens an independent connection.
+    pub async fn open_sqlite(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        Ok(Self {
+            backend: Backend::Sqlite(SqliteAuthStore::open(path.into()).await?),
+        })
+    }
+
+    /// Initialize backend schema/indexes. SQLite applies its schema when it is
+    /// opened, so this is a no-op there.
     pub async fn init_indexes(&self) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.init_indexes().await,
+            Backend::Sqlite(_) => Ok(()),
         }
     }
 
@@ -56,6 +80,7 @@ impl AuthStore {
     pub async fn create_user(&self, user: UserRecord) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.create_user(user).await,
+            Backend::Sqlite(store) => store.create_user(user).await,
         }
     }
 
@@ -65,6 +90,7 @@ impl AuthStore {
         crate::system::resource_stream::qual_hook::record_auth("get_user", username);
         match &self.backend {
             Backend::Mongo(store) => store.get_user(username).await,
+            Backend::Sqlite(store) => store.get_user(username).await,
         }
     }
 
@@ -81,6 +107,11 @@ impl AuthStore {
     ) -> Result<bool, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => {
+                store
+                    .confirm_enrollment(username, expected_auth_version, mfa)
+                    .await
+            }
+            Backend::Sqlite(store) => {
                 store
                     .confirm_enrollment(username, expected_auth_version, mfa)
                     .await
@@ -105,6 +136,11 @@ impl AuthStore {
                     .advance_totp_step(username, expected_auth_version, matched_step)
                     .await
             }
+            Backend::Sqlite(store) => {
+                store
+                    .advance_totp_step(username, expected_auth_version, matched_step)
+                    .await
+            }
         }
     }
 
@@ -118,6 +154,7 @@ impl AuthStore {
     ) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.record_failed_attempt(username, now).await,
+            Backend::Sqlite(store) => store.record_failed_attempt(username, now).await,
         }
     }
 
@@ -125,6 +162,7 @@ impl AuthStore {
     pub async fn clear_failed_attempts(&self, username: &str) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.clear_failed_attempts(username).await,
+            Backend::Sqlite(store) => store.clear_failed_attempts(username).await,
         }
     }
 
@@ -132,6 +170,7 @@ impl AuthStore {
     pub async fn create_challenge(&self, challenge: AuthChallenge) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.create_challenge(challenge).await,
+            Backend::Sqlite(store) => store.create_challenge(challenge).await,
         }
     }
 
@@ -139,6 +178,7 @@ impl AuthStore {
     pub async fn get_challenge(&self, digest: &str) -> Result<Option<AuthChallenge>, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.get_challenge(digest).await,
+            Backend::Sqlite(store) => store.get_challenge(digest).await,
         }
     }
 
@@ -146,6 +186,7 @@ impl AuthStore {
     pub async fn increment_challenge_attempt(&self, digest: &str) -> Result<u32, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.increment_challenge_attempt(digest).await,
+            Backend::Sqlite(store) => store.increment_challenge_attempt(digest).await,
         }
     }
 
@@ -158,6 +199,7 @@ impl AuthStore {
     ) -> Result<bool, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.consume_challenge(digest, expected_purpose, now).await,
+            Backend::Sqlite(store) => store.consume_challenge(digest, expected_purpose, now).await,
         }
     }
 
@@ -165,6 +207,7 @@ impl AuthStore {
     pub async fn create_session(&self, session: AuthSession) -> Result<(), StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.create_session(session).await,
+            Backend::Sqlite(store) => store.create_session(session).await,
         }
     }
 
@@ -174,6 +217,7 @@ impl AuthStore {
         crate::system::resource_stream::qual_hook::record_auth("get_session", session_id);
         match &self.backend {
             Backend::Mongo(store) => store.get_session(session_id).await,
+            Backend::Sqlite(store) => store.get_session(session_id).await,
         }
     }
 
@@ -190,6 +234,11 @@ impl AuthStore {
                     .advance_session_mfa(session_id, expected_credential_version, now)
                     .await
             }
+            Backend::Sqlite(store) => {
+                store
+                    .advance_session_mfa(session_id, expected_credential_version, now)
+                    .await
+            }
         }
     }
 
@@ -201,6 +250,7 @@ impl AuthStore {
     ) -> Result<bool, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.revoke_session(session_id, now).await,
+            Backend::Sqlite(store) => store.revoke_session(session_id, now).await,
         }
     }
 
@@ -212,6 +262,7 @@ impl AuthStore {
     ) -> Result<u64, StoreError> {
         match &self.backend {
             Backend::Mongo(store) => store.revoke_user_sessions(username, now).await,
+            Backend::Sqlite(store) => store.revoke_user_sessions(username, now).await,
         }
     }
 }
