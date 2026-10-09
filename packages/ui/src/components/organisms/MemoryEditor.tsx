@@ -44,6 +44,16 @@ export function MemoryEditor({ projects, owner, profileId }: Props) {
   const updateMemory = useUpdateMemoryFile({ owner });
   const applyTemplate = useApplyMemoryTemplate({ owner });
   // Reset editor when project/agent/profile changes or fresh data arrives for current clean target
+  // Reconcile project selection when projects arrive or currently selected project disappears
+  useEffect(() => {
+    if (projects.length === 0) {
+      if (projectName) setProjectName("");
+    } else if (!projectName) {
+      setProjectName(projects[0]!.name);
+    } else if (!projects.some((p) => p.name === projectName)) {
+      setProjectName(projects[0]!.name);
+    }
+  }, [projectName, projects]);
   useEffect(() => {
     const target = draftTargetRef.current;
     if (

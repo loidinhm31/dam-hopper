@@ -1782,20 +1782,6 @@ export default function WorkspacePage() {
         )}
 
         <div className="flex-1 min-h-0">
-          {mountedSessions.length > 0 && (
-            <Suspense fallback={null}>
-              <TerminalKeepAliveHost
-                mountedSessions={mountedSessions}
-                openTabs={terminalTabs}
-                onSessionExit={handleSessionExit}
-                onNewTerminal={handleOpenCurrentTerminal}
-                suppressAutoFocus
-                suppressNativeKeyboard={isAndroidChromeNativeInputSuppressed}
-                webglEnabledSessionIds={webglEnabledSessionIds}
-              />
-            </Suspense>
-          )}
-
           {terminalUsageMode === "runtime" ? (
             <Suspense fallback={<PanelFallback label="Loading runtime…" />}>
               <ActiveTerminalRuntimeDisplay
@@ -2688,6 +2674,20 @@ export default function WorkspacePage() {
         viewportVersion={browserViewportVersion}
         isViewportVisible={isBrowserViewportVisible}
       />
+      {/* Keep terminal ownership stable across responsive shell replacement. */}
+      {mountedSessions.length > 0 && (
+        <Suspense fallback={null}>
+          <TerminalKeepAliveHost
+            mountedSessions={mountedSessions}
+            openTabs={terminalTabs}
+            onSessionExit={handleSessionExit}
+            onNewTerminal={handleOpenCurrentTerminal}
+            suppressAutoFocus
+            suppressNativeKeyboard={isAndroidChromeNativeInputSuppressed}
+            webglEnabledSessionIds={webglEnabledSessionIds}
+          />
+        </Suspense>
+      )}
       {isAdvisorVisible && (
         <WorkspaceAdvisorHost
           project={selectedProject ?? null}

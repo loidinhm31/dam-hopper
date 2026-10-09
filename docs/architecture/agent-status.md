@@ -217,6 +217,15 @@ Implementation and focused tests: `server/src/agent_status/assets/omp-agent-stat
 - Reuse notification store, toast viewport, sound and browser service. Qualify shared browser rate-limit keys/tags and selection targets by profile and incarnation. This does not claim exactly-once OS delivery.
 - Consolidate preferences under `terminalAgentNotifications: {version:2, agents:{codex:policy, omp:policy, claude:policy}}`; each policy contains `enabled`, `toast`, `browser`, `sound`, `volume`, and `pattern`. Version-1 migration preserves Codex and OMP channel values and adds Claude disabled; older Codex aliases still normalize once. OMP defaults off when no policy exists; badges remain independent of notification preferences. Write/export only the new shape, remove obsolete in-memory fields/callers, and avoid a dual-write shim. Add policies for other agents only with real adapters.
 
+### Traditional navigator presentation
+
+Traditional mode adds a separate Agents list after Projects, scoped to admitted observations in currently open, alive terminal incarnations across registered profiles. It retains the original status DTO and source/limited-coverage context. The display subscribes to existing status/profile/connection stores; no new polling, ingress, terminal-content parsing, notifications or backend state is introduced.
+
+This list uses **Working** for `working`; existing terminal badges retain their current vocabulary. **Idle**, **Needs attention** (Approval/Question/Error) and **Unknown** preserve reducer meaning. The secondary **Done (turn ended)** hint requires ready current-owner evidence, nonexpired `idle`, explicit `lastOutcome: ended` and no current `turnId`. Interrupted/failed/expired/unavailable evidence never shows it. Silent snapshots may retain historical hints without sending alerts; notification policy does not gate roster status.
+
+Canonical qualified UI terminal IDs are projected to raw server metadata only at the display's builder boundary after exact identity agreement. Mounted/tab ownership, concrete incarnation and status identity must agree; stale callbacks cannot activate replacements. Settings links carry the selected registered project owner; ownerless Settings requires choice and invalid/disconnected/removed owners cannot mount query-bearing UI. `WorkspacePage` keeps the sole `TerminalKeepAliveHost` stable above responsive shell switches. See [runtime qualification report](../../plans/261008-0233-traditional-terminal-agents-sidebar/reports/04-runtime-qualification.md) for full qualification matrix results across OMP, Codex, and Claude; prior backend version qualifications do not certify newer installed CLIs.
+
+
 ## Agent Store path verification
 
 - The Agent Store's **Agent Settings** tab replaces the former Integrations tab and Appearance notification panel. It configures OMP, Codex, and Claude paths for the selected server profile; installation state and runtime readiness are shown separately. `agentSettingsPaths` and v2 `terminalAgentNotifications` are persisted in that server's global UI config. Status badges remain independent of notification policy.

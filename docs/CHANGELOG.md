@@ -1,3 +1,10 @@
+# 2026-10-08
+
+- **Traditional Projects + Agents navigation (Phases 01–04).** Preserves Projects-first navigation and adds an exact-incarnation agent roster across open terminals, wide and compact. Agent clicks select the existing terminal/split; stale callbacks are rejected. Compact controls have local 44px minimum targets, DoubleShift modal event isolation, and explicit opener focus restoration. Relocated `TerminalKeepAliveHost` in `WorkspacePage` preserves xterm DOM continuity across wide/compact shell switches.
+  - Primary Working/Idle/Needs attention/Unknown retain server meaning; secondary `Done (turn ended)` requires explicit fresh ended evidence and never claims task success. Notification policy and backend protocols remain unchanged.
+  - Agent Settings links carry selected-owner intent. Invalid/disconnected/removed targets deny remote query mounting; ownerless Settings asks for a profile, without changing the global active profile.
+  - Full UI suite passed 2,694 tests across 326 files; focused Chromium browser suite passed 28/28 tests with metadata-rebuild focus and split preservation; production authenticated application journey passed 2/2 tests. Full-viewport wide (1440x900) and compact (390x844) visual review ACCEPTED. Real managed OMP/Codex/Claude admission and true duplicate-ID collision qualified; see [runtime evidence](../plans/261008-0233-traditional-terminal-agents-sidebar/reports/04-runtime-qualification.md) and [progress](../plans/261008-0233-traditional-terminal-agents-sidebar/progress.md). No native-desktop or cross-version qualification implied.
+
 # 2026-10-07
 
 - **SQLite authentication lite mode (Phases 01–05).** Added environment-selected SQLite authentication (`DAM_HOPPER_LITE_MODE=true`, `DAM_HOPPER_AUTH_SQLITE_PATH`) providing full security parity with MongoDB with zero external service requirements within the same server binary:

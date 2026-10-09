@@ -1,5 +1,8 @@
-import { useRef } from "react";
+import { useId, useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
+import { Link } from "react-router-dom";
+import { TraditionalTerminalAgentRow } from "@/components/molecules/traditional-terminal-agent-row.js";
+import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
 import type { ProjectTargetInput } from "@/api/client.js";
@@ -98,6 +101,10 @@ interface TraditionalTerminalProjectsNavigatorProps {
   width?: number;
   className?: string;
   touchOptimized?: boolean;
+  readonly agentRows?: readonly TraditionalTerminalAgentRowModel[];
+  readonly activeSessionId?: string | null;
+  readonly onSelectAgent?: (sessionId: string) => void;
+  readonly agentSettingsHref?: string;
 }
 
 export function TraditionalTerminalProjectsNavigator({
@@ -108,7 +115,13 @@ export function TraditionalTerminalProjectsNavigator({
   width,
   className,
   touchOptimized = false,
+  agentRows = [],
+  activeSessionId,
+  onSelectAgent,
+  agentSettingsHref,
 }: TraditionalTerminalProjectsNavigatorProps) {
+  const projectsHeadingId = useId();
+  const agentsHeadingId = useId();
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
   const showCommitStatus = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -137,16 +150,17 @@ export function TraditionalTerminalProjectsNavigator({
 
   return (
     <nav
-      aria-label="Terminal projects"
+      aria-label="Terminal projects and agents"
       style={width ? { width } : undefined}
       className={cn(
-        "flex w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]",
+        "flex min-h-0 w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]",
         touchOptimized && "w-full border-r-0",
         className,
       )}
     >
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-        <h2 className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+      <section aria-labelledby={projectsHeadingId} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+        <h2 id={projectsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
           projects
         </h2>
         {onNewTerminal ? (
@@ -156,8 +170,8 @@ export function TraditionalTerminalProjectsNavigator({
             title="New terminal in selected project"
             onClick={onNewTerminal}
             className={cn(
-              "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
-              touchOptimized && "h-10 w-10",
+              "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
+              touchOptimized && "min-h-11 min-w-11",
             )}
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
@@ -227,6 +241,42 @@ export function TraditionalTerminalProjectsNavigator({
           );
         })}
       </div>
+      </section>
+      <section aria-labelledby={agentsHeadingId} className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-[var(--color-border)] px-4 py-2">
+          <h2 id={agentsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+            agents
+          </h2>
+          {agentSettingsHref ? (
+            <Link
+              to={agentSettingsHref}
+              className="inline-flex min-h-11 min-w-11 items-center rounded px-2 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]"
+            >
+              Agent Settings
+            </Link>
+          ) : null}
+        </div>
+        <fieldset disabled={!onSelectAgent} className="m-0 min-h-0 min-w-0 flex-1 overflow-y-auto border-0 p-0">
+          {agentRows.length ? (
+            <ul aria-label="Observed agents in open terminals" className="py-1">
+              {agentRows.map((row) => (
+                <li key={row.key}>
+                  <TraditionalTerminalAgentRow
+                    row={row}
+                    active={row.sessionId === activeSessionId}
+                    onSelectAgent={(sessionId) => onSelectAgent?.(sessionId)}
+                    touchOptimized={touchOptimized}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="px-4 py-3 text-xs leading-relaxed text-[var(--color-text-muted)]">
+              No observed agents in open terminals. OMP, Codex and Claude appear after supported integrations report status.
+            </p>
+          )}
+        </fieldset>
+      </section>
     </nav>
   );
 }

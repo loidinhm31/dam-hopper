@@ -1,8 +1,43 @@
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
-import type { GitStatus, Worktree } from "@/api/client.js";
+import { page, userEvent as browserUserEvent } from "vitest/browser";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import type { GitStatus, TerminalAgentNotifications, Worktree } from "@/api/client.js";
+import {
+  __setConnectionSnapshotForTests,
+  getConnectionSnapshot,
+} from "@/api/connections.js";
+import {
+  getActiveProfileId,
+  getProfiles,
+  saveProfiles,
+} from "@/api/server-config.js";
+import { projectKey, terminalKey } from "@/api/ownership.js";
+import {
+  applyAgentStatusChanged,
+  beginAgentStatusConnection,
+  installAgentStatusSnapshot,
+  useAgentStatusStore,
+} from "@/stores/agent-status.js";
+import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
+import { notifyTerminalAgent } from "@/lib/browser-notification-service.js";
+import { playTerminalNotificationSound } from "@/lib/terminal-notification-sound.js";
+import type * as BrowserNotificationService from "@/lib/browser-notification-service.js";
+import type * as TerminalNotificationSound from "@/lib/terminal-notification-sound.js";
+import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
+import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
+import type * as TerminalHostAttachment from "@/lib/terminal-host-attachment.js";
+import type * as TerminalFitScheduler from "@/lib/terminal-fit-scheduler.js";
+import {
+  getTerminal,
+  registerTerminal,
+  removeTerminal,
+  type TerminalEntry,
+} from "@/lib/terminal-registry.js";
+import { TerminalFindController } from "@/lib/terminal-find-controller.js";
 import {
   initTransport,
   resetTransport,
@@ -11,15 +46,56 @@ import {
 import {
   TraditionalProjectsFixture,
   dragSecondTraditionalTerminalToRight,
+  agentFixtureRefs,
+  seedTraditionalAgentFixture,
+  updateTraditionalAgentFixtureStatus,
+  settleTraditionalFixtureQueries,
 } from "./terminal-traditional-projects.browser-fixture.js";
 import { traditionalTerminalLayoutStorageKey } from "@/lib/traditional-terminal-projects.js";
 import "@/index.css";
+import "@xterm/xterm/css/xterm.css";
+// Browser mode actions run outside React. Keep the entire real interaction
+// inside act so selection effects and modal focus/Presence updates settle.
+const userEvent = {
+  click: async (...args: Parameters<typeof browserUserEvent.click>) => {
+    await act(async () => browserUserEvent.click(...args));
+    await settleTraditionalFixtureQueries();
+  },
+  keyboard: async (...args: Parameters<typeof browserUserEvent.keyboard>) => {
+    await act(async () => browserUserEvent.keyboard(...args));
+    await settleTraditionalFixtureQueries();
+  },
+};
+
+async function waitForProjectsSheetDismissal(opener: HTMLElement) {
+  await act(async () => {
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+  });
+}
+
 
 const LONG_COMMIT_MESSAGE =
   "Preserve complete Traditional project commit context while resizing the terminal navigator";
 
 const compactState = vi.hoisted(() => ({ value: false }));
 const terminalCommitStatusState = vi.hoisted(() => ({ enabled: true }));
+const notificationPolicy = vi.hoisted(() => {
+  const policy = {
+    enabled: false,
+    toast: true,
+    browser: true,
+    sound: true,
+    volume: 100,
+    pattern: "default" as const,
+  };
+  return {
+    version: 2 as const,
+    agents: { omp: { ...policy }, codex: { ...policy }, claude: { ...policy } },
+  };
+});
 
 function statusFor(projectName: string): GitStatus {
   return {
@@ -97,17 +173,35 @@ vi.mock("@/hooks/use-coarse-pointer.js", () => ({
   useCoarsePointer: () => false,
 }));
 
-vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: (
-    selector: (state: {
-      mobileCustomKeyboardEnabled: boolean;
-      terminalCommitStatusEnabled: boolean;
-    }) => unknown,
-  ) =>
-    selector({
-      mobileCustomKeyboardEnabled: false,
-      terminalCommitStatusEnabled: terminalCommitStatusState.enabled,
-    }),
+interface BrowserSettings {
+  mobileCustomKeyboardEnabled: boolean;
+  terminalCommitStatusEnabled: boolean;
+  terminalAgentNotifications: TerminalAgentNotifications;
+}
+
+vi.mock("@/stores/settings.js", () => {
+  const getState = (): BrowserSettings => ({
+    mobileCustomKeyboardEnabled: false,
+    terminalCommitStatusEnabled: terminalCommitStatusState.enabled,
+    terminalAgentNotifications: notificationPolicy,
+  });
+  return {
+    useSettingsStore: Object.assign(
+      (selector: (state: BrowserSettings) => unknown) =>
+        selector(getState()),
+      { getState },
+    ),
+  };
+});
+
+vi.mock("@/lib/browser-notification-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BrowserNotificationService>()),
+  notifyTerminalAgent: vi.fn(),
+}));
+
+vi.mock("@/lib/terminal-notification-sound.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof TerminalNotificationSound>()),
+  playTerminalNotificationSound: vi.fn(),
 }));
 
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
@@ -116,16 +210,18 @@ vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
   }),
 }));
 
-vi.mock("@/lib/terminal-host-attachment.js", () => ({
-  attachTerminalsToHost: vi.fn(),
-}));
+// Observe the real consumer path without removing reparenting, geometry checks,
+// animation-frame fitting or xterm autofocus. Most tests have no registry entry;
+// the metadata focus regression below registers a real xterm.
+vi.mock("@/lib/terminal-host-attachment.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof TerminalHostAttachment>();
+  return { ...actual, attachTerminalsToHost: vi.fn(actual.attachTerminalsToHost) };
+});
 
-vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
-  cancelScheduledTerminalFit: vi.fn(),
-  fitAllTerminals: vi.fn(),
-  isTerminalFitEligible: vi.fn(() => true),
-  scheduleTerminalFit: vi.fn(),
-}));
+vi.mock("@/lib/terminal-fit-scheduler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof TerminalFitScheduler>();
+  return { ...actual, scheduleTerminalFit: vi.fn(actual.scheduleTerminalFit) };
+});
 
 vi.mock("@/lib/terminal-native-input-policy.js", () => ({
   syncNativeKeyboardSuppression: vi.fn(),
@@ -142,11 +238,18 @@ reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 describe("Traditional terminal projects in Chromium", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let cleanupAgentFixture: (() => void) | undefined;
 
   beforeEach(async () => {
     compactState.value = false;
     terminalCommitStatusState.enabled = true;
+    for (const policy of Object.values(notificationPolicy.agents)) {
+      policy.enabled = false;
+    }
     invoke.mockClear();
+    vi.mocked(notifyTerminalAgent).mockClear();
+    vi.mocked(playTerminalNotificationSound).mockClear();
+    useTerminalNotificationsStore.getState().clearNotifications();
     initTransport(projectStatusTransport);
     localStorage.removeItem(
       traditionalTerminalLayoutStorageKey("project:alpha"),
@@ -161,10 +264,21 @@ describe("Traditional terminal projects in Chromium", () => {
     document.body.append(container);
     root = createRoot(container);
     await act(async () => root.render(<TraditionalProjectsFixture />));
+    await settleTraditionalFixtureQueries();
   });
 
   afterEach(async () => {
     await act(async () => root.unmount());
+    cleanupAgentFixture?.();
+    cleanupAgentFixture = undefined;
+    for (const [profileId, project] of [
+      [agentFixtureRefs.alpha.profileId, "alpha"],
+      [agentFixtureRefs.beta.profileId, "beta"],
+    ]) {
+      localStorage.removeItem(
+        traditionalTerminalLayoutStorageKey(projectKey({ profileId, project })),
+      );
+    }
     resetTransport();
     container.remove();
     document.body.innerHTML = "";
@@ -177,6 +291,41 @@ describe("Traditional terminal projects in Chromium", () => {
         document.querySelector('[data-testid="fixture-active-session"]'),
       ).not.toBeNull(),
     );
+  }
+
+  async function mountAgents(
+    props: ComponentProps<typeof TraditionalProjectsFixture> = {},
+  ) {
+    await act(async () => {
+      root.unmount();
+      cleanupAgentFixture = seedTraditionalAgentFixture(projectStatusTransport);
+      root = createRoot(container);
+      root.render(<TraditionalProjectsFixture {...props} withAgents />);
+    });
+    await settleTraditionalFixtureQueries();
+    if (compactState.value) {
+      await expect
+        .element(page.getByRole("button", { name: "Projects + Agents" }))
+        .toBeVisible();
+    } else {
+      await expect
+        .element(page.getByRole("list", { name: "Observed agents in open terminals" }))
+        .toBeVisible();
+    }
+  }
+
+  // Retain the real row's React click closure, not a new DOM dispatch that would
+  // resolve the current props. This exercises callbacks queued before retirement.
+  function retainAgentActivation(button: HTMLElement): () => void {
+    const propsKey = Object.keys(button).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    if (!propsKey) throw new Error("React row click props are missing");
+    const props = (button as unknown as Record<string, { onClick?: () => void }>)[
+      propsKey
+    ];
+    if (!props?.onClick) throw new Error("Agent row click handler is missing");
+    return props.onClick;
   }
 
   it("shows scoped project status, preserves each selection, and restores split layouts", async () => {
@@ -220,7 +369,7 @@ describe("Traditional terminal projects in Chromium", () => {
     ).not.toBeNull();
     expect(alphaMetadata?.children[2]?.querySelector(".truncate")).toBeNull();
     const projectsNavigator = document.querySelector<HTMLElement>(
-      'nav[aria-label="Terminal projects"]',
+      'nav[aria-label="Terminal projects and agents"]',
     );
     const resizeHandle = document.querySelector<HTMLElement>(
       '[data-testid="traditional-projects-resize-handle"]',
@@ -324,7 +473,7 @@ describe("Traditional terminal projects in Chromium", () => {
       root.render(<TraditionalProjectsFixture />);
     });
     const reloadedNavigator = document.querySelector<HTMLElement>(
-      'nav[aria-label="Terminal projects"]',
+      'nav[aria-label="Terminal projects and agents"]',
     );
     const reloadedResizeHandle = document.querySelector<HTMLElement>(
       '[data-testid="traditional-projects-resize-handle"]',
@@ -332,7 +481,7 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(reloadedNavigator?.style.width).toBe("520px");
     expect(reloadedResizeHandle?.getAttribute("aria-valuenow")).toBe("520");
     const projectTabs = document.querySelectorAll<HTMLElement>(
-      'nav[aria-label="Terminal projects"] [role="tab"]',
+      'nav[aria-label="Terminal projects and agents"] [role="tab"]',
     );
     expect(projectTabs).toHaveLength(2);
     expect(Array.from(projectTabs, (tab) => tab.id)).toEqual([
@@ -373,7 +522,16 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(selectedPanel?.getAttribute("aria-labelledby")).toBe(
       selectedTab?.id,
     );
-    expect(document.body.textContent).not.toContain("agents");
+    await expect
+      .element(page.getByRole("heading", { name: "agents" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByText("No observed agents in open terminals.", { exact: false }))
+      .toBeVisible();
+    expect(
+      page.getByRole("link", { name: "Agent Settings" }).element()
+        .getAttribute("href"),
+    ).toBe("/agent-store?tab=settings");
     await expect
       .element(page.getByText("alpha first", { exact: true }))
       .toBeVisible();
@@ -637,7 +795,7 @@ describe("Traditional terminal projects in Chromium", () => {
     await act(async () => root.render(<TraditionalProjectsFixture />));
 
     await expect
-      .element(page.getByRole("button", { name: "Projects" }))
+      .element(page.getByRole("button", { name: "Projects + Agents" }))
       .toBeVisible();
     expect(
       document
@@ -657,7 +815,7 @@ describe("Traditional terminal projects in Chromium", () => {
       "Selected terminal project",
     );
     expect(compactPanel?.getAttribute("aria-labelledby")).toBeNull();
-    await userEvent.click(page.getByRole("button", { name: "Projects" }));
+    await userEvent.click(page.getByRole("button", { name: "Projects + Agents" }));
     await expect.element(page.getByRole("dialog")).toBeVisible();
     expect(
       document
@@ -721,5 +879,650 @@ describe("Traditional terminal projects in Chromium", () => {
       document.querySelector('[data-testid="fixture-active-session"]')
         ?.textContent,
     ).toBe("alpha-1");
+  });
+
+  it("selects the exact cross-project agent instead of the remembered shell and qualifies colliding remote IDs", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const roster = page.getByRole("list", {
+      name: "Observed agents in open terminals",
+    });
+    expect(roster.element().querySelectorAll("li")).toHaveLength(3);
+    await expect
+      .element(roster.getByRole("button", { name: /OMP: alpha first #1;.*Server A/ }))
+      .toBeVisible();
+    await expect
+      .element(roster.getByRole("button", { name: /Codex: beta agent #2;.*Server B/ }))
+      .toBeVisible();
+    await expect
+      .element(roster.getByRole("button", { name: /Claude: beta Claude/ }))
+      .toBeVisible();
+    for (const name of [/Codex: beta agent #2;/, /Claude: beta Claude #3;/]) {
+      const nativeRow = roster.getByRole("button", { name }).element();
+      const descriptionId = nativeRow.getAttribute("aria-describedby")!;
+      expect(document.getElementById(descriptionId)?.textContent).toContain(
+        "Hook observation (limited coverage; quiet reasoning and long waits become Unknown)",
+      );
+    }
+    expect(roster.element().textContent).not.toContain("alpha second");
+    expect(roster.element().textContent).not.toContain("beta shell");
+    expect(agentFixtureRefs.alpha.id).toBe(agentFixtureRefs.beta.id);
+    expect(terminalKey(agentFixtureRefs.alpha)).not.toBe(
+      terminalKey(agentFixtureRefs.beta),
+    );
+
+    await selectProject("beta");
+    await userEvent.click(page.getByText("beta shell", { exact: true }));
+    await selectProject("alpha");
+    await selectProject("beta");
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.betaShell));
+    await selectProject("alpha");
+    await userEvent.click(
+      roster.getByRole("button", { name: /Codex: beta agent #2;/ }),
+    );
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.beta));
+    expect(
+      roster.getByRole("button", { name: /Codex: beta agent #2;/ }).element()
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      roster.getByRole("button", { name: /OMP: alpha first #1;/ }).element()
+        .getAttribute("aria-current"),
+    ).toBeNull();
+    await userEvent.click(
+      page.getByRole("button", { name: "New terminal in selected project" }),
+    );
+    await expect
+      .element(page.getByTestId("fixture-new-terminal-project"))
+      .toHaveTextContent("beta");
+    await userEvent.click(roster.getByRole("button", { name: /OMP: alpha first #1;/ }));
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.alpha));
+  });
+
+  it("activates the existing nonfocused split pane without changing membership, layout or terminal hosts", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    await userEvent.click(page.getByText("alpha second", { exact: true }));
+    await dragSecondTraditionalTerminalToRight();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelectorAll('[data-testid="terminal-pane-output-host"]'),
+      ).toHaveLength(2),
+    );
+    const hosts = Array.from(
+      document.querySelectorAll('[data-testid="terminal-pane-output-host"]'),
+    );
+    const layoutKey = traditionalTerminalLayoutStorageKey(
+      projectKey({ profileId: agentFixtureRefs.alpha.profileId, project: "alpha" }),
+    );
+    const before = JSON.parse(localStorage.getItem(layoutKey)!);
+    const focusedBefore = hosts.find((host) =>
+      host.closest(".border")?.className.includes("border-[var(--color-primary)]/60"),
+    );
+    expect(focusedBefore).toBe(hosts[1]);
+    const visibleBefore = page.getByTestId("fixture-visible-sessions")
+      .element().textContent;
+    await userEvent.click(page.getByRole("button", { name: /OMP: alpha first #1;/ }));
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.alpha));
+    await vi.waitFor(() => {
+      const after = JSON.parse(localStorage.getItem(layoutKey)!);
+      expect(after.root).toEqual(before.root);
+      const focusedAfter = hosts.find((host) =>
+        host.closest(".border")?.className.includes("border-[var(--color-primary)]/60"),
+      );
+      expect(focusedAfter).toBe(hosts[0]);
+      expect(focusedAfter).not.toBe(focusedBefore);
+    });
+    expect(
+      Array.from(document.querySelectorAll('[data-testid="terminal-pane-output-host"]')),
+    ).toEqual(hosts);
+    expect(page.getByTestId("fixture-visible-sessions").element().textContent)
+      .toBe(visibleBefore);
+    await selectProject("beta");
+    await selectProject("alpha");
+    expect(document.querySelectorAll('[data-testid="terminal-pane-output-host"]'))
+      .toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem(layoutKey)!).root).toEqual(before.root);
+  });
+
+  it.each([
+    ["another profile's qualified metadata", "mismatch-agent-metadata"],
+    ["a raw-ID alternate instead of application metadata", "raw-agent-metadata"],
+  ])("rejects %s without forwarding a retained row action", async (_label, control) => {
+    await mountAgents();
+    const staleActivate = retainAgentActivation(
+      page.getByRole("button", { name: /OMP: alpha first #1;/ }).element(),
+    );
+    await selectProject("beta");
+    await userEvent.click(page.getByTestId(control));
+    expect(
+      useAgentStatusStore.getState().profiles
+        .get(agentFixtureRefs.alpha.profileId)?.rows.has(agentFixtureRefs.alpha.id),
+    ).toBe(true);
+    expect(document.querySelector('button[aria-label^="OMP: alpha first #1;"]'))
+      .toBeNull();
+    const selectionCount = page.getByTestId("fixture-selection-count")
+      .element().textContent;
+    const activeId = page.getByTestId("fixture-active-session").element().textContent;
+    await act(async () => staleActivate());
+    expect(page.getByTestId("fixture-selection-count").element().textContent)
+      .toBe(selectionCount);
+    expect(page.getByTestId("fixture-active-session").element().textContent)
+      .toBe(activeId);
+    await expect
+      .element(page.getByRole("button", { name: /Codex: beta agent #2;/ }))
+      .toBeVisible();
+  });
+
+  it("rejects a retained agent callback after terminal removal", async () => {
+    await mountAgents();
+    const staleActivate = retainAgentActivation(
+      page.getByRole("button", { name: /OMP: alpha first #1;/ }).element(),
+    );
+    await userEvent.click(page.getByTestId("remove-agent-terminal"));
+    const selectionCount = page.getByTestId("fixture-selection-count")
+      .element().textContent;
+    const activeId = page.getByTestId("fixture-active-session").element().textContent;
+    expect(
+      document.querySelector('button[aria-label^="OMP: alpha first #1;"]'),
+    ).toBeNull();
+    await act(async () => staleActivate());
+    expect(page.getByTestId("fixture-selection-count").element().textContent)
+      .toBe(selectionCount);
+    expect(page.getByTestId("fixture-active-session").element().textContent)
+      .toBe(activeId);
+  });
+
+  it("rejects the old incarnation callback after restart but allows the new row", async () => {
+    await mountAgents();
+    const oldButton = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    const staleActivate = retainAgentActivation(oldButton);
+    await selectProject("beta");
+    await userEvent.click(page.getByTestId("restart-agent-terminal"));
+    const replacement = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(replacement).not.toBe(oldButton);
+    const selectionCount = page.getByTestId("fixture-selection-count")
+      .element().textContent;
+    const activeId = page.getByTestId("fixture-active-session").element().textContent;
+    await act(async () => staleActivate());
+    expect(page.getByTestId("fixture-selection-count").element().textContent)
+      .toBe(selectionCount);
+    expect(page.getByTestId("fixture-active-session").element().textContent)
+      .toBe(activeId);
+    await userEvent.click(replacement);
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.alpha));
+  });
+
+  it("rejects a retained callback when the mounted terminal is no longer live", async () => {
+    await mountAgents();
+    const staleActivate = retainAgentActivation(
+      page.getByRole("button", { name: /OMP: alpha first #1;/ }).element(),
+    );
+    await selectProject("beta");
+    await userEvent.click(page.getByTestId("stop-agent-terminal"));
+    expect(
+      useAgentStatusStore.getState().profiles
+        .get(agentFixtureRefs.alpha.profileId)?.rows.has(agentFixtureRefs.alpha.id),
+    ).toBe(true);
+    expect(document.querySelector('button[aria-label^="OMP: alpha first #1;"]')).toBeNull();
+    const selectionCount = page.getByTestId("fixture-selection-count")
+      .element().textContent;
+    const activeId = page.getByTestId("fixture-active-session").element().textContent;
+    await act(async () => staleActivate());
+    expect(page.getByTestId("fixture-selection-count").element().textContent)
+      .toBe(selectionCount);
+    expect(page.getByTestId("fixture-active-session").element().textContent)
+      .toBe(activeId);
+  });
+
+  it("uses the latest tab handler when a retained callback still names the same live incarnation", async () => {
+    await mountAgents({ syncWorkspaceProjectOnTerminalSelection: false });
+    const retainedActivate = retainAgentActivation(
+      page.getByRole("button", { name: /OMP: alpha first #1;/ }).element(),
+    );
+    await selectProject("beta");
+    await userEvent.click(page.getByTestId("select-global-beta-project"));
+    await act(async () =>
+      updateTraditionalAgentFixtureStatus(agentFixtureRefs.alpha, {
+        state: "working",
+        turnId: "fixture-next-turn",
+      }),
+    );
+    await act(async () => retainedActivate());
+    await expect.element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.alpha));
+    await expect.element(page.getByTestId("fixture-current-project"))
+      .toHaveTextContent("beta");
+    await userEvent.click(page.getByRole("button", { name: "New terminal in selected project" }));
+    await expect.element(page.getByTestId("fixture-new-terminal-project"))
+      .toHaveTextContent("alpha");
+  });
+
+  it("preserves focused row and xterm through same-membership metadata rebuilds and status updates", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const ref = agentFixtureRefs.alpha;
+    const id = terminalKey(ref);
+    const host = page.getByTestId("terminal-pane-output-host").element();
+    const boundary = document.createElement("div");
+    boundary.style.cssText = "position:absolute;inset:0";
+    host.append(boundary);
+    const terminal = new Terminal({ cols: 80, rows: 24, fontSize: 13 });
+    const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.loadAddon(searchAddon);
+    terminal.open(boundary);
+    const find = new TerminalFindController(searchAddon);
+    const focus = vi.spyOn(terminal, "focus");
+    const fit = vi.spyOn(fitAddon, "fit");
+    // Drain the real attachment scheduler and the following rendering frame;
+    // no timers, polling, synthetic focus replacement or inert fit mock.
+    const settleTerminalFrames = () => act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    });
+    try {
+      let entry!: TerminalEntry;
+      await act(async () => {
+        entry = registerTerminal(ref, terminal, fitAddon, find, boundary);
+      });
+      await settleTerminalFrames();
+      const xterm = terminal.element!;
+      const input = xterm.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
+      // Positive control: PaneContainer's registry subscription invokes real
+      // attachment -> scheduled fit({focus:true}) -> actual xterm input focus.
+      expect(vi.mocked(attachTerminalsToHost)).toHaveBeenCalledWith(
+        expect.objectContaining({ host, activeSessionId: id, suppressTerminalFocus: false }),
+      );
+      expect(vi.mocked(scheduleTerminalFit)).toHaveBeenCalledWith(entry, { focus: true });
+      expect(fit).toHaveBeenCalled();
+      expect(focus).toHaveBeenCalled();
+      expect(document.activeElement).toBe(input);
+      expect(boundary.parentElement).toBe(host);
+      await new Promise<void>((resolve) => terminal.write("metadata-focus-buffer\r\n", resolve));
+      terminal.select(0, 0, 8);
+
+      const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+      const list = page.getByRole("list", { name: "Observed agents in open terminals" }).element();
+      const buttons = Array.from(list.querySelectorAll("button"));
+      const activeId = page.getByTestId("fixture-active-session").element().textContent;
+      const selectionCount = page.getByTestId("fixture-selection-count").element().textContent;
+      const visibleIds = page.getByTestId("fixture-visible-sessions").element().textContent;
+      const layoutKey = traditionalTerminalLayoutStorageKey(
+        projectKey({ profileId: ref.profileId, project: "alpha" }),
+      );
+      const layout = localStorage.getItem(layoutKey);
+      const geometry = host.getBoundingClientRect().toJSON();
+      const buffer = terminal.buffer.active;
+      const contents = Array.from(
+        { length: buffer.length },
+        (_, index) => buffer.getLine(index)?.translateToString(),
+      );
+      const terminalSelection = terminal.getSelection();
+      expect(contents.join("\n")).toContain("metadata-focus-buffer");
+      expect(terminalSelection).toBe("metadata");
+      const attachmentsBefore = vi.mocked(attachTerminalsToHost).mock.calls.length;
+      const schedulesBefore = vi.mocked(scheduleTerminalFit).mock.calls.length;
+      const fitsBefore = fit.mock.calls.length;
+      const focusBefore = focus.mock.calls.length;
+      await act(async () => row.focus());
+      expect(document.activeElement).toBe(row);
+      expect(row.textContent).toContain("Done (turn ended)");
+      expect(row.querySelector('[title^="Last turn ended"]')).not.toBeNull();
+      let metadataRevision = 0;
+      for (const { patch, label } of [
+        { patch: { state: "working" as const, turnId: "fixture-turn" }, label: "Working" },
+        { patch: { state: "blocked" as const, reason: "approval" as const }, label: "Needs attention: Approval" },
+        { patch: { state: "unknown" as const, turnId: undefined }, label: "Unknown" },
+        { patch: { state: "idle" as const, lastOutcome: "interrupted" as const }, label: "Idle" },
+        { patch: { state: "unknown" as const, lastOutcome: "ended" as const }, label: "Unknown" },
+        { patch: { state: "idle" as const, turnId: undefined, reason: undefined,
+            lastOutcome: "ended" as const }, label: "Idle" },
+      ]) {
+        metadataRevision += 1;
+        await act(async () => {
+          updateTraditionalAgentFixtureStatus(ref, patch);
+          // First republish tabs/groups only, then canonical mounted names too,
+          // as session hydration after a public rename does. Neither publication
+          // changes registered owner, live PTY membership or incarnation.
+          root.render(
+            <TraditionalProjectsFixture
+              withAgents
+              terminalMetadataRevision={metadataRevision}
+              republishMountedMetadata={metadataRevision > 3}
+            />,
+          );
+        });
+        await settleTraditionalFixtureQueries();
+        await settleTerminalFrames();
+        // Actual pane-tab title, not a fixture revision echo, proves metadata arrived.
+        expect(page.getByText(`alpha metadata ${metadataRevision}`, { exact: true }).element()).toBeVisible();
+        expect(row.getAttribute("aria-label")).toContain(label);
+        expect(Array.from(list.querySelectorAll("button"))).toEqual(buttons);
+        expect(document.activeElement).toBe(row);
+        expect(row.textContent?.includes("Done (turn ended)")).toBe(metadataRevision === 6);
+        expect(getTerminal(ref)).toBe(entry);
+        expect(terminal.element).toBe(xterm);
+        expect(host.querySelector(".xterm")).toBe(xterm);
+        expect(xterm.querySelector(".xterm-helper-textarea")).toBe(input);
+        expect(boundary.parentElement).toBe(host);
+        expect(page.getByTestId("terminal-pane-output-host").element()).toBe(host);
+        expect(host.getBoundingClientRect().toJSON()).toEqual(geometry);
+        expect(terminal.buffer.active).toBe(buffer);
+        expect(Array.from(
+          { length: terminal.buffer.active.length },
+          (_, index) => terminal.buffer.active.getLine(index)?.translateToString(),
+        )).toEqual(contents);
+        expect(terminal.getSelection()).toBe(terminalSelection);
+        expect(localStorage.getItem(layoutKey)).toBe(layout);
+        expect(page.getByTestId("fixture-active-session").element().textContent).toBe(activeId);
+        expect(page.getByTestId("fixture-selection-count").element().textContent).toBe(selectionCount);
+        expect(page.getByTestId("fixture-visible-sessions").element().textContent).toBe(visibleIds);
+        expect(vi.mocked(attachTerminalsToHost)).toHaveBeenCalledTimes(attachmentsBefore);
+        expect(vi.mocked(scheduleTerminalFit)).toHaveBeenCalledTimes(schedulesBefore);
+        expect(fit).toHaveBeenCalledTimes(fitsBefore);
+        expect(focus).toHaveBeenCalledTimes(focusBefore);
+      }
+    } finally {
+      await act(async () => removeTerminal(ref));
+      focus.mockRestore();
+      fit.mockRestore();
+      find.dispose();
+      terminal.dispose();
+      boundary.remove();
+    }
+  });
+
+  it("reacts to generation-only replacement before the status bridge and waits for a fresh baseline", async () => {
+    notificationPolicy.agents.omp.enabled = true;
+    await mountAgents();
+    const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    const previousProfiles = useAgentStatusStore.getState().profiles;
+    const owner = { profileId: agentFixtureRefs.alpha.profileId, generation: 2 };
+    await act(async () =>
+      __setConnectionSnapshotForTests(owner.profileId, { owner, status: "connected" }),
+    );
+    expect(useAgentStatusStore.getState().profiles).toBe(previousProfiles);
+    expect(row.textContent).toContain("Unavailable");
+    expect(row.textContent).not.toContain("Done (turn ended)");
+    await act(async () => beginAgentStatusConnection(owner));
+    expect(row.textContent).toContain("Unavailable");
+    const retained = useAgentStatusStore.getState().profiles.get(owner.profileId)!;
+    await act(async () =>
+      installAgentStatusSnapshot(owner, {
+        version: 1,
+        serverEpoch: 2,
+        revision: 0,
+        availability: "ready",
+        terminals: [...retained.rows.values()],
+      }),
+    );
+    expect(row.textContent).toContain("Idle");
+    expect(row.textContent).toContain("Done (turn ended)");
+    await act(async () =>
+      __setConnectionSnapshotForTests(owner.profileId, { status: "disconnected" }),
+    );
+    expect(row.textContent).toContain("Unavailable");
+    expect(row.textContent).not.toContain("Done (turn ended)");
+    expect(vi.mocked(notifyTerminalAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(playTerminalNotificationSound)).not.toHaveBeenCalled();
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("prunes authoritative snapshot membership and rejects its retained row callback", async () => {
+    await mountAgents();
+    const staleActivate = retainAgentActivation(
+      page.getByRole("button", { name: /OMP: alpha first #1;/ }).element(),
+    );
+    const owner = getConnectionSnapshot(agentFixtureRefs.alpha.profileId)!.owner;
+    await act(async () =>
+      installAgentStatusSnapshot(owner, {
+        version: 1,
+        serverEpoch: 2,
+        revision: 0,
+        availability: "ready",
+        terminals: [],
+      }),
+    );
+    expect(document.querySelector('button[aria-label^="OMP: alpha first #1;"]')).toBeNull();
+    const selectionCount = page.getByTestId("fixture-selection-count")
+      .element().textContent;
+    await act(async () => staleActivate());
+    expect(page.getByTestId("fixture-selection-count").element().textContent)
+      .toBe(selectionCount);
+    expect(
+      page.getByRole("list", { name: "Observed agents in open terminals" })
+        .element().querySelectorAll("li"),
+    ).toHaveLength(2);
+    await expect.element(page.getByText("alpha first", { exact: true })).toBeVisible();
+  });
+
+  it("shows live status and ended facts even when notification policies are disabled", async () => {
+    await mountAgents();
+    const owner = getConnectionSnapshot(agentFixtureRefs.alpha.profileId)!.owner;
+    const profile = useAgentStatusStore.getState().profiles.get(owner.profileId)!;
+    const initialRow = profile.rows.get(agentFixtureRefs.alpha.id)!;
+    expect(notificationPolicy.agents.omp.enabled).toBe(false);
+    await act(async () => {
+      expect(
+        applyAgentStatusChanged(owner, {
+          serverEpoch: profile.epoch!,
+          revision: profile.revision + 1,
+          row: { ...initialRow, state: "working", turnId: "fixture-turn" },
+        }),
+      ).toBe("applied");
+    });
+    const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(row.textContent).toContain("Working");
+    expect(row.textContent).not.toContain("Done (turn ended)");
+    await act(async () => {
+      expect(
+        applyAgentStatusChanged(owner, {
+          serverEpoch: profile.epoch!,
+          revision: profile.revision + 2,
+          row: { ...initialRow, attentionRevision: 1 },
+          attention: {
+            id: `${profile.epoch}:${initialRow.id}:${initialRow.incarnation}:1`,
+            kind: "turn-ended",
+            terminalId: initialRow.id,
+            incarnation: initialRow.incarnation,
+            agentKind: initialRow.agentKind,
+            agentSessionId: initialRow.agentSessionId,
+            attentionRevision: 1,
+            outcome: "ended",
+            timestampMs: Date.now(),
+          },
+        }),
+      ).toBe("applied");
+    });
+    expect(row.textContent).toContain("Idle");
+    expect(row.textContent).toContain("Done (turn ended)");
+    expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
+    expect(useTerminalNotificationsStore.getState().toasts).toHaveLength(0);
+    expect(vi.mocked(notifyTerminalAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(playTerminalNotificationSound)).not.toHaveBeenCalled();
+    expect(notificationPolicy.agents.omp.enabled).toBe(false);
+  });
+
+  it("targets the selected registered profile in Settings despite ambient A and retains disconnected B", async () => {
+    await mountAgents();
+    await selectProject("beta");
+    expect(getActiveProfileId()).toBe(agentFixtureRefs.alpha.profileId);
+    const href = `/agent-store?tab=settings&profileId=${encodeURIComponent(agentFixtureRefs.beta.profileId)}`;
+    expect(page.getByRole("link", { name: "Agent Settings" }).element()
+      .getAttribute("href")).toBe(href);
+    await act(async () =>
+      __setConnectionSnapshotForTests(agentFixtureRefs.beta.profileId, {
+        status: "disconnected",
+      }),
+    );
+    expect(page.getByRole("link", { name: "Agent Settings" }).element()
+      .getAttribute("href")).toBe(href);
+    await userEvent.click(page.getByRole("link", { name: "Agent Settings" }));
+    await expect.element(page.getByTestId("fixture-route")).toHaveTextContent(href);
+    expect(getActiveProfileId()).toBe(agentFixtureRefs.alpha.profileId);
+    await act(async () =>
+      saveProfiles(getProfiles().filter((profile) =>
+        profile.id !== agentFixtureRefs.beta.profileId,
+      )),
+    );
+    expect(page.getByRole("link", { name: "Agent Settings" }).element()
+      .getAttribute("href")).toBe("/agent-store?tab=settings");
+    expect(
+      document.querySelector('button[aria-label^="Codex: beta agent #2;"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('button[aria-label^="Claude: beta Claude #3;"]'),
+    ).toBeNull();
+  });
+
+  it("reactively updates registered profile labels without replacing focused rows", async () => {
+    await mountAgents();
+    const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    await act(async () => row.focus());
+    await act(async () =>
+      saveProfiles(getProfiles().map((profile) =>
+        profile.id === agentFixtureRefs.alpha.profileId
+          ? { ...profile, name: "Renamed server A" }
+          : profile,
+      )),
+    );
+    expect(row.getAttribute("aria-label")).toContain("Renamed server A");
+    expect(document.activeElement).toBe(row);
+    await expect
+      .element(page.getByRole("tab", { name: /alpha.*Renamed server A/ }))
+      .toBeVisible();
+  });
+
+  it.each([320, 375, 390])(
+    "keeps compact sheet and add actions clickable beside the default floating Panels geometry at %ipx",
+    async (width) => {
+      await page.viewport(width, 844);
+      container.style.width = `${width}px`;
+      compactState.value = true;
+      await mountAgents();
+      const opener = page.getByRole("button", { name: "Projects + Agents" });
+      const add = page.getByRole("button", { name: "New terminal in selected project" });
+      const toolbar = opener.element().parentElement!;
+      const toolbarRect = toolbar.getBoundingClientRect();
+      // Geometry-only regression for the separately owned shell's default
+      // leading floating control; real-shell qualification remains app E2E.
+      const panels = document.createElement("button");
+      panels.textContent = "Panels";
+      panels.style.cssText =
+        `position:fixed;left:12px;top:${toolbarRect.top}px;width:148px;height:44px;z-index:40`;
+      document.body.append(panels);
+      try {
+        const openerRect = opener.element().getBoundingClientRect();
+        const addRect = add.element().getBoundingClientRect();
+        expect(openerRect.top).toBeGreaterThanOrEqual(addRect.bottom);
+        for (const target of [opener.element(), add.element()]) {
+          const rect = target.getBoundingClientRect();
+          expect(rect.height).toBeGreaterThanOrEqual(44);
+          expect(rect.width).toBeGreaterThanOrEqual(44);
+          expect(target.contains(document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          ))).toBe(true);
+        }
+        await userEvent.click(add);
+        await expect.element(page.getByTestId("fixture-new-terminal-project"))
+          .toHaveTextContent("alpha");
+        await userEvent.click(opener);
+        await expect.element(page.getByRole("dialog", { name: "Projects + Agents" }))
+          .toBeVisible();
+        await userEvent.keyboard("{Escape}");
+        await waitForProjectsSheetDismissal(opener.element());
+      } finally {
+        panels.remove();
+      }
+    },
+  );
+
+  it("traps compact keyboard focus, sizes every local target, and restores the opener after Escape, Close and project Arrow selection", async () => {
+    await page.viewport(375, 700);
+    container.style.width = "375px";
+    compactState.value = true;
+    await mountAgents();
+    const opener = page.getByRole("button", { name: "Projects + Agents" });
+    for (const target of [
+      opener.element(),
+      page.getByRole("button", { name: "New terminal in selected project" }).element(),
+    ]) {
+      expect(target.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
+      expect(target.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+    }
+    await act(async () => opener.element().focus());
+    await userEvent.keyboard("{Enter}");
+    const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+    await expect.element(dialog).toBeVisible();
+    await expect.element(dialog.getByRole("heading", { name: "projects", exact: true }))
+      .toBeVisible();
+    await expect.element(dialog.getByRole("heading", { name: "agents", exact: true }))
+      .toBeVisible();
+    for (const target of dialog.element().querySelectorAll<HTMLElement>("button, a[href]")) {
+      expect(target.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
+      expect(target.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+    }
+    const focusable = Array.from(
+      dialog.element().querySelectorAll<HTMLElement>("button, a[href], [tabindex]"),
+    ).filter((target) => target.tabIndex >= 0 && target.getClientRects().length > 0);
+    await act(async () => focusable.at(-1)!.focus());
+    await userEvent.keyboard("{Tab}");
+    expect(dialog.element().contains(document.activeElement)).toBe(true);
+    await act(async () => focusable[0]!.focus());
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(dialog.element().contains(document.activeElement)).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    await waitForProjectsSheetDismissal(opener.element());
+    await userEvent.click(opener);
+    await userEvent.click(dialog.getByRole("button", { name: "Close", exact: true }));
+    await waitForProjectsSheetDismissal(opener.element());
+    await userEvent.click(opener);
+    await act(async () => dialog.getByRole("tab", { name: /alpha/ }).element().focus());
+    await userEvent.keyboard("{ArrowDown}");
+    await waitForProjectsSheetDismissal(opener.element());
+    await expect.element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.claude));
+  });
+
+  it("activates compact agents with Enter and Space, dismisses and restores opener without another terminal mount", async () => {
+    await page.viewport(375, 700);
+    container.style.width = "375px";
+    compactState.value = true;
+    await mountAgents();
+    const opener = page.getByRole("button", { name: "Projects + Agents" });
+    const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+    await userEvent.click(opener);
+    const alphaHost = document.querySelector('[data-testid="terminal-pane-output-host"]');
+    await act(async () =>
+      dialog.getByRole("button", { name: /OMP: alpha first #1;/ }).element().focus(),
+    );
+    await userEvent.keyboard("{Enter}");
+    await waitForProjectsSheetDismissal(opener.element());
+    expect(document.querySelector('[data-testid="terminal-pane-output-host"]')).toBe(alphaHost);
+    await userEvent.click(opener);
+    await act(async () =>
+      dialog.getByRole("button", { name: /Codex: beta agent #2;/ }).element().focus(),
+    );
+    await userEvent.keyboard(" ");
+    await waitForProjectsSheetDismissal(opener.element());
+    await expect.element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.beta));
+    expect(document.querySelectorAll('[data-testid="terminal-pane-output-host"]')).toHaveLength(1);
+    await userEvent.click(page.getByRole("button", { name: "New terminal in selected project" }));
+    await expect.element(page.getByTestId("fixture-new-terminal-project")).toHaveTextContent("beta");
   });
 });

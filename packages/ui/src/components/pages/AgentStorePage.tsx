@@ -1,4 +1,5 @@
 import { lazy, Suspense, useMemo, useState, useSyncExternalStore } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { StoreInventory } from "@/components/organisms/StoreInventory.js";
@@ -18,10 +19,13 @@ import {
   subscribeToProfileChanges,
   type ServerProfile,
 } from "@/api/server-config.js";
-import { getConnectionSnapshot } from "@/api/connections.js";
-import type { ConnectionRef } from "@/api/ownership.js";
+import { useConnectionSnapshot } from "@/api/connections.js";
+import { connectionKey, type ConnectionRef } from "@/api/ownership.js";
 import type { AgentStoreItem } from "@/api/client.js";
-type Tab = "store" | "memory" | "settings" | "import";
+import {
+  parseAgentStoreLocation,
+  type AgentStoreTab,
+} from "@/lib/agent-store-navigation.js";
 
 const MemoryEditor = lazy(() =>
   import("@/components/organisms/MemoryEditor.js").then((m) => ({
@@ -50,61 +54,56 @@ const getEmptyProfiles = () => EMPTY_PROFILES;
 
 
 export function AgentStorePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = parseAgentStoreLocation(searchParams.toString());
   const profiles = useSyncExternalStore(
     subscribeToProfileChanges,
     getProfiles,
     getEmptyProfiles,
   );
-  const [selectedProfileId, setSelectedProfileId] = useState<string>(() => {
-    return getActiveProfileId() || getProfiles()[0]?.id || "";
+  // Capture the ordinary entry default once. Removal must not pick another owner.
+  const [defaultProfileId] = useState<string | null>(() => {
+    const initialProfiles = getProfiles();
+    const activeId = getActiveProfileId();
+    return initialProfiles.find((profile) => profile.id === activeId)?.id
+      ?? initialProfiles[0]?.id
+      ?? null;
   });
+  const selectedProfileId = location.profile.kind === "explicit"
+    ? location.profile.profileId
+    : location.profile.kind === "default"
+      ? defaultProfileId
+      : null;
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const snapshot = useConnectionSnapshot(selectedProfileId ?? "");
+  const owner = selectedProfile && snapshot?.status === "connected"
+    && snapshot.owner.profileId === selectedProfile.id
+    ? snapshot.owner
+    : null;
 
-  const effectiveProfileId = useMemo(() => {
-    if (profiles.some((p) => p.id === selectedProfileId)) return selectedProfileId;
-    return profiles[0]?.id ?? selectedProfileId;
-  }, [profiles, selectedProfileId]);
-
-  const owner = useMemo<ConnectionRef>(() => {
-    const snap = getConnectionSnapshot(effectiveProfileId);
-    return (
-      snap?.owner ?? {
-        profileId: effectiveProfileId,
-        generation: 0,
-      }
-    );
-  }, [effectiveProfileId]);
-
-  const handleProfileChange = (newProfileId: string) => {
-    if (newProfileId === selectedProfileId) return;
-    setShowImportDialog(false);
-    setShowShipDialog(false);
-    setSelectedItem(null);
-    setSelectedProfileId(newProfileId);
+  const handleProfileChange = (profileId: string) => {
+    if (!profiles.some((profile) => profile.id === profileId)) return;
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", location.tab);
+    params.set("profileId", profileId);
+    setSearchParams(params);
   };
-
-  const {
-    data: items = [],
-    isLoading,
-    isError: itemsError,
-  } = useAgentStoreItems(undefined, { owner });
-  const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix({ owner });
-  const { data: projects = [], isError: projectsError } = useProjects({ owner });
-  const [activeTab, setActiveTab] = useState<Tab>("store");
-  const [selectedItem, setSelectedItem] = useState<AgentStoreItem | null>(null);
-  const [showShipDialog, setShowShipDialog] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
-
-  const shipCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const [itemKey, projectMap] of Object.entries(matrix)) {
-      counts[itemKey] = Object.values(projectMap).filter(
-        (v) => v.shipped,
-      ).length;
+  const handleTabChange = (tab: AgentStoreTab) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", tab);
+    // A tab change retains the deliberate target, including a removed default.
+    if (location.profile.kind === "default" && selectedProfileId !== null) {
+      params.set("profileId", selectedProfileId);
     }
-    return counts;
-  }, [matrix]);
-
-  const hasError = itemsError || matrixError || projectsError;
+    setSearchParams(params);
+  };
+  const unavailableMessage = location.profile.kind === "invalid"
+    ? "Invalid profile target. Choose a server profile to continue."
+    : selectedProfileId === null
+      ? "Choose a server profile to continue."
+      : !selectedProfile
+        ? `Profile ${selectedProfileId} is no longer available. Choose another server profile.`
+        : `Profile ${selectedProfile.name || selectedProfile.id} is unavailable (${snapshot?.status ?? "disconnected"}). Connect this profile to continue or choose another server profile.`;
 
   return (
     <AppLayout
@@ -123,58 +122,103 @@ export function AgentStorePage() {
       }
     >
       <div className="flex flex-col gap-4">
-        {/* Tab bar + profile selector + action */}
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
-            {(["store", "memory", "settings", "import"] as Tab[]).map((tab) => (
+            {(["store", "memory", "settings", "import"] as const).map((tab) => (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => handleTabChange(tab)}
+                disabled={location.profile.kind === "choose"}
+                aria-pressed={location.tab === tab}
                 className={[
-                  "px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize",
-                  activeTab === tab
+                  "px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize disabled:cursor-not-allowed disabled:opacity-50",
+                  location.tab === tab
                     ? "bg-[var(--color-primary)] text-white"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
                 ].join(" ")}
               >
-                {tab === "store"
-                  ? "Store"
-                  : tab === "memory"
-                    ? "Memory Files"
-                    : tab === "settings"
-                      ? "Agent Settings"
-                      : "Import"}
+                {tab === "store" ? "Store" : tab === "memory" ? "Memory Files" : tab === "settings" ? "Agent Settings" : "Import"}
               </button>
             ))}
           </div>
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="agent-store-profile-select" className="text-xs text-[var(--color-text-muted)] font-medium">
+              Profile:
+            </label>
+            <select
+              id="agent-store-profile-select"
+              value={selectedProfile?.id ?? ""}
+              onChange={(event) => handleProfileChange(event.target.value)}
+              className="text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] outline-none"
+            >
+              <option value="" disabled>Choose a profile</option>
+              {profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.name || profile.id}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {owner && selectedProfile ? (
+          <ConnectedAgentStore
+            key={connectionKey(owner)}
+            owner={owner}
+            profileId={selectedProfile.id}
+            activeTab={location.tab}
+          />
+        ) : (
+          <p className="rounded-lg border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">
+            {unavailableMessage}
+          </p>
+        )}
+      </div>
+    </AppLayout>
+  );
+}
 
-          {profiles.length > 1 && (
-            <div className="flex items-center gap-1.5">
-              <label
-                htmlFor="agent-store-profile-select"
-                className="text-xs text-[var(--color-text-muted)] font-medium"
-              >
-                Profile:
-              </label>
-              <select
-                id="agent-store-profile-select"
-                value={effectiveProfileId}
-                onChange={(e) => handleProfileChange(e.target.value)}
-                className="text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] outline-none"
-              >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name || p.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+// No query-bearing feature may mount without a registered, connected owner.
+function ConnectedAgentStore({
+  owner,
+  profileId,
+  activeTab,
+}: {
+  owner: ConnectionRef;
+  profileId: string;
+  activeTab: AgentStoreTab;
+}) {
+  const {
+    data: items = [],
+    isLoading,
+    isError: itemsError,
+  } = useAgentStoreItems(undefined, { owner });
+  const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix({ owner });
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+  } = useProjects({ owner });
+  const [selectedItem, setSelectedItem] = useState<AgentStoreItem | null>(null);
+  const [showShipDialog, setShowShipDialog] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
 
+  const shipCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const [itemKey, projectMap] of Object.entries(matrix)) {
+      counts[itemKey] = Object.values(projectMap).filter(
+        (v) => v.shipped,
+      ).length;
+    }
+    return counts;
+  }, [matrix]);
+
+  const hasError = itemsError || matrixError || projectsError;
+
+  return (
+    <>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <div className="flex-1 min-w-[200px]">
             {activeTab === "store" && <HealthStatus owner={owner} />}
           </div>
-
           {activeTab === "import" && (
             <Button
               variant="primary"
@@ -260,16 +304,20 @@ export function AgentStorePage() {
                 "clamp(400px, calc(var(--app-viewport-height) * 0.6), 640px)",
             }}
           >
-            <Suspense fallback={AGENT_STORE_FALLBACK}>
-              <MemoryEditor projects={projects} owner={owner} profileId={effectiveProfileId} />
-            </Suspense>
+            {projectsLoading ? (
+              AGENT_STORE_FALLBACK
+            ) : (
+              <Suspense fallback={AGENT_STORE_FALLBACK}>
+                <MemoryEditor projects={projects} owner={owner} profileId={profileId} />
+              </Suspense>
+            )}
           </div>
         )}
 
         {/* ── Agent Settings tab ────────────────────────────────────────── */}
         {activeTab === "settings" && (
           <Suspense fallback={AGENT_STORE_FALLBACK}>
-            <AgentSettings owner={owner} profileId={effectiveProfileId} />
+            <AgentSettings owner={owner} profileId={profileId} />
           </Suspense>
         )}
 
@@ -304,6 +352,6 @@ export function AgentStorePage() {
           <ImportDialog owner={owner} onClose={() => setShowImportDialog(false)} />
         </Suspense>
       )}
-    </AppLayout>
+    </>
   );
 }
