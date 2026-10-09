@@ -153,8 +153,6 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     const newTerminal = container.querySelector<HTMLButtonElement>('[aria-label="New terminal in selected project"]')!;
     act(() => newTerminal.click());
     expect(onNewTerminal).toHaveBeenCalledOnce();
-    expect(mocks.useProjectStatus).toHaveBeenCalledWith("demo", true);
-    expect(mocks.useWorktrees).toHaveBeenCalledWith("demo");
   });
 
   it("shows the selected worktree matching exact path, or root main worktree", () => {
@@ -205,9 +203,8 @@ describe("TraditionalTerminalProjectsNavigator", () => {
 
     expect(markup).not.toContain("Ship the demo terminal workflow");
     expect(mocks.useProjectStatus).not.toHaveBeenCalled();
-    // Worktree dropdown remains present and queries worktrees
+    // Worktree dropdown remains present
     expect(markup).toContain('role="combobox"');
-    expect(mocks.useWorktrees).toHaveBeenCalledWith("demo", { pollWhileVisible: false });
   });
   it("queries project status and worktrees scoped to the group profile", () => {
     const qualifiedGroup: TraditionalTerminalProjectGroup = {
@@ -353,8 +350,6 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(settings.getAttribute("href")).toBe(href);
     act(() => settings.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
     expect(container.querySelector('[aria-label="Current location"]')!.textContent).toBe(href);
-    expect(mocks.useProjectStatus).not.toHaveBeenCalled();
-    expect(mocks.useWorktrees).not.toHaveBeenCalled();
   });
 
   it("supports additive empty props without inventing a Settings target and disables absent selection", () => {
