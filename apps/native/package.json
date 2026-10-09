@@ -1,6 +1,6 @@
 {
   "name": "@dam-hopper/native",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "scripts": {
