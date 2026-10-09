@@ -202,7 +202,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     );
 
     expect(markup).not.toContain("Ship the demo terminal workflow");
-    expect(mocks.useProjectStatus).not.toHaveBeenCalled();
+    expect(mocks.useProjectStatus).not.toHaveBeenCalledWith("demo", true);
     // Worktree dropdown remains present
     expect(markup).toContain('role="combobox"');
   });
@@ -391,5 +391,16 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(combobox).not.toBeNull();
     act(() => combobox.click());
     expect(onSelectGroup).not.toHaveBeenCalled();
+  });
+
+  it("omits worktree selector for non-Git projects with statusError", () => {
+    mocks.useProjectStatus.mockReturnValue({
+      data: { ...mocks.status, statusError: "Not a git repository" },
+      isLoading: false,
+      isError: false,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(0);
   });
 });

@@ -16,6 +16,7 @@ import { useWorktreeTargetReconciliation } from "@/hooks/use-worktree-target-rec
 import {
   isSelectableWorktree,
   normalizeWorktreePath,
+  projectScopeKey,
   useProjectTargetStore,
   worktreeStatusLabel,
 } from "@/stores/project-target.js";
@@ -73,6 +74,16 @@ export function TraditionalTerminalWorktreeSelect({
 
   const targetSnapshot = useProjectTarget(projectScope);
   const selectedPath = targetSnapshot?.target.worktreePath ?? null;
+  const projectScopeKeyStr = useMemo(
+    () => projectScopeKey(projectScope),
+    [projectScope],
+  );
+  const lastUnavailablePath = useProjectTargetStore(
+    (state) => state.unavailableTargetByProject[projectScopeKeyStr],
+  );
+  const clearUnavailableTarget = useProjectTargetStore(
+    (state) => state.clearUnavailableTarget,
+  );
 
   const {
     data: worktrees = [],
@@ -82,6 +93,7 @@ export function TraditionalTerminalWorktreeSelect({
     isError,
     refetch,
   } = useWorktrees(projectScope, {
+    enabled: isOpen || selectedPath != null || Boolean(lastUnavailablePath),
     pollWhileVisible: isOpen,
   });
 
@@ -125,6 +137,7 @@ export function TraditionalTerminalWorktreeSelect({
 
   const handleValueChange = useCallback(
     (nextValue: string) => {
+      clearUnavailableTarget(projectScope);
       if (nextValue === WORKTREE_ROOT_SENTINEL) {
         selectTarget(projectScope, null);
         return;
@@ -138,11 +151,18 @@ export function TraditionalTerminalWorktreeSelect({
         selectTarget(projectScope, candidate.path);
       }
     },
-    [projectScope, selectTarget, worktrees],
+    [clearUnavailableTarget, projectScope, selectTarget, worktrees],
   );
 
   const currentTriggerLabel = useMemo(() => {
     if (selectedPath == null) {
+      if (lastUnavailablePath) {
+        const short = distinguishWorktreePath(
+          lastUnavailablePath,
+          allWorktreePaths,
+        );
+        return `${short} (missing · using root)`;
+      }
       return "root";
     }
     const short = distinguishWorktreePath(selectedPath, allWorktreePaths);
@@ -159,17 +179,19 @@ export function TraditionalTerminalWorktreeSelect({
   }, [
     allWorktreePaths,
     isCurrentTargetUnavailable,
+    lastUnavailablePath,
     selectedPath,
     selectedWorktree,
   ]);
 
   const selectValue = selectedPath ?? WORKTREE_ROOT_SENTINEL;
-
+  const effectiveMissingPath = selectedPath ?? lastUnavailablePath ?? null;
   const hasMissingSelectedTarget =
-    selectedPath != null &&
+    effectiveMissingPath != null &&
     !worktrees.some(
       (w) =>
-        normalizeWorktreePath(w.path) === normalizeWorktreePath(selectedPath),
+        normalizeWorktreePath(w.path) ===
+        normalizeWorktreePath(effectiveMissingPath),
     );
 
   return (
@@ -203,7 +225,7 @@ export function TraditionalTerminalWorktreeSelect({
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
             "h-7 w-full min-w-0 gap-1.5 px-2 py-0.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors rounded bg-[var(--color-surface-2)]/60 hover:bg-[var(--color-surface-2)] border border-[var(--color-border)]/80 focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
-            isCurrentTargetUnavailable &&
+            (isCurrentTargetUnavailable || Boolean(lastUnavailablePath)) &&
               "border-[var(--color-warning)]/60 text-[var(--color-warning)]",
             touchOptimized && "min-h-11 text-sm px-3",
           )}
@@ -281,17 +303,17 @@ export function TraditionalTerminalWorktreeSelect({
               })}
             </SelectGroup>
           ) : null}
-          {hasMissingSelectedTarget && selectedPath ? (
+          {hasMissingSelectedTarget && effectiveMissingPath ? (
             <SelectGroup>
               <SelectSeparator />
               <SelectItem
-                value={selectedPath}
+                value={effectiveMissingPath}
                 disabled
-                title={selectedPath}
-                aria-label={`Missing worktree: ${selectedPath}`}
+                title={effectiveMissingPath}
+                aria-label={`Missing worktree: ${effectiveMissingPath}`}
               >
                 <span className="truncate text-xs text-[var(--color-warning)]">
-                  {distinguishWorktreePath(selectedPath, allWorktreePaths)}{" "}
+                  {distinguishWorktreePath(effectiveMissingPath, allWorktreePaths)}{" "}
                   (Missing)
                 </span>
               </SelectItem>

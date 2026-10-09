@@ -152,8 +152,9 @@ below the project tab button:
   - An active worktree displays `<branch> (<short-path>)` (for example,
     `feature/login (wt-feature)`).
   - Detached HEAD worktrees display `Detached HEAD (<short-path>)`.
-  - Unavailable active targets display `<short-path> (unavailable)` with warning
-    highlighting and an accessible polite status announcement.
+  - Unavailable active targets display `<short-path> (unavailable)` or
+    `<short-path> (missing · using root)` with warning highlighting and an
+    accessible polite status announcement.
 - **Path disambiguation**:
   - If multiple worktrees share identical directory basenames (for example,
     `/repos/client-a/feature` and `/repos/client-b/feature`), DamHopper
@@ -169,15 +170,18 @@ below the project tab button:
     disabled in the menu with explicit warning labels explaining why they cannot
     be selected. Locked worktrees remain selectable.
   - **Missing targets**: If an active worktree is removed externally from disk or
-    Git discovery, it is preserved in the list as `<short-path> (Missing)` in a
-    disabled state, allowing the user to understand what target was lost before
-    explicitly switching.
+    Git discovery, it is tracked in `unavailableTargetByProject` and preserved in
+    the list as `<short-path> (Missing)` in a disabled state, displaying
+    `<short-path> (missing · using root)` in the trigger until explicitly cleared
+    by selecting the project root or another worktree.
   - **Informative status**: When no secondary worktrees exist or during queries,
     the dropdown indicates `Loading worktrees…`, `No secondary worktrees`, or
     `Worktrees unavailable`.
-- **Discovery and visible-only polling**:
   - Opening the dropdown immediately triggers an on-demand refetch of the
     project's worktree inventory (`useWorktrees`).
+  - Discovery query is lazily gated when closed at root
+    (`enabled: isOpen || selectedPath != null || Boolean(lastUnavailablePath)`),
+    eliminating redundant background queries for inactive root project rows.
   - Polling is enabled strictly while the dropdown is open (`pollWhileVisible: isOpen`),
     automatically capturing background Git worktree additions or removals
     without continuous CPU/network overhead across unopened sidebar rows.
@@ -198,8 +202,8 @@ below the project tab button:
   - The dropdown remains fully functional whether Git commit summaries
     (`terminalCommitStatusEnabled`) are toggled on or off in settings. When commit
     summaries are enabled, they track the selected worktree's latest commit.
-  - Non-Git projects and non-project terminal groups (such as Free terminals)
-    omit the dropdown.
+  - Non-Git projects (detected via `useProjectStatus` status errors) and
+    non-project terminal groups (such as Free terminals) omit the dropdown.
 - **Target reconciliation & safe fallback**:
   - Managed by `useWorktreeTargetReconciliation`. If an active target disappears
     from successful Git discovery, it is flagged as unavailable and announced
@@ -211,6 +215,12 @@ below the project tab button:
 - **Profile isolation**:
   - Target selection and discovery are scoped to the project ref / owning profile
     (`profileId`), preventing cross-profile target leakage in multi-server setups.
+  - Terminal creation explicitly qualified by profile fails closed without ambient
+    API fallback (`resolveBoundTerminalClient`) if the target profile connection
+    cannot be captured.
+  - Workflow target selection resolves the owning profile ID
+    (`setActiveProject(outcome.project, resolvedProfileId)`) so identically named
+    projects across profiles remain isolated.
 - **Non-disruptive switching**:
   - Switching the worktree updates the session-scoped target for subsequent
     operations without restarting active terminal processes, clearing split panes,

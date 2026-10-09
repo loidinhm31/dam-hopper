@@ -151,9 +151,15 @@ function TraditionalProjectRow({
         : group.projectName)
     );
   }, [group.profileId, group.projectName, group.projectRef]);
-
   const targetSnapshot = useProjectTarget(projectScope);
   const selectedPath = targetSnapshot?.target.worktreePath ?? null;
+  const { data: projectStatus } = useProjectStatus(
+    projectScope ?? "",
+    false,
+  );
+  const isGitProject = projectStatus
+    ? Boolean(projectStatus.pathExists !== false && !projectStatus.statusError)
+    : true;
   return (
     <div
       role="presentation"
@@ -205,7 +211,7 @@ function TraditionalProjectRow({
           ) : null}
         </span>
       </button>
-      {group.projectName ? (
+      {group.projectName && isGitProject ? (
         <div className="pl-5 pr-1 pb-1">
           <TraditionalTerminalWorktreeSelect
             projectName={group.projectName}

@@ -154,6 +154,10 @@ describe("TraditionalTerminalWorktreeSelect", () => {
     expect(trigger).not.toBeNull();
     expect(trigger.getAttribute("aria-label")).toBe("Worktree for demo: root");
     expect(trigger.textContent).toContain("root");
+    expect(mocks.useWorktrees).toHaveBeenCalledWith(
+      "demo",
+      expect.objectContaining({ enabled: false }),
+    );
 
     // Clicking trigger opens and refetches
     act(() => {
@@ -171,17 +175,19 @@ describe("TraditionalTerminalWorktreeSelect", () => {
     expect(trigger.textContent).toContain("feature/login (wt-feature)");
   });
 
-  it("shows (unavailable) and warning styling when target is marked unavailable", () => {
+  it("shows visible (missing · using root) warning and styling when target is marked unavailable", () => {
     useProjectTargetStore.getState().markTargetUnavailable("demo", "/repos/demo/wt-missing");
     renderSelect();
 
     const trigger = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
-    expect(trigger.getAttribute("aria-label")).toBe("Worktree for demo: root");
-    // Fallback notice is rendered in polite live region
+    expect(trigger.getAttribute("aria-label")).toBe("Worktree for demo: wt-missing (missing · using root)");
+    expect(trigger.textContent).toContain("wt-missing (missing · using root)");
+    expect(trigger.className).toContain("border-[var(--color-warning)]/60");
+
+    // Fallback notice is also rendered in polite live region
     const status = container.querySelector('[role="status"]');
     expect(status?.textContent).toContain("Worktree /repos/demo/wt-missing is unavailable");
   });
-
   it("applies touch-optimized sizing when touchOptimized is true", () => {
     renderSelect({ touchOptimized: true });
     const trigger = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;

@@ -2619,15 +2619,29 @@ export default function WorkspacePage() {
       if (!outcome.canSelect || !outcome.project) {
         return;
       }
-      setActiveProject(outcome.project);
-      const targetProject = target.profileId
-        ? { profileId: target.profileId, project: outcome.project }
-        : outcome.project;
+      const targetProfileId = target.profileId;
+      const matchedAggregated = targetProfileId
+        ? allProjects.find(
+            (item) =>
+              item.profileId === targetProfileId &&
+              item.project.name === outcome.project,
+          )
+        : allProjects.find((item) => item.project.name === outcome.project);
+      const resolvedProfileId =
+        targetProfileId ?? matchedAggregated?.profileId ?? activeProfileId;
+      if (!resolvedProfileId) {
+        return;
+      }
+      setActiveProject(outcome.project, resolvedProfileId);
+      const targetProject = {
+        profileId: resolvedProfileId,
+        project: outcome.project,
+      };
       useProjectTargetStore
         .getState()
         .selectTarget(targetProject, outcome.worktreePath ?? null);
     },
-    [projects, setActiveProject, unavailableTargetsByProject],
+    [activeProfileId, allProjects, projects, setActiveProject, unavailableTargetsByProject],
   );
 
   const handleWorkflowOpenTerminal = useCallback(

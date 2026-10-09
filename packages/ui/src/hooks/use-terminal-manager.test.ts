@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { ApiRequestError, type SessionInfo } from "@/api/client.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ApiRequestError, type ApiClient, type SessionInfo } from "@/api/client.js";
+import {
+  __setConnectionSnapshotForTests,
+} from "@/api/connections.js";
+import { ConnectionOwnerError } from "@/api/ownership.js";
+import type { Transport } from "@/api/transport.js";
 import {
   rememberTerminalSessionIncarnation,
   resetTerminalSessionIncarnations,
@@ -16,6 +21,7 @@ import {
   isSameSessionIdentity,
   reconcileTerminalTargetError,
   resolveTerminalLaunchForProject,
+  resolveBoundTerminalClient,
 } from "./use-terminal-manager.js";
 
 describe("buildTerminalDisplayTabs", () => {
@@ -446,5 +452,58 @@ describe("resolveTerminalLaunchForProject", () => {
       { project: "legacy" },
     );
     expect(launch.worktreePath).toBe("/tmp/legacy-wt");
+  });
+});
+
+describe("resolveBoundTerminalClient", () => {
+  const dummyAmbientApi = { id: "ambient-api" } as unknown as ApiClient;
+  const mockApi = { id: "mock-api" } as unknown as ApiClient;
+
+  beforeEach(() => {
+    __setConnectionSnapshotForTests("profile-connected", {
+      owner: { profileId: "profile-connected", generation: 1 },
+      status: "connected",
+      serverUrl: "http://localhost:4800",
+      transport: {} as unknown as Transport,
+      api: mockApi,
+    });
+    __setConnectionSnapshotForTests("profile-disconnected", null);
+  });
+
+  afterEach(() => {
+    __setConnectionSnapshotForTests("profile-connected", null);
+  });
+
+  it("fails closed and throws ConnectionOwnerError when target profile is disconnected", () => {
+    expect(() =>
+      resolveBoundTerminalClient("profile-disconnected", undefined, dummyAmbientApi),
+    ).toThrow(ConnectionOwnerError);
+  });
+
+  it("never falls back to ambient api for explicitly qualified profile when disconnected", () => {
+    try {
+      resolveBoundTerminalClient("profile-disconnected", undefined, dummyAmbientApi);
+      expect.unreachable("Should have thrown ConnectionOwnerError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConnectionOwnerError);
+    }
+  });
+
+  it("returns bound api client for connected profile", () => {
+    const client = resolveBoundTerminalClient("profile-connected", undefined, dummyAmbientApi);
+    expect(client).toBe(mockApi);
+  });
+
+  it("falls back to defaultProfileId if targetProfileId is undefined or default", () => {
+    const client = resolveBoundTerminalClient(undefined, "profile-connected", dummyAmbientApi);
+    expect(client).toBe(mockApi);
+
+    const clientDefault = resolveBoundTerminalClient("default", "profile-connected", dummyAmbientApi);
+    expect(clientDefault).toBe(mockApi);
+  });
+
+  it("returns ambient api when neither target nor default profile is specified", () => {
+    const client = resolveBoundTerminalClient(undefined, undefined, dummyAmbientApi);
+    expect(client).toBe(dummyAmbientApi);
   });
 });
