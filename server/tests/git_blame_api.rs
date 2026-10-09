@@ -482,6 +482,10 @@ async fn test_api_blame_body_limit_allows_over_10mb_payload() {
 }
 
 async fn request_blame(app: &TestApp, path: &str) -> (StatusCode, Value) {
+    request_blame_content(app, path, "short text\n").await
+}
+
+async fn request_blame_content(app: &TestApp, path: &str, content: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
         .uri("/api/git/test-repo/blame")
@@ -489,7 +493,7 @@ async fn request_blame(app: &TestApp, path: &str) -> (StatusCode, Value) {
         .body(Body::from(
             serde_json::to_vec(&json!({
                 "path": path,
-                "content": "short text\n",
+                "content": content,
                 "snapshotId": "baseline-guard",
                 "modelVersion": 1
             }))
@@ -583,4 +587,136 @@ async fn head_symlink_mode_is_rejected_without_a_working_copy_entry() {
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(body["code"], "GIT_BLAME_UNSUPPORTED_FILE");
     assert_eq!(repository_snapshot(&app.project_path, "link.txt"), before);
+}
+
+#[tokio::test]
+async fn crlf_head_attribution_preserves_history_and_real_buffer_edits() {
+    let app = setup_test_app();
+    git(&["config", "core.autocrlf", "false"], &app.project_path);
+    let file = "crlf.txt";
+    std::fs::write(app.project_path.join(file), "first\r\nsecond\r\nthird\r\n").unwrap();
+    git(&["add", file], &app.project_path);
+    git(&["commit", "-m", "add CRLF file"], &app.project_path);
+    let original_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    std::fs::write(app.project_path.join(file), "first\r\nupdated\r\nthird\r\n").unwrap();
+    git(&["add", file], &app.project_path);
+    git(&["commit", "-m", "update middle line"], &app.project_path);
+    let head_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    let before = repository_snapshot(&app.project_path, file);
+
+    let cases = [
+        (
+            "first\nupdated\nthird\n",
+            vec![
+                Some(&original_oid),
+                Some(&head_oid),
+                Some(&original_oid),
+                None,
+            ],
+        ),
+        (
+            "first\r\nupdated\r\nthird\r\n",
+            vec![
+                Some(&original_oid),
+                Some(&head_oid),
+                Some(&original_oid),
+                None,
+            ],
+        ),
+        (
+            "inserted\nfirst\nupdated\nthird \n",
+            vec![None, Some(&original_oid), Some(&head_oid), None, None],
+        ),
+        (
+            "first\nthird\n",
+            vec![Some(&original_oid), Some(&original_oid), None],
+        ),
+        (
+            "first\nupdated\nthird",
+            vec![Some(&original_oid), Some(&head_oid), None],
+        ),
+        ("changed\n", vec![None, None]),
+    ];
+    for (content, expected_commits) in cases {
+        let (status, response) = request_blame_content(&app, file, content).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response["baseCommitOid"], head_oid);
+        assert_eq!(response["bufferLineCount"], expected_commits.len());
+        let ranges = response["ranges"].as_array().unwrap();
+        for (index, expected_oid) in expected_commits.iter().enumerate() {
+            let line = index + 1;
+            let range = ranges
+                .iter()
+                .find(|range| {
+                    let start = range["startLine"].as_u64().unwrap() as usize;
+                    let count = range["lineCount"].as_u64().unwrap() as usize;
+                    start <= line && line < start + count
+                })
+                .unwrap();
+            let actual_oid = range["commitIndex"].as_u64().map(|commit_index| {
+                response["commits"][commit_index as usize]["hash"]
+                    .as_str()
+                    .unwrap()
+            });
+            assert_eq!(
+                actual_oid,
+                expected_oid.map(String::as_str),
+                "line {line}: {content:?}"
+            );
+        }
+        assert_eq!(repository_snapshot(&app.project_path, file), before);
+    }
+
+    // A genuinely new index entry has no HEAD history, even when its content matches.
+    std::fs::write(
+        app.project_path.join("new.txt"),
+        "first\r\nupdated\r\nthird\r\n",
+    )
+    .unwrap();
+    git(&["add", "new.txt"], &app.project_path);
+    let before_new = repository_snapshot(&app.project_path, "new.txt");
+    let (status, response) =
+        request_blame_content(&app, "new.txt", "first\nupdated\nthird\n").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["status"], "uncommitted");
+    assert!(response["commits"].as_array().unwrap().is_empty());
+    assert!(response["ranges"][0]["commitIndex"].is_null());
+    assert_eq!(
+        repository_snapshot(&app.project_path, "new.txt"),
+        before_new
+    );
+    git(&["rm", "--cached", "new.txt"], &app.project_path);
+
+    // Staged rename origins must receive the same CRLF normalization as direct paths.
+    git(&["mv", file, "renamed.txt"], &app.project_path);
+    let before_rename = repository_snapshot(&app.project_path, "renamed.txt");
+    let (status, response) =
+        request_blame_content(&app, "renamed.txt", "first\nupdated\nthird\n").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["status"], "ready");
+    assert_eq!(response["ranges"][0]["commitIndex"], 0);
+    assert_eq!(response["commits"][0]["hash"], original_oid);
+    assert_eq!(
+        repository_snapshot(&app.project_path, "renamed.txt"),
+        before_rename
+    );
+
+    // Mixed CRLF/LF baselines without a terminal newline use the same line mapping.
+    std::fs::write(app.project_path.join("mixed.txt"), "first\r\nsecond\nthird").unwrap();
+    git(&["add", "mixed.txt"], &app.project_path);
+    git(&["commit", "-m", "add mixed EOL file"], &app.project_path);
+    let mixed_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    let before_mixed = repository_snapshot(&app.project_path, "mixed.txt");
+    let (status, response) = request_blame_content(&app, "mixed.txt", "first\nsecond\nthird").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["status"], "ready");
+    assert_eq!(response["bufferLineCount"], 3);
+    assert_eq!(response["ranges"].as_array().unwrap().len(), 1);
+    assert_eq!(response["ranges"][0]["lineCount"], 3);
+    assert_eq!(response["ranges"][0]["commitIndex"], 0);
+    assert_eq!(response["commits"][0]["hash"], mixed_oid);
+    assert_eq!(
+        repository_snapshot(&app.project_path, "mixed.txt"),
+        before_mixed
+    );
 }

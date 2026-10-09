@@ -1,4 +1,4 @@
-import React, { useId, useMemo } from "react";
+import React, { useEffect, useId, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils.js";
 import type { GitLogEntry } from "@/api/client.js";
 import { ContextMenu } from "@/components/ui/ContextMenu.js";
@@ -23,6 +23,7 @@ interface GitLogTreeProps {
   logs: GitLogEntry[];
   isLoading?: boolean;
   selectedHash?: string;
+  revealNonce?: number;
   squashSelectedHashes?: readonly string[];
   onToggleSquashCommit?: (hash: string) => void;
   squashSelectionDisabled?: boolean;
@@ -205,6 +206,7 @@ export function GitLogTree({
   logs,
   isLoading = false,
   selectedHash,
+  revealNonce,
   squashSelectedHashes = [],
   onToggleSquashCommit,
   squashSelectionDisabled = false,
@@ -218,6 +220,28 @@ export function GitLogTree({
   presentation = "graph",
   emptyMessage = "No commits found.",
 }: GitLogTreeProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lastFocusedNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!selectedHash || !containerRef.current) return;
+    const targetRow = containerRef.current.querySelector<HTMLElement>(
+      `[data-commit-hash="${selectedHash}"]`,
+    );
+    if (!targetRow) return;
+
+    if (typeof targetRow.scrollIntoView === "function") {
+      targetRow.scrollIntoView({ block: "nearest" });
+    }
+
+    if (
+      revealNonce !== undefined &&
+      revealNonce !== lastFocusedNonceRef.current
+    ) {
+      lastFocusedNonceRef.current = revealNonce;
+      targetRow.focus?.({ preventScroll: true });
+    }
+  }, [selectedHash, revealNonce, logs, presentation]);
   const parsedGraph = useMemo(() => {
     if (presentation === "list") {
       return [];
@@ -301,7 +325,10 @@ export function GitLogTree({
   }
 
   return (
-    <div className="relative h-full w-full overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]"
+    >
       <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)] bg-[var(--color-background)]">
@@ -345,6 +372,9 @@ export function GitLogTree({
                 <tr
                   tabIndex={0}
                   aria-haspopup="menu"
+                  aria-selected={isSelected}
+                  data-selected={isSelected ? "true" : undefined}
+                  data-commit-hash={entry.hash}
                   onClick={() => onSelectCommit?.(entry)}
                   onKeyDown={(event) => {
                     if (
@@ -356,14 +386,21 @@ export function GitLogTree({
                     }
                   }}
                   className={cn(
-                    "border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
+                    "group border-b border-[var(--color-border)] hover:bg-[var(--color-border)]/20 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
                     isSelected &&
                       "bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/15",
                   )}
                   style={{ height: `${ROW_HEIGHT}px` }}
                 >
                   {onToggleSquashCommit && (
-                    <td className="w-11 min-w-11 sticky left-0 z-20 bg-[var(--color-surface)]">
+                    <td
+                      className={cn(
+                        "w-11 min-w-11 sticky left-0 z-20 bg-[var(--color-surface)] transition-colors",
+                        isSelected
+                          ? "bg-[var(--color-primary)]/10 group-hover:bg-[var(--color-primary)]/15"
+                          : "group-hover:bg-[var(--color-border)]/20",
+                      )}
+                    >
                       <label
                         className="flex h-11 w-11 items-center justify-center cursor-pointer"
                         onClick={(event) => event.stopPropagation()}
@@ -382,12 +419,13 @@ export function GitLogTree({
                   )}
                   <td
                     className={cn(
-                      "px-4 py-0 flex items-center gap-2 sticky z-10 bg-[var(--color-surface)]",
+                      "px-4 py-0 flex items-center gap-2 sticky z-10 bg-[var(--color-surface)] transition-colors h-full",
                       onToggleSquashCommit ? "left-11" : "left-0",
                       isSelected
-                        ? "bg-[var(--color-primary)]/10"
-                        : "group-hover:bg-[#f8f9fa] dark:group-hover:bg-[#1a1b1e]",
+                        ? "bg-[var(--color-primary)]/10 group-hover:bg-[var(--color-primary)]/15"
+                        : "group-hover:bg-[var(--color-border)]/20",
                     )}
+                    style={{ height: `${ROW_HEIGHT}px` }}
                   >
                     {node ? (
                       <div

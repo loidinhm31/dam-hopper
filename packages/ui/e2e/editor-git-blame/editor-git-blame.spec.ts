@@ -216,8 +216,58 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
       checkpointName: "workspace-git-full-body",
     });
 
+    // Terminal reveal must remain above the Files panel after menu focus cleanup.
+    await page.getByTitle("Close commit details").click();
+    await page
+      .locator("header button[aria-pressed]")
+      .filter({ hasText: /^Terminal$/i })
+      .click();
+    await page.getByRole("button", { name: "Show files panel" }).click();
+    await expect(row3).toBeVisible({ timeout: 15_000 });
+    await row3.click({ button: "right" });
+    await revealItem.click();
+    const exactBobHash = page.getByTitle(
+      `Click to copy full commit hash: ${fixtureMeta.bobCommitOid}`,
+    );
+    await expect(exactBobHash).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(() =>
+        exactBobHash.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(
+              rect.x + rect.width / 2,
+              rect.y + rect.height / 2,
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+
+    // A matching filtered row must be selected, focused and scrolled into view.
+    await page
+      .getByRole("textbox", { name: "Search commit messages" })
+      .fill(fixtureMeta.bobCommitSubject);
+    const bobHistoryRow = page.locator(
+      `tr[data-commit-hash="${fixtureMeta.bobCommitOid}"]`,
+    );
+    await expect(bobHistoryRow).toHaveAttribute("aria-selected", "true");
+    await expect(bobHistoryRow).toBeInViewport();
+    await page.getByTitle("Drag files panel").click({
+      position: { x: 12, y: 12 },
+    });
+    await row3.click({ button: "right" });
+    await revealItem.click();
+    await expect(bobHistoryRow).toBeFocused();
+    await expect(exactBobHash).toBeVisible();
+    await page.getByRole("button", { name: "Close Git panel" }).click();
+    await page.getByRole("button", { name: "Close files panel" }).click();
+    await page.getByRole("button", { name: "IDE", exact: true }).click();
+
     // 7. Test responsive compact layout (<640px)
     await page.setViewportSize({ width: 620, height: 900 });
+    await page.getByTestId("mobile-workspace-panel-trigger").click();
+    await page.getByRole("option", { name: "Editor", exact: true }).click();
 
     // Confirm gutter switches to compact mode
     await expect(blameGutter).toHaveAttribute("data-blame-mode", "compact", {

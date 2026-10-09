@@ -1,3 +1,8 @@
+# 2026-10-09
+
+- **Git blame commit navigation and attribution fixes.** Propagate reveal requests through memoized IDE, Terminal and compact Git surfaces; highlight, scroll and focus the exact visible commit row while preserving active history filters and outside-view inspection. Prevent blame-menu focus restoration from hiding Terminal Git details behind Files; reject mismatched owner/profile/generation requests.
+  - CRLF-committed files retain historical attribution after Monaco normalizes to LF; genuine edits and staged-only new files remain Uncommitted. Discovering the first commit in an unborn repository invalidates cached Uncommitted annotations.
+
 # 2026-10-08
 
 - **Traditional Projects + Agents navigation (Phases 01–04).** Preserves Projects-first navigation and adds an exact-incarnation agent roster across open terminals, wide and compact. Agent clicks select the existing terminal/split; stale callbacks are rejected. Compact controls have local 44px minimum targets, DoubleShift modal event isolation, and explicit opener focus restoration. Relocated `TerminalKeepAliveHost` in `WorkspacePage` preserves xterm DOM continuity across wide/compact shell switches.

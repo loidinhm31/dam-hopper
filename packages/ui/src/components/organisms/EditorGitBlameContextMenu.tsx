@@ -48,6 +48,7 @@ export function EditorGitBlameContextMenu({
 }: EditorGitBlameContextMenuProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const revealingCommitRef = useRef(false);
 
   useEffect(() => {
     const trigger = triggerRef.current;
@@ -144,6 +145,11 @@ export function EditorGitBlameContextMenu({
         <ContextMenu.Content
           className="w-56"
           data-testid="editor-git-blame-menu"
+          onCloseAutoFocus={(event) => {
+            // Navigation must not restore editor focus and raise its floating
+            // files panel over the Git panel that was just revealed.
+            if (revealingCommitRef.current) event.preventDefault();
+          }}
         >
           <ContextMenu.Item
             data-testid="editor-git-blame-menu-toggle"
@@ -195,6 +201,7 @@ export function EditorGitBlameContextMenu({
                 title={revealTooltip}
                 onSelect={() => {
                   if (canRevealCommit && targetCommit && blameData?.rootId) {
+                    revealingCommitRef.current = true;
                     setOpen(false);
                     onClose();
                     onRevealCommit(targetCommit.hash, blameData.rootId);
