@@ -143,11 +143,25 @@ export function WorkspaceGitPanel({
   useEffect(() => {
     if (!revealRequest) return;
     if (lastConsumedNonceRef.current === revealRequest.nonce) return;
+    // Enforce target project, worktree, and profileId isolation
+    if (
+      projectTargetKey(revealRequest.target) !== projectTargetKey(targetRef)
+    ) {
+      return;
+    }
 
-    if (revealRequest.target.project !== targetRef.project) return;
-    const reqWorktree = revealRequest.target.worktreePath ?? null;
-    const currWorktree = targetRef.worktreePath ?? null;
-    if (reqWorktree !== currWorktree) return;
+    // Enforce connection owner profileId and generation isolation
+    const currentOwner = connectionSnapshot?.owner;
+    if (currentOwner) {
+      if (
+        revealRequest.owner.profileId !== currentOwner.profileId ||
+        revealRequest.owner.generation !== currentOwner.generation
+      ) {
+        return;
+      }
+    } else if (targetRef.profileId || revealRequest.owner.profileId) {
+      return;
+    }
 
     if (historyView.rootOptions.length === 0) return;
     const rootMatches = historyView.rootOptions.some(
@@ -179,6 +193,8 @@ export function WorkspaceGitPanel({
     historyView.clearSelectedCommit,
     historyActions.resetScope,
     targetRef,
+    connectionSnapshot?.owner.profileId,
+    connectionSnapshot?.owner.generation,
     onRevealRequestConsumed,
   ]);
 
@@ -186,9 +202,12 @@ export function WorkspaceGitPanel({
   useEffect(() => {
     if (!inspectionState) return;
     const currentGeneration = connectionSnapshot?.owner.generation;
+    const currentProfileId = connectionSnapshot?.owner.profileId;
     if (
       inspectionState.rootId !== historyView.rootId ||
       inspectionState.targetKey !== projectTargetKey(targetRef) ||
+      (currentProfileId !== undefined &&
+        inspectionState.owner.profileId !== currentProfileId) ||
       (currentGeneration !== undefined &&
         inspectionState.owner.generation !== currentGeneration)
     ) {
@@ -197,6 +216,7 @@ export function WorkspaceGitPanel({
   }, [
     historyView.rootId,
     targetRef,
+    connectionSnapshot?.owner.profileId,
     connectionSnapshot?.owner.generation,
     inspectionState,
   ]);
@@ -491,6 +511,7 @@ export function WorkspaceGitPanel({
                     ? inspectionState.hash
                     : historyView.selectedCommit?.hash
                 }
+                revealNonce={inspectionState?.nonce}
                 onSelectCommit={(entry) => {
                   setInspectionState(null);
                   historyView.selectCommit(entry);

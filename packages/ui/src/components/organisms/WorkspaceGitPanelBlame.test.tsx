@@ -255,4 +255,131 @@ describe("WorkspaceGitPanel Git blame reveal & inspection mode", () => {
       );
     }
   });
+
+  it("ignores revealRequest with mismatched target profileId", async () => {
+    const onConsumed = vi.fn();
+    const revealRequest: GitCommitRevealRequest = {
+      nonce: 201,
+      owner: { profileId: fixture.target.profileId, generation: 1 },
+      target: {
+        profileId: "other-profile",
+        project: fixture.target.project,
+        worktreePath: fixture.target.worktreePath,
+      },
+      rootId: ".",
+      hash: "1111111111111111111111111111111111111111",
+    };
+
+    await renderPanel({
+      revealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="outside-history-view-notice"]'),
+    ).toBeNull();
+  });
+
+  it("ignores revealRequest with mismatched owner profileId", async () => {
+    const onConsumed = vi.fn();
+    const revealRequest: GitCommitRevealRequest = {
+      nonce: 202,
+      owner: { profileId: "rogue-profile", generation: 1 },
+      target: fixture.target,
+      rootId: ".",
+      hash: "2222222222222222222222222222222222222222",
+    };
+
+    await renderPanel({
+      revealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="outside-history-view-notice"]'),
+    ).toBeNull();
+  });
+
+  it("ignores revealRequest with mismatched owner generation", async () => {
+    const onConsumed = vi.fn();
+    const revealRequest: GitCommitRevealRequest = {
+      nonce: 203,
+      owner: { profileId: fixture.target.profileId, generation: 99 },
+      target: fixture.target,
+      rootId: ".",
+      hash: "3333333333333333333333333333333333333333",
+    };
+
+    await renderPanel({
+      revealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="outside-history-view-notice"]'),
+    ).toBeNull();
+  });
+
+  it("highlights and scrolls visible revealed commit into view in GitLogTree", async () => {
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+
+    const loadedHash = fixture.logs[0]?.hash ?? "aaaa";
+    const onConsumed = vi.fn();
+    const revealRequest: GitCommitRevealRequest = {
+      nonce: 204,
+      owner: { profileId: fixture.target.profileId, generation: 1 },
+      target: fixture.target,
+      rootId: ".",
+      hash: loadedHash,
+    };
+
+    await renderPanel({
+      revealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).toHaveBeenCalledWith(204);
+
+    const targetRow = container.querySelector(
+      `tr[data-commit-hash="${loadedHash}"]`,
+    );
+    expect(targetRow).not.toBeNull();
+    expect(targetRow?.getAttribute("aria-selected")).toBe("true");
+    expect(targetRow?.getAttribute("data-selected")).toBe("true");
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
+  it("retains inspect details with notice when revealed commit is outside history", async () => {
+    const outsideHash = "5555555555555555555555555555555555555555";
+    const onConsumed = vi.fn();
+    const revealRequest: GitCommitRevealRequest = {
+      nonce: 205,
+      owner: { profileId: fixture.target.profileId, generation: 1 },
+      target: fixture.target,
+      rootId: ".",
+      hash: outsideHash,
+    };
+
+    await renderPanel({
+      revealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).toHaveBeenCalledWith(205);
+
+    const notice = container.querySelector(
+      '[data-testid="outside-history-view-notice"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Commit opened from annotation");
+
+    expect(container.textContent).toContain(outsideHash.slice(0, 7));
+
+    const selectedRows = container.querySelectorAll('tr[aria-selected="true"]');
+    expect(selectedRows.length).toBe(0);
+  });
 });

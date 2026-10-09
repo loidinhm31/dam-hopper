@@ -270,3 +270,155 @@ describe("GitLogTree context menu accessibility & branch eligibility", () => {
     }
   });
 });
+
+describe.each(["graph", "list"] as const)(
+  "row selection highlight, scroll, and reveal focus in %s mode",
+  (presentation) => {
+    it("highlights matching row and scrolls it into view", async () => {
+      const scrollSpy = vi.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+
+      try {
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={sampleLogs[0].hash}
+            />,
+          );
+        });
+
+        const selectedRow = container.querySelector<HTMLTableRowElement>(
+          `tr[data-commit-hash="${sampleLogs[0].hash}"]`,
+        );
+        expect(selectedRow).not.toBeNull();
+        expect(selectedRow?.getAttribute("aria-selected")).toBe("true");
+        expect(selectedRow?.getAttribute("data-selected")).toBe("true");
+        expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+
+        const unselectedRow = container.querySelector<HTMLTableRowElement>(
+          `tr[data-commit-hash="${sampleLogs[1].hash}"]`,
+        );
+        expect(unselectedRow?.getAttribute("aria-selected")).toBe("false");
+        expect(unselectedRow?.getAttribute("data-selected")).toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+      }
+    });
+
+    it("focuses destination row when revealNonce is provided, but does not blanket focus without revealNonce", async () => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+
+      try {
+        // Plain selectedHash: no revealNonce -> does not steal focus
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={sampleLogs[0].hash}
+            />,
+          );
+        });
+
+        const firstRow = container.querySelector<HTMLTableRowElement>(
+          `tr[data-commit-hash="${sampleLogs[0].hash}"]`,
+        )!;
+        expect(document.activeElement).not.toBe(firstRow);
+
+        // Reveal request with revealNonce -> focuses row
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={sampleLogs[0].hash}
+              revealNonce={42}
+            />,
+          );
+        });
+
+        expect(document.activeElement).toBe(firstRow);
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+      }
+    });
+
+    it("re-triggers scroll into view when revealNonce increments with same hash", async () => {
+      const scrollSpy = vi.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+
+      try {
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={sampleLogs[0].hash}
+              revealNonce={1}
+            />,
+          );
+        });
+
+        expect(scrollSpy).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash={sampleLogs[0].hash}
+              revealNonce={2}
+            />,
+          );
+        });
+
+        expect(scrollSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+      }
+    });
+
+    it("does not scroll or highlight when selectedHash is outside history", async () => {
+      const scrollSpy = vi.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+
+      try {
+        await act(async () => {
+          root.render(
+            <GitLogTree
+              logs={sampleLogs}
+              presentation={presentation}
+              selectedHash="outside-hash-not-in-logs"
+            />,
+          );
+        });
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+        const selectedRows = container.querySelectorAll('tr[aria-selected="true"]');
+        expect(selectedRows.length).toBe(0);
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+      }
+    });
+  },
+);

@@ -191,12 +191,14 @@ pub fn execute_native_blame(
         }
         Err(e) => return Err(GitBlameError::Git(e.message().to_string())),
     };
-    if let Some(path) = baseline_path.as_deref() {
+    let baseline_blob = if let Some(path) = baseline_path.as_deref() {
         let entry = head_tree.get_path(Path::new(path)).map_err(|e| {
             GitBlameError::Git(format!("failed to resolve HEAD baseline: {}", e.message()))
         })?;
-        validate_baseline_entry(&repo, &entry)?;
-    }
+        Some(validate_baseline_entry(&repo, &entry)?)
+    } else {
+        None
+    };
     if input.content.is_empty() {
         ensure_head_unchanged(&repo, initial_head_oid)?;
         return Ok(GitBlameResponse {
@@ -235,7 +237,7 @@ pub fn execute_native_blame(
         }
     };
 
-    // Run native blame_file against HEAD, then blame_buffer with in-memory normalized content.
+    // Resolve historical attribution at HEAD before comparing the editor buffer.
     let mut blame_opts = git2::BlameOptions::new();
     blame_opts.newest_commit(head_oid);
     let blame = repo
@@ -245,10 +247,6 @@ pub fn execute_native_blame(
         )
         .map_err(|e| GitBlameError::Git(format!("failed to blame file: {}", e.message())))?;
 
-    let blame_with_buffer = blame
-        .blame_buffer(normalized_content.as_bytes())
-        .map_err(|e| GitBlameError::Git(format!("failed to blame buffer: {}", e.message())))?;
-
     let mut commits: Vec<GitBlameCommit> = Vec::new();
     let mut commit_map: HashMap<git2::Oid, usize> = HashMap::new();
     let mut raw_ranges: Vec<GitBlameRange> = Vec::new();
@@ -257,80 +255,85 @@ pub fn execute_native_blame(
         .odb()
         .map_err(|e| GitBlameError::Git(format!("failed to open ODB: {}", e.message())))?;
 
-    for hunk in blame_with_buffer.iter() {
-        let lines_in_hunk = hunk.lines_in_hunk();
-        if lines_in_hunk == 0 {
-            continue;
-        }
-
-        let start_line = hunk.final_start_line();
-        let final_commit_id = hunk.final_commit_id();
-
-        let commit_index = if final_commit_id.is_zero() {
-            None
-        } else if let Some(&idx) = commit_map.get(&final_commit_id) {
-            Some(idx)
-        } else {
-            // Validate commit header size before loading.
-            let (obj_size, obj_type) = odb.read_header(final_commit_id).map_err(|e| {
-                GitBlameError::Git(format!("failed to read commit header: {}", e.message()))
-            })?;
-
-            if obj_type != git2::ObjectType::Commit {
-                return Err(GitBlameError::Git(format!(
-                    "blame commit OID {final_commit_id} is not a commit object: {obj_type:?}"
-                )));
+    visit_buffer_blame_hunks(
+        &blame,
+        baseline_blob
+            .as_ref()
+            .expect("resolved baseline blob")
+            .content(),
+        normalized_content.as_bytes(),
+        |start_line, lines_in_hunk, final_commit_id| {
+            if lines_in_hunk == 0 {
+                return Ok(());
             }
 
-            if obj_size > MAX_COMMIT_OBJECT_BYTES {
-                return Err(GitBlameError::CommitTooLarge(format!(
-                    "commit {final_commit_id} exceeds {MAX_COMMIT_OBJECT_BYTES} bytes"
-                )));
-            }
+            let commit_index = if final_commit_id.is_zero() {
+                None
+            } else if let Some(&idx) = commit_map.get(&final_commit_id) {
+                Some(idx)
+            } else {
+                // Validate commit header size before loading.
+                let (obj_size, obj_type) = odb.read_header(final_commit_id).map_err(|e| {
+                    GitBlameError::Git(format!("failed to read commit header: {}", e.message()))
+                })?;
 
-            let commit_obj = repo.find_commit(final_commit_id).map_err(|e| {
-                GitBlameError::Git(format!(
-                    "failed to find commit {final_commit_id}: {}",
-                    e.message()
-                ))
-            })?;
+                if obj_type != git2::ObjectType::Commit {
+                    return Err(GitBlameError::Git(format!(
+                        "blame commit OID {final_commit_id} is not a commit object: {obj_type:?}"
+                    )));
+                }
 
-            let author = commit_obj.author();
-            let author_when = author.when();
-            let author_name = author
-                .name()
-                .map(str::to_string)
-                .unwrap_or_else(|| String::from_utf8_lossy(author.name_bytes()).into_owned());
+                if obj_size > MAX_COMMIT_OBJECT_BYTES {
+                    return Err(GitBlameError::CommitTooLarge(format!(
+                        "commit {final_commit_id} exceeds {MAX_COMMIT_OBJECT_BYTES} bytes"
+                    )));
+                }
 
-            let subject = commit_obj.summary().map(str::to_string).unwrap_or_else(|| {
-                commit_obj
-                    .message()
-                    .and_then(|m| m.lines().next())
-                    .unwrap_or("")
-                    .to_string()
-            });
+                let commit_obj = repo.find_commit(final_commit_id).map_err(|e| {
+                    GitBlameError::Git(format!(
+                        "failed to find commit {final_commit_id}: {}",
+                        e.message()
+                    ))
+                })?;
 
-            let commit_dto = GitBlameCommit {
-                hash: final_commit_id.to_string(),
-                author_name,
-                author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
-                author_timestamp: author_when.seconds(),
-                author_timezone_offset_minutes: author_when.offset_minutes(),
-                subject,
+                let author = commit_obj.author();
+                let author_when = author.when();
+                let author_name = author
+                    .name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| String::from_utf8_lossy(author.name_bytes()).into_owned());
+
+                let subject = commit_obj.summary().map(str::to_string).unwrap_or_else(|| {
+                    commit_obj
+                        .message()
+                        .and_then(|m| m.lines().next())
+                        .unwrap_or("")
+                        .to_string()
+                });
+
+                let commit_dto = GitBlameCommit {
+                    hash: final_commit_id.to_string(),
+                    author_name,
+                    author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
+                    author_timestamp: author_when.seconds(),
+                    author_timezone_offset_minutes: author_when.offset_minutes(),
+                    subject,
+                };
+
+                let idx = commits.len();
+                commits.push(commit_dto);
+                commit_map.insert(final_commit_id, idx);
+                Some(idx)
             };
 
-            let idx = commits.len();
-            commits.push(commit_dto);
-            commit_map.insert(final_commit_id, idx);
-            Some(idx)
-        };
-
-        raw_ranges.push(GitBlameRange {
-            start_line,
-            line_count: lines_in_hunk,
-            commit_index,
-        });
-    }
+            raw_ranges.push(GitBlameRange {
+                start_line,
+                line_count: lines_in_hunk,
+                commit_index,
+            });
+            Ok(())
+        },
+    )?;
 
     // Fill Monaco display rows: if trailing newline, add terminal uncommitted row.
     let mut partitioned_ranges = partition_and_merge_ranges(raw_ranges, buffer_line_count);
@@ -407,10 +410,96 @@ fn ensure_head_unchanged(
     Ok(())
 }
 
-fn validate_baseline_entry(
-    repo: &git2::Repository,
-    entry: &git2::TreeEntry<'_>,
+/// libgit2's buffer blame compares the raw HEAD blob, not normalized line endings.
+/// For CRLF baselines, map unchanged normalized spans back to native HEAD hunks.
+/// Only CR before LF is removed: real whitespace and content edits still lose attribution.
+fn visit_buffer_blame_hunks(
+    blame: &git2::Blame<'_>,
+    baseline: &[u8],
+    buffer: &[u8],
+    mut visit: impl FnMut(usize, usize, git2::Oid) -> Result<(), GitBlameError>,
 ) -> Result<(), GitBlameError> {
+    if !baseline.windows(2).any(|pair| pair == b"\r\n") {
+        let buffer_blame = blame
+            .blame_buffer(buffer)
+            .map_err(|e| GitBlameError::Git(format!("failed to blame buffer: {}", e.message())))?;
+        for hunk in buffer_blame.iter() {
+            visit(
+                hunk.final_start_line(),
+                hunk.lines_in_hunk(),
+                hunk.final_commit_id(),
+            )?;
+        }
+        return Ok(());
+    }
+
+    let mut normalized_baseline = Vec::with_capacity(baseline.len());
+    let mut baseline_lines = usize::from(!baseline.ends_with(b"\n"));
+    for (index, &byte) in baseline.iter().enumerate() {
+        if byte != b'\r' || baseline.get(index + 1) != Some(&b'\n') {
+            normalized_baseline.push(byte);
+        }
+        if byte == b'\n' {
+            baseline_lines += 1;
+        }
+    }
+    let mut options = git2::DiffOptions::new();
+    options.context_lines(0);
+    let patch =
+        git2::Patch::from_buffers(&normalized_baseline, None, buffer, None, Some(&mut options))
+            .map_err(|e| {
+                GitBlameError::Git(format!("failed to compare blame buffer: {}", e.message()))
+            })?;
+    let mut old_line = 1;
+    let mut new_line = 1;
+    // Changes occupy the hunk's new span; unchanged gaps retain their original commits.
+    for index in 0..patch.num_hunks() {
+        let (hunk, _) = patch.hunk(index).map_err(|e| {
+            GitBlameError::Git(format!("failed to read buffer diff: {}", e.message()))
+        })?;
+        let old_start = hunk.old_start() as usize + usize::from(hunk.old_lines() == 0);
+        let new_start = hunk.new_start() as usize + usize::from(hunk.new_lines() == 0);
+        visit_unchanged_blame_hunks(blame, old_line, new_line, old_start - old_line, &mut visit)?;
+        if hunk.new_lines() > 0 {
+            visit(new_start, hunk.new_lines() as usize, git2::Oid::zero())?;
+        }
+        old_line = old_start + hunk.old_lines() as usize;
+        new_line = new_start + hunk.new_lines() as usize;
+    }
+    visit_unchanged_blame_hunks(
+        blame,
+        old_line,
+        new_line,
+        baseline_lines + 1 - old_line,
+        &mut visit,
+    )?;
+    Ok(())
+}
+
+fn visit_unchanged_blame_hunks(
+    blame: &git2::Blame<'_>,
+    mut old_line: usize,
+    mut new_line: usize,
+    mut count: usize,
+    visit: &mut impl FnMut(usize, usize, git2::Oid) -> Result<(), GitBlameError>,
+) -> Result<(), GitBlameError> {
+    while count > 0 {
+        let hunk = blame.get_line(old_line).ok_or_else(|| {
+            GitBlameError::Git("missing HEAD blame hunk for unchanged line".to_string())
+        })?;
+        let length = count.min(hunk.final_start_line() + hunk.lines_in_hunk() - old_line);
+        visit(new_line, length, hunk.final_commit_id())?;
+        old_line += length;
+        new_line += length;
+        count -= length;
+    }
+    Ok(())
+}
+
+fn validate_baseline_entry<'repo>(
+    repo: &'repo git2::Repository,
+    entry: &git2::TreeEntry<'_>,
+) -> Result<git2::Blob<'repo>, GitBlameError> {
     if !matches!(entry.filemode(), 0o100644 | 0o100755)
         || entry.kind() != Some(git2::ObjectType::Blob)
     {
@@ -442,7 +531,7 @@ fn validate_baseline_entry(
             "HEAD baseline blob is binary".to_string(),
         ));
     }
-    Ok(())
+    Ok(blob)
 }
 
 /// Inspects index delta for staged renames relative to HEAD tree.
