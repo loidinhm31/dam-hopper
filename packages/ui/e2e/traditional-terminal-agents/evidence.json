@@ -1,0 +1,41 @@
+{
+  "run_id": "e2e-run-1791519260907-8f8fae84",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-09T04:14:20.907Z",
+  "completed_at": "2026-10-09T04:14:27.990Z",
+  "case_name": "traditional-terminal-agents",
+  "route": "/workspace",
+  "git_head": "706c0636994e78a8c5b005bf90a845286577c1bb",
+  "source_fingerprint": "28f4c5e558288ec407de78ec7b3812c4290faaabcbbb182cacd1ef4305324e7b",
+  "seed_digest": "a84d35a8639ef79ff288bcbd4ec7b079a87ff59f7280b416ff85000b2d3bfc65",
+  "browser": "chromium",
+  "browser_version": "154.0.8037.97",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "dbd64a46deb7b0a3eb6dedb77164e3c5898e977b948cecb7b54f1708f552991b",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "sha256": "a355a05d0bafd4c4ef688102aa91be354e7593696b221316c4bc9d20cbcc7c27",
+      "dimensions": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

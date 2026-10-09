@@ -9,7 +9,9 @@ Server catalogs, projects, tunnels, PTYs, and artifact files remain authoritativ
 
 ## 1. Agent Store Ownership
 
-`AgentStorePage` features an explicit profile selector. It chooses an effective `profileId`, captures the current `ConnectionRef { profileId, generation }`, and passes that owner to every Agent Store, project, memory, import, and health query. If the selected profile is removed, the selector chooses another listed profile; it never reuses a global active-profile request.
+`AgentStorePage` resolves reactive tab/profile URL intent and offers an explicit profile selector. `/agent-store?tab=settings&profileId=<encoded-id>` retains that exact registered target; settings without a target requires deliberate profile choice, with tab changes disabled until selection. Ordinary untargeted entry may initially select a valid active/first profile. Invalid, removed, and disconnected targets never fall back to another profile or mount query-bearing features.
+
+Only a registered target with a current connected `ConnectionRef { profileId, generation }` mounts the page-local feature subtree. Every Agent Store, project, memory, import, and health query receives that concrete owner. The subtree is keyed by `connectionKey(owner)` so a profile or generation replacement retires selected items, dialogs, and drafts. Local profile navigation never mutates the global active profile or automatically connects/installs integrations.
 
 Agent item catalogs, item content, scans, distribution matrices, project lists, health results, and mutations are server-local. Owner-qualified React Query keys keep equal item/project names on two servers separate. Ship, unship, absorb, bulk ship, and health refreshes run through the captured owner and invalidate only that owner's cache. Cross-server distribution is not a supported operation.
 

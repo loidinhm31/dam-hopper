@@ -1,5 +1,23 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { Plus } from "lucide-react";
+import {
+  getConnectionSnapshot,
+  subscribeConnections,
+  type ConnectionSnapshot,
+} from "@/api/connections.js";
+import {
+  getProfileChangeVersion,
+  getProfiles,
+  subscribeToProfileChanges,
+} from "@/api/server-config.js";
+import { parseTerminalKey, terminalKey } from "@/api/ownership.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import {
   Dialog,
@@ -25,6 +43,9 @@ import {
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
 } from "@/lib/traditional-terminal-projects.js";
+import { buildAgentSettingsHref } from "@/lib/agent-store-navigation.js";
+import { buildTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-agents.js";
+import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { cn } from "@/lib/utils.js";
 
 const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
@@ -88,17 +109,142 @@ export function TraditionalTerminalProjectsDisplay({
     storageKey: TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY,
   });
   const [projectsSheetOpen, setProjectsSheetOpen] = useState(false);
+  const projectsOpenerRef = useRef<HTMLButtonElement>(null);
+  const statusProfiles = useAgentStatusStore((state) => state.profiles);
+  const profileVersion = useSyncExternalStore(
+    subscribeToProfileChanges,
+    getProfileChangeVersion,
+    () => 0,
+  );
+  const registeredProfiles = useMemo(() => getProfiles(), [profileVersion]);
+  const profileLabels = useMemo(
+    () => new Map(registeredProfiles.map((profile) => [profile.id, profile.name])),
+    [registeredProfiles],
+  );
+  const connectionSignature = useSyncExternalStore(
+    subscribeConnections,
+    () =>
+      JSON.stringify(
+        registeredProfiles.map((profile) => {
+          const snapshot = getConnectionSnapshot(profile.id);
+          return [profile.id, snapshot?.status, snapshot?.owner.generation];
+        }),
+      ),
+    () => "",
+  );
+  const connections = useMemo(() => {
+    const snapshots = new Map<string, ConnectionSnapshot>();
+    for (const profile of registeredProfiles) {
+      const snapshot = getConnectionSnapshot(profile.id);
+      if (snapshot) snapshots.set(profile.id, snapshot);
+    }
+    return snapshots;
+  }, [registeredProfiles, connectionSignature]);
   const groups = useMemo(
     () => buildTraditionalTerminalProjectGroups(mountedSessions, terminalTabs),
-    [mountedSessions, terminalTabs],
+    [mountedSessions, terminalTabs, registeredProfiles],
   );
+  const rosterGroups = useMemo(
+    () =>
+      groups.map((group) => {
+        const terminalTabs: DisplayTabEntry[] = [];
+        for (const tab of group.terminalTabs) {
+          const parsed = parseTerminalKey(tab.sessionId);
+          const ref = tab.terminalRef ?? parsed;
+          const session = tab.session;
+          // useTerminalTree qualifies SessionInfo.id for UI routing. Project
+          // only that exact application shape back to server metadata for the
+          // pure builder; never accept raw alternates or mismatched identities.
+          if (
+            !parsed ||
+            !ref ||
+            !session ||
+            tab.sessionId !== terminalKey(ref) ||
+            session.id !== tab.sessionId ||
+            parsed.profileId !== ref.profileId ||
+            parsed.id !== ref.id ||
+            (tab.profileId !== undefined && tab.profileId !== ref.profileId)
+          ) continue;
+          terminalTabs.push({
+            ...tab,
+            session: { ...session, id: ref.id },
+          });
+        }
+        return { ...group, terminalTabs };
+      }),
+    [groups],
+  );
+  const agentRows = useMemo(
+    () =>
+      buildTraditionalTerminalAgentRows({
+        groups: rosterGroups,
+        profiles: statusProfiles,
+        connections,
+        profileLabels,
+        nowMs: Date.now(),
+      }),
+    [rosterGroups, statusProfiles, connections, profileLabels],
+  );
+  const offeredAgentKeys = useMemo(
+    () => new Map(agentRows.map((row) => [row.sessionId, row.key])),
+    [agentRows],
+  );
+  const committedAgentSelection = useRef<{
+    keys: ReadonlyMap<string, string>;
+    selectTab: (sessionId: string) => void;
+  } | null>(null);
   const selection = useTraditionalTerminalProjectSelection({
     groups,
     activeSessionId,
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
+  const selectedGroupId = selectedGroup?.id ?? null;
+  const mountedMembershipSignature = JSON.stringify(
+    selectedGroup?.mountedSessions.map((session) => session.sessionId) ?? [],
+  );
+  // Status-bearing tabs or session renames rebuild groups/mountedSessions,
+  // but unchanged PTY membership must not retrigger MultiTerminalDisplay's
+  // prune/reparent/fit path and steal focus.
+  const prevTerminalSurfaceMountedSessionsRef = useRef<MountedSession[]>([]);
+  const terminalSurfaceMountedSessions = useMemo(() => {
+    const canonicalById = new Map(
+      mountedSessions.map((session) => [session.sessionId, session]),
+    );
+    const memberIds: string[] = JSON.parse(mountedMembershipSignature);
+    const members: MountedSession[] = [];
+    for (const sessionId of memberIds) {
+      const session = canonicalById.get(sessionId);
+      if (session) members.push(session);
+    }
+    const prev = prevTerminalSurfaceMountedSessionsRef.current;
+    const same =
+      prev.length === members.length &&
+      prev.every(
+        (prevSession, index) =>
+          prevSession.sessionId === members[index]?.sessionId &&
+          prevSession.project === members[index]?.project &&
+          prevSession.profileId === members[index]?.profileId &&
+          prevSession.terminalRef?.id === members[index]?.terminalRef?.id &&
+          prevSession.terminalRef?.profileId ===
+            members[index]?.terminalRef?.profileId,
+      );
+    if (same) {
+      return prev;
+    }
+    prevTerminalSurfaceMountedSessionsRef.current = members;
+    return members;
+  }, [mountedSessions, selectedGroupId, mountedMembershipSignature]);
   const selectedGroupProjectName = selectedGroup?.projectName ?? null;
+  const settingsProfileId =
+    selectedGroupProjectName &&
+    selectedGroup?.profileId &&
+    (!selectedGroup.projectRef ||
+      selectedGroup.projectRef.profileId === selectedGroup.profileId) &&
+    profileLabels.has(selectedGroup.profileId)
+      ? selectedGroup.profileId
+      : null;
+  const agentSettingsHref = buildAgentSettingsHref(settingsProfileId);
   const activeSessionGroup = activeSessionId
     ? groups.find((group) =>
         group.terminalTabs.some((tab) => tab.sessionId === activeSessionId),
@@ -147,6 +293,26 @@ export function TraditionalTerminalProjectsDisplay({
     if (group) rememberNewTerminalTarget(group.projectName);
     selection.handleSelectTab(sessionId);
   }
+
+  // Publish only committed membership/selection. A retained old row callback
+  // must not select a removed terminal or a replacement PTY with the same ID.
+  useLayoutEffect(() => {
+    committedAgentSelection.current = {
+      keys: offeredAgentKeys,
+      selectTab: handleSelectTab,
+    };
+    return () => {
+      committedAgentSelection.current = null;
+    };
+  });
+
+  function handleSelectAgent(sessionId: string) {
+    const offeredKey = offeredAgentKeys.get(sessionId);
+    const committed = committedAgentSelection.current;
+    if (!offeredKey || committed?.keys.get(sessionId) !== offeredKey) return;
+    committed.selectTab(sessionId);
+    setProjectsSheetOpen(false);
+  }
   function handleCloseTerminalTab(sessionId: string) {
     const group = groups.find((candidate) =>
       candidate.terminalTabs.some((tab) => tab.sessionId === sessionId),
@@ -172,7 +338,7 @@ export function TraditionalTerminalProjectsDisplay({
       <MultiTerminalDisplay
         key={selectedGroup.id}
         activeSessionId={activeSessionForGroup}
-        mountedSessions={selectedGroup.mountedSessions}
+        mountedSessions={terminalSurfaceMountedSessions}
         openTabs={selectedGroup.terminalTabs}
         layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id)}
         terminalCommitStatusEnabled={false}
@@ -202,16 +368,7 @@ export function TraditionalTerminalProjectsDisplay({
   if (isCompactWorkspace) {
     return (
       <div className="flex h-full min-h-0 flex-col overflow-clip bg-[var(--color-background)]">
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
-          <button
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={projectsSheetOpen}
-            onClick={() => setProjectsSheetOpen(true)}
-            className="flex h-8 items-center gap-2 rounded-md border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 px-3 text-xs font-semibold text-[var(--color-primary)] active:bg-[var(--color-primary)]/20"
-          >
-            <span>Projects</span>
-          </button>
+        <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1">
           <span className="min-w-0 flex items-center gap-1.5 truncate text-xs font-semibold text-[var(--color-text)]">
             <span className="min-w-0 truncate">{selectedGroup.label}</span>
             {selectedGroup.profileName && (
@@ -226,12 +383,27 @@ export function TraditionalTerminalProjectsDisplay({
             aria-label="New terminal in selected project"
             onClick={handleNewTerminal}
             title="New terminal in selected project"
-            className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
+            className="ml-auto flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
           </button>
+          {/* Keep the sheet action on its own trailing row: the mobile shell's
+              default floating Panels selector occupies the leading edge. */}
+          <button
+            ref={projectsOpenerRef}
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={projectsSheetOpen}
+            onClick={() => setProjectsSheetOpen(true)}
+            className="col-span-2 flex min-h-11 min-w-11 shrink-0 items-center justify-self-end gap-2 rounded-md border border-[var(--color-primary)]/35 bg-[var(--color-primary)]/14 px-3 text-xs font-semibold text-[var(--color-primary)] active:bg-[var(--color-primary)]/20"
+          >
+            <span>Projects + Agents</span>
+          </button>
         </div>
+        {/* The pane host changes sibling position between layouts. Keep its
+            React identity so a breakpoint does not detach or remount xterm. */}
         <main
+          key="terminal-surface"
           id={selectedGroupPanelId}
           role="tabpanel"
           aria-label="Selected terminal project"
@@ -241,11 +413,22 @@ export function TraditionalTerminalProjectsDisplay({
           {renderTerminalSurface()}
         </main>
         <Dialog open={projectsSheetOpen} onOpenChange={setProjectsSheetOpen}>
-          <DialogContent className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[calc(var(--app-viewport-height)*0.75)] w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl">
-            <DialogHeader className="border-b border-[var(--color-border)] px-4 py-3 text-left">
-              <DialogTitle className="text-sm">projects</DialogTitle>
+          <DialogContent
+            // Keep modal keys out of document-level workspace shortcuts.
+            // Do not preventDefault: Radix still owns Tab trapping and Escape.
+            onKeyDown={(event) => event.stopPropagation()}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              if (projectsOpenerRef.current?.isConnected) {
+                projectsOpenerRef.current.focus();
+              }
+            }}
+            className="safe-area-inline safe-area-bottom fixed inset-x-0 bottom-0 top-auto left-0 z-50 max-h-[calc(var(--app-viewport-height)*0.75)] w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-t-2xl border-x-0 border-b-0 p-0 [&>button]:flex [&>button]:min-h-11 [&>button]:min-w-11 [&>button]:items-center [&>button]:justify-center data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:rounded-t-2xl"
+          >
+            <DialogHeader className="border-b border-[var(--color-border)] py-3 pl-4 pr-16 text-left">
+              <DialogTitle className="text-sm">Projects + Agents</DialogTitle>
               <DialogDescription className="text-xs">
-                Select an open terminal project.
+                Select an open project or an observed agent's terminal.
               </DialogDescription>
             </DialogHeader>
             <TraditionalTerminalProjectsNavigator
@@ -253,6 +436,10 @@ export function TraditionalTerminalProjectsDisplay({
               activeGroupId={selectedGroup.id}
               onSelectGroup={handleSelectGroup}
               onNewTerminal={handleNewTerminal}
+              agentRows={agentRows}
+              activeSessionId={activeSessionId}
+              onSelectAgent={handleSelectAgent}
+              agentSettingsHref={agentSettingsHref}
               className="max-h-[calc(var(--app-viewport-height)*0.75_-_5rem)]"
               touchOptimized
             />
@@ -274,6 +461,10 @@ export function TraditionalTerminalProjectsDisplay({
         activeGroupId={selectedGroup.id}
         onSelectGroup={handleSelectGroup}
         onNewTerminal={handleNewTerminal}
+        agentRows={agentRows}
+        activeSessionId={activeSessionId}
+        onSelectAgent={handleSelectAgent}
+        agentSettingsHref={agentSettingsHref}
         width={projectsNavigatorWidth}
       />
       <div
@@ -297,6 +488,7 @@ export function TraditionalTerminalProjectsDisplay({
         />
       </div>
       <main
+        key="terminal-surface"
         id={selectedGroupPanelId}
         role="tabpanel"
         aria-labelledby={selectedGroupTabId}

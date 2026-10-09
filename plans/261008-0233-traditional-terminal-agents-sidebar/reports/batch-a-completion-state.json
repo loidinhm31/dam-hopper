@@ -1,0 +1,850 @@
+{
+  "request": {
+    "protocol": "evcrate-advisor-state",
+    "version": 1,
+    "operation": "complete",
+    "task_run_id": "8f7a871c-e7f2-4ede-b024-b8aaf0dca977",
+    "operation_id": "31f2e20c-7560-4ee1-bb21-f80b4b989e6a",
+    "expected_revision": 11,
+    "payload": {}
+  },
+  "response": {
+    "protocol": "evcrate-advisor-state",
+    "version": 1,
+    "operation": "complete",
+    "status": "STATE_READY",
+    "state": {
+      "schema_version": 1,
+      "task_run_id": "8f7a871c-e7f2-4ede-b024-b8aaf0dca977",
+      "project_id": "19c524d3cbe7802089d1d9dfc5b734ae0fe2828e9b4051cd0e54216133ea209c",
+      "task_revision": 12,
+      "phase_id": "batch-a-phases-01-03",
+      "gate_status": "completed",
+      "unresolved_episode_id": null,
+      "correction_count": 0,
+      "pending_consultation_id": null,
+      "last_consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+      "disposition": {
+        "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+        "evidence_revision": 1,
+        "action": "accept",
+        "rationale": "User selected Approve for validated phases1–3 at review cycle2. Register finalization of phase1–3 delivered behavior/evidence docs and validation report; preserve read-only plan/contracts and all unrelated baseline. Any Git staging/commit will require separate explicit user choice and exact authorized paths. Controller completion and outside-baseline phase receipts remain pending.",
+        "correction": {
+          "action_id": "0f2e9295-9fb3-417f-8b1b-eb51b017db56",
+          "episode_id": "batch-a-approved-finalization",
+          "validation_command": "pnpm --filter @dam-hopper/ui test"
+        }
+      },
+      "outcome": {
+        "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+        "action_id": "0f2e9295-9fb3-417f-8b1b-eb51b017db56",
+        "episode_id": "batch-a-approved-finalization",
+        "result": "resolved",
+        "validation": {
+          "suite": "ui-full-finalization",
+          "command": "pnpm --filter @dam-hopper/ui test",
+          "status": "passed",
+          "passed": 2694,
+          "failed": 0,
+          "details": "Parent final writer-barrier run:326/326 files;20.27s; UI buildadditionalexit0. Phase docs/report finalization settled, userApproved and Leave uncommitted; noindextransitions. Actual connectedbrowser and nativekeyboard evidence retained with scope limits."
+        },
+        "actual_changed_paths": [
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+        ],
+        "evidence_revision": 2,
+        "correction_number": 1,
+        "recorded_at": 1791424141027,
+        "checkpoint_digest": "49eada02d42a972658cb4c0f8f5f489c569be081e684d0aaa4285f472ec34035",
+        "result_digest": "ecce2b3e6a8a7eacfc0e97ec1f12f91d162b323b07da961b89f59127491ccf46",
+        "baseline_digest": "bb1322b475bac4c5fdf7cc3e0a08a82a912c264ce2b64c5c8a784d8c86b732ce"
+      },
+      "task": {
+        "goal": "Implement, validate, review and finalize phases 1–3 (batch A) of plans/261008-0233-traditional-terminal-agents-sidebar/plan.md; phase 4 excluded until phase-scoped completion receipts.",
+        "non_goals": [
+          "Phase 4 display integration and live-harness qualification",
+          "Backend, status protocol, root bridge or query API changes",
+          "Global profile/policy mutation"
+        ],
+        "authorized_paths": [
+          "packages/ui/src/lib/traditional-terminal-agents.ts",
+          "packages/ui/src/lib/traditional-terminal-agents.test.ts",
+          "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx",
+          "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.test.tsx",
+          "packages/ui/src/components/molecules/traditional-terminal-agent-row.tsx",
+          "packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx",
+          "packages/ui/src/lib/agent-store-navigation.ts",
+          "packages/ui/src/lib/agent-store-navigation.test.ts",
+          "packages/ui/src/components/pages/AgentStorePage.tsx",
+          "packages/ui/src/components/pages/AgentStorePage.test.tsx",
+          "packages/ui/src/filename-conventions.test.ts",
+          "docs/architecture/agent-store-ports-and-browser.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+        ],
+        "scope_rationale": "Frozen independent batch A ownership plus parent-reviewed incidental filename-test removal and affected Agent Store architecture documentation; overview/receipts excluded.",
+        "invariants": [
+          "Canonical registered profile/terminal/incarnation ownership",
+          "Unavailable reconnect evidence never presents ready state",
+          "Idle ended hint never claims task success",
+          "Unresolved chooser/invalid/removed/disconnected owner must not mount remote queries",
+          "Preserve user untracked planning baseline and all unrelated files"
+        ],
+        "success_criteria": [
+          "Full UI suite and UI package build pass",
+          "Exact identity/generation/outcome behavioral cases pass",
+          "Actual browser route denial and native component keyboard path exercised",
+          "Terminal review/advice and user approval complete before finalization",
+          "No phase 4 completion claim"
+        ]
+      },
+      "initial_baseline": [
+        {
+          "path": "docs/architecture/agent-store-ports-and-browser.md",
+          "digest": "52ec9d173d5265c815f7571c9c95bf916937c4e252602f0a40c19610847f28e2",
+          "status": "file",
+          "git": {
+            "status": "  ",
+            "identity": "|100644 0fea271e4dc86d008309ac1df1432b2e856db0d6 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx",
+          "digest": "8341bfd87c08f5abf77542f7d3813a3486775ba3795d0022973b95585d286501",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/molecules/traditional-terminal-agent-row.tsx",
+          "digest": "e39032e6d32eca5f0f7f72c59c303fece642f25f9edad74c5cd5e7bab67989b7",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.test.tsx",
+          "digest": "e8e9e6008a69d3745fc0a0e6dd7288bf67df6ffbbd1bb450e5f31b6480f4dffb",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 246195afb7f3a33f124c329ac7e98c7c1c0eefb5 246195afb7f3a33f124c329ac7e98c7c1c0eefb5|100644 246195afb7f3a33f124c329ac7e98c7c1c0eefb5 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx",
+          "digest": "395b3a4079a62a865a5f0e0cff9999576a83e3f632c2c13a0480b7eb2c060175",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 a18a8b0ad81710010643c5cfbdfd04dee4594ee5 a18a8b0ad81710010643c5cfbdfd04dee4594ee5|100644 a18a8b0ad81710010643c5cfbdfd04dee4594ee5 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/pages/AgentStorePage.test.tsx",
+          "digest": "d7534f1de17a8805c82f8db43136300a89698ae08e77bac6659b4d1918850731",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 b9ca4b6679c3ba9ded8848cfb38a79d13b96677a b9ca4b6679c3ba9ded8848cfb38a79d13b96677a|100644 b9ca4b6679c3ba9ded8848cfb38a79d13b96677a 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/pages/AgentStorePage.tsx",
+          "digest": "b0ff6a79e7fae4e65f18537919bed400df9498d71b4a8e55691528c612878e01",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 8324373e51c5ba5a5b27a4e00741f6af489ce63b 8324373e51c5ba5a5b27a4e00741f6af489ce63b|100644 8324373e51c5ba5a5b27a4e00741f6af489ce63b 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/filename-conventions.test.ts",
+          "digest": "74e95d59c1586e92bcd7b0bce51abd654bb5463413492d59667a11233621927a",
+          "status": "file",
+          "git": {
+            "status": "  ",
+            "identity": "|100644 fc5cb88494110a3cf6030ab25c54468dd7d19d84 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/agent-store-navigation.test.ts",
+          "digest": "9eb7c162e41c7b08f2db2cc29f651867850a8241778207914750fdc9996730d4",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/agent-store-navigation.ts",
+          "digest": "55a9492592bbd7fda136af503e76da364cf42ff410a5485f0bb1399c564a4bd8",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/traditional-terminal-agents.test.ts",
+          "digest": "43a69d11c4a50750a1e22a2e7277ff8f1971b1cc4f85f1f52729dcfaec3c9554",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/traditional-terminal-agents.ts",
+          "digest": "faa480ea1b774b937993efa7c4e79f4763e6193bc50b4999fed00abc8ffb90d8",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/contracts.md",
+          "digest": "a1b9ef7b104d83d0c12a5c59d25293c78c737112dcd975c3a906bedf1b543cc4",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "digest": "d63099fed3ef91160e7555b526d2f271b8a4b1ac9e6dde70782d6d440e636b52",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "digest": "1e75305ad0e9058c808dcfb3244eb17ac8ba98e21bf4a33fff35b149bb6d7c42",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "digest": "9a101312897d40e7af166de3a0d55f318764aaf521e0baa0e97ae873cc402ce9",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/plan.md",
+          "digest": "0d1f274e8dadfbcfa20a69e58ae1f5f9bd5817f7007a2e8a6493585b5b3ee07b",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md",
+          "digest": "0cded632913571c108e3a0ef59c3dffec3c899dafec6b41d5a4ac0f76574b860",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        }
+      ],
+      "scope_revision": 0,
+      "scope": {
+        "authorized_paths": [
+          "packages/ui/src/lib/traditional-terminal-agents.ts",
+          "packages/ui/src/lib/traditional-terminal-agents.test.ts",
+          "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx",
+          "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.test.tsx",
+          "packages/ui/src/components/molecules/traditional-terminal-agent-row.tsx",
+          "packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx",
+          "packages/ui/src/lib/agent-store-navigation.ts",
+          "packages/ui/src/lib/agent-store-navigation.test.ts",
+          "packages/ui/src/components/pages/AgentStorePage.tsx",
+          "packages/ui/src/components/pages/AgentStorePage.test.tsx",
+          "packages/ui/src/filename-conventions.test.ts",
+          "docs/architecture/agent-store-ports-and-browser.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+        ],
+        "rationale": "Frozen independent batch A ownership plus parent-reviewed incidental filename-test removal and affected Agent Store architecture documentation; overview/receipts excluded.",
+        "added_baseline": []
+      },
+      "evidence_revision": 2,
+      "current_baseline": [
+        {
+          "path": "docs/architecture/agent-store-ports-and-browser.md",
+          "digest": "40eb42f9b7b8788ec26eed10d4d0283b70158da3b07d5e134d23c561cb6cdb57",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 0fea271e4dc86d008309ac1df1432b2e856db0d6 0fea271e4dc86d008309ac1df1432b2e856db0d6|100644 0fea271e4dc86d008309ac1df1432b2e856db0d6 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx",
+          "digest": "8b5292f2ff7ab013048e088c93b2ff8077216d2fdca0b4d59efc13889a0b17a0",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/molecules/traditional-terminal-agent-row.tsx",
+          "digest": "e39032e6d32eca5f0f7f72c59c303fece642f25f9edad74c5cd5e7bab67989b7",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.test.tsx",
+          "digest": "e8e9e6008a69d3745fc0a0e6dd7288bf67df6ffbbd1bb450e5f31b6480f4dffb",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 246195afb7f3a33f124c329ac7e98c7c1c0eefb5 246195afb7f3a33f124c329ac7e98c7c1c0eefb5|100644 246195afb7f3a33f124c329ac7e98c7c1c0eefb5 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx",
+          "digest": "395b3a4079a62a865a5f0e0cff9999576a83e3f632c2c13a0480b7eb2c060175",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 a18a8b0ad81710010643c5cfbdfd04dee4594ee5 a18a8b0ad81710010643c5cfbdfd04dee4594ee5|100644 a18a8b0ad81710010643c5cfbdfd04dee4594ee5 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/pages/AgentStorePage.test.tsx",
+          "digest": "cb58c0c50d0a9a483c42316b20394525f9d6a59f6bcfcc8ef09cab2cf9805f38",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 b9ca4b6679c3ba9ded8848cfb38a79d13b96677a b9ca4b6679c3ba9ded8848cfb38a79d13b96677a|100644 b9ca4b6679c3ba9ded8848cfb38a79d13b96677a 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/components/pages/AgentStorePage.tsx",
+          "digest": "2a36e83e3f2c53cb0c2a6650dd9e06fcd492af22f56e09692063eed5673b7bda",
+          "status": "file",
+          "git": {
+            "status": " M",
+            "identity": "1 .M N... 100644 100644 100644 8324373e51c5ba5a5b27a4e00741f6af489ce63b 8324373e51c5ba5a5b27a4e00741f6af489ce63b|100644 8324373e51c5ba5a5b27a4e00741f6af489ce63b 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/filename-conventions.test.ts",
+          "digest": null,
+          "status": "missing",
+          "git": {
+            "status": " D",
+            "identity": "1 .D N... 100644 100644 000000 fc5cb88494110a3cf6030ab25c54468dd7d19d84 fc5cb88494110a3cf6030ab25c54468dd7d19d84|100644 fc5cb88494110a3cf6030ab25c54468dd7d19d84 0",
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/agent-store-navigation.test.ts",
+          "digest": "9eb7c162e41c7b08f2db2cc29f651867850a8241778207914750fdc9996730d4",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/agent-store-navigation.ts",
+          "digest": "55a9492592bbd7fda136af503e76da364cf42ff410a5485f0bb1399c564a4bd8",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/traditional-terminal-agents.test.ts",
+          "digest": "43a69d11c4a50750a1e22a2e7277ff8f1971b1cc4f85f1f52729dcfaec3c9554",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "packages/ui/src/lib/traditional-terminal-agents.ts",
+          "digest": "faa480ea1b774b937993efa7c4e79f4763e6193bc50b4999fed00abc8ffb90d8",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/contracts.md",
+          "digest": "a1b9ef7b104d83d0c12a5c59d25293c78c737112dcd975c3a906bedf1b543cc4",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "digest": "802117750b0f439070dfbb22c40a472edc956edf712eb4b35f30721211558303",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "digest": "42a144ac7a82bf4049574bf29dc4853daa9a6e72ca277afde7da1249f1ed878b",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "digest": "683e04ea4bb20e9465c60be0a1378d5ae93d7bab5725389ca9936f5e8fe62bb8",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/plan.md",
+          "digest": "0d1f274e8dadfbcfa20a69e58ae1f5f9bd5817f7007a2e8a6493585b5b3ee07b",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md",
+          "digest": "962c581761ee7dc1c5bfa9752ebf64992f3f2adcb245f2ea8c1eb1019400b490",
+          "status": "file",
+          "git": {
+            "status": "??",
+            "identity": null,
+            "original_path": null
+          }
+        }
+      ],
+      "pending": null,
+      "last_terminal": {
+        "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+        "status": "ADVICE_READY",
+        "checkpoint_id": "batch-a-review-step-4-cycle-2",
+        "checkpoint_digest": "49eada02d42a972658cb4c0f8f5f489c569be081e684d0aaa4285f472ec34035",
+        "task_revision": 6,
+        "evidence_revision": 1,
+        "scope_revision": 0,
+        "result_digest": "ecce2b3e6a8a7eacfc0e97ec1f12f91d162b323b07da961b89f59127491ccf46",
+        "envelope_digest": "ad03789657fc8462fa08cbe592e9b6359ef52af24a8a46502b009a83c34dfad5",
+        "receipt": {
+          "backend": "omp",
+          "model": "openai-codex/gpt-6-astra",
+          "effort": "high",
+          "controller_version": 2,
+          "adapter_version": "18.8.3",
+          "build_identity": "evcrate-advisor-v2-16505a41eea260ae",
+          "elapsed_ms": 33302
+        },
+        "has_concerns": false,
+        "validation_commands": [
+          "pnpm --filter @dam-hopper/ui test",
+          "pnpm --filter @dam-hopper/ui build",
+          "Fresh Vite UI + two isolated authenticated fixture backends: chooser/explicit B/history/default/invalid/disconnected/removed browser scenarios"
+        ],
+        "intended_changed_paths": [
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+          "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+        ]
+      },
+      "correction": null,
+      "episode_validation_command": null,
+      "human_continuation": null,
+      "operation_ledger": [
+        {
+          "operation_id": "d44bef88-5b90-4a55-968e-0131964b7088",
+          "operation": "init",
+          "digest": "af1fe32f93684acee7a900edad3333f46ed6b08163cade7da1b1372041c6fc9c",
+          "revision": 1,
+          "consultation_id": null,
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "d1430f73-d81c-4c8c-a680-9090a14e6982",
+          "operation": "checkpoint",
+          "digest": "9549485670cba3ae752d0ad76d765172822101f0ee6e8f333d52a712893e7fee",
+          "revision": 2,
+          "consultation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+          "operation": "attach",
+          "digest": "761211c39076e392b23765fdd2dcd0fcb84d8b7b29a85bfbd732657de95e1095",
+          "revision": 4,
+          "consultation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": "544f96a285609ace0f32898c6c2ecd9e108d7a2b2a9a71b7e589ce0e080ec995",
+          "result_digest": "a07782eec3e5bddb8c866515c0607f13f11a56fe8eb30a3a76325b161c19c23c"
+        },
+        {
+          "operation_id": "1bcdb417-4e32-4268-be7e-ba4d87df97ac",
+          "operation": "disposition",
+          "digest": "c97d1b3139308449cf0e1462dfab341c81fb43cfde612244f96edc2749afed17",
+          "revision": 5,
+          "consultation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+          "action_id": "ab4c2766-7830-4201-b0f5-1e0afa1052ae",
+          "episode_id": "batch-a-review-cycle-1-fix-all",
+          "outcome_result": null,
+          "validation_command": "pnpm --filter @dam-hopper/ui test",
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "6cbfb99e-b93c-4e31-84c6-ebba760d3c1a",
+          "operation": "outcome",
+          "digest": "b40674650630c239cfa5105fc4d2b311f98734cad48b8abbdd46fc1a6f99733a",
+          "revision": 6,
+          "consultation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+          "action_id": "ab4c2766-7830-4201-b0f5-1e0afa1052ae",
+          "episode_id": "batch-a-review-cycle-1-fix-all",
+          "outcome_result": "resolved",
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "1b15cf70-2fe4-4ef3-b07e-b6e3cbfd69f1",
+          "operation": "checkpoint",
+          "digest": "51ca6461a1195ad75cd17a03d009ad97247abe19b300c45f4eb18245a866f5ba",
+          "revision": 7,
+          "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+          "operation": "attach",
+          "digest": "ad03789657fc8462fa08cbe592e9b6359ef52af24a8a46502b009a83c34dfad5",
+          "revision": 9,
+          "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": "49eada02d42a972658cb4c0f8f5f489c569be081e684d0aaa4285f472ec34035",
+          "result_digest": "ecce2b3e6a8a7eacfc0e97ec1f12f91d162b323b07da961b89f59127491ccf46"
+        },
+        {
+          "operation_id": "2073d3e1-355f-4ca5-b689-935bf32ed880",
+          "operation": "disposition",
+          "digest": "7f7b41c65d6617420627b0a3292ca198af8a64e1dee116ee5f8da3636fe0482e",
+          "revision": 10,
+          "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+          "action_id": "0f2e9295-9fb3-417f-8b1b-eb51b017db56",
+          "episode_id": "batch-a-approved-finalization",
+          "outcome_result": null,
+          "validation_command": "pnpm --filter @dam-hopper/ui test",
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "3f1452f8-509b-46b2-b65e-d0c20dcfc490",
+          "operation": "outcome",
+          "digest": "f44661f7b4e21de3d5b3578d448c707631841954df3571fd09aadf7b4f1f30b8",
+          "revision": 11,
+          "consultation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+          "action_id": "0f2e9295-9fb3-417f-8b1b-eb51b017db56",
+          "episode_id": "batch-a-approved-finalization",
+          "outcome_result": "resolved",
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        },
+        {
+          "operation_id": "31f2e20c-7560-4ee1-bb21-f80b4b989e6a",
+          "operation": "complete",
+          "digest": "6469c7da500ee0bcd76ffa9a7319440828456e8ca12f991c95f9bf2b0721bbd1",
+          "revision": 12,
+          "consultation_id": null,
+          "action_id": null,
+          "episode_id": null,
+          "outcome_result": null,
+          "validation_command": null,
+          "checkpoint_digest": null,
+          "result_digest": null
+        }
+      ],
+      "human_decisions": []
+    }
+  },
+  "review_checkpoint": {
+    "protocol": "evcrate-advisor-checkpoint",
+    "version": 2,
+    "task_run_id": "8f7a871c-e7f2-4ede-b024-b8aaf0dca977",
+    "checkpoint_id": "batch-a-review-step-4-cycle-2",
+    "phase_id": "batch-a-phases-01-03",
+    "task_revision": 6,
+    "evidence_revision": 1,
+    "checkpoint": "review:step-4",
+    "kind": "review",
+    "question": "Do the completed accepted corrections and fresh test/browser evidence permit requesting batch A approval and registering bounded phase-doc/report finalization, excluding phase 4 and preserving all sealed/read-only paths?",
+    "task": {
+      "goal": "Implement, validate, review and finalize phases 1–3 (batch A) of plans/261008-0233-traditional-terminal-agents-sidebar/plan.md; phase 4 excluded until phase-scoped completion receipts.",
+      "non_goals": [
+        "Phase 4 display integration and live-harness qualification",
+        "Backend, status protocol, root bridge or query API changes",
+        "Global profile/policy mutation"
+      ],
+      "authorized_paths": [
+        "packages/ui/src/lib/traditional-terminal-agents.ts",
+        "packages/ui/src/lib/traditional-terminal-agents.test.ts",
+        "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.tsx",
+        "packages/ui/src/components/organisms/TraditionalTerminalProjectsNavigator.test.tsx",
+        "packages/ui/src/components/molecules/traditional-terminal-agent-row.tsx",
+        "packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx",
+        "packages/ui/src/lib/agent-store-navigation.ts",
+        "packages/ui/src/lib/agent-store-navigation.test.ts",
+        "packages/ui/src/components/pages/AgentStorePage.tsx",
+        "packages/ui/src/components/pages/AgentStorePage.test.tsx",
+        "packages/ui/src/filename-conventions.test.ts",
+        "docs/architecture/agent-store-ports-and-browser.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+      ],
+      "scope_rationale": "Frozen independent batch A ownership plus parent-reviewed incidental filename-test removal and affected Agent Store architecture documentation; overview/receipts excluded.",
+      "invariants": [
+        "Canonical registered profile/terminal/incarnation ownership",
+        "Unavailable reconnect evidence never presents ready state",
+        "Idle ended hint never claims task success",
+        "Unresolved chooser/invalid/removed/disconnected owner must not mount remote queries",
+        "Preserve user untracked planning baseline and all unrelated files"
+      ],
+      "success_criteria": [
+        "Full UI suite and UI package build pass",
+        "Exact identity/generation/outcome behavioral cases pass",
+        "Actual browser route denial and native component keyboard path exercised",
+        "Terminal review/advice and user approval complete before finalization",
+        "No phase 4 completion claim"
+      ]
+    },
+    "proposal": {
+      "next_action": "Request user approval; on approval register phase1–3 substantive documentation/report finalization and selected authorized Git transitions, then validate/outcome/complete and publish phase-scoped receipts outside baseline.",
+      "rationale": "Terminal second reviewer 9/10, no Critical or mustfix. Accepted correction outcome resolved, 2694/2694 full-suite tests and UI build passed. Real authenticated connected A/B browser verifies chooser denial, explicit B ownership, history/default and invalid/disconnected/removed denial.",
+      "intended_changed_paths": [
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-01-roster-model.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-02-navigator-components.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/phase-03-agent-store-navigation.md",
+        "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md"
+      ]
+    },
+    "evidence": {
+      "summary": "Accepted cycle1 Fix all action completed; truthful matching outcome at revision6/evidence1, six changed paths. Chooser-only disabled tabs, four denial/history regressions, accessible unavailable-hook regression, incidental filename spelling test removed, architecture corrected. Terminal reviewer2 9/10: no Critical/High/mustfix; warning fresh tests/browser were unavailable to reviewer at terminal barrier, now supplied here. Full UI 2694/2694 tests, 326/326 files, 143 affected cases; build exit0. Actual current Vite app used two isolated real authenticated sqlite fixture servers with explicit localhost CORS (existing production-test image unchanged backend only). Both connected; ownerless tabs disabled, empty target unchanged, zero Agent Store requests. Deliberate B Settings with list/matrix200 exclusively B origin; global A unchanged. Back chooser/Forward B; ordinary bare entry A. Invalid/empty, disconnected B and removed B preserve denial across all other tab changes with zero Agent Store requests; removed ID retained URL. Existing connection manager performs disconnect/remove, no source/profile/policy/install changes except ephemeral smoke profiles. Both services disposed exit0, browser closed, scripts deleted. Prior isolated native keyboard/44px evidence retained; no phase4/live-harness qualification. Final substantive phase docs/report and any approved current-run authorized index transitions remain to settle before complete; overview/receipts excluded baseline.",
+      "files": [
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md",
+          "excerpt": "Post-correction: full UI suite2694/2694 pass; 326/326 files;143 affected cases; buildexit0. Real connected A/B current-UI smoke passed chooser denial, B-only list/matrix requests, globalAunchanged, Back/Forward, ordinaryAdefault, invalid/empty/disconnected/removed denial across tabs. Both isolated authenticated services disposed. Reviewer2 9/10 no Critical or mustfix; review evidence warning now satisfied by parent. No phase4 completion.",
+          "digest": "e2bef769fc8ab8863502559bfc50c043b6ffe715a3008887ddf2c8309fb12080"
+        },
+        {
+          "path": "packages/ui/src/components/pages/AgentStorePage.tsx",
+          "excerpt": "Tab button disabled={location.profile.kind === \"choose\"}; profile selector writes deliberate ID into URL. Ordinary default capture and tab target retention unchanged. Registered connected snapshot matching selected profile required; ConnectedAgentStore keyed connectionKey(owner) before query hooks.",
+          "digest": "2a36e83e3f2c53cb0c2a6650dd9e06fcd492af22f56e09692063eed5673b7bda"
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/plan.md",
+          "excerpt": "Phases1–3 groupA independent frozen interfaces; phase4 groupB depends all three. 26 authorized implementation paths include parent proposed filename spelling test deletion and affected Agent Store architecture finalization. Explicit advice progress overview outside captured snapshot. No previous completion receipts.",
+          "digest": "0d1f274e8dadfbcfa20a69e58ae1f5f9bd5817f7007a2e8a6493585b5b3ee07b"
+        },
+        {
+          "path": "plans/261008-0233-traditional-terminal-agents-sidebar/contracts.md",
+          "excerpt": "Settings without profile means choose, not ambient selection. Query-bearing child mounts only registered connected current owner. Removed/disconnected targets retain denial. Exact qualified/incarnation/current-ready strict hint. BatchA gate before dependency dispatch; frozen kebab-case row paths retained.",
+          "digest": "a1b9ef7b104d83d0c12a5c59d25293c78c737112dcd975c3a906bedf1b543cc4"
+        }
+      ],
+      "validation_results": [
+        {
+          "suite": "ui-full",
+          "command": "pnpm --filter @dam-hopper/ui test",
+          "status": "passed",
+          "passed": 2694,
+          "failed": 0,
+          "details": "326/326 files, 143 affected cases;23.54s."
+        },
+        {
+          "suite": "ui-types",
+          "command": "pnpm --filter @dam-hopper/ui build",
+          "status": "passed",
+          "passed": 1,
+          "failed": 0,
+          "details": "TypeScript exit0."
+        },
+        {
+          "suite": "actual-browser-correction",
+          "command": "Fresh Vite UI + two isolated authenticated fixture backends: chooser/explicit B/history/default/invalid/disconnected/removed browser scenarios",
+          "status": "passed",
+          "passed": 7,
+          "failed": 0,
+          "details": "Seven named scenario groups observed; distinct real backends, successful B-only inventory/matrix calls, zero Agent Store calls for unresolved/denied states. No live harness qualification."
+        }
+      ],
+      "artifacts": []
+    },
+    "prior": {
+      "prior_consultation_id": "bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8",
+      "prior_counsel": "{\"protocol\":\"evcrate-advisor-result\",\"version\":2,\"checkpoint\":\"review:step-4\",\"status\":\"ADVICE_READY\",\"recommendation\":\"Apply one bounded correction set: preserve unresolved profile-choice intent across Agent Store tab changes, add behavioral chooser and accessible hook-coverage regressions, remove the incidental filename-spelling test without renaming frozen row files, and reconcile affected removal-policy documentation. Then validate the corrected paths, update the batch A validation report, obtain another same-run review, and secure user approval before finalization. No additional profile-policy decision is needed.\",\"rationale\":\"The supplied browser report establishes that ownerless Settings -> Memory Files selects default A without user choice, violating the explicit chooser contract. [INFERENCE] The route transition loses chooser intent and is subsequently interpreted as default-profile navigation; the supplied handleTabChange excerpt supports this mechanism, but the complete encoder/parser is not provided. Registered/connected-owner gating cannot preserve deliberate choice once a connected default is implicitly selected. A was disconnected in the reported smoke, so connected remote-query leakage remains a risk, not an observed result. The reported 138 passing cases and successful build do not negate the observed escape. The sole reported full-suite failure is an incidental spelling assertion incompatible with frozen row filenames; removing that test follows the stated policy without changing production naming. M1 identifies missing accessibility coverage, not a demonstrated rendering defect.\",\"must_fix\":[\"Preserve chooser intent through tab navigation until an explicit profile selection occurs; do not replace it with an ambient default or mount query-bearing children while unresolved.\",\"Remove the incidental filename-spelling test responsible for filename-conventions.test.ts:55. Do not rename the frozen kebab-case row files or repin their spelling in another assertion; preserve any unrelated behavioral tests.\",\"Reconcile the affected Agent Store removed-profile fallback documentation with the required denial behavior, and update the validation report with post-correction evidence before finalization.\"],\"cautions\":[\"Preserve intentional default-profile navigation outside the chooser flow; globally disabling defaults would exceed this correction.\",\"Do not repair the escape merely by suppressing requests while still displaying an implicitly selected profile; deliberate selection is itself part of the contract.\",\"Keep global profile/policy state unchanged. Exclude backend, protocol, root bridge, query API, and phase 4 display or live-harness work.\",\"The existing native keyboard and target-size observations concern isolated components, not phase 4 integration qualification.\"],\"assumptions\":[\"The caller must inspect the existing navigation encoder/parser before choosing the smallest representation-preserving fix; the excerpts do not establish the exact encoding that distinguishes chooser and default routes.\",\"The hook's intended limited-coverage explanation is defined in the existing component or contract; the checkpoint does not provide its accessible wording or semantics.\"],\"success_checks\":[\"In the actual browser, configure registered connected default A, enter ownerless Settings, and switch to Memory Files and the other available tabs. Expect unresolved selection throughout and zero remote Agent Store queries until explicit selection.\",\"From that chooser, explicitly select connected B while A remains the default. Expect B's content and B-owned queries only, with global default A unchanged. Separately confirm an intentionally default-profile route still resolves as designed.\",\"Exercise explicit disconnected B, a removed profile, and invalid/empty-profile denial routes through tab changes. Expect denial to persist, no fallback to A, and zero remote queries.\",\"Add a focused row regression using a limited-coverage hook state. Assert that assistive-technology-facing output conveys limited coverage without implying readiness or task success; assert semantics rather than incidental wording.\",\"After correction, run the focused behavioral cases, pnpm --filter @dam-hopper/ui test, and pnpm --filter @dam-hopper/ui build. Require passing results alongside the browser evidence, not as substitutes for it.\",\"Record actual post-correction results and the existing native Enter/Space evidence with their scope limits, complete another same-run review and user approval, and finalize only phases 1–3 without a phase 4 completion claim.\"],\"unresolved_questions\":[]}",
+      "prior_disposition": "{\"consultation_id\":\"bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8\",\"evidence_revision\":0,\"action\":\"accept\",\"rationale\":\"User selected Fix all issues. Accept bounded chooser ownership correction, focused hook accessibility regression, removal of incidental filename spelling test, affected architecture/validation report reconciliation. Declared validation uses the exact full-suite command reserved at checkpoint; build and browser are additional checks.\",\"correction\":{\"action_id\":\"ab4c2766-7830-4201-b0f5-1e0afa1052ae\",\"episode_id\":\"batch-a-review-cycle-1-fix-all\",\"validation_command\":\"pnpm --filter @dam-hopper/ui test\"}}",
+      "observed_outcome": "{\"consultation_id\":\"bd87cdfe-b9f9-4053-ba21-0acda6ccb2a8\",\"action_id\":\"ab4c2766-7830-4201-b0f5-1e0afa1052ae\",\"episode_id\":\"batch-a-review-cycle-1-fix-all\",\"result\":\"resolved\",\"validation\":{\"suite\":\"ui-full\",\"command\":\"pnpm --filter @dam-hopper/ui test\",\"status\":\"passed\",\"passed\":2694,\"failed\":0,\"details\":\"326/326 files passed; 143 affected cases. UI build exit0 additional; actual connected A/B chooser/selection/history/default/invalid/disconnected/removed smoke passed; scoped limits retained in report.\"},\"actual_changed_paths\":[\"docs/architecture/agent-store-ports-and-browser.md\",\"packages/ui/src/components/molecules/traditional-terminal-agent-row.test.tsx\",\"packages/ui/src/components/pages/AgentStorePage.test.tsx\",\"packages/ui/src/components/pages/AgentStorePage.tsx\",\"packages/ui/src/filename-conventions.test.ts\",\"plans/261008-0233-traditional-terminal-agents-sidebar/reports/07-batch-a-validation.md\"],\"evidence_revision\":1,\"correction_number\":1,\"recorded_at\":1791422879043,\"checkpoint_digest\":\"544f96a285609ace0f32898c6c2ecd9e108d7a2b2a9a71b7e589ce0e080ec995\",\"result_digest\":\"a07782eec3e5bddb8c866515c0607f13f11a56fe8eb30a3a76325b161c19c23c\",\"baseline_digest\":\"9a0307d6c4c10481806428765b2db747459313a370504a3e2984b2544731304f\"}"
+    }
+  },
+  "advice": {
+    "protocol": "evcrate-advisor-controller",
+    "version": 2,
+    "correlation_id": "ab9c8450-8308-41f6-a619-cf0d48d21287",
+    "task_run_id": "8f7a871c-e7f2-4ede-b024-b8aaf0dca977",
+    "checkpoint_id": "batch-a-review-step-4-cycle-2",
+    "task_revision": 6,
+    "evidence_revision": 1,
+    "checkpoint_digest": "49eada02d42a972658cb4c0f8f5f489c569be081e684d0aaa4285f472ec34035",
+    "status": "ADVICE_READY",
+    "receipt": {
+      "backend": "omp",
+      "model": "openai-codex/gpt-6-astra",
+      "effort": "high",
+      "controller_version": 2,
+      "adapter_version": "18.8.3",
+      "build_identity": "evcrate-advisor-v2-16505a41eea260ae",
+      "elapsed_ms": 33302
+    },
+    "attempts": [
+      {
+        "attempt_id": "7ee51f35-4d7d-4136-b131-8bbee9b120d9",
+        "slot": "primary",
+        "route": {
+          "backend": "omp",
+          "model": "openai-codex/gpt-6-astra",
+          "effort": "high"
+        },
+        "phase": "model",
+        "model_started": true,
+        "elapsed_ms": 28767,
+        "terminal_classification": "success",
+        "retry_delay_ms": null,
+        "cleanup_outcome": "confirmed"
+      }
+    ],
+    "result": {
+      "protocol": "evcrate-advisor-result",
+      "version": 2,
+      "checkpoint": "review:step-4",
+      "status": "ADVICE_READY",
+      "recommendation": "Request user approval for batch A now, explicitly limited to phases 1–3. After approval, register finalization of the three named phase documents and 07-batch-a-validation.md, with any Git index transitions individually scoped to approved changes. Keep sealed/read-only paths unchanged; publish phase-scoped receipts only through the separately authorized out-of-baseline mechanism after finalization.",
+      "rationale": "The supplied evidence supports requesting approval, not declaring completion. The prior defect allowed unresolved Settings navigation to acquire ambient owner A. AgentStorePage.tsx now disables tabs while profile.kind is \"choose\", preventing that transition until deliberate selection. The reported connected A/B browser exercise supplies behavioral evidence beyond passing tests: unresolved entry retains an empty target with zero Agent Store requests; selecting B produces successful B-only list/matrix requests without changing global A; history, ordinary default entry, and invalid/disconnected/removed denial behave as required. The accepted correction outcome also reports the accessibility regression, incidental filename-test removal, and architecture reconciliation complete. The reported 2694 passing tests, successful build, and second review support these observations but do not independently certify correctness. Substantive phase documentation, explicit user approval, and completion receipts remain pending.",
+      "must_fix": [],
+      "cautions": [
+        "Disabling chooser tabs deliberately prevents tab navigation before selection; preserve ordinary default-profile entry and tab navigation for resolved or denied explicit targets.",
+        "The native keyboard/44px evidence concerns isolated components. Neither it nor the authenticated fixture-browser smoke qualifies phase 4 display integration or the live harness.",
+        "Use the explicit authorized-path list, not the plan excerpt's broader path count, as the finalization boundary. Approval must not imply permission to modify the overview, contracts, sealed paths, or the user's untracked planning baseline.",
+        "Avoid blanket staging or index transitions that could include unrelated user changes."
+      ],
+      "assumptions": [
+        "The reported test, browser, and retained keyboard evidence applies to the current implementation revision; the second reviewer did not independently inspect the fresh validation results.",
+        "The reported exact identity/generation/outcome cases cover canonical ownership, unavailable reconnect readiness, and ended hints without task-success claims; individual assertions are not supplied here.",
+        "A separately authorized receipt destination exists outside the preserved baseline; no receipt path is authorized by this checkpoint's file list."
+      ],
+      "success_checks": [
+        "Record explicit user approval for phases 1–3 and the bounded finalization actions before performing them; do not treat the earlier 'Fix all issues' approval as final batch acceptance.",
+        "Finalize each phase document with its delivered behavior and applicable evidence. Record the supplied full-suite/build results, connected A/B browser outcomes, retained native keyboard evidence, and their scope limits in the validation report without implying fresh execution or reviewer observation.",
+        "Confirm the finalization operation touches only its registered paths and approved index entries, leaving sealed/read-only paths and unrelated planning files unchanged.",
+        "Before issuing phase-scoped receipts, tie each phase's acceptance criteria to the corresponding evidence and completed documentation. Receipts must identify only phases 1–3 and make no phase 4 completion or live-harness qualification claim."
+      ],
+      "unresolved_questions": []
+    },
+    "audit_status": "recorded"
+  }
+}
