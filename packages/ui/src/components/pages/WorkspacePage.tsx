@@ -1813,7 +1813,7 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 terminalTabs={terminalTabs}
-                currentProjectName={selectedProjectId}
+                currentProjectId={selectedProjectId}
                 currentProjectRevision={activeProjectRevision}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
@@ -2608,9 +2608,12 @@ export default function WorkspacePage() {
         return;
       }
       setActiveProject(outcome.project);
+      const targetProject = target.profileId
+        ? { profileId: target.profileId, project: outcome.project }
+        : outcome.project;
       useProjectTargetStore
         .getState()
-        .selectTarget(outcome.project, outcome.worktreePath ?? null);
+        .selectTarget(targetProject, outcome.worktreePath ?? null);
     },
     [projects, setActiveProject, unavailableTargetsByProject],
   );

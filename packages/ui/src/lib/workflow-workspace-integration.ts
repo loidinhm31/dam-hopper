@@ -1,4 +1,5 @@
 import type { ProjectTargetRef } from "@/api/client.js";
+import { projectScopeKey } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
 export interface WorkflowTerminalCandidate {
@@ -169,7 +170,11 @@ export function resolveWorkflowTargetSelection({
   }
   if (target.worktreePath) {
     const rawPath = target.worktreePath.trim();
-    if (isPathUnavailable(rawPath, unavailableTargetsByProject?.[projectName])) {
+    const scopeKey = projectScopeKey(target);
+    const unavailableList =
+      unavailableTargetsByProject?.[scopeKey] ??
+      (target.profileId ? undefined : unavailableTargetsByProject?.[projectName]);
+    if (isPathUnavailable(rawPath, unavailableList)) {
       return {
         canSelect: false,
         project: projectName,

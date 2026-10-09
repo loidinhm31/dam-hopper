@@ -15,6 +15,7 @@ import {
   getLocallyStoppedSessionMarker,
   isSameSessionIdentity,
   reconcileTerminalTargetError,
+  resolveTerminalLaunchForProject,
 } from "./use-terminal-manager.js";
 
 describe("buildTerminalDisplayTabs", () => {
@@ -349,5 +350,101 @@ describe("reconcileTerminalTargetError", () => {
     expect(
       useProjectTargetStore.getState().unavailableTargetsByProject,
     ).toEqual({});
+  });
+});
+
+describe("resolveTerminalLaunchForProject", () => {
+  const projects = [
+    {
+      name: "demo",
+      path: "/workspace/server-a/demo",
+      profileId: "server-a",
+    },
+    {
+      name: "demo",
+      path: "/workspace/server-b/demo",
+      profileId: "server-b",
+    },
+    {
+      name: "legacy",
+      path: "/workspace/legacy",
+    },
+  ];
+
+  beforeEach(() => {
+    useProjectTargetStore.setState({
+      activeTargetByProject: {},
+      unavailableTargetByProject: {},
+      unavailableTargetsByProject: {},
+    });
+  });
+
+  it("resolves exact owner configured root and ignores same-named projects on other profiles", () => {
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+    );
+    expect(launchA.cwd).toBe("/workspace/server-a/demo");
+    expect(launchA.worktreePath).toBeUndefined();
+
+    const launchB = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-b", project: "demo" },
+    );
+    expect(launchB.cwd).toBe("/workspace/server-b/demo");
+    expect(launchB.worktreePath).toBeUndefined();
+  });
+
+  it("fails closed when qualified owner profile is missing or disconnected", () => {
+    const launchMissing = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-missing", project: "demo" },
+    );
+    // Must NOT fall back to server-a or server-b
+    expect(launchMissing.cwd).toBeUndefined();
+  });
+
+  it("reads store synchronously at dispatch time to resolve exact owner worktree", () => {
+    // Select worktree immediately before launch dispatch
+    useProjectTargetStore.getState().selectTarget(
+      { profileId: "server-a", project: "demo" },
+      "/tmp/server-a-feature",
+    );
+
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+      "/workspace/server-a/demo/packages/core",
+    );
+    expect(launchA.cwd).toBe("packages/core");
+    expect(launchA.worktreePath).toBe("/tmp/server-a-feature");
+    expect(launchA.displayCwd).toBe("/tmp/server-a-feature/packages/core");
+  });
+
+  it("does not inherit worktree from another profile or bare key with same project name", () => {
+    // Bare "demo" and server-b have selected worktrees
+    useProjectTargetStore.getState().selectTarget("demo", "/tmp/bare-demo-wt");
+    useProjectTargetStore.getState().selectTarget(
+      { profileId: "server-b", project: "demo" },
+      "/tmp/server-b-wt",
+    );
+
+    // Server A has NO worktree selected (remains at root)
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+    );
+    // Must be at server-a root, NOT in server-b-wt or bare-demo-wt
+    expect(launchA.cwd).toBe("/workspace/server-a/demo");
+    expect(launchA.worktreePath).toBeUndefined();
+  });
+
+  it("preserves unqualified behavior for legacy callers", () => {
+    useProjectTargetStore.getState().selectTarget("legacy", "/tmp/legacy-wt");
+    const launch = resolveTerminalLaunchForProject(
+      projects,
+      { project: "legacy" },
+    );
+    expect(launch.worktreePath).toBe("/tmp/legacy-wt");
   });
 });

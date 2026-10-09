@@ -10,6 +10,7 @@ import { parseProjectKey, projectKey, parseTerminalKey, terminalKey, type Connec
 import { api, isProjectTargetError } from "@/api/client.js";
 import {
   markProjectTargetUnavailable,
+  projectScopeKey,
   useProjectTargetStore,
 } from "@/stores/project-target.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
@@ -283,6 +284,31 @@ export function reconcileTerminalTargetError(
       : { ...target, worktreePath };
   markProjectTargetUnavailable(targetRef);
 }
+export function resolveTerminalLaunchForProject(
+  projects: ReadonlyArray<{ name: string; path?: string; profileId?: string }>,
+  target: ProjectRef,
+  requestedCwd?: string,
+  projectPathOverride?: string,
+) {
+  const projectPath =
+    projectPathOverride ??
+    (target.profileId
+      ? projects.find(
+          (project) =>
+            project.profileId === target.profileId &&
+            project.name === target.project,
+        )?.path
+      : projects.find((project) => project.name === target.project)?.path);
+  const scopeKey = projectScopeKey(target);
+  const worktreeTarget =
+    useProjectTargetStore.getState().activeTargetByProject[scopeKey];
+  return getTerminalLaunchRequest(
+    projectPath,
+    worktreeTarget,
+    requestedCwd,
+  );
+}
+
 
 export function findSessionMeta(
   sessionId: string,
@@ -453,9 +479,6 @@ export function useTerminalManager(
   } = options;
   const qc = useQueryClient();
   const { tree, freeTerminals, isLoading, projects, sessions, hasSnapshot: hasTerminalSessionSnapshot } = useTerminalTree();
-  const activeTargetByProject = useProjectTargetStore(
-    (state) => state.activeTargetByProject,
-  );
 
   // A qualified identifier is an opaque UI key. Never resolve it against focus.
   function requireProject(key: string): QualifiedProjectRef {
@@ -864,21 +887,11 @@ export function useTerminalManager(
     requestedCwd?: string,
     projectPathOverride?: string,
   ) {
-    const projectPath =
-      projectPathOverride ??
-      projects.find(
-        (project) =>
-          (target.profileId ? project.profileId === target.profileId : true) &&
-          project.name === target.project,
-      )?.path ??
-      projects.find((project) => project.name === target.project)?.path;
-    const worktreeTarget =
-      (target.profileId ? activeTargetByProject[projectKey(target)] : undefined) ??
-      activeTargetByProject[target.project];
-    return getTerminalLaunchRequest(
-      projectPath,
-      worktreeTarget,
+    return resolveTerminalLaunchForProject(
+      projects,
+      target,
       requestedCwd,
+      projectPathOverride,
     );
   }
 

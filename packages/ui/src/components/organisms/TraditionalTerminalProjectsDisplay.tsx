@@ -17,7 +17,7 @@ import {
   getProfiles,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
-import { parseTerminalKey, terminalKey } from "@/api/ownership.js";
+import { parseTerminalKey, projectKey, terminalKey } from "@/api/ownership.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import {
   Dialog,
@@ -42,6 +42,7 @@ import {
   traditionalTerminalLayoutStorageKey,
   traditionalTerminalProjectPanelId,
   traditionalTerminalProjectTabId,
+  type TraditionalTerminalProjectGroup,
 } from "@/lib/traditional-terminal-projects.js";
 import { buildAgentSettingsHref } from "@/lib/agent-store-navigation.js";
 import { buildTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-agents.js";
@@ -51,17 +52,25 @@ import { cn } from "@/lib/utils.js";
 const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
   "dam-hopper:traditional-projects-navigator-width";
 
+function groupProjectTargetId(
+  group?: Pick<TraditionalTerminalProjectGroup, "projectRef" | "projectName"> | null,
+): string | null {
+  if (!group) return null;
+  if (group.projectRef) return projectKey(group.projectRef);
+  return group.projectName;
+}
+
 export interface TraditionalTerminalProjectsDisplayProps {
   activeSessionId: string | null;
   mountedSessions: MountedSession[];
   terminalTabs: DisplayTabEntry[];
-  currentProjectName: string | null;
+  currentProjectId: string | null;
   currentProjectRevision: number;
   layoutRevision?: number;
   renderTerminals?: boolean;
   profileId?: string;
   onSessionExit?: (sessionId: string) => void;
-  onNewProjectTerminal?: (projectName: string) => void;
+  onNewProjectTerminal?: (projectId: string) => void;
   onNewFreeTerminal?: (projectId?: string) => void;
   onSelectTab?: (sessionId: string) => void;
   onToggleTabPin?: (sessionId: string) => void;
@@ -78,7 +87,7 @@ export function TraditionalTerminalProjectsDisplay({
   activeSessionId,
   mountedSessions,
   terminalTabs,
-  currentProjectName,
+  currentProjectId,
   currentProjectRevision,
   layoutRevision = 0,
   renderTerminals = false,
@@ -223,9 +232,9 @@ export function TraditionalTerminalProjectsDisplay({
     return members;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalSurfaceMountedSessionsKey]);
-  const selectedGroupProjectName = selectedGroup?.projectName ?? null;
+  const selectedGroupProjectTargetId = groupProjectTargetId(selectedGroup);
   const settingsProfileId =
-    selectedGroupProjectName &&
+    selectedGroup?.projectName &&
     selectedGroup?.profileId &&
     (!selectedGroup.projectRef ||
       selectedGroup.projectRef.profileId === selectedGroup.profileId) &&
@@ -238,13 +247,12 @@ export function TraditionalTerminalProjectsDisplay({
         group.terminalTabs.some((tab) => tab.sessionId === activeSessionId),
       )
     : undefined;
+  const activeSessionGroupProjectTargetId = groupProjectTargetId(activeSessionGroup);
   const [newTerminalTargetState, setNewTerminalTargetState] = useState(() => ({
-    projectName:
-      currentProjectName === null
+    projectId:
+      currentProjectId === null
         ? null
-        : activeSessionGroup
-          ? activeSessionGroup.projectName
-          : selectedGroupProjectName,
+        : (activeSessionGroupProjectTargetId ?? selectedGroupProjectTargetId),
     currentProjectRevision,
     activeSessionId,
   }));
@@ -253,14 +261,14 @@ export function TraditionalTerminalProjectsDisplay({
   const activeSessionChanged =
     newTerminalTargetState.activeSessionId !== activeSessionId;
   const newTerminalProjectTarget = currentProjectChanged
-    ? currentProjectName
+    ? currentProjectId
     : activeSessionChanged
-      ? selectedGroupProjectName
-      : newTerminalTargetState.projectName;
+      ? selectedGroupProjectTargetId
+      : newTerminalTargetState.projectId;
 
-  function rememberNewTerminalTarget(projectName: string | null) {
+  function rememberNewTerminalTarget(projectId: string | null) {
     setNewTerminalTargetState({
-      projectName,
+      projectId,
       currentProjectRevision,
       activeSessionId,
     });
@@ -269,7 +277,7 @@ export function TraditionalTerminalProjectsDisplay({
   function handleSelectGroup(groupId: string) {
     const group = groups.find((candidate) => candidate.id === groupId);
     if (!group) return;
-    rememberNewTerminalTarget(group.projectName);
+    rememberNewTerminalTarget(groupProjectTargetId(group));
     selection.handleSelectGroup(groupId);
     setProjectsSheetOpen(false);
   }
@@ -278,10 +286,9 @@ export function TraditionalTerminalProjectsDisplay({
     const group = groups.find((candidate) =>
       candidate.terminalTabs.some((tab) => tab.sessionId === sessionId),
     );
-    if (group) rememberNewTerminalTarget(group.projectName);
+    if (group) rememberNewTerminalTarget(groupProjectTargetId(group));
     selection.handleSelectTab(sessionId);
   }
-
   // Publish only committed membership/selection. A retained old row callback
   // must not select a removed terminal or a replacement PTY with the same ID.
   useLayoutEffect(() => {
@@ -312,9 +319,9 @@ export function TraditionalTerminalProjectsDisplay({
   }
 
   function handleNewTerminal() {
-    const targetProjectName = newTerminalProjectTarget;
-    if (targetProjectName) {
-      onNewProjectTerminal?.(targetProjectName);
+    const targetProjectId = newTerminalProjectTarget;
+    if (targetProjectId) {
+      onNewProjectTerminal?.(targetProjectId);
     } else {
       onNewFreeTerminal?.();
     }
