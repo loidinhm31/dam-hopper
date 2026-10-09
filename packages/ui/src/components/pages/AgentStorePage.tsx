@@ -191,7 +191,11 @@ function ConnectedAgentStore({
     isError: itemsError,
   } = useAgentStoreItems(undefined, { owner });
   const { data: matrix = {}, isError: matrixError } = useAgentStoreMatrix({ owner });
-  const { data: projects = [], isError: projectsError } = useProjects({ owner });
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+  } = useProjects({ owner });
   const [selectedItem, setSelectedItem] = useState<AgentStoreItem | null>(null);
   const [showShipDialog, setShowShipDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -300,9 +304,13 @@ function ConnectedAgentStore({
                 "clamp(400px, calc(var(--app-viewport-height) * 0.6), 640px)",
             }}
           >
-            <Suspense fallback={AGENT_STORE_FALLBACK}>
-              <MemoryEditor projects={projects} owner={owner} profileId={profileId} />
-            </Suspense>
+            {projectsLoading ? (
+              AGENT_STORE_FALLBACK
+            ) : (
+              <Suspense fallback={AGENT_STORE_FALLBACK}>
+                <MemoryEditor projects={projects} owner={owner} profileId={profileId} />
+              </Suspense>
+            )}
           </div>
         )}
 

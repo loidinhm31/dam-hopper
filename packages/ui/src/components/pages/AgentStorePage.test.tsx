@@ -484,4 +484,21 @@ describe("AgentStorePage profile navigation", () => {
     expect(container.textContent).toContain("B-2-skill");
     expectOwner("Health", "B", 2);
   });
+
+  it("delays MemoryEditor mounting until owner projects query resolves", async () => {
+    let resolveProjects!: (projects: ProjectConfig[]) => void;
+    const pendingProjects = new Promise<ProjectConfig[]>((resolve) => {
+      resolveProjects = resolve;
+    });
+    state.clients.get(JSON.stringify({ profileId: "B", generation: 1 }))!.projects.list.mockReturnValue(pendingProjects);
+    await render("/agent-store?tab=memory&profileId=B");
+    expect(container.textContent).toContain("Loading agent store…");
+    expect(panel("Memory editor")).toBeNull();
+    await act(async () => {
+      resolveProjects([{ name: "deferred-project" } as ProjectConfig]);
+      await pendingProjects;
+    });
+    await waitForPanel("Memory editor");
+    expectOwner("Memory editor", "B", 1);
+  });
 });

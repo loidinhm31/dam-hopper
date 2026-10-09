@@ -161,4 +161,32 @@ describe("MemoryEditor", () => {
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
+
+  it("reconciles projectName when projects arrive after initial empty render", async () => {
+    await act(async () => {
+      root?.render(<MemoryEditor projects={[]} />);
+    });
+    expect(container?.textContent).toContain("No projects in workspace");
+
+    await act(async () => {
+      root?.render(<MemoryEditor projects={mockProjects} />);
+    });
+
+    const select = container?.querySelector<HTMLSelectElement>("select");
+    expect(select).toBeTruthy();
+    expect(select?.value).toBe("project-1");
+  });
+
+  it("reconciles projectName when currently selected project is removed from projects", async () => {
+    await act(async () => {
+      root?.render(<MemoryEditor projects={mockProjects} />);
+    });
+    const select = container?.querySelector<HTMLSelectElement>("select");
+    expect(select?.value).toBe("project-1");
+
+    await act(async () => {
+      root?.render(<MemoryEditor projects={[{ name: "project-2", path: "/path/2" }]} />);
+    });
+    expect(select?.value).toBe("project-2");
+  });
 });

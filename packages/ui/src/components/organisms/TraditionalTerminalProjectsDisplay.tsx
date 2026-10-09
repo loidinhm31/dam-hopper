@@ -181,7 +181,6 @@ export function TraditionalTerminalProjectsDisplay({
         profiles: statusProfiles,
         connections,
         profileLabels,
-        nowMs: Date.now(),
       }),
     [rosterGroups, statusProfiles, connections, profileLabels],
   );
@@ -199,42 +198,31 @@ export function TraditionalTerminalProjectsDisplay({
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
-  const selectedGroupId = selectedGroup?.id ?? null;
-  const mountedMembershipSignature = JSON.stringify(
-    selectedGroup?.mountedSessions.map((session) => session.sessionId) ?? [],
-  );
   // Status-bearing tabs or session renames rebuild groups/mountedSessions,
   // but unchanged PTY membership must not retrigger MultiTerminalDisplay's
   // prune/reparent/fit path and steal focus.
-  const prevTerminalSurfaceMountedSessionsRef = useRef<MountedSession[]>([]);
+  const terminalSurfaceMountedSessionsKey = useMemo(() => {
+    if (!selectedGroup) return "";
+    return selectedGroup.mountedSessions
+      .map(
+        (s) =>
+          `${s.sessionId}:${s.project}:${s.command}:${s.cwd ?? ""}:${s.worktreePath ?? ""}:${s.profileId ?? ""}:${s.terminalRef?.id ?? ""}:${s.terminalRef?.profileId ?? ""}`,
+      )
+      .join("|");
+  }, [selectedGroup]);
   const terminalSurfaceMountedSessions = useMemo(() => {
+    if (!selectedGroup) return [];
     const canonicalById = new Map(
       mountedSessions.map((session) => [session.sessionId, session]),
     );
-    const memberIds: string[] = JSON.parse(mountedMembershipSignature);
     const members: MountedSession[] = [];
-    for (const sessionId of memberIds) {
-      const session = canonicalById.get(sessionId);
-      if (session) members.push(session);
+    for (const s of selectedGroup.mountedSessions) {
+      const canonical = canonicalById.get(s.sessionId);
+      if (canonical) members.push(canonical);
     }
-    const prev = prevTerminalSurfaceMountedSessionsRef.current;
-    const same =
-      prev.length === members.length &&
-      prev.every(
-        (prevSession, index) =>
-          prevSession.sessionId === members[index]?.sessionId &&
-          prevSession.project === members[index]?.project &&
-          prevSession.profileId === members[index]?.profileId &&
-          prevSession.terminalRef?.id === members[index]?.terminalRef?.id &&
-          prevSession.terminalRef?.profileId ===
-            members[index]?.terminalRef?.profileId,
-      );
-    if (same) {
-      return prev;
-    }
-    prevTerminalSurfaceMountedSessionsRef.current = members;
     return members;
-  }, [mountedSessions, selectedGroupId, mountedMembershipSignature]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalSurfaceMountedSessionsKey]);
   const selectedGroupProjectName = selectedGroup?.projectName ?? null;
   const settingsProfileId =
     selectedGroupProjectName &&

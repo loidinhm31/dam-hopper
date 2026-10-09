@@ -46,7 +46,6 @@ export interface BuildTraditionalTerminalAgentsInput {
   readonly profiles: AgentStatusProfilesView;
   readonly connections: ReadonlyMap<string, ConnectionSnapshot>;
   readonly profileLabels: ReadonlyMap<string, string>;
-  readonly nowMs: number;
 }
 
 const HARNESS_LABELS = { omp: "OMP", codex: "Codex", claude: "Claude" } as const;
@@ -69,7 +68,6 @@ function qualifiedRef(
 function present(
   status: TerminalAgentStatusRow,
   availability: AgentStatusPresentationAvailability | null,
-  nowMs: number,
 ): TraditionalTerminalAgentPresentation {
   let label: TraditionalAgentStatusLabel = "Unavailable";
   let reasonLabel: TraditionalTerminalAgentPresentation["reasonLabel"] = null;
@@ -77,23 +75,19 @@ function present(
   if (availability === "platform-unqualified") label = "Platform unqualified";
   else if (availability === "unsupported") label = "Unsupported";
   else if (availability === "ready") {
-    if (status.expiresAtMs !== undefined && status.expiresAtMs <= nowMs) {
-      label = "Unknown";
-    } else {
-      switch (status.state) {
-        case "unknown": label = "Unknown"; break;
-        case "working": label = "Working"; break;
-        case "blocked":
-          label = "Needs attention";
-          reasonLabel = status.reason === undefined ? null : REASON_LABELS[status.reason];
-          break;
-        case "idle":
-          label = "Idle";
-          if (status.lastOutcome === "ended" && status.turnId === undefined) {
-            outcomeHint = "Done (turn ended)";
-          }
-          break;
-      }
+    switch (status.state) {
+      case "unknown": label = "Unknown"; break;
+      case "working": label = "Working"; break;
+      case "blocked":
+        label = "Needs attention";
+        reasonLabel = status.reason === undefined ? null : REASON_LABELS[status.reason];
+        break;
+      case "idle":
+        label = "Idle";
+        if (status.lastOutcome === "ended" && status.turnId === undefined) {
+          outcomeHint = "Done (turn ended)";
+        }
+        break;
     }
   }
   return {
@@ -164,7 +158,7 @@ export function buildTraditionalTerminalAgentRows(
         statusOwner: profile.owner,
         availability,
         status,
-        presentation: present(status, availability, input.nowMs),
+        presentation: present(status, availability),
       });
     }
   }

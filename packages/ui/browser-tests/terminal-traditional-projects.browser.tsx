@@ -1187,9 +1187,9 @@ describe("Traditional terminal projects in Chromium", () => {
         { patch: { state: "blocked" as const, reason: "approval" as const }, label: "Needs attention: Approval" },
         { patch: { state: "unknown" as const, turnId: undefined }, label: "Unknown" },
         { patch: { state: "idle" as const, lastOutcome: "interrupted" as const }, label: "Idle" },
-        { patch: { state: "idle" as const, lastOutcome: "ended" as const, expiresAtMs: Date.now() - 1 }, label: "Unknown" },
+        { patch: { state: "unknown" as const, lastOutcome: "ended" as const }, label: "Unknown" },
         { patch: { state: "idle" as const, turnId: undefined, reason: undefined,
-            lastOutcome: "ended" as const, expiresAtMs: undefined }, label: "Idle" },
+            lastOutcome: "ended" as const }, label: "Idle" },
       ]) {
         metadataRevision += 1;
         await act(async () => {

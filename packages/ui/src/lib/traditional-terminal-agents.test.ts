@@ -81,7 +81,7 @@ function fixture(
   }]]);
   const profileLabels = new Map([[profileId, `Server ${profileId}`]]);
   return {
-    input: { groups: [group], profiles, connections, profileLabels, nowMs: 1_000 },
+    input: { groups: [group], profiles, connections, profileLabels },
     group, tab, mounted, status, profile, profiles, connections, profileLabels,
   };
 }
@@ -304,22 +304,17 @@ describe("observed semantics and strict last-turn fact", () => {
     expect(buildTraditionalTerminalAgentRows(f.input)[0].presentation.outcomeHint).toBeNull();
   });
 
-  it.each(["codex", "claude"] as const)("expires %s hook evidence at the exact boundary", (agentKind) => {
+  it.each(["codex", "claude"] as const)("preserves server-authoritative %s hook state without client clock skew", (agentKind) => {
     const f = fixture({ agentKind, source: "hook", observedAtMs: 900, expiresAtMs: 1_000, lastOutcome: "ended" });
-    expect(buildTraditionalTerminalAgentRows({ ...f.input, nowMs: 999 })[0].presentation).toMatchObject({
+    expect(buildTraditionalTerminalAgentRows(f.input)[0].presentation).toMatchObject({
       label: "Idle", outcomeHint: "Done (turn ended)",
     });
-    for (const nowMs of [1_000, 1_001]) {
-      const row = buildTraditionalTerminalAgentRows({ ...f.input, nowMs })[0];
-      expect(row.status).toBe(f.status);
-      expect(row.presentation).toMatchObject({ label: "Unknown", reasonLabel: null, outcomeHint: null });
-    }
   });
 
-  it("expiry outranks a blocked reason while preserving hook coverage", () => {
+  it("preserves authoritative blocked reason without client clock comparison", () => {
     const f = fixture({ agentKind: "claude", source: "hook", state: "blocked", reason: "question", observedAtMs: 900, expiresAtMs: 1_000 });
     expect(buildTraditionalTerminalAgentRows(f.input)[0].presentation).toMatchObject({
-      label: "Unknown", reasonLabel: null, sourceLabel: "Hook observation", coverageHint: expect.any(String),
+      label: "Needs attention", reasonLabel: "Question", sourceLabel: "Hook observation", coverageHint: expect.any(String),
     });
   });
 
