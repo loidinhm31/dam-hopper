@@ -153,6 +153,10 @@ vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
   TerminalWorkspaceShell: () => <div data-shell="terminal" />,
 }));
 
+vi.mock("@/components/organisms/TerminalKeepAliveHost.js", () => ({
+  TerminalKeepAliveHost: () => null,
+}));
+
 vi.mock("@/components/templates/MobileWorkspaceShell.js", () => ({
   MobileWorkspaceShell: ({
     activeSurfaceId,
@@ -493,7 +497,6 @@ describe("WorkspacePage notification navigation in Chromium", () => {
     await act(async () => {
       dispatchTerminalNotificationSelection(SESSION_ID);
     });
-
     const shell = container.querySelector('[data-shell="mobile"]');
     expect(shell?.getAttribute("data-workspace-mode")).toBe("ide");
     expect(shell?.getAttribute("data-surface")).toBe("terminal");

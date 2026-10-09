@@ -2036,7 +2036,12 @@ export default function WorkspacePage() {
           Select a project to see Git status
         </div>
       ),
-    [projectName, projectTarget],
+    [
+      projectName,
+      projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
+    ],
   );
 
   const projectContent = useMemo(
@@ -2200,6 +2205,8 @@ export default function WorkspacePage() {
       terminalContent,
       portsContent,
       projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
     ],
   );
 
@@ -2252,7 +2259,12 @@ export default function WorkspacePage() {
         renderCompactPlaceholder("Select a project to see Git status")
       ),
     }),
-    [projectName, projectTarget],
+    [
+      projectName,
+      projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
+    ],
   );
 
   const compactProjectSurface = useMemo<MobileWorkspaceSurface>(
