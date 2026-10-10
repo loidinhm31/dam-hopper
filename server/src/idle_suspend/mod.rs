@@ -13,6 +13,7 @@ pub mod helper_client;
 pub mod helper_server;
 pub mod event;
 
+pub mod client_presence;
 pub(crate) mod activity;
 
 #[cfg(test)]
@@ -73,4 +74,10 @@ pub use event::{
     MeasurementUnavailableDataV1, ProducerIdentity, ReconciliationCompletedDataV1,
     ServerIdleSuspendEventTypeV1, ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
     DEFAULT_IDLE_SUSPEND_EVENTS_PATH, IDLE_SUSPEND_EVENT_SCHEMA_VERSION, MAX_EVENT_LINE_BYTES,
+};
+pub use client_presence::{
+    hash_capability, CapabilityVerificationError, ClientPresenceGuard, ClientPresenceRegistry,
+    LiveClientRecord, PendingReservation, PendingUpgradeGuard, PresenceAdmissionError,
+    PresenceClaimError, DEFAULT_MAX_PUBLIC_CLIENTS, HEARTBEAT_DEADLINE, HEARTBEAT_INTERVAL,
+    PENDING_UPGRADE_TIMEOUT,
 };

@@ -54,6 +54,7 @@ import {
   type PublishSnapshot,
   type TerminalLifecycle,
   type TerminalLifecycleEvent,
+  type UiConnectionFrame,
 } from "./client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
@@ -1747,6 +1748,11 @@ export class WsTransport implements Transport {
     Set<(message: string) => void>
   >();
 
+  /** Current connection decision capability receipt bound to this exact socket session. */
+  private currentUiConnection: UiConnectionFrame | null = null;
+  private uiConnectionListeners = new Set<
+    (receipt: UiConnectionFrame | null) => void
+  >();
   // ── FS subscription state ─────────────────────────────────────────────────
   private nextReqId = 1;
   private pendingFsReqs = new Map<
@@ -2285,12 +2291,22 @@ export class WsTransport implements Transport {
     this.fsOverflowListeners.clear();
     this.fsEventListeners.clear();
     this.bufferListeners.clear();
+    this.currentUiConnection = null;
+    this.uiConnectionListeners.forEach((cb) => {
+      try {
+        cb(null);
+      } catch (err) {
+        logger.error("WsTransport", "uiConnection listener error", err);
+      }
+    });
+    this.uiConnectionListeners.clear();
     this.failAllPending("transport destroyed");
   }
 
   private connect(): void {
     if (this.closed) return;
     this.messageKindCounts.clear();
+    this.currentUiConnection = null;
     this.setStatus("connecting");
 
     let wsProto: string;
@@ -2813,6 +2829,34 @@ export class WsTransport implements Transport {
             });
             break;
           }
+          case "host:uiConnection": {
+            const raw = msg as unknown as Record<string, unknown>;
+            if (
+              raw.version === 1 &&
+              typeof raw.connectionId === "string" &&
+              raw.connectionId.length > 0 &&
+              typeof raw.decisionCapability === "string" &&
+              raw.decisionCapability.length > 0
+            ) {
+              const receipt: UiConnectionFrame = {
+                kind: "host:uiConnection",
+                version: 1,
+                connectionId: raw.connectionId,
+                decisionCapability: raw.decisionCapability,
+              };
+              this.currentUiConnection = receipt;
+              this.uiConnectionListeners.forEach((cb) => {
+                try {
+                  cb(receipt);
+                } catch (err) {
+                  logger.error("WsTransport", "uiConnection listener error", err);
+                }
+              });
+            }
+            const payload = msg.payload ?? msg;
+            this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
+            break;
+          }
 
           default: {
             const payload = msg.payload ?? msg;
@@ -2845,6 +2889,14 @@ export class WsTransport implements Transport {
         reason,
       });
       this.failAllPending("WebSocket disconnected");
+      this.currentUiConnection = null;
+      this.uiConnectionListeners.forEach((cb) => {
+        try {
+          cb(null);
+        } catch (err) {
+          logger.error("WsTransport", "uiConnection listener error", err);
+        }
+      });
       this.setStatus("disconnected");
       if (this.onDrop) {
         this.onDrop(this, {
@@ -2874,6 +2926,14 @@ export class WsTransport implements Transport {
         messageKindCounts: this.messageKindCountsSnapshot(),
       });
       this.setStatus("error");
+      this.currentUiConnection = null;
+      this.uiConnectionListeners.forEach((cb) => {
+        try {
+          cb(null);
+        } catch (err) {
+          logger.error("WsTransport", "uiConnection listener error", err);
+        }
+      });
       try {
         capturedWs.close();
       } catch {}
@@ -3067,6 +3127,31 @@ export class WsTransport implements Transport {
     } finally {
       this.activeAbortControllers.delete(controller);
     }
+  }
+  /**
+   * Returns the current connection decision capability receipt bound to this exact socket session,
+   * or null if not currently connected.
+   */
+  public getUiConnectionReceipt(): UiConnectionFrame | null {
+    return this.currentUiConnection;
+  }
+
+  /**
+   * Subscribes to changes in the connection decision capability receipt.
+   * Immediately calls listener with current receipt upon subscription.
+   */
+  public subscribeUiConnection(
+    listener: (receipt: UiConnectionFrame | null) => void,
+  ): () => void {
+    this.uiConnectionListeners.add(listener);
+    try {
+      listener(this.currentUiConnection);
+    } catch (err) {
+      logger.error("WsTransport", "uiConnection listener initial error", err);
+    }
+    return () => {
+      this.uiConnectionListeners.delete(listener);
+    };
   }
 
   onTerminalData(

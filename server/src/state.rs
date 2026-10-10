@@ -127,6 +127,8 @@ pub struct AppState {
         Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
+    /// Bounded in-memory registry for public WebSocket presence, liveness, and session binding.
+    pub client_presence: Arc<crate::idle_suspend::ClientPresenceRegistry>,
     /// Authentication and session policy service.
     pub auth_service: Arc<crate::auth::AuthService>,
     /// Agent status runtime coordinating credentials, admission, and semantic events.
@@ -419,6 +421,7 @@ impl AppState {
             idle_suspend_coordinator: Arc::new(RwLock::new(None)),
             idle_suspend_event_writer,
             fallback_warning_onset_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
+            client_presence: crate::idle_suspend::ClientPresenceRegistry::new(),
             auth_service,
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
             advisor_service: Arc::new(crate::advisor::AdvisorService::new(
@@ -439,6 +442,14 @@ impl AppState {
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
         self.auth_service = auth_service;
+        self
+    }
+    /// Override the client presence registry handle (used for testing or custom capacity injection).
+    pub fn with_client_presence(
+        mut self,
+        client_presence: Arc<crate::idle_suspend::ClientPresenceRegistry>,
+    ) -> Self {
+        self.client_presence = client_presence;
         self
     }
     /// Attach the live agent status runtime.

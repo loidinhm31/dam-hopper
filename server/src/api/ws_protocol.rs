@@ -538,12 +538,22 @@ pub enum ServerMsg {
         session_id: String,
         incarnation: u64,
     },
+    #[serde(rename = "host:uiConnection")]
+    UiConnection {
+        version: u32,
+        #[serde(rename = "connectionId")]
+        connection_id: String,
+        #[serde(rename = "decisionCapability")]
+        decision_capability: String,
+    },
 }
 
-/// Wire message — either a JSON text frame, raw binary frame, or close signal.
+/// Wire message — either a JSON text frame, raw binary frame, ping/pong control frame, or close signal.
 pub enum WireMsg {
     Text(String),
     Binary(Vec<u8>),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
     /// Signal the writer task to send a close frame with the given code.
     CloseOverflow,
     CloseAuth {
@@ -557,7 +567,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_ui_connection_frame_serialization() {
+        let msg = ServerMsg::UiConnection {
+            version: 1,
+            connection_id: "conn-abc-123".to_string(),
+            decision_capability: "cap-sec-456".to_string(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["kind"], "host:uiConnection");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["connectionId"], "conn-abc-123");
+        assert_eq!(json["decisionCapability"], "cap-sec-456");
+    }
+
+    #[test]
     fn test_terminal_exit_enhanced_serialization() {
+
         // Full payload with all optional fields
         let msg_full = ServerMsg::TermExit {
             id: "test-123".to_string(),

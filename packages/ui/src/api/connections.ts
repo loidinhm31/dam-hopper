@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import type { ApiClient } from "./client.js";
+import type { ApiClient, UiConnectionFrame } from "./client.js";
 import { createApiClient } from "./client.js";
 import {
   type Transport,
@@ -734,6 +734,40 @@ export function getMediaClientIdForProfile(profileId: ProfileId): string {
   const snap = getConnectionSnapshot(profileId);
   const owner: ConnectionRef = snap?.owner ?? { profileId, generation: 1 };
   return getMediaClientId(owner);
+}
+/**
+ * Returns the current connection decision capability receipt bound to this exact owner,
+ * or null if stale, disconnected, or non-WS transport.
+ * Strictly checks isCurrentConnection(owner) with no ambient fallback.
+ */
+export function getUiConnectionReceipt(
+  owner: ConnectionRef,
+): UiConnectionFrame | null {
+  if (!isCurrentConnection(owner)) return null;
+  const entry = entries.get(owner.profileId);
+  if (!entry || !entry.transport) return null;
+  return entry.transport.getUiConnectionReceipt?.() ?? null;
+}
+
+/**
+ * Subscribes to changes in the connection decision capability receipt for an exact owner.
+ * If owner is not currently connected, fires immediately with null.
+ * Strictly scoped to owner; invalidation or replacement unhooks cleanly.
+ */
+export function subscribeUiConnectionReceipt(
+  owner: ConnectionRef,
+  listener: (receipt: UiConnectionFrame | null) => void,
+): () => void {
+  if (!isCurrentConnection(owner)) {
+    listener(null);
+    return () => {};
+  }
+  const entry = entries.get(owner.profileId);
+  if (!entry || !entry.transport || !entry.transport.subscribeUiConnection) {
+    listener(null);
+    return () => {};
+  }
+  return entry.transport.subscribeUiConnection(listener);
 }
 export function subscribeConnections(listener: () => void): () => void {
   listeners.add(listener);
