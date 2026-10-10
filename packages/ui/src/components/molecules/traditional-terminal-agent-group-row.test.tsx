@@ -4,11 +4,19 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminalInstanceKey, terminalKey } from "@/api/ownership.js";
+import {
+  groupTraditionalTerminalAgentRows,
+  type TraditionalTerminalAgentStatusGroup,
+} from "@/lib/traditional-terminal-agent-groups.js";
 import type { TraditionalTerminalAgentRow as RowModel } from "@/lib/traditional-terminal-agents.js";
-import { TraditionalTerminalAgentRow } from "./traditional-terminal-agent-row.js";
+import { TraditionalTerminalAgentGroupRow } from "./traditional-terminal-agent-group-row.js";
 
-function makeRow(profileId = "server-a"): RowModel {
-  const terminalRef = { profileId, id: "terminal-1" };
+function makeRow(
+  profileId = "server-a",
+  id = "terminal-1",
+  harnessLabel: RowModel["harnessLabel"] = "Codex",
+): RowModel {
+  const terminalRef = { profileId, id };
   return {
     key: terminalInstanceKey({ ...terminalRef, incarnation: 2 }),
     sessionId: terminalKey(terminalRef),
@@ -17,12 +25,12 @@ function makeRow(profileId = "server-a"): RowModel {
     groupId: `project-${profileId}`,
     projectLabel: profileId === "server-a" ? "Editor" : "Website",
     profileLabel: profileId === "server-a" ? "Development" : "Production",
-    terminalTitle: "Shared terminal title with a long descriptive suffix",
-    harnessLabel: "Codex",
+    terminalTitle: `Shared terminal title ${id}`,
+    harnessLabel,
     statusOwner: { profileId, generation: 3 },
     availability: "ready",
     status: {
-      id: terminalRef.id, incarnation: 2, agentKind: "codex",
+      id, incarnation: 2, agentKind: "codex",
       agentSessionId: "private-agent-id", reporterEpoch: 4,
       state: "working", source: "hook", attentionRevision: 0,
     },
@@ -34,7 +42,13 @@ function makeRow(profileId = "server-a"): RowModel {
   };
 }
 
-describe("TraditionalTerminalAgentRow", () => {
+function groupOf(...rows: RowModel[]): TraditionalTerminalAgentStatusGroup {
+  const groups = groupTraditionalTerminalAgentRows(rows);
+  expect(groups).toHaveLength(1);
+  return groups[0]!;
+}
+
+describe("TraditionalTerminalAgentGroupRow", () => {
   let container: HTMLDivElement;
   let root: Root;
   const onSelectAgent = vi.fn();
@@ -50,39 +64,57 @@ describe("TraditionalTerminalAgentRow", () => {
     container.remove();
   });
 
-  function renderRow(row = makeRow(), active = false): HTMLButtonElement {
+  function renderGroup(group: TraditionalTerminalAgentStatusGroup, activeSessionId: string | null = null) {
     act(() => root.render(
-      <TraditionalTerminalAgentRow row={row} active={active} onSelectAgent={onSelectAgent} touchOptimized />,
+      <TraditionalTerminalAgentGroupRow group={group} activeSessionId={activeSessionId} onSelectAgent={onSelectAgent} touchOptimized />,
     ));
     return container.querySelector("button")!;
   }
 
-  it("exposes full context and selects the exact qualified terminal once", () => {
+  it("keeps a single agent's full context, count badge 1, and selects its exact terminal", () => {
     const row = makeRow();
-    const button = renderRow(row, true);
+    const button = renderGroup(groupOf(row), row.sessionId);
     expect(button.type).toBe("button");
-    expect(button.getAttribute("role")).toBeNull();
-    expect(button.getAttribute("aria-controls")).toBeNull();
     expect(button.getAttribute("aria-current")).toBe("true");
+    expect(button.getAttribute("aria-label")).toMatch(/^Codex: Shared terminal title terminal-1; Project: Editor; Server profile: Development; Working$/);
     for (const context of [row.terminalTitle, row.harnessLabel, row.projectLabel, row.profileLabel]) {
-      expect(button.getAttribute("aria-label")).toContain(context);
       expect(button.textContent).toContain(context);
     }
+    expect(button.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("1");
     expect(button.textContent).not.toContain(row.status.agentSessionId);
     expect(button.getAttribute("aria-label")).not.toContain(row.sessionId);
     act(() => button.click());
     expect(onSelectAgent).toHaveBeenCalledExactlyOnceWith(row.sessionId);
-    renderRow(row, false);
+  });
+
+  it("shows one item with a count badge for several agents and cycles members on activation", () => {
+    const a = makeRow("server-a", "t-a", "OMP");
+    const b = makeRow("server-a", "t-b", "Claude");
+    const c = makeRow("server-a", "t-c", "OMP");
+    const group = groupOf(a, b, c);
+    const button = renderGroup(group);
+    expect(button.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("3");
+    expect(button.getAttribute("aria-label")).toBe("OMP, Claude: 3 agents; Project: Editor; Server profile: Development; Working");
+    expect(button.textContent).not.toContain("Shared terminal title");
     expect(button.hasAttribute("aria-current")).toBe(false);
+    act(() => button.click());
+    expect(onSelectAgent).toHaveBeenLastCalledWith(a.sessionId);
+    renderGroup(group, a.sessionId);
+    expect(button.getAttribute("aria-current")).toBe("true");
+    act(() => button.click());
+    expect(onSelectAgent).toHaveBeenLastCalledWith(b.sessionId);
+    renderGroup(group, c.sessionId);
+    act(() => button.click());
+    expect(onSelectAgent).toHaveBeenLastCalledWith(a.sessionId);
   });
 
   it("retains accessible hook coverage while the observed agent is unavailable", () => {
     const row = makeRow();
-    const button = renderRow({
+    const button = renderGroup(groupOf({
       ...row,
       availability: "unavailable",
       presentation: { ...row.presentation, label: "Unavailable" },
-    });
+    }));
     const description = document.getElementById(button.getAttribute("aria-describedby")!)!;
     expect(description.textContent).toMatch(/limited coverage/i);
     expect(description.textContent).toMatch(/quiet reasoning.*long waits.*Unknown/i);
@@ -91,12 +123,13 @@ describe("TraditionalTerminalAgentRow", () => {
       .find((element) => element.textContent === row.presentation.sourceLabel)!;
     expect(source.getAttribute("title")).toMatch(/limited coverage/i);
   });
+
   it("keeps Idle primary and explains Done as unverified turn end", () => {
     const row = makeRow();
-    const button = renderRow({ ...row, presentation: {
+    const button = renderGroup(groupOf({ ...row, presentation: {
       label: "Idle", reasonLabel: null, outcomeHint: "Done (turn ended)",
       sourceLabel: "Lifecycle observation", coverageHint: null,
-    } });
+    } }));
     expect(button.getAttribute("aria-label")).toContain("Idle");
     expect(button.getAttribute("aria-label")).not.toContain("Done");
     expect(button.textContent).toContain("Done (turn ended)");
@@ -107,25 +140,14 @@ describe("TraditionalTerminalAgentRow", () => {
     expect(description.textContent).toContain("task success has not been verified");
   });
 
-  it("distinguishes duplicate titles across project/profile and preserves focus on updates", () => {
-    const first = makeRow();
-    const second = makeRow("server-b");
-    function renderRows(rows: readonly RowModel[]) {
-      act(() => root.render(<>{rows.map((row) => (
-        <TraditionalTerminalAgentRow key={row.key} row={row} active={false} onSelectAgent={onSelectAgent} />
-      ))}</>));
-    }
-    renderRows([first, second]);
-    const buttons = Array.from(container.querySelectorAll("button"));
-    expect(buttons[0]!.getAttribute("aria-label")).toContain("Editor; Server profile: Development");
-    expect(buttons[1]!.getAttribute("aria-label")).toContain("Website; Server profile: Production");
-    buttons[1]!.focus();
-    renderRows([{ ...first, presentation: { ...first.presentation, label: "Idle" } },
-      { ...second, presentation: { ...second.presentation, label: "Needs attention", reasonLabel: "Approval" } }]);
-    expect(Array.from(container.querySelectorAll("button"))).toEqual(buttons);
-    expect(document.activeElement).toBe(buttons[1]);
-    expect(buttons[1]!.getAttribute("aria-label")).toContain("Needs attention: Approval");
-    act(() => buttons[1]!.click());
-    expect(onSelectAgent).toHaveBeenCalledExactlyOnceWith(second.sessionId);
+  it("preserves the button and focus when members change but the item identity stays", () => {
+    const a = makeRow("server-a", "t-a");
+    const b = makeRow("server-a", "t-b");
+    const button = renderGroup(groupOf(a));
+    button.focus();
+    renderGroup(groupOf(a, b));
+    expect(container.querySelector("button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(button.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("2");
   });
 });

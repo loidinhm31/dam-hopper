@@ -989,23 +989,32 @@ describe("Traditional terminal projects in Chromium", () => {
     const roster = page.getByRole("list", {
       name: "Observed agents in open terminals",
     });
-    expect(roster.element().querySelectorAll("li")).toHaveLength(3);
+    expect(roster.element().querySelectorAll("li")).toHaveLength(2);
     await expect
       .element(roster.getByRole("button", { name: /OMP: alpha first #1;.*Server A/ }))
       .toBeVisible();
     await expect
-      .element(roster.getByRole("button", { name: /Codex: beta agent #2;.*Server B/ }))
+      .element(roster.getByRole("button", { name: /Codex, Claude: 2 agents;.*Server B/ }))
       .toBeVisible();
-    await expect
-      .element(roster.getByRole("button", { name: /Claude: beta Claude/ }))
-      .toBeVisible();
-    for (const name of [/Codex: beta agent #2;/, /Claude: beta Claude #3;/]) {
-      const nativeRow = roster.getByRole("button", { name }).element();
-      const descriptionId = nativeRow.getAttribute("aria-describedby")!;
-      expect(document.getElementById(descriptionId)?.textContent).toContain(
-        "Hook observation (limited coverage; quiet reasoning and long waits become Unknown)",
-      );
-    }
+    expect(
+      roster.getByRole("button", { name: /Codex, Claude: 2 agents;/ })
+        .element()
+        .querySelector('[data-testid="agent-count-badge"]')
+        ?.textContent,
+    ).toBe("2");
+    expect(
+      roster.getByRole("button", { name: /OMP: alpha first #1;/ })
+        .element()
+        .querySelector('[data-testid="agent-count-badge"]')
+        ?.textContent,
+    ).toBe("1");
+    const nativeRow = roster
+      .getByRole("button", { name: /Codex, Claude: 2 agents;/ })
+      .element();
+    const descriptionId = nativeRow.getAttribute("aria-describedby")!;
+    expect(document.getElementById(descriptionId)?.textContent).toContain(
+      "Hook observation (limited coverage; quiet reasoning and long waits become Unknown)",
+    );
     expect(roster.element().textContent).not.toContain("alpha second");
     expect(roster.element().textContent).not.toContain("beta shell");
     expect(agentFixtureRefs.alpha.id).toBe(agentFixtureRefs.beta.id);
@@ -1022,13 +1031,13 @@ describe("Traditional terminal projects in Chromium", () => {
       .toHaveTextContent(terminalKey(agentFixtureRefs.betaShell));
     await selectProject("alpha");
     await userEvent.click(
-      roster.getByRole("button", { name: /Codex: beta agent #2;/ }),
+      roster.getByRole("button", { name: /Codex, Claude: 2 agents;/ }),
     );
     await expect
       .element(page.getByTestId("fixture-active-session"))
       .toHaveTextContent(terminalKey(agentFixtureRefs.beta));
     expect(
-      roster.getByRole("button", { name: /Codex: beta agent #2;/ }).element()
+      roster.getByRole("button", { name: /Codex, Claude: 2 agents;/ }).element()
         .getAttribute("aria-current"),
     ).toBe("true");
     expect(
@@ -1045,6 +1054,57 @@ describe("Traditional terminal projects in Chromium", () => {
     await expect
       .element(page.getByTestId("fixture-active-session"))
       .toHaveTextContent(terminalKey(agentFixtureRefs.alpha));
+  });
+
+  it("groups same-project same-status agents into one item with cycling activation and splits on status change", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const roster = page.getByRole("list", {
+      name: "Observed agents in open terminals",
+    });
+
+    // Two agents in the same project (beta) and same status (Idle) render as one item with badge 2
+    const betaGroup = roster.getByRole("button", {
+      name: /^Codex, Claude: 2 agents;.*Project: beta;/,
+    });
+    await expect.element(betaGroup).toBeVisible();
+    const badge = betaGroup.element().querySelector('[data-testid="agent-count-badge"]');
+    expect(badge?.textContent).toBe("2");
+
+    // Clicking it selects the first member (Codex: agentFixtureRefs.beta)
+    await userEvent.click(betaGroup);
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.beta));
+
+    // Clicking again selects the second member (Claude: agentFixtureRefs.claude)
+    await userEvent.click(betaGroup);
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent(terminalKey(agentFixtureRefs.claude));
+
+    // Changing one agent's status splits it into two items with badges 1 and 1
+    await act(async () => {
+      updateTraditionalAgentFixtureStatus(agentFixtureRefs.claude, {
+        state: "working",
+        turnId: "claude-turn",
+      });
+    });
+
+    const codexRow = roster.getByRole("button", {
+      name: /^Codex: beta agent #2;.*Project: beta;/,
+    });
+    const claudeRow = roster.getByRole("button", {
+      name: /^Claude: beta Claude #3;.*Project: beta;/,
+    });
+    await expect.element(codexRow).toBeVisible();
+    await expect.element(claudeRow).toBeVisible();
+    expect(
+      codexRow.element().querySelector('[data-testid="agent-count-badge"]')?.textContent,
+    ).toBe("1");
+    expect(
+      claudeRow.element().querySelector('[data-testid="agent-count-badge"]')?.textContent,
+    ).toBe("1");
   });
 
   it("activates the existing nonfocused split pane without changing membership, layout or terminal hosts", async () => {
@@ -1120,7 +1180,7 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(page.getByTestId("fixture-active-session").element().textContent)
       .toBe(activeId);
     await expect
-      .element(page.getByRole("button", { name: /Codex: beta agent #2;/ }))
+      .element(page.getByRole("button", { name: /Codex, Claude: 2 agents;/ }))
       .toBeVisible();
   });
 
@@ -1150,7 +1210,7 @@ describe("Traditional terminal projects in Chromium", () => {
     await selectProject("beta");
     await userEvent.click(page.getByTestId("restart-agent-terminal"));
     const replacement = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
-    expect(replacement).not.toBe(oldButton);
+    expect(replacement).toBe(oldButton);
     const selectionCount = page.getByTestId("fixture-selection-count")
       .element().textContent;
     const activeId = page.getByTestId("fixture-active-session").element().textContent;
@@ -1283,8 +1343,10 @@ describe("Traditional terminal projects in Chromium", () => {
       expect(document.activeElement).toBe(row);
       expect(row.textContent).toContain("Done (turn ended)");
       expect(row.querySelector('[title^="Last turn ended"]')).not.toBeNull();
+      let previousRow = row;
       let metadataRevision = 0;
-      for (const { patch, label } of [
+      for (const { patch, label, unchanged } of [
+        { patch: {}, label: "Idle", unchanged: true },
         { patch: { state: "working" as const, turnId: "fixture-turn" }, label: "Working" },
         { patch: { state: "blocked" as const, reason: "approval" as const }, label: "Needs attention: Approval" },
         { patch: { state: "unknown" as const, turnId: undefined }, label: "Unknown" },
@@ -1295,7 +1357,9 @@ describe("Traditional terminal projects in Chromium", () => {
       ]) {
         metadataRevision += 1;
         await act(async () => {
-          updateTraditionalAgentFixtureStatus(ref, patch);
+          if (Object.keys(patch).length > 0) {
+            updateTraditionalAgentFixtureStatus(ref, patch);
+          }
           // First republish tabs/groups only, then canonical mounted names too,
           // as session hydration after a public rename does. Neither publication
           // changes registered owner, live PTY membership or incarnation.
@@ -1303,7 +1367,7 @@ describe("Traditional terminal projects in Chromium", () => {
             <TraditionalProjectsFixture
               withAgents
               terminalMetadataRevision={metadataRevision}
-              republishMountedMetadata={metadataRevision > 3}
+              republishMountedMetadata={metadataRevision > 4}
             />,
           );
         });
@@ -1311,10 +1375,20 @@ describe("Traditional terminal projects in Chromium", () => {
         await settleTerminalFrames();
         // Actual pane-tab title, not a fixture revision echo, proves metadata arrived.
         expect(page.getByText(`alpha metadata ${metadataRevision}`, { exact: true }).element()).toBeVisible();
-        expect(row.getAttribute("aria-label")).toContain(label);
-        expect(Array.from(list.querySelectorAll("button"))).toEqual(buttons);
-        expect(document.activeElement).toBe(row);
-        expect(row.textContent?.includes("Done (turn ended)")).toBe(metadataRevision === 6);
+        const currentRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+        expect(currentRow.getAttribute("aria-label")).toContain(label);
+        if (unchanged) {
+          expect(currentRow).toBe(previousRow);
+          expect(document.activeElement).toBe(currentRow);
+          expect(Array.from(list.querySelectorAll("button"))).toEqual(buttons);
+        } else {
+          expect(currentRow).not.toBe(previousRow);
+          expect(document.activeElement).not.toBe(currentRow);
+          expect(list.querySelectorAll("button")).toHaveLength(2);
+          expect(list.querySelectorAll("button")[1]).toBe(buttons[1]);
+        }
+        previousRow = currentRow;
+        expect(currentRow.textContent?.includes("Done (turn ended)")).toBe(metadataRevision === 1 || metadataRevision === 7);
         expect(getTerminal(ref)).toBe(entry);
         expect(terminal.element).toBe(xterm);
         expect(host.querySelector(".xterm")).toBe(xterm);
@@ -1350,17 +1424,17 @@ describe("Traditional terminal projects in Chromium", () => {
   it("reacts to generation-only replacement before the status bridge and waits for a fresh baseline", async () => {
     notificationPolicy.agents.omp.enabled = true;
     await mountAgents();
-    const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
     const previousProfiles = useAgentStatusStore.getState().profiles;
     const owner = { profileId: agentFixtureRefs.alpha.profileId, generation: 2 };
     await act(async () =>
       __setConnectionSnapshotForTests(owner.profileId, { owner, status: "connected" }),
     );
     expect(useAgentStatusStore.getState().profiles).toBe(previousProfiles);
-    expect(row.textContent).toContain("Unavailable");
-    expect(row.textContent).not.toContain("Done (turn ended)");
+    const unavailableRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(unavailableRow.textContent).toContain("Unavailable");
+    expect(unavailableRow.textContent).not.toContain("Done (turn ended)");
     await act(async () => beginAgentStatusConnection(owner));
-    expect(row.textContent).toContain("Unavailable");
+    expect(page.getByRole("button", { name: /OMP: alpha first #1;/ }).element().textContent).toContain("Unavailable");
     const retained = useAgentStatusStore.getState().profiles.get(owner.profileId)!;
     await act(async () =>
       installAgentStatusSnapshot(owner, {
@@ -1371,13 +1445,15 @@ describe("Traditional terminal projects in Chromium", () => {
         terminals: [...retained.rows.values()],
       }),
     );
-    expect(row.textContent).toContain("Idle");
-    expect(row.textContent).toContain("Done (turn ended)");
+    const idleRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(idleRow.textContent).toContain("Idle");
+    expect(idleRow.textContent).toContain("Done (turn ended)");
     await act(async () =>
       __setConnectionSnapshotForTests(owner.profileId, { status: "disconnected" }),
     );
-    expect(row.textContent).toContain("Unavailable");
-    expect(row.textContent).not.toContain("Done (turn ended)");
+    const disconnectedRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(disconnectedRow.textContent).toContain("Unavailable");
+    expect(disconnectedRow.textContent).not.toContain("Done (turn ended)");
     expect(vi.mocked(notifyTerminalAgent)).not.toHaveBeenCalled();
     expect(vi.mocked(playTerminalNotificationSound)).not.toHaveBeenCalled();
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
@@ -1407,7 +1483,10 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(
       page.getByRole("list", { name: "Observed agents in open terminals" })
         .element().querySelectorAll("li"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    await expect
+      .element(page.getByRole("button", { name: /Codex, Claude: 2 agents;/ }))
+      .toBeVisible();
     await expect.element(page.getByText("alpha first", { exact: true })).toBeVisible();
   });
 
@@ -1426,9 +1505,9 @@ describe("Traditional terminal projects in Chromium", () => {
         }),
       ).toBe("applied");
     });
-    const row = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
-    expect(row.textContent).toContain("Working");
-    expect(row.textContent).not.toContain("Done (turn ended)");
+    const workingRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(workingRow.textContent).toContain("Working");
+    expect(workingRow.textContent).not.toContain("Done (turn ended)");
     await act(async () => {
       expect(
         applyAgentStatusChanged(owner, {
@@ -1449,8 +1528,9 @@ describe("Traditional terminal projects in Chromium", () => {
         }),
       ).toBe("applied");
     });
-    expect(row.textContent).toContain("Idle");
-    expect(row.textContent).toContain("Done (turn ended)");
+    const idleRow = page.getByRole("button", { name: /OMP: alpha first #1;/ }).element();
+    expect(idleRow.textContent).toContain("Idle");
+    expect(idleRow.textContent).toContain("Done (turn ended)");
     expect(useTerminalNotificationsStore.getState().notifications).toHaveLength(0);
     expect(useTerminalNotificationsStore.getState().toasts).toHaveLength(0);
     expect(vi.mocked(notifyTerminalAgent)).not.toHaveBeenCalled();
@@ -1482,6 +1562,9 @@ describe("Traditional terminal projects in Chromium", () => {
     );
     expect(page.getByRole("link", { name: "Agent Settings" }).element()
       .getAttribute("href")).toBe("/agent-store?tab=settings");
+    expect(
+      document.querySelector('button[aria-label^="Codex, Claude: 2 agents;"]'),
+    ).toBeNull();
     expect(
       document.querySelector('button[aria-label^="Codex: beta agent #2;"]'),
     ).toBeNull();
@@ -1617,7 +1700,7 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(document.querySelector('[data-testid="terminal-pane-output-host"]')).toBe(alphaHost);
     await userEvent.click(opener);
     await act(async () =>
-      dialog.getByRole("button", { name: /Codex: beta agent #2;/ }).element().focus(),
+      dialog.getByRole("button", { name: /Codex, Claude: 2 agents;/ }).element().focus(),
     );
     await userEvent.keyboard(" ");
     await waitForProjectsSheetDismissal(opener.element());

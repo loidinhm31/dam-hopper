@@ -85,14 +85,14 @@ const group: TraditionalTerminalProjectGroup = {
   mountedSessions: [{ sessionId: "demo:1", project: "demo", command: "bash" }],
 };
 
-function makeAgentRow(profileId: string, title: string): RowModel {
-  const terminalRef = { profileId, id: "terminal-1" };
+function makeAgentRow(profileId: string, title: string, { id = "terminal-1", groupId = `project-${profileId}` } = {}): RowModel {
+  const terminalRef = { profileId, id };
   return {
     key: terminalInstanceKey({ ...terminalRef, incarnation: 1 }),
     sessionId: terminalKey(terminalRef),
     terminalRef,
     incarnation: 1,
-    groupId: `project-${profileId}`,
+    groupId,
     projectLabel: "demo",
     profileLabel: profileId === "server-a" ? "Development" : "Production",
     terminalTitle: title,
@@ -318,23 +318,31 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(onSelectGroup).not.toHaveBeenCalled();
   });
 
-  it("retains supplied input order and keyboard focus through status-only updates", () => {
-    const first = makeAgentRow("server-a", "First");
-    const second = makeAgentRow("server-b", "Second");
+  it("collapses same-project same-status agents into one counted item and splits it on a status change without remounting the unchanged item", () => {
+    const first = makeAgentRow("server-a", "First", { id: "t-1", groupId: "project-a" });
+    const second = makeAgentRow("server-a", "Second", { id: "t-2", groupId: "project-a" });
+    const third = makeAgentRow("server-a", "Third", { id: "t-3", groupId: "project-a" });
     const onSelectAgent = vi.fn();
-    renderNavigator({ agentRows: [first, second], onSelectAgent });
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("ul button"));
-    buttons[1]!.focus();
+    renderNavigator({ agentRows: [first, second, third], onSelectAgent });
+    const items = Array.from(container.querySelectorAll<HTMLButtonElement>("ul button"));
+    expect(items).toHaveLength(1);
+    expect(items[0]!.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("3");
+    items[0]!.focus();
     renderNavigator({ agentRows: [
-      { ...first, presentation: { ...first.presentation, label: "Needs attention", reasonLabel: "Approval" } },
-      { ...second, presentation: { ...second.presentation, label: "Idle", outcomeHint: "Done (turn ended)" } },
+      first,
+      { ...second, presentation: { ...second.presentation, label: "Needs attention", reasonLabel: "Approval" } },
+      third,
     ], onSelectAgent });
-    expect(Array.from(container.querySelectorAll("ul button"))).toEqual(buttons);
-    expect(buttons[0]!.getAttribute("aria-label")).toContain("First");
-    expect(buttons[0]!.getAttribute("aria-label")).toContain("Needs attention");
-    expect(buttons[1]!.getAttribute("aria-label")).toContain("Second");
-    expect(buttons[1]!.getAttribute("aria-label")).toContain("Idle");
-    expect(document.activeElement).toBe(buttons[1]);
+    const split = Array.from(container.querySelectorAll<HTMLButtonElement>("ul button"));
+    expect(split.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "OMP: Second; Project: demo; Server profile: Development; Needs attention: Approval",
+      "OMP: 2 agents; Project: demo; Server profile: Development; Working",
+    ]);
+    expect(split.map((button) => button.querySelector('[data-testid="agent-count-badge"]')!.textContent)).toEqual(["1", "2"]);
+    expect(split[1]).toBe(items[0]);
+    expect(document.activeElement).toBe(items[0]);
+    act(() => split[1]!.click());
+    expect(onSelectAgent).toHaveBeenCalledExactlyOnceWith(first.sessionId);
   });
 
   it("explains the empty observation roster and navigates to the supplied Settings target", () => {
