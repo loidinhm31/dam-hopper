@@ -213,7 +213,7 @@ impl AppState {
         }
 
         let coordinator = Arc::new(
-            crate::idle_suspend::IdleSuspendCoordinator::start_with_sink(
+            crate::idle_suspend::IdleSuspendCoordinator::start_with_components(
                 (*self.idle_suspend_policy).clone(),
                 Arc::clone(&self.idle_suspend_timing),
                 Some((*self.idle_suspend_store).clone()),
@@ -222,6 +222,9 @@ impl AppState {
                 self.pty_manager.clone(),
                 Some(Arc::new(self.event_sink.clone())),
                 self.idle_suspend_event_writer.clone(),
+                Some(Arc::clone(&self.client_presence)),
+                Some(self.agent_status.clone()),
+                Some(Arc::clone(&self.auth_service)),
             ),
         );
         *guard = Some(Arc::clone(&coordinator));

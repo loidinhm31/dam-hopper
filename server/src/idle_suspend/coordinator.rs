@@ -46,6 +46,20 @@ use crate::idle_suspend::status::{
 use crate::idle_suspend::timing_store::IdleSuspendTimingStore;
 use crate::pty::fleet_state::PtyFleetSnapshot;
 use crate::pty::manager::PtySessionManager;
+/// Recommended timeout for unanswered sleep consent requests (2s under test, 60s in production).
+pub const UNANSWERED_CONSENT_TIMEOUT_SECONDS: u64 = if cfg!(test) { 2 } else { 60 };
+use crate::api::auth::AuthenticatedActor;
+use crate::agent_status::types::{AgentSemanticBlockReason, AgentSemanticEvaluation};
+use crate::idle_suspend::activity::process::ProcessDiscovery;
+use crate::idle_suspend::activity::sampler::{
+    AgentFreeAdmission, AgentFreeClaimTicket, ManagedAgentClaimEvidence,
+};
+use crate::idle_suspend::client_presence::{ClientPresenceRegistry, PresenceClaimError};
+use crate::idle_suspend::protocol::{
+    ConsentDecisionResponse, ConsentDecisionValue,
+};
+use crate::idle_suspend::server_audit::{ConsentAuditRecord, ConsentAuditResult};
+use crate::idle_suspend::status::{ConsentDecision, ConsentState, IdleSuspendConsentStatusV1};
 
 /// Command to request a timing update through the idle suspend coordinator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +138,45 @@ pub enum CoordinatorForceSuspendResult {
     /// Coordinator is shutting down.
     ShuttingDown,
 }
+/// Command to submit a user consent decision.
+#[derive(Debug, Clone)]
+pub struct SubmitConsentDecisionCommand {
+    pub actor: AuthenticatedActor,
+    pub request_id: String,
+    pub request_revision: u64,
+    pub connection_id: String,
+    pub decision: ConsentDecisionValue,
+}
+
+/// Result returned from processing a consent decision command.
+#[derive(Debug, Clone)]
+pub enum CoordinatorConsentDecisionResult {
+    /// Decision was accepted and latched.
+    Success {
+        response: ConsentDecisionResponse,
+        idempotent: bool,
+    },
+    /// Decision has already been settled and the incoming decision differs.
+    DecisionAlreadySettled {
+        request_id: String,
+        settled_decision: ConsentDecisionValue,
+    },
+    /// The consent request has expired.
+    Expired,
+    /// The consent request was cancelled.
+    Cancelled,
+    /// No consent request is active or request_id/revision mismatch.
+    Unavailable,
+    /// Coordinator is disabled.
+    Disabled,
+    /// Coordinator is shutting down.
+    ShuttingDown,
+    /// A handoff is currently in progress.
+    HandoffInProgress,
+    /// Audit logging failed.
+    AuditFailed(String),
+}
+
 
 enum CommandMessage {
     UpdateTiming {
@@ -133,6 +186,10 @@ enum CommandMessage {
     ForceSuspend {
         cmd: ForceSuspendCommand,
         reply: oneshot::Sender<CoordinatorForceSuspendResult>,
+    },
+    SubmitConsentDecision {
+        cmd: SubmitConsentDecisionCommand,
+        reply: oneshot::Sender<CoordinatorConsentDecisionResult>,
     },
 }
 #[derive(Debug, Clone)]
@@ -288,6 +345,36 @@ impl IdleSuspendCoordinator {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_components(
+        startup_policy: StartupIdleSuspendPolicy,
+        runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
+        timing_store: Option<IdleSuspendTimingStore>,
+        server_audit: Option<IdleSuspendServerAudit>,
+        executor: Arc<dyn IdleSuspendExecutor>,
+        pty_manager: PtySessionManager,
+        event_sink: Option<Arc<dyn crate::pty::EventSink>>,
+        event_writer: Option<Arc<IdleSuspendEventWriter>>,
+        client_presence: Option<Arc<crate::idle_suspend::ClientPresenceRegistry>>,
+        agent_status: Option<crate::agent_status::AgentStatusRuntime>,
+        auth_service: Option<Arc<crate::auth::AuthService>>,
+    ) -> Self {
+        Self::start_internal(
+            startup_policy,
+            runtime_timing,
+            timing_store,
+            server_audit,
+            executor,
+            pty_manager,
+            event_sink,
+            None,
+            event_writer,
+            client_presence,
+            agent_status,
+            auth_service,
+        )
+    }
+
     pub fn start_with_sink(
         startup_policy: StartupIdleSuspendPolicy,
         runtime_timing: Arc<RwLock<RuntimeIdleSuspendTiming>>,
@@ -308,6 +395,9 @@ impl IdleSuspendCoordinator {
             event_sink,
             None,
             event_writer,
+            None,
+            None,
+            None,
         )
     }
 
@@ -334,6 +424,9 @@ impl IdleSuspendCoordinator {
             event_sink,
             Some((sampler, sampler_rx)),
             event_writer,
+            None,
+            None,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -347,7 +440,12 @@ impl IdleSuspendCoordinator {
         event_sink: Option<Arc<dyn crate::pty::EventSink>>,
         injected_sampler: Option<(ActivitySampler, mpsc::Receiver<ActivitySamplerResult>)>,
         event_writer: Option<Arc<IdleSuspendEventWriter>>,
+        client_presence: Option<Arc<crate::idle_suspend::ClientPresenceRegistry>>,
+        agent_status: Option<crate::agent_status::AgentStatusRuntime>,
+        auth_service: Option<Arc<crate::auth::AuthService>>,
     ) -> Self {
+        let client_presence = client_presence.unwrap_or_else(crate::idle_suspend::ClientPresenceRegistry::new);
+        let agent_status = agent_status.unwrap_or_else(crate::agent_status::AgentStatusRuntime::platform_unqualified);
         let event_sink = event_sink.unwrap_or_else(|| pty_manager.sink());
         let (command_tx, command_rx) = mpsc::channel(32);
         let shutdown_token = CancellationToken::new();
@@ -402,12 +500,7 @@ impl IdleSuspendCoordinator {
                         deferred_until_ms: None,
                         reason_code: Some(AgentFreeReasonCode::Reconciling),
                     }),
-                    Some(IdleSuspendClientPresenceStatusV1 {
-                        connection_count: 0,
-                        pending_upgrade_count: 0,
-                        revision: 0,
-                        available: false,
-                    }),
+                    Some(client_presence.snapshot()),
                     None,
                 )
             } else {
@@ -467,6 +560,9 @@ impl IdleSuspendCoordinator {
                 initial_state,
                 injected_sampler,
                 event_writer,
+                client_presence,
+                agent_status,
+                auth_service,
             )
             .await;
         });
@@ -515,6 +611,27 @@ impl IdleSuspendCoordinator {
         reply_rx.await.unwrap_or(CoordinatorForceSuspendResult::ShuttingDown)
     }
 
+    /// Submit an authenticated consent decision to the coordinator.
+    pub async fn submit_consent_decision(
+        &self,
+        cmd: SubmitConsentDecisionCommand,
+    ) -> CoordinatorConsentDecisionResult {
+        if self.shutdown_token.is_cancelled() {
+            return CoordinatorConsentDecisionResult::ShuttingDown;
+        }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let msg = CommandMessage::SubmitConsentDecision {
+            cmd,
+            reply: reply_tx,
+        };
+        if self.command_tx.send(msg).await.is_err() {
+            return CoordinatorConsentDecisionResult::ShuttingDown;
+        }
+        reply_rx
+            .await
+            .unwrap_or(CoordinatorConsentDecisionResult::ShuttingDown)
+    }
+
     /// Gracefully shutdown the coordinator, cancelling any active grace.
     pub async fn shutdown(&self) {
         self.shutdown_token.cancel();
@@ -547,6 +664,9 @@ async fn run_coordinator(
     mut state: CoordinatorState,
     injected_sampler: Option<(ActivitySampler, mpsc::Receiver<ActivitySamplerResult>)>,
     event_writer: Option<Arc<IdleSuspendEventWriter>>,
+    client_presence: Arc<ClientPresenceRegistry>,
+    agent_status: crate::agent_status::AgentStatusRuntime,
+    auth_service: Option<Arc<crate::auth::AuthService>>,
 ) {
     let mut active_attempt: Option<AttemptContext> = None;
     let mut prior_measurement_available: Option<bool> = None;
@@ -559,6 +679,32 @@ async fn run_coordinator(
     let mut armed_generation: Option<u64> = None;
     let mut last_outcome: Option<SuspendOutcome> = None;
     let mut detail: Option<String> = None;
+
+    let is_agent_free_policy = startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree;
+    #[cfg(not(test))]
+    if is_agent_free_policy {
+        quiet_period_seconds = 10800;
+    }
+
+    let mut process_discovery = ProcessDiscovery::new();
+    let mut free_anchor: Option<Instant> = None;
+    let mut free_since_ms: Option<u64> = None;
+    let mut eligible_at_ms: Option<u64> = None;
+    let mut deferred_until: Option<Instant> = None;
+    let mut deferred_until_ms: Option<u64> = None;
+    let mut agent_free_phase = AgentFreePhase::Reconciling;
+    let mut inventory_state = AgentFreeInventoryState::Uninitialized;
+    let mut inventory_revision = 0u64;
+    let mut semantic_revision = agent_status.revision();
+    let mut last_seen_non_free_gen = agent_status.non_free_generation();
+    let mut idle_count: Option<u32> = None;
+    let mut blocked_count: Option<u32> = None;
+    let mut working_count: Option<u32> = None;
+    let mut unknown_count: Option<u32> = None;
+    let mut agent_free_reason: Option<AgentFreeReasonCode> = Some(AgentFreeReasonCode::Reconciling);
+    let mut active_consent: Option<ActiveConsentRequest> = None;
+    let mut last_settled_consent: Option<ActiveConsentRequest> = None;
+    let mut next_consent_request_seq = 1u64;
 
     let is_agent_policy = startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity;
 
@@ -710,6 +856,43 @@ async fn run_coordinator(
                         Some(epoch_activity_revision) == last_attempted_epoch_activity_revision,
                     );
                 }
+                if is_agent_free_policy {
+                    if state == CoordinatorState::Armed || state == CoordinatorState::FinalCheck {
+                        state = CoordinatorState::Watching;
+                    }
+                    pty_manager.release_handoff();
+                    client_presence.release_host_suspending();
+                    publish_agent_free_status_checked(
+                        &status_tx,
+                        Some(&*event_sink),
+                        state,
+                        &startup_policy,
+                        quiet_period_seconds,
+                        wake_after_seconds,
+                        &mut status_revision,
+                        current_epoch,
+                        pty_manager.fleet_snapshot(),
+                        &last_outcome,
+                        &detail,
+                        Some(IdleSuspendAgentFreeStatusV1 {
+                            phase: agent_free_phase,
+                            scope: "managed-terminals".to_string(),
+                            inventory_state,
+                            inventory_revision,
+                            semantic_revision,
+                            idle_count,
+                            blocked_count,
+                            working_count,
+                            unknown_count,
+                            free_since_ms,
+                            eligible_at_ms,
+                            deferred_until_ms,
+                            reason_code: agent_free_reason,
+                        }),
+                        Some(client_presence.snapshot()),
+                        active_consent.as_ref().map(|r| r.to_status()),
+                    );
+                }
                 if let Some(s) = &sampler {
                     s.cancel_current();
                     s.shutdown_and_join();
@@ -740,7 +923,7 @@ async fn run_coordinator(
                     }
                 }
                 handle_outcome(
-                    outcome,
+                    outcome.clone(),
                     &mut state,
                     &mut epoch_ready,
                     current_epoch,
@@ -773,6 +956,53 @@ async fn run_coordinator(
                         IdleSuspendEventDataV1::ReconciliationCompleted(ReconciliationCompletedDataV1 {
                             reason_code: outcome_reason,
                         }),
+                    );
+                }
+                if is_agent_free_policy {
+                    pty_manager.release_handoff();
+                    client_presence.release_host_suspending();
+                    free_anchor = None;
+                    free_since_ms = None;
+                    eligible_at_ms = None;
+                    deferred_until = None;
+                    deferred_until_ms = None;
+                    active_consent = None;
+                    agent_free_phase = AgentFreePhase::Reconciling;
+                    agent_free_reason = Some(AgentFreeReasonCode::Reconciling);
+                    last_outcome = Some(outcome.clone());
+                    state = match &outcome {
+                        SuspendOutcome::ResumedSuccessfully { .. } => CoordinatorState::Resumed,
+                        _ => CoordinatorState::Failed,
+                    };
+                    publish_agent_free_status_checked(
+                        &status_tx,
+                        Some(&*event_sink),
+                        state,
+                        &startup_policy,
+                        quiet_period_seconds,
+                        wake_after_seconds,
+                        &mut status_revision,
+                        current_epoch,
+                        pty_manager.fleet_snapshot(),
+                        &last_outcome,
+                        &detail,
+                        Some(IdleSuspendAgentFreeStatusV1 {
+                            phase: agent_free_phase,
+                            scope: "managed-terminals".to_string(),
+                            inventory_state,
+                            inventory_revision,
+                            semantic_revision,
+                            idle_count,
+                            blocked_count,
+                            working_count,
+                            unknown_count,
+                            free_since_ms,
+                            eligible_at_ms,
+                            deferred_until_ms,
+                            reason_code: agent_free_reason,
+                        }),
+                        Some(client_presence.snapshot()),
+                        None,
                     );
                 }
             }
@@ -888,6 +1118,46 @@ async fn run_coordinator(
                             active_attempt = Some(new_ctx);
                         }
                         let _ = reply.send(result);
+                        if is_agent_free_policy {
+                            if let Some(r) = active_consent.as_mut() {
+                                r.state = ConsentState::Cancelled;
+                            }
+                            free_anchor = None;
+                            free_since_ms = None;
+                            eligible_at_ms = None;
+                            agent_free_phase = AgentFreePhase::Reconciling;
+                            agent_free_reason = Some(AgentFreeReasonCode::Reconciling);
+                            publish_agent_free_status_checked(
+                                &status_tx,
+                                Some(&*event_sink),
+                                state,
+                                &startup_policy,
+                                quiet_period_seconds,
+                                wake_after_seconds,
+                                &mut status_revision,
+                                current_epoch,
+                                pty_manager.fleet_snapshot(),
+                                &last_outcome,
+                                &detail,
+                                Some(IdleSuspendAgentFreeStatusV1 {
+                                    phase: agent_free_phase,
+                                    scope: "managed-terminals".to_string(),
+                                    inventory_state,
+                                    inventory_revision,
+                                    semantic_revision,
+                                    idle_count,
+                                    blocked_count,
+                                    working_count,
+                                    unknown_count,
+                                    free_since_ms,
+                                    eligible_at_ms,
+                                    deferred_until_ms,
+                                    reason_code: agent_free_reason,
+                                }),
+                                Some(client_presence.snapshot()),
+                                active_consent.as_ref().map(|r| r.to_status()),
+                            );
+                        }
                     }
                     CommandMessage::ForceSuspend { cmd, reply } => {
                         // Invalidate pending final sample request on manual force
@@ -917,6 +1187,14 @@ async fn run_coordinator(
                             }
                         }
 
+                        if is_agent_free_policy {
+                            if let Some(r) = active_consent.as_mut() {
+                                r.state = ConsentState::Cancelled;
+                            }
+                            free_anchor = None;
+                            free_since_ms = None;
+                            eligible_at_ms = None;
+                        }
                         let timing_rev = runtime_timing.try_read().map(|r| r.status_revision).unwrap_or(1);
                         let (result, maybe_fut, maybe_audit, maybe_attempt) = handle_force_suspend(
                             cmd,
@@ -958,11 +1236,209 @@ async fn run_coordinator(
                         );
                         let _ = reply.send(result);
                     }
+                    CommandMessage::SubmitConsentDecision { cmd, reply } => {
+                        if !is_agent_free_policy || !startup_policy.enabled {
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Disabled);
+                            continue;
+                        }
+                        if active_consent.is_none() {
+                            if let Some(req) = last_settled_consent.as_ref() {
+                                if req.request_id == cmd.request_id && req.request_revision == cmd.request_revision {
+                                    if let Some(settled) = req.decision {
+                                        if settled == cmd.decision {
+                                            let resp = ConsentDecisionResponse {
+                                                version: 1,
+                                                request_id: req.request_id.clone(),
+                                                decision: settled,
+                                                status_revision,
+                                                settled: true,
+                                            };
+                                            let _ = reply.send(CoordinatorConsentDecisionResult::Success {
+                                                response: resp,
+                                                idempotent: true,
+                                            });
+                                        } else {
+                                            let _ = reply.send(CoordinatorConsentDecisionResult::DecisionAlreadySettled {
+                                                request_id: req.request_id.clone(),
+                                                settled_decision: settled,
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Unavailable);
+                            continue;
+                        }
+                        let req = active_consent.as_mut().unwrap();
+                        if req.request_id != cmd.request_id || req.request_revision != cmd.request_revision {
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Unavailable);
+                            continue;
+                        }
+                        if let Some(settled) = req.decision {
+                            if settled == cmd.decision {
+                                let resp = ConsentDecisionResponse {
+                                    version: 1,
+                                    request_id: req.request_id.clone(),
+                                    decision: settled,
+                                    status_revision,
+                                    settled: true,
+                                };
+                                let _ = reply.send(CoordinatorConsentDecisionResult::Success {
+                                    response: resp,
+                                    idempotent: true,
+                                });
+                            } else {
+                                let _ = reply.send(CoordinatorConsentDecisionResult::DecisionAlreadySettled {
+                                    request_id: req.request_id.clone(),
+                                    settled_decision: settled,
+                                });
+                            }
+                            continue;
+                        }
+                        if state == CoordinatorState::HandedOff || in_flight_suspend.is_some() {
+                            let _ = reply.send(CoordinatorConsentDecisionResult::HandoffInProgress);
+                            continue;
+                        }
+                        if req.state == ConsentState::Cancelled {
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Cancelled);
+                            continue;
+                        }
+                        if req.state == ConsentState::Expired || Instant::now() >= req.expires_at {
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Expired);
+                            continue;
+                        }
+
+                        // First valid decision!
+                        req.decision = Some(cmd.decision);
+                        last_settled_consent = Some(req.clone());
+                        if let Some(audit) = server_audit.as_ref() {
+                            if let Ok(rec) = ConsentAuditRecord::new(
+                                cmd.actor.subject.clone(),
+                                cmd.request_id.clone(),
+                                cmd.request_revision,
+                                cmd.connection_id.clone(),
+                                cmd.decision,
+                                status_revision,
+                                ConsentAuditResult::Admitted,
+                            ) {
+                                let _ = audit.record_consent_event(&rec);
+                            }
+                        }
+
+                        if cmd.decision == ConsentDecisionValue::Approve {
+                            req.state = ConsentState::Approved;
+                            req.approving_connection_id = Some(cmd.connection_id.clone());
+                            req.approving_actor = Some(cmd.actor.clone());
+                            agent_free_phase = AgentFreePhase::Approved;
+                            agent_free_reason = Some(AgentFreeReasonCode::AllFree);
+                            let resp = ConsentDecisionResponse {
+                                version: 1,
+                                request_id: req.request_id.clone(),
+                                decision: ConsentDecisionValue::Approve,
+                                status_revision,
+                                settled: true,
+                            };
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Success {
+                                response: resp,
+                                idempotent: false,
+                            });
+
+                            attempt_agent_free_final_check(
+                                true,
+                                &mut agent_free_phase,
+                                &mut agent_free_reason,
+                                &mut active_consent,
+                                &mut deferred_until,
+                                &mut deferred_until_ms,
+                                &mut free_anchor,
+                                &mut free_since_ms,
+                                &mut eligible_at_ms,
+                                &mut inventory_state,
+                                &mut inventory_revision,
+                                &mut semantic_revision,
+                                &mut idle_count,
+                                &mut blocked_count,
+                                &mut working_count,
+                                &mut unknown_count,
+                                &mut next_request_id,
+                                &mut next_consent_request_seq,
+                                &mut state,
+                                &mut in_flight_suspend,
+                                &mut active_attempt,
+                                &mut status_revision,
+                                &client_presence,
+                                auth_service.as_ref(),
+                                &agent_status,
+                                &mut process_discovery,
+                                &pty_manager,
+                                &startup_policy,
+                                &runtime_timing,
+                                &executor,
+                                event_writer.as_deref(),
+                                wake_after_seconds,
+                                quiet_period_seconds,
+                            ).await;
+                        } else {
+                            req.state = ConsentState::Denied;
+                            agent_free_phase = AgentFreePhase::Deferred;
+                            agent_free_reason = Some(AgentFreeReasonCode::ClientRefusal);
+                            let defer_dur = Duration::from_secs(quiet_period_seconds);
+                            deferred_until = Some(Instant::now() + defer_dur);
+                            deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
+                            free_anchor = None;
+                            free_since_ms = None;
+                            eligible_at_ms = None;
+                            let resp = ConsentDecisionResponse {
+                                version: 1,
+                                request_id: req.request_id.clone(),
+                                decision: ConsentDecisionValue::Deny,
+                                status_revision,
+                                settled: true,
+                            };
+                            let _ = reply.send(CoordinatorConsentDecisionResult::Success {
+                                response: resp,
+                                idempotent: false,
+                            });
+                        }
+
+                        publish_agent_free_status_checked(
+                            &status_tx,
+                            Some(&*event_sink),
+                            state,
+                            &startup_policy,
+                            quiet_period_seconds,
+                            wake_after_seconds,
+                            &mut status_revision,
+                            current_epoch,
+                            pty_manager.fleet_snapshot(),
+                            &last_outcome,
+                            &detail,
+                            Some(IdleSuspendAgentFreeStatusV1 {
+                                phase: agent_free_phase,
+                                scope: "managed-terminals".to_string(),
+                                inventory_state,
+                                inventory_revision,
+                                semantic_revision,
+                                idle_count,
+                                blocked_count,
+                                working_count,
+                                unknown_count,
+                                free_since_ms,
+                                eligible_at_ms,
+                                deferred_until_ms,
+                                reason_code: agent_free_reason,
+                            }),
+                            Some(client_presence.snapshot()),
+                            active_consent.as_ref().map(|r| r.to_status()),
+                        );
+                    }
                 }
             }
 
             // PTY Activity invalidation signal (terminal input or session lifecycle)
-            _ = activity_watcher.changed(), if is_agent_policy => {
+            _ = activity_watcher.changed(), if is_agent_policy || is_agent_free_policy => {
+                if is_agent_policy {
                 seen_non_quiescent = true;
                 if let Some(s) = &sampler {
                     if pending_final_request.take().is_some() {
@@ -1020,10 +1496,53 @@ async fn run_coordinator(
                     false,
                     Some(epoch_activity_revision) == last_attempted_epoch_activity_revision,
                 );
+                } else if is_agent_free_policy {
+                if let Some(r) = active_consent.as_mut() {
+                    r.state = ConsentState::Cancelled;
+                }
+                free_anchor = None;
+                free_since_ms = None;
+                eligible_at_ms = None;
+                if agent_free_phase != AgentFreePhase::HandedOff {
+                    agent_free_phase = AgentFreePhase::Blocked;
+                    agent_free_reason = Some(AgentFreeReasonCode::SafetyInvalidation);
+                }
+                publish_agent_free_status_checked(
+                    &status_tx,
+                    Some(&*event_sink),
+                    state,
+                    &startup_policy,
+                    quiet_period_seconds,
+                    wake_after_seconds,
+                    &mut status_revision,
+                    current_epoch,
+                    pty_manager.fleet_snapshot(),
+                    &last_outcome,
+                    &detail,
+                    Some(IdleSuspendAgentFreeStatusV1 {
+                        phase: agent_free_phase,
+                        scope: "managed-terminals".to_string(),
+                        inventory_state,
+                        inventory_revision,
+                        semantic_revision,
+                        idle_count,
+                        blocked_count,
+                        working_count,
+                        unknown_count,
+                        free_since_ms,
+                        eligible_at_ms,
+                        deferred_until_ms,
+                        reason_code: agent_free_reason,
+                    }),
+                    Some(client_presence.snapshot()),
+                    active_consent.as_ref().map(|r| r.to_status()),
+                );
+            }
             }
 
             // Recurring 2-second scheduled background observation tick (agent-activity policy only)
-            _ = cadence_interval.tick(), if is_agent_policy => {
+            _ = cadence_interval.tick(), if is_agent_policy || is_agent_free_policy => {
+                if is_agent_policy {
                 if let Some(s) = &sampler {
                     if pending_final_request.is_none() {
                         let req = SampleRequest::new(
@@ -1038,6 +1557,275 @@ async fn run_coordinator(
                         s.try_send_scheduled(req);
                     }
                 }
+                } else if is_agent_free_policy {
+                if !startup_policy.enabled || in_flight_suspend.is_some() {
+                    continue;
+                }
+
+                // 1. Deferral check
+                if let Some(deadline) = deferred_until {
+                    if Instant::now() >= deadline {
+                        deferred_until = None;
+                        deferred_until_ms = None;
+                        agent_free_phase = AgentFreePhase::Reconciling;
+                        agent_free_reason = Some(AgentFreeReasonCode::Reconciling);
+                    } else {
+                        agent_free_phase = AgentFreePhase::Deferred;
+                    }
+                }
+
+                // 2. Non-free generation check
+                let current_nfg = agent_status.non_free_generation();
+                if current_nfg > last_seen_non_free_gen {
+                    last_seen_non_free_gen = current_nfg;
+                    if free_anchor.is_some() {
+                        free_anchor = None;
+                        free_since_ms = None;
+                        eligible_at_ms = None;
+                        if let Some(r) = active_consent.as_mut() {
+                            r.state = ConsentState::Cancelled;
+                        }
+                        if agent_free_phase == AgentFreePhase::Tracking
+                            || agent_free_phase == AgentFreePhase::AwaitingConsent
+                            || agent_free_phase == AgentFreePhase::Approved
+                            || agent_free_phase == AgentFreePhase::FinalCheck
+                        {
+                            agent_free_phase = AgentFreePhase::Blocked;
+                            agent_free_reason = Some(AgentFreeReasonCode::SafetyInvalidation);
+                        }
+                    }
+                }
+
+                // 3. Unanswered timeout check
+                if agent_free_phase == AgentFreePhase::AwaitingConsent {
+                    if let Some(req) = active_consent.as_mut() {
+                        if req.decision.is_none() && Instant::now() >= req.expires_at {
+                            req.state = ConsentState::Expired;
+                            agent_free_phase = AgentFreePhase::Deferred;
+                            agent_free_reason = Some(AgentFreeReasonCode::UnansweredTimeout);
+                            let defer_dur = Duration::from_secs(quiet_period_seconds);
+                            deferred_until = Some(Instant::now() + defer_dur);
+                            deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
+                            free_anchor = None;
+                            free_since_ms = None;
+                            eligible_at_ms = None;
+                        }
+                    }
+                }
+
+                // 4. Last client disconnect check
+                let pres = client_presence.snapshot();
+                if agent_free_phase == AgentFreePhase::AwaitingConsent || agent_free_phase == AgentFreePhase::Approved {
+                    if pres.connection_count == 0 && pres.pending_upgrade_count == 0 {
+                        if let Some(r) = active_consent.as_mut() {
+                            r.state = ConsentState::Cancelled;
+                        }
+                        agent_free_phase = AgentFreePhase::Deferred;
+                        agent_free_reason = Some(AgentFreeReasonCode::LastClientDisconnected);
+                        let defer_dur = Duration::from_secs(quiet_period_seconds);
+                        deferred_until = Some(Instant::now() + defer_dur);
+                        deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
+                        free_anchor = None;
+                        free_since_ms = None;
+                        eligible_at_ms = None;
+                    }
+                }
+
+                // 5. Managed inventory & semantic evaluation
+                let pty_snapshot = pty_manager.capture_activity_snapshot();
+                let prep_res = process_discovery.prepare_sample(
+                    &pty_snapshot,
+                    &startup_policy.agent_executables,
+                    Instant::now() + Duration::from_millis(100),
+                );
+                match prep_res {
+                    Err(_) => {
+                        inventory_state = AgentFreeInventoryState::Degraded;
+                        inventory_revision = inventory_revision.wrapping_add(1);
+                        free_anchor = None;
+                        free_since_ms = None;
+                        eligible_at_ms = None;
+                        idle_count = None;
+                        blocked_count = None;
+                        working_count = None;
+                        unknown_count = None;
+                        if deferred_until.is_none() {
+                            agent_free_phase = AgentFreePhase::Blocked;
+                            agent_free_reason = Some(AgentFreeReasonCode::Unavailable);
+                        }
+                    }
+                    Ok(prepared) => {
+                        inventory_state = AgentFreeInventoryState::Consistent;
+                        inventory_revision = inventory_revision.wrapping_add(1);
+                        let sample = process_discovery.commit_sample(prepared);
+                        let matched_agents = sample.matched_agents;
+                        let now_ms = IdleSuspendStatusV1::now_ms();
+                        let eval = agent_status.evaluate_managed_agents(&matched_agents, now_ms);
+                        semantic_revision = agent_status.revision();
+                        match eval {
+                            AgentSemanticEvaluation::Free { idle_count: ic, blocked_count: bc, .. } => {
+                                idle_count = Some(ic as u32);
+                                blocked_count = Some(bc as u32);
+                                working_count = Some(0);
+                                unknown_count = Some(0);
+                                if deferred_until.is_some() {
+                                    // Kept in Deferred
+                                } else {
+                                    if free_anchor.is_none() {
+                                        let now = Instant::now();
+                                        free_anchor = Some(now);
+                                        free_since_ms = Some(now_ms);
+                                        let el_ms = now_ms + quiet_period_seconds * 1000;
+                                        eligible_at_ms = Some(el_ms);
+                                        agent_free_phase = AgentFreePhase::Tracking;
+                                        agent_free_reason = if ic == 0 && bc == 0 {
+                                            Some(AgentFreeReasonCode::NoAgents)
+                                        } else {
+                                            Some(AgentFreeReasonCode::AllFree)
+                                        };
+                                    } else {
+                                        let anchor = free_anchor.unwrap();
+                                        let elapsed = Instant::now().duration_since(anchor);
+                                        if elapsed > Duration::from_secs(quiet_period_seconds) {
+                                            let pres_now = client_presence.snapshot();
+                                            if pres_now.connection_count > 0 {
+                                                if agent_free_phase == AgentFreePhase::Tracking {
+                                                    let req_id = format!("consent-{}", uuid::Uuid::new_v4());
+                                                    let req_rev = next_consent_request_seq;
+                                                    next_consent_request_seq = next_consent_request_seq.wrapping_add(1);
+                                                    let req_at = Instant::now();
+                                                    let req_at_ms = IdleSuspendStatusV1::now_ms();
+                                                    let exp_at = req_at + Duration::from_secs(UNANSWERED_CONSENT_TIMEOUT_SECONDS);
+                                                    let exp_at_ms = req_at_ms + UNANSWERED_CONSENT_TIMEOUT_SECONDS * 1000;
+                                                    active_consent = Some(ActiveConsentRequest {
+                                                        request_id: req_id,
+                                                        request_revision: req_rev,
+                                                        requested_at: req_at,
+                                                        requested_at_ms: req_at_ms,
+                                                        expires_at: exp_at,
+                                                        expires_at_ms: exp_at_ms,
+                                                        wake_after_seconds,
+                                                        decision: None,
+                                                        state: ConsentState::Pending,
+                                                        approving_connection_id: None,
+                                                        approving_actor: None,
+                                                    });
+                                                    agent_free_phase = AgentFreePhase::AwaitingConsent;
+                                                    agent_free_reason = Some(AgentFreeReasonCode::AllFree);
+                                                }
+                                            } else if pres_now.pending_upgrade_count > 0 {
+                                                // Pending upgrade, wait
+                                            } else {
+                                                // Zero clients
+                                                if agent_free_phase == AgentFreePhase::Tracking {
+                                                    agent_free_phase = AgentFreePhase::FinalCheck;
+                                                    agent_free_reason = Some(AgentFreeReasonCode::AllFree);
+                                                    attempt_agent_free_final_check(
+                                                        false,
+                                                        &mut agent_free_phase,
+                                                        &mut agent_free_reason,
+                                                        &mut active_consent,
+                                                        &mut deferred_until,
+                                                        &mut deferred_until_ms,
+                                                        &mut free_anchor,
+                                                        &mut free_since_ms,
+                                                        &mut eligible_at_ms,
+                                                        &mut inventory_state,
+                                                        &mut inventory_revision,
+                                                        &mut semantic_revision,
+                                                        &mut idle_count,
+                                                        &mut blocked_count,
+                                                        &mut working_count,
+                                                        &mut unknown_count,
+                                                        &mut next_request_id,
+                                                        &mut next_consent_request_seq,
+                                                        &mut state,
+                                                        &mut in_flight_suspend,
+                                                        &mut active_attempt,
+                                                        &mut status_revision,
+                                                        &client_presence,
+                                                        auth_service.as_ref(),
+                                                        &agent_status,
+                                                        &mut process_discovery,
+                                                        &pty_manager,
+                                                        &startup_policy,
+                                                        &runtime_timing,
+                                                        &executor,
+                                                        event_writer.as_deref(),
+                                                        wake_after_seconds,
+                                                        quiet_period_seconds,
+                                                    ).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            AgentSemanticEvaluation::Working { working_count: wc, .. } => {
+                                working_count = Some(wc as u32);
+                                free_anchor = None;
+                                free_since_ms = None;
+                                eligible_at_ms = None;
+                                if let Some(r) = active_consent.as_mut() {
+                                    r.state = ConsentState::Cancelled;
+                                }
+                                if deferred_until.is_none() {
+                                    agent_free_phase = AgentFreePhase::Blocked;
+                                    agent_free_reason = Some(AgentFreeReasonCode::Working);
+                                }
+                            }
+                            AgentSemanticEvaluation::Unknown { reason, .. } => {
+                                unknown_count = Some(1);
+                                free_anchor = None;
+                                free_since_ms = None;
+                                eligible_at_ms = None;
+                                if let Some(r) = active_consent.as_mut() {
+                                    r.state = ConsentState::Cancelled;
+                                }
+                                if deferred_until.is_none() {
+                                    agent_free_phase = AgentFreePhase::Blocked;
+                                    agent_free_reason = Some(match reason {
+                                        AgentSemanticBlockReason::ExpiredLease { .. } => AgentFreeReasonCode::Expired,
+                                        AgentSemanticBlockReason::AmbiguousOwner { .. } => AgentFreeReasonCode::Ambiguous,
+                                        _ => AgentFreeReasonCode::Unknown,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                publish_agent_free_status_checked(
+                    &status_tx,
+                    Some(&*event_sink),
+                    state,
+                    &startup_policy,
+                    quiet_period_seconds,
+                    wake_after_seconds,
+                    &mut status_revision,
+                    current_epoch,
+                    pty_manager.fleet_snapshot(),
+                    &last_outcome,
+                    &detail,
+                    Some(IdleSuspendAgentFreeStatusV1 {
+                        phase: agent_free_phase,
+                        scope: "managed-terminals".to_string(),
+                        inventory_state,
+                        inventory_revision,
+                        semantic_revision,
+                        idle_count,
+                        blocked_count,
+                        working_count,
+                        unknown_count,
+                        free_since_ms,
+                        eligible_at_ms,
+                        deferred_until_ms,
+                        reason_code: agent_free_reason,
+                    }),
+                    Some(client_presence.snapshot()),
+                    active_consent.as_ref().map(|r| r.to_status()),
+                );
+            }
             }
 
             // Activity sampler result received from dedicated worker thread
@@ -1683,6 +2471,514 @@ async fn run_coordinator(
                 }
             }
         }
+    }
+}
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct ActiveConsentRequest {
+    request_id: String,
+    request_revision: u64,
+    requested_at: Instant,
+    requested_at_ms: u64,
+    expires_at: Instant,
+    expires_at_ms: u64,
+    wake_after_seconds: u64,
+    decision: Option<ConsentDecisionValue>,
+    state: ConsentState,
+    approving_connection_id: Option<String>,
+    approving_actor: Option<AuthenticatedActor>,
+}
+
+impl ActiveConsentRequest {
+    fn to_status(&self) -> IdleSuspendConsentStatusV1 {
+        IdleSuspendConsentStatusV1 {
+            request_id: self.request_id.clone(),
+            request_revision: self.request_revision,
+            state: self.state,
+            requested_at_ms: self.requested_at_ms,
+            expires_at_ms: self.expires_at_ms,
+            decision: self.decision.map(|d| match d {
+                ConsentDecisionValue::Approve => ConsentDecision::Approve,
+                ConsentDecisionValue::Deny => ConsentDecision::Deny,
+            }),
+            wake_after_seconds: self.wake_after_seconds,
+        }
+    }
+}
+
+async fn revalidate_approving_actor(
+    auth_service: Option<&Arc<crate::auth::AuthService>>,
+    actor: &AuthenticatedActor,
+) -> bool {
+    if let Some(auth) = auth_service {
+        if let Some(store) = auth.store() {
+            if let Ok(Some(user)) = store.get_user(&actor.subject).await {
+                if !user.is_enabled {
+                    return false;
+                }
+                if let Some(expected_av) = actor.auth_version {
+                    if user.auth_version != expected_av {
+                        return false;
+                    }
+                }
+            } else {
+                return false;
+            }
+            if let Some(sid) = &actor.session_id {
+                if let Ok(Some(session)) = store.get_session(sid).await {
+                    if session.revoked_at.is_some() {
+                        return false;
+                    }
+                    let exp = crate::auth::bson_to_chrono(session.expires_at);
+                    let now = chrono::Utc::now();
+                    if now >= exp {
+                        return false;
+                    }
+                    let mfa_verified_at = crate::auth::bson_to_chrono(session.mfa_verified_at);
+                    let mfa_due = crate::auth::policy::compute_mfa_due_at(mfa_verified_at, exp);
+                    if now >= mfa_due {
+                        return false;
+                    }
+                    if let Some(expected_cv) = actor.credential_version {
+                        if session.credential_version != expected_cv {
+                            return false;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attempt_agent_free_final_check(
+    is_client_approved: bool,
+    agent_free_phase: &mut AgentFreePhase,
+    agent_free_reason: &mut Option<AgentFreeReasonCode>,
+    active_consent: &mut Option<ActiveConsentRequest>,
+    deferred_until: &mut Option<Instant>,
+    deferred_until_ms: &mut Option<u64>,
+    free_anchor: &mut Option<Instant>,
+    free_since_ms: &mut Option<u64>,
+    eligible_at_ms: &mut Option<u64>,
+    inventory_state: &mut AgentFreeInventoryState,
+    inventory_revision: &mut u64,
+    semantic_revision: &mut u64,
+    idle_count: &mut Option<u32>,
+    blocked_count: &mut Option<u32>,
+    working_count: &mut Option<u32>,
+    unknown_count: &mut Option<u32>,
+    next_request_id: &mut u64,
+    next_consent_request_seq: &mut u64,
+    state: &mut CoordinatorState,
+    in_flight_suspend: &mut Option<BoxFuture<'static, SuspendOutcome>>,
+    active_attempt: &mut Option<AttemptContext>,
+    status_revision: &mut u64,
+    client_presence: &Arc<ClientPresenceRegistry>,
+    auth_service: Option<&Arc<crate::auth::AuthService>>,
+    agent_status: &crate::agent_status::AgentStatusRuntime,
+    process_discovery: &mut ProcessDiscovery,
+    pty_manager: &PtySessionManager,
+    startup_policy: &StartupIdleSuspendPolicy,
+    runtime_timing: &Arc<RwLock<RuntimeIdleSuspendTiming>>,
+    executor: &Arc<dyn IdleSuspendExecutor>,
+    event_writer: Option<&IdleSuspendEventWriter>,
+    wake_after_seconds: u64,
+    quiet_period_seconds: u64,
+) {
+    if is_client_approved {
+        let Some(req) = active_consent.as_ref() else {
+            return;
+        };
+        let Some(_approving_conn_id) = &req.approving_connection_id else {
+            return;
+        };
+        let Some(approving_act) = &req.approving_actor else {
+            return;
+        };
+
+        let pres_snapshot = client_presence.snapshot();
+        if pres_snapshot.connection_count == 0 {
+            if let Some(r) = active_consent.as_mut() {
+                r.state = ConsentState::Cancelled;
+            }
+            *agent_free_phase = AgentFreePhase::Deferred;
+            *agent_free_reason = Some(AgentFreeReasonCode::LastClientDisconnected);
+            let defer_dur = Duration::from_secs(quiet_period_seconds);
+            *deferred_until = Some(Instant::now() + defer_dur);
+            *deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
+            *free_anchor = None;
+            *free_since_ms = None;
+            *eligible_at_ms = None;
+            return;
+        }
+
+        if !revalidate_approving_actor(auth_service, approving_act).await {
+            if let Some(r) = active_consent.as_mut() {
+                r.state = ConsentState::Cancelled;
+            }
+            *agent_free_phase = AgentFreePhase::Deferred;
+            *agent_free_reason = Some(AgentFreeReasonCode::SafetyInvalidation);
+            let defer_dur = Duration::from_secs(quiet_period_seconds);
+            *deferred_until = Some(Instant::now() + defer_dur);
+            *deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
+            *free_anchor = None;
+            *free_since_ms = None;
+            *eligible_at_ms = None;
+            return;
+        }
+    } else {
+        let pres_snapshot = client_presence.snapshot();
+        if pres_snapshot.connection_count > 0 {
+            let req_id = format!("consent-{}", uuid::Uuid::new_v4());
+            let req_rev = *next_consent_request_seq;
+            *next_consent_request_seq = next_consent_request_seq.wrapping_add(1);
+            let req_at = Instant::now();
+            let req_at_ms = IdleSuspendStatusV1::now_ms();
+            let exp_at = req_at + Duration::from_secs(UNANSWERED_CONSENT_TIMEOUT_SECONDS);
+            let exp_at_ms = req_at_ms + UNANSWERED_CONSENT_TIMEOUT_SECONDS * 1000;
+            *active_consent = Some(ActiveConsentRequest {
+                request_id: req_id,
+                request_revision: req_rev,
+                requested_at: req_at,
+                requested_at_ms: req_at_ms,
+                expires_at: exp_at,
+                expires_at_ms: exp_at_ms,
+                wake_after_seconds,
+                decision: None,
+                state: ConsentState::Pending,
+                approving_connection_id: None,
+                approving_actor: None,
+            });
+            *agent_free_phase = AgentFreePhase::AwaitingConsent;
+            *agent_free_reason = Some(AgentFreeReasonCode::AllFree);
+            return;
+        }
+    }
+
+    let pty_snapshot = pty_manager.capture_activity_snapshot();
+    let prep_res = process_discovery.prepare_sample(
+        &pty_snapshot,
+        &startup_policy.agent_executables,
+        Instant::now() + Duration::from_millis(100),
+    );
+
+    match prep_res {
+        Err(_) => {
+            *inventory_state = AgentFreeInventoryState::Degraded;
+            *agent_free_phase = AgentFreePhase::Blocked;
+            *agent_free_reason = Some(AgentFreeReasonCode::Unavailable);
+            *free_anchor = None;
+            *free_since_ms = None;
+            *eligible_at_ms = None;
+            if let Some(r) = active_consent.as_mut() {
+                r.state = ConsentState::Cancelled;
+            }
+        }
+        Ok(prepared) => {
+            *inventory_state = AgentFreeInventoryState::Consistent;
+            *inventory_revision = inventory_revision.wrapping_add(1);
+            let sample = process_discovery.commit_sample(prepared);
+            let matched_agents = sample.matched_agents;
+            let roots = pty_snapshot
+                .roots
+                .iter()
+                .filter_map(|r| r.qualification.process_identity().map(|pid| (r.terminal.clone(), pid)))
+                .collect::<Vec<_>>();
+            let now_ms = IdleSuspendStatusV1::now_ms();
+            let eval = agent_status.evaluate_managed_agents(&matched_agents, now_ms);
+            *semantic_revision = agent_status.revision();
+            match eval {
+                AgentSemanticEvaluation::Free {
+                    idle_count: ic,
+                    blocked_count: bc,
+                    min_lease_remaining_ms,
+                    non_free_generation: nfg,
+                    semantic_revision: s_rev,
+                } => {
+                    *idle_count = Some(ic as u32);
+                    *blocked_count = Some(bc as u32);
+                    *working_count = Some(0);
+                    *unknown_count = Some(0);
+
+                    if free_anchor.is_none()
+                        || Instant::now().duration_since(free_anchor.unwrap())
+                            <= Duration::from_secs(quiet_period_seconds)
+                    {
+                        *agent_free_phase = AgentFreePhase::Blocked;
+                        *free_anchor = None;
+                        *free_since_ms = None;
+                        *eligible_at_ms = None;
+                        if let Some(r) = active_consent.as_mut() {
+                            r.state = ConsentState::Cancelled;
+                        }
+                        return;
+                    }
+
+                    let matched_evidence = matched_agents
+                        .iter()
+                        .map(|m| ManagedAgentClaimEvidence {
+                            identity: m.identity,
+                            terminal: m.terminal.clone(),
+                            safe_executable_identity: m.safe_executable_identity.clone(),
+                            is_idle: true,
+                        })
+                        .collect();
+
+                    let timing_rev = runtime_timing
+                        .try_read()
+                        .map(|r| r.status_revision)
+                        .unwrap_or(1);
+                    let ticket = AgentFreeClaimTicket {
+                        request_id: *next_request_id,
+                        completed_at: Instant::now(),
+                        semantic_revision: s_rev,
+                        non_free_generation: nfg,
+                        timing_revision: timing_rev,
+                        fleet_generation: pty_snapshot.fleet.generation,
+                        input_revision: pty_manager.input_revision(),
+                        roots,
+                        matched_agents: matched_evidence,
+                        idle_count: ic,
+                        blocked_count: bc,
+                        min_lease_remaining_ms,
+                        eligibility_deadline: free_anchor.unwrap()
+                            + Duration::from_secs(quiet_period_seconds),
+                    };
+                    *next_request_id = next_request_id.wrapping_add(1).max(1);
+
+                    let admission = AgentFreeAdmission {
+                        ticket: &ticket,
+                        automatic_policy: IdleSuspendAutomaticPolicy::AgentFree,
+                        automatic_enabled: true,
+                        accepted_request_id: ticket.request_id,
+                        accepted_semantic_revision: ticket.semantic_revision,
+                        accepted_non_free_generation: ticket.non_free_generation,
+                        accepted_timing_revision: ticket.timing_revision,
+                        now: Instant::now(),
+                    };
+
+                    match pty_manager.try_claim_agent_free_handoff(admission) {
+                        Ok(_handoff_claim) => {
+                            let mut presence_claimed = true;
+                            if !is_client_approved {
+                                let pres_rev = client_presence.snapshot().revision;
+                                match client_presence.try_claim_no_client_fence(pres_rev) {
+                                    Ok(_) => {}
+                                    Err(PresenceClaimError::LiveConnectionsPresent { .. })
+                                    | Err(PresenceClaimError::PendingUpgradesPresent { .. }) => {
+                                        pty_manager.release_handoff();
+                                        let req_id = format!("consent-{}", uuid::Uuid::new_v4());
+                                        let req_rev = *next_consent_request_seq;
+                                        *next_consent_request_seq = next_consent_request_seq.wrapping_add(1);
+                                        let req_at = Instant::now();
+                                        let req_at_ms = IdleSuspendStatusV1::now_ms();
+                                        let exp_at = req_at + Duration::from_secs(UNANSWERED_CONSENT_TIMEOUT_SECONDS);
+                                        let exp_at_ms = req_at_ms + UNANSWERED_CONSENT_TIMEOUT_SECONDS * 1000;
+                                        *active_consent = Some(ActiveConsentRequest {
+                                            request_id: req_id,
+                                            request_revision: req_rev,
+                                            requested_at: req_at,
+                                            requested_at_ms: req_at_ms,
+                                            expires_at: exp_at,
+                                            expires_at_ms: exp_at_ms,
+                                            wake_after_seconds,
+                                            decision: None,
+                                            state: ConsentState::Pending,
+                                            approving_connection_id: None,
+                                            approving_actor: None,
+                                        });
+                                        *agent_free_phase = AgentFreePhase::AwaitingConsent;
+                                        *agent_free_reason = Some(AgentFreeReasonCode::AllFree);
+                                        presence_claimed = false;
+                                    }
+                                    Err(_) => {
+                                        pty_manager.release_handoff();
+                                        *agent_free_phase = AgentFreePhase::Blocked;
+                                        *free_anchor = None;
+                                        *free_since_ms = None;
+                                        *eligible_at_ms = None;
+                                        presence_claimed = false;
+                                    }
+                                }
+                            } else {
+                                client_presence.set_host_suspending(true);
+                            }
+
+                            if presence_claimed {
+                                let attempt_ctx = AttemptContext::new_automatic(
+                                    pty_snapshot.fleet.generation,
+                                    None,
+                                    ticket.timing_revision,
+                                    *status_revision,
+                                    wake_after_seconds,
+                                );
+                                emit_event(
+                                    event_writer,
+                                    ServerIdleSuspendEventTypeV1::FinalCheckCompleted,
+                                    Some(&attempt_ctx.correlation_id),
+                                    Some(attempt_ctx.mode),
+                                    IdleSuspendEventDataV1::FinalCheckCompleted(
+                                        FinalCheckCompletedDataV1 {
+                                            accepted: true,
+                                            reason_code: None,
+                                            fleet_generation: pty_snapshot.fleet.generation,
+                                            activity_revision: None,
+                                        },
+                                    ),
+                                );
+                                emit_event(
+                                    event_writer,
+                                    ServerIdleSuspendEventTypeV1::HandoffClaimAccepted,
+                                    Some(&attempt_ctx.correlation_id),
+                                    Some(attempt_ctx.mode),
+                                    IdleSuspendEventDataV1::HandoffClaimAccepted(
+                                        HandoffClaimAcceptedDataV1 {
+                                            fleet_generation: pty_snapshot.fleet.generation,
+                                        },
+                                    ),
+                                );
+                                emit_event(
+                                    event_writer,
+                                    ServerIdleSuspendEventTypeV1::HelperRequestDispatched,
+                                    Some(&attempt_ctx.correlation_id),
+                                    Some(attempt_ctx.mode),
+                                    IdleSuspendEventDataV1::HelperRequestDispatched(
+                                        HelperRequestDispatchedDataV1 {
+                                            wake_after_seconds,
+                                        },
+                                    ),
+                                );
+                                *active_attempt = Some(attempt_ctx);
+                                let suspend_req = SuspendWithRtcWakeRequest {
+                                    request_id: format!("req-{}", uuid::Uuid::new_v4()),
+                                    wake_after_seconds,
+                                };
+                                let exec = Arc::clone(executor);
+                                *in_flight_suspend = Some(Box::pin(async move {
+                                    exec.execute_suspend(suspend_req).await
+                                }));
+                                *state = CoordinatorState::HandedOff;
+                                *agent_free_phase = AgentFreePhase::HandedOff;
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!("Agent-free PTY handoff claim rejected: {err:?}");
+                            *agent_free_phase = AgentFreePhase::Blocked;
+                            *agent_free_reason = Some(AgentFreeReasonCode::Ambiguous);
+                            *free_anchor = None;
+                            *free_since_ms = None;
+                            *eligible_at_ms = None;
+                            if let Some(r) = active_consent.as_mut() {
+                                r.state = ConsentState::Cancelled;
+                            }
+                        }
+                    }
+                }
+                AgentSemanticEvaluation::Working {
+                    working_count: wc, ..
+                } => {
+                    *working_count = Some(wc as u32);
+                    *agent_free_phase = AgentFreePhase::Blocked;
+                    *agent_free_reason = Some(AgentFreeReasonCode::Working);
+                    *free_anchor = None;
+                    *free_since_ms = None;
+                    *eligible_at_ms = None;
+                    if let Some(r) = active_consent.as_mut() {
+                        r.state = ConsentState::Cancelled;
+                    }
+                }
+                AgentSemanticEvaluation::Unknown {
+                    reason,
+                    ..
+                } => {
+                    *unknown_count = Some(1);
+                    *agent_free_phase = AgentFreePhase::Blocked;
+                    *agent_free_reason = Some(match reason {
+                        AgentSemanticBlockReason::ExpiredLease { .. } => {
+                            AgentFreeReasonCode::Expired
+                        }
+                        AgentSemanticBlockReason::AmbiguousOwner { .. } => {
+                            AgentFreeReasonCode::Ambiguous
+                        }
+                        _ => AgentFreeReasonCode::Unknown,
+                    });
+                    *free_anchor = None;
+                    *free_since_ms = None;
+                    *eligible_at_ms = None;
+                    if let Some(r) = active_consent.as_mut() {
+                        r.state = ConsentState::Cancelled;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_agent_free_status_checked(
+    tx: &watch::Sender<IdleSuspendStatusV1>,
+    event_sink: Option<&dyn crate::pty::EventSink>,
+    state: CoordinatorState,
+    startup_policy: &StartupIdleSuspendPolicy,
+    quiet_period_seconds: u64,
+    wake_after_seconds: u64,
+    status_revision: &mut u64,
+    current_epoch: u64,
+    fleet_snapshot: PtyFleetSnapshot,
+    last_outcome: &Option<SuspendOutcome>,
+    detail: &Option<String>,
+    agent_free: Option<IdleSuspendAgentFreeStatusV1>,
+    client_presence: Option<IdleSuspendClientPresenceStatusV1>,
+    consent: Option<IdleSuspendConsentStatusV1>,
+) {
+    let new_status = IdleSuspendStatusV1 {
+        version: 1,
+        status_revision: *status_revision,
+        state,
+        automatic_policy: startup_policy.automatic_policy,
+        enabled: startup_policy.enabled,
+        timing_mutable: startup_policy.enabled && state != CoordinatorState::HandedOff,
+        timing_mutable_reason: if !startup_policy.enabled {
+            Some("disabled".to_string())
+        } else if state == CoordinatorState::HandedOff {
+            Some("handoffInProgress".to_string())
+        } else {
+            None
+        },
+        capability_code: startup_policy.capability_selection.as_str().to_string(),
+        current_epoch,
+        quiet_period_seconds,
+        wake_after_seconds,
+        min_quiet_period_seconds: MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        max_quiet_period_seconds: MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,
+        min_wake_after_seconds: MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+        max_wake_after_seconds: MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
+        fleet_snapshot,
+        arm_deadline_ms: None,
+        last_outcome: last_outcome.clone(),
+        detail: detail.clone(),
+        activity: None,
+        agent_free,
+        client_presence,
+        consent,
+        timestamp_ms: IdleSuspendStatusV1::now_ms(),
+    };
+
+    let prev = tx.borrow().clone();
+    if new_status.is_meaningful_change(&prev) {
+        *status_revision = status_revision.wrapping_add(1);
+        let mut final_status = new_status;
+        final_status.status_revision = *status_revision;
+        if let Some(sink) = event_sink {
+            sink.send_idle_suspend_changed(*status_revision);
+        }
+        let _ = tx.send(final_status);
+    } else {
+        let _ = tx.send(new_status);
     }
 }
 

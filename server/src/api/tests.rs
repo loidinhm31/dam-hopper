@@ -8313,3 +8313,217 @@ async fn test_get_agent_status_snapshot_unauthorized() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+#[tokio::test]
+async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
+    let user_record = crate::auth::UserRecord {
+        id: None,
+        username: crate::auth::MOCK_USER.to_string(),
+        password_hash: String::new(),
+        is_enabled: true,
+        role: crate::auth::UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    store.create_user(user_record).await.unwrap();
+    let presence = crate::idle_suspend::ClientPresenceRegistry::new();
+    let (auth_cookie_str, session) = {
+        use crate::auth::model::{chrono_to_bson, AuthClaims};
+        use crate::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+        let now = chrono::Utc::now();
+        let exp = now.timestamp() as usize + MOCK_EXPIRY_SECS as usize;
+        let expires_at = chrono::DateTime::from_timestamp(exp as i64, 0).unwrap();
+        let claims = AuthClaims {
+            v: AUTH_PROTOCOL_VERSION,
+            sub: MOCK_USER.to_string(),
+            sid: MOCK_SESSION_ID.to_string(),
+            auth_version: 0,
+            credential_version: 0,
+            iat: now.timestamp() as usize,
+            exp,
+        };
+        let token = claims.encode(&TEST_TOKEN).unwrap();
+        let session = crate::auth::AuthSession {
+            id: MOCK_SESSION_ID.to_string(),
+            username: MOCK_USER.to_string(),
+            auth_version: 0,
+            credential_version: 0,
+            issued_at: chrono_to_bson(now),
+            expires_at: chrono_to_bson(expires_at),
+            mfa_verified_at: chrono_to_bson(now),
+            revoked_at: None,
+        };
+        (format!("damhopper-auth={token}"), session)
+    };
+    store.create_session(session).await.unwrap();
+    let actor = crate::api::auth::AuthenticatedActor::with_session(
+        crate::auth::MOCK_USER,
+        None,
+        crate::auth::MOCK_SESSION_ID,
+        0,
+        0,
+        chrono::Utc::now() + chrono::Duration::hours(1),
+        crate::auth::UserRole::User,
+    );
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let conn_id = "test-ws-conn".to_string();
+    let cap_sec = "test-cap-secret".to_string();
+    let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
+
+    let state = make_state(&tmp)
+        .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(Some(store.clone()), None)))
+        .with_client_presence(presence.clone());
+
+    let _coord = state.start_idle_suspend_coordinator(Arc::new(crate::idle_suspend::UnavailableExecutor::default())).await;
+
+    // 1. Unauthenticated -> 401
+    {
+        let app = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "requestId": "req-1",
+                "requestRevision": 1,
+                "connectionId": conn_id,
+                "decisionCapability": cap_sec,
+                "decision": "approve"
+            }).to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // 2. Non-JSON -> 415 invalidContentType
+    {
+        let app = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "text/plain")
+            .header("Cookie", &auth_cookie_str)
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from("decision=approve"))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    // 3. Unknown connection -> 404 connectionNotFound
+    {
+        let app = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "application/json")
+            .header("Cookie", &auth_cookie_str)
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(serde_json::json!({
+                "requestId": "req-1",
+                "requestRevision": 1,
+                "connectionId": "non-existent-conn",
+                "decisionCapability": cap_sec,
+                "decision": "approve"
+            }).to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "connectionNotFound");
+    }
+
+    // 4. Invalid capability -> 403 invalidCapability
+    {
+        let app = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "application/json")
+            .header("Cookie", &auth_cookie_str)
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(serde_json::json!({
+                "requestId": "req-1",
+                "requestRevision": 1,
+                "connectionId": conn_id,
+                "decisionCapability": "wrong-capability-secret",
+                "decision": "approve"
+            }).to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "invalidCapability");
+    }
+
+    // 5. Valid capability and connection, but coordinator disabled -> 403 idleSuspendDisabled
+    {
+        let app = build_router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "application/json")
+            .header("Cookie", &auth_cookie_str)
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(serde_json::json!({
+                "requestId": "req-1",
+                "requestRevision": 1,
+                "connectionId": conn_id,
+                "decisionCapability": cap_sec,
+                "decision": "approve"
+            }).to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "idleSuspendDisabled");
+    }
+
+    // 6. Valid capability and connection with enabled AgentFree coordinator, but no active request -> 409 consentUnavailable
+    {
+        let mut enabled_cfg = crate::config::IdleSuspendConfig::default();
+        enabled_cfg.enabled = true;
+        enabled_cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentFree;
+        enabled_cfg.quiet_period_seconds = 10800;
+        enabled_cfg.wake_after_seconds = 600;
+        let enabled_state = make_state_with_idle_suspend_config(&tmp, enabled_cfg)
+            .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(Some(store), None)))
+            .with_client_presence(presence.clone());
+        let _coord2 = enabled_state.start_idle_suspend_coordinator(Arc::new(crate::idle_suspend::UnavailableExecutor::default())).await;
+
+        let app = build_router(enabled_state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/idle-suspend/v1/consent/decision")
+            .header("Content-Type", "application/json")
+            .header("Cookie", &auth_cookie_str)
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(serde_json::json!({
+                "requestId": "req-1",
+                "requestRevision": 1,
+                "connectionId": conn_id,
+                "decisionCapability": cap_sec,
+                "decision": "approve"
+            }).to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "consentUnavailable");
+    }
+
+    client_guard.retire();
+}

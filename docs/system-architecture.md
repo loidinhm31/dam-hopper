@@ -227,7 +227,7 @@ Linux terminal idle suspend is coordinated by the server and an enrolled Unix-so
 ### Semantic agent-free automatic sleep
 
 Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
-Phase 01 (Contracts and configuration), Phase 02 (Managed agent inventory and qualified semantic evidence), and Phase 03 (Public WebSocket presence, liveness and session binding) are implemented and certified; Phase 04–06 cover coordinator timer and UI consent.
+Phase 01 (Contracts and configuration), Phase 02 (Managed agent inventory and qualified semantic evidence), Phase 03 (Public WebSocket presence, liveness and session binding), and Phase 04 (Three-hour coordinator, immediate consent, and final handoff) are implemented and certified; Phase 05–06 cover host resources and consent UI and final qualification.
 - **Policy & Fixed Timing**:
   - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
   - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.
@@ -290,11 +290,35 @@ Phase 01 (Contracts and configuration), Phase 02 (Managed agent inventory and qu
 - **UI Exact-Owner Receipt Binding & Lifecycle**:
   - `WsTransport` (`packages/ui/src/api/ws-transport.ts`): Caches `host:uiConnection` receipt in memory upon arrival (`getUiConnectionReceipt()`); immediately delivers cached snapshot to late subscribers (`subscribeUiConnection`). Socket disconnect, close, error, reconnect, or transport disposal resets receipt to `null` and notifies subscribers.
   - `connections.ts` (`packages/ui/src/api/connections.ts`): Provides `getUiConnectionReceipt(owner)` and `subscribeUiConnectionReceipt(owner, listener)` gated strictly by `isCurrentConnection(owner)` with generation matching. Stale owners, disconnected profiles, or non-WebSocket transports return `null` with no ambient or fallback profile resolution.
-- **Client Presence & Consent Interaction**:
-  - Private OMP reporter sockets are not client presence. Track authenticated public `/ws` sessions through upgrade, liveness, and teardown.
-  - At eligibility: zero clients allows automatic final admission; connected clients receive one server-owned consent request through shared web/native UI.
-  - Any enabled authenticated user's approval suffices (first valid Yes/No wins); approval immediately enters fresh final checks.
-  - Refusal, 60s unanswered timeout, or last-client loss defers three hours. Browsers never authorize sleep independently.
+- **Three-Hour Coordinator Engine & Monotonic Epochs**:
+  - Tracks continuous quiescence epoch (>10,800s, 3 hours) using monotonic `Instant` timestamps (`free_anchor`, `elapsed > Duration::from_secs(quiet_period_seconds)`). Strict inequality required; exact boundary (`== 10,800s`) rejected.
+  - Clean zero-agent boot support: fleets starting with zero agents initialize directly in valid tracking epoch without false blockers.
+  - Intervening non-free agent activity (`Working`, hook transitions, lease expiration) or safety invalidations immediately reset continuity and clear `free_anchor`.
+- **Public Client Presence Arbitration & Branching**:
+  - Zero connected public clients (`connection_count == 0 && pending_upgrade_count == 0`): coordinator enters `FinalCheck` automatically, bypassing consent prompt.
+  - Positive connected public clients (`connection_count > 0`): coordinator issues single active consent request (`ActiveConsentRequest`) with unique UUID (`consent-<uuid>`), monotonic revision, and 60-second expiration (`expires_at = now + 60s`), transitioning to `AgentFreePhase::AwaitingConsent`.
+  - Pending-only connection upgrades (`pending_upgrade_count > 0`): coordinator pauses and waits across cadence ticks until pending upgrades complete promotion or timeout, eliminating handshake race conditions.
+- **First-Valid Consent Latching & Immediate Final Check Dispatch**:
+  - `POST /api/system/idle-suspend/v1/consent/decision` endpoint passes decisions to coordinator actor loop.
+  - First valid server-accepted decision latches atomically into `active_consent.decision` and records `last_settled_consent`.
+  - Subsequent contrary decisions return HTTP 409 `decisionAlreadySettled`.
+  - Duplicate identical decisions return idempotent HTTP 200 OK (`Success { idempotent: true }`).
+  - Approval (`Approve`): sets `AgentFreePhase::Approved`, captures approving actor and connection ID, responds HTTP 200 OK, and immediately dispatches `attempt_agent_free_final_check(true, ...)` without waiting for the 60s timeout.
+  - Refusal (`Deny`): sets `AgentFreePhase::Deferred` with reason `ClientRefusal`, responds HTTP 200 OK, and defers coordinator for full `> 10,800s` (3 hours) cooldown.
+- **Timeouts, Disconnects, and Pre-Dispatch Invalidation**:
+  - 60s Unanswered Timeout: if `now >= expires_at` with no decision, consent request transitions to `ConsentState::Expired`, sets reason `UnansweredTimeout`, and defers coordinator for `> 10,800s`.
+  - Last-Client Disconnect: if client count drops to 0 while in `AwaitingConsent` or `Approved`, in-flight consent transitions to `ConsentState::Cancelled`, sets reason `LastClientDisconnected`, and defers for `> 10,800s`.
+  - Pre-Dispatch Actor Revalidation: `revalidate_approving_actor` re-checks the approving actor before final execution against database: user enabled, auth version matched, session unrevoked, session non-expired (`now < expires_at`), MFA deadline valid (`now < mfa_due_at`), and credential version matched. Revalidation failure cancels consent with `SafetyInvalidation` and defers for `> 10,800s`.
+- **Fresh Final Check Pipeline & Atomic Handoff**:
+  - Captures fresh PTY snapshot and runs `process_discovery.prepare_sample` / `commit_sample` and `agent_status.evaluate_managed_agents`.
+  - Any working agent, ambiguous owner, unrefreshed native provider, or expired lease cancels consent, sets `Blocked`, and resets quiet anchor.
+  - All-free evaluation acquires PTY handoff claim via `try_claim_agent_free_handoff(admission)` under middle lock.
+  - Zero-client flow: atomically claims `try_claim_no_client_fence(pres_rev)`. If clients arrived during final check, releases PTY claim and issues consent request instead.
+  - Approved client flow: sets `client_presence.set_host_suspending(true)`.
+  - Emits `FinalCheckCompleted`, `HandoffClaimAccepted`, `HelperRequestDispatched` server events and dispatches single `SuspendWithRtcWakeRequest` to executor.
+- **Audit Logging & Privacy-Preserving Redaction**:
+  - `IdleSuspendServerAudit` appends `ConsentAuditRecord` (version, timestamp, actor, request_id, request_revision, connection_id, decision, status_revision, result) via verified file descriptors (`O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, mode 0600, UID/GID checks, `sync_data`).
+  - `project_server_audit` redacts actor subject to boolean `actor_present: bool`, omits `connection_id`, projects canonical UUID `correlation_id`, and redacts details to `requestRevision,statusRevision` for diagnostic bundles.
 - **Canonical Admission Lock Order**:
   1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
   2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).

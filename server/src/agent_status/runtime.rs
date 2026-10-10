@@ -767,6 +767,10 @@ impl AgentStatusRuntime {
     pub fn non_free_generation(&self) -> u64 {
         self.0.registry.read().non_free_generation()
     }
+    /// Read the current semantic status revision.
+    pub fn revision(&self) -> u64 {
+        self.0.registry.read().revision
+    }
 
     /// Authoritative semantic evaluation of managed agents against current registry state.
     #[allow(dead_code)]

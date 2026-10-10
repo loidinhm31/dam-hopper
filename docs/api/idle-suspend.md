@@ -235,6 +235,67 @@ invalidOrigin`. Callers presenting a valid `Authorization: Bearer` token
 
 The route is registered only under the protected API router; there is no
 unauthenticated WebSocket or native bypass.
+#### POST `/api/system/idle-suspend/v1/consent/decision`
+
+Submits a user consent decision (`approve` or `deny`) for an active automatic sleep prompt under the `agent-free` policy.
+
+- **Auth & Transport Guards**:
+  - Protected route requiring an authenticated user (`AuthenticatedActor`).
+  - Denied under `--no-auth` bypass with HTTP 403 (`consentDisabledNoAuth`).
+  - Database verification enforces that the actor account is still enabled (`user.is_enabled`).
+  - Request body is limited to 16 KiB via `RequestBodyLimitLayer`.
+  - Enforces `Content-Type: application/json` and origin header validation for cookie-authenticated requests.
+- **Cryptographic Capability Verification**:
+  - Validates `decisionCapability` against the SHA-256 digest cached in `AppState.client_presence` using constant-time comparison (`subtle::ConstantTimeEq`).
+  - Asserts exact actor session invariant match: `subject`, `session_id`, `auth_version`, `credential_version`, and non-expired `effective_deadline`.
+  - Rejects connections marked closing (`closing: true`) or non-existent in the registry.
+- **Request Schema (`ConsentDecisionRequest`)**:
+  - Strict camelCase JSON schema; unknown fields are forbidden (`deny_unknown_fields`).
+  ```json
+  {
+    "requestId": "consent-550e8400-e29b-41d4-a716-446655440000",
+    "requestRevision": 1,
+    "connectionId": "550e8400-e29b-41d4-a716-446655440001",
+    "decisionCapability": "550e8400-e29b-41d4-a716-446655440002",
+    "decision": "approve"
+  }
+  ```
+  - `requestId`: string (1..=64 characters), matching the active consent request UUID.
+  - `requestRevision`: integer (`u64`), monotonic sequence of the consent issuance.
+  - `connectionId`: string (1..=128 characters), active WebSocket connection UUID.
+  - `decisionCapability`: string (1..=128 characters), high-entropy capability token delivered in `host:uiConnection`.
+  - `decision`: enum (`"approve"` or `"deny"`).
+- **Responses**:
+  - **`200 OK`**: Accepted decision latched by coordinator. Includes `Cache-Control: no-store`.
+    ```json
+    {
+      "version": 1,
+      "requestId": "consent-550e8400-e29b-41d4-a716-446655440000",
+      "decision": "approve",
+      "statusRevision": 42,
+      "settled": true
+    }
+    ```
+    Duplicate identical decisions for an already settled request return `200 OK` idempotently.
+  - **`409 Conflict`**: Returned when the decision cannot be applied:
+    - `decisionAlreadySettled`: request already settled with a contrary decision.
+    - `consentExpired`: request exceeded the 60-second unanswered timeout.
+    - `consentCancelled`: request cancelled due to intervening agent activity, disconnect, or safety invalidation.
+    - `consentUnavailable`: no active request or mismatched `requestId`/`requestRevision`.
+    - `handoffInProgress`: machine suspend handoff is already executing.
+  - **`403 Forbidden`**:
+    - `invalidCapability`: capability secret mismatch, actor invariant mismatch, or deadline expired.
+    - `consentDisabledNoAuth`: rejected because server runs with `--no-auth`.
+    - `coordinatorDisabled`: idle suspend coordinator is disabled.
+    - `actorDisabled`: user account is disabled.
+  - **`404 Not Found`**:
+    - `connectionNotFound`: connection ID not present in `ClientPresenceRegistry`.
+  - **`400 Bad Request`**:
+    - `invalidConsentPayload`: field lengths out of bounds, empty strings, or invalid JSON.
+  - **`503 Service Unavailable`**:
+    - `coordinatorShuttingDown`: server is shutting down.
+    - `forceSuspendAuditUnavailable`: audit logging write failed.
+
 
 #### Configured-agent activity qualification boundary (2026-09-11)
 

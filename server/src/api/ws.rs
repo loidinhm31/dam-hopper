@@ -3199,6 +3199,17 @@ async fn pump_idle_suspend_hints(
                     dropped = n,
                     "idle suspend broadcast lagged; client reconciles via REST status"
                 );
+                let resync_hint = serde_json::json!({
+                    "kind": "host:idleSuspendChanged",
+                    "payload": {
+                        "version": 1,
+                        "revision": 0,
+                    }
+                })
+                .to_string();
+                if alert_tx.send(WireMsg::Text(resync_hint)).await.is_err() {
+                    break;
+                }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
