@@ -38,13 +38,13 @@ export function ProjectBadge({ name, className }: ProjectBadgeProps) {
       role="status"
       aria-label={`Project: ${trimmedName}`}
       className={cn(
-        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium tracking-wide border shrink-0 truncate max-w-[120px]",
+        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium tracking-wide border shrink-0 max-w-[120px]",
         colorClass,
         className,
       )}
       title={`Project: ${trimmedName}`}
     >
-      {trimmedName}
+      <span className="min-w-0 truncate">{trimmedName}</span>
     </span>
   );
 }

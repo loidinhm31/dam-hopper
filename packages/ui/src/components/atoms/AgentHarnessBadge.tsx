@@ -32,7 +32,7 @@ export function AgentHarnessBadge({
       )}
       title={`Agent: ${trimmed}`}
     >
-      {trimmed}
+      <span className="min-w-0 truncate">{trimmed}</span>
     </span>
   );
 }

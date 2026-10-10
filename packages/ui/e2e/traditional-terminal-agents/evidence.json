@@ -1,13 +1,13 @@
 {
-  "run_id": "e2e-run-1791635111554-9dc10c28",
+  "run_id": "e2e-run-1791643813632-0ce851d2",
   "command": "pnpm --filter @dam-hopper/ui test:e2e",
-  "started_at": "2026-10-10T12:25:11.554Z",
-  "completed_at": "2026-10-10T12:25:19.009Z",
+  "started_at": "2026-10-10T14:50:13.632Z",
+  "completed_at": "2026-10-10T14:50:21.299Z",
   "case_name": "traditional-terminal-agents",
   "route": "/workspace",
-  "git_head": "39c5e454169760c636170266885f91e1cdbfcb0a",
-  "source_fingerprint": "02f596ad3508ff3f231cc198476a049a017914c60677e5cb3317217c2b7fd978",
-  "seed_digest": "ecd78d2c67d31048f28de564e03dd9382de4acb3985d4d0d7455ed78443c4efa",
+  "git_head": "3fbf6ecb91c8204c9aef9feeebfb18f4b232971e",
+  "source_fingerprint": "a5803226dbdad81fd2df34947dcf7b8ae33d6d956b3d7adfdfdda7d1c4d26b04",
+  "seed_digest": "3f0dac690337fb5c32a93fd23164320aa003e6d56290e8d4b817f9a1ddd08634",
   "browser": "chromium",
   "browser_version": "151.0.7922.173",
   "os": "linux",
@@ -20,7 +20,7 @@
     {
       "checkpoint": "primary",
       "file_name": "screenshot.png",
-      "sha256": "328ab002ff79a37ec740f1ce011b80147c05aab8d72d246426038ea2b5ecd5d0",
+      "sha256": "55aef9844359bfc2479f494a91305018284f1210ff6ea850e71fac2f78d1b404",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -29,10 +29,28 @@
     {
       "checkpoint": "compact",
       "file_name": "compact.png",
-      "sha256": "11244d38b00a9d4fa5a10bdd3304548eef1d741bf7d19e5dab51df3ce6a065c8",
+      "sha256": "3bdef30181e996d9274998a09ca044ac1a48daac7ee29df4c46f6c7661930e86",
       "dimensions": {
         "width": 390,
         "height": 844
+      }
+    },
+    {
+      "checkpoint": "agent-badges-grouped",
+      "file_name": "agent-badges-grouped.png",
+      "sha256": "900ff4fec51a0694a3dc6ca814c1e131686d7891ce5928bfb01393d5aeb6b18e",
+      "dimensions": {
+        "width": 1280,
+        "height": 700
+      }
+    },
+    {
+      "checkpoint": "agent-badges-split",
+      "file_name": "agent-badges-split.png",
+      "sha256": "890a12c41a8f5b67c5ff30a55d1dabfb781aa1b4f640b876c4dd00a918422102",
+      "dimensions": {
+        "width": 1280,
+        "height": 700
       }
     }
   ],

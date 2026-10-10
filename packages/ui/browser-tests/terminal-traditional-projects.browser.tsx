@@ -53,6 +53,8 @@ import {
   settleTraditionalFixtureQueries,
 } from "./terminal-traditional-projects.browser-fixture.js";
 import { traditionalTerminalLayoutStorageKey } from "@/lib/traditional-terminal-projects.js";
+import { TraditionalTerminalAgentGroupRow } from "@/components/molecules/traditional-terminal-agent-group-row.js";
+import type { TraditionalTerminalAgentStatusGroup } from "@/lib/traditional-terminal-agent-groups.js";
 import "@/index.css";
 import "@xterm/xterm/css/xterm.css";
 // Browser mode actions run outside React. Keep the entire real interaction
@@ -2105,5 +2107,93 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(
       useProjectTargetStore.getState().activeTargetByProject["alpha"],
     ).toBeUndefined();
+  });
+
+  it("renders long project and profile badge labels with text-overflow ellipsis without horizontal overflow in narrow sidebar", async () => {
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+    const longProject = "extremely-long-project-name-that-exceeds-the-badge-bounds";
+    const longProfile = "extremely-long-server-profile-name-exceeding-space";
+    const longAgentGroup: TraditionalTerminalAgentStatusGroup = {
+      key: "long-agent-group",
+      groupId: "project:long",
+      profileId: "profile-long",
+      projectLabel: longProject,
+      profileLabel: longProfile,
+      label: "Working",
+      reasonLabel: null,
+      outcomeHint: null,
+      harnessLabels: ["OMP"],
+      sourceLabels: ["Lifecycle observation"],
+      coverageHints: [],
+      rows: [
+        {
+          key: "term:long:1",
+          sessionId: "term:long",
+          terminalRef: { profileId: "profile-long", id: "term-1" },
+          incarnation: 1,
+          groupId: "project:long",
+          projectLabel: longProject,
+          profileLabel: longProfile,
+          terminalTitle: "long terminal title",
+          harnessLabel: "OMP",
+          statusOwner: { profileId: "profile-long", generation: 1 },
+          availability: "ready",
+          status: {
+            id: "term-1",
+            incarnation: 1,
+            agentKind: "omp",
+            agentSessionId: "sess-long",
+            reporterEpoch: 1,
+            state: "working",
+            source: "lifecycle",
+            attentionRevision: 0,
+          },
+          presentation: {
+            label: "Working",
+            reasonLabel: null,
+            outcomeHint: null,
+            sourceLabel: "Lifecycle observation",
+            coverageHint: null,
+          },
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <div style={{ width: "224px" }} className="bg-[var(--color-surface)]">
+          <TraditionalTerminalAgentGroupRow
+            group={longAgentGroup}
+            onSelectAgent={() => {}}
+          />
+        </div>,
+      );
+    });
+
+    const button = container.querySelector("button")!;
+    expect(button).not.toBeNull();
+
+    const projectBadge = button.querySelector('[role="status"][aria-label^="Project:"]');
+    expect(projectBadge).not.toBeNull();
+    const projectTruncate = projectBadge!.querySelector(".truncate");
+    expect(projectTruncate).not.toBeNull();
+    const projectStyle = window.getComputedStyle(projectTruncate!);
+    expect(projectStyle.textOverflow).toBe("ellipsis");
+    expect(projectStyle.overflow).toBe("hidden");
+    expect(projectStyle.whiteSpace).toBe("nowrap");
+
+    const profileBadge = button.querySelector('[role="status"][aria-label^="Server profile:"]');
+    expect(profileBadge).not.toBeNull();
+    const profileTruncate = profileBadge!.querySelector(".truncate");
+    expect(profileTruncate).not.toBeNull();
+    const profileStyle = window.getComputedStyle(profileTruncate!);
+    expect(profileStyle.textOverflow).toBe("ellipsis");
+    expect(profileStyle.overflow).toBe("hidden");
+    expect(profileStyle.whiteSpace).toBe("nowrap");
+
+    expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth + 1);
   });
 });
