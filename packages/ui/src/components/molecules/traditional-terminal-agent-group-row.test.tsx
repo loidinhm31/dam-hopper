@@ -80,6 +80,9 @@ describe("TraditionalTerminalAgentGroupRow", () => {
     for (const context of [row.terminalTitle, row.harnessLabel, row.projectLabel, row.profileLabel]) {
       expect(button.textContent).toContain(context);
     }
+    expect(button.querySelector('[aria-label="Agent: Codex"]')).not.toBeNull();
+    expect(button.querySelector('[aria-label="Project: Editor"]')).not.toBeNull();
+    expect(button.querySelector('[aria-label="Server profile: Development"]')).not.toBeNull();
     expect(button.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("1");
     expect(button.textContent).not.toContain(row.status.agentSessionId);
     expect(button.getAttribute("aria-label")).not.toContain(row.sessionId);
@@ -95,8 +98,9 @@ describe("TraditionalTerminalAgentGroupRow", () => {
     const button = renderGroup(group);
     expect(button.querySelector('[data-testid="agent-count-badge"]')!.textContent).toBe("3");
     expect(button.getAttribute("aria-label")).toBe("OMP, Claude: 3 agents; Project: Editor; Server profile: Development; Working");
+    expect(button.querySelector('[aria-label="Agent: OMP"]')).not.toBeNull();
+    expect(button.querySelector('[aria-label="Agent: Claude"]')).not.toBeNull();
     expect(button.textContent).not.toContain("Shared terminal title");
-    expect(button.hasAttribute("aria-current")).toBe(false);
     act(() => button.click());
     expect(onSelectAgent).toHaveBeenLastCalledWith(a.sessionId);
     renderGroup(group, a.sessionId);

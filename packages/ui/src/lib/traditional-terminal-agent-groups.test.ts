@@ -50,6 +50,7 @@ describe("groupTraditionalTerminalAgentRows", () => {
       ["Working", ["a", "c"]],
       ["Idle", ["b"]],
     ]);
+    expect(groups[0]!.profileId).toBe("p");
   });
 
   it("never merges equal statuses across projects and keeps project order", () => {

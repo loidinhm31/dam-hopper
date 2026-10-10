@@ -12,6 +12,7 @@ import type {
 export interface TraditionalTerminalAgentStatusGroup {
   readonly key: string;
   readonly groupId: string;
+  readonly profileId?: string;
   readonly projectLabel: string;
   readonly profileLabel: string;
   readonly label: TraditionalAgentStatusLabel;
@@ -61,6 +62,7 @@ export function groupTraditionalTerminalAgentRows(
     groups.push({
       key,
       groupId: first.groupId,
+      profileId: first.terminalRef.profileId,
       projectLabel: first.projectLabel,
       profileLabel: first.profileLabel,
       label,

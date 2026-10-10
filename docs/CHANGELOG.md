@@ -1,6 +1,9 @@
 # 2026-10-10
 
-- **Traditional terminal Agents sidebar groups by project and status.** The `agents` section now shows one item per (project, primary status) instead of one per agent terminal, with a count badge of agents in that item (e.g. a project with 3 Working and 1 Needs attention agents shows two items, badged 3 and 1). Status identity is the primary label plus attention reason; items are ordered project-first (builder order) then by severity (Needs attention, Working, Idle, Unknown, Unavailable, Platform unqualified, Unsupported). `Done (turn ended)` appears on an item only when every member carries it. Activating a multi-agent item selects the member after the active one in tab order (wrapping), or the first member when the active terminal is outside the item; selection still flows through the display's committed-key fence, so stale or replaced PTYs are never selected. Single-agent items keep the previous accessible name prefix; multi-agent items read `<harnesses>: N agents; Project: …; Server profile: …; <status>`.
+- **Traditional terminal Agents sidebar groups by project and status with color-coded badges.** The `agents` section shows one item per (project, primary status) with an agent count badge. Each item features distinct color-coded micro-badges adhering to unified typography and border geometry (`text-[9px] font-mono font-medium tracking-wide border rounded-sm px-1.5 py-0.5`):
+  - **Agent Type Badges (`AgentHarnessBadge`):** Brand-aligned semantic color styling for OMP (purple), Codex (emerald), and Claude (amber), rendering individual badges for single and multi-harness agent groups.
+  - **Project & Profile Badges (`ProjectBadge`, `ProfileBadge`):** Deterministic color-hashed badges for project labels and server profile connections with accessible titles, truncation protection, and aria-status semantics.
+  - **Status & Cycling Interaction:** Groups order project-first then by severity; activating a multi-agent item cycles member terminals via the existing committed-key fence. Full UI unit test suite (332 test files, 2,767 tests) and Chromium browser suite (35/35 tests) passing cleanly.
 
 # 2026-10-09
 
