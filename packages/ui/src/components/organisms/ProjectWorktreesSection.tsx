@@ -18,8 +18,7 @@ import { WorktreeAddForm } from "@/components/organisms/WorktreeAddForm.js";
 import { countDirtyTabsForTarget, useEditorStore } from "@/stores/editor.js";
 import { countLiveTerminalSessionsForTarget } from "@/hooks/use-terminal-tree.js";
 import { formatWorktreeRemovalBlockerMessage } from "./ProjectInfoHelpers.js";
-
-const EMPTY_UNAVAILABLE_TARGET_PATHS: string[] = [];
+import { useWorktreeTargetReconciliation } from "@/hooks/use-worktree-target-reconciliation.js";
 
 function isTargetLossError(error: unknown): boolean {
   const values: string[] = [];
@@ -34,22 +33,6 @@ function isTargetLossError(error: unknown): boolean {
   }
   return isProjectTargetError(...values);
 }
-
-function recoveredTargetPaths(
-  projectName: string,
-  unavailablePaths: string[],
-  worktrees: ReadonlyArray<Worktree> | undefined,
-) {
-  return unavailablePaths.filter((path) =>
-    worktrees?.some(
-      (worktree) =>
-        worktreeTargetKey(projectName, worktree.path) ===
-          worktreeTargetKey(projectName, path) &&
-        isSelectableWorktree(worktree),
-    ),
-  );
-}
-
 interface ProjectWorktreesSectionProps {
   projectName: string;
   projectRoot: string;
@@ -64,6 +47,9 @@ export function ProjectWorktreesSection({
   isVisible,
 }: ProjectWorktreesSectionProps) {
   const targetRef = target?.target ?? projectName;
+  const projectScope = target?.target?.profileId
+    ? { profileId: target.target.profileId, project: projectName }
+    : projectName;
   const {
     data,
     dataUpdatedAt,
@@ -80,116 +66,36 @@ export function ProjectWorktreesSection({
   const worktrees = useMemo<Worktree[]>(() => data ?? [], [data]);
   const removeWorktree = useRemoveWorktree(targetRef);
   const selectTarget = useProjectTargetStore((state) => state.selectTarget);
-  const markTargetUnavailable = useProjectTargetStore(
-    (state) => state.markTargetUnavailable,
-  );
-  const clearUnavailableTarget = useProjectTargetStore(
-    (state) => state.clearUnavailableTarget,
-  );
-  const markEditorTargetUnavailable = useEditorStore(
-    (state) => state.markTargetUnavailable,
-  );
-  const markEditorTargetAvailable = useEditorStore(
-    (state) => state.markTargetAvailable,
-  );
   const editorTabs = useEditorStore((state) => state.tabs);
-  const unavailableTargetPaths = useProjectTargetStore(
-    (state) =>
-      state.unavailableTargetsByProject[projectName] ??
-      EMPTY_UNAVAILABLE_TARGET_PATHS,
-  );
   const [showAdd, setShowAdd] = useState(false);
   const [removingPath, setRemovingPath] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const previousVisible = useRef(false);
-  const pendingUnavailableRecovery = useRef(new Set<string>());
-  const unavailableDiscoveryVersions = useRef(new Map<string, number>());
   const selectedPath = target.target.worktreePath ?? null;
-  const selectedWorktree = selectedPath
-    ? worktrees.find(
-        (worktree) =>
-          worktreeTargetKey(projectName, worktree.path) ===
-          worktreeTargetKey(projectName, selectedPath),
-      )
-    : undefined;
-  const fallbackNotice =
-    unavailableTargetPaths.length === 0
-      ? null
-      : unavailableTargetPaths.length === 1
-        ? `Worktree ${unavailableTargetPaths[0]} is unavailable. Using Project root for new operations.`
-        : `${unavailableTargetPaths.length} worktrees are unavailable. Using Project root for new operations.`;
+  const {
+    unavailableTargetPaths,
+    fallbackNotice,
+    markTargetAsUnavailable,
+    markTargetAsAvailable,
+    reconcileRecoveredTargets,
+    pendingUnavailableRecovery,
+  } = useWorktreeTargetReconciliation({
+    projectName,
+    projectScope,
+    worktrees,
+    selectedPath,
+    dataUpdatedAt,
+    isFetched,
+    isFetching,
+    isError,
+    enabled: isVisible,
+  });
 
   useEffect(() => {
     const becameVisible = isVisible && !previousVisible.current;
     previousVisible.current = isVisible;
     if (becameVisible && !isFetching) void refetch();
   }, [isFetching, isVisible, refetch]);
-
-  useEffect(() => {
-    const activeKeys = new Set(
-      unavailableTargetPaths.map((path) =>
-        worktreeTargetKey(projectName, path),
-      ),
-    );
-    for (const path of unavailableTargetPaths) {
-      const key = worktreeTargetKey(projectName, path);
-      if (!unavailableDiscoveryVersions.current.has(key)) {
-        unavailableDiscoveryVersions.current.set(key, dataUpdatedAt);
-      }
-    }
-    for (const key of unavailableDiscoveryVersions.current.keys()) {
-      if (!activeKeys.has(key))
-        unavailableDiscoveryVersions.current.delete(key);
-    }
-  }, [dataUpdatedAt, projectName, unavailableTargetPaths]);
-
-  useEffect(() => {
-    if (!isVisible || !isFetched || isFetching || isError) return;
-    for (const path of recoveredTargetPaths(
-      projectName,
-      unavailableTargetPaths,
-      worktrees,
-    ).filter(
-      (candidate) =>
-        dataUpdatedAt >
-        (unavailableDiscoveryVersions.current.get(
-          worktreeTargetKey(projectName, candidate),
-        ) ?? dataUpdatedAt),
-    )) {
-      if (
-        pendingUnavailableRecovery.current.has(
-          worktreeTargetKey(projectName, path),
-        )
-      ) {
-        continue;
-      }
-      markEditorTargetAvailable(projectName, path);
-      clearUnavailableTarget(projectName, path);
-    }
-    if (
-      selectedPath == null ||
-      (selectedWorktree && isSelectableWorktree(selectedWorktree))
-    ) {
-      return;
-    }
-    markEditorTargetUnavailable(projectName, selectedPath);
-    markTargetUnavailable(projectName, selectedPath);
-  }, [
-    clearUnavailableTarget,
-    isError,
-    isFetching,
-    isFetched,
-    isVisible,
-    dataUpdatedAt,
-    markEditorTargetAvailable,
-    markEditorTargetUnavailable,
-    markTargetUnavailable,
-    projectName,
-    selectedPath,
-    selectedWorktree,
-    unavailableTargetPaths,
-    worktrees,
-  ]);
 
   async function handleRemove(path: string) {
     setMutationError(null);
@@ -210,10 +116,14 @@ export function ProjectWorktreesSection({
         throw new Error("Worktree is no longer registered; refresh and retry.");
       }
 
-      const targetRef = { project: projectName, worktreePath: path } as const;
+      const removalTargetRef = {
+        project: projectName,
+        worktreePath: path,
+        ...(target?.target?.profileId ? { profileId: target.target.profileId } : {}),
+      } as const;
       const blockerMessage = formatWorktreeRemovalBlockerMessage(
-        countDirtyTabsForTarget(editorTabs, targetRef),
-        countLiveTerminalSessionsForTarget(sessions, targetRef, projectRoot),
+        countDirtyTabsForTarget(editorTabs, removalTargetRef),
+        countLiveTerminalSessionsForTarget(sessions, removalTargetRef, projectRoot),
       );
       if (blockerMessage) {
         setMutationError(blockerMessage);
@@ -226,16 +136,14 @@ export function ProjectWorktreesSection({
         worktreeTargetKey(projectName, selectedPath) ===
           worktreeTargetKey(projectName, path)
       ) {
-        markEditorTargetUnavailable(projectName, path);
-        markTargetUnavailable(projectName, path);
+        markTargetAsUnavailable(path);
       }
       await refetch();
     } catch (error) {
       if (isTargetLossError(error)) {
         const unavailableKey = worktreeTargetKey(projectName, path);
         pendingUnavailableRecovery.current.add(unavailableKey);
-        markEditorTargetUnavailable(projectName, path);
-        markTargetUnavailable(projectName, path);
+        markTargetAsUnavailable(path);
         // The target may have disappeared after preflight. Reconcile the
         // selector immediately so new operations return to Project root.
         void refetch().then((result) => {
@@ -247,8 +155,7 @@ export function ProjectWorktreesSection({
                 unavailableKey && isSelectableWorktree(worktree),
           );
           if (recovered) {
-            markEditorTargetAvailable(projectName, path);
-            clearUnavailableTarget(projectName, path);
+            markTargetAsAvailable(path);
           }
         });
       }
@@ -263,14 +170,7 @@ export function ProjectWorktreesSection({
   function handleReconnect() {
     void refetch().then((result) => {
       if (result.isError || result.data == null) return;
-      for (const path of recoveredTargetPaths(
-        projectName,
-        unavailableTargetPaths,
-        result.data,
-      )) {
-        markEditorTargetAvailable(projectName, path);
-        clearUnavailableTarget(projectName, path);
-      }
+      reconcileRecoveredTargets(result.data);
     });
   }
 
@@ -287,7 +187,7 @@ export function ProjectWorktreesSection({
         fallbackNotice={fallbackNotice}
         fallbackTargetPaths={unavailableTargetPaths}
         removePendingPath={removingPath}
-        onSelect={(path) => selectTarget(projectName, path)}
+        onSelect={(path) => selectTarget(projectScope, path)}
         onRefresh={() => void refetch()}
         onRemove={handleRemove}
       />

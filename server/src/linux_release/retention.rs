@@ -3,7 +3,8 @@
 //! Enforces:
 //! - Retain active + one previous known-good + pending or latest failed candidate
 //! - Set-based reference calculation; fail closed on any uncertainty
-//! - Verify manifest validity and ownership on every unreferenced candidate before deletion
+//! - Verify manifest validity and ownership before deleting nonempty release trees
+//! - Remove verified empty tag directories non-recursively; never require a manifest for them
 //! - Two-pass design: abort entire GC on any unverifiable entry before deleting anything
 
 use super::error::ReleaseError;
@@ -69,7 +70,7 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
     })?;
 
     // Pass 1: Gather and verify unreferenced candidates
-    let mut candidates_to_delete: Vec<PathBuf> = Vec::new();
+    let mut candidates_to_delete: Vec<(PathBuf, bool)> = Vec::new();
     for entry_res in entries {
         let entry = entry_res.map_err(|e| ReleaseError::Io {
             action: "iterate releases directory entry",
@@ -115,17 +116,40 @@ pub fn apply_retention(layout: &Layout, state: &ManagerState) -> Result<usize, R
                 }
             }
 
-            // Verify manifest and ownership before adding to delete list
-            verify_candidate_integrity(&canonical_path)?;
-            candidates_to_delete.push(path);
+            // Staging cleanup/reinstallation can leave an empty tag directory.
+            // It contains no release to validate, but still needs ownership checks.
+            let is_empty = fs::read_dir(&canonical_path)
+                .map_err(|e| ReleaseError::Io {
+                    action: "inspect candidate release directory contents",
+                    details: format!("{}: {e}", path.display()),
+                })?
+                .next()
+                .transpose()
+                .map_err(|e| ReleaseError::Io {
+                    action: "read candidate release directory entry",
+                    details: format!("{}: {e}", path.display()),
+                })?
+                .is_none();
+            if is_empty {
+                verify_release_ownership(&canonical_path, false)?;
+            } else {
+                verify_candidate_integrity(&canonical_path)?;
+            }
+            candidates_to_delete.push((path, is_empty));
         }
     }
 
     // Pass 2: Delete only after ALL candidates passed verification
     let mut pruned_count = 0;
-    for path in candidates_to_delete {
-        fs::remove_dir_all(&path).map_err(|e| ReleaseError::Io {
-            action: "remove unreferenced release tree",
+    for (path, is_empty) in candidates_to_delete {
+        // rmdir fails if contents appeared after verification; never delete them.
+        let result = if is_empty {
+            fs::remove_dir(&path)
+        } else {
+            fs::remove_dir_all(&path)
+        };
+        result.map_err(|e| ReleaseError::Io {
+            action: "remove unreferenced release directory",
             details: format!("{}: {e}", path.display()),
         })?;
         pruned_count += 1;

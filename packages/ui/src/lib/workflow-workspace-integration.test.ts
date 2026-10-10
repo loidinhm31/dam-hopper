@@ -120,14 +120,13 @@ describe("workflow-workspace-integration", () => {
 
     it("selects valid project root target", () => {
       const outcome = resolveWorkflowTargetSelection({ target: { project: "proj-a" }, projects });
-      expect(outcome).toEqual({ canSelect: true, project: "proj-a", worktreePath: null });
+      expect(outcome).toEqual({ canSelect: true, project: "proj-a", profileId: undefined, worktreePath: null });
     });
 
     it("selects valid worktree target", () => {
       const outcome = resolveWorkflowTargetSelection({ target: { project: "proj-a", worktreePath: "/tmp/feat" }, projects });
-      expect(outcome).toEqual({ canSelect: true, project: "proj-a", worktreePath: "/tmp/feat" });
+      expect(outcome).toEqual({ canSelect: true, project: "proj-a", profileId: undefined, worktreePath: "/tmp/feat" });
     });
-
     it("rejects unavailable worktree target", () => {
       const outcome = resolveWorkflowTargetSelection({
         target: { project: "proj-a", worktreePath: "/tmp/feat" },
@@ -142,5 +141,53 @@ describe("workflow-workspace-integration", () => {
         errorMessage: 'Worktree "/tmp/feat" is currently unavailable.',
       });
     });
+
+    it("selects target scoped to explicit profile and disambiguates same-named projects across profiles", () => {
+      const multiProfileProjects = [
+        { name: "demo", profileId: "server-a" },
+        { name: "demo", profileId: "server-b" },
+      ];
+      const outcomeA = resolveWorkflowTargetSelection({
+        target: { profileId: "server-a", project: "demo", worktreePath: "/wt-a" },
+        projects: multiProfileProjects,
+      });
+      expect(outcomeA).toEqual({
+        canSelect: true,
+        project: "demo",
+        profileId: "server-a",
+        worktreePath: "/wt-a",
+      });
+
+      const outcomeB = resolveWorkflowTargetSelection({
+        target: { profileId: "server-b", project: "demo", worktreePath: "/wt-b" },
+        projects: multiProfileProjects,
+      });
+      expect(outcomeB).toEqual({
+        canSelect: true,
+        project: "demo",
+        profileId: "server-b",
+        worktreePath: "/wt-b",
+      });
+
+      const outcomeMissing = resolveWorkflowTargetSelection({
+        target: { profileId: "server-c", project: "demo" },
+        projects: multiProfileProjects,
+      });
+      expect(outcomeMissing.canSelect).toBe(false);
+      expect(outcomeMissing.reason).toBe("project_not_configured");
+    });
+    it("rejects explicitly qualified target when requested profile does not configure the project even if another profile does", () => {
+      const projects = [
+        { name: "demo", profileId: "server-a" },
+        { name: "other", profileId: "server-b" },
+      ];
+      const outcome = resolveWorkflowTargetSelection({
+        target: { profileId: "server-b", project: "demo" },
+        projects,
+      });
+      expect(outcome.canSelect).toBe(false);
+      expect(outcome.reason).toBe("project_not_configured");
+    });
+
   });
 });

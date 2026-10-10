@@ -580,6 +580,34 @@ describe("useEditorGitBlame", () => {
     expect(blameMock).toHaveBeenCalledTimes(3);
   });
 
+  it("replaces unborn Uncommitted attribution after the first commit is discovered", async () => {
+    const mock = createMockEditor("new file\n");
+    blameMock.mockImplementationOnce((_target, input: GitBlameInput) =>
+      Promise.resolve({
+        ...createSampleBlameResponse(input.snapshotId, input.modelVersion, 2, input.path),
+        baseCommitOid: null,
+        status: "uncommitted",
+        commits: [],
+        ranges: [{ startLine: 1, lineCount: 2, commitIndex: null }],
+      }),
+    );
+    await mount(defaultTab, mock.editor, true);
+    expect(currentHook?.data?.status).toBe("uncommitted");
+    expect(currentHook?.data?.baseCommitOid).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(blameMock).toHaveBeenCalledTimes(2);
+    expect(currentHook?.data?.status).toBe("ready");
+    expect(currentHook?.data?.baseCommitOid).toBe("head-commit-1111");
+    expect(currentHook?.data?.ranges[0].commitIndex).toBe(0);
+  });
+
   it("keeps status off when roots fetch rejects after feature was toggled off (parent repro)", async () => {
     const deferredRoots = createDeferred<VcsRoot[]>();
     rootsMock.mockReturnValueOnce(deferredRoots.promise);

@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { ApiRequestError, type SessionInfo } from "@/api/client.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ApiRequestError, type ApiClient, type SessionInfo } from "@/api/client.js";
+import {
+  __setConnectionSnapshotForTests,
+} from "@/api/connections.js";
+import { ConnectionOwnerError } from "@/api/ownership.js";
+import type { Transport } from "@/api/transport.js";
 import {
   rememberTerminalSessionIncarnation,
   resetTerminalSessionIncarnations,
@@ -15,6 +20,8 @@ import {
   getLocallyStoppedSessionMarker,
   isSameSessionIdentity,
   reconcileTerminalTargetError,
+  resolveTerminalLaunchForProject,
+  resolveBoundTerminalClient,
 } from "./use-terminal-manager.js";
 
 describe("buildTerminalDisplayTabs", () => {
@@ -349,5 +356,154 @@ describe("reconcileTerminalTargetError", () => {
     expect(
       useProjectTargetStore.getState().unavailableTargetsByProject,
     ).toEqual({});
+  });
+});
+
+describe("resolveTerminalLaunchForProject", () => {
+  const projects = [
+    {
+      name: "demo",
+      path: "/workspace/server-a/demo",
+      profileId: "server-a",
+    },
+    {
+      name: "demo",
+      path: "/workspace/server-b/demo",
+      profileId: "server-b",
+    },
+    {
+      name: "legacy",
+      path: "/workspace/legacy",
+    },
+  ];
+
+  beforeEach(() => {
+    useProjectTargetStore.setState({
+      activeTargetByProject: {},
+      unavailableTargetByProject: {},
+      unavailableTargetsByProject: {},
+    });
+  });
+
+  it("resolves exact owner configured root and ignores same-named projects on other profiles", () => {
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+    );
+    expect(launchA.cwd).toBe("/workspace/server-a/demo");
+    expect(launchA.worktreePath).toBeUndefined();
+
+    const launchB = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-b", project: "demo" },
+    );
+    expect(launchB.cwd).toBe("/workspace/server-b/demo");
+    expect(launchB.worktreePath).toBeUndefined();
+  });
+
+  it("fails closed when qualified owner profile is missing or disconnected", () => {
+    const launchMissing = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-missing", project: "demo" },
+    );
+    // Must NOT fall back to server-a or server-b
+    expect(launchMissing.cwd).toBeUndefined();
+  });
+
+  it("reads store synchronously at dispatch time to resolve exact owner worktree", () => {
+    // Select worktree immediately before launch dispatch
+    useProjectTargetStore.getState().selectTarget(
+      { profileId: "server-a", project: "demo" },
+      "/tmp/server-a-feature",
+    );
+
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+      "/workspace/server-a/demo/packages/core",
+    );
+    expect(launchA.cwd).toBe("packages/core");
+    expect(launchA.worktreePath).toBe("/tmp/server-a-feature");
+    expect(launchA.displayCwd).toBe("/tmp/server-a-feature/packages/core");
+  });
+
+  it("does not inherit worktree from another profile or bare key with same project name", () => {
+    // Bare "demo" and server-b have selected worktrees
+    useProjectTargetStore.getState().selectTarget("demo", "/tmp/bare-demo-wt");
+    useProjectTargetStore.getState().selectTarget(
+      { profileId: "server-b", project: "demo" },
+      "/tmp/server-b-wt",
+    );
+
+    // Server A has NO worktree selected (remains at root)
+    const launchA = resolveTerminalLaunchForProject(
+      projects,
+      { profileId: "server-a", project: "demo" },
+    );
+    // Must be at server-a root, NOT in server-b-wt or bare-demo-wt
+    expect(launchA.cwd).toBe("/workspace/server-a/demo");
+    expect(launchA.worktreePath).toBeUndefined();
+  });
+
+  it("preserves unqualified behavior for legacy callers", () => {
+    useProjectTargetStore.getState().selectTarget("legacy", "/tmp/legacy-wt");
+    const launch = resolveTerminalLaunchForProject(
+      projects,
+      { project: "legacy" },
+    );
+    expect(launch.worktreePath).toBe("/tmp/legacy-wt");
+  });
+});
+
+describe("resolveBoundTerminalClient", () => {
+  const dummyAmbientApi = { id: "ambient-api" } as unknown as ApiClient;
+  const mockApi = { id: "mock-api" } as unknown as ApiClient;
+
+  beforeEach(() => {
+    __setConnectionSnapshotForTests("profile-connected", {
+      owner: { profileId: "profile-connected", generation: 1 },
+      status: "connected",
+      serverUrl: "http://localhost:4800",
+      transport: {} as unknown as Transport,
+      api: mockApi,
+    });
+    __setConnectionSnapshotForTests("profile-disconnected", null);
+  });
+
+  afterEach(() => {
+    __setConnectionSnapshotForTests("profile-connected", null);
+  });
+
+  it("fails closed and throws ConnectionOwnerError when target profile is disconnected", () => {
+    expect(() =>
+      resolveBoundTerminalClient("profile-disconnected", undefined, dummyAmbientApi),
+    ).toThrow(ConnectionOwnerError);
+  });
+
+  it("never falls back to ambient api for explicitly qualified profile when disconnected", () => {
+    try {
+      resolveBoundTerminalClient("profile-disconnected", undefined, dummyAmbientApi);
+      expect.unreachable("Should have thrown ConnectionOwnerError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConnectionOwnerError);
+    }
+  });
+
+  it("returns bound api client for connected profile", () => {
+    const client = resolveBoundTerminalClient("profile-connected", undefined, dummyAmbientApi);
+    expect(client).toBe(mockApi);
+  });
+
+  it("falls back to defaultProfileId if targetProfileId is undefined or default", () => {
+    const client = resolveBoundTerminalClient(undefined, "profile-connected", dummyAmbientApi);
+    expect(client).toBe(mockApi);
+
+    const clientDefault = resolveBoundTerminalClient("default", "profile-connected", dummyAmbientApi);
+    expect(clientDefault).toBe(mockApi);
+  });
+
+  it("returns ambient api when neither target nor default profile is specified", () => {
+    const client = resolveBoundTerminalClient(undefined, undefined, dummyAmbientApi);
+    expect(client).toBe(dummyAmbientApi);
   });
 });

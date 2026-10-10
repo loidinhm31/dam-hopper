@@ -445,8 +445,18 @@ returns to no active release with app units disabled. Manual
 `sudo dam-hopper rollback` promotes `previous` through the same transaction;
 failure first attempts to restore the original active release, otherwise
 returns `RECOVERY_REQUIRED`. Retention keeps active, one previous known-good,
-pending/latest-failed, and transaction-referenced views, deleting only after
-manifest and ownership verification.
+pending/latest-failed, and transaction-referenced views. Nonempty release trees
+require manifest and ownership verification before deletion. Empty, unreferenced
+tag directories left by staging cleanup or reinstallation require directory
+permission verification but no manifest; they are removed non-recursively, so
+newly added contents cannot be deleted without verification. All candidates are
+verified before any deletion; an invalid nonempty tree aborts the entire pass.
+
+Retention runs after activation commits. Previously, an empty stale tag directory
+could cause the first `start` after an upgrade to report
+`unreferenced release tree missing release-manifest.json` even though the new
+release was already committed. A second `start` took the ordinary active-release
+path and skipped retention. Empty tag cleanup now succeeds during the first pass.
 
 ### Status and version
 

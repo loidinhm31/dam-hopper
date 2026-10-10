@@ -1,0 +1,50 @@
+{
+  "run_id": "e2e-run-1791559015752-a0556ec4",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-09T15:16:55.752Z",
+  "completed_at": "2026-10-09T15:17:04.320Z",
+  "case_name": "traditional-terminal-worktree-switching",
+  "route": "/workspace",
+  "git_head": "e7f6fda56b692dbea711959da5910f46b45b1b53",
+  "source_fingerprint": "ca183c78823b37087393bfb365625923bde03e6953c5b31acd668b69003c3bab",
+  "seed_digest": "e9a6201c3363b481baf02005446223d499a7f0845b915201ba5bf9aa90fa2fb6",
+  "browser": "chromium",
+  "browser_version": "154.0.8037.97",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "primary",
+      "file_name": "screenshot.png",
+      "sha256": "3a82a1e30ca1d2d9eda5ae34daa4e8f920881588612147007a6ff4c35b83c149",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "narrow",
+      "file_name": "narrow.png",
+      "sha256": "fb5ccff140a3844d2fc8b8235b9ee6829dc39822cf5fbfe6ffbfd9404857d35f",
+      "dimensions": {
+        "width": 768,
+        "height": 1024
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "sha256": "401424007c045583eeb87d70885195bc6ed2426c25d286ccb280a38e26aaed04",
+      "dimensions": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

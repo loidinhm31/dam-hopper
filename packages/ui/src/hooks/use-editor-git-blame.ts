@@ -341,9 +341,8 @@ export function useEditorGitBlame({
       setStatus("ready");
       setData(validation.response);
       dataRef.current = validation.response;
-      if (validation.response.baseCommitOid) {
-        lastHeadCommitRef.current = validation.response.baseCommitOid;
-      }
+      // An unborn HEAD is known state, not the null "not observed yet" sentinel.
+      lastHeadCommitRef.current = validation.response.baseCommitOid ?? "";
       if (validation.response.rootId) {
         lastOwningRootIdRef.current = validation.response.rootId;
       }

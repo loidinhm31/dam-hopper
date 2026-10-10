@@ -1,4 +1,5 @@
 import type { ProjectTargetRef } from "@/api/client.js";
+import { projectScopeKey } from "@/stores/project-target.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
 export interface WorkflowTerminalCandidate {
@@ -136,13 +137,14 @@ export function resolveWorkflowTerminalReveal({
 
 export interface ResolveWorkflowTargetSelectionArgs {
   target: ProjectTargetRef | null | undefined;
-  projects: ReadonlyArray<{ name: string }>;
+  projects: ReadonlyArray<{ name: string; profileId?: string }>;
   unavailableTargetsByProject?: Record<string, string[]>;
 }
 
 export interface WorkflowTargetSelectionOutcome {
   canSelect: boolean;
   project?: string;
+  profileId?: string;
   worktreePath?: string | null;
   reason?: "missing_target" | "project_not_configured" | "target_unavailable";
   errorMessage?: string;
@@ -160,16 +162,26 @@ export function resolveWorkflowTargetSelection({
     return { canSelect: false, reason: "missing_target", errorMessage: "No target project specified." };
   }
   const projectName = target.project.trim();
-  if (!projects.some((p) => p.name === projectName)) {
+  const matchingProject = target.profileId
+    ? projects.find(
+        (p) => p.name === projectName && p.profileId === target.profileId,
+      )
+    : projects.find((p) => p.name === projectName);
+  if (!matchingProject) {
     return {
       canSelect: false,
       reason: "project_not_configured",
       errorMessage: `Project "${projectName}" is not configured in this workspace.`,
     };
   }
+  const resolvedProfileId = matchingProject.profileId ?? target.profileId;
   if (target.worktreePath) {
     const rawPath = target.worktreePath.trim();
-    if (isPathUnavailable(rawPath, unavailableTargetsByProject?.[projectName])) {
+    const scopeKey = projectScopeKey(target);
+    const unavailableList =
+      unavailableTargetsByProject?.[scopeKey] ??
+      (target.profileId ? undefined : unavailableTargetsByProject?.[projectName]);
+    if (isPathUnavailable(rawPath, unavailableList)) {
       return {
         canSelect: false,
         project: projectName,
@@ -178,7 +190,17 @@ export function resolveWorkflowTargetSelection({
         errorMessage: `Worktree "${rawPath}" is currently unavailable.`,
       };
     }
-    return { canSelect: true, project: projectName, worktreePath: rawPath };
+    return {
+      canSelect: true,
+      project: projectName,
+      profileId: resolvedProfileId,
+      worktreePath: rawPath,
+    };
   }
-  return { canSelect: true, project: projectName, worktreePath: null };
+  return {
+    canSelect: true,
+    project: projectName,
+    profileId: resolvedProfileId,
+    worktreePath: null,
+  };
 }

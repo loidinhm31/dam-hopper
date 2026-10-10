@@ -130,12 +130,116 @@ The UI refreshes discovery after a successful add.
 
 ## 7. Select the active worktree
 
+DamHopper provides two surfaces to select the active worktree for a configured
+project:
+
+1. **Traditional terminal navigation sidebar**: A compact inline worktree
+   dropdown on each configured project row for instant switching while working
+   with terminals.
+2. **Project panel Worktrees section**: A full management interface for
+   viewing detailed status, adding new worktrees, removing merged worktrees,
+   and switching targets.
+
+### Traditional terminal sidebar dropdown
+
+In the Traditional terminal sidebar (`TraditionalTerminalProjectsNavigator`),
+every configured project row displays a dedicated worktree combobox directly
+below the project tab button:
+
+- **Trigger appearance**:
+  - Shows a Git branch icon alongside the currently active target.
+  - Project root displays `root`.
+  - An active worktree displays `<branch> (<short-path>)` (for example,
+    `feature/login (wt-feature)`).
+  - Detached HEAD worktrees display `Detached HEAD (<short-path>)`.
+  - Unavailable active targets display `<short-path> (unavailable)` or
+    `<short-path> (missing · using root)` with warning highlighting and an
+    accessible polite status announcement.
+- **Path disambiguation**:
+  - If multiple worktrees share identical directory basenames (for example,
+    `/repos/client-a/feature` and `/repos/client-b/feature`), DamHopper
+    automatically prefixes the immediate parent folder (`client-a/feature` vs.
+    `client-b/feature`) so options remain clear at a glance.
+- **Dropdown menu items**:
+  - **Project root**: Displayed first (`Project root: <project>`). Selecting it
+    resets the active target to the primary configured checkout (`null` path).
+  - **Secondary worktrees**: Listed beneath a separator, displaying branch
+    name, distinguished short path, lock status (`· Locked`), and full path
+    titles for accessibility.
+  - **Disabled states**: Bare, prunable, or unavailable worktrees are rendered
+    disabled in the menu with explicit warning labels explaining why they cannot
+    be selected. Locked worktrees remain selectable.
+  - **Missing targets**: If an active worktree is removed externally from disk or
+    Git discovery, it is tracked in `unavailableTargetByProject` and preserved in
+    the list as `<short-path> (Missing)` in a disabled state, displaying
+    `<short-path> (missing · using root)` in the trigger until explicitly cleared
+    by selecting the project root or another worktree.
+  - **Informative status**: When no secondary worktrees exist or during queries,
+    the dropdown indicates `Loading worktrees…`, `No secondary worktrees`, or
+    `Worktrees unavailable`.
+  - Opening the dropdown immediately triggers an on-demand refetch of the
+    project's worktree inventory (`useWorktrees`).
+  - Discovery query is lazily gated when closed at root
+    (`enabled: isOpen || selectedPath != null || Boolean(lastUnavailablePath)`),
+    eliminating redundant background queries for inactive root project rows.
+  - Polling is enabled strictly while the dropdown is open (`pollWhileVisible: isOpen`),
+    automatically capturing background Git worktree additions or removals
+    without continuous CPU/network overhead across unopened sidebar rows.
+- **Keyboard navigation and accessibility**:
+  - The dropdown trigger is a sibling control to the project tab button inside a
+    presentation container (`role="presentation"`), preserving ARIA `tablist` -> `tab`
+    roving keyboard semantics (Up/Down Arrow, Home, End).
+  - Clicking or keyboard-navigating the dropdown stops event propagation,
+    ensuring worktree selection never triggers accidental project activation
+    or terminal launches.
+  - Pressing `Escape` closes the dropdown and returns focus to the combobox
+    trigger.
+  - Touch-optimized mode expands the trigger height to 44px (`min-h-11`),
+    conforming to WCAG 2.1 AAA minimum touch target sizing.
+  - Radix Select portal renders at `z-[80]`, reliably floating above compact
+    sheet dialogs (`z-50`) without clipping or focus containment traps.
+- **Commit metadata independence**:
+  - The dropdown remains fully functional whether Git commit summaries
+    (`terminalCommitStatusEnabled`) are toggled on or off in settings. When commit
+    summaries are enabled, they track the selected worktree's latest commit.
+  - Non-Git projects (detected via `useProjectStatus` active on named projects
+    checking `pathExists !== false`, lack of `statusError`, and presence of
+    `branch` or `lastCommit.hash`, failing closed while loading or unknown) and
+    non-project terminal groups (such as Free terminals) omit the dropdown.
+- **Target reconciliation & safe fallback**:
+  - Managed by `useWorktreeTargetReconciliation`. If an active target disappears
+    from successful Git discovery, it is flagged as unavailable and announced
+    via `aria-live="polite"` (`Worktree <path> is unavailable. Using Project root for new operations.`).
+  - Temporary discovery errors or in-flight network requests do not mark targets
+    unavailable (fails closed and safe).
+  - When an unavailable worktree returns in subsequent successful discovery,
+    it is automatically unflagged without disrupting the user's active session.
+- **Profile isolation**:
+  - Target selection and discovery are scoped to the project ref / owning profile
+    (`profileId`), preventing cross-profile target leakage in multi-server setups.
+  - Terminal creation explicitly qualified by profile fails closed without ambient
+    API fallback (`resolveBoundTerminalClient`) if the target profile connection
+    cannot be captured.
+  - Workflow target selection strictly validates `{profileId, project}` against
+    the candidate projects inventory (`resolveWorkflowTargetSelection`) with zero
+    untagged fallback, resolving the owning profile ID
+    (`setActiveProject(outcome.project, resolvedProfileId)`) and profile-qualified
+    target selection so identically named projects across profiles remain isolated.
+- **Non-disruptive switching**:
+  - Switching the worktree updates the session-scoped target for subsequent
+    operations without restarting active terminal processes, clearing split panes,
+    or interrupting running commands.
+
+### Project panel Worktrees section
+
 In the Project panel:
 
 1. Click Refresh worktrees if the new row is not visible.
 2. Select the worktree row for the branch/path.
 3. Select Project root to return to the configured checkout.
 
+The Project panel additionally supports creating new worktrees and safely
+removing existing ones.
 The selected target is session-scoped. It does not change the project name,
 project configuration, or top-bar project identity. A browser restart returns to
 the configured project root.
@@ -391,6 +495,28 @@ DamHopper fails closed for unavailable targets. New operations use the project
 root only after the unavailable state is recorded; it does not silently send a
 request to another worktree.
 
+
+### Worktree appears as (unavailable) in sidebar dropdown
+
+When the sidebar dropdown indicates `(unavailable)` or announces fallback to
+Project root:
+
+- The worktree directory was moved, deleted, or removed outside DamHopper.
+- Check `git -C "$MAIN_REPO" worktree list --porcelain`.
+- If the directory was moved, run `git -C "$MAIN_REPO" worktree repair <path>`.
+- If the deletion was intended, select `Project root` or another secondary
+  worktree in the dropdown.
+- When Git discovery succeeds again with the path restored, DamHopper
+  automatically clears the unavailable state and announcement.
+
+### Sidebar dropdown shows "Worktrees unavailable"
+
+If the dropdown displays `Worktrees unavailable`:
+
+- Git discovery encountered an error or the repository path is temporarily
+  inaccessible.
+- The existing target selection is preserved without falling back prematurely.
+- Reopening the dropdown triggers an immediate retry.
 ### Removal is blocked
 
 Save or close dirty editor tabs and live terminals for that exact worktree.

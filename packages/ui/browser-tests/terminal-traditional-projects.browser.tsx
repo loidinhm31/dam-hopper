@@ -23,6 +23,7 @@ import {
   useAgentStatusStore,
 } from "@/stores/agent-status.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
+import { useProjectTargetStore } from "@/stores/project-target.js";
 import { notifyTerminalAgent } from "@/lib/browser-notification-service.js";
 import { playTerminalNotificationSound } from "@/lib/terminal-notification-sound.js";
 import type * as BrowserNotificationService from "@/lib/browser-notification-service.js";
@@ -119,7 +120,94 @@ function statusFor(projectName: string): GitStatus {
     },
   };
 }
+export const alphaWorktrees: Worktree[] = [
+  {
+    path: "/workspace/alpha",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: "alpha/main",
+    commitHash: "alpha-commit-hash-123456789",
+    isMain: true,
+    isLocked: false,
+    isDetached: false,
+    isBare: false,
+    isPrunable: false,
+    isAvailable: true,
+  },
+  {
+    path: "/workspace/alpha-feat",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: "feature/alpha-ui",
+    commitHash: "alpha-feat-hash-123",
+    isMain: false,
+    isLocked: false,
+    isDetached: false,
+    isBare: false,
+    isPrunable: false,
+    isAvailable: true,
+  },
+  {
+    path: "/workspace/alpha-detached",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: null,
+    commitHash: "alpha-detached-hash-456",
+    isMain: false,
+    isLocked: false,
+    isDetached: true,
+    isBare: false,
+    isPrunable: false,
+    isAvailable: true,
+  },
+  {
+    path: "/workspace/alpha-locked",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: "feature/locked",
+    commitHash: "alpha-locked-hash-789",
+    isMain: false,
+    isLocked: true,
+    isDetached: false,
+    isBare: false,
+    isPrunable: false,
+    isAvailable: true,
+  },
+  {
+    path: "/workspace/alpha-bare",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: "feature/bare",
+    commitHash: "alpha-bare-hash-101",
+    isMain: false,
+    isLocked: false,
+    isDetached: false,
+    isBare: true,
+    isPrunable: false,
+    isAvailable: true,
+  },
+  {
+    path: "/workspace/alpha-prunable",
+    repositoryPath: "/workspace/alpha/.git",
+    branch: "feature/prunable",
+    commitHash: "alpha-prunable-hash-202",
+    isMain: false,
+    isLocked: false,
+    isDetached: false,
+    isBare: false,
+    isPrunable: true,
+    isAvailable: false,
+  },
+];
+
+let customWorktrees: Record<string, Worktree[]> | null = null;
+let worktreeDiscoveryError: Error | null = null;
+
 function worktreesFor(projectName: string): Worktree[] {
+  if (worktreeDiscoveryError) {
+    throw worktreeDiscoveryError;
+  }
+  if (customWorktrees?.[projectName]) {
+    return customWorktrees[projectName]!;
+  }
+  if (projectName === "alpha") {
+    return alphaWorktrees;
+  }
   return [
     {
       path: `/workspace/${projectName}`,
@@ -258,6 +346,13 @@ describe("Traditional terminal projects in Chromium", () => {
       traditionalTerminalLayoutStorageKey("project:beta"),
     );
     localStorage.removeItem("dam-hopper:traditional-projects-navigator-width");
+    customWorktrees = null;
+    worktreeDiscoveryError = null;
+    useProjectTargetStore.setState({
+      activeTargetByProject: {},
+      unavailableTargetByProject: {},
+      unavailableTargetsByProject: {},
+    });
     container = document.createElement("div");
     container.style.height = "640px";
     container.style.width = "1280px";
@@ -279,6 +374,13 @@ describe("Traditional terminal projects in Chromium", () => {
         traditionalTerminalLayoutStorageKey(projectKey({ profileId, project })),
       );
     }
+    customWorktrees = null;
+    worktreeDiscoveryError = null;
+    useProjectTargetStore.setState({
+      activeTargetByProject: {},
+      unavailableTargetByProject: {},
+      unavailableTargetsByProject: {},
+    });
     resetTransport();
     container.remove();
     document.body.innerHTML = "";
@@ -1524,5 +1626,402 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(document.querySelectorAll('[data-testid="terminal-pane-output-host"]')).toHaveLength(1);
     await userEvent.click(page.getByRole("button", { name: "New terminal in selected project" }));
     await expect.element(page.getByTestId("fixture-new-terminal-project")).toHaveTextContent("beta");
+  });
+
+  it("selects a feature worktree target then returns to root, preserving running session tabs, active splits, and distinct project context", async () => {
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+
+    const alphaCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await expect.element(alphaCombobox).toBeVisible();
+
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent("alpha-1");
+
+    await userEvent.click(alphaCombobox);
+
+    await expect
+      .element(page.getByRole("option", { name: /Project root/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("option", { name: /feature\/alpha-ui/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("option", { name: /Detached HEAD/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("option", { name: /feature\/locked/ }))
+      .toBeVisible();
+
+    await userEvent.click(
+      page.getByRole("option", { name: /feature\/alpha-ui/ }),
+    );
+
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+        }),
+      )
+      .toBeVisible();
+
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["alpha"],
+    ).toBe("/workspace/alpha-feat");
+
+    await expect
+      .element(
+        page.getByRole("combobox", { name: "Worktree for beta: root" }),
+      )
+      .toBeVisible();
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["beta"],
+    ).toBeUndefined();
+
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent("alpha-1");
+    await expect
+      .element(page.getByText("alpha first", { exact: true }))
+      .toBeVisible();
+    await expect
+      .element(page.getByText("alpha second", { exact: true }))
+      .toBeVisible();
+
+    const updatedCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+    });
+    await userEvent.click(updatedCombobox);
+    await userEvent.click(
+      page.getByRole("option", { name: /Project root/ }),
+    );
+
+    await expect
+      .element(
+        page.getByRole("combobox", { name: "Worktree for alpha: root" }),
+      )
+      .toBeVisible();
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["alpha"],
+    ).toBeUndefined();
+
+    await expect
+      .element(page.getByTestId("fixture-active-session"))
+      .toHaveTextContent("alpha-1");
+  });
+
+  it("renders and operates worktree selector when terminal commit status is disabled", async () => {
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+    terminalCommitStatusState.enabled = false;
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(<TraditionalProjectsFixture />);
+    });
+    await settleTraditionalFixtureQueries();
+
+    expect(document.querySelector('nav [role="status"]')).toBeNull();
+
+    const alphaCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await expect.element(alphaCombobox).toBeVisible();
+
+    await userEvent.click(alphaCombobox);
+    await userEvent.click(
+      page.getByRole("option", { name: /feature\/alpha-ui/ }),
+    );
+
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+        }),
+      )
+      .toBeVisible();
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["alpha"],
+    ).toBe("/workspace/alpha-feat");
+  });
+
+  it("navigates worktree selector via keyboard, restores focus on Escape, and does not dismiss compact Projects Dialog", async () => {
+    await page.viewport(375, 700);
+    container.style.width = "375px";
+    compactState.value = true;
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(<TraditionalProjectsFixture />);
+    });
+    await settleTraditionalFixtureQueries();
+
+    const opener = page.getByRole("button", { name: "Projects + Agents" });
+    await userEvent.click(opener);
+
+    const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+    await expect.element(dialog).toBeVisible();
+
+    const alphaCombobox = dialog.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await expect.element(alphaCombobox).toBeVisible();
+
+    await act(async () => alphaCombobox.element().focus());
+    expect(document.activeElement).toBe(alphaCombobox.element());
+
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByRole("listbox")).toBeVisible();
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+    await expect.element(dialog).toBeVisible();
+    expect(document.activeElement).toBe(alphaCombobox.element());
+
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByRole("listbox")).toBeVisible();
+
+    const featureOption = page.getByRole("option", { name: /feature\/alpha-ui/ });
+    await userEvent.click(featureOption);
+    await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+    await expect.element(dialog).toBeVisible();
+
+    await expect
+      .element(
+        dialog.getByRole("combobox", {
+          name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+        }),
+      )
+      .toBeVisible();
+
+    await userEvent.click(dialog.getByRole("button", { name: "Close", exact: true }));
+    await waitForProjectsSheetDismissal(opener.element());
+  });
+
+  it("disables unavailable, bare, and prunable worktrees, displays detached and locked states, and distinguishes same-basename paths", async () => {
+    customWorktrees = {
+      alpha: [
+          {
+            path: "/workspace/alpha",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "alpha/main",
+            commitHash: "hash-main",
+            isMain: true,
+            isLocked: false,
+            isDetached: false,
+            isBare: false,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/alpha-detached",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: null,
+            commitHash: "hash-detached",
+            isMain: false,
+            isLocked: false,
+            isDetached: true,
+            isBare: false,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/alpha-locked",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "feature/locked",
+            commitHash: "hash-locked",
+            isMain: false,
+            isLocked: true,
+            isDetached: false,
+            isBare: false,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/dir-one/feature",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "feature/one",
+            commitHash: "hash-shared",
+            isMain: false,
+            isLocked: false,
+            isDetached: false,
+            isBare: false,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/dir-two/feature",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "feature/two",
+            commitHash: "hash-shared",
+            isMain: false,
+            isLocked: false,
+            isDetached: false,
+            isBare: false,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/alpha-bare",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "feature/bare",
+            commitHash: "hash-bare",
+            isMain: false,
+            isLocked: false,
+            isDetached: false,
+            isBare: true,
+            isPrunable: false,
+            isAvailable: true,
+          },
+          {
+            path: "/workspace/alpha-prunable",
+            repositoryPath: "/workspace/alpha/.git",
+            branch: "feature/prunable",
+            commitHash: "hash-prunable",
+            isMain: false,
+            isLocked: false,
+            isDetached: false,
+            isBare: false,
+            isPrunable: true,
+            isAvailable: false,
+          },
+      ],
+    };
+
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(<TraditionalProjectsFixture />);
+    });
+    await settleTraditionalFixtureQueries();
+
+    const alphaCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await userEvent.click(alphaCombobox);
+
+    const bareOption = page.getByRole("option", { name: /feature\/bare/ });
+    await expect.element(bareOption).toBeDisabled();
+    const prunableOption = page.getByRole("option", { name: /feature\/prunable/ });
+    await expect.element(prunableOption).toBeDisabled();
+
+    await expect
+      .element(page.getByRole("option", { name: /dir-one\/feature/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("option", { name: /dir-two\/feature/ }))
+      .toBeVisible();
+
+    await userEvent.click(
+      page.getByRole("option", { name: /Detached HEAD/ }),
+    );
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: Detached HEAD (alpha-detached)",
+        }),
+      )
+      .toBeVisible();
+
+    await userEvent.click(
+      page.getByRole("combobox", {
+        name: "Worktree for alpha: Detached HEAD (alpha-detached)",
+      }),
+    );
+    await userEvent.click(
+      page.getByRole("option", { name: /feature\/locked/ }),
+    );
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: feature/locked (alpha-locked)",
+        }),
+      )
+      .toBeVisible();
+  });
+
+  it("preserves selection across refetch and discovery transport error", async () => {
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+
+    const alphaCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await userEvent.click(alphaCombobox);
+    await userEvent.click(
+      page.getByRole("option", { name: /feature\/alpha-ui/ }),
+    );
+
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+        }),
+      )
+      .toBeVisible();
+
+    worktreeDiscoveryError = new Error("Transient connection error");
+
+    const updatedCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+    });
+    await userEvent.click(updatedCombobox);
+    await expect.element(page.getByRole("listbox")).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["alpha"],
+    ).toBe("/workspace/alpha-feat");
+    await expect
+      .element(
+        page.getByRole("combobox", {
+          name: "Worktree for alpha: feature/alpha-ui (alpha-feat)",
+        }),
+      )
+      .toBeVisible();
+
+    worktreeDiscoveryError = null;
+  });
+
+  it("keeps target selection strictly scoped by profile for same-name projects", async () => {
+    await page.viewport(1280, 700);
+    container.style.width = "1280px";
+    await mountAgents();
+
+    const alphaCombobox = page.getByRole("combobox", {
+      name: "Worktree for alpha: root",
+    });
+    await expect.element(alphaCombobox).toBeVisible();
+
+    await userEvent.click(alphaCombobox);
+    await userEvent.click(
+      page.getByRole("option", { name: /feature\/alpha-ui/ }),
+    );
+
+    const profileKey = projectKey({
+      profileId: agentFixtureRefs.alpha.profileId,
+      project: "alpha",
+    });
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[profileKey],
+    ).toBe("/workspace/alpha-feat");
+
+    const betaProfileKey = projectKey({
+      profileId: agentFixtureRefs.beta.profileId,
+      project: "beta",
+    });
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[betaProfileKey],
+    ).toBeUndefined();
+
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject["alpha"],
+    ).toBeUndefined();
   });
 });

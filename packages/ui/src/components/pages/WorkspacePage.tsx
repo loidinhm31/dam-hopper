@@ -1813,7 +1813,7 @@ export default function WorkspacePage() {
                 activeSessionId={activeTab}
                 mountedSessions={mountedSessions}
                 terminalTabs={terminalTabs}
-                currentProjectName={selectedProjectId}
+                currentProjectId={selectedProjectId}
                 currentProjectRevision={activeProjectRevision}
                 layoutRevision={compactTerminalLayoutRevision}
                 renderTerminals={false}
@@ -2036,7 +2036,12 @@ export default function WorkspacePage() {
           Select a project to see Git status
         </div>
       ),
-    [projectName, projectTarget],
+    [
+      projectName,
+      projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
+    ],
   );
 
   const projectContent = useMemo(
@@ -2200,6 +2205,8 @@ export default function WorkspacePage() {
       terminalContent,
       portsContent,
       projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
     ],
   );
 
@@ -2252,7 +2259,12 @@ export default function WorkspacePage() {
         renderCompactPlaceholder("Select a project to see Git status")
       ),
     }),
-    [projectName, projectTarget],
+    [
+      projectName,
+      projectTarget,
+      gitCommitRevealRequest,
+      handleGitCommitRevealConsumed,
+    ],
   );
 
   const compactProjectSurface = useMemo<MobileWorkspaceSurface>(
@@ -2599,20 +2611,43 @@ export default function WorkspacePage() {
 
   const handleWorkflowSelectTarget = useCallback(
     (target: ProjectTargetRef) => {
+      const candidateProjects =
+        allProjects.length > 0
+          ? allProjects.map((item) => ({
+              name: item.project.name,
+              profileId: item.profileId,
+            }))
+          : projects.map((p) => ({
+              name: p.name,
+              profileId: activeProfileId ?? undefined,
+            }));
+
       const outcome = resolveWorkflowTargetSelection({
         target,
-        projects,
+        projects: candidateProjects,
         unavailableTargetsByProject,
       });
       if (!outcome.canSelect || !outcome.project) {
         return;
       }
-      setActiveProject(outcome.project);
+      const resolvedProfileId =
+        outcome.profileId ??
+        target.profileId ??
+        allProjects.find((item) => item.project.name === outcome.project)?.profileId ??
+        activeProfileId;
+      if (!resolvedProfileId) {
+        return;
+      }
+      setActiveProject(outcome.project, resolvedProfileId);
+      const targetProject = {
+        profileId: resolvedProfileId,
+        project: outcome.project,
+      };
       useProjectTargetStore
         .getState()
-        .selectTarget(outcome.project, outcome.worktreePath ?? null);
+        .selectTarget(targetProject, outcome.worktreePath ?? null);
     },
-    [projects, setActiveProject, unavailableTargetsByProject],
+    [activeProfileId, allProjects, projects, setActiveProject, unavailableTargetsByProject],
   );
 
   const handleWorkflowOpenTerminal = useCallback(

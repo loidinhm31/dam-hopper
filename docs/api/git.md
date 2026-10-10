@@ -287,7 +287,7 @@ Computes line-by-line attribution for an in-memory editor buffer snapshot agains
 
 Direct HEAD paths and staged rename origins share regular-file mode, object-header size/type and binary checks. Oversized baseline payloads are rejected before requesting their blob content; rename similarity/history traversal still performs library work. HEAD symlinks are rejected even when missing on disk. Every successful publication path rechecks captured HEAD, including unborn, untracked and empty-buffer responses.
 
-LF, CRLF and lone-CR buffers normalize to LF with Monaco display-row counting. CRLF/lone-CR input retains attribution against an LF baseline. Native byte comparison can mark a CRLF-committed baseline Uncommitted after normalization; normalization does not promise EOL-insensitive history attribution.
+LF, CRLF and lone-CR buffers normalize to LF with Monaco display-row counting. CRLF/lone-CR input retains attribution against an LF baseline. For CRLF-committed baselines, unchanged normalized spans retain native historical attribution; CRLF/LF differences alone do not mark lines Uncommitted. Genuine content and whitespace edits still do. New staged-only files absent from HEAD remain Uncommitted.
 
 Request body (`GitBlameInput`):
 - `path` (string, required): File path relative to project root (must not contain `..` or leading `/`; max 4096 bytes).

@@ -317,6 +317,10 @@ vi.mock("@/api/client.js", () => ({
     worktreePath?: string | null;
   }) =>
     target.worktreePath == null ? "root" : `worktree:${target.worktreePath}`,
+  projectKey: (target: { profileId?: string; project: string } | string) =>
+    typeof target === "string"
+      ? target
+      : JSON.stringify([target.profileId, target.project]),
 }));
 
 vi.mock("@/lib/workspace-mode.js", () => ({
@@ -906,9 +910,17 @@ describe("WorkspacePage", () => {
         project: "demo-project",
         worktreePath: "/tmp/feat-1",
       });
-
-      expect(mockSetActiveProject).toHaveBeenCalledWith("demo-project");
-      expect(useProjectTargetStore.getState().activeTargetByProject["demo-project"]).toBe("/tmp/feat-1");
+      expect(mockSetActiveProject).toHaveBeenCalledWith(
+        "demo-project",
+        "default",
+      );
+      const expectedTargetKey = JSON.stringify([
+        "default",
+        "demo-project",
+      ]);
+      expect(
+        useProjectTargetStore.getState().activeTargetByProject[expectedTargetKey],
+      ).toBe("/tmp/feat-1");
     });
 
     it("ignores onSelectTarget for unconfigured projects", () => {

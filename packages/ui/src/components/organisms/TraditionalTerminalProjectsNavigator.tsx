@@ -1,4 +1,4 @@
-import { useId, useRef } from "react";
+import { useId, useMemo, useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { TraditionalTerminalAgentRow } from "@/components/molecules/traditional-terminal-agent-row.js";
@@ -6,6 +6,7 @@ import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } 
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
 import type { ProjectTargetInput } from "@/api/client.js";
+import type { ProjectRef } from "@/api/ownership.js";
 import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import {
   traditionalTerminalProjectPanelId,
@@ -14,32 +15,54 @@ import {
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useProjectTarget } from "@/hooks/use-project-target.js";
+import { normalizeWorktreePath } from "@/stores/project-target.js";
+import { TraditionalTerminalWorktreeSelect } from "@/components/organisms/TraditionalTerminalWorktreeSelect.js";
+
 function TraditionalProjectGitSummary({
   projectName,
   profileId,
   target,
+  selectedPath,
 }: {
   projectName: string;
   profileId?: string;
   target?: ProjectTargetInput;
+  selectedPath?: string | null;
 }) {
-  const targetInput: ProjectTargetInput =
-    target ?? (profileId ? { profileId, project: projectName } : projectName);
+  const targetInput: ProjectTargetInput = useMemo(() => {
+    const base =
+      target ?? (profileId ? { profileId, project: projectName } : projectName);
+    if (selectedPath != null) {
+      if (typeof base === "string") {
+        return { project: base, worktreePath: selectedPath };
+      }
+      return { ...base, worktreePath: selectedPath };
+    }
+    return base;
+  }, [profileId, projectName, selectedPath, target]);
+
   const {
     data: status,
     isLoading,
     isError,
   } = useProjectStatus(targetInput, true);
+
   const {
     data: worktrees,
     isLoading: isWorktreesLoading,
     isError: isWorktreesError,
   } = useWorktrees(targetInput);
+
   const lastCommit = status?.lastCommit;
   const worktree =
-    worktrees?.find((candidate) => candidate.branch === status?.branch) ??
-    worktrees?.find((candidate) => candidate.commitHash === lastCommit?.hash) ??
-    worktrees?.find((candidate) => candidate.isMain);
+    selectedPath != null
+      ? worktrees?.find(
+          (candidate) =>
+            normalizeWorktreePath(candidate.path) ===
+            normalizeWorktreePath(selectedPath),
+        )
+      : worktrees?.find((candidate) => candidate.isMain);
 
   if (
     isLoading ||
@@ -90,6 +113,119 @@ function TraditionalProjectGitSummary({
         </span>
       </span>
     </span>
+  );
+}
+
+interface TraditionalProjectRowProps {
+  group: TraditionalTerminalProjectGroup;
+  index: number;
+  isActive: boolean;
+  activeGroupId: string | null;
+  onSelectGroup: (groupId: string) => void;
+  onKeyDown: (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    groupIndex: number,
+  ) => void;
+  setButtonRef: (groupId: string, element: HTMLButtonElement | null) => void;
+  showCommitStatus: boolean;
+  touchOptimized?: boolean;
+}
+
+function TraditionalProjectRow({
+  group,
+  index,
+  isActive,
+  activeGroupId,
+  onSelectGroup,
+  onKeyDown,
+  setButtonRef,
+  showCommitStatus,
+  touchOptimized = false,
+}: TraditionalProjectRowProps) {
+  const projectScope = useMemo<string | ProjectRef | null>(() => {
+    if (!group.projectName) return null;
+    return (
+      group.projectRef ??
+      (group.profileId
+        ? { profileId: group.profileId, project: group.projectName }
+        : group.projectName)
+    );
+  }, [group.profileId, group.projectName, group.projectRef]);
+  const targetSnapshot = useProjectTarget(projectScope);
+  const selectedPath = targetSnapshot?.target.worktreePath ?? null;
+  const { data: projectStatus } = useProjectStatus(
+    projectScope ?? "",
+    Boolean(group.projectName),
+  );
+  const isGitProject = projectStatus
+    ? Boolean(
+        projectStatus.pathExists !== false &&
+          !projectStatus.statusError &&
+          Boolean(projectStatus.branch || projectStatus.lastCommit?.hash),
+      )
+    : false;
+  return (
+    <div
+      role="presentation"
+      className={cn(
+        "group/row relative flex flex-col gap-1 px-3 py-1 transition-colors",
+        isActive
+          ? "bg-[var(--color-primary)]/10 text-[var(--color-text)]"
+          : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]/40",
+      )}
+    >
+      <button
+        id={traditionalTerminalProjectTabId(group.id)}
+        ref={(element) => setButtonRef(group.id, element)}
+        type="button"
+        role="tab"
+        aria-selected={isActive}
+        aria-controls={
+          isActive ? traditionalTerminalProjectPanelId(group.id) : undefined
+        }
+        tabIndex={isActive || (!activeGroupId && index === 0) ? 0 : -1}
+        onClick={() => onSelectGroup(group.id)}
+        onKeyDown={(event) => onKeyDown(event, index)}
+        className={cn(
+          "flex min-h-11 w-full items-start gap-2 rounded px-1 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]",
+          touchOptimized && "min-h-12",
+        )}
+      >
+        <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate font-mono">{group.label}</span>
+            {group.profileName && (
+              <ProfileBadge
+                profileId={group.profileId}
+                name={group.profileName}
+              />
+            )}
+            <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)]">
+              {group.terminalTabs.length}
+            </span>
+          </span>
+          {group.projectName && showCommitStatus ? (
+            <TraditionalProjectGitSummary
+              projectName={group.projectName}
+              profileId={group.profileId}
+              target={group.projectRef}
+              selectedPath={selectedPath}
+            />
+          ) : null}
+        </span>
+      </button>
+      {group.projectName && isGitProject ? (
+        <div className="pl-5 pr-1 pb-1">
+          <TraditionalTerminalWorktreeSelect
+            projectName={group.projectName}
+            profileId={group.profileId}
+            projectRef={group.projectRef}
+            touchOptimized={touchOptimized}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -159,88 +295,49 @@ export function TraditionalTerminalProjectsNavigator({
       )}
     >
       <section aria-labelledby={projectsHeadingId} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-        <h2 id={projectsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
-          projects
-        </h2>
-        {onNewTerminal ? (
-          <button
-            type="button"
-            aria-label="New terminal in selected project"
-            title="New terminal in selected project"
-            onClick={onNewTerminal}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
-              touchOptimized && "min-h-11 min-w-11",
-            )}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </button>
-        ) : null}
-      </div>
-      <div
-        role="tablist"
-        aria-label="Open terminal projects"
-        aria-orientation="vertical"
-        className="min-h-0 flex-1 overflow-y-auto py-1"
-      >
-        {groups.map((group, index) => {
-          const isActive = group.id === activeGroupId;
-          return (
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+          <h2 id={projectsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+            projects
+          </h2>
+          {onNewTerminal ? (
             <button
-              key={group.id}
-              id={traditionalTerminalProjectTabId(group.id)}
-              ref={(element) => {
-                if (element) buttonRefs.current.set(group.id, element);
-                else buttonRefs.current.delete(group.id);
-              }}
               type="button"
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={
-                isActive
-                  ? traditionalTerminalProjectPanelId(group.id)
-                  : undefined
-              }
-              tabIndex={isActive || (!activeGroupId && index === 0) ? 0 : -1}
-              onClick={() => onSelectGroup(group.id)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
+              aria-label="New terminal in selected project"
+              title="New terminal in selected project"
+              onClick={onNewTerminal}
               className={cn(
-                "flex min-h-11 w-full items-start gap-2 px-4 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]",
-                isActive
-                  ? "bg-[var(--color-primary)]/12 text-[var(--color-text)]"
-                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
-                touchOptimized && "min-h-12",
+                "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
+                touchOptimized && "min-h-11 min-w-11",
               )}
             >
-              <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
-              <span className="min-w-0 flex-1">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 truncate font-mono">
-                    {group.label}
-                  </span>
-                  {group.profileName && (
-                    <ProfileBadge
-                      profileId={group.profileId}
-                      name={group.profileName}
-                    />
-                  )}
-                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)]">
-                    {group.terminalTabs.length}
-                  </span>
-                </span>
-                {group.projectName && showCommitStatus ? (
-                  <TraditionalProjectGitSummary
-                    projectName={group.projectName}
-                    profileId={group.profileId}
-                    target={group.projectRef}
-                  />
-                ) : null}
-              </span>
+              <Plus className="h-4 w-4" aria-hidden="true" />
             </button>
-          );
-        })}
-      </div>
+          ) : null}
+        </div>
+        <div
+          role="tablist"
+          aria-label="Open terminal projects"
+          aria-orientation="vertical"
+          className="min-h-0 flex-1 overflow-y-auto py-1"
+        >
+          {groups.map((group, index) => (
+            <TraditionalProjectRow
+              key={group.id}
+              group={group}
+              index={index}
+              isActive={group.id === activeGroupId}
+              activeGroupId={activeGroupId}
+              onSelectGroup={onSelectGroup}
+              onKeyDown={handleKeyDown}
+              setButtonRef={(groupId, element) => {
+                if (element) buttonRefs.current.set(groupId, element);
+                else buttonRefs.current.delete(groupId);
+              }}
+              showCommitStatus={showCommitStatus}
+              touchOptimized={touchOptimized}
+            />
+          ))}
+        </div>
       </section>
       <section aria-labelledby={agentsHeadingId} className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-[var(--color-border)] px-4 py-2">

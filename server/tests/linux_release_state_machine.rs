@@ -403,10 +403,12 @@ fn test_reference_safe_retention() {
     let active_dir = layout.release_role_dir("v1.0.0", "server");
     let prev_dir = layout.release_role_dir("v0.9.0", "server");
     let old_dir = layout.release_role_dir("v0.8.0", "server");
+    let empty_dir = layout.releases_dir().join("v0.10.1");
 
     fs::create_dir_all(&active_dir).unwrap();
     fs::create_dir_all(&prev_dir).unwrap();
     fs::create_dir_all(&old_dir).unwrap();
+    fs::create_dir_all(&empty_dir).unwrap();
 
     let (mut manifest, _) = common::release_fixtures::create_test_manifest_and_archive();
     manifest.release.tag = "v0.8.0".to_string();
@@ -427,6 +429,7 @@ fn test_reference_safe_retention() {
     fs::write(old_dir.join("bin/dam-hopper-web"), b"web").unwrap();
     fs::create_dir_all(old_dir.join("systemd")).unwrap();
     use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&empty_dir, fs::Permissions::from_mode(0o755)).unwrap();
     if let Some(parent) = old_dir.parent() {
         let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o755));
     }
@@ -482,11 +485,60 @@ fn test_reference_safe_retention() {
         fs::Permissions::from_mode(0o644),
     );
     let _ = fs::set_permissions(old_dir.join("LICENSE"), fs::Permissions::from_mode(0o644));
+
+    // A nonempty manifestless tree must abort the entire GC, including empty tags.
+    let invalid_dir = layout.releases_dir().join("v0.7.0");
+    fs::create_dir_all(invalid_dir.join("server")).unwrap();
+    fs::write(invalid_dir.join("server/unverified"), b"preserve").unwrap();
+    assert!(matches!(
+        apply_retention(&layout, &state),
+        Err(ReleaseError::InvalidBundle { path, .. })
+            if path == invalid_dir.display().to_string()
+    ));
+    assert!(old_dir.exists());
+    assert!(empty_dir.exists());
+    assert_eq!(
+        fs::read(invalid_dir.join("server/unverified")).unwrap(),
+        b"preserve"
+    );
+    fs::remove_dir_all(&invalid_dir).unwrap();
+
     let pruned = apply_retention(&layout, &state).expect("apply retention");
-    assert_eq!(pruned, 1);
+    assert_eq!(pruned, 2);
     assert!(active_dir.exists());
     assert!(prev_dir.exists());
     assert!(!old_dir.exists());
+    assert!(!empty_dir.exists());
+}
+
+#[test]
+fn test_retention_preserves_empty_current_directory() {
+    let root = tempdir().unwrap();
+    let layout = Layout::with_root(root.path());
+    let current_dir = layout.releases_dir().join("v0.10.1");
+    fs::create_dir_all(&current_dir).unwrap();
+    atomic_symlink(&current_dir, &layout.current_link()).unwrap();
+
+    assert_eq!(apply_retention(&layout, &ManagerState::new()).unwrap(), 0);
+    assert!(current_dir.is_dir());
+    assert_eq!(fs::read_link(layout.current_link()).unwrap(), current_dir);
+}
+
+#[test]
+fn test_retention_rejects_unsafe_empty_directory_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    let layout = Layout::with_root(root.path());
+    let empty_dir = layout.releases_dir().join("v0.10.1");
+    fs::create_dir_all(&empty_dir).unwrap();
+    fs::set_permissions(&empty_dir, fs::Permissions::from_mode(0o777)).unwrap();
+
+    assert!(matches!(
+        apply_retention(&layout, &ManagerState::new()),
+        Err(ReleaseError::OwnershipViolation { .. })
+    ));
+    assert!(empty_dir.is_dir());
 }
 
 #[tokio::test]

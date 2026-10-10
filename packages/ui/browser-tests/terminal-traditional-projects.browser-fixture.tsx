@@ -502,7 +502,7 @@ function TraditionalProjectsFixtureContent({
         activeSessionId={activeSessionId}
         mountedSessions={displayMountedSessions}
         terminalTabs={displayTabs}
-        currentProjectName={currentProjectName}
+        currentProjectId={currentProjectName}
         currentProjectRevision={currentProjectRevision}
         renderTerminals={false}
         onSelectTab={selectTab}
