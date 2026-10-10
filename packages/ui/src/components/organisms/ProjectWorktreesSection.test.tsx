@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Worktree } from "@/api/client.js";
 import {
   createProjectTargetSnapshot,
+  projectScopeKey,
   useProjectTargetStore,
 } from "@/stores/project-target.js";
 import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
@@ -90,7 +91,10 @@ vi.mock("@/api/queries.js", () => ({
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-function renderSection(targetPath: string | null = null) {
+function renderSection(
+  targetPath: string | null = null,
+  targetOverride?: ProjectTargetSnapshot,
+) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -99,7 +103,9 @@ function renderSection(targetPath: string | null = null) {
       createElement(ProjectWorktreesSection, {
         projectName: "demo-project",
         projectRoot: "/tmp/demo",
-        target: createProjectTargetSnapshot("demo-project", targetPath),
+        target:
+          targetOverride ??
+          createProjectTargetSnapshot("demo-project", targetPath),
         isVisible: true,
       }),
     );
@@ -416,6 +422,39 @@ describe("ProjectWorktreesSection mutation feedback", () => {
     } finally {
       await act(async () => root.unmount());
       container.remove();
+    }
+  });
+  it("qualifies target selection and loss by profile when target carries profileId", async () => {
+    const qualifiedTarget = createProjectTargetSnapshot(
+      { profileId: "server-a", project: "demo-project" },
+      null,
+    );
+    const { container, root } = renderSection(null, qualifiedTarget);
+
+    try {
+      // Select the feature worktree in the selector
+      const input = container.querySelector<HTMLInputElement>(
+        `input[value="${worktree.path}"]`,
+      );
+      await act(async () => {
+        input.click();
+      });
+      const scopedKey = projectScopeKey({
+        profileId: "server-a",
+        project: "demo-project",
+      });
+      expect(
+        useProjectTargetStore.getState().activeTargetByProject[scopedKey],
+      ).toBe(worktree.path);
+      expect(
+        useProjectTargetStore.getState().activeTargetByProject["demo-project"],
+      ).toBeUndefined();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      useProjectTargetStore
+        .getState()
+        .resetTarget({ profileId: "server-a", project: "demo-project" });
     }
   });
 });

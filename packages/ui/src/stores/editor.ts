@@ -238,9 +238,10 @@ function availabilityTarget(
   target: ProjectTargetInput,
   worktreePath?: string,
 ): ProjectTargetRef {
-  if (worktreePath === undefined) return normalizeProjectTarget(target);
+  const normalized = normalizeProjectTarget(target);
+  if (worktreePath === undefined) return normalized;
   return normalizeProjectTarget({
-    project: typeof target === "string" ? target : target.project,
+    ...normalized,
     worktreePath,
   });
 }

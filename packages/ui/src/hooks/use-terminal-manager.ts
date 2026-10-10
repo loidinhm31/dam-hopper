@@ -7,9 +7,10 @@ import {
 } from "@/hooks/use-terminal-tree.js";
 import { captureConnection, getApi } from "@/api/connections.js";
 import { parseProjectKey, projectKey, parseTerminalKey, terminalKey, type ConnectionRef, type ProjectRef, type QualifiedProjectRef } from "@/api/ownership.js";
-import { api, isProjectTargetError } from "@/api/client.js";
+import { api, isProjectTargetError, type ApiClient } from "@/api/client.js";
 import {
   markProjectTargetUnavailable,
+  projectScopeKey,
   useProjectTargetStore,
 } from "@/stores/project-target.js";
 import { generateUUID, sanitizeSessionSegment } from "@/lib/utils.js";
@@ -283,6 +284,31 @@ export function reconcileTerminalTargetError(
       : { ...target, worktreePath };
   markProjectTargetUnavailable(targetRef);
 }
+export function resolveTerminalLaunchForProject(
+  projects: ReadonlyArray<{ name: string; path?: string; profileId?: string }>,
+  target: ProjectRef,
+  requestedCwd?: string,
+  projectPathOverride?: string,
+) {
+  const projectPath =
+    projectPathOverride ??
+    (target.profileId
+      ? projects.find(
+          (project) =>
+            project.profileId === target.profileId &&
+            project.name === target.project,
+        )?.path
+      : projects.find((project) => project.name === target.project)?.path);
+  const scopeKey = projectScopeKey(target);
+  const worktreeTarget =
+    useProjectTargetStore.getState().activeTargetByProject[scopeKey];
+  return getTerminalLaunchRequest(
+    projectPath,
+    worktreeTarget,
+    requestedCwd,
+  );
+}
+
 
 export function findSessionMeta(
   sessionId: string,
@@ -441,6 +467,24 @@ export function buildTerminalDisplayTabs(
   });
   return applyTerminalTitleOrdinals(baseTabs);
 }
+
+export function resolveBoundTerminalClient(
+  targetProfileId?: string,
+  defaultProfileId?: string,
+  ambientApi: ApiClient = api,
+): ApiClient {
+  const explicitProfileId =
+    targetProfileId && targetProfileId !== "default"
+      ? targetProfileId
+      : undefined;
+  if (explicitProfileId) {
+    return getApi(captureConnection(explicitProfileId));
+  }
+  if (defaultProfileId && defaultProfileId !== "default") {
+    return getApi(captureConnection(defaultProfileId));
+  }
+  return ambientApi;
+}
 export function useTerminalManager(
   searchParams: URLSearchParams,
   setSearchParams: SetURLSearchParams,
@@ -453,9 +497,6 @@ export function useTerminalManager(
   } = options;
   const qc = useQueryClient();
   const { tree, freeTerminals, isLoading, projects, sessions, hasSnapshot: hasTerminalSessionSnapshot } = useTerminalTree();
-  const activeTargetByProject = useProjectTargetStore(
-    (state) => state.activeTargetByProject,
-  );
 
   // A qualified identifier is an opaque UI key. Never resolve it against focus.
   function requireProject(key: string): QualifiedProjectRef {
@@ -471,13 +512,11 @@ export function useTerminalManager(
     if (target) return target;
     return { profileId: profileId ?? "default", id: key };
   }
-  const getBoundApi = useCallback((targetProfileId: string) => {
-    try {
-      return getApi(captureConnection(targetProfileId));
-    } catch {
-      return api;
-    }
-  }, []);
+  const getBoundApi = useCallback(
+    (targetProfileId?: string) =>
+      resolveBoundTerminalClient(targetProfileId, profileId, api),
+    [profileId],
+  );
   const invalidateTerminalQueries = useCallback(async (targetProfileId?: string) => {
     if (targetProfileId) {
       await qc.invalidateQueries({ queryKey: ["profile", targetProfileId], predicate: (query) => query.queryKey.includes("terminal-sessions") });
@@ -864,21 +903,11 @@ export function useTerminalManager(
     requestedCwd?: string,
     projectPathOverride?: string,
   ) {
-    const projectPath =
-      projectPathOverride ??
-      projects.find(
-        (project) =>
-          (target.profileId ? project.profileId === target.profileId : true) &&
-          project.name === target.project,
-      )?.path ??
-      projects.find((project) => project.name === target.project)?.path;
-    const worktreeTarget =
-      (target.profileId ? activeTargetByProject[projectKey(target)] : undefined) ??
-      activeTargetByProject[target.project];
-    return getTerminalLaunchRequest(
-      projectPath,
-      worktreeTarget,
+    return resolveTerminalLaunchForProject(
+      projects,
+      target,
       requestedCwd,
+      projectPathOverride,
     );
   }
 
@@ -886,16 +915,19 @@ export function useTerminalManager(
     const target = requireProject(projectId);
     const { profileId, project: projectName } = target;
     const launch = terminalLaunchForProject(target, cmd.cwd);
-    getBoundApi(profileId)
-      .terminal.create({
-        id: requireTerminal(cmd.sessionId).id,
-        project: projectName,
-        command: cmd.command,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: requireTerminal(cmd.sessionId).id,
+          project: projectName,
+          command: cmd.command,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -933,16 +965,19 @@ export function useTerminalManager(
       launch.worktreePath,
     );
 
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName,
-        command: cmd.command,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName,
+          command: cmd.command,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -989,16 +1024,19 @@ export function useTerminalManager(
 
     setLaunchForm(null);
 
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName,
-        command: resolvedCommand,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName,
+          command: resolvedCommand,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -1207,16 +1245,19 @@ export function useTerminalManager(
       projectPath,
     );
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName || undefined,
-        command: "",
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName || undefined,
+          command: "",
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -1255,16 +1296,19 @@ export function useTerminalManager(
       projectPath,
     );
     const sessionId = `${FREE_TERMINAL_PREFIX}${generateUUID()}`;
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName || undefined,
-        command,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName || undefined,
+          command,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -1312,16 +1356,19 @@ export function useTerminalManager(
       "_",
       launch.worktreePath,
     );
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName,
-        command,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName,
+          command,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);
@@ -1377,16 +1424,19 @@ export function useTerminalManager(
       "_",
       launch.worktreePath,
     );
-    getBoundApi(profileId)
-      .terminal.create({
-        id: sessionId,
-        project: projectName,
-        command,
-        cwd: launch.cwd,
-        worktreePath: launch.worktreePath,
-        cols: 120,
-        rows: 30,
-      })
+    Promise.resolve()
+      .then(() => getBoundApi(profileId))
+      .then((client) =>
+        client.terminal.create({
+          id: sessionId,
+          project: projectName,
+          command,
+          cwd: launch.cwd,
+          worktreePath: launch.worktreePath,
+          cols: 120,
+          rows: 30,
+        }),
+      )
       .then((session) => {
         if (session) {
           rememberTerminalSessionIncarnation(terminalKey({profileId, id: session.id}), session.incarnation);

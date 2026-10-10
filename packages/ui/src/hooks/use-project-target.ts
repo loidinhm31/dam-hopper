@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import type { Worktree } from "@/api/client.js";
-import { projectKey, type ProjectRef } from "@/api/ownership.js";
+import type { ProjectRef } from "@/api/ownership.js";
 import {
   createProjectTargetSnapshot,
+  projectScopeKey,
   useProjectTargetStore,
   type ProjectTargetSnapshot,
 } from "@/stores/project-target.js";
@@ -13,13 +14,7 @@ export function useProjectTarget(
 ): ProjectTargetSnapshot | null {
   const selectedPath = useProjectTargetStore((state) => {
     if (!project) return null;
-    if (typeof project === "string") return state.activeTargetByProject[project] ?? null;
-    const scopedKey = project.profileId ? projectKey(project) : null;
-    return (
-      (scopedKey ? state.activeTargetByProject[scopedKey] : null) ??
-      state.activeTargetByProject[project.project] ??
-      null
-    );
+    return state.activeTargetByProject[projectScopeKey(project)] ?? null;
   });
 
   return useMemo(

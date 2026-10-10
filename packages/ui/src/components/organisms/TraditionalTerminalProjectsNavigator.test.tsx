@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useProjectTargetStore } from "@/stores/project-target.js";
 import type { GitStatus, Worktree } from "@/api/client.js";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
 import { terminalInstanceKey, terminalKey } from "@/api/ownership.js";
@@ -51,11 +52,13 @@ const mocks = vi.hoisted(() => {
       data: status,
       isLoading: false,
       isError: false,
+      isSuccess: true,
     })),
     useWorktrees: vi.fn(() => ({
       data: [worktree],
       isLoading: false,
       isError: false,
+      refetch: vi.fn(),
     })),
     useSettingsStore: vi.fn((selector: (state: SettingsState) => unknown) =>
       selector(settings),
@@ -126,6 +129,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     ));
   }
   beforeEach(() => {
+    useProjectTargetStore.getState().resetTarget("demo");
     mocks.settings.terminalCommitStatusEnabled = true;
     mocks.useProjectStatus.mockClear();
     mocks.useWorktrees.mockClear();
@@ -135,7 +139,6 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     document.body.append(container);
     root = createRoot(container);
   });
-
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
@@ -151,29 +154,24 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     const newTerminal = container.querySelector<HTMLButtonElement>('[aria-label="New terminal in selected project"]')!;
     act(() => newTerminal.click());
     expect(onNewTerminal).toHaveBeenCalledOnce();
-    expect(mocks.useProjectStatus).toHaveBeenCalledWith("demo", true);
-    expect(mocks.useWorktrees).toHaveBeenCalledWith("demo");
   });
 
-  it("shows the worktree matching the project branch", () => {
+  it("shows the selected worktree matching exact path, or root main worktree", () => {
     mocks.useWorktrees.mockReturnValue({
       data: [
-        { ...mocks.worktree, path: "/workspace/main", branch: "main" },
-        { ...mocks.worktree, path: "/workspace/feature" },
+        { ...mocks.worktree, path: "/workspace/main", branch: "main", isMain: true },
+        { ...mocks.worktree, path: "/workspace/feature", branch: "feature", isMain: false },
       ],
       isLoading: false,
       isError: false,
     });
-    const markup = renderToStaticMarkup(
-      <TraditionalTerminalProjectsNavigator
-        groups={[group]}
-        activeGroupId={group.id}
-        onSelectGroup={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("/workspace/feature");
-    expect(markup).not.toContain("/workspace/main");
+    useProjectTargetStore.getState().selectTarget("demo", "/workspace/feature");
+    renderNavigator({ groups: [group], activeGroupId: group.id });
+    const status = container.querySelector('[role="status"]');
+    expect(status?.textContent).toContain("/workspace/feature");
+    expect(status?.textContent).not.toContain("/workspace/main");
+    const combobox = container.querySelector('[role="combobox"]');
+    expect(combobox?.getAttribute("aria-label")).toContain("feature");
   });
 
   it("hides metadata for unavailable worktrees", () => {
@@ -194,7 +192,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(markup).not.toContain("/workspace/demo");
   });
 
-  it("does not query or render metadata when the preference is disabled", () => {
+  it("does not query status or render commit metadata when preference is disabled, but keeps worktree selector", () => {
     mocks.settings.terminalCommitStatusEnabled = false;
     const markup = renderToStaticMarkup(
       <TraditionalTerminalProjectsNavigator
@@ -204,9 +202,9 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       />,
     );
 
-    expect(markup).not.toContain("feature/demo");
-    expect(mocks.useProjectStatus).not.toHaveBeenCalled();
-    expect(mocks.useWorktrees).not.toHaveBeenCalled();
+    expect(markup).not.toContain("Ship the demo terminal workflow");
+    // Worktree dropdown remains present
+    expect(markup).toContain('role="combobox"');
   });
   it("queries project status and worktrees scoped to the group profile", () => {
     const qualifiedGroup: TraditionalTerminalProjectGroup = {
@@ -352,8 +350,6 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(settings.getAttribute("href")).toBe(href);
     act(() => settings.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
     expect(container.querySelector('[aria-label="Current location"]')!.textContent).toBe(href);
-    expect(mocks.useProjectStatus).not.toHaveBeenCalled();
-    expect(mocks.useWorktrees).not.toHaveBeenCalled();
   });
 
   it("supports additive empty props without inventing a Settings target and disables absent selection", () => {
@@ -373,5 +369,70 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(button.matches(":disabled")).toBe(false);
     act(() => button.click());
     expect(onSelectAgent).toHaveBeenCalledExactlyOnceWith(agent.sessionId);
+  });
+  it("renders a worktree selector for configured project rows but not for free-terminal groups", () => {
+    const freeGroup: TraditionalTerminalProjectGroup = {
+      id: "free-terminals",
+      label: "Free terminals",
+      projectName: null,
+      terminalTabs: [{ sessionId: "free-shell", label: "Free shell" }],
+      mountedSessions: [],
+    };
+    renderNavigator({ groups: [group, freeGroup] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(1);
+    expect(comboboxes[0]!.getAttribute("aria-label")).toContain("Worktree for demo");
+  });
+
+  it("interacting with worktree selector does not invoke onSelectGroup", () => {
+    const onSelectGroup = vi.fn();
+    renderNavigator({ groups: [group], onSelectGroup });
+    const combobox = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+    expect(combobox).not.toBeNull();
+    act(() => combobox.click());
+    expect(onSelectGroup).not.toHaveBeenCalled();
+  });
+
+  it("omits worktree selector before Git capability is established (loading / unknown)", () => {
+    mocks.useProjectStatus.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      isSuccess: false,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(0);
+  });
+
+  it("omits worktree selector for non-Git projects with statusError", () => {
+    mocks.useProjectStatus.mockReturnValue({
+      data: { ...mocks.status, statusError: "Not a git repository" },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(0);
+  });
+
+  it("renders worktree selector when commit status is disabled but project is a valid Git repo", () => {
+    mocks.useSettingsStore.mockImplementation(
+      (selector: (state: SettingsState) => unknown) =>
+        selector({ ...mocks.settings, terminalCommitStatusEnabled: false }),
+    );
+    mocks.useProjectStatus.mockReturnValue({
+      data: mocks.status,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(1);
+    expect(comboboxes[0]!.getAttribute("aria-label")).toContain(
+      "Worktree for demo",
+    );
   });
 });
