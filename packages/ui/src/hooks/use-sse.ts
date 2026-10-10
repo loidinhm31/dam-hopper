@@ -70,7 +70,8 @@ export function asHostIdleSuspendChangedEvent(
   if (
     data.version === 1 &&
     typeof data.revision === "number" &&
-    Number.isSafeInteger(data.revision)
+    Number.isSafeInteger(data.revision) &&
+    data.revision >= 0
   ) {
     return {
       type: "host:idleSuspendChanged",
@@ -635,10 +636,41 @@ export function installTransportBridge(
     bridgeUnsubs.push(
       transport.onStatusChange((status) => {
         publishTransportStatus(status, owner);
+        if (status === "connected" && isCurrentConnection(owner)) {
+          for (const qc of resolveQcs()) {
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(
+                owner,
+                "system",
+                "idle-suspend",
+                "v1",
+                "status",
+              ),
+            });
+          }
+        }
       }),
     );
   }
 
+  if (typeof transport.subscribeUiConnection === "function") {
+    bridgeUnsubs.push(
+      transport.subscribeUiConnection((receipt) => {
+        if (!receipt || !isCurrentConnection(owner)) return;
+        for (const qc of resolveQcs()) {
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(
+              owner,
+              "system",
+              "idle-suspend",
+              "v1",
+              "status",
+            ),
+          });
+        }
+      }),
+    );
+  }
   return () => {
     ownerBridgeTransports.delete(transport);
     bridgeUnsubs.forEach((fn) => fn());
@@ -730,6 +762,9 @@ export function useIpc(): { status: IpcStatus } {
         }
         handleIpcStatusChange(event.data as IpcStatus, setWsStatus, () => {
           void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
+          void qc.invalidateQueries({
+            queryKey: ["system", "idle-suspend", "v1", "status"],
+          });
           invalidateHostResourceQueries(qc);
         });
       }),

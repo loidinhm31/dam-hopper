@@ -1549,6 +1549,55 @@ describe("WsTransport idle suspend endpoints", () => {
     });
     transport.destroy();
   });
+
+  it("maps submitConsentDecision to POST /api/system/idle-suspend/v1/consent/decision with credentials omit", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          requestId: "req-abc",
+          decision: "approve",
+          statusRevision: 7,
+          settled: true,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      authToken: "token-xyz",
+    });
+
+    const payload = {
+      requestId: "req-abc",
+      requestRevision: 1,
+      connectionId: "conn-1",
+      decisionCapability: "cap-1",
+      decision: "approve",
+    };
+    const result = await transport.invoke("system:submitConsentDecision", payload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/system/idle-suspend/v1/consent/decision",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      credentials: "omit",
+      body: JSON.stringify(payload),
+    });
+    expect(result).toEqual({
+      version: 1,
+      requestId: "req-abc",
+      decision: "approve",
+      statusRevision: 7,
+      settled: true,
+    });
+    transport.destroy();
+  });
 });
 
 describe("WsTransport settings export/import", () => {

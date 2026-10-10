@@ -1380,6 +1380,12 @@ function channelToEndpoint(
         url: "/api/system/idle-suspend/v1/force-suspend",
         body: data,
       };
+    case "system:submitConsentDecision":
+      return {
+        method: "POST",
+        url: "/api/system/idle-suspend/v1/consent/decision",
+        body: data,
+      };
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {

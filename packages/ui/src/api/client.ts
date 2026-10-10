@@ -1031,7 +1031,7 @@ export function decodeAgentFreeStatus(val: unknown): IdleSuspendAgentFreeStatusV
   if (typeof val.phase !== "string" || !AGENT_FREE_PHASES[val.phase]) {
     throw new Error("Invalid agentFree: invalid phase");
   }
-  if (typeof val.scope !== "string" || val.scope.length === 0) {
+  if (val.scope !== "managed-terminals") {
     throw new Error("Invalid agentFree: invalid scope");
   }
   if (
@@ -1173,6 +1173,13 @@ export function decodeConsentStatus(val: unknown): IdleSuspendConsentStatusV1 {
   ) {
     throw new Error("Invalid consent: invalid decision");
   }
+  if (
+    (val.state === "pending" && val.decision !== null && val.decision !== undefined) ||
+    (val.state === "approved" && val.decision !== "approve") ||
+    (val.state === "denied" && val.decision !== "deny")
+  ) {
+    throw new Error("Invalid consent: state and decision mismatch");
+  }
   if (!isNonNegativeSafeInteger(val.wakeAfterSeconds)) {
     throw new Error("Invalid consent: invalid wakeAfterSeconds");
   }
@@ -1185,6 +1192,38 @@ export function decodeConsentStatus(val: unknown): IdleSuspendConsentStatusV1 {
     expiresAtMs: val.expiresAtMs as number,
     decision: (val.decision ?? null) as ConsentDecision | null,
     wakeAfterSeconds: val.wakeAfterSeconds as number,
+  };
+}
+
+export function decodeConsentDecisionResponse(
+  val: unknown,
+): ConsentDecisionResponse {
+  if (!isPlainObject(val)) {
+    throw new Error("Invalid consent decision response: expected plain object");
+  }
+  if (val.version !== 1) {
+    throw new Error("Invalid consent decision response: expected version 1");
+  }
+  if (typeof val.requestId !== "string" || val.requestId.length === 0) {
+    throw new Error("Invalid consent decision response: invalid requestId");
+  }
+  if (typeof val.decision !== "string" || !CONSENT_DECISIONS[val.decision]) {
+    throw new Error("Invalid consent decision response: invalid decision");
+  }
+  if (!isNonNegativeSafeInteger(val.statusRevision)) {
+    throw new Error(
+      "Invalid consent decision response: invalid statusRevision",
+    );
+  }
+  if (typeof val.settled !== "boolean") {
+    throw new Error("Invalid consent decision response: invalid settled");
+  }
+  return {
+    version: 1,
+    requestId: val.requestId,
+    decision: val.decision as ConsentDecision,
+    statusRevision: val.statusRevision,
+    settled: val.settled,
   };
 }
 
@@ -1504,6 +1543,7 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
     value,
     "clientPresence",
   );
+  const hasConsent = Object.prototype.hasOwnProperty.call(value, "consent");
 
   let automaticPolicy: IdleSuspendAutomaticPolicy;
   let activity: IdleSuspendActivityStatusV1 | null = null;
@@ -1511,7 +1551,13 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
   let clientPresence: IdleSuspendClientPresenceStatusV1 | null = null;
   let consent: IdleSuspendConsentStatusV1 | null = null;
 
-  if (!hasAutomaticPolicy && !hasActivity) {
+  if (
+    !hasAutomaticPolicy &&
+    !hasActivity &&
+    !hasAgentFree &&
+    !hasClientPresence &&
+    !hasConsent
+  ) {
     automaticPolicy = "empty-fleet";
     activity = null;
   } else if (!hasAutomaticPolicy || (!hasActivity && value.automaticPolicy !== "agent-free")) {
@@ -1535,6 +1581,20 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
           "Invalid idle suspend status: agentFree must be null for empty-fleet policy",
         );
       }
+      if (
+        hasClientPresence &&
+        value.clientPresence !== null &&
+        value.clientPresence !== undefined
+      ) {
+        throw new Error(
+          "Invalid idle suspend status: clientPresence must be null for empty-fleet policy",
+        );
+      }
+      if (hasConsent && value.consent !== null && value.consent !== undefined) {
+        throw new Error(
+          "Invalid idle suspend status: consent must be null for empty-fleet policy",
+        );
+      }
       automaticPolicy = "empty-fleet";
       activity = null;
     } else if (value.automaticPolicy === "agent-activity") {
@@ -1546,6 +1606,20 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
       if (hasAgentFree && value.agentFree !== null && value.agentFree !== undefined) {
         throw new Error(
           "Invalid idle suspend status: agentFree must be null for agent-activity policy",
+        );
+      }
+      if (
+        hasClientPresence &&
+        value.clientPresence !== null &&
+        value.clientPresence !== undefined
+      ) {
+        throw new Error(
+          "Invalid idle suspend status: clientPresence must be null for agent-activity policy",
+        );
+      }
+      if (hasConsent && value.consent !== null && value.consent !== undefined) {
+        throw new Error(
+          "Invalid idle suspend status: consent must be null for agent-activity policy",
         );
       }
       automaticPolicy = "agent-activity";
@@ -3156,11 +3230,13 @@ export function createApiClient(
           "system:forceSuspend",
           request,
         ),
-      submitConsentDecision: (request: ConsentDecisionRequest) =>
-        transport.invoke<ConsentDecisionResponse>(
+      submitConsentDecision: async (request: ConsentDecisionRequest) => {
+        const raw = await transport.invoke<unknown>(
           "system:submitConsentDecision",
           request,
-        ),
+        );
+        return decodeConsentDecisionResponse(raw);
+      },
     },
     usage: {
       summary: (query: UsageSummaryQuery = {}) =>

@@ -651,4 +651,66 @@ describe("Idle Suspend Settings & Status Browser Tests", () => {
     expect(container.textContent).toContain("Policy: Legacy empty-fleet");
     expect(container.textContent).not.toContain("Measurement Blocked");
   });
+
+  it("renders HostIdleSuspendStatus and SettingsIdleSuspendTimingSection in agent-free mode", async () => {
+    const fakeNow = 1726010805000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-free",
+      quietPeriodSeconds: 10800,
+      wakeAfterSeconds: 600,
+      activity: null,
+      agentFree: {
+        phase: "awaitingConsent",
+        scope: "managed-terminals",
+        inventoryState: "consistent",
+        inventoryRevision: 2,
+        semanticRevision: 4,
+        idleCount: 1,
+        blockedCount: 1,
+        workingCount: 0,
+        unknownCount: 0,
+        freeSinceMs: fakeNow - 10805000,
+        eligibleAtMs: fakeNow - 5000,
+        deferredUntilMs: null,
+        reasonCode: "allFree",
+      },
+      clientPresence: {
+        connectionCount: 2,
+        pendingUpgradeCount: 0,
+        revision: 3,
+        available: true,
+      },
+      consent: {
+        requestId: "11111111-1111-4000-8000-111111111111",
+        requestRevision: 1,
+        state: "pending",
+        requestedAtMs: fakeNow - 5000,
+        expiresAtMs: fakeNow + 55000,
+        decision: null,
+        wakeAfterSeconds: 600,
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <div>
+          <HostIdleSuspendStatus />
+          <SettingsIdleSuspendTimingSection />
+        </div>,
+      );
+    });
+
+    expect(container.textContent).toContain("Policy: Agent Free (>3h)");
+    expect(container.textContent).toContain("Semantic Agent-Free Eligibility");
+    expect(container.textContent).toContain(
+      "Tracks DamHopper terminals only; external work does not block sleep.",
+    );
+    const quietInput = page.getByLabelText("Quiet period in seconds");
+    await expect.element(quietInput).toHaveValue(10800);
+    await expect.element(quietInput).toBeDisabled();
+
+    vi.restoreAllMocks();
+  });
 });

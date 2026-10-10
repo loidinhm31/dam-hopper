@@ -3,6 +3,7 @@ import {
   api,
   decodeAgentFreeStatus,
   decodeClientPresenceStatus,
+  decodeConsentDecisionResponse,
   decodeConsentStatus,
   decodeIdleSuspendStatusV1,
   isIdleSuspendStatusV1,
@@ -659,6 +660,59 @@ describe("decodeIdleSuspendStatusV1", () => {
     };
     expect(() => decodeConsentStatus(badDecision)).toThrow(/invalid decision/);
   });
+
+  it("rejects invalid agentFree scope", () => {
+    expect(() =>
+      decodeAgentFreeStatus({
+        phase: "tracking",
+        scope: "host-wide",
+        inventoryState: "consistent",
+        inventoryRevision: 1,
+        semanticRevision: 1,
+        idleCount: 0,
+        blockedCount: 0,
+        workingCount: 0,
+        unknownCount: 0,
+        freeSinceMs: null,
+        eligibleAtMs: null,
+        deferredUntilMs: null,
+        reasonCode: null,
+      }),
+    ).toThrow(/invalid scope/);
+  });
+
+  it("rejects empty-fleet or agent-activity policy with non-null clientPresence or consent", () => {
+    expect(() =>
+      decodeIdleSuspendStatusV1({
+        ...makeBaseStatus(),
+        automaticPolicy: "empty-fleet",
+        activity: null,
+        clientPresence: {
+          connectionCount: 1,
+          pendingUpgradeCount: 0,
+          revision: 1,
+          available: true,
+        },
+      }),
+    ).toThrow(/clientPresence must be null for empty-fleet policy/);
+
+    expect(() =>
+      decodeIdleSuspendStatusV1({
+        ...makeBaseStatus(),
+        automaticPolicy: "empty-fleet",
+        activity: null,
+        consent: {
+          requestId: "req-1",
+          requestRevision: 1,
+          state: "pending",
+          requestedAtMs: 1726000000000,
+          expiresAtMs: 1726000060000,
+          decision: null,
+          wakeAfterSeconds: 600,
+        },
+      }),
+    ).toThrow(/consent must be null for empty-fleet policy/);
+  });
 });
 
 describe("api.system.idleSuspendStatus", () => {
@@ -702,5 +756,48 @@ describe("api.system.idleSuspendStatus", () => {
     await expect(api.system.idleSuspendStatus()).rejects.toThrow(
       /Invalid idle suspend status/,
     );
+  });
+});
+
+describe("api.system.submitConsentDecision", () => {
+  it("decodes valid consent decision response and rejects malformed payload", async () => {
+    const validResp = {
+      version: 1,
+      requestId: "req-123",
+      decision: "approve",
+      statusRevision: 14,
+      settled: true,
+    };
+    const mockTransport = {
+      invoke: vi.fn().mockResolvedValueOnce(validResp).mockResolvedValueOnce({ version: 2 }),
+    } as unknown as Transport;
+    initTransport(mockTransport);
+
+    const res = await api.system.submitConsentDecision({
+      requestId: "req-123",
+      requestRevision: 2,
+      connectionId: "conn-1",
+      decisionCapability: "cap-secret",
+      decision: "approve",
+    });
+    expect(res).toEqual(validResp);
+    expect(mockTransport.invoke).toHaveBeenCalledWith(
+      "system:submitConsentDecision",
+      expect.objectContaining({
+        requestId: "req-123",
+        decision: "approve",
+      }),
+    );
+
+    await expect(
+      api.system.submitConsentDecision({
+        requestId: "req-123",
+        requestRevision: 2,
+        connectionId: "conn-1",
+        decisionCapability: "cap-secret",
+        decision: "approve",
+      }),
+    ).rejects.toThrow(/Invalid consent decision response/);
+    expect(() => decodeConsentDecisionResponse(null)).toThrow(/expected plain object/);
   });
 });

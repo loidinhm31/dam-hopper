@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostResourceSnapshotV1 } from "../api/client.js";
+import type { QueryClient } from "@tanstack/react-query";
+import type { Transport } from "../api/transport.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
 const connectionState = vi.hoisted(() => ({
@@ -580,6 +582,13 @@ describe("host:idleSuspendChanged event validation", () => {
         data: { version: 1, revision: 42 },
       }),
     ).toBeNull();
+    expect(
+      asHostIdleSuspendChangedEvent({
+        type: "host:idleSuspendChanged",
+        timestamp: 100,
+        data: { version: 1, revision: -1 },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -667,6 +676,55 @@ describe("installTransportBridge for 04-W", () => {
       queryKey: profileQueryKey(owner, "system", "resource-alerts"),
     });
 
+    cleanup();
+  });
+
+  it("invalidates owner idle-suspend status on connected status and uiConnection receipt acquisition", () => {
+    let uiConnCb: ((receipt: unknown) => void) | null = null;
+    const transport = {
+      ...eventTransport(),
+      subscribeUiConnection: vi.fn((cb: (receipt: unknown) => void) => {
+        uiConnCb = cb;
+        cb(null);
+        return () => {
+          uiConnCb = null;
+        };
+      }),
+    };
+    const qc = { invalidateQueries: vi.fn() };
+    const cleanup = installTransportBridge(
+      owner,
+      transport as unknown as Transport,
+      () => [qc as unknown as QueryClient],
+    );
+
+    expect(qc.invalidateQueries).not.toHaveBeenCalled();
+    transport.emitStatus("connected");
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: profileQueryKey(owner, "system", "idle-suspend", "v1", "status"),
+    });
+
+    qc.invalidateQueries.mockClear();
+    uiConnCb?.({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-1",
+      decisionCapability: "cap-1",
+    });
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: profileQueryKey(owner, "system", "idle-suspend", "v1", "status"),
+    });
+
+    qc.invalidateQueries.mockClear();
+    connectionState.isCurrent = false;
+    transport.emitStatus("connected");
+    uiConnCb?.({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-2",
+      decisionCapability: "cap-2",
+    });
+    expect(qc.invalidateQueries).not.toHaveBeenCalled();
     cleanup();
   });
 });

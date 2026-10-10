@@ -141,46 +141,60 @@ unread`. Opening acknowledges the presentation count only; this read-only UI
 does not change query, acknowledgement, bounds, fallback, active incidents, or
 dismissal behavior.
 
-## Terminal idle-suspend status
+## Terminal idle-suspend status and sleep consent UI
 
 **Locations:** `packages/ui/src/api/client.ts`,
-`packages/ui/src/api/queries.ts`, and
-`packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`.
+`packages/ui/src/api/queries.ts`,
+`packages/ui/src/hooks/use-host-sleep-consent.ts`,
+`packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`,
+`packages/ui/src/components/organisms/SettingsIdleSuspendTimingSection.tsx`,
+`packages/ui/src/components/organisms/HostSleepConsentHost.tsx`, and
+`packages/ui/src/components/organisms/HostSleepConsentDialog.tsx`.
 
 `api.system.idleSuspendStatus()` invokes the strict
 `decodeIdleSuspendStatusV1` boundary on an `unknown` transport response. The
-decoder accepts the existing version-1 status plus required
-`automaticPolicy`/`activity` additive fields, normalizes only a valid old
-server that omits both fields, and leaves malformed, partial, authentication,
-and transport failures as query errors. It never echoes rejected payloads.
+decoder validates `empty-fleet`, `agent-activity`, and `agent-free` policies
+(via `decodeAgentFreeStatus`, `decodeClientPresenceStatus`, and
+`decodeConsentStatus`), normalizes only a valid old server that omits all
+additive policy/projection fields, and leaves malformed, partial,
+authentication, and transport failures as query errors without echoing rejected
+payloads. `api.system.submitConsentDecision()` posts to
+`/api/system/idle-suspend/v1/consent/decision` (with `credentials: "omit"` on
+`WsTransport`) and validates responses via `decodeConsentDecisionResponse`.
 
 `HostIdleSuspendStatus` keeps coordinator state, actual fleet counts, timing,
 capability, detail, generated-at time, and the manual Force Machine to Sleep
-action. Agent mode adds independent measurement state/reason, nullable
+action. In `agent-activity` mode, it renders measurement state/reason, nullable
 recognized-agent and monitored-terminal counts (`Unknown` when null),
-`tcp4-tcp6` coverage, and a persistent accessible heuristic notice. The notice
-states that silence does not prove completion, only attributable TCP4/TCP6 is
-measured, and service-only terminals may still be suspended.
+`tcp4-tcp6` coverage, measurement-blocked alerts, and the activity heuristic
+notice. In `agent-free` mode (`Policy: Agent Free (>3h)`), it renders the
+**Semantic Agent-Free Eligibility** card: phase and `inventoryState` badge,
+`Idle / Blocked` and `Working / Unknown` counts, public client presence
+(`<N> live (+<M> pending)` or `Unavailable (blocking)`), fixed `>10,800s (3h)`
+threshold, reason label, `managed-terminals` scope, live countdowns for
+`eligibleAtMs`, `deferredUntilMs`, and pending `consent.expiresAtMs`, consent
+state/decision summary, and the scope notice (DamHopper terminals only; external
+work excluded; `Free = Idle + Blocked`; `Working` or `Unknown` blocks sleep).
 
-Initializing/unavailable observation is never rendered as quiet, zero, or
-automatic-ready. Measurement warnings use a persistent `role="alert"` with
-reason, elapsed blocked duration, bounded PID/safe identity examples, an
-identity-unavailable label, and a truncation/incomplete label. The warning's
-process projection excludes command arguments, matcher data, environment,
-terminal/session/root/start identities, socket details, bytes, tokens, and raw
-diagnostics.
+`SettingsIdleSuspendTimingSection` locks **Quiet Period** to `10800` seconds
+(3 hours, `readOnly` and `disabled`) when `automaticPolicy === "agent-free"`,
+while keeping **Wake Duration** (`wakeAfterSeconds`) editable within server
+bounds when `timingMutable` is true and handoff is not active.
 
-One local display clock serves both the `armDeadlineMs` countdown and warning
-elapsed duration, ticks at most once per second, clamps negative values at zero,
-and stops when neither display is present. Sample and activity timestamps are
-display-only; ticks never refetch, publish a status hint, or affect admission.
-Manual confirmation continues to use actual
-`liveCount + creatingCount + restartPendingCount`, independent of agent counts
-or measurement warnings. See [Protected Idle-Suspend Status and Browser UI](../idle-suspend-status-ui.md).
-Chromium browser qualification covers the rendered agent-activity policy,
-available/initializing/unavailable/disabled measurement, warning duration and
-safe identity/truncation, countdown, manual force flow, and old-server
-compatibility.
+`HostSleepConsentHost` is always mounted in `DamHopperApp` and drives
+`HostSleepConsentDialog` through `useHostSleepConsent`. It watches all connected
+profiles, pairs status queries with per-socket `host:uiConnection` capability
+receipts (`connectionId` + `decisionCapability`), orders active requests
+deterministically, and deduplicates multi-profile aliases targeting the same
+server instance via `server-instance:${serverEpoch}:${requestId}` when a fresh
+`serverEpoch` and UUID `requestId` are present (surfacing merged `Aliases:` and
+`Host 1 of N`). **Allow sleep** immediately starts host-wide final safety checks
+(first valid answer wins); **Do not sleep** or pending Escape/outside/close
+dismissal submits `deny` (deferring sleep 3 hours), whereas settled items close
+locally without a POST. `409` conflicts transition to settled state, `503`/timeout
+errors show an outcome-uncertain alert while refetching status, and active
+Cognito Mode unmounts the dialog and blocks consent actions. See
+[Protected Idle-Suspend Status and Browser UI](../idle-suspend-status-ui.md).
 
 ## Error Boundary and stale lazy-chunk recovery
 

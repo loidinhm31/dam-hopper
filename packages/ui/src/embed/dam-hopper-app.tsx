@@ -38,6 +38,7 @@ import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { TunnelReminderBanner } from "@/components/organisms/TunnelReminderBanner.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
+import { HostSleepConsentHost } from "@/components/organisms/HostSleepConsentHost.js";
 import { useCognitoModeInputGuard } from "@/hooks/use-cognito-mode-input-guard.js";
 import { CognitoModeOverlay } from "@/components/organisms/CognitoModeOverlay.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -368,6 +369,7 @@ export function DamHopperApp() {
               <FreshResetBanner />
               <LegacyDeepLinkNotice />
               <TunnelReminderBanner />
+              <HostSleepConsentHost />
               <div className="app-route-viewport min-h-0 flex-1">
               <Routes>
               <Route

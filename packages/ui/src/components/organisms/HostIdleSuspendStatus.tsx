@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useIdleSuspendStatus, type OwnerInput } from "@/api/queries.js";
 import type {
+  AgentFreePhase,
+  AgentFreeReasonCode,
   IdleSuspendActivityMeasurementState,
   IdleSuspendActivityReasonCode,
   IdleSuspendCoordinatorState,
@@ -118,6 +120,36 @@ const WARNING_REASON_LABELS: Record<
   reconciling: "Reconciling observation baseline",
 };
 
+const AGENT_FREE_PHASE_LABELS: Record<AgentFreePhase, string> = {
+  blocked: "Blocked",
+  tracking: "Tracking (>3h)",
+  awaitingConsent: "Awaiting consent",
+  approved: "Approved",
+  finalCheck: "Final check",
+  handedOff: "Handed off",
+  deferred: "Deferred",
+  reconciling: "Reconciling",
+};
+
+const AGENT_FREE_REASON_LABELS: Record<AgentFreeReasonCode, string> = {
+  idle: "Agents idle",
+  blocked: "Agents blocked (waiting for user/error)",
+  working: "Agent actively working",
+  unknown: "Agent state unknown",
+  expired: "Observation lease expired",
+  disconnected: "Provider disconnected",
+  unavailable: "Observation unavailable",
+  ambiguous: "Ambiguous agent owner",
+  reconciling: "Reconciling baseline",
+  noAgents: "No recognized agents in managed terminals",
+  allFree: "All recognized agents free (Idle + Blocked)",
+  unansweredTimeout: "Consent unanswered (deferred 3h)",
+  clientRefusal: "Client declined sleep (deferred 3h)",
+  lastClientDisconnected: "Last client disconnected (deferred 3h)",
+  safetyInvalidation: "Final safety check invalidated",
+  decisionAlreadySettled: "Consent decision already settled",
+};
+
 export function HostIdleSuspendStatus({
   onForceSleep,
   isForceSleepPending,
@@ -131,9 +163,18 @@ export function HostIdleSuspendStatus({
   const hasMeasurementWarning =
     status?.activity?.measurementWarning !== null &&
     status?.activity?.measurementWarning !== undefined;
+  const hasAgentFreeDeadline =
+    status?.automaticPolicy === "agent-free" &&
+    Boolean(
+      status.enabled &&
+        (status.agentFree?.eligibleAtMs != null ||
+          status.agentFree?.deferredUntilMs != null ||
+          (status.consent?.state === "pending" &&
+            status.consent?.expiresAtMs != null)),
+    );
 
   useEffect(() => {
-    if (!hasArmDeadline && !hasMeasurementWarning) {
+    if (!hasArmDeadline && !hasMeasurementWarning && !hasAgentFreeDeadline) {
       return;
     }
     const initialTimer = setTimeout(() => {
@@ -146,8 +187,7 @@ export function HostIdleSuspendStatus({
       clearTimeout(initialTimer);
       clearInterval(interval);
     };
-  }, [hasArmDeadline, hasMeasurementWarning]);
-
+  }, [hasArmDeadline, hasMeasurementWarning, hasAgentFreeDeadline]);
   if (isLoading) {
     return (
       <div className="py-2 text-[10px] text-[var(--color-text-muted)]">
@@ -177,8 +217,12 @@ export function HostIdleSuspendStatus({
   };
   const sampleTime = new Date(status.timestampMs).toLocaleTimeString();
   const isAgentMode = status.automaticPolicy === "agent-activity";
-  const policyLabel = isAgentMode ? "Agent Activity" : "Legacy empty-fleet";
-
+  const isAgentFreeMode = status.automaticPolicy === "agent-free";
+  const policyLabel = isAgentMode
+    ? "Agent Activity"
+    : isAgentFreeMode
+      ? "Agent Free (>3h)"
+      : "Legacy empty-fleet";
   const remainingCountdownSeconds =
     status.armDeadlineMs !== null && status.armDeadlineMs !== undefined
       ? Math.max(0, Math.ceil((status.armDeadlineMs - nowMs) / 1000))
@@ -205,6 +249,33 @@ export function HostIdleSuspendStatus({
     ? Math.max(0, Math.floor((nowMs - warning.blockedSinceMs) / 1000))
     : null;
 
+  const agentFree = status.agentFree;
+  const clientPresence = status.clientPresence;
+  const consent = status.consent;
+  const agentFreePhaseLabel = agentFree
+    ? (AGENT_FREE_PHASE_LABELS[agentFree.phase] ?? agentFree.phase)
+    : null;
+  const agentFreeReasonLabel = agentFree?.reasonCode
+    ? (AGENT_FREE_REASON_LABELS[agentFree.reasonCode] ?? agentFree.reasonCode)
+    : null;
+  const eligibleRemainingSeconds =
+    status.enabled &&
+    agentFree?.phase === "tracking" &&
+    agentFree.eligibleAtMs != null
+      ? Math.max(0, Math.ceil((agentFree.eligibleAtMs - nowMs) / 1000))
+      : null;
+  const deferredRemainingSeconds =
+    status.enabled &&
+    agentFree?.phase === "deferred" &&
+    agentFree.deferredUntilMs != null
+      ? Math.max(0, Math.ceil((agentFree.deferredUntilMs - nowMs) / 1000))
+      : null;
+  const consentRemainingSeconds =
+    status.enabled &&
+    consent?.state === "pending" &&
+    consent.expiresAtMs != null
+      ? Math.max(0, Math.ceil((consent.expiresAtMs - nowMs) / 1000))
+      : null;
   return (
     <div
       aria-label="Terminal idle suspend status"
@@ -354,6 +425,123 @@ export function HostIdleSuspendStatus({
             Silence does not prove agent completion; measurement covers
             attributable TCP4/TCP6 only; service-only terminals may still be
             suspended.
+          </div>
+        </div>
+      )}
+      {isAgentFreeMode && agentFree && clientPresence && (
+        <div className="space-y-1.5 rounded border border-[var(--color-border)]/60 bg-[var(--color-surface-2)]/40 p-2 text-[11px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">
+              Semantic Agent-Free Eligibility
+            </span>
+            <span className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--color-text)]">
+              {agentFreePhaseLabel} ({agentFree.inventoryState})
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] text-[var(--color-text-muted)]">
+            <div>
+              <span>Idle / Blocked: </span>
+              <span className="font-mono text-[var(--color-text)]">
+                {agentFree.idleCount ?? "Unknown"} /{" "}
+                {agentFree.blockedCount ?? "Unknown"}
+              </span>
+            </div>
+            <div>
+              <span>Working / Unknown: </span>
+              <span className="font-mono text-[var(--color-text)]">
+                {agentFree.workingCount ?? "Unknown"} /{" "}
+                {agentFree.unknownCount ?? "Unknown"}
+              </span>
+            </div>
+            <div>
+              <span>Public clients: </span>
+              <span className="font-mono text-[var(--color-text)]">
+                {clientPresence.available
+                  ? `${clientPresence.connectionCount} live${
+                      clientPresence.pendingUpgradeCount > 0
+                        ? ` (+${clientPresence.pendingUpgradeCount} pending)`
+                        : ""
+                    }`
+                  : "Unavailable (blocking)"}
+              </span>
+            </div>
+            <div>
+              <span>Threshold: </span>
+              <span className="font-mono text-[var(--color-text)]">
+                &gt;10,800s (3h)
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-[var(--color-text-muted)]">
+            <span>
+              Status:{" "}
+              <span className="text-[var(--color-text)]">
+                {agentFreeReasonLabel ?? "None"}
+              </span>
+            </span>
+            <span className="font-mono text-[9px]">
+              {agentFree.scope}
+            </span>
+          </div>
+
+          {eligibleRemainingSeconds !== null && (
+            <div
+              aria-live="polite"
+              className="flex items-center justify-between rounded bg-[var(--color-primary)]/10 px-2 py-1 text-[10px] font-medium text-[var(--color-text)]"
+            >
+              <span>Free eligibility countdown:</span>
+              <span className="font-mono font-bold">
+                {eligibleRemainingSeconds}s
+              </span>
+            </div>
+          )}
+
+          {deferredRemainingSeconds !== null && (
+            <div
+              aria-live="polite"
+              className="flex items-center justify-between rounded bg-[var(--color-warning)]/10 px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]"
+            >
+              <span>Deferral remaining:</span>
+              <span className="font-mono font-bold">
+                {deferredRemainingSeconds}s
+              </span>
+            </div>
+          )}
+
+          {consent && (
+            <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 text-[10px] text-[var(--color-text-muted)]">
+              <div className="flex items-center justify-between">
+                <span>
+                  Consent:{" "}
+                  <strong className="uppercase text-[var(--color-text)]">
+                    {consent.state}
+                  </strong>
+                  {consent.decision ? ` (${consent.decision})` : ""}
+                </span>
+                <span className="font-mono">
+                  Wake: {consent.wakeAfterSeconds}s
+                </span>
+              </div>
+              {consentRemainingSeconds !== null && (
+                <div className="mt-0.5 flex items-center justify-between text-[var(--color-warning)]">
+                  <span>Response deadline:</span>
+                  <span className="font-mono font-bold">
+                    {consentRemainingSeconds}s
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="rounded bg-[var(--color-surface-2)] p-1.5 text-[9px] leading-tight text-[var(--color-text-muted)]">
+            <span className="font-semibold text-[var(--color-text)]">
+              Scope:{" "}
+            </span>
+            Tracks DamHopper terminals only; external work does not block sleep.
+            Free = Idle + Blocked (waiting for input/approval, not task
+            completion); Working or Unknown blocks automatic sleep.
           </div>
         </div>
       )}
