@@ -202,7 +202,9 @@ below the project tab button:
   - The dropdown remains fully functional whether Git commit summaries
     (`terminalCommitStatusEnabled`) are toggled on or off in settings. When commit
     summaries are enabled, they track the selected worktree's latest commit.
-  - Non-Git projects (detected via `useProjectStatus` status errors) and
+  - Non-Git projects (detected via `useProjectStatus` active on named projects
+    checking `pathExists !== false`, lack of `statusError`, and presence of
+    `branch` or `lastCommit.hash`, failing closed while loading or unknown) and
     non-project terminal groups (such as Free terminals) omit the dropdown.
 - **Target reconciliation & safe fallback**:
   - Managed by `useWorktreeTargetReconciliation`. If an active target disappears
@@ -218,9 +220,11 @@ below the project tab button:
   - Terminal creation explicitly qualified by profile fails closed without ambient
     API fallback (`resolveBoundTerminalClient`) if the target profile connection
     cannot be captured.
-  - Workflow target selection resolves the owning profile ID
-    (`setActiveProject(outcome.project, resolvedProfileId)`) so identically named
-    projects across profiles remain isolated.
+  - Workflow target selection strictly validates `{profileId, project}` against
+    the candidate projects inventory (`resolveWorkflowTargetSelection`) with zero
+    untagged fallback, resolving the owning profile ID
+    (`setActiveProject(outcome.project, resolvedProfileId)`) and profile-qualified
+    target selection so identically named projects across profiles remain isolated.
 - **Non-disruptive switching**:
   - Switching the worktree updates the session-scoped target for subsequent
     operations without restarting active terminal processes, clearing split panes,

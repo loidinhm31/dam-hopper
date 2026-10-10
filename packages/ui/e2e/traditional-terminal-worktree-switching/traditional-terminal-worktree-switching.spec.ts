@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type { Locator } from "@playwright/test";
 import type { SessionInfo } from "../../src/api/client.js";
 import { test, expect, type ApplicationServices } from "../fixtures/application-fixture.js";
@@ -32,6 +33,28 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
     authenticatedPage: page,
   }) => {
     // 1. Initialize Git repository with main branch and linked feature worktree in fixture-project
+    await execInContainer(appServices.appContainerId, [
+      "git",
+      "config",
+      "--global",
+      "--add",
+      "safe.directory",
+      "/e2e/workspace/fixture-project",
+    ]);
+    await execInContainer(appServices.appContainerId, [
+      "git",
+      "config",
+      "--global",
+      "--add",
+      "safe.directory",
+      "/e2e/workspace/fixture-feature-worktree",
+    ]);
+    await execInContainer(appServices.appContainerId, [
+      "mkdir",
+      "-p",
+      "/e2e/workspace/fixture-project",
+    ]);
+
     const git = (args: string[]) =>
       execInContainer(appServices.appContainerId, [
         "git",
@@ -40,9 +63,18 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
         ...args,
       ]);
 
-    await git(["init", "-b", "main"]);
+    try {
+      await git(["init", "-b", "main"]);
+    } catch {
+      await git(["init"]);
+      await git(["checkout", "-B", "main"]);
+    }
     await git(["config", "user.name", "Test User"]);
     await git(["config", "user.email", "test@example.com"]);
+
+    const gitDir = await git(["rev-parse", "--git-dir"]);
+    expect(gitDir).toMatch(/\.git$/);
+
     await git(["add", "README.md", "sample.txt"]);
     await git(["commit", "-m", "Initial commit on main"]);
 
@@ -61,7 +93,6 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
       "/e2e/workspace/fixture-feature-worktree/feature-branch.txt",
       "FEATURE_WORKTREE_MARKER_FILE_CONTENT\n",
     );
-
     // 2. Open Traditional terminal view in the browser
     await page.goto(`${appServices.appOrigin}/workspace`);
     await page
@@ -221,12 +252,24 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
 
 
     // 7. Verify two-profile isolation: independent profile does not inherit target selection
-    const secondaryProfileId = "secondary-profile-" + Date.now();
+    const secondaryProfileId = randomUUID();
     const secondaryStorageState = createBrowserStorageState({
       appOrigin: appServices.appOrigin,
       profileId: secondaryProfileId,
       token: appServices.token,
       username: appServices.username,
+    });
+    secondaryStorageState.origins[0]!.localStorage.push({
+      name: "dam-hopper:workspace-state",
+      value: JSON.stringify({
+        state: {
+          selectedProject: {
+            profileId: secondaryProfileId,
+            project: "fixture-project",
+          },
+        },
+        version: 1,
+      }),
     });
     const secondaryContext = await page.context().browser()!.newContext({
       storageState: secondaryStorageState,
@@ -239,6 +282,12 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
       .getByRole("button", { name: "Terminal", exact: true })
       .click();
     await secondaryPage.getByRole("button", { name: /^traditional$/i }).click();
+
+    // Wait for secondary page connection to transition to connected online
+    await expect(
+      secondaryPage.getByRole("button", { name: /E2E Fixture Profile/ }),
+    ).toContainText(/online/i);
+
     const secondaryNavigator = secondaryPage.getByRole("navigation", {
       name: "Terminal projects and agents",
       exact: true,
@@ -246,6 +295,30 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
     await expect(
       secondaryNavigator.getByRole("heading", { name: "projects", exact: true }),
     ).toBeVisible();
+
+    // Verify profile B selector is independent (at root, does not inherit feature worktree)
+    const secondaryWorktreeSelect = secondaryNavigator.getByRole("combobox", {
+      name: /Worktree for fixture-project/,
+    });
+    await expect(secondaryWorktreeSelect).toBeVisible();
+    await expect(secondaryWorktreeSelect).toContainText(/root/i);
+
+    // Launch terminal in fixture-project under profile B and assert server-side PTY cwd is at root
+    const sessionCountBefore = (await sessions(appServices)).length;
+    await secondaryNavigator
+      .getByRole("button", {
+        name: "New terminal in selected project",
+        exact: true,
+      })
+      .click();
+    await expect
+      .poll(async () => (await sessions(appServices)).length)
+      .toBe(sessionCountBefore + 1);
+    const afterSecondarySessions = await sessions(appServices);
+    const secondaryTerminal = afterSecondarySessions[afterSecondarySessions.length - 1];
+    expect(secondaryTerminal).toBeDefined();
+    expect(secondaryTerminal!.project).toBe("fixture-project");
+    expect(secondaryTerminal!.cwd).toBe("/e2e/workspace/fixture-project");
     await secondaryContext.close();
     // 7. Visual captures across wide, narrow, and compact layouts
     // Wide layout (1440x900)

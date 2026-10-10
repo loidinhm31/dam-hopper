@@ -2611,24 +2611,30 @@ export default function WorkspacePage() {
 
   const handleWorkflowSelectTarget = useCallback(
     (target: ProjectTargetRef) => {
+      const candidateProjects =
+        allProjects.length > 0
+          ? allProjects.map((item) => ({
+              name: item.project.name,
+              profileId: item.profileId,
+            }))
+          : projects.map((p) => ({
+              name: p.name,
+              profileId: activeProfileId ?? undefined,
+            }));
+
       const outcome = resolveWorkflowTargetSelection({
         target,
-        projects,
+        projects: candidateProjects,
         unavailableTargetsByProject,
       });
       if (!outcome.canSelect || !outcome.project) {
         return;
       }
-      const targetProfileId = target.profileId;
-      const matchedAggregated = targetProfileId
-        ? allProjects.find(
-            (item) =>
-              item.profileId === targetProfileId &&
-              item.project.name === outcome.project,
-          )
-        : allProjects.find((item) => item.project.name === outcome.project);
       const resolvedProfileId =
-        targetProfileId ?? matchedAggregated?.profileId ?? activeProfileId;
+        outcome.profileId ??
+        target.profileId ??
+        allProjects.find((item) => item.project.name === outcome.project)?.profileId ??
+        activeProfileId;
       if (!resolvedProfileId) {
         return;
       }

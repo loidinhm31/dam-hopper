@@ -176,5 +176,18 @@ describe("workflow-workspace-integration", () => {
       expect(outcomeMissing.canSelect).toBe(false);
       expect(outcomeMissing.reason).toBe("project_not_configured");
     });
+    it("rejects explicitly qualified target when requested profile does not configure the project even if another profile does", () => {
+      const projects = [
+        { name: "demo", profileId: "server-a" },
+        { name: "other", profileId: "server-b" },
+      ];
+      const outcome = resolveWorkflowTargetSelection({
+        target: { profileId: "server-b", project: "demo" },
+        projects,
+      });
+      expect(outcome.canSelect).toBe(false);
+      expect(outcome.reason).toBe("project_not_configured");
+    });
+
   });
 });

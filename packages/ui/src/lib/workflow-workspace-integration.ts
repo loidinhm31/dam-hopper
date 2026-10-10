@@ -162,20 +162,19 @@ export function resolveWorkflowTargetSelection({
     return { canSelect: false, reason: "missing_target", errorMessage: "No target project specified." };
   }
   const projectName = target.project.trim();
-  const isConfigured = target.profileId
-    ? projects.some(
-        (p) =>
-          p.name === projectName &&
-          (!p.profileId || p.profileId === target.profileId),
+  const matchingProject = target.profileId
+    ? projects.find(
+        (p) => p.name === projectName && p.profileId === target.profileId,
       )
-    : projects.some((p) => p.name === projectName);
-  if (!isConfigured) {
+    : projects.find((p) => p.name === projectName);
+  if (!matchingProject) {
     return {
       canSelect: false,
       reason: "project_not_configured",
       errorMessage: `Project "${projectName}" is not configured in this workspace.`,
     };
   }
+  const resolvedProfileId = matchingProject.profileId ?? target.profileId;
   if (target.worktreePath) {
     const rawPath = target.worktreePath.trim();
     const scopeKey = projectScopeKey(target);
@@ -191,7 +190,17 @@ export function resolveWorkflowTargetSelection({
         errorMessage: `Worktree "${rawPath}" is currently unavailable.`,
       };
     }
-    return { canSelect: true, project: projectName, profileId: target.profileId, worktreePath: rawPath };
+    return {
+      canSelect: true,
+      project: projectName,
+      profileId: resolvedProfileId,
+      worktreePath: rawPath,
+    };
   }
-  return { canSelect: true, project: projectName, profileId: target.profileId, worktreePath: null };
+  return {
+    canSelect: true,
+    project: projectName,
+    profileId: resolvedProfileId,
+    worktreePath: null,
+  };
 }

@@ -155,11 +155,15 @@ function TraditionalProjectRow({
   const selectedPath = targetSnapshot?.target.worktreePath ?? null;
   const { data: projectStatus } = useProjectStatus(
     projectScope ?? "",
-    false,
+    Boolean(group.projectName),
   );
   const isGitProject = projectStatus
-    ? Boolean(projectStatus.pathExists !== false && !projectStatus.statusError)
-    : true;
+    ? Boolean(
+        projectStatus.pathExists !== false &&
+          !projectStatus.statusError &&
+          Boolean(projectStatus.branch || projectStatus.lastCommit?.hash),
+      )
+    : false;
   return (
     <div
       role="presentation"

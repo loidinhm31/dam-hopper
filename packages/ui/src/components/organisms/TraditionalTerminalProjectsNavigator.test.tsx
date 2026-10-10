@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => {
       data: status,
       isLoading: false,
       isError: false,
+      isSuccess: true,
     })),
     useWorktrees: vi.fn(() => ({
       data: [worktree],
@@ -202,7 +203,6 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     );
 
     expect(markup).not.toContain("Ship the demo terminal workflow");
-    expect(mocks.useProjectStatus).not.toHaveBeenCalledWith("demo", true);
     // Worktree dropdown remains present
     expect(markup).toContain('role="combobox"');
   });
@@ -393,14 +393,46 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(onSelectGroup).not.toHaveBeenCalled();
   });
 
+  it("omits worktree selector before Git capability is established (loading / unknown)", () => {
+    mocks.useProjectStatus.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      isSuccess: false,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(0);
+  });
+
   it("omits worktree selector for non-Git projects with statusError", () => {
     mocks.useProjectStatus.mockReturnValue({
       data: { ...mocks.status, statusError: "Not a git repository" },
       isLoading: false,
       isError: false,
+      isSuccess: true,
     });
     renderNavigator({ groups: [group] });
     const comboboxes = container.querySelectorAll('[role="combobox"]');
     expect(comboboxes).toHaveLength(0);
+  });
+
+  it("renders worktree selector when commit status is disabled but project is a valid Git repo", () => {
+    mocks.useSettingsStore.mockImplementation(
+      (selector: (state: SettingsState) => unknown) =>
+        selector({ ...mocks.settings, terminalCommitStatusEnabled: false }),
+    );
+    mocks.useProjectStatus.mockReturnValue({
+      data: mocks.status,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+    renderNavigator({ groups: [group] });
+    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    expect(comboboxes).toHaveLength(1);
+    expect(comboboxes[0]!.getAttribute("aria-label")).toContain(
+      "Worktree for demo",
+    );
   });
 });
