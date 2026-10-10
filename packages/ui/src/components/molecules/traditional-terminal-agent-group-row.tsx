@@ -4,6 +4,9 @@ import {
   nextAgentSessionId,
   type TraditionalTerminalAgentStatusGroup,
 } from "@/lib/traditional-terminal-agent-groups.js";
+import { AgentHarnessBadge } from "@/components/atoms/AgentHarnessBadge.js";
+import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
+import { ProjectBadge } from "@/components/atoms/ProjectBadge.js";
 import { cn } from "@/lib/utils.js";
 
 export interface TraditionalTerminalAgentGroupRowProps {
@@ -62,16 +65,25 @@ export function TraditionalTerminalAgentGroupRow({
         touchOptimized && "min-h-12",
       )}
     >
-      <span className="flex w-full min-w-0 items-center gap-2">
-        <span className="shrink-0 text-xs font-medium">{harnesses}</span>
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <span className="flex shrink-0 items-center gap-1">
+          {harnessLabels.map((harness) => (
+            <AgentHarnessBadge key={harness} harness={harness} />
+          ))}
+        </span>
         {count === 1 ? (
-          <span className="min-w-0 truncate font-mono" title={rows[0]!.terminalTitle}>
+          <span className="min-w-0 truncate font-mono text-xs text-[var(--color-text)]" title={rows[0]!.terminalTitle}>
             {rows[0]!.terminalTitle}
           </span>
         ) : null}
       </span>
-      <span className="w-full min-w-0 truncate text-xs" title={where}>
-        {group.projectLabel} · {group.profileLabel}
+      <span className="flex w-full min-w-0 flex-wrap items-center gap-1.5 text-xs" title={where}>
+        <ProjectBadge name={group.projectLabel} />
+        <ProfileBadge
+          profileId={group.profileId}
+          name={group.profileLabel}
+          className="truncate max-w-[100px]"
+        />
       </span>
       <span className="flex w-full min-w-0 flex-wrap items-center gap-1 text-xs">
         <span className={cn("inline-flex items-center gap-1 rounded-sm border border-[var(--color-border)] px-1 py-0.5 font-medium", statusClassName)}>

@@ -1070,7 +1070,6 @@ describe("Traditional terminal projects in Chromium", () => {
     await expect.element(betaGroup).toBeVisible();
     const badge = betaGroup.element().querySelector('[data-testid="agent-count-badge"]');
     expect(badge?.textContent).toBe("2");
-
     // Clicking it selects the first member (Codex: agentFixtureRefs.beta)
     await userEvent.click(betaGroup);
     await expect
