@@ -15,6 +15,7 @@ fn sample_hello(reporter_id: &str, session_id: &str) -> ReporterHello {
         reporter_id: reporter_id.to_string(),
         agent_session_id: session_id.to_string(),
         adapter_version: "18.3.5".to_string(),
+        pid: None,
     }
 }
 
@@ -2162,4 +2163,477 @@ fn test_cross_agent_disallowed_events_rejected() {
     );
     let out = claude_registry.apply_hook("term-claude", 1, &claude_interrupt, 1050).unwrap();
     assert!(!out.state_changed);
+}
+
+// ============================================================================
+// Phase 02: Managed Agent Inventory and Semantic Evidence Tests
+// ============================================================================
+
+#[test]
+fn test_evaluate_managed_agents_zero_free() {
+    let registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let eval = registry.evaluate_managed_agents(&[], 1000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Free {
+            idle_count,
+            blocked_count,
+            min_lease_remaining_ms,
+            non_free_generation,
+            semantic_revision,
+        } => {
+            assert_eq!(idle_count, 0);
+            assert_eq!(blocked_count, 0);
+            assert_eq!(min_lease_remaining_ms, u64::MAX);
+            assert_eq!(non_free_generation, registry.non_free_generation());
+            assert_eq!(semantic_revision, registry.revision);
+        }
+        other => panic!("expected Free for zero agents, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_all_idle_or_blocked_free() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty1 = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let pty2 = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc1 = ProcessIdentity {
+        pid: 1001,
+        start_ticks: 2001,
+    };
+    let proc2 = ProcessIdentity {
+        pid: 1002,
+        start_ticks: 2002,
+    };
+
+    // Admit OMP reporter on pty1 with verified process proc1
+    let hello1 = sample_hello("rep-1", "sess-1");
+    registry
+        .admit_reporter_with_process(pty1.session_id.to_string(), 1, &hello1, Some(proc1), 1000)
+        .unwrap();
+    registry
+        .apply_report(
+            &pty1.session_id.to_string(),
+            1,
+            1,
+            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            1000,
+        )
+        .unwrap();
+
+    // Admit native Claude on pty2 with native_root proc2
+    // Establish native Claude on pty2 with UserPromptSubmit, then transition to Blocked via Notification
+    let mut start_env = sample_hook_envelope("ev-0", "UserPromptSubmit", "sess-2", Some("turn-1"), AgentKind::Claude);
+    start_env.root_process = proc2;
+    registry.apply_hook(&pty2.session_id.to_string(), 1, &start_env, 900).unwrap();
+
+    let mut hook_env = sample_hook_envelope("ev-1", "Notification", "sess-2", Some("turn-1"), AgentKind::Claude);
+    hook_env.notification_type = Some("permission_prompt".to_string());
+    hook_env.reason = Some(BlockedReason::Approval);
+    hook_env.root_process = proc2;
+    registry.apply_hook(&pty2.session_id.to_string(), 1, &hook_env, 1000).unwrap();
+    let image_key = crate::idle_suspend::activity::ProcessImageKey {
+        exe_dev: 1,
+        exe_ino: 2,
+        entrypoint_token: None,
+    };
+    let matched = vec![
+        crate::idle_suspend::activity::MatchedManagedAgent {
+            identity: proc1,
+            terminal: pty1,
+            safe_executable_identity: Some("omp".to_string()),
+            image_key: image_key.clone(),
+            descendant_processes: vec![],
+        },
+        crate::idle_suspend::activity::MatchedManagedAgent {
+            identity: proc2,
+            terminal: pty2,
+            safe_executable_identity: Some("claude".to_string()),
+            image_key,
+            descendant_processes: vec![],
+        },
+    ];
+
+    let eval = registry.evaluate_managed_agents(&matched, 5000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Free {
+            idle_count,
+            blocked_count,
+            ..
+        } => {
+            assert_eq!(idle_count, 1);
+            assert_eq!(blocked_count, 1);
+        }
+        other => panic!("expected Free, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_working_blocks() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty1 = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc1 = ProcessIdentity {
+        pid: 1001,
+        start_ticks: 2001,
+    };
+
+    let hello = sample_hello("rep-1", "sess-1");
+    registry
+        .admit_reporter_with_process(pty1.session_id.to_string(), 1, &hello, Some(proc1), 1000)
+        .unwrap();
+    registry
+        .apply_report(
+            &pty1.session_id.to_string(),
+            1,
+            1,
+            sample_report(1, ReporterEventKind::StateChanged, AgentState::Working, "sess-1", Some("t1"), None, None),
+            1000,
+        )
+        .unwrap();
+
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc1,
+        terminal: pty1,
+        safe_executable_identity: Some("omp".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    let eval = registry.evaluate_managed_agents(&matched, 2000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Working {
+            working_count,
+            implicated,
+            ..
+        } => {
+            assert_eq!(working_count, 1);
+            assert_eq!(implicated, vec![proc1]);
+        }
+        other => panic!("expected Working, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_non_free_generation_mutations() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let gen0 = registry.non_free_generation();
+    assert_eq!(gen0, 1);
+
+    let pty_id = "term-non-free";
+    let hello = sample_hello("rep-1", "sess-1");
+    registry.admit_reporter(pty_id.to_string(), 1, &hello, 1000).unwrap();
+    let gen_admitted = registry.non_free_generation();
+    assert!(gen_admitted > gen0, "admitting new unknown agent increments non_free_generation");
+
+    // Transition Unknown -> Idle
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            1000,
+        )
+        .unwrap();
+    let gen_idle = registry.non_free_generation();
+    assert!(gen_idle > gen_admitted, "Unknown -> Idle transitions out of Unknown");
+
+    // Same-state heartbeat Idle -> Idle does NOT increment non_free_generation
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(2, ReporterEventKind::Heartbeat, AgentState::Idle, "sess-1", None, None, None),
+            2000,
+        )
+        .unwrap();
+    assert_eq!(registry.non_free_generation(), gen_idle, "heartbeat preserves non_free_generation");
+
+    // Idle -> Blocked preserves non_free_generation
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(3, ReporterEventKind::StateChanged, AgentState::Blocked, "sess-1", None, None, Some(BlockedReason::Question)),
+            3000,
+        )
+        .unwrap();
+    assert_eq!(registry.non_free_generation(), gen_idle, "Idle -> Blocked preserves non_free_generation");
+
+    // Blocked -> Idle preserves non_free_generation
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(4, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            4000,
+        )
+        .unwrap();
+    assert_eq!(registry.non_free_generation(), gen_idle, "Blocked -> Idle preserves non_free_generation");
+
+    // Idle -> Working increments non_free_generation
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(5, ReporterEventKind::StateChanged, AgentState::Working, "sess-1", Some("turn-1"), None, None),
+            5000,
+        )
+        .unwrap();
+    let gen_working = registry.non_free_generation();
+    assert!(gen_working > gen_idle, "Idle -> Working increments non_free_generation");
+
+    // Working -> Idle increments non_free_generation (leaving non-free state)
+    registry
+        .apply_report(
+            pty_id,
+            1,
+            1,
+            sample_report(6, ReporterEventKind::TurnEnded, AgentState::Idle, "sess-1", Some("turn-1"), Some(TurnOutcome::Ended), None),
+            6000,
+        )
+        .unwrap();
+    let gen_idle2 = registry.non_free_generation();
+    assert!(gen_idle2 > gen_working, "Working -> Idle increments non_free_generation");
+
+    // Disconnect increments non_free_generation
+    registry.mark_unknown(pty_id, 1, 1).unwrap();
+    let gen_disconnected = registry.non_free_generation();
+    assert!(gen_disconnected > gen_idle2, "disconnect increments non_free_generation");
+}
+
+#[test]
+fn test_evaluate_managed_agents_unverified_process_binding_fails_closed() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty1 = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc1 = ProcessIdentity {
+        pid: 1001,
+        start_ticks: 2001,
+    };
+
+    // Admit OMP reporter WITHOUT verified process binding (verified_process = None)
+    let hello = sample_hello("rep-unverified", "sess-1");
+    registry
+        .admit_reporter(pty1.session_id.to_string(), 1, &hello, 1000)
+        .unwrap();
+    registry
+        .apply_report(
+            &pty1.session_id.to_string(),
+            1,
+            1,
+            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            1000,
+        )
+        .unwrap();
+
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc1,
+        terminal: pty1,
+        safe_executable_identity: Some("omp".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    let eval = registry.evaluate_managed_agents(&matched, 2000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(reason, super::types::AgentSemanticBlockReason::UnverifiedProcessBinding { pid: 1001, .. }));
+        }
+        other => panic!("expected Unknown(UnverifiedProcessBinding), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_expired_lease_fails_closed() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty1 = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc1 = ProcessIdentity {
+        pid: 1001,
+        start_ticks: 2001,
+    };
+
+    let hello = sample_hello("rep-1", "sess-1");
+    registry
+        .admit_reporter_with_process(pty1.session_id.to_string(), 1, &hello, Some(proc1), 1000)
+        .unwrap();
+    registry
+        .apply_report(
+            &pty1.session_id.to_string(),
+            1,
+            1,
+            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            1000,
+        )
+        .unwrap();
+
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc1,
+        terminal: pty1,
+        safe_executable_identity: Some("omp".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    // Evaluating at 1000 + DEFAULT_LEASE_MS (15,000ms) + 1ms = 16,001ms
+    let eval = registry.evaluate_managed_agents(&matched, 16_001);
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(reason, super::types::AgentSemanticBlockReason::ExpiredLease { pid: 1001, .. }));
+        }
+        other => panic!("expected Unknown(ExpiredLease), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_native_gate_fail_closed() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc = ProcessIdentity {
+        pid: 2001,
+        start_ticks: 3001,
+    };
+
+    // Native Codex hook received at time 1000
+    let mut hook_env = sample_hook_envelope("ev-1", "Interrupt", "sess-codex", Some("turn-1"), AgentKind::Codex);
+    hook_env.root_process = proc;
+    // First establish session with UserPromptSubmit
+    let mut start_env = sample_hook_envelope("ev-0", "UserPromptSubmit", "sess-codex", Some("turn-1"), AgentKind::Codex);
+    start_env.root_process = proc;
+    registry.apply_hook(&pty.session_id.to_string(), 1, &start_env, 900).unwrap();
+    registry.apply_hook(&pty.session_id.to_string(), 1, &hook_env, 1000).unwrap();
+
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc,
+        terminal: pty,
+        safe_executable_identity: Some("codex".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    // At time 2000 (within 15s), Idle
+    let eval_fresh = registry.evaluate_managed_agents(&matched, 2000);
+    assert!(matches!(eval_fresh, super::types::AgentSemanticEvaluation::Free { idle_count: 1, .. }));
+
+    // At time 16_001 (beyond 15s lease), fails closed to UnrefreshedNativeProvider!
+    let eval_expired = registry.evaluate_managed_agents(&matched, 16_001);
+    match eval_expired {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::UnrefreshedNativeProvider { pid: 2001, agent_kind: AgentKind::Codex, .. }
+            ));
+        }
+        other => panic!("expected Unknown(UnrefreshedNativeProvider), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_multiple_agents_in_terminal_ambiguous() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc1 = ProcessIdentity { pid: 3001, start_ticks: 4001 };
+    let proc2 = ProcessIdentity { pid: 3002, start_ticks: 4002 };
+
+    // Admit OMP reporter tied to proc1
+    let hello = sample_hello("rep-shared", "sess-1");
+    registry.admit_reporter_with_process(pty.session_id.to_string(), 1, &hello, Some(proc1), 1000).unwrap();
+    registry.apply_report(
+        &pty.session_id.to_string(),
+        1,
+        1,
+        sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+        1000,
+    ).unwrap();
+
+    let image_key = crate::idle_suspend::activity::ProcessImageKey {
+        exe_dev: 1,
+        exe_ino: 2,
+        entrypoint_token: None,
+    };
+    // Both proc1 and proc2 running in the SAME terminal
+    let matched = vec![
+        crate::idle_suspend::activity::MatchedManagedAgent {
+            identity: proc1,
+            terminal: pty.clone(),
+            safe_executable_identity: Some("omp".to_string()),
+            image_key: image_key.clone(),
+            descendant_processes: vec![],
+        },
+        crate::idle_suspend::activity::MatchedManagedAgent {
+            identity: proc2,
+            terminal: pty,
+            safe_executable_identity: Some("omp".to_string()),
+            image_key,
+            descendant_processes: vec![],
+        },
+    ];
+
+    let eval = registry.evaluate_managed_agents(&matched, 2000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(reason, super::types::AgentSemanticBlockReason::AmbiguousOwner { .. }));
+        }
+        other => panic!("expected Unknown(AmbiguousOwner), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_process_exit_proof() {
+    // Self PID is alive
+    let current_pid = std::process::id();
+    let stat = crate::pty::activity::read_process_stat(std::path::Path::new("/proc"), current_pid).expect("read self stat");
+    let current_identity = ProcessIdentity {
+        pid: current_pid,
+        start_ticks: stat.start_ticks,
+    };
+    let proof_alive = super::runtime::verify_process_exit(current_identity);
+    assert_eq!(proof_alive, super::runtime::ProcessExitProof::Alive);
+
+    // Non-existent PID is exited
+    let non_existent = ProcessIdentity {
+        pid: 4_194_300,
+        start_ticks: 99999,
+    };
+    let proof_exited = super::runtime::verify_process_exit(non_existent);
+    assert_eq!(proof_exited, super::runtime::ProcessExitProof::Exited);
 }

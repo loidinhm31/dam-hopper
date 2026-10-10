@@ -1266,6 +1266,86 @@ impl PtySessionManager {
             .try_claim_agent_handoff(admission.ticket.fleet_generation)
     }
 
+    /// Attempt to claim agent-free handoff admission.
+    ///
+    /// Validates policy, accepted ticket revisions, monotonic deadline, observation age,
+    /// input revision, fleet generation, and live roots before setting handoff_active.
+    #[allow(dead_code)]
+    pub(crate) fn try_claim_agent_free_handoff(
+        &self,
+        admission: crate::idle_suspend::activity::sampler::AgentFreeAdmission<'_>,
+    ) -> Result<crate::pty::fleet_state::HandoffClaim, crate::pty::fleet_state::HandoffClaimError> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // 1. Startup automatic policy must be AgentFree and enabled
+        if admission.automatic_policy
+            != crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentFree
+            || !admission.automatic_enabled
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 2. Request and revision values must match accepted admission
+        if admission.accepted_request_id != admission.ticket.request_id
+            || admission.accepted_semantic_revision != admission.ticket.semantic_revision
+            || admission.accepted_non_free_generation != admission.ticket.non_free_generation
+            || admission.accepted_timing_revision != admission.ticket.timing_revision
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::PolicyMismatch);
+        }
+
+        // 3. Monotonic deadline must remain expired
+        if admission.now < admission.ticket.eligibility_deadline {
+            return Err(crate::pty::fleet_state::HandoffClaimError::DeadlineNotExpired);
+        }
+
+        // 4. Observation age must be <= 5 seconds
+        if admission
+            .now
+            .saturating_duration_since(admission.ticket.completed_at)
+            > crate::idle_suspend::activity::MAX_ACCEPTED_OBSERVATION_AGE
+        {
+            return Err(crate::pty::fleet_state::HandoffClaimError::ObservationStale);
+        }
+
+        // 5. Input revision must match ticket
+        if inner.input_revision != admission.ticket.input_revision {
+            return Err(crate::pty::fleet_state::HandoffClaimError::InputRevisionMismatch);
+        }
+
+        // 6. Fleet generation must match ticket
+        if inner.fleet.generation() != admission.ticket.fleet_generation {
+            return Err(
+                crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
+                    expected: admission.ticket.fleet_generation,
+                    actual: inner.fleet.generation(),
+                },
+            );
+        }
+
+        // 7. Check live sessions match roots in ticket
+        if inner.live.len() != admission.ticket.roots.len() {
+            return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+        }
+        for (terminal, expected_root) in &admission.ticket.roots {
+            let session = inner
+                .live
+                .get(&terminal.session_id)
+                .ok_or(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch)?;
+            if session.incarnation != terminal.incarnation {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+            if session.root_qualification.process_identity() != Some(*expected_root) {
+                return Err(crate::pty::fleet_state::HandoffClaimError::RootIdentityMismatch);
+            }
+        }
+
+        // 8. Atomic fleet handoff claim (checks closing, disposing, handoff_active, creating, restart_pending)
+        inner
+            .fleet
+            .try_claim_agent_handoff(admission.ticket.fleet_generation)
+    }
+
     pub fn release_handoff(&self) {
         self.inner.lock().unwrap().fleet.release_handoff();
     }

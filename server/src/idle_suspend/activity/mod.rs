@@ -19,9 +19,9 @@ pub(crate) use crate::idle_suspend::status::{ActivityMeasurementState, ActivityO
 #[allow(unused_imports)]
 pub(crate) use sampler::{
     ActivityClaimTicket, ActivityDelta, ActivityObservation, ActivitySampler,
-    ActivitySamplerResult, AgentActivityAdmission, MonitoredOutputFence,
-    QualifyingActivityKind, SampleKind, SampleRequest,
-    MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_ACCEPTANCE_TIMEOUT, SAMPLE_CADENCE,
+    ActivitySamplerResult, AgentActivityAdmission, AgentFreeAdmission, AgentFreeClaimTicket,
+    ManagedAgentClaimEvidence, MonitoredOutputFence, QualifyingActivityKind, SampleKind,
+    SampleRequest, MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_ACCEPTANCE_TIMEOUT, SAMPLE_CADENCE,
 };
 
 // ---------------------------------------------------------------------------
@@ -279,6 +279,24 @@ impl ActivityUnavailable {
 // Process sample result
 // ---------------------------------------------------------------------------
 
+/// Minimal private key tracking process image without raw argv.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProcessImageKey {
+    pub(crate) exe_dev: u64,
+    pub(crate) exe_ino: u64,
+    pub(crate) entrypoint_token: Option<String>,
+}
+
+/// Qualified evidence of a single matched agent running within managed terminal lineage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MatchedManagedAgent {
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) terminal: TerminalIdentity,
+    pub(crate) safe_executable_identity: Option<String>,
+    pub(crate) image_key: ProcessImageKey,
+    pub(crate) descendant_processes: Vec<ProcessIdentity>,
+}
+
 /// Qualified outcome of a complete process discovery pass.
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessSample {
@@ -289,8 +307,10 @@ pub(crate) struct ProcessSample {
     /// Current relevant processes; sorted by (pid, start_ticks); len <= 1024.
     pub(crate) process_evidence: Vec<BlockingProcessEvidence>,
     pub(crate) change: ProcessChange,
+    /// Distinct matched agents within managed lineage with image and descendant coverage.
+    #[allow(dead_code)]
+    pub(crate) matched_agents: Vec<MatchedManagedAgent>,
 }
-
 impl ProcessSample {
     pub(crate) fn monitored_terminal_count(&self) -> usize {
         self.monitored_terminals.len()

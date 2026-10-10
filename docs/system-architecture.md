@@ -53,7 +53,7 @@ Primary labels are Working, Idle, Needs attention and Unknown. `Done (turn ended
 
 ### Traditional Terminal Worktree Shortcut
 
-**Implemented and qualified.** See [implementation plan](../plans/261009-1403-traditional-terminal-worktree-switching/plan.md).
+**Implemented and qualified.** See [implementation plan](../plans/261009-1403-traditional-terminal-worktree-switching/phase-01-scoped-target-routing.md).
 
 - Each existing configured-project row in the Traditional terminal navigator exposes a compact inline worktree dropdown independent of optional commit metadata. Free-terminal groups have no project worktree selector.
 - Selection reuses the Project panel's session-scoped project-target store, keyed by the owning profile and project (`{ profileId, project }`). Other target-aware surfaces observe the same target; reload returns to the primary project root.
@@ -223,34 +223,59 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 <a id="server-authoritative-terminal-idle-suspend-architecture"></a>
 Linux terminal idle suspend is coordinated by the server and an enrolled Unix-socket helper (`dam-hopper-idle-suspend-helper`) with systemd integration. The server applies bounded policy (`empty-fleet` or `agent-activity`) and sysfs RTC wakealarm preflight; helper peer verification, deduplication, audit ordering, and fixed execution keep side effects fail-closed. Quiet period and wake interval are clamped between 60 and 86,400 seconds. Quiet is not proof of agent completion. See [Terminal Idle-Suspend Security](./terminal-idle-suspend-security.md) and [PTY Activity Observation](./pty-activity-observation.md).
 
-### Proposed: semantic agent-free automatic sleep
+### Semantic agent-free automatic sleep
 
-**Design only; not implemented.** Feature branch `feat/host-resources-auto-sleep`;
-implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
+Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
+Phase 01 (Contracts and configuration) and Phase 02 (Managed agent inventory and qualified semantic evidence) are implemented and certified; Phase 03–06 cover presence, coordinator timer, and UI consent.
 
-- Add an opt-in startup policy `agent-free`; retain existing policies and manual
-  force-sleep behavior. Require continuously qualified `idle` or `blocked`
-  agents for strictly more than 10,800 seconds. `working`, `unknown`, expired
-  evidence, incomplete inventory, and unsupported observation block admission.
-- Inventory covers configured agents in all DamHopper-managed terminals,
-  including traditional UI mode and retained managed lineage, not just open tabs.
-  External SSH/tmux/headless agents are deliberately excluded and do not block
-  sleep. Complete in-scope zero qualifies; unobserved in-scope agents do not.
-- Private OMP reporter sockets are not client presence. Track authenticated
-  public `/ws` sessions through upgrade, liveness, and teardown. At eligibility:
-  zero clients allows automatic final admission; connected clients receive one
-  server-owned consent request through the shared web/native UI.
-- Any enabled authenticated user's approval suffices. The first valid Yes/No
-  accepted by the server wins; approval immediately enters fresh final checks.
-  Accepted refusal, 60s unanswered timeout, or last-client loss defers three hours.
-- Semantic timing is independent of reporter heartbeat/network-byte noise.
-  Final admission rechecks semantic, inventory, presence, consent, timing, and
-  PTY lifecycle revisions under a common bounded handoff fence; existing helper
-  peer authentication, inhibitors, audit, RTC wake setting, and deduplication remain.
-- Client prompts and responses bind to the exact server profile, generation,
-  socket, authenticated session, and request revision. Browsers never authorize
-  sleep through a local timer, stale request, dismiss action, or disconnect.
-- Canonical admission lock order:
+- **Policy & Fixed Timing**:
+  - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
+  - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.
+  - Startup policy is immutable: full configuration updates, workspace reload, and settings import preserve the running startup policy even if the on-disk file changes.
+  - Wire protocol `IdleSuspendStatusV1` enforces strict mutual exclusivity between `activity` (`agent-activity` only) and `agentFree`/`clientPresence`/`consent` (`agent-free` only).
+- **Managed Agent Inventory & Descendant Closures**:
+  - `ProcessDiscovery` in `server/src/idle_suspend/activity/process.rs` bounds candidate matching strictly to managed PTY session roots and retained lineage (`MAX_MANAGED_ROOTS_LIMIT = 64`, `MAX_RELEVANT_PROCESSES_LIMIT = 1024`, `MAX_SCANNED_PROCESSES_LIMIT = 8192`).
+  - Traces complete `descendant_processes` closures per recognized agent (Codex, Claude, OMP) using process-tree traversal; child workers or subagents cannot hide running activity under an idle parent.
+  - Privacy-preserving `ProcessImageKey` captures device ID (`exe_dev`), inode (`exe_ino`), and sanitized entrypoint token without exposing raw arguments or environment variables.
+  - Produces deduplicated, sorted `matched_agents: Vec<MatchedManagedAgent>` with exact process identities (`pid`, `start_ticks`) and terminal bindings.
+  - Independent external agents (tmux, SSH, shell outside managed PTYs) are deliberately excluded by product design and do not block sleep.
+- **Verified OMP TCP Peer Binding**:
+  - `verify_tcp_peer_process` in `server/src/agent_status/collector.rs` binds loopback WebSocket connections to verified OS process identities on Linux:
+    1. Pre-check: reads `/proc/<claimed_pid>/stat` to record `start_ticks` and reject zombie/dead states (`Z`, `X`).
+    2. Socket lookup: locates client socket inode from `/proc/net/tcp` and `/proc/net/tcp6` matching `peer_addr.port()`.
+    3. Descriptor check: scans `/proc/<claimed_pid>/fd/` for symlinks targeting `socket:[<inode>]`, bounded by `MAX_PEER_FDS_SCAN = 256` to prevent DoS.
+    4. Ancestry check: traces `/proc/<pid>/stat` parent PIDs (up to 32 hops) ensuring lineage connects to the registered terminal root; asserts `stat_before.start_ticks == root.start_ticks` on direct root match to defeat recycled PID spoofing.
+    5. Post-check: re-reads `/proc/<claimed_pid>/stat` ensuring `start_ticks` remained identical and the process remained alive.
+  - Unverified connections fail closed in semantic evaluation as `UnverifiedProcessBinding` without leaking socket inodes or PIDs to clients.
+- **Hard Fail-Closed Native Freshness Gate**:
+  - Codex and Claude CLI hooks lack keepalive heartbeats; leases expire after 15s (`DEFAULT_LEASE_MS = 15_000`).
+  - Enforces hard fail-closed gate: zero synthetic lease stretching, zero simulated Idle states from stop events, zero screen/transcript scraping, and zero cloud API substitution.
+  - Unrefreshed native providers transition to `AgentSemanticBlockReason::UnrefreshedNativeProvider` (`AgentSemanticEvaluation::Unknown`), blocking automatic sleep until refreshed or proven exited.
+- **Monotonic Non-Free Generation Tracking & Semantic Evaluation**:
+  - `AgentStatusRegistry` maintains monotonic `non_free_generation: u64` (initialized at 1) incremented on every non-free mutation: working reporter admission, hook state transition, lease expiration sweep, terminal removal, or reconnect.
+  - Brief `Working -> Idle` gaps between coordinator polling sweeps increment `non_free_generation`, invalidating previous Free claim tickets.
+  - `evaluate_managed_agents` executes under registry read lock:
+    - Empty matched agents -> `Free` (0 idle, 0 blocked).
+    - Any agent `Working` -> `Working` (capturing implicated PIDs).
+    - Expired lease, unrefreshed native provider, unverified binding, ambiguous owner, or uncovered subagent -> `Unknown`.
+    - All matched agents `Idle` or `Blocked` with active leases -> `Free` with `min_lease_remaining_ms`, current `non_free_generation`, and `semantic_revision`.
+- **AgentFreeClaimTicket & PTY Manager Handoff Fences**:
+  - `AgentFreeClaimTicket` in `server/src/idle_suspend/activity/sampler.rs` captures atomic evaluation snapshot with sanitized `Debug` formatting.
+  - `PtySessionManager::try_claim_agent_free_handoff` in `server/src/pty/manager.rs` enforces 8-point admission fence under `inner` lock:
+    1. Policy is `AgentFree` and enabled.
+    2. Request ID, semantic revision, non-free generation, and timing revision match ticket.
+    3. Monotonic eligibility deadline is expired.
+    4. Observation age <= 5 seconds (`MAX_ACCEPTED_OBSERVATION_AGE`).
+    5. Input revision matches ticket.
+    6. Fleet generation matches ticket.
+    7. Live sessions count and root process identities match ticket roots exactly.
+    8. Atomic fleet handoff claim acquires handoff flag, verifying no session is creating, closing, disposing, or restarting.
+- **Client Presence & Consent Interaction**:
+  - Private OMP reporter sockets are not client presence. Track authenticated public `/ws` sessions through upgrade, liveness, and teardown.
+  - At eligibility: zero clients allows automatic final admission; connected clients receive one server-owned consent request through shared web/native UI.
+  - Any enabled authenticated user's approval suffices (first valid Yes/No wins); approval immediately enters fresh final checks.
+  - Refusal, 60s unanswered timeout, or last-client loss defers three hours. Browsers never authorize sleep independently.
+- **Canonical Admission Lock Order**:
   1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
   2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).
   3. Inner / Fine: `AgentStatusRuntime::registry` lock (synchronous read/write lock for semantic agent states).

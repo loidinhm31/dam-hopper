@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use crate::idle_suspend::activity::{
     ActivityUnavailable, ActivityUnavailableReason, BlockingProcessEvidence, FailureContext,
-    MonitoredTerminalEvidence, NetworkNamespaceIdentity, OwnedSocketInode, OwnedSocketSet,
-    ProcessChange, ProcessSample, MAX_CMDLINE_BYTES_LIMIT, MAX_MANAGED_ROOTS_LIMIT,
-    MAX_OWNED_SOCKETS_LIMIT, MAX_PROCESS_FDS_LIMIT, MAX_RELEVANT_PROCESSES_LIMIT,
-    MAX_SAFE_EXECUTABLE_IDENTITY_BYTES, MAX_SCANNED_PROCESSES_LIMIT,
+    MatchedManagedAgent, MonitoredTerminalEvidence, NetworkNamespaceIdentity, OwnedSocketInode,
+    OwnedSocketSet, ProcessChange, ProcessImageKey, ProcessSample, MAX_CMDLINE_BYTES_LIMIT,
+    MAX_MANAGED_ROOTS_LIMIT, MAX_OWNED_SOCKETS_LIMIT, MAX_PROCESS_FDS_LIMIT,
+    MAX_RELEVANT_PROCESSES_LIMIT, MAX_SAFE_EXECUTABLE_IDENTITY_BYTES, MAX_SCANNED_PROCESSES_LIMIT,
 };
 use crate::idle_suspend::policy::{AgentExecutableEntry, AgentExecutableSet};
 use crate::pty::activity::{
@@ -967,13 +967,6 @@ pub(crate) fn match_candidate_process<S: ProcessSource>(
 // Internal state tracking
 // ---------------------------------------------------------------------------
 
-/// Minimal private key tracking process image without raw argv.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ProcessImageKey {
-    pub(crate) exe_dev: u64,
-    pub(crate) exe_ino: u64,
-    pub(crate) entrypoint_token: Option<String>,
-}
 
 /// Retained attribution entry carrying terminal identity and raw-output counter handle.
 #[allow(dead_code)]
@@ -1372,6 +1365,28 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
             }
         }
 
+        // Map descendant closure specifically per recognized agent
+        let mut agent_descendants: HashMap<ProcessIdentity, Vec<ProcessIdentity>> = HashMap::new();
+        for agent_id in &recognized_agents {
+            let mut descendants = Vec::new();
+            let mut stack = vec![agent_id.pid];
+            let mut seen = HashSet::new();
+            seen.insert(agent_id.pid);
+            while let Some(curr_pid) = stack.pop() {
+                if let Some(children) = ppid_to_children.get(&curr_pid) {
+                    for child_pid in children {
+                        if seen.insert(*child_pid) {
+                            if let Some(child_id) = pid_to_identity.get(child_pid) {
+                                descendants.push(*child_id);
+                                stack.push(*child_pid);
+                            }
+                        }
+                    }
+                }
+            }
+            descendants.sort_by_key(|id| (id.pid, id.start_ticks));
+            agent_descendants.insert(*agent_id, descendants);
+        }
         check_deadline()?;
 
         // 10. For valid zero-agent result: return empty OwnedSocketSet without scanning FDs (Requirement 20)
@@ -1586,12 +1601,31 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
             }
         };
 
+        let mut sorted_matched_ids: Vec<ProcessIdentity> =
+            recognized_agents.iter().copied().collect();
+        sorted_matched_ids.sort_by_key(|id| (id.pid, id.start_ticks));
+
+        let mut matched_agents = Vec::with_capacity(sorted_matched_ids.len());
+        for agent_id in &sorted_matched_ids {
+            if let Some(attr) = next_retained_map.get(agent_id) {
+                let descendants = agent_descendants.remove(agent_id).unwrap_or_default();
+                matched_agents.push(MatchedManagedAgent {
+                    identity: *agent_id,
+                    terminal: attr.terminal.clone(),
+                    safe_executable_identity: attr.safe_executable_identity.clone(),
+                    image_key: attr.image_key.clone(),
+                    descendant_processes: descendants,
+                });
+            }
+        }
+
         let sample = ProcessSample {
             recognized_agent_count: recognized_agents.len(),
             monitored_terminals,
             owned_sockets,
             process_evidence,
             change,
+            matched_agents,
         };
 
         let next_state = ProcessDiscoveryState {
@@ -2024,6 +2058,15 @@ pub(crate) mod tests {
         let sample = prepared.sample();
 
         assert_eq!(sample.recognized_agent_count, 1);
+        assert_eq!(sample.matched_agents.len(), 1);
+        let matched_agent = &sample.matched_agents[0];
+        assert_eq!(matched_agent.identity.pid, 20);
+        assert_eq!(matched_agent.terminal, term);
+        assert_eq!(matched_agent.safe_executable_identity.as_deref(), Some("codex"));
+        assert_eq!(matched_agent.descendant_processes.len(), 2);
+        assert_eq!(matched_agent.descendant_processes[0].pid, 30);
+        assert_eq!(matched_agent.descendant_processes[1].pid, 40);
+
         assert_eq!(sample.owned_sockets.len(), 1);
         let socket = &sample.owned_sockets.inodes[0];
         assert_eq!(socket.inode, 12345);
@@ -2034,7 +2077,6 @@ pub(crate) mod tests {
         // Relevant processes: codex (20), worker (30), helper (40)
         assert_eq!(sample.process_evidence.len(), 3);
         assert_eq!(sample.change, ProcessChange::BaselineEstablished);
-
         // Commit sample
         let committed_sample = discovery.commit_sample(prepared);
         assert_eq!(committed_sample.recognized_agent_count, 1);
@@ -2042,6 +2084,31 @@ pub(crate) mod tests {
         // Next pass with no changes emits ProcessChange::Unchanged
         let prepared2 = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare 2 should succeed");
         assert_eq!(prepared2.sample().change, ProcessChange::Unchanged);
+    }
+
+    #[test]
+    fn test_matched_agents_excludes_independent_external_process() {
+        let mut src = MockProcessSource::new();
+        let term = TerminalIdentity { session_id: "term-managed".to_string(), incarnation: 1 };
+        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+
+        // Managed root process: bash (PID 10)
+        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
+
+        // Independent external process: codex (PID 999, ppid 1 - NOT in managed tree!)
+        src.set_proc(999, 1, PathBuf::from("/usr/local/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 999), 9000);
+
+        let discovery = ProcessDiscovery::with_source(src);
+        let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
+        let pty = make_test_pty_snapshot(vec![(term, root_id, Arc::new(AtomicU64::new(0)))]);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let prepared = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare should succeed");
+        let sample = prepared.sample();
+
+        // Independent external agent outside managed lineage is excluded per user validation
+        assert_eq!(sample.recognized_agent_count, 0);
+        assert!(sample.matched_agents.is_empty());
     }
 
     #[test]
