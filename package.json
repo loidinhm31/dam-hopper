@@ -23,6 +23,7 @@
     "test": "cd server && cargo test",
     "test:all": "scripts/run-all-tests.sh",
     "test:run": "cd server && cargo test",
+    "release:bump": "node scripts/bump-version.mjs",
     "release:check-version": "node deploy/release/check-version-alignment.mjs",
     "release:archive": "bash deploy/release/build-release-archive.sh",
     "release:manifest": "node deploy/release/generate-release-manifest.mjs",
