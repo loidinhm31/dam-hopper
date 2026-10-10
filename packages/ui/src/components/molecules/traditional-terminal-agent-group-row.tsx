@@ -1,11 +1,14 @@
 import { useId, type JSX } from "react";
 import { Activity, Ban, Circle, CircleAlert, CircleHelp, TriangleAlert, Unplug } from "lucide-react";
-import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
+import {
+  nextAgentSessionId,
+  type TraditionalTerminalAgentStatusGroup,
+} from "@/lib/traditional-terminal-agent-groups.js";
 import { cn } from "@/lib/utils.js";
 
-export interface TraditionalTerminalAgentRowProps {
-  readonly row: TraditionalTerminalAgentRowModel;
-  readonly active: boolean;
+export interface TraditionalTerminalAgentGroupRowProps {
+  readonly group: TraditionalTerminalAgentStatusGroup;
+  readonly activeSessionId?: string | null;
   readonly onSelectAgent: (sessionId: string) => void;
   readonly touchOptimized?: boolean;
 }
@@ -20,28 +23,37 @@ const STATUS_STYLES = {
   Unsupported: { Icon: Ban, className: "text-[var(--color-text-muted)]" },
 } as const;
 
-/** Render only the caller's fenced presentation; never rejoin live status here. */
-export function TraditionalTerminalAgentRow({
-  row,
-  active,
+/**
+ * One project + status item with an agent-count badge. Renders only the
+ * caller's fenced presentation; activating it selects one exact member terminal
+ * (cycling through members), never a project-level or remembered sibling.
+ */
+export function TraditionalTerminalAgentGroupRow({
+  group,
+  activeSessionId,
   onSelectAgent,
   touchOptimized = false,
-}: TraditionalTerminalAgentRowProps): JSX.Element {
+}: TraditionalTerminalAgentGroupRowProps): JSX.Element {
   const descriptionId = useId();
-  const { label, reasonLabel, sourceLabel, coverageHint, outcomeHint } = row.presentation;
+  const { label, reasonLabel, outcomeHint, harnessLabels, rows } = group;
+  const count = rows.length;
+  const active = rows.some((row) => row.sessionId === activeSessionId);
   const { Icon, className: statusClassName } = STATUS_STYLES[label];
-  const context = `${row.harnessLabel}: ${row.terminalTitle}; Project: ${row.projectLabel}; Server profile: ${row.profileLabel}`;
-  const sourceExplanation = coverageHint ?? sourceLabel;
+  const harnesses = harnessLabels.join(", ");
+  const subject = count === 1 ? `${harnesses}: ${rows[0]!.terminalTitle}` : `${harnesses}: ${count} agents`;
+  const where = `Project: ${group.projectLabel}; Server profile: ${group.profileLabel}`;
+  const sourceLabel = group.sourceLabels.join(" · ");
+  const sourceExplanation = group.coverageHints.join(" ") || sourceLabel;
   const outcomeExplanation = "Last turn ended; task success has not been verified.";
 
   return (
     <button
       type="button"
-      aria-label={`${context}; ${label}${reasonLabel ? `: ${reasonLabel}` : ""}`}
+      aria-label={`${subject}; ${where}; ${label}${reasonLabel ? `: ${reasonLabel}` : ""}`}
       aria-describedby={descriptionId}
       aria-current={active ? "true" : undefined}
-      title={context}
-      onClick={() => onSelectAgent(row.sessionId)}
+      title={`${subject}; ${where}`}
+      onClick={() => onSelectAgent(nextAgentSessionId(group, activeSessionId))}
       className={cn(
         "flex min-h-11 min-w-11 w-full flex-col gap-1 px-4 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-60",
         active
@@ -51,18 +63,27 @@ export function TraditionalTerminalAgentRow({
       )}
     >
       <span className="flex w-full min-w-0 items-center gap-2">
-        <span className="shrink-0 text-xs font-medium">{row.harnessLabel}</span>
-        <span className="min-w-0 truncate font-mono" title={row.terminalTitle}>
-          {row.terminalTitle}
-        </span>
+        <span className="shrink-0 text-xs font-medium">{harnesses}</span>
+        {count === 1 ? (
+          <span className="min-w-0 truncate font-mono" title={rows[0]!.terminalTitle}>
+            {rows[0]!.terminalTitle}
+          </span>
+        ) : null}
       </span>
-      <span className="w-full min-w-0 truncate text-xs" title={`Project: ${row.projectLabel}; Server profile: ${row.profileLabel}`}>
-        {row.projectLabel} · {row.profileLabel}
+      <span className="w-full min-w-0 truncate text-xs" title={where}>
+        {group.projectLabel} · {group.profileLabel}
       </span>
       <span className="flex w-full min-w-0 flex-wrap items-center gap-1 text-xs">
         <span className={cn("inline-flex items-center gap-1 rounded-sm border border-[var(--color-border)] px-1 py-0.5 font-medium", statusClassName)}>
           <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
           {label}
+        </span>
+        <span
+          data-testid="agent-count-badge"
+          title={`${count} ${count === 1 ? "agent" : "agents"}`}
+          className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--color-text)]"
+        >
+          {count}
         </span>
         {reasonLabel ? <span>{reasonLabel}</span> : null}
       </span>
@@ -75,7 +96,7 @@ export function TraditionalTerminalAgentRow({
         {sourceLabel}
       </span>
       <span id={descriptionId} className="sr-only">
-        {sourceLabel}. {coverageHint ? `${coverageHint}. ` : ""}
+        {sourceLabel}. {group.coverageHints.length ? `${group.coverageHints.join(". ")}. ` : ""}
         {outcomeHint ? `${outcomeHint}. ${outcomeExplanation}` : ""}
       </span>
     </button>

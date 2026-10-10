@@ -1,7 +1,8 @@
 import { useId, useMemo, useRef } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
-import { TraditionalTerminalAgentRow } from "@/components/molecules/traditional-terminal-agent-row.js";
+import { TraditionalTerminalAgentGroupRow } from "@/components/molecules/traditional-terminal-agent-group-row.js";
+import { groupTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-agent-groups.js";
 import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
@@ -258,6 +259,10 @@ export function TraditionalTerminalProjectsNavigator({
 }: TraditionalTerminalProjectsNavigatorProps) {
   const projectsHeadingId = useId();
   const agentsHeadingId = useId();
+  const agentGroups = useMemo(
+    () => groupTraditionalTerminalAgentRows(agentRows),
+    [agentRows],
+  );
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
   const showCommitStatus = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -354,13 +359,13 @@ export function TraditionalTerminalProjectsNavigator({
           ) : null}
         </div>
         <fieldset disabled={!onSelectAgent} className="m-0 min-h-0 min-w-0 flex-1 overflow-y-auto border-0 p-0">
-          {agentRows.length ? (
+          {agentGroups.length ? (
             <ul aria-label="Observed agents in open terminals" className="py-1">
-              {agentRows.map((row) => (
-                <li key={row.key}>
-                  <TraditionalTerminalAgentRow
-                    row={row}
-                    active={row.sessionId === activeSessionId}
+              {agentGroups.map((group) => (
+                <li key={group.key}>
+                  <TraditionalTerminalAgentGroupRow
+                    group={group}
+                    activeSessionId={activeSessionId}
                     onSelectAgent={(sessionId) => onSelectAgent?.(sessionId)}
                     touchOptimized={touchOptimized}
                   />

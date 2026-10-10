@@ -1,3 +1,7 @@
+# 2026-10-10
+
+- **Traditional terminal Agents sidebar groups by project and status.** The `agents` section now shows one item per (project, primary status) instead of one per agent terminal, with a count badge of agents in that item (e.g. a project with 3 Working and 1 Needs attention agents shows two items, badged 3 and 1). Status identity is the primary label plus attention reason; items are ordered project-first (builder order) then by severity (Needs attention, Working, Idle, Unknown, Unavailable, Platform unqualified, Unsupported). `Done (turn ended)` appears on an item only when every member carries it. Activating a multi-agent item selects the member after the active one in tab order (wrapping), or the first member when the active terminal is outside the item; selection still flows through the display's committed-key fence, so stale or replaced PTYs are never selected. Single-agent items keep the previous accessible name prefix; multi-agent items read `<harnesses>: N agents; Project: …; Server profile: …; <status>`.
+
 # 2026-10-09
 
 - **Traditional terminal sidebar worktree switching (Phases 01–03).** Added compact inline worktree selection to configured project rows in Traditional terminal navigation, routing newly launched terminals to selected worktrees while preserving running PTY sessions:
