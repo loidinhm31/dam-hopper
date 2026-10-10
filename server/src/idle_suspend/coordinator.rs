@@ -27,7 +27,7 @@ use crate::idle_suspend::event::{
 };
 use crate::idle_suspend::executor::{BoxFuture, IdleSuspendExecutor};
 use crate::idle_suspend::policy::{
-    validate_timing_pair, IdleSuspendAutomaticPolicy, RuntimeIdleSuspendTiming,
+    validate_timing_pair_for_policy, IdleSuspendAutomaticPolicy, RuntimeIdleSuspendTiming,
     StartupIdleSuspendPolicy,
 };
 use crate::idle_suspend::protocol::{
@@ -38,8 +38,10 @@ use crate::idle_suspend::server_audit::{
     TimingAuditRecord, TimingAuditResult,
 };
 use crate::idle_suspend::status::{
-    CoordinatorState, IdleSuspendActivityStatusV1, IdleSuspendMeasurementWarningV1,
-    IdleSuspendStatusV1, IdleSuspendWarningProcessV1, MeasurementWarningReasonCode,
+    AgentFreeInventoryState, AgentFreePhase, AgentFreeReasonCode, CoordinatorState,
+    IdleSuspendActivityStatusV1, IdleSuspendAgentFreeStatusV1, IdleSuspendClientPresenceStatusV1,
+    IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1, IdleSuspendWarningProcessV1,
+    MeasurementWarningReasonCode,
 };
 use crate::idle_suspend::timing_store::IdleSuspendTimingStore;
 use crate::pty::fleet_state::PtyFleetSnapshot;
@@ -382,6 +384,35 @@ impl IdleSuspendCoordinator {
         } else {
             None
         };
+        let (initial_agent_free, initial_client_presence, initial_consent) =
+            if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree {
+                (
+                    Some(IdleSuspendAgentFreeStatusV1 {
+                        phase: AgentFreePhase::Reconciling,
+                        scope: "managed-terminals".to_string(),
+                        inventory_state: AgentFreeInventoryState::Uninitialized,
+                        inventory_revision: 0,
+                        semantic_revision: 0,
+                        idle_count: None,
+                        blocked_count: None,
+                        working_count: None,
+                        unknown_count: None,
+                        free_since_ms: None,
+                        eligible_at_ms: None,
+                        deferred_until_ms: None,
+                        reason_code: Some(AgentFreeReasonCode::Reconciling),
+                    }),
+                    Some(IdleSuspendClientPresenceStatusV1 {
+                        connection_count: 0,
+                        pending_upgrade_count: 0,
+                        revision: 0,
+                        available: false,
+                    }),
+                    None,
+                )
+            } else {
+                (None, None, None)
+            };
 
         let initial_status = IdleSuspendStatusV1 {
             version: 1,
@@ -408,6 +439,9 @@ impl IdleSuspendCoordinator {
             last_outcome: None,
             detail: None,
             activity: initial_activity,
+            agent_free: initial_agent_free,
+            client_presence: initial_client_presence,
+            consent: initial_consent,
             timestamp_ms: IdleSuspendStatusV1::now_ms(),
         };
 
@@ -569,6 +603,7 @@ async fn run_coordinator(
     let automatic_policy_v1 = match startup_policy.automatic_policy {
         IdleSuspendAutomaticPolicy::EmptyFleet => AutomaticPolicyV1::EmptyFleet,
         IdleSuspendAutomaticPolicy::AgentActivity => AutomaticPolicyV1::AgentActivity,
+        IdleSuspendAutomaticPolicy::AgentFree => AutomaticPolicyV1::AgentFree,
     };
     let initial_timing_revision = runtime_timing
         .try_read()
@@ -1780,6 +1815,39 @@ fn publish_status_checked(
     } else {
         None
     };
+    let (agent_free, client_presence, consent) = if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree {
+        let prev = tx.borrow();
+        (
+            prev.agent_free.clone().or_else(|| {
+                Some(IdleSuspendAgentFreeStatusV1 {
+                    phase: AgentFreePhase::Reconciling,
+                    scope: "managed-terminals".to_string(),
+                    inventory_state: AgentFreeInventoryState::Uninitialized,
+                    inventory_revision: 0,
+                    semantic_revision: 0,
+                    idle_count: None,
+                    blocked_count: None,
+                    working_count: None,
+                    unknown_count: None,
+                    free_since_ms: None,
+                    eligible_at_ms: None,
+                    deferred_until_ms: None,
+                    reason_code: Some(AgentFreeReasonCode::Reconciling),
+                })
+            }),
+            prev.client_presence.clone().or_else(|| {
+                Some(IdleSuspendClientPresenceStatusV1 {
+                    connection_count: 0,
+                    pending_upgrade_count: 0,
+                    revision: 0,
+                    available: false,
+                })
+            }),
+            prev.consent.clone(),
+        )
+    } else {
+        (None, None, None)
+    };
 
     let new_status = IdleSuspendStatusV1 {
         version: 1,
@@ -1808,6 +1876,9 @@ fn publish_status_checked(
         last_outcome: last_outcome.clone(),
         detail: detail.clone(),
         activity,
+        agent_free,
+        client_presence,
+        consent,
         timestamp_ms: IdleSuspendStatusV1::now_ms(),
     };
 
@@ -1849,7 +1920,11 @@ async fn handle_timing(
     let cur_quiet = *quiet_period_seconds;
     let cur_wake = *wake_after_seconds;
 
-    if let Err(e) = validate_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds) {
+    if let Err(e) = validate_timing_pair_for_policy(
+        cmd.quiet_period_seconds,
+        cmd.wake_after_seconds,
+        startup_policy.automatic_policy,
+    ) {
         if let Some(audit) = server_audit {
             if let Ok(rec) = TimingAuditRecord::new(
                 cmd.actor.clone(),
@@ -1903,8 +1978,11 @@ async fn handle_timing(
     }
 
     if let Some(store) = timing_store {
-        if let Err(e) = store.persist_timing_pair(cmd.quiet_period_seconds, cmd.wake_after_seconds)
-        {
+        if let Err(e) = store.persist_timing_pair_for_policy(
+            cmd.quiet_period_seconds,
+            cmd.wake_after_seconds,
+            startup_policy.automatic_policy,
+        ) {
             if let Some(audit) = server_audit {
                 if let Ok(rec) = TimingAuditRecord::new(
                     cmd.actor.clone(),

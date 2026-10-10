@@ -13,7 +13,7 @@ use crate::{
             CoordinatorForceSuspendResult, CoordinatorTimingResult, ForceSuspendCommand,
             UpdateTimingCommand,
         },
-        policy::validate_timing_pair,
+        policy::validate_timing_pair_for_policy,
         protocol::{
             validate_suspend_wake_seconds, ForceSuspendAcceptedResponse, ForceSuspendRequest,
             IdleSuspendConflictResponse, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
@@ -235,9 +235,11 @@ pub async fn update_timing(
     };
 
     // 8. Validate timing pair bounds
-    if let Err(err) =
-        validate_timing_pair(patch_req.quiet_period_seconds, patch_req.wake_after_seconds)
-    {
+    if let Err(err) = validate_timing_pair_for_policy(
+        patch_req.quiet_period_seconds,
+        patch_req.wake_after_seconds,
+        state.idle_suspend_policy.automatic_policy,
+    ) {
         return idle_suspend_error_response(
             StatusCode::BAD_REQUEST,
             IdleSuspendErrorCode::InvalidTiming.as_code_str(),

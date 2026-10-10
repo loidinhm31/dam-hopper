@@ -28,6 +28,7 @@ pub use schema::{
     IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig, KnownWorkspace,
     ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig, ServiceConfig,
     TelemetryCollectorConfig, TelemetryConfig, TerminalProfile, UiConfig, WorkspaceInfo,
+    AGENT_FREE_QUIET_PERIOD_SECONDS,
     DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     DEFAULT_RESTART_MAX_RETRIES, MAX_IDLE_SUSPEND_AGENT_EXECUTABLES,
     MAX_IDLE_SUSPEND_AGENT_EXECUTABLE_BYTES, MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS,

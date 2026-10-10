@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use toml_edit::{value, DocumentMut, Item, Table};
 
-use crate::idle_suspend::policy::validate_timing_pair;
+use crate::idle_suspend::policy::{
+    validate_timing_pair, validate_timing_pair_for_policy, IdleSuspendAutomaticPolicy,
+};
 use crate::utils::atomic_write;
 
 #[derive(Debug, Error)]
@@ -46,7 +48,26 @@ impl IdleSuspendTimingStore {
     ) -> Result<(), TimingStoreError> {
         validate_timing_pair(quiet_period_seconds, wake_after_seconds)
             .map_err(TimingStoreError::Validation)?;
+        self.persist_timing_pair_internal(quiet_period_seconds, wake_after_seconds)
+    }
 
+    /// Atomically update timing pair while validating constraints for the specific policy.
+    pub fn persist_timing_pair_for_policy(
+        &self,
+        quiet_period_seconds: u64,
+        wake_after_seconds: u64,
+        policy: IdleSuspendAutomaticPolicy,
+    ) -> Result<(), TimingStoreError> {
+        validate_timing_pair_for_policy(quiet_period_seconds, wake_after_seconds, policy)
+            .map_err(TimingStoreError::Validation)?;
+        self.persist_timing_pair_internal(quiet_period_seconds, wake_after_seconds)
+    }
+
+    fn persist_timing_pair_internal(
+        &self,
+        quiet_period_seconds: u64,
+        wake_after_seconds: u64,
+    ) -> Result<(), TimingStoreError> {
         self.validate_target_file()?;
 
         let content = fs::read_to_string(&self.canonical_registry_path)

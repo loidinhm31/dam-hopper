@@ -355,6 +355,7 @@ pub const DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS: u64 = 900;
 pub const MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 60;
 pub const MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 86400;
 pub const DEFAULT_IDLE_SUSPEND_WAKE_AFTER_SECONDS: u64 = 600;
+pub const AGENT_FREE_QUIET_PERIOD_SECONDS: u64 = 10800;
 
 pub const fn default_idle_suspend_quiet_period_seconds() -> u64 {
     DEFAULT_IDLE_SUSPEND_QUIET_PERIOD_SECONDS
@@ -386,6 +387,7 @@ pub enum IdleSuspendAutomaticPolicy {
     #[default]
     EmptyFleet,
     AgentActivity,
+    AgentFree,
 }
 
 impl IdleSuspendAutomaticPolicy {
@@ -393,6 +395,7 @@ impl IdleSuspendAutomaticPolicy {
         match self {
             Self::EmptyFleet => "empty-fleet",
             Self::AgentActivity => "agent-activity",
+            Self::AgentFree => "agent-free",
         }
     }
 }
@@ -629,6 +632,14 @@ impl IdleSuspendConfig {
             }
         }
         validate_agent_executables(&self.agent_executables)?;
+        if self.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree
+            && self.quiet_period_seconds != AGENT_FREE_QUIET_PERIOD_SECONDS
+        {
+            return Err(format!(
+                "server.idle_suspend.quiet_period_seconds must be exactly {} seconds (3 hours) when automatic_policy is 'agent-free'",
+                AGENT_FREE_QUIET_PERIOD_SECONDS
+            ));
+        }
         Ok(())
     }
 }

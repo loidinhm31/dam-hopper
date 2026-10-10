@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub use crate::config::{
     default_idle_suspend_agent_executables, validate_agent_executables,
+    AGENT_FREE_QUIET_PERIOD_SECONDS,
     IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig,
     MAX_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
@@ -135,6 +136,11 @@ impl StartupIdleSuspendPolicy {
     pub fn is_agent_activity_policy(&self) -> bool {
         self.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity
     }
+    /// Whether agent-free automatic suspend policy is active.
+    pub fn is_agent_free_policy(&self) -> bool {
+        self.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree
+    }
+
 
     /// Borrow the compiled agent executables matcher set.
     pub fn agent_executables(&self) -> &AgentExecutableSet {
@@ -211,6 +217,26 @@ pub fn validate_timing_pair(
         return Err(format!(
             "wakeAfterSeconds must be between {} and {}",
             MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS, MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS
+        ));
+    }
+    Ok(())
+}
+
+/// Validate timing pair with respect to an automatic policy.
+///
+/// When policy is `agent-free`, quiet_period_seconds must be exactly 10800 seconds.
+pub fn validate_timing_pair_for_policy(
+    quiet_period_seconds: u64,
+    wake_after_seconds: u64,
+    policy: IdleSuspendAutomaticPolicy,
+) -> Result<(), String> {
+    validate_timing_pair(quiet_period_seconds, wake_after_seconds)?;
+    if policy == IdleSuspendAutomaticPolicy::AgentFree
+        && quiet_period_seconds != AGENT_FREE_QUIET_PERIOD_SECONDS
+    {
+        return Err(format!(
+            "quietPeriodSeconds must be exactly {} seconds (3 hours) when automatic_policy is 'agent-free'",
+            AGENT_FREE_QUIET_PERIOD_SECONDS
         ));
     }
     Ok(())

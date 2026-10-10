@@ -19,17 +19,19 @@ pub(crate) mod activity;
 pub mod tests;
 
 pub use policy::{
-    validate_timing_pair, AgentExecutableEntry, AgentExecutableSet, IdleSuspendAutomaticPolicy,
-    RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy,
+    validate_timing_pair, validate_timing_pair_for_policy,
+    AgentExecutableEntry, AgentExecutableSet, IdleSuspendAutomaticPolicy,
+    RuntimeIdleSuspendTiming, StartupIdleSuspendPolicy, AGENT_FREE_QUIET_PERIOD_SECONDS,
 };
 pub use protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
     validate_suspend_wake_seconds, write_frame_async,
+    ConsentDecisionRequest, ConsentDecisionResponse, ConsentDecisionValue,
     ForceSuspendAcceptedResponse, ForceSuspendRequest, HelperRequestFrame,
     HelperRequestPayload, HelperResponseFrame, HelperResponsePayload,
     IdleSuspendConflictResponse, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
     IdleSuspendTimingPatchResponse, ProtocolError, RequestDeduplicator, SuspendOutcome,
-    SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
+    SuspendWithRtcWakeRequest, UiConnectionFrame, HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
 };
 pub use peer_auth::{EnrolledPeerPolicy, PeerAuthError, PeerCredentials};
 pub use preflight::{
@@ -48,8 +50,10 @@ pub use coordinator::{
 };
 pub use executor::{FakeExecutor, IdleSuspendExecutor, SystemdIdleSuspendExecutor, UnavailableExecutor};
 pub use status::{
-    ActivityMeasurementState, ActivityObservationReason, CoordinatorState,
-    IdleSuspendActivityStatusV1, IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1,
+    ActivityMeasurementState, ActivityObservationReason, AgentFreeInventoryState, AgentFreePhase,
+    AgentFreeReasonCode, ConsentDecision, ConsentState, CoordinatorState,
+    IdleSuspendActivityStatusV1, IdleSuspendAgentFreeStatusV1, IdleSuspendClientPresenceStatusV1,
+    IdleSuspendConsentStatusV1, IdleSuspendMeasurementWarningV1, IdleSuspendStatusV1,
     IdleSuspendWarningProcessV1, MeasurementWarningReasonCode,
 };
 pub use audit::{

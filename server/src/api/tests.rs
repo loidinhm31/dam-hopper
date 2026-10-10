@@ -7435,6 +7435,9 @@ async fn idle_suspend_status_agent_activity_available_measurement_warning_is_nul
         last_outcome: None,
         detail: None,
         activity: Some(activity),
+        agent_free: None,
+        client_presence: None,
+        consent: None,
         timestamp_ms: 1724500001000,
     };
 
@@ -7510,6 +7513,9 @@ async fn idle_suspend_status_warning_serialization_privacy_and_bounds() {
         last_outcome: None,
         detail: None,
         activity: Some(activity),
+        agent_free: None,
+        client_presence: None,
+        consent: None,
         timestamp_ms: 1724500000000,
     };
 
@@ -7656,6 +7662,207 @@ async fn idle_suspend_timing_patch_guards() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "idleSuspendTimingDisabledNoAuth");
+}
+
+#[tokio::test]
+async fn idle_suspend_timing_patch_agent_free_policy_enforcement() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut idle_suspend_cfg = crate::config::IdleSuspendConfig::default();
+    idle_suspend_cfg.enabled = true;
+    idle_suspend_cfg.automatic_policy =
+        crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentFree;
+    idle_suspend_cfg.quiet_period_seconds = 10800;
+    idle_suspend_cfg.wake_after_seconds = 600;
+
+
+    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
+    store.create_user(crate::auth::UserRecord {
+        id: None,
+        username: crate::auth::MOCK_USER.to_string(),
+        password_hash: String::new(),
+        is_enabled: true,
+        role: crate::auth::UserRole::Admin,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    }).await.unwrap();
+
+    let (auth_cookie_str, session) = {
+        use crate::auth::model::{chrono_to_bson, AuthClaims};
+        use crate::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+        let now = chrono::Utc::now();
+        let exp = now.timestamp() as usize + MOCK_EXPIRY_SECS as usize;
+        let expires_at = chrono::DateTime::from_timestamp(exp as i64, 0).unwrap();
+        let claims = AuthClaims {
+            v: AUTH_PROTOCOL_VERSION,
+            sub: MOCK_USER.to_string(),
+            sid: MOCK_SESSION_ID.to_string(),
+            auth_version: 0,
+            credential_version: 0,
+            iat: now.timestamp() as usize,
+            exp,
+        };
+        let token = claims.encode(&TEST_TOKEN).unwrap();
+        let session = crate::auth::AuthSession {
+            id: MOCK_SESSION_ID.to_string(),
+            username: MOCK_USER.to_string(),
+            auth_version: 0,
+            credential_version: 0,
+            issued_at: chrono_to_bson(now),
+            expires_at: chrono_to_bson(expires_at),
+            mfa_verified_at: chrono_to_bson(now),
+            revoked_at: None,
+        };
+        (format!("damhopper-auth={token}"), session)
+    };
+    store.create_session(session).await.unwrap();
+
+    let state = make_state_with_idle_suspend_config(&tmp, idle_suspend_cfg)
+        .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::with_system_clock(Some(store), None)));
+    let audit_file = state.idle_suspend_audit.path().clone();
+    if let Some(parent) = audit_file.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(&audit_file).unwrap();
+    let _coord = state
+        .start_idle_suspend_coordinator(std::sync::Arc::new(
+            crate::idle_suspend::UnavailableExecutor::default(),
+        ))
+        .await;
+
+    // 1. Submit quiet = 10799 -> 400 Bad Request
+    let resp_10799 = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie_str.clone())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 10799,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    let status_10799 = resp_10799.status();
+    let body = axum::body::to_bytes(resp_10799.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8_lossy(&body);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status_10799, StatusCode::BAD_REQUEST, "body: {body_str}");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("quietPeriodSeconds must be exactly 10800 seconds (3 hours) when automatic_policy is 'agent-free'"));
+
+    // 2. Submit quiet = 10801 -> 400 Bad Request
+    let resp_10801 = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie_str.clone())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 10801,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(resp_10801.status(), StatusCode::BAD_REQUEST);
+
+    // 3. Submit quiet = 900 -> 400 Bad Request
+    let resp_900 = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie_str.clone())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 900,
+                    "wakeAfterSeconds": 600
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(resp_900.status(), StatusCode::BAD_REQUEST);
+
+    // 4. Submit legal quiet = 10800 with new wake = 1800 -> 200 OK
+    let resp_10800 = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/system/idle-suspend/v1/timing")
+            .header("Content-Type", "application/json")
+            .header("Cookie", auth_cookie_str.clone())
+            .header("Origin", "http://127.0.0.1:4801")
+            .header("Host", "127.0.0.1:4801")
+            .body(Body::from(
+                serde_json::json!({
+                    "quietPeriodSeconds": 10800,
+                    "wakeAfterSeconds": 1800
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    let status_10800 = resp_10800.status();
+    let body = axum::body::to_bytes(resp_10800.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8_lossy(&body);
+    assert_eq!(status_10800, StatusCode::OK, "body: {body_str}");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["changed"], true);
+
+    // 5. Read back status -> quietPeriodSeconds is 10800 and wakeAfterSeconds is 1800
+    let resp_status = {
+        let router = build_router(state.clone());
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/system/idle-suspend/v1/status")
+            .header("Cookie", auth_cookie_str)
+            .body(Body::empty())
+            .unwrap();
+        router.oneshot(req).await.unwrap()
+    };
+    assert_eq!(resp_status.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp_status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["quietPeriodSeconds"], 10800);
+    assert_eq!(json["wakeAfterSeconds"], 1800);
+    assert_eq!(json["automaticPolicy"], "agent-free");
 }
 
 #[tokio::test]

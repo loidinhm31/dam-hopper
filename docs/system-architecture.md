@@ -223,6 +223,42 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 <a id="server-authoritative-terminal-idle-suspend-architecture"></a>
 Linux terminal idle suspend is coordinated by the server and an enrolled Unix-socket helper (`dam-hopper-idle-suspend-helper`) with systemd integration. The server applies bounded policy (`empty-fleet` or `agent-activity`) and sysfs RTC wakealarm preflight; helper peer verification, deduplication, audit ordering, and fixed execution keep side effects fail-closed. Quiet period and wake interval are clamped between 60 and 86,400 seconds. Quiet is not proof of agent completion. See [Terminal Idle-Suspend Security](./terminal-idle-suspend-security.md) and [PTY Activity Observation](./pty-activity-observation.md).
 
+### Proposed: semantic agent-free automatic sleep
+
+**Design only; not implemented.** Feature branch `feat/host-resources-auto-sleep`;
+implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
+
+- Add an opt-in startup policy `agent-free`; retain existing policies and manual
+  force-sleep behavior. Require continuously qualified `idle` or `blocked`
+  agents for strictly more than 10,800 seconds. `working`, `unknown`, expired
+  evidence, incomplete inventory, and unsupported observation block admission.
+- Inventory covers configured agents in all DamHopper-managed terminals,
+  including traditional UI mode and retained managed lineage, not just open tabs.
+  External SSH/tmux/headless agents are deliberately excluded and do not block
+  sleep. Complete in-scope zero qualifies; unobserved in-scope agents do not.
+- Private OMP reporter sockets are not client presence. Track authenticated
+  public `/ws` sessions through upgrade, liveness, and teardown. At eligibility:
+  zero clients allows automatic final admission; connected clients receive one
+  server-owned consent request through the shared web/native UI.
+- Any enabled authenticated user's approval suffices. The first valid Yes/No
+  accepted by the server wins; approval immediately enters fresh final checks.
+  Accepted refusal, 60s unanswered timeout, or last-client loss defers three hours.
+- Semantic timing is independent of reporter heartbeat/network-byte noise.
+  Final admission rechecks semantic, inventory, presence, consent, timing, and
+  PTY lifecycle revisions under a common bounded handoff fence; existing helper
+  peer authentication, inhibitors, audit, RTC wake setting, and deduplication remain.
+- Client prompts and responses bind to the exact server profile, generation,
+  socket, authenticated session, and request revision. Browsers never authorize
+  sleep through a local timer, stale request, dismiss action, or disconnect.
+- Canonical admission lock order:
+  1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
+  2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).
+  3. Inner / Fine: `AgentStatusRuntime::registry` lock (synchronous read/write lock for semantic agent states).
+  Invariants:
+  - Never hold any lock across `.await`, Tokio channel dispatch, filesystem I/O, or procfs/network inspection.
+  - Never acquire in reverse order (`AgentStatusRuntime` -> `PtySessionManager` -> `ClientPresence`).
+  - Asynchronous authentication, database verification, and fresh process sampling complete before acquiring the final admission fence; only monotonic session/revocation epochs and fleet/semantic revisions are checked under the fence.
+
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
 ## Qualification Boundary

@@ -257,6 +257,255 @@ agent_executables = ["codex", "/opt/bin/my-claude-wrapper"]
 }
 
 #[test]
+fn test_idle_suspend_agent_free_policy_serialization_and_validation() {
+    use crate::config::{IdleSuspendAutomaticPolicy, AGENT_FREE_QUIET_PERIOD_SECONDS};
+
+    // Direct JSON serialization/deserialization
+    let agent_free_json = serde_json::to_string(&IdleSuspendAutomaticPolicy::AgentFree).unwrap();
+    assert_eq!(agent_free_json, "\"agent-free\"");
+    let parsed: IdleSuspendAutomaticPolicy = serde_json::from_str("\"agent-free\"").unwrap();
+    assert_eq!(parsed, IdleSuspendAutomaticPolicy::AgentFree);
+    assert_eq!(IdleSuspendAutomaticPolicy::AgentFree.as_str(), "agent-free");
+
+    // Valid agent-free config requires quiet_period_seconds == 10800
+    let valid_json = r#"{
+        "automaticPolicy": "agent-free",
+        "quietPeriodSeconds": 10800,
+        "wakeAfterSeconds": 600
+    }"#;
+    let cfg: IdleSuspendConfig = serde_json::from_str(valid_json).unwrap();
+    assert_eq!(cfg.automatic_policy, IdleSuspendAutomaticPolicy::AgentFree);
+    assert_eq!(cfg.quiet_period_seconds, AGENT_FREE_QUIET_PERIOD_SECONDS);
+    assert!(cfg.validate().is_ok());
+
+    // Omitted quietPeriodSeconds defaults to 900, which must fail validation
+    let default_quiet_json = r#"{
+        "automaticPolicy": "agent-free"
+    }"#;
+    let cfg_default: IdleSuspendConfig = serde_json::from_str(default_quiet_json).unwrap();
+    assert_eq!(cfg_default.quiet_period_seconds, 900);
+    let err = cfg_default.validate().unwrap_err();
+    assert!(
+        err.contains("server.idle_suspend.quiet_period_seconds must be exactly 10800 seconds (3 hours) when automatic_policy is 'agent-free'"),
+        "unexpected error message: {err}"
+    );
+
+    // Non-10800 quiet values (e.g. 10799, 10801) must fail
+    let mut cfg_invalid = cfg.clone();
+    cfg_invalid.quiet_period_seconds = 10799;
+    assert!(cfg_invalid.validate().is_err());
+    cfg_invalid.quiet_period_seconds = 10801;
+    assert!(cfg_invalid.validate().is_err());
+}
+
+#[test]
+fn test_toml_roundtrip_agent_free_policy() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let toml_str = r#"
+[workspace]
+name = "test-agent-free"
+
+[server.idle_suspend]
+enabled = true
+automatic_policy = "agent-free"
+quiet_period_seconds = 10800
+wake_after_seconds = 1200
+agent_executables = ["codex", "omp", "claude"]
+"#;
+    fs::write(&config_path, toml_str).unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.server.idle_suspend.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentFree
+    );
+    assert_eq!(cfg.server.idle_suspend.quiet_period_seconds, 10800);
+    assert_eq!(cfg.server.idle_suspend.wake_after_seconds, 1200);
+    assert!(cfg.server.idle_suspend.validate().is_ok());
+
+    let out_path = dir.path().join("out-agent-free.toml");
+    write_config(&out_path, &cfg).unwrap();
+    let written = read_config(&out_path).unwrap();
+    assert_eq!(written.server.idle_suspend, cfg.server.idle_suspend);
+
+    let policy = StartupIdleSuspendPolicy::from_config(&out_path, &written.server.idle_suspend);
+    assert_eq!(policy.automatic_policy(), IdleSuspendAutomaticPolicy::AgentFree);
+    assert!(policy.is_agent_free_policy());
+    assert!(!policy.is_agent_activity_policy());
+}
+
+#[test]
+fn test_validate_timing_pair_for_policy_agent_free() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+    use crate::idle_suspend::policy::validate_timing_pair_for_policy;
+
+    // AgentFree requires quiet == 10800
+    assert!(validate_timing_pair_for_policy(10800, 600, IdleSuspendAutomaticPolicy::AgentFree).is_ok());
+    assert!(validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::AgentFree).is_err());
+    assert!(validate_timing_pair_for_policy(3600, 600, IdleSuspendAutomaticPolicy::AgentFree).is_err());
+
+    // EmptyFleet and AgentActivity accept 900
+    assert!(validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::EmptyFleet).is_ok());
+    assert!(validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::AgentActivity).is_ok());
+}
+
+#[test]
+fn test_timing_store_persist_timing_pair_for_policy_agent_free() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+    use crate::idle_suspend::timing_store::{IdleSuspendTimingStore, TimingStoreError};
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let initial_content = r#"
+[server.idle_suspend]
+enabled = true
+automatic_policy = "agent-free"
+quiet_period_seconds = 10800
+wake_after_seconds = 600
+"#;
+    fs::write(&config_path, initial_content).unwrap();
+
+    let store = IdleSuspendTimingStore::new(config_path.clone());
+
+    // Persisting legal 10800 with new wake succeeds
+    store
+        .persist_timing_pair_for_policy(10800, 1800, IdleSuspendAutomaticPolicy::AgentFree)
+        .unwrap();
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("quiet_period_seconds = 10800"));
+    assert!(content.contains("wake_after_seconds = 1800"));
+
+    // Attempting to persist quiet != 10800 fails validation without disk mutation
+    let err = store
+        .persist_timing_pair_for_policy(900, 1800, IdleSuspendAutomaticPolicy::AgentFree)
+        .unwrap_err();
+    assert!(matches!(err, TimingStoreError::Validation(_)));
+    let content_after = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(content, content_after);
+}
+
+#[test]
+fn test_idle_suspend_status_agent_free_fallback_and_dto_serialization() {
+    use crate::idle_suspend::status::{
+        AgentFreeInventoryState, AgentFreePhase, AgentFreeReasonCode,
+        ConsentDecision, ConsentState, IdleSuspendConsentStatusV1,
+        IdleSuspendStatusV1,
+    };
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentFree;
+    cfg.quiet_period_seconds = 10800;
+    cfg.wake_after_seconds = 600;
+    cfg.enabled = true;
+
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("dam-hopper.toml"), &cfg);
+    let fleet = crate::pty::fleet_state::PtyFleetSnapshot {
+        generation: 1,
+        live_count: 0,
+        creating_count: 0,
+        restart_pending_count: 0,
+        disposing: false,
+        closing: false,
+        handoff_active: false,
+    };
+
+    let fallback = IdleSuspendStatusV1::fallback_status(&policy, 10800, 600, fleet, 1726000000000);
+    assert_eq!(fallback.automatic_policy, crate::config::IdleSuspendAutomaticPolicy::AgentFree);
+    assert!(fallback.activity.is_none());
+    assert!(fallback.agent_free.is_some());
+    assert!(fallback.client_presence.is_some());
+    assert!(fallback.consent.is_none());
+
+    let agent_free = fallback.agent_free.as_ref().unwrap();
+    assert_eq!(agent_free.phase, AgentFreePhase::Reconciling);
+    assert_eq!(agent_free.scope, "managed-terminals");
+    assert_eq!(agent_free.inventory_state, AgentFreeInventoryState::Uninitialized);
+    assert_eq!(agent_free.reason_code, Some(AgentFreeReasonCode::Reconciling));
+
+    let client_presence = fallback.client_presence.as_ref().unwrap();
+    assert_eq!(client_presence.connection_count, 0);
+    assert_eq!(client_presence.pending_upgrade_count, 0);
+    assert!(!client_presence.available);
+
+    // JSON serialization roundtrip of full AgentFree status with consent
+    let mut full_status = fallback.clone();
+    full_status.consent = Some(IdleSuspendConsentStatusV1 {
+        request_id: "req-123".to_string(),
+        request_revision: 1,
+        state: ConsentState::Pending,
+        requested_at_ms: 1726000000000,
+        expires_at_ms: 1726000060000,
+        decision: Some(ConsentDecision::Approve),
+        wake_after_seconds: 600,
+    });
+
+    let json_val = serde_json::to_value(&full_status).unwrap();
+    assert_eq!(json_val["automaticPolicy"], "agent-free");
+    assert!(json_val.get("activity").is_none() || json_val["activity"].is_null());
+    assert_eq!(json_val["agentFree"]["phase"], "reconciling");
+    assert_eq!(json_val["agentFree"]["scope"], "managed-terminals");
+    assert_eq!(json_val["clientPresence"]["connectionCount"], 0);
+    assert_eq!(json_val["consent"]["state"], "pending");
+    assert_eq!(json_val["consent"]["decision"], "approve");
+}
+
+#[test]
+fn test_idle_suspend_protocol_consent_and_frame_serialization() {
+    use crate::idle_suspend::protocol::{
+        ConsentDecisionRequest, ConsentDecisionResponse, ConsentDecisionValue,
+        IdleSuspendErrorCode, UiConnectionFrame,
+    };
+
+    // UiConnectionFrame
+    let frame = UiConnectionFrame::new("conn-1".to_string(), "sec-456".to_string());
+    let frame_json = serde_json::to_value(&frame).unwrap();
+    assert_eq!(frame_json["kind"], "host:uiConnection");
+    assert_eq!(frame_json["version"], 1);
+    assert_eq!(frame_json["connectionId"], "conn-1");
+    assert_eq!(frame_json["decisionCapability"], "sec-456");
+
+    // ConsentDecisionRequest
+    let req = ConsentDecisionRequest {
+        request_id: "req-42".to_string(),
+        request_revision: 2,
+        connection_id: "conn-1".to_string(),
+        decision_capability: "sec-456".to_string(),
+        decision: ConsentDecisionValue::Approve,
+    };
+    let req_json = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_json["requestId"], "req-42");
+    assert_eq!(req_json["decision"], "approve");
+    let req_de: ConsentDecisionRequest = serde_json::from_value(req_json).unwrap();
+    assert_eq!(req, req_de);
+
+    // ConsentDecisionResponse
+    let resp = ConsentDecisionResponse {
+        version: 1,
+        request_id: "req-42".to_string(),
+        decision: ConsentDecisionValue::Deny,
+        status_revision: 5,
+        settled: true,
+    };
+    let resp_json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_json["decision"], "deny");
+    assert_eq!(resp_json["settled"], true);
+
+    // Error codes
+    assert_eq!(IdleSuspendErrorCode::DecisionAlreadySettled.as_code_str(), "decisionAlreadySettled");
+    assert_eq!(IdleSuspendErrorCode::ConsentExpired.as_code_str(), "consentExpired");
+    assert_eq!(IdleSuspendErrorCode::ConsentCancelled.as_code_str(), "consentCancelled");
+    assert_eq!(IdleSuspendErrorCode::InvalidCapability.as_code_str(), "invalidCapability");
+    assert_eq!(IdleSuspendErrorCode::ConnectionNotFound.as_code_str(), "connectionNotFound");
+    assert_eq!(IdleSuspendErrorCode::PresenceUnavailable.as_code_str(), "presenceUnavailable");
+    assert_eq!(IdleSuspendErrorCode::ConsentUnavailable.as_code_str(), "consentUnavailable");
+    assert_eq!(IdleSuspendErrorCode::InvalidConsentPayload.as_code_str(), "invalidConsentPayload");
+    assert_eq!(IdleSuspendErrorCode::ConsentDisabledNoAuth.as_code_str(), "consentDisabledNoAuth");
+}
+
+#[test]
 fn test_timing_bounds_validation() {
     // Valid boundaries
     assert!(validate_timing_pair(
