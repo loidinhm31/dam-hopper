@@ -141,7 +141,7 @@ created: 2026-10-05
   // Unreadable document inside bulk directory (permissions restricted inside container post-copy)
   const unreadablePath = path.join(bulkDir, "unreadable-doc.txt");
   await fs.writeFile(unreadablePath, "Cannot read\n");
-  // 7. Secondary project plan with same relative path plans/261001-sample but different report
+  // 7. Secondary project plan with same relative path plans/261001-sample but different phase inventory
   if (secondaryProjectDir) {
     const secSampleDir = path.join(
       secondaryProjectDir,
@@ -154,7 +154,7 @@ created: 2026-10-05
       `---
 title: "Sample Feature Plan"
 description: "Secondary project version of sample feature plan"
-status: pending
+status: completed
 priority: P3
 created: 2026-10-01
 ---
@@ -165,7 +165,7 @@ created: 2026-10-01
 
 | # | Phase | Status | Progress | Effort | Detail |
 |---|---|---|---|---|---|
-| 01 | Phase 1 | Pending | 0% | 8h | [Phase 1](./phase-01.md) |
+| 01 | Phase 1 | Completed | 100% | 8h | [Phase 1](./phase-01.md) |
 `,
     );
   }

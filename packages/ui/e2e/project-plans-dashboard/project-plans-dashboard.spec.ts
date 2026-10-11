@@ -194,10 +194,18 @@ created: 2026-10-01
 | 04 | Phase 4 | Completed | 100% | 8h | [Phase 4](./phase-04.md) |
 | 05 | Phase 5 | Completed | 100% | 8h | [Phase 5](./phase-05.md) |
 `;
+    expect(await appServices.readContainerFile(planFilePath)).toBe(
+      initialPlanBytes,
+    );
+    expect((await appServices.statContainerFile(planFilePath)).size).toBe(
+      initialPlanStat.size,
+    );
     await appServices.writeContainerFile(
-      "/e2e/workspace/fixture-project/plans/261001-sample/plan.md",
+      planFilePath,
       updatedPlan,
     );
+    const postUpdatePlanBytes = await appServices.readContainerFile(planFilePath);
+    const postUpdatePlanStat = await appServices.statContainerFile(planFilePath);
     await expect(selectedStatus).toBeHidden();
     await expect(
       planDashboard
@@ -325,14 +333,14 @@ created: 2026-10-01
     // Restore desktop viewport
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    // 19. Final source file non-mutation verification:
+    // 19. Final source file non-mutation verification since step 13 update:
     // Placed strictly after all dashboard-read and responsive interactions have settled.
     // Asserts exact bytes equality, exact size, and full-resolution mtime string equality (%y).
     const finalPlanBytes = await appServices.readContainerFile(planFilePath);
     const finalPlanStat = await appServices.statContainerFile(planFilePath);
-    expect(finalPlanBytes).toBe(initialPlanBytes);
-    expect(finalPlanStat.size).toBe(initialPlanStat.size);
-    expect(finalPlanStat.mtime).toBe(initialPlanStat.mtime);
+    expect(finalPlanBytes).toBe(postUpdatePlanBytes);
+    expect(finalPlanStat.size).toBe(postUpdatePlanStat.size);
+    expect(finalPlanStat.mtime).toBe(postUpdatePlanStat.mtime);
     expect(finalPlanStat.mtime.length).toBeGreaterThan(15);
   });
 });
