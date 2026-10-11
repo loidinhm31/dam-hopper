@@ -50,7 +50,7 @@ export function ProfileBadge({
       )}
       title={`Server profile: ${trimmedName}`}
     >
-      {trimmedName}
+      <span className="min-w-0 truncate">{trimmedName}</span>
     </span>
   );
 }
