@@ -4858,6 +4858,61 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
 }
 
 #[tokio::test]
+async fn git_worktree_routes_broadcast_worktree_changed_event() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_repo(project.path());
+    git(&["branch", "feature"], project.path());
+    let worktree_path = project.path().join("broadcast-worktree");
+    let state = make_state_with_project(&project);
+    let mut rx = state.event_sink.subscribe();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({
+            "branch": "feature",
+            "path": "broadcast-worktree",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify add worktree broadcasts worktree:changed
+    let msg_str = rx.recv().await.expect("expected add broadcast");
+    let msg_val: serde_json::Value = serde_json::from_str(&msg_str).unwrap();
+    assert_eq!(msg_val["kind"], "worktree:changed");
+    assert_eq!(msg_val["payload"]["projectName"], "test-project");
+
+    let resp = delete_json(
+        state.clone(),
+        "/api/git/test-project/worktrees",
+        serde_json::json!({ "path": worktree_path }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify remove worktree broadcasts worktree:changed
+    let msg_str = rx.recv().await.expect("expected delete broadcast");
+    let msg_val: serde_json::Value = serde_json::from_str(&msg_str).unwrap();
+    assert_eq!(msg_val["kind"], "worktree:changed");
+    assert_eq!(msg_val["payload"]["projectName"], "test-project");
+
+    let resp = post_json(
+        state.clone(),
+        "/api/git/test-project/worktrees/prune",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify prune worktrees broadcasts worktree:changed
+    let msg_str = rx.recv().await.expect("expected prune broadcast");
+    let msg_val: serde_json::Value = serde_json::from_str(&msg_str).unwrap();
+    assert_eq!(msg_val["kind"], "worktree:changed");
+    assert_eq!(msg_val["payload"]["projectName"], "test-project");
+}
+
+#[tokio::test]
 async fn git_worktree_remove_dirty_worktree_requires_force() {
     let project = tempfile::tempdir().unwrap();
     init_git_repo(project.path());

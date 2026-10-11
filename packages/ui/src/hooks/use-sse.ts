@@ -211,6 +211,7 @@ const PUSH_EVENT_CHANNELS = [
   "host:alertChanged",
   "host:alertsInvalidated",
   "host:idleSuspendChanged",
+  "worktree:changed",
 ] as const;
 
 export function asTerminalTargetUnavailableEvent(
@@ -562,6 +563,22 @@ export function installTransportBridge(
           for (const qc of qcs) {
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "projects"),
+            });
+          }
+        }
+      } else if (channel === "worktree:changed") {
+        if (
+          isRecord(data) &&
+          typeof data.projectName === "string" &&
+          data.projectName.trim().length > 0
+        ) {
+          const projectName = data.projectName.trim();
+          for (const qc of qcs) {
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "git", "worktrees", projectName),
+            });
+            void qc.invalidateQueries({
+              queryKey: profileQueryKey(owner, "git", "branches", projectName),
             });
           }
         }
