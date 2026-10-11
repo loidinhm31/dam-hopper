@@ -1809,8 +1809,14 @@ fn test_claude_parallel_tool_blocker_resolution_and_fencing() {
     notice1.tool_call_id = Some("call-1".to_string());
     let out = registry.apply_hook("term-1", 1, &notice1, 1050).unwrap();
     assert_eq!(out.row.unwrap().state, AgentState::Blocked);
-    assert_eq!(out.attention.as_ref().unwrap().kind, AttentionKind::NeedsAttention);
-    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Approval));
+    assert_eq!(
+        out.attention.as_ref().unwrap().kind,
+        AttentionKind::NeedsAttention
+    );
+    assert_eq!(
+        out.attention.as_ref().unwrap().reason,
+        Some(BlockedReason::Approval)
+    );
 
     // Parallel Tool 2 begins execution (unrelated to call-1)
     let mut tool2_pre = sample_hook_envelope(
@@ -1883,7 +1889,9 @@ fn test_claude_parallel_tool_blocker_resolution_and_fencing() {
         AgentKind::Claude,
     );
     uncorrelated.tool_call_id = None;
-    let out = registry.apply_hook("term-1", 1, &uncorrelated, 1300).unwrap();
+    let out = registry
+        .apply_hook("term-1", 1, &uncorrelated, 1300)
+        .unwrap();
     assert_eq!(
         out.row.unwrap().state,
         AgentState::Unknown,
@@ -1925,7 +1933,9 @@ fn test_claude_continuation_and_stop_handling() {
         Some("turn-1"),
         AgentKind::Claude,
     );
-    let out = registry.apply_hook("term-1", 1, &continuation_tool, 1100).unwrap();
+    let out = registry
+        .apply_hook("term-1", 1, &continuation_tool, 1100)
+        .unwrap();
     assert_eq!(
         out.row.as_ref().unwrap().state,
         AgentState::Working,
@@ -1992,7 +2002,9 @@ fn test_claude_ask_user_question_and_agent_needs_input() {
         AgentKind::Claude,
     );
     question_candidate.notification_type = Some("question_candidate".to_string());
-    let out = registry.apply_hook("term-1", 1, &question_candidate, 1050).unwrap();
+    let out = registry
+        .apply_hook("term-1", 1, &question_candidate, 1050)
+        .unwrap();
     assert_eq!(out.row.unwrap().state, AgentState::Unknown);
     assert!(out.attention.is_none());
 
@@ -2004,7 +2016,9 @@ fn test_claude_ask_user_question_and_agent_needs_input() {
         Some("turn-1"),
         AgentKind::Claude,
     );
-    let out = registry.apply_hook("term-1", 1, &normal_tool, 1100).unwrap();
+    let out = registry
+        .apply_hook("term-1", 1, &normal_tool, 1100)
+        .unwrap();
     assert_eq!(out.row.unwrap().state, AgentState::Working);
 
     // Notification(agent_needs_input): Blocked(Question) with NeedsAttention
@@ -2020,13 +2034,19 @@ fn test_claude_ask_user_question_and_agent_needs_input() {
     let row = out.row.unwrap();
     assert_eq!(row.state, AgentState::Blocked);
     assert_eq!(row.reason, Some(BlockedReason::Question));
-    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Question));
+    assert_eq!(
+        out.attention.as_ref().unwrap().reason,
+        Some(BlockedReason::Question)
+    );
 
     // Duplicate Notification(agent_needs_input): no duplicate attention
     let mut dupe = notice.clone();
     dupe.event_id = "ev-notice-dupe".to_string();
     let out = registry.apply_hook("term-1", 1, &dupe, 1160).unwrap();
-    assert!(out.attention.is_none(), "duplicate notification must not duplicate attention");
+    assert!(
+        out.attention.is_none(),
+        "duplicate notification must not duplicate attention"
+    );
 }
 
 #[test]
@@ -2066,7 +2086,10 @@ fn test_claude_stop_failure_and_post_tool_failure() {
     let row = out.row.unwrap();
     assert_eq!(row.state, AgentState::Blocked);
     assert_eq!(row.reason, Some(BlockedReason::Error));
-    assert_eq!(out.attention.as_ref().unwrap().reason, Some(BlockedReason::Error));
+    assert_eq!(
+        out.attention.as_ref().unwrap().reason,
+        Some(BlockedReason::Error)
+    );
 }
 
 #[test]
@@ -2094,7 +2117,10 @@ fn test_codex_interrupt_and_stop_behavior() {
     let row = out.row.unwrap();
     assert_eq!(row.state, AgentState::Idle);
     assert_eq!(row.last_outcome, Some(TurnOutcome::Interrupted));
-    assert!(out.attention.is_none(), "Interrupt must never emit completion attention");
+    assert!(
+        out.attention.is_none(),
+        "Interrupt must never emit completion attention"
+    );
 
     // Turn-1 was retired by interrupt; late tool event is ignored
     let late_tool = sample_hook_envelope(
@@ -2119,7 +2145,9 @@ fn test_cross_agent_disallowed_events_rejected() {
         Some("turn-1"),
         AgentKind::Codex,
     );
-    registry.apply_hook("term-codex", 1, &codex_start, 1000).unwrap();
+    registry
+        .apply_hook("term-codex", 1, &codex_start, 1000)
+        .unwrap();
 
     // Codex cannot receive Notification
     let codex_notice = sample_hook_envelope(
@@ -2129,7 +2157,9 @@ fn test_cross_agent_disallowed_events_rejected() {
         Some("turn-1"),
         AgentKind::Codex,
     );
-    let out = registry.apply_hook("term-codex", 1, &codex_notice, 1050).unwrap();
+    let out = registry
+        .apply_hook("term-codex", 1, &codex_notice, 1050)
+        .unwrap();
     assert!(!out.state_changed);
 
     // Codex cannot receive StopFailure
@@ -2140,7 +2170,9 @@ fn test_cross_agent_disallowed_events_rejected() {
         Some("turn-1"),
         AgentKind::Codex,
     );
-    let out = registry.apply_hook("term-codex", 1, &codex_stop_fail, 1060).unwrap();
+    let out = registry
+        .apply_hook("term-codex", 1, &codex_stop_fail, 1060)
+        .unwrap();
     assert!(!out.state_changed);
 
     let mut claude_registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
@@ -2151,7 +2183,9 @@ fn test_cross_agent_disallowed_events_rejected() {
         Some("turn-1"),
         AgentKind::Claude,
     );
-    claude_registry.apply_hook("term-claude", 1, &claude_start, 1000).unwrap();
+    claude_registry
+        .apply_hook("term-claude", 1, &claude_start, 1000)
+        .unwrap();
 
     // Claude cannot receive Interrupt
     let claude_interrupt = sample_hook_envelope(
@@ -2161,7 +2195,9 @@ fn test_cross_agent_disallowed_events_rejected() {
         Some("turn-1"),
         AgentKind::Claude,
     );
-    let out = claude_registry.apply_hook("term-claude", 1, &claude_interrupt, 1050).unwrap();
+    let out = claude_registry
+        .apply_hook("term-claude", 1, &claude_interrupt, 1050)
+        .unwrap();
     assert!(!out.state_changed);
 }
 
@@ -2221,22 +2257,46 @@ fn test_evaluate_managed_agents_all_idle_or_blocked_free() {
             &pty1.session_id.to_string(),
             1,
             1,
-            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             1000,
         )
         .unwrap();
 
     // Admit native Claude on pty2 with native_root proc2
     // Establish native Claude on pty2 with UserPromptSubmit, then transition to Blocked via Notification
-    let mut start_env = sample_hook_envelope("ev-0", "UserPromptSubmit", "sess-2", Some("turn-1"), AgentKind::Claude);
+    let mut start_env = sample_hook_envelope(
+        "ev-0",
+        "UserPromptSubmit",
+        "sess-2",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
     start_env.root_process = proc2;
-    registry.apply_hook(&pty2.session_id.to_string(), 1, &start_env, 900).unwrap();
+    registry
+        .apply_hook(&pty2.session_id.to_string(), 1, &start_env, 900)
+        .unwrap();
 
-    let mut hook_env = sample_hook_envelope("ev-1", "Notification", "sess-2", Some("turn-1"), AgentKind::Claude);
+    let mut hook_env = sample_hook_envelope(
+        "ev-1",
+        "Notification",
+        "sess-2",
+        Some("turn-1"),
+        AgentKind::Claude,
+    );
     hook_env.notification_type = Some("permission_prompt".to_string());
     hook_env.reason = Some(BlockedReason::Approval);
     hook_env.root_process = proc2;
-    registry.apply_hook(&pty2.session_id.to_string(), 1, &hook_env, 1000).unwrap();
+    registry
+        .apply_hook(&pty2.session_id.to_string(), 1, &hook_env, 1000)
+        .unwrap();
     let image_key = crate::idle_suspend::activity::ProcessImageKey {
         exe_dev: 1,
         exe_ino: 2,
@@ -2294,7 +2354,15 @@ fn test_evaluate_managed_agents_working_blocks() {
             &pty1.session_id.to_string(),
             1,
             1,
-            sample_report(1, ReporterEventKind::StateChanged, AgentState::Working, "sess-1", Some("t1"), None, None),
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Working,
+                "sess-1",
+                Some("t1"),
+                None,
+                None,
+            ),
             1000,
         )
         .unwrap();
@@ -2333,9 +2401,14 @@ fn test_non_free_generation_mutations() {
 
     let pty_id = "term-non-free";
     let hello = sample_hello("rep-1", "sess-1");
-    registry.admit_reporter(pty_id.to_string(), 1, &hello, 1000).unwrap();
+    registry
+        .admit_reporter(pty_id.to_string(), 1, &hello, 1000)
+        .unwrap();
     let gen_admitted = registry.non_free_generation();
-    assert!(gen_admitted > gen0, "admitting new unknown agent increments non_free_generation");
+    assert!(
+        gen_admitted > gen0,
+        "admitting new unknown agent increments non_free_generation"
+    );
 
     // Transition Unknown -> Idle
     registry
@@ -2343,12 +2416,23 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             1000,
         )
         .unwrap();
     let gen_idle = registry.non_free_generation();
-    assert!(gen_idle > gen_admitted, "Unknown -> Idle transitions out of Unknown");
+    assert!(
+        gen_idle > gen_admitted,
+        "Unknown -> Idle transitions out of Unknown"
+    );
 
     // Same-state heartbeat Idle -> Idle does NOT increment non_free_generation
     registry
@@ -2356,11 +2440,23 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(2, ReporterEventKind::Heartbeat, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                2,
+                ReporterEventKind::Heartbeat,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             2000,
         )
         .unwrap();
-    assert_eq!(registry.non_free_generation(), gen_idle, "heartbeat preserves non_free_generation");
+    assert_eq!(
+        registry.non_free_generation(),
+        gen_idle,
+        "heartbeat preserves non_free_generation"
+    );
 
     // Idle -> Blocked preserves non_free_generation
     registry
@@ -2368,11 +2464,23 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(3, ReporterEventKind::StateChanged, AgentState::Blocked, "sess-1", None, None, Some(BlockedReason::Question)),
+            sample_report(
+                3,
+                ReporterEventKind::StateChanged,
+                AgentState::Blocked,
+                "sess-1",
+                None,
+                None,
+                Some(BlockedReason::Question),
+            ),
             3000,
         )
         .unwrap();
-    assert_eq!(registry.non_free_generation(), gen_idle, "Idle -> Blocked preserves non_free_generation");
+    assert_eq!(
+        registry.non_free_generation(),
+        gen_idle,
+        "Idle -> Blocked preserves non_free_generation"
+    );
 
     // Blocked -> Idle preserves non_free_generation
     registry
@@ -2380,11 +2488,23 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(4, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                4,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             4000,
         )
         .unwrap();
-    assert_eq!(registry.non_free_generation(), gen_idle, "Blocked -> Idle preserves non_free_generation");
+    assert_eq!(
+        registry.non_free_generation(),
+        gen_idle,
+        "Blocked -> Idle preserves non_free_generation"
+    );
 
     // Idle -> Working increments non_free_generation
     registry
@@ -2392,12 +2512,23 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(5, ReporterEventKind::StateChanged, AgentState::Working, "sess-1", Some("turn-1"), None, None),
+            sample_report(
+                5,
+                ReporterEventKind::StateChanged,
+                AgentState::Working,
+                "sess-1",
+                Some("turn-1"),
+                None,
+                None,
+            ),
             5000,
         )
         .unwrap();
     let gen_working = registry.non_free_generation();
-    assert!(gen_working > gen_idle, "Idle -> Working increments non_free_generation");
+    assert!(
+        gen_working > gen_idle,
+        "Idle -> Working increments non_free_generation"
+    );
 
     // Working -> Idle increments non_free_generation (leaving non-free state)
     registry
@@ -2405,17 +2536,31 @@ fn test_non_free_generation_mutations() {
             pty_id,
             1,
             1,
-            sample_report(6, ReporterEventKind::TurnEnded, AgentState::Idle, "sess-1", Some("turn-1"), Some(TurnOutcome::Ended), None),
+            sample_report(
+                6,
+                ReporterEventKind::TurnEnded,
+                AgentState::Idle,
+                "sess-1",
+                Some("turn-1"),
+                Some(TurnOutcome::Ended),
+                None,
+            ),
             6000,
         )
         .unwrap();
     let gen_idle2 = registry.non_free_generation();
-    assert!(gen_idle2 > gen_working, "Working -> Idle increments non_free_generation");
+    assert!(
+        gen_idle2 > gen_working,
+        "Working -> Idle increments non_free_generation"
+    );
 
     // Disconnect increments non_free_generation
     registry.mark_unknown(pty_id, 1, 1).unwrap();
     let gen_disconnected = registry.non_free_generation();
-    assert!(gen_disconnected > gen_idle2, "disconnect increments non_free_generation");
+    assert!(
+        gen_disconnected > gen_idle2,
+        "disconnect increments non_free_generation"
+    );
 }
 
 #[test]
@@ -2440,7 +2585,15 @@ fn test_evaluate_managed_agents_unverified_process_binding_fails_closed() {
             &pty1.session_id.to_string(),
             1,
             1,
-            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             1000,
         )
         .unwrap();
@@ -2460,7 +2613,10 @@ fn test_evaluate_managed_agents_unverified_process_binding_fails_closed() {
     let eval = registry.evaluate_managed_agents(&matched, 2000);
     match eval {
         super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
-            assert!(matches!(reason, super::types::AgentSemanticBlockReason::UnverifiedProcessBinding { pid: 1001, .. }));
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::UnverifiedProcessBinding { pid: 1001, .. }
+            ));
         }
         other => panic!("expected Unknown(UnverifiedProcessBinding), got {other:?}"),
     }
@@ -2487,7 +2643,15 @@ fn test_evaluate_managed_agents_expired_lease_fails_closed() {
             &pty1.session_id.to_string(),
             1,
             1,
-            sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
             1000,
         )
         .unwrap();
@@ -2508,7 +2672,10 @@ fn test_evaluate_managed_agents_expired_lease_fails_closed() {
     let eval = registry.evaluate_managed_agents(&matched, 16_001);
     match eval {
         super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
-            assert!(matches!(reason, super::types::AgentSemanticBlockReason::ExpiredLease { pid: 1001, .. }));
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::ExpiredLease { pid: 1001, .. }
+            ));
         }
         other => panic!("expected Unknown(ExpiredLease), got {other:?}"),
     }
@@ -2527,13 +2694,29 @@ fn test_evaluate_managed_agents_native_gate_fail_closed() {
     };
 
     // Native Codex hook received at time 1000
-    let mut hook_env = sample_hook_envelope("ev-1", "Interrupt", "sess-codex", Some("turn-1"), AgentKind::Codex);
+    let mut hook_env = sample_hook_envelope(
+        "ev-1",
+        "Interrupt",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
     hook_env.root_process = proc;
     // First establish session with UserPromptSubmit
-    let mut start_env = sample_hook_envelope("ev-0", "UserPromptSubmit", "sess-codex", Some("turn-1"), AgentKind::Codex);
+    let mut start_env = sample_hook_envelope(
+        "ev-0",
+        "UserPromptSubmit",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
     start_env.root_process = proc;
-    registry.apply_hook(&pty.session_id.to_string(), 1, &start_env, 900).unwrap();
-    registry.apply_hook(&pty.session_id.to_string(), 1, &hook_env, 1000).unwrap();
+    registry
+        .apply_hook(&pty.session_id.to_string(), 1, &start_env, 900)
+        .unwrap();
+    registry
+        .apply_hook(&pty.session_id.to_string(), 1, &hook_env, 1000)
+        .unwrap();
 
     let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
         identity: proc,
@@ -2549,7 +2732,10 @@ fn test_evaluate_managed_agents_native_gate_fail_closed() {
 
     // At time 2000 (within 15s), Idle
     let eval_fresh = registry.evaluate_managed_agents(&matched, 2000);
-    assert!(matches!(eval_fresh, super::types::AgentSemanticEvaluation::Free { idle_count: 1, .. }));
+    assert!(matches!(
+        eval_fresh,
+        super::types::AgentSemanticEvaluation::Free { idle_count: 1, .. }
+    ));
 
     // At time 16_001 (beyond 15s lease), fails closed to UnrefreshedNativeProvider!
     let eval_expired = registry.evaluate_managed_agents(&matched, 16_001);
@@ -2557,7 +2743,11 @@ fn test_evaluate_managed_agents_native_gate_fail_closed() {
         super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
             assert!(matches!(
                 reason,
-                super::types::AgentSemanticBlockReason::UnrefreshedNativeProvider { pid: 2001, agent_kind: AgentKind::Codex, .. }
+                super::types::AgentSemanticBlockReason::UnrefreshedNativeProvider {
+                    pid: 2001,
+                    agent_kind: AgentKind::Codex,
+                    ..
+                }
             ));
         }
         other => panic!("expected Unknown(UnrefreshedNativeProvider), got {other:?}"),
@@ -2571,19 +2761,37 @@ fn test_evaluate_managed_agents_multiple_agents_in_terminal_ambiguous() {
         session_id: uuid::Uuid::new_v4().to_string(),
         incarnation: 1,
     };
-    let proc1 = ProcessIdentity { pid: 3001, start_ticks: 4001 };
-    let proc2 = ProcessIdentity { pid: 3002, start_ticks: 4002 };
+    let proc1 = ProcessIdentity {
+        pid: 3001,
+        start_ticks: 4001,
+    };
+    let proc2 = ProcessIdentity {
+        pid: 3002,
+        start_ticks: 4002,
+    };
 
     // Admit OMP reporter tied to proc1
     let hello = sample_hello("rep-shared", "sess-1");
-    registry.admit_reporter_with_process(pty.session_id.to_string(), 1, &hello, Some(proc1), 1000).unwrap();
-    registry.apply_report(
-        &pty.session_id.to_string(),
-        1,
-        1,
-        sample_report(1, ReporterEventKind::StateChanged, AgentState::Idle, "sess-1", None, None, None),
-        1000,
-    ).unwrap();
+    registry
+        .admit_reporter_with_process(pty.session_id.to_string(), 1, &hello, Some(proc1), 1000)
+        .unwrap();
+    registry
+        .apply_report(
+            &pty.session_id.to_string(),
+            1,
+            1,
+            sample_report(
+                1,
+                ReporterEventKind::StateChanged,
+                AgentState::Idle,
+                "sess-1",
+                None,
+                None,
+                None,
+            ),
+            1000,
+        )
+        .unwrap();
 
     let image_key = crate::idle_suspend::activity::ProcessImageKey {
         exe_dev: 1,
@@ -2611,7 +2819,10 @@ fn test_evaluate_managed_agents_multiple_agents_in_terminal_ambiguous() {
     let eval = registry.evaluate_managed_agents(&matched, 2000);
     match eval {
         super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
-            assert!(matches!(reason, super::types::AgentSemanticBlockReason::AmbiguousOwner { .. }));
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::AmbiguousOwner { .. }
+            ));
         }
         other => panic!("expected Unknown(AmbiguousOwner), got {other:?}"),
     }
@@ -2621,7 +2832,8 @@ fn test_evaluate_managed_agents_multiple_agents_in_terminal_ambiguous() {
 fn test_process_exit_proof() {
     // Self PID is alive
     let current_pid = std::process::id();
-    let stat = crate::pty::activity::read_process_stat(std::path::Path::new("/proc"), current_pid).expect("read self stat");
+    let stat = crate::pty::activity::read_process_stat(std::path::Path::new("/proc"), current_pid)
+        .expect("read self stat");
     let current_identity = ProcessIdentity {
         pid: current_pid,
         start_ticks: stat.start_ticks,
@@ -2636,4 +2848,127 @@ fn test_process_exit_proof() {
     };
     let proof_exited = super::runtime::verify_process_exit(non_existent);
     assert_eq!(proof_exited, super::runtime::ProcessExitProof::Exited);
+}
+
+#[test]
+fn test_evaluate_managed_agents_uncovered_retained_descendants_blocks() {
+    let registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let term = crate::pty::activity::TerminalIdentity {
+        session_id: "term-uncovered".to_string(),
+        incarnation: 1,
+    };
+    let uncovered = vec![crate::idle_suspend::activity::RetainedManagedProcess {
+        identity: ProcessIdentity {
+            pid: 9001,
+            start_ticks: 1234,
+        },
+        terminal: term,
+    }];
+
+    let eval = registry.evaluate_managed_agents_with_details(&[], &uncovered, 1000, None);
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::SubagentUncovered { pid: 9001, .. }
+            ));
+        }
+        other => panic!("expected Unknown(SubagentUncovered), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_executable_identity_mismatch_blocks() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc = ProcessIdentity {
+        pid: 3001,
+        start_ticks: 4001,
+    };
+
+    // Admitted as OMP agent
+    let hello = sample_hello("rep-omp-3001", "omp-3001");
+    registry
+        .admit_reporter_with_process(pty.session_id.clone(), 1, &hello, Some(proc), 1000)
+        .unwrap();
+
+    // But discovery sees safe_executable_identity as "codex"
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc,
+        terminal: pty,
+        safe_executable_identity: Some("codex".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    let eval = registry.evaluate_managed_agents(&matched, 2000);
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::AmbiguousOwner { pid: 3001, .. }
+            ));
+        }
+        other => panic!("expected Unknown(AmbiguousOwner), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_evaluate_managed_agents_monotonic_elapsed_rollback_defense() {
+    let mut registry = AgentStatusRegistry::new(100, AgentStatusAvailability::Ready);
+    let pty = crate::pty::activity::TerminalIdentity {
+        session_id: uuid::Uuid::new_v4().to_string(),
+        incarnation: 1,
+    };
+    let proc = ProcessIdentity {
+        pid: 5001,
+        start_ticks: 6001,
+    };
+
+    let mut start_env = sample_hook_envelope(
+        "ev-0",
+        "UserPromptSubmit",
+        "sess-codex",
+        Some("turn-1"),
+        AgentKind::Codex,
+    );
+    start_env.root_process = proc;
+    registry
+        .apply_hook(&pty.session_id.to_string(), 1, &start_env, 10_000)
+        .unwrap();
+
+    let matched = vec![crate::idle_suspend::activity::MatchedManagedAgent {
+        identity: proc,
+        terminal: pty,
+        safe_executable_identity: Some("codex".to_string()),
+        image_key: crate::idle_suspend::activity::ProcessImageKey {
+            exe_dev: 1,
+            exe_ino: 2,
+            entrypoint_token: None,
+        },
+        descendant_processes: vec![],
+    }];
+
+    // Simulate clock rollback: wall clock now_ms is 5000 (< 10000), but monotonic instant is 16 seconds later
+    let start_instant = std::time::Instant::now();
+    let future_instant = start_instant + std::time::Duration::from_secs(16);
+
+    let eval =
+        registry.evaluate_managed_agents_with_details(&matched, &[], 5000, Some(future_instant));
+    match eval {
+        super::types::AgentSemanticEvaluation::Unknown { reason, .. } => {
+            assert!(matches!(
+                reason,
+                super::types::AgentSemanticBlockReason::UnrefreshedNativeProvider { pid: 5001, .. }
+            ));
+        }
+        other => panic!("expected Unknown(UnrefreshedNativeProvider), got {other:?}"),
+    }
 }

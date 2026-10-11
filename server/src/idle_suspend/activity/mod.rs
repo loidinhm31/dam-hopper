@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 
 #[cfg(target_os = "linux")]
-pub(crate) mod process;
-#[cfg(target_os = "linux")]
 mod netlink;
-mod tcp_info;
+#[cfg(target_os = "linux")]
+pub(crate) mod process;
+pub(crate) mod sampler;
 #[cfg(target_os = "linux")]
 pub(crate) mod tcp;
-pub(crate) mod sampler;
+mod tcp_info;
 
 #[allow(unused_imports)]
 pub(crate) use crate::idle_suspend::status::{ActivityMeasurementState, ActivityObservationReason};
@@ -72,7 +72,10 @@ impl NetworkNamespaceIdentity {
             std::path::Path::new("/proc/self/ns/net")
         };
         let meta = std::fs::metadata(path).map_err(|e| {
-            tracing::debug!("Failed to read thread netns metadata {}: {e}", path.display());
+            tracing::debug!(
+                "Failed to read thread netns metadata {}: {e}",
+                path.display()
+            );
             ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess)
         })?;
         Ok(Self {
@@ -83,7 +86,9 @@ impl NetworkNamespaceIdentity {
 
     #[cfg(windows)]
     pub(crate) fn current_thread() -> Result<Self, ActivityUnavailable> {
-        Err(ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess))
+        Err(ActivityUnavailable::new(
+            ActivityUnavailableReason::ProcAccess,
+        ))
     }
 }
 
@@ -296,6 +301,12 @@ pub(crate) struct MatchedManagedAgent {
     pub(crate) image_key: ProcessImageKey,
     pub(crate) descendant_processes: Vec<ProcessIdentity>,
 }
+/// Evidence of an uncovered retained process from managed agent lineage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedManagedProcess {
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) terminal: TerminalIdentity,
+}
 
 /// Qualified outcome of a complete process discovery pass.
 #[derive(Clone, Debug)]
@@ -310,6 +321,9 @@ pub(crate) struct ProcessSample {
     /// Distinct matched agents within managed lineage with image and descendant coverage.
     #[allow(dead_code)]
     pub(crate) matched_agents: Vec<MatchedManagedAgent>,
+    /// Living retained descendant processes from agent lineage not covered by any active matched agent.
+    #[allow(dead_code)]
+    pub(crate) uncovered_retained_processes: Vec<RetainedManagedProcess>,
 }
 impl ProcessSample {
     pub(crate) fn monitored_terminal_count(&self) -> usize {

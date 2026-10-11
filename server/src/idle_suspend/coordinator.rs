@@ -11,10 +11,9 @@ use crate::config::{
     MIN_IDLE_SUSPEND_QUIET_PERIOD_SECONDS, MIN_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
 };
 use crate::idle_suspend::activity::{
-    ActivityDelta, ActivityMeasurementState, ActivityObservation,
-    ActivityObservationReason, ActivitySampler, ActivitySamplerResult, ActivityUnavailableReason,
-    AgentActivityAdmission, SampleKind, SampleRequest,
-    MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_CADENCE,
+    ActivityDelta, ActivityMeasurementState, ActivityObservation, ActivityObservationReason,
+    ActivitySampler, ActivitySamplerResult, ActivityUnavailableReason, AgentActivityAdmission,
+    SampleKind, SampleRequest, MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_CADENCE,
 };
 use crate::idle_suspend::event::{
     ActionCorrelationId, ArmCancelledDataV1, ArmStartedDataV1, AttemptStartedDataV1,
@@ -22,8 +21,8 @@ use crate::idle_suspend::event::{
     FinalCheckStartedDataV1, HandoffClaimAcceptedDataV1, HandoffClaimRejectedDataV1,
     HelperOutcomeReceivedDataV1, HelperRequestDispatchedDataV1, IdleSuspendEventDataV1,
     IdleSuspendEventWriter, IdleSuspendModeV1, MeasurementRecoveredDataV1,
-    MeasurementUnavailableDataV1, ReconciliationCompletedDataV1,
-    ServerIdleSuspendEventTypeV1, ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
+    MeasurementUnavailableDataV1, ReconciliationCompletedDataV1, ServerIdleSuspendEventTypeV1,
+    ServerIdleSuspendReasonCodeV1, TerminalRejectedDataV1,
 };
 use crate::idle_suspend::executor::{BoxFuture, IdleSuspendExecutor};
 use crate::idle_suspend::policy::{
@@ -48,16 +47,14 @@ use crate::pty::fleet_state::PtyFleetSnapshot;
 use crate::pty::manager::PtySessionManager;
 /// Recommended timeout for unanswered sleep consent requests (2s under test, 60s in production).
 pub const UNANSWERED_CONSENT_TIMEOUT_SECONDS: u64 = if cfg!(test) { 2 } else { 60 };
-use crate::api::auth::AuthenticatedActor;
 use crate::agent_status::types::{AgentSemanticBlockReason, AgentSemanticEvaluation};
+use crate::api::auth::AuthenticatedActor;
 use crate::idle_suspend::activity::process::ProcessDiscovery;
 use crate::idle_suspend::activity::sampler::{
     AgentFreeAdmission, AgentFreeClaimTicket, ManagedAgentClaimEvidence,
 };
 use crate::idle_suspend::client_presence::{ClientPresenceRegistry, PresenceClaimError};
-use crate::idle_suspend::protocol::{
-    ConsentDecisionResponse, ConsentDecisionValue,
-};
+use crate::idle_suspend::protocol::{ConsentDecisionResponse, ConsentDecisionValue};
 use crate::idle_suspend::server_audit::{ConsentAuditRecord, ConsentAuditResult};
 use crate::idle_suspend::status::{ConsentDecision, ConsentState, IdleSuspendConsentStatusV1};
 
@@ -116,9 +113,7 @@ pub enum CoordinatorForceSuspendResult {
         fleet_snapshot: PtyFleetSnapshot,
     },
     /// Active fleet requires explicit confirmation; no claim or executor side-effects.
-    ActiveFleetRequiresConfirmation {
-        fleet_snapshot: PtyFleetSnapshot,
-    },
+    ActiveFleetRequiresConfirmation { fleet_snapshot: PtyFleetSnapshot },
     /// A handoff is currently in flight; caller must retry after resume.
     HandoffInProgress,
     /// Generation mismatch between confirmation/snapshot and claim.
@@ -176,7 +171,6 @@ pub enum CoordinatorConsentDecisionResult {
     /// Audit logging failed.
     AuditFailed(String),
 }
-
 
 enum CommandMessage {
     UpdateTiming {
@@ -250,7 +244,11 @@ fn emit_event(
     if let Some(w) = writer {
         let now_ms = IdleSuspendStatusV1::now_ms();
         if let Err(e) = w.emit(now_ms, event_type, correlation_id, mode, data) {
-            tracing::warn!("Failed to emit idle suspend event {}: {:?}", event_type.as_str(), e);
+            tracing::warn!(
+                "Failed to emit idle suspend event {}: {:?}",
+                event_type.as_str(),
+                e
+            );
         }
     }
 }
@@ -260,9 +258,7 @@ fn map_outcome_to_reason_code(outcome: &SuspendOutcome) -> ServerIdleSuspendReas
         SuspendOutcome::ResumedSuccessfully { .. } => {
             ServerIdleSuspendReasonCodeV1::ResumedSuccessfully
         }
-        SuspendOutcome::RejectedFleetActive { .. } => {
-            ServerIdleSuspendReasonCodeV1::ActiveFleet
-        }
+        SuspendOutcome::RejectedFleetActive { .. } => ServerIdleSuspendReasonCodeV1::ActiveFleet,
         SuspendOutcome::BlockedByInhibitor { .. } => {
             ServerIdleSuspendReasonCodeV1::InhibitorPresent
         }
@@ -292,7 +288,6 @@ fn map_outcome_to_reason_code(outcome: &SuspendOutcome) -> ServerIdleSuspendReas
         }
     }
 }
-
 
 /// Authoritative coordinator for terminal idle suspend.
 pub struct IdleSuspendCoordinator {
@@ -444,8 +439,10 @@ impl IdleSuspendCoordinator {
         agent_status: Option<crate::agent_status::AgentStatusRuntime>,
         auth_service: Option<Arc<crate::auth::AuthService>>,
     ) -> Self {
-        let client_presence = client_presence.unwrap_or_else(crate::idle_suspend::ClientPresenceRegistry::new);
-        let agent_status = agent_status.unwrap_or_else(crate::agent_status::AgentStatusRuntime::platform_unqualified);
+        let client_presence =
+            client_presence.unwrap_or_else(crate::idle_suspend::ClientPresenceRegistry::new);
+        let agent_status = agent_status
+            .unwrap_or_else(crate::agent_status::AgentStatusRuntime::platform_unqualified);
         let event_sink = event_sink.unwrap_or_else(|| pty_manager.sink());
         let (command_tx, command_rx) = mpsc::channel(32);
         let shutdown_token = CancellationToken::new();
@@ -463,25 +460,26 @@ impl IdleSuspendCoordinator {
             CoordinatorState::Disabled
         };
 
-        let initial_activity = if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity {
-            Some(IdleSuspendActivityStatusV1 {
-                measurement_state: ActivityMeasurementState::Initializing,
-                reason_code: Some(ActivityObservationReason::Reconciling),
-                recognized_agent_count: None,
-                monitored_terminal_count: None,
-                sampled_at_ms: None,
-                last_activity_at_ms: None,
-                network_coverage: "tcp4-tcp6".to_string(),
-                measurement_warning: Some(IdleSuspendMeasurementWarningV1 {
-                    reason_code: MeasurementWarningReasonCode::Reconciling,
-                    blocked_since_ms: IdleSuspendStatusV1::now_ms(),
-                    processes: Vec::new(),
-                    processes_truncated: false,
-                }),
-            })
-        } else {
-            None
-        };
+        let initial_activity =
+            if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity {
+                Some(IdleSuspendActivityStatusV1 {
+                    measurement_state: ActivityMeasurementState::Initializing,
+                    reason_code: Some(ActivityObservationReason::Reconciling),
+                    recognized_agent_count: None,
+                    monitored_terminal_count: None,
+                    sampled_at_ms: None,
+                    last_activity_at_ms: None,
+                    network_coverage: "tcp4-tcp6".to_string(),
+                    measurement_warning: Some(IdleSuspendMeasurementWarningV1 {
+                        reason_code: MeasurementWarningReasonCode::Reconciling,
+                        blocked_since_ms: IdleSuspendStatusV1::now_ms(),
+                        processes: Vec::new(),
+                        processes_truncated: false,
+                    }),
+                })
+            } else {
+                None
+            };
         let (initial_agent_free, initial_client_presence, initial_consent) =
             if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree {
                 (
@@ -608,7 +606,9 @@ impl IdleSuspendCoordinator {
         if self.command_tx.send(msg).await.is_err() {
             return CoordinatorForceSuspendResult::ShuttingDown;
         }
-        reply_rx.await.unwrap_or(CoordinatorForceSuspendResult::ShuttingDown)
+        reply_rx
+            .await
+            .unwrap_or(CoordinatorForceSuspendResult::ShuttingDown)
     }
 
     /// Submit an authenticated consent decision to the coordinator.
@@ -680,7 +680,8 @@ async fn run_coordinator(
     let mut last_outcome: Option<SuspendOutcome> = None;
     let mut detail: Option<String> = None;
 
-    let is_agent_free_policy = startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree;
+    let is_agent_free_policy =
+        startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree;
     #[cfg(not(test))]
     if is_agent_free_policy && quiet_period_seconds >= 60 {
         quiet_period_seconds = 10800;
@@ -688,6 +689,7 @@ async fn run_coordinator(
 
     let mut process_discovery = ProcessDiscovery::new();
     let mut free_anchor: Option<Instant> = None;
+    let mut free_anchor_nfg: Option<u64> = None;
     let mut free_since_ms: Option<u64> = None;
     let mut eligible_at_ms: Option<u64> = None;
     let mut deferred_until: Option<Instant> = None;
@@ -706,7 +708,8 @@ async fn run_coordinator(
     let mut last_settled_consent: Option<ActiveConsentRequest> = None;
     let mut next_consent_request_seq = 1u64;
 
-    let is_agent_policy = startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity;
+    let is_agent_policy =
+        startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentActivity;
 
     // Agent activity observation and sampling components
     let (sampler, mut sampler_rx) = if is_agent_policy {
@@ -786,7 +789,6 @@ async fn run_coordinator(
 
     let mut in_flight_suspend: Option<BoxFuture<'static, SuspendOutcome>> = None;
     let mut in_flight_manual_audit: Option<ManualAuditRecord> = None;
-
 
     loop {
         let sleep_fut = async {
@@ -962,6 +964,7 @@ async fn run_coordinator(
                     pty_manager.release_handoff();
                     client_presence.release_host_suspending();
                     free_anchor = None;
+                    free_anchor_nfg = None;
                     free_since_ms = None;
                     eligible_at_ms = None;
                     deferred_until = None;
@@ -1123,6 +1126,7 @@ async fn run_coordinator(
                                 r.state = ConsentState::Cancelled;
                             }
                             free_anchor = None;
+                            free_anchor_nfg = None;
                             free_since_ms = None;
                             eligible_at_ms = None;
                             agent_free_phase = AgentFreePhase::Reconciling;
@@ -1192,6 +1196,7 @@ async fn run_coordinator(
                                 r.state = ConsentState::Cancelled;
                             }
                             free_anchor = None;
+                            free_anchor_nfg = None;
                             free_since_ms = None;
                             eligible_at_ms = None;
                         }
@@ -1352,6 +1357,7 @@ async fn run_coordinator(
                                 &mut deferred_until,
                                 &mut deferred_until_ms,
                                 &mut free_anchor,
+                                &mut free_anchor_nfg,
                                 &mut free_since_ms,
                                 &mut eligible_at_ms,
                                 &mut inventory_state,
@@ -1387,6 +1393,7 @@ async fn run_coordinator(
                             deferred_until = Some(Instant::now() + defer_dur);
                             deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
                             free_anchor = None;
+                            free_anchor_nfg = None;
                             free_since_ms = None;
                             eligible_at_ms = None;
                             let resp = ConsentDecisionResponse {
@@ -1501,6 +1508,7 @@ async fn run_coordinator(
                     r.state = ConsentState::Cancelled;
                 }
                 free_anchor = None;
+                free_anchor_nfg = None;
                 free_since_ms = None;
                 eligible_at_ms = None;
                 if agent_free_phase != AgentFreePhase::HandedOff {
@@ -1567,8 +1575,12 @@ async fn run_coordinator(
                     if Instant::now() >= deadline {
                         deferred_until = None;
                         deferred_until_ms = None;
-                        agent_free_phase = AgentFreePhase::Reconciling;
-                        agent_free_reason = Some(AgentFreeReasonCode::Reconciling);
+                        if free_anchor.is_some() {
+                            agent_free_phase = AgentFreePhase::Tracking;
+                        } else {
+                            agent_free_phase = AgentFreePhase::Reconciling;
+                            agent_free_reason = Some(AgentFreeReasonCode::Reconciling);
+                        }
                     } else {
                         agent_free_phase = AgentFreePhase::Deferred;
                     }
@@ -1580,6 +1592,7 @@ async fn run_coordinator(
                     last_seen_non_free_gen = current_nfg;
                     if free_anchor.is_some() {
                         free_anchor = None;
+                        free_anchor_nfg = None;
                         free_since_ms = None;
                         eligible_at_ms = None;
                         if let Some(r) = active_consent.as_mut() {
@@ -1607,6 +1620,7 @@ async fn run_coordinator(
                             deferred_until = Some(Instant::now() + defer_dur);
                             deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
                             free_anchor = None;
+                            free_anchor_nfg = None;
                             free_since_ms = None;
                             eligible_at_ms = None;
                         }
@@ -1626,6 +1640,7 @@ async fn run_coordinator(
                         deferred_until = Some(Instant::now() + defer_dur);
                         deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
                         free_anchor = None;
+                        free_anchor_nfg = None;
                         free_since_ms = None;
                         eligible_at_ms = None;
                     }
@@ -1643,6 +1658,7 @@ async fn run_coordinator(
                         inventory_state = AgentFreeInventoryState::Degraded;
                         inventory_revision = inventory_revision.wrapping_add(1);
                         free_anchor = None;
+                        free_anchor_nfg = None;
                         free_since_ms = None;
                         eligible_at_ms = None;
                         idle_count = None;
@@ -1660,7 +1676,12 @@ async fn run_coordinator(
                         let sample = process_discovery.commit_sample(prepared);
                         let matched_agents = sample.matched_agents;
                         let now_ms = IdleSuspendStatusV1::now_ms();
-                        let eval = agent_status.evaluate_managed_agents(&matched_agents, now_ms);
+                        let eval = agent_status.evaluate_managed_agents_with_details(
+                            &matched_agents,
+                            &sample.uncovered_retained_processes,
+                            now_ms,
+                            Some(Instant::now()),
+                        );
                         semantic_revision = agent_status.revision();
                         match eval {
                             AgentSemanticEvaluation::Free { idle_count: ic, blocked_count: bc, .. } => {
@@ -1668,25 +1689,26 @@ async fn run_coordinator(
                                 blocked_count = Some(bc as u32);
                                 working_count = Some(0);
                                 unknown_count = Some(0);
-                                if deferred_until.is_some() {
-                                    // Kept in Deferred
-                                } else {
                                     if free_anchor.is_none() {
                                         let now = Instant::now();
                                         free_anchor = Some(now);
+                                        free_anchor_nfg = Some(current_nfg);
                                         free_since_ms = Some(now_ms);
                                         let el_ms = now_ms + quiet_period_seconds * 1000;
                                         eligible_at_ms = Some(el_ms);
-                                        agent_free_phase = AgentFreePhase::Tracking;
-                                        agent_free_reason = if ic == 0 && bc == 0 {
-                                            Some(AgentFreeReasonCode::NoAgents)
-                                        } else {
-                                            Some(AgentFreeReasonCode::AllFree)
-                                        };
+                                        if deferred_until.is_none() {
+                                            agent_free_phase = AgentFreePhase::Tracking;
+                                            agent_free_reason = if ic == 0 && bc == 0 {
+                                                Some(AgentFreeReasonCode::NoAgents)
+                                            } else {
+                                                Some(AgentFreeReasonCode::AllFree)
+                                            };
+                                        }
                                     } else {
                                         let anchor = free_anchor.unwrap();
                                         let elapsed = Instant::now().duration_since(anchor);
-                                        if elapsed > Duration::from_secs(quiet_period_seconds) {
+                                        let defer_active = deferred_until.is_some();
+                                        if !defer_active && elapsed > Duration::from_secs(quiet_period_seconds) {
                                             let pres_now = client_presence.snapshot();
                                             if pres_now.connection_count > 0 {
                                                 if agent_free_phase == AgentFreePhase::Tracking {
@@ -1728,6 +1750,7 @@ async fn run_coordinator(
                                                         &mut deferred_until,
                                                         &mut deferred_until_ms,
                                                         &mut free_anchor,
+                                                        &mut free_anchor_nfg,
                                                         &mut free_since_ms,
                                                         &mut eligible_at_ms,
                                                         &mut inventory_state,
@@ -1759,11 +1782,11 @@ async fn run_coordinator(
                                             }
                                         }
                                     }
-                                }
                             }
                             AgentSemanticEvaluation::Working { working_count: wc, .. } => {
                                 working_count = Some(wc as u32);
                                 free_anchor = None;
+                                free_anchor_nfg = None;
                                 free_since_ms = None;
                                 eligible_at_ms = None;
                                 if let Some(r) = active_consent.as_mut() {
@@ -1777,6 +1800,7 @@ async fn run_coordinator(
                             AgentSemanticEvaluation::Unknown { reason, .. } => {
                                 unknown_count = Some(1);
                                 free_anchor = None;
+                                free_anchor_nfg = None;
                                 free_since_ms = None;
                                 eligible_at_ms = None;
                                 if let Some(r) = active_consent.as_mut() {
@@ -2562,6 +2586,7 @@ async fn attempt_agent_free_final_check(
     deferred_until: &mut Option<Instant>,
     deferred_until_ms: &mut Option<u64>,
     free_anchor: &mut Option<Instant>,
+    free_anchor_nfg: &mut Option<u64>,
     free_since_ms: &mut Option<u64>,
     eligible_at_ms: &mut Option<u64>,
     inventory_state: &mut AgentFreeInventoryState,
@@ -2601,7 +2626,9 @@ async fn attempt_agent_free_final_check(
         };
 
         let pres_snapshot = client_presence.snapshot();
-        if pres_snapshot.connection_count == 0 || !client_presence.is_connection_live(approving_conn_id) {
+        if pres_snapshot.connection_count == 0
+            || !client_presence.is_connection_live(approving_conn_id)
+        {
             if let Some(r) = active_consent.as_mut() {
                 r.state = ConsentState::Cancelled;
             }
@@ -2611,6 +2638,7 @@ async fn attempt_agent_free_final_check(
             *deferred_until = Some(Instant::now() + defer_dur);
             *deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
             *free_anchor = None;
+            *free_anchor_nfg = None;
             *free_since_ms = None;
             *eligible_at_ms = None;
             return;
@@ -2626,6 +2654,7 @@ async fn attempt_agent_free_final_check(
             *deferred_until = Some(Instant::now() + defer_dur);
             *deferred_until_ms = Some(IdleSuspendStatusV1::now_ms() + defer_dur.as_millis() as u64);
             *free_anchor = None;
+            *free_anchor_nfg = None;
             *free_since_ms = None;
             *eligible_at_ms = None;
             return;
@@ -2672,6 +2701,7 @@ async fn attempt_agent_free_final_check(
             *agent_free_phase = AgentFreePhase::Blocked;
             *agent_free_reason = Some(AgentFreeReasonCode::Unavailable);
             *free_anchor = None;
+            *free_anchor_nfg = None;
             *free_since_ms = None;
             *eligible_at_ms = None;
             if let Some(r) = active_consent.as_mut() {
@@ -2686,10 +2716,19 @@ async fn attempt_agent_free_final_check(
             let roots = pty_snapshot
                 .roots
                 .iter()
-                .filter_map(|r| r.qualification.process_identity().map(|pid| (r.terminal.clone(), pid)))
+                .filter_map(|r| {
+                    r.qualification
+                        .process_identity()
+                        .map(|pid| (r.terminal.clone(), pid))
+                })
                 .collect::<Vec<_>>();
             let now_ms = IdleSuspendStatusV1::now_ms();
-            let eval = agent_status.evaluate_managed_agents(&matched_agents, now_ms);
+            let eval = agent_status.evaluate_managed_agents_with_details(
+                &matched_agents,
+                &sample.uncovered_retained_processes,
+                now_ms,
+                Some(Instant::now()),
+            );
             *semantic_revision = agent_status.revision();
             match eval {
                 AgentSemanticEvaluation::Free {
@@ -2705,11 +2744,15 @@ async fn attempt_agent_free_final_check(
                     *unknown_count = Some(0);
 
                     if free_anchor.is_none()
+                        || free_anchor_nfg.is_none()
+                        || free_anchor_nfg.unwrap() != nfg
                         || Instant::now().duration_since(free_anchor.unwrap())
                             <= Duration::from_secs(quiet_period_seconds)
                     {
                         *agent_free_phase = AgentFreePhase::Blocked;
+                        *agent_free_reason = Some(AgentFreeReasonCode::SafetyInvalidation);
                         *free_anchor = None;
+                        *free_anchor_nfg = None;
                         *free_since_ms = None;
                         *eligible_at_ms = None;
                         if let Some(r) = active_consent.as_mut() {
@@ -2736,7 +2779,7 @@ async fn attempt_agent_free_final_check(
                         request_id: *next_request_id,
                         completed_at: Instant::now(),
                         semantic_revision: s_rev,
-                        non_free_generation: nfg,
+                        non_free_generation: free_anchor_nfg.unwrap(),
                         timing_revision: timing_rev,
                         fleet_generation: pty_snapshot.fleet.generation,
                         input_revision: pty_manager.input_revision(),
@@ -2773,11 +2816,16 @@ async fn attempt_agent_free_final_check(
                                         pty_manager.release_handoff();
                                         let req_id = format!("consent-{}", uuid::Uuid::new_v4());
                                         let req_rev = *next_consent_request_seq;
-                                        *next_consent_request_seq = next_consent_request_seq.wrapping_add(1);
+                                        *next_consent_request_seq =
+                                            next_consent_request_seq.wrapping_add(1);
                                         let req_at = Instant::now();
                                         let req_at_ms = IdleSuspendStatusV1::now_ms();
-                                        let exp_at = req_at + Duration::from_secs(UNANSWERED_CONSENT_TIMEOUT_SECONDS);
-                                        let exp_at_ms = req_at_ms + UNANSWERED_CONSENT_TIMEOUT_SECONDS * 1000;
+                                        let exp_at = req_at
+                                            + Duration::from_secs(
+                                                UNANSWERED_CONSENT_TIMEOUT_SECONDS,
+                                            );
+                                        let exp_at_ms =
+                                            req_at_ms + UNANSWERED_CONSENT_TIMEOUT_SECONDS * 1000;
                                         *active_consent = Some(ActiveConsentRequest {
                                             request_id: req_id,
                                             request_revision: req_rev,
@@ -2798,14 +2846,40 @@ async fn attempt_agent_free_final_check(
                                     Err(_) => {
                                         pty_manager.release_handoff();
                                         *agent_free_phase = AgentFreePhase::Blocked;
-                                        *free_anchor = None;
+                                        *free_anchor_nfg = None;
                                         *free_since_ms = None;
                                         *eligible_at_ms = None;
                                         presence_claimed = false;
                                     }
                                 }
                             } else {
-                                client_presence.set_host_suspending(true);
+                                let req = active_consent.as_ref().unwrap();
+                                let conn_id = req.approving_connection_id.as_deref().unwrap_or("");
+                                let act = req.approving_actor.as_ref().unwrap();
+                                match client_presence.try_claim_approved_client_fence(conn_id, act)
+                                {
+                                    Ok(_) => {}
+                                    Err(_) => {
+                                        pty_manager.release_handoff();
+                                        if let Some(r) = active_consent.as_mut() {
+                                            r.state = ConsentState::Cancelled;
+                                        }
+                                        *agent_free_phase = AgentFreePhase::Deferred;
+                                        *agent_free_reason =
+                                            Some(AgentFreeReasonCode::LastClientDisconnected);
+                                        let defer_dur = Duration::from_secs(quiet_period_seconds);
+                                        *deferred_until = Some(Instant::now() + defer_dur);
+                                        *deferred_until_ms = Some(
+                                            IdleSuspendStatusV1::now_ms()
+                                                + defer_dur.as_millis() as u64,
+                                        );
+                                        *free_anchor = None;
+                                        *free_anchor_nfg = None;
+                                        *free_since_ms = None;
+                                        *eligible_at_ms = None;
+                                        presence_claimed = false;
+                                    }
+                                }
                             }
 
                             if presence_claimed {
@@ -2847,9 +2921,7 @@ async fn attempt_agent_free_final_check(
                                     Some(&attempt_ctx.correlation_id),
                                     Some(attempt_ctx.mode),
                                     IdleSuspendEventDataV1::HelperRequestDispatched(
-                                        HelperRequestDispatchedDataV1 {
-                                            wake_after_seconds,
-                                        },
+                                        HelperRequestDispatchedDataV1 { wake_after_seconds },
                                     ),
                                 );
                                 *active_attempt = Some(attempt_ctx);
@@ -2858,7 +2930,24 @@ async fn attempt_agent_free_final_check(
                                     wake_after_seconds,
                                 };
                                 let exec = Arc::clone(executor);
+                                let presence = Arc::clone(client_presence);
+                                let maybe_approving_conn = if is_client_approved {
+                                    active_consent
+                                        .as_ref()
+                                        .and_then(|r| r.approving_connection_id.clone())
+                                } else {
+                                    None
+                                };
                                 *in_flight_suspend = Some(Box::pin(async move {
+                                    if let Some(conn_id) = &maybe_approving_conn {
+                                        if !presence.is_connection_live(conn_id) {
+                                            tracing::warn!("Approving socket lost before physical dispatch — cancelling suspend");
+                                            return SuspendOutcome::ExecutionFailed {
+                                                request_id: suspend_req.request_id,
+                                                error: "Approving client disconnected before physical dispatch".to_string(),
+                                            };
+                                        }
+                                    }
                                     exec.execute_suspend(suspend_req).await
                                 }));
                                 *state = CoordinatorState::HandedOff;
@@ -2871,6 +2960,7 @@ async fn attempt_agent_free_final_check(
                             *agent_free_reason = Some(AgentFreeReasonCode::Ambiguous);
                             *free_anchor = None;
                             *free_since_ms = None;
+                            *free_anchor_nfg = None;
                             *eligible_at_ms = None;
                             if let Some(r) = active_consent.as_mut() {
                                 r.state = ConsentState::Cancelled;
@@ -2886,15 +2976,13 @@ async fn attempt_agent_free_final_check(
                     *agent_free_reason = Some(AgentFreeReasonCode::Working);
                     *free_anchor = None;
                     *free_since_ms = None;
+                    *free_anchor_nfg = None;
                     *eligible_at_ms = None;
                     if let Some(r) = active_consent.as_mut() {
                         r.state = ConsentState::Cancelled;
                     }
                 }
-                AgentSemanticEvaluation::Unknown {
-                    reason,
-                    ..
-                } => {
+                AgentSemanticEvaluation::Unknown { reason, .. } => {
                     *unknown_count = Some(1);
                     *agent_free_phase = AgentFreePhase::Blocked;
                     *agent_free_reason = Some(match reason {
@@ -2908,6 +2996,7 @@ async fn attempt_agent_free_final_check(
                     });
                     *free_anchor = None;
                     *free_since_ms = None;
+                    *free_anchor_nfg = None;
                     *eligible_at_ms = None;
                     if let Some(r) = active_consent.as_mut() {
                         r.state = ConsentState::Cancelled;
@@ -3026,7 +3115,8 @@ fn publish_status_checked(
             ActivityMeasurementState::Initializing
         };
 
-        let lifecycle_busy = fleet_snapshot.creating_count > 0 || fleet_snapshot.restart_pending_count > 0;
+        let lifecycle_busy =
+            fleet_snapshot.creating_count > 0 || fleet_snapshot.restart_pending_count > 0;
 
         let reason_code = if reconciling {
             Some(ActivityObservationReason::Reconciling)
@@ -3049,16 +3139,34 @@ fn publish_status_checked(
         let measurement_warning = if measurement_state != ActivityMeasurementState::Available {
             let reason_code = match current_observation.and_then(|o| o.failure_reason) {
                 Some(r) => match r {
-                    ActivityUnavailableReason::ProcAccess => MeasurementWarningReasonCode::ProcAccess,
+                    ActivityUnavailableReason::ProcAccess => {
+                        MeasurementWarningReasonCode::ProcAccess
+                    }
                     ActivityUnavailableReason::ScanLimit => MeasurementWarningReasonCode::ScanLimit,
-                    ActivityUnavailableReason::ScanTimeout => MeasurementWarningReasonCode::ScanTimeout,
-                    ActivityUnavailableReason::SocketDiagnostics => MeasurementWarningReasonCode::SocketDiagnostics,
-                    ActivityUnavailableReason::UnsupportedTransport => MeasurementWarningReasonCode::UnsupportedTransport,
-                    ActivityUnavailableReason::NamespaceMismatch => MeasurementWarningReasonCode::NamespaceMismatch,
-                    ActivityUnavailableReason::StaleObservation => MeasurementWarningReasonCode::StaleObservation,
-                    ActivityUnavailableReason::IdentityUncertain => MeasurementWarningReasonCode::IdentityUncertain,
-                    ActivityUnavailableReason::CounterOverflow => MeasurementWarningReasonCode::CounterOverflow,
-                    ActivityUnavailableReason::Reconciling => MeasurementWarningReasonCode::Reconciling,
+                    ActivityUnavailableReason::ScanTimeout => {
+                        MeasurementWarningReasonCode::ScanTimeout
+                    }
+                    ActivityUnavailableReason::SocketDiagnostics => {
+                        MeasurementWarningReasonCode::SocketDiagnostics
+                    }
+                    ActivityUnavailableReason::UnsupportedTransport => {
+                        MeasurementWarningReasonCode::UnsupportedTransport
+                    }
+                    ActivityUnavailableReason::NamespaceMismatch => {
+                        MeasurementWarningReasonCode::NamespaceMismatch
+                    }
+                    ActivityUnavailableReason::StaleObservation => {
+                        MeasurementWarningReasonCode::StaleObservation
+                    }
+                    ActivityUnavailableReason::IdentityUncertain => {
+                        MeasurementWarningReasonCode::IdentityUncertain
+                    }
+                    ActivityUnavailableReason::CounterOverflow => {
+                        MeasurementWarningReasonCode::CounterOverflow
+                    }
+                    ActivityUnavailableReason::Reconciling => {
+                        MeasurementWarningReasonCode::Reconciling
+                    }
                 },
                 None => MeasurementWarningReasonCode::Reconciling,
             };
@@ -3111,39 +3219,40 @@ fn publish_status_checked(
     } else {
         None
     };
-    let (agent_free, client_presence, consent) = if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree {
-        let prev = tx.borrow();
-        (
-            prev.agent_free.clone().or_else(|| {
-                Some(IdleSuspendAgentFreeStatusV1 {
-                    phase: AgentFreePhase::Reconciling,
-                    scope: "managed-terminals".to_string(),
-                    inventory_state: AgentFreeInventoryState::Uninitialized,
-                    inventory_revision: 0,
-                    semantic_revision: 0,
-                    idle_count: None,
-                    blocked_count: None,
-                    working_count: None,
-                    unknown_count: None,
-                    free_since_ms: None,
-                    eligible_at_ms: None,
-                    deferred_until_ms: None,
-                    reason_code: Some(AgentFreeReasonCode::Reconciling),
-                })
-            }),
-            prev.client_presence.clone().or_else(|| {
-                Some(IdleSuspendClientPresenceStatusV1 {
-                    connection_count: 0,
-                    pending_upgrade_count: 0,
-                    revision: 0,
-                    available: false,
-                })
-            }),
-            prev.consent.clone(),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (agent_free, client_presence, consent) =
+        if startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree {
+            let prev = tx.borrow();
+            (
+                prev.agent_free.clone().or_else(|| {
+                    Some(IdleSuspendAgentFreeStatusV1 {
+                        phase: AgentFreePhase::Reconciling,
+                        scope: "managed-terminals".to_string(),
+                        inventory_state: AgentFreeInventoryState::Uninitialized,
+                        inventory_revision: 0,
+                        semantic_revision: 0,
+                        idle_count: None,
+                        blocked_count: None,
+                        working_count: None,
+                        unknown_count: None,
+                        free_since_ms: None,
+                        eligible_at_ms: None,
+                        deferred_until_ms: None,
+                        reason_code: Some(AgentFreeReasonCode::Reconciling),
+                    })
+                }),
+                prev.client_presence.clone().or_else(|| {
+                    Some(IdleSuspendClientPresenceStatusV1 {
+                        connection_count: 0,
+                        pending_upgrade_count: 0,
+                        revision: 0,
+                        available: false,
+                    })
+                }),
+                prev.consent.clone(),
+            )
+        } else {
+            (None, None, None)
+        };
 
     let new_status = IdleSuspendStatusV1 {
         version: 1,
@@ -3322,7 +3431,10 @@ async fn handle_timing(
         *status_revision = status_revision.wrapping_add(1);
 
         if is_agent_policy {
-            if startup_policy.enabled && baseline_established && Some(epoch_activity_revision) != last_attempted_epoch_activity_revision {
+            if startup_policy.enabled
+                && baseline_established
+                && Some(epoch_activity_revision) != last_attempted_epoch_activity_revision
+            {
                 let anchor = Instant::now();
                 *quiet_anchor = Some(anchor);
                 let deadline = anchor + Duration::from_secs(cmd.quiet_period_seconds);
@@ -3339,8 +3451,9 @@ async fn handle_timing(
             let snap = pty_manager.fleet_snapshot();
             if snap.is_quiescent() && epoch_ready && startup_policy.enabled {
                 *state = CoordinatorState::Armed;
-                *arm_deadline =
-                    Some(tokio::time::Instant::now() + Duration::from_secs(cmd.quiet_period_seconds));
+                *arm_deadline = Some(
+                    tokio::time::Instant::now() + Duration::from_secs(cmd.quiet_period_seconds),
+                );
                 *armed_generation = Some(snap.generation);
             }
         }
@@ -3858,7 +3971,12 @@ async fn handle_force_suspend(
                         activity_revision: None,
                     }),
                 );
-                return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None, None);
+                return (
+                    CoordinatorForceSuspendResult::AuditFailed(e.to_string()),
+                    None,
+                    None,
+                    None,
+                );
             }
         };
         if let Err(e) = audit.record_manual_event(&attempt_rec) {
@@ -3873,7 +3991,12 @@ async fn handle_force_suspend(
                     activity_revision: None,
                 }),
             );
-            return (CoordinatorForceSuspendResult::AuditFailed(e.to_string()), None, None, None);
+            return (
+                CoordinatorForceSuspendResult::AuditFailed(e.to_string()),
+                None,
+                None,
+                None,
+            );
         }
     }
 
@@ -3883,36 +4006,36 @@ async fn handle_force_suspend(
         pty_manager.try_claim_handoff(snapshot_before.generation)
     };
 
-     match claim_res {
-         Ok(claim) => {
-             *state = CoordinatorState::HandedOff;
-             *arm_deadline = None;
-             *armed_generation = None;
-             *status_revision = status_revision.wrapping_add(1);
+    match claim_res {
+        Ok(claim) => {
+            *state = CoordinatorState::HandedOff;
+            *arm_deadline = None;
+            *armed_generation = None;
+            *status_revision = status_revision.wrapping_add(1);
 
-             let snapshot_after = pty_manager.fleet_snapshot();
+            let snapshot_after = pty_manager.fleet_snapshot();
 
-             let manual_audit_rec = if let Some(audit) = server_audit {
-                 if let Ok(rec) = ManualAuditRecord::new(
-                     actor,
-                     request_id.clone(),
-                     cmd.wake_after_seconds,
-                     cmd.force,
-                     effective_force,
-                     claim.generation,
-                     snapshot_after.live_count,
-                     snapshot_after.creating_count,
-                     snapshot_after.restart_pending_count,
-                     ManualAuditResult::Accepted,
-                 ) {
-                     let _ = audit.record_manual_event(&rec);
-                     Some(rec)
-                 } else {
-                     None
-                 }
-             } else {
-                 None
-             };
+            let manual_audit_rec = if let Some(audit) = server_audit {
+                if let Ok(rec) = ManualAuditRecord::new(
+                    actor,
+                    request_id.clone(),
+                    cmd.wake_after_seconds,
+                    cmd.force,
+                    effective_force,
+                    claim.generation,
+                    snapshot_after.live_count,
+                    snapshot_after.creating_count,
+                    snapshot_after.restart_pending_count,
+                    ManualAuditResult::Accepted,
+                ) {
+                    let _ = audit.record_manual_event(&rec);
+                    Some(rec)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             emit_event(
                 event_writer,
@@ -3933,45 +4056,48 @@ async fn handle_force_suspend(
                 }),
             );
 
-             let req = SuspendWithRtcWakeRequest {
-                 request_id: request_id.clone(),
-                 wake_after_seconds: cmd.wake_after_seconds,
-             };
-             let exec = Arc::clone(executor);
-             let fut: BoxFuture<'static, SuspendOutcome> =
-                 Box::pin(async move { exec.execute_suspend(req).await });
+            let req = SuspendWithRtcWakeRequest {
+                request_id: request_id.clone(),
+                wake_after_seconds: cmd.wake_after_seconds,
+            };
+            let exec = Arc::clone(executor);
+            let fut: BoxFuture<'static, SuspendOutcome> =
+                Box::pin(async move { exec.execute_suspend(req).await });
 
-             (
-                 CoordinatorForceSuspendResult::Accepted {
-                     request_id,
-                     status_revision: *status_revision,
-                     fleet_snapshot: snapshot_after,
-                 },
-                 Some(fut),
-                 manual_audit_rec,
+            (
+                CoordinatorForceSuspendResult::Accepted {
+                    request_id,
+                    status_revision: *status_revision,
+                    fleet_snapshot: snapshot_after,
+                },
+                Some(fut),
+                manual_audit_rec,
                 Some(ctx),
-             )
-         }
-         Err(err) => {
-             let snapshot_err = pty_manager.fleet_snapshot();
-             match err {
-                 crate::pty::fleet_state::HandoffClaimError::GenerationMismatch { expected, actual } => {
-                     if let Some(audit) = server_audit {
-                         if let Ok(rec) = ManualAuditRecord::new(
-                             actor.clone(),
+            )
+        }
+        Err(err) => {
+            let snapshot_err = pty_manager.fleet_snapshot();
+            match err {
+                crate::pty::fleet_state::HandoffClaimError::GenerationMismatch {
+                    expected,
+                    actual,
+                } => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
                             request_id.clone(),
-                             cmd.wake_after_seconds,
-                             cmd.force,
-                             effective_force,
-                             actual,
-                             snapshot_err.live_count,
-                             snapshot_err.creating_count,
-                             snapshot_err.restart_pending_count,
-                             ManualAuditResult::RejectedConflict,
-                         ) {
-                             let _ = audit.record_manual_event(&rec);
-                         }
-                     }
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            actual,
+                            snapshot_err.live_count,
+                            snapshot_err.creating_count,
+                            snapshot_err.restart_pending_count,
+                            ManualAuditResult::RejectedConflict,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
                     emit_event(
                         event_writer,
                         ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
@@ -3994,34 +4120,34 @@ async fn handle_force_suspend(
                             activity_revision: None,
                         }),
                     );
-                     (
-                         CoordinatorForceSuspendResult::GenerationConflict {
-                             expected,
-                             actual,
-                             fleet_snapshot: snapshot_err,
-                         },
-                         None,
-                         None,
+                    (
+                        CoordinatorForceSuspendResult::GenerationConflict {
+                            expected,
+                            actual,
+                            fleet_snapshot: snapshot_err,
+                        },
                         None,
-                     )
-                 }
-                 crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
-                     if let Some(audit) = server_audit {
-                         if let Ok(rec) = ManualAuditRecord::new(
-                             actor.clone(),
+                        None,
+                        None,
+                    )
+                }
+                crate::pty::fleet_state::HandoffClaimError::NotQuiescent => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
                             request_id.clone(),
-                             cmd.wake_after_seconds,
-                             cmd.force,
-                             effective_force,
-                             snapshot_err.generation,
-                             snapshot_err.live_count,
-                             snapshot_err.creating_count,
-                             snapshot_err.restart_pending_count,
-                             ManualAuditResult::RejectedConfirmationRequired,
-                         ) {
-                             let _ = audit.record_manual_event(&rec);
-                         }
-                     }
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            snapshot_err.generation,
+                            snapshot_err.live_count,
+                            snapshot_err.creating_count,
+                            snapshot_err.restart_pending_count,
+                            ManualAuditResult::RejectedConfirmationRequired,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
                     emit_event(
                         event_writer,
                         ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
@@ -4044,32 +4170,32 @@ async fn handle_force_suspend(
                             activity_revision: None,
                         }),
                     );
-                     (
-                         CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
-                             fleet_snapshot: snapshot_err,
-                         },
-                         None,
-                         None,
+                    (
+                        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation {
+                            fleet_snapshot: snapshot_err,
+                        },
                         None,
-                     )
-                 }
-                 crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
-                     if let Some(audit) = server_audit {
-                         if let Ok(rec) = ManualAuditRecord::new(
-                             actor.clone(),
+                        None,
+                        None,
+                    )
+                }
+                crate::pty::fleet_state::HandoffClaimError::HandoffAlreadyActive => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
                             request_id.clone(),
-                             cmd.wake_after_seconds,
-                             cmd.force,
-                             effective_force,
-                             snapshot_err.generation,
-                             snapshot_err.live_count,
-                             snapshot_err.creating_count,
-                             snapshot_err.restart_pending_count,
-                             ManualAuditResult::RejectedHandoffInProgress,
-                         ) {
-                             let _ = audit.record_manual_event(&rec);
-                         }
-                     }
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            snapshot_err.generation,
+                            snapshot_err.live_count,
+                            snapshot_err.creating_count,
+                            snapshot_err.restart_pending_count,
+                            ManualAuditResult::RejectedHandoffInProgress,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
                     emit_event(
                         event_writer,
                         ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
@@ -4092,30 +4218,31 @@ async fn handle_force_suspend(
                             activity_revision: None,
                         }),
                     );
-                     (
-                         CoordinatorForceSuspendResult::HandoffInProgress,
-                         None,
-                         None,
+                    (
+                        CoordinatorForceSuspendResult::HandoffInProgress,
                         None,
-                     )
-                 }
-                 crate::pty::fleet_state::HandoffClaimError::Closing | crate::pty::fleet_state::HandoffClaimError::Disposing => {
-                     if let Some(audit) = server_audit {
-                         if let Ok(rec) = ManualAuditRecord::new(
-                             actor.clone(),
+                        None,
+                        None,
+                    )
+                }
+                crate::pty::fleet_state::HandoffClaimError::Closing
+                | crate::pty::fleet_state::HandoffClaimError::Disposing => {
+                    if let Some(audit) = server_audit {
+                        if let Ok(rec) = ManualAuditRecord::new(
+                            actor.clone(),
                             request_id.clone(),
-                             cmd.wake_after_seconds,
-                             cmd.force,
-                             effective_force,
-                             snapshot_err.generation,
-                             snapshot_err.live_count,
-                             snapshot_err.creating_count,
-                             snapshot_err.restart_pending_count,
-                             ManualAuditResult::RejectedShuttingDown,
-                         ) {
-                             let _ = audit.record_manual_event(&rec);
-                         }
-                     }
+                            cmd.wake_after_seconds,
+                            cmd.force,
+                            effective_force,
+                            snapshot_err.generation,
+                            snapshot_err.live_count,
+                            snapshot_err.creating_count,
+                            snapshot_err.restart_pending_count,
+                            ManualAuditResult::RejectedShuttingDown,
+                        ) {
+                            let _ = audit.record_manual_event(&rec);
+                        }
+                    }
                     emit_event(
                         event_writer,
                         ServerIdleSuspendEventTypeV1::HandoffClaimRejected,
@@ -4138,8 +4265,13 @@ async fn handle_force_suspend(
                             activity_revision: None,
                         }),
                     );
-                    (CoordinatorForceSuspendResult::ShuttingDown, None, None, None)
-                 }
+                    (
+                        CoordinatorForceSuspendResult::ShuttingDown,
+                        None,
+                        None,
+                        None,
+                    )
+                }
                 _ => {
                     emit_event(
                         event_writer,
@@ -4170,7 +4302,7 @@ async fn handle_force_suspend(
                         None,
                     )
                 }
-             }
-         }
-     }
- }
+            }
+        }
+    }
+}

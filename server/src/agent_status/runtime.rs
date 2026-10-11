@@ -784,6 +784,22 @@ impl AgentStatusRuntime {
             .read()
             .evaluate_managed_agents(matched_agents, now_ms)
     }
+    /// Authoritative semantic evaluation with uncovered retained processes and monotonic time.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents_with_details(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        uncovered_retained: &[crate::idle_suspend::activity::RetainedManagedProcess],
+        now_ms: u64,
+        now_instant: Option<std::time::Instant>,
+    ) -> crate::agent_status::types::AgentSemanticEvaluation {
+        self.0.registry.read().evaluate_managed_agents_with_details(
+            matched_agents,
+            uncovered_retained,
+            now_ms,
+            now_instant,
+        )
+    }
 
     /// Subscribe to semantic agent status broadcast events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentStatusBroadcastEvent> {

@@ -22,6 +22,7 @@ export interface ApplicationServicesConfig {
   mongoImage?: string;
   appImage?: string;
   port?: number;
+  idleSuspendPolicy?: "agent-free";
 }
 
 export interface ApplicationServices {
@@ -109,7 +110,9 @@ export async function startApplicationServices(
   process.on("SIGTERM", signalHandler);
 
   try {
-    seedTree = await createSeedTree();
+    seedTree = await createSeedTree({
+      idleSuspendPolicy: config.idleSuspendPolicy,
+    });
 
     await runEngine(["network", "create", networkId]);
     ownedNetwork = networkId;

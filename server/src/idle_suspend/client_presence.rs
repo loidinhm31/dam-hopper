@@ -159,7 +159,6 @@ impl std::fmt::Debug for ClientPresenceRegistry {
     }
 }
 
-
 impl ClientPresenceRegistry {
     /// Creates a new presence registry with the default capacity.
     pub fn new() -> Arc<Self> {
@@ -198,6 +197,17 @@ impl ClientPresenceRegistry {
             revision: inner.membership_revision,
             available,
         }
+    }
+    fn publish_inner(&self, inner: &RegistryInner) {
+        let snapshot = Self::snapshot_inner(inner);
+        self.status_tx.send_if_modified(|current| {
+            if snapshot.revision >= current.revision {
+                *current = snapshot;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     fn prune_expired_pending_inner(inner: &mut RegistryInner, now: Instant) -> bool {
@@ -250,9 +260,8 @@ impl ClientPresenceRegistry {
         );
         inner.membership_revision += 1;
 
-        let snapshot = Self::snapshot_inner(&inner);
+        self.publish_inner(&inner);
         drop(inner);
-        self.status_tx.send_replace(snapshot);
 
         Ok(PendingUpgradeGuard {
             registry: Arc::clone(self),
@@ -275,9 +284,8 @@ impl ClientPresenceRegistry {
         if inner.host_suspending {
             if inner.pending.remove(&reservation_id).is_some() {
                 inner.membership_revision += 1;
-                let snapshot = Self::snapshot_inner(&inner);
+                self.publish_inner(&inner);
                 drop(inner);
-                self.status_tx.send_replace(snapshot);
             }
             return Err(PresenceAdmissionError::HostSuspending);
         }
@@ -289,9 +297,8 @@ impl ClientPresenceRegistry {
 
         if inner.live.contains_key(&connection_id) {
             inner.membership_revision += 1;
-            let snapshot = Self::snapshot_inner(&inner);
+            self.publish_inner(&inner);
             drop(inner);
-            self.status_tx.send_replace(snapshot);
             return Err(PresenceAdmissionError::DuplicateConnection { connection_id });
         }
 
@@ -313,9 +320,8 @@ impl ClientPresenceRegistry {
         );
         inner.membership_revision += 1;
 
-        let snapshot = Self::snapshot_inner(&inner);
+        self.publish_inner(&inner);
         drop(inner);
-        self.status_tx.send_replace(snapshot);
 
         Ok(ClientPresenceGuard {
             registry: Arc::clone(self),
@@ -329,9 +335,8 @@ impl ClientPresenceRegistry {
         let mut inner = self.inner.lock();
         if inner.pending.remove(&reservation_id).is_some() {
             inner.membership_revision += 1;
-            let snapshot = Self::snapshot_inner(&inner);
+            self.publish_inner(&inner);
             drop(inner);
-            self.status_tx.send_replace(snapshot);
         }
     }
 
@@ -350,9 +355,8 @@ impl ClientPresenceRegistry {
             if !record.closing {
                 record.closing = true;
                 inner.membership_revision += 1;
-                let snapshot = Self::snapshot_inner(&inner);
+                self.publish_inner(&inner);
                 drop(inner);
-                self.status_tx.send_replace(snapshot);
             }
         }
     }
@@ -362,9 +366,8 @@ impl ClientPresenceRegistry {
         let mut inner = self.inner.lock();
         if inner.live.remove(connection_id).is_some() {
             inner.membership_revision += 1;
-            let snapshot = Self::snapshot_inner(&inner);
+            self.publish_inner(&inner);
             drop(inner);
-            self.status_tx.send_replace(snapshot);
         }
     }
 
@@ -386,12 +389,13 @@ impl ClientPresenceRegistry {
         current_actor: &AuthenticatedActor,
     ) -> Result<(), CapabilityVerificationError> {
         let inner = self.inner.lock();
-        let record = inner
-            .live
-            .get(connection_id)
-            .ok_or_else(|| CapabilityVerificationError::NotFound {
-                connection_id: connection_id.to_string(),
-            })?;
+        let record =
+            inner
+                .live
+                .get(connection_id)
+                .ok_or_else(|| CapabilityVerificationError::NotFound {
+                    connection_id: connection_id.to_string(),
+                })?;
 
         if record.closing {
             return Err(CapabilityVerificationError::Closing {
@@ -449,7 +453,8 @@ impl ClientPresenceRegistry {
             .live
             .iter()
             .filter_map(|(id, record)| {
-                if !record.closing && now.saturating_duration_since(record.last_liveness) > max_age {
+                if !record.closing && now.saturating_duration_since(record.last_liveness) > max_age
+                {
                     Some(id.clone())
                 } else {
                     None
@@ -464,9 +469,8 @@ impl ClientPresenceRegistry {
         let before = inner.pending.len();
         if Self::prune_expired_pending_inner(&mut inner, Instant::now()) {
             let removed = before.saturating_sub(inner.pending.len());
-            let snapshot = Self::snapshot_inner(&inner);
+            self.publish_inner(&inner);
             drop(inner);
-            self.status_tx.send_replace(snapshot);
             removed
         } else {
             0
@@ -489,9 +493,8 @@ impl ClientPresenceRegistry {
         if inner.host_suspending != suspending {
             inner.host_suspending = suspending;
             inner.membership_revision += 1;
-            let snapshot = Self::snapshot_inner(&inner);
+            self.publish_inner(&inner);
             drop(inner);
-            self.status_tx.send_replace(snapshot);
         }
     }
 
@@ -540,12 +543,57 @@ impl ClientPresenceRegistry {
         inner.host_suspending = true;
         inner.membership_revision += 1;
 
-        let snapshot = Self::snapshot_inner(&inner);
         let new_revision = inner.membership_revision;
+        self.publish_inner(&inner);
         drop(inner);
-        self.status_tx.send_replace(snapshot);
 
         Ok(new_revision)
+    }
+    /// Atomically verifies that an approving connection is live, matches the expected actor,
+    /// and sets the host-suspending admission fence under the presence registry lock.
+    pub fn try_claim_approved_client_fence(
+        &self,
+        connection_id: &str,
+        expected_actor: &AuthenticatedActor,
+    ) -> Result<u64, PresenceClaimError> {
+        let mut inner = self.inner.lock();
+        let now = Instant::now();
+        Self::prune_expired_pending_inner(&mut inner, now);
+
+        if inner.host_suspending {
+            return Err(PresenceClaimError::AlreadySuspending);
+        }
+
+        let Some(record) = inner.live.get(connection_id) else {
+            return Err(PresenceClaimError::Unavailable);
+        };
+
+        if record.closing {
+            return Err(PresenceClaimError::Unavailable);
+        }
+
+        if record.subject != expected_actor.subject {
+            return Err(PresenceClaimError::Unavailable);
+        }
+
+        if record.session_id != expected_actor.session_id
+            || record.auth_version != expected_actor.auth_version
+            || record.credential_version != expected_actor.credential_version
+        {
+            return Err(PresenceClaimError::Unavailable);
+        }
+
+        if let Some(deadline) = record.effective_deadline {
+            if chrono::Utc::now() >= deadline {
+                return Err(PresenceClaimError::Unavailable);
+            }
+        }
+
+        inner.host_suspending = true;
+        inner.membership_revision += 1;
+        self.publish_inner(&inner);
+
+        Ok(inner.membership_revision)
     }
 
     /// Releases the host-suspending admission fence after a failed or cancelled attempt.
@@ -574,11 +622,8 @@ impl PendingUpgradeGuard {
         capability_secret: &str,
     ) -> Result<ClientPresenceGuard, PresenceAdmissionError> {
         self.disarmed = true;
-        self.registry.promote_pending_to_live(
-            self.reservation_id,
-            connection_id,
-            capability_secret,
-        )
+        self.registry
+            .promote_pending_to_live(self.reservation_id, connection_id, capability_secret)
     }
 
     /// Explicitly releases the reservation without promoting.
@@ -624,7 +669,6 @@ impl ClientPresenceGuard {
         }
     }
 
-
     /// Marks this connection as closing to immediately revoke capability.
     pub fn mark_closing(&self) {
         self.registry.mark_closing(&self.connection_id);
@@ -660,7 +704,9 @@ mod tests {
         assert!(initial.available);
 
         // Reserve pending
-        let pending_guard = registry.reserve_pending_upgrade(actor).expect("reserve pending");
+        let pending_guard = registry
+            .reserve_pending_upgrade(actor)
+            .expect("reserve pending");
         let reserved_snap = registry.snapshot();
         assert_eq!(reserved_snap.connection_count, 0);
         assert_eq!(reserved_snap.pending_upgrade_count, 1);
@@ -718,10 +764,7 @@ mod tests {
         let p3_err = registry.reserve_pending_upgrade(actor.clone()).unwrap_err();
         assert_eq!(
             p3_err,
-            PresenceAdmissionError::CapacityExceeded {
-                current: 2,
-                max: 2,
-            }
+            PresenceAdmissionError::CapacityExceeded { current: 2, max: 2 }
         );
 
         // Release p2 -> back to available
@@ -886,9 +929,6 @@ mod tests {
         let _l = p.promote("live-1".into(), "sec").unwrap();
         let current_rev = registry.snapshot().revision;
         let err = registry.try_claim_no_client_fence(current_rev).unwrap_err();
-        assert_eq!(
-            err,
-            PresenceClaimError::LiveConnectionsPresent { count: 1 }
-        );
+        assert_eq!(err, PresenceClaimError::LiveConnectionsPresent { count: 1 });
     }
 }

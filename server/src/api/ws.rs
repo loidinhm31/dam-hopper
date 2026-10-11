@@ -56,6 +56,11 @@ const FS_WS_READ_MAX: u64 = 5 * 1024 * 1024;
 /// Max write size cap (100 MB). Enforced at write_begin.
 const FS_WRITE_MAX: u64 = 100 * 1024 * 1024;
 
+/// Maximum assembled WebSocket message size (128 MB).
+pub const MAX_WS_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
+/// Maximum individual WebSocket frame size (128 MB).
+pub const MAX_WS_FRAME_BYTES: usize = 128 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // In-flight write state (per connection)
 // ---------------------------------------------------------------------------
@@ -247,6 +252,10 @@ pub async fn ws_handler(
         }
     };
 
+    let upgrade = upgrade
+        .max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_FRAME_BYTES);
+
     upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, pending_guard))
 }
 
@@ -408,7 +417,7 @@ async fn handle_socket(
                     match msg {
                         Message::Ping(payload) => {
                             reader_presence_guard.record_pong();
-                            let _ = reader_alert_tx.send(WireMsg::Pong(payload.to_vec())).await;
+                            let _ = reader_alert_tx.try_send(WireMsg::Pong(payload.to_vec()));
                         }
                         Message::Pong(_) => {
                             reader_presence_guard.record_pong();
@@ -420,10 +429,20 @@ async fn handle_socket(
                         }
                         Message::Text(_) | Message::Binary(_) => {
                             reader_presence_guard.record_pong();
-                            if app_msg_tx.send(msg).await.is_err() {
-                                reader_presence_guard.mark_closing();
-                                let _ = reader_cancel_tx.send(true);
-                                break;
+                            match app_msg_tx.try_send(msg) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    warn!("WebSocket application queue saturated — closing connection due to backpressure");
+                                    reader_presence_guard.mark_closing();
+                                    let _ = reader_alert_tx.try_send(WireMsg::CloseOverflow);
+                                    let _ = reader_cancel_tx.send(true);
+                                    break;
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    reader_presence_guard.mark_closing();
+                                    let _ = reader_cancel_tx.send(true);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -472,10 +491,8 @@ async fn handle_socket(
     });
 
     // Send host:uiConnection receipt directly to this socket's private channel.
-    let ui_connection_frame = crate::idle_suspend::UiConnectionFrame::new(
-        connection_id,
-        capability_secret,
-    );
+    let ui_connection_frame =
+        crate::idle_suspend::UiConnectionFrame::new(connection_id, capability_secret);
     if let Ok(json) = serde_json::to_string(&ui_connection_frame) {
         let _ = alert_tx.send(WireMsg::Text(json)).await;
     }
@@ -2079,7 +2096,9 @@ async fn handle_socket(
     {
         writer.abort();
     }
-    state.client_presence.retire_live(presence_guard.connection_id());
+    state
+        .client_presence
+        .retire_live(presence_guard.connection_id());
 }
 
 // ---------------------------------------------------------------------------

@@ -62,6 +62,7 @@ pub struct TerminalAgentReducer {
     pub reporter_lease_active: bool,
     pub last_report_time_ms: u64,
     pub observed_at_ms: Option<u64>,
+    pub last_report_instant: Option<std::time::Instant>,
 
     // Semantic state
     pub state: AgentState,
@@ -122,6 +123,7 @@ impl TerminalAgentReducer {
             reporter_lease_active: true,
             last_report_time_ms: now_ms,
             observed_at_ms: None,
+            last_report_instant: Some(std::time::Instant::now()),
             state: AgentState::Unknown,
             agent_session_id: hello.agent_session_id.clone(),
             current_turn_id: None,
@@ -169,6 +171,7 @@ impl TerminalAgentReducer {
             reporter_lease_active: false,
             last_report_time_ms: now_ms,
             observed_at_ms: Some(now_ms),
+            last_report_instant: Some(std::time::Instant::now()),
             state: AgentState::Unknown,
             agent_session_id: envelope.agent_session_id.clone(),
             current_turn_id: None,
@@ -380,6 +383,7 @@ impl TerminalAgentReducer {
             self.state = AgentState::Unknown;
             self.last_report_time_ms = now_ms;
             self.observed_at_ms = Some(now_ms);
+            self.last_report_instant = Some(std::time::Instant::now());
             self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
             self.last_published_freshness_ms = now_ms;
             return Ok(ReducerOutput {
@@ -772,6 +776,7 @@ impl TerminalAgentReducer {
         self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
         self.last_report_time_ms = now_ms;
         self.observed_at_ms = self.native_root.map(|_| now_ms);
+        self.last_report_instant = Some(std::time::Instant::now());
 
         if attention.is_some() {
             self.latest_attention = attention.clone();
@@ -901,6 +906,7 @@ impl TerminalAgentReducer {
         self.reporter_lease_active = true;
         self.last_report_time_ms = now_ms;
         self.observed_at_ms = None;
+        self.last_report_instant = Some(std::time::Instant::now());
         self.agent_session_id = hello.agent_session_id.clone();
         self.state = AgentState::Unknown;
         self.current_turn_id = None;
@@ -982,6 +988,7 @@ impl TerminalAgentReducer {
         self.last_report = Some(report.clone());
         self.last_report_time_ms = now_ms;
 
+        self.last_report_instant = Some(std::time::Instant::now());
         let old_state = self.state;
         let old_reason = self.blocked_reason;
         let old_turn_id = self.current_turn_id.clone();
@@ -1232,7 +1239,16 @@ impl TerminalAgentReducer {
         let has_evidence = self.reporter_lease_active
             || self.observed_at_ms.is_some()
             || self.current_turn_id.is_some();
-        if !has_evidence || now_ms.saturating_sub(self.last_report_time_ms) < lease_ms {
+        let elapsed_inst = self.last_report_instant.map(|rep| {
+            std::time::Instant::now()
+                .saturating_duration_since(rep)
+                .as_millis() as u64
+        });
+        let elapsed_ms = match elapsed_inst {
+            Some(inst_ms) => inst_ms.max(now_ms.saturating_sub(self.last_report_time_ms)),
+            None => now_ms.saturating_sub(self.last_report_time_ms),
+        };
+        if !has_evidence || elapsed_ms < lease_ms {
             return None;
         }
         if self.agent_kind == AgentKind::Omp {
@@ -1457,6 +1473,7 @@ impl AgentStatusRegistry {
         if let Some(existing) = self.terminals.get_mut(&key) {
             let changed = existing.reconnect(reporter_epoch, hello, now_ms)?;
             existing.verified_process = verified_process;
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             let row = existing.to_row();
             if changed {
                 self.advance_revision()?;
@@ -1708,6 +1725,30 @@ impl AgentStatusRegistry {
         matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
         now_ms: u64,
     ) -> AgentSemanticEvaluation {
+        self.evaluate_managed_agents_with_details(matched_agents, &[], now_ms, None)
+    }
+
+    /// Authoritative semantic evaluation with uncovered retained processes and monotonic time.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents_with_details(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        uncovered_retained: &[crate::idle_suspend::activity::RetainedManagedProcess],
+        now_ms: u64,
+        now_instant: Option<std::time::Instant>,
+    ) -> AgentSemanticEvaluation {
+        if let Some(uncovered) = uncovered_retained.first() {
+            return AgentSemanticEvaluation::Unknown {
+                reason: AgentSemanticBlockReason::SubagentUncovered {
+                    pid: uncovered.identity.pid,
+                    start_ticks: uncovered.identity.start_ticks,
+                    parent_pid: 0,
+                    parent_start_ticks: 0,
+                },
+                non_free_generation: self.non_free_generation,
+            };
+        }
+
         if matched_agents.is_empty() {
             return AgentSemanticEvaluation::Free {
                 idle_count: 0,
@@ -1717,7 +1758,6 @@ impl AgentStatusRegistry {
                 semantic_revision: self.revision,
             };
         }
-
         let mut idle_count = 0;
         let mut blocked_count = 0;
         let mut working_count = 0;
@@ -1725,18 +1765,29 @@ impl AgentStatusRegistry {
         let mut min_lease_remaining_ms = u64::MAX;
 
         // Group matched agents by terminal to detect multiple agents sharing one terminal
-        let mut procs_by_terminal: std::collections::HashMap<(String, u64), Vec<&crate::idle_suspend::activity::MatchedManagedAgent>> =
-            std::collections::HashMap::new();
+        let mut procs_by_terminal: std::collections::HashMap<
+            (String, u64),
+            Vec<&crate::idle_suspend::activity::MatchedManagedAgent>,
+        > = std::collections::HashMap::new();
         for agent in matched_agents {
             procs_by_terminal
-                .entry((agent.terminal.session_id.to_string(), agent.terminal.incarnation))
+                .entry((
+                    agent.terminal.session_id.to_string(),
+                    agent.terminal.incarnation,
+                ))
                 .or_default()
                 .push(agent);
         }
 
         for agent in matched_agents {
-            let key = (agent.terminal.session_id.to_string(), agent.terminal.incarnation);
-            let siblings = procs_by_terminal.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let key = (
+                agent.terminal.session_id.to_string(),
+                agent.terminal.incarnation,
+            );
+            let siblings = procs_by_terminal
+                .get(&key)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
             let reducer = match self.terminals.get(&key) {
                 Some(r) => r,
@@ -1815,10 +1866,37 @@ impl AgentStatusRegistry {
                     };
                 }
             }
+            // Check executable identity matches agent kind
+            let expected_exec = match reducer.agent_kind {
+                AgentKind::Omp => "omp",
+                AgentKind::Codex => "codex",
+                AgentKind::Claude => "claude",
+            };
+            if let Some(actual_exec) = &agent.safe_executable_identity {
+                if !actual_exec.eq_ignore_ascii_case(expected_exec) {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::AmbiguousOwner {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            }
 
-            // Check lease expiration
+            // Check lease expiration with monotonic time defense
             let lease_duration = DEFAULT_LEASE_MS;
-            let elapsed_ms = now_ms.saturating_sub(reducer.last_report_time_ms);
+            let elapsed_inst = now_instant.and_then(|inst| {
+                reducer
+                    .last_report_instant
+                    .map(|rep| inst.saturating_duration_since(rep).as_millis() as u64)
+            });
+            let elapsed_ms = match elapsed_inst {
+                Some(inst_ms) => inst_ms.max(now_ms.saturating_sub(reducer.last_report_time_ms)),
+                None => now_ms.saturating_sub(reducer.last_report_time_ms),
+            };
             if elapsed_ms >= lease_duration {
                 let reason = if reducer.agent_kind != AgentKind::Omp {
                     AgentSemanticBlockReason::UnrefreshedNativeProvider {

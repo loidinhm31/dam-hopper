@@ -43,7 +43,12 @@ export function HostSleepConsentDialog({
       clearTimeout(initial);
       clearInterval(timer);
     };
-  }, [item.isSettled, item.consent.requestId, item.consent.expiresAtMs, cognitoActive]);
+  }, [
+    item.isSettled,
+    item.consent.requestId,
+    item.consent.expiresAtMs,
+    cognitoActive,
+  ]);
 
   if (cognitoActive) return null;
 
@@ -60,21 +65,24 @@ export function HostSleepConsentDialog({
       : "Indefinite (manual wake)";
 
   const settledSummary =
-    item.effectiveState === "approved" || item.effectiveDecision === "approve"
-      ? isHandedOff
-        ? "Decision settled: Approved — Host suspend handoff in progress (cannot be cancelled)."
-        : "Decision settled: Approved — Waiting for server / final safety checks."
-      : item.effectiveState === "denied" || item.effectiveDecision === "deny"
-        ? "Decision settled: Denied — Automatic sleep deferred for 3 hours."
-        : item.effectiveState === "expired"
-          ? "Request expired unanswered — Automatic sleep deferred for 3 hours."
-          : "Request cancelled — Automatic sleep check reset.";
-
+    item.effectiveState === "cancelled"
+      ? "Request cancelled — Automatic sleep check reset."
+      : item.effectiveState === "expired"
+        ? "Request expired unanswered — Automatic sleep deferred for 3 hours."
+        : item.effectiveState === "denied" || item.effectiveDecision === "deny"
+          ? "Decision settled: Denied — Automatic sleep deferred for 3 hours."
+          : isHandedOff
+            ? "Decision settled: Approved — Host suspend handoff in progress (cannot be cancelled)."
+            : "Decision settled: Approved — Waiting for server / final safety checks.";
   return (
     <Dialog
       open={!cognitoActive}
       onOpenChange={(isOpen) => {
-        if (!isOpen && !item.isSubmitting && !useCognitoModeStore.getState().active) {
+        if (
+          !isOpen &&
+          !item.isSubmitting &&
+          !useCognitoModeStore.getState().active
+        ) {
           void onDismiss(item.actionTarget);
         }
       }}
@@ -123,20 +131,20 @@ export function HostSleepConsentDialog({
 
         <div className="space-y-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/50 p-2.5 text-[11px]">
           <p className="text-[var(--color-text)]">
-            Recognized agents in <strong>DamHopper terminals only</strong> have been
-            free (<strong>Idle + Blocked</strong>) for more than{" "}
+            Recognized agents in <strong>DamHopper terminals only</strong> have
+            been free (<strong>Idle + Blocked</strong>) for more than{" "}
             <strong>3 hours (10,800s)</strong>.
           </p>
           <p className="text-[10px] text-[var(--color-text-muted)]">
-            <strong>Scope notice:</strong> Tracks DamHopper terminals only; external
-            work does not block sleep (SSH, tmux, or OS processes outside managed
-            terminals are excluded). <strong>Blocked</strong> means waiting for input
-            or approval, not task completion.
+            <strong>Scope notice:</strong> Tracks DamHopper terminals only;
+            external work does not block sleep (SSH, tmux, or OS processes
+            outside managed terminals are excluded). <strong>Blocked</strong>{" "}
+            means waiting for input or approval, not task completion.
           </p>
           <p className="text-[10px] text-[var(--color-warning)]">
-            <strong>Host-wide effect:</strong> First valid decision accepted by the
-            server wins. Accepting sleep immediately starts final safety checks for
-            the entire host and cannot be undone by another client.
+            <strong>Host-wide effect:</strong> First valid decision accepted by
+            the server wins. Accepting sleep immediately starts final safety
+            checks for the entire host and cannot be undone by another client.
           </p>
         </div>
 
@@ -144,13 +152,15 @@ export function HostSleepConsentDialog({
           <div>
             Idle / Blocked:{" "}
             <span className="font-mono text-[var(--color-text)]">
-              {agentFree.idleCount ?? "Unknown"} / {agentFree.blockedCount ?? "Unknown"}
+              {agentFree.idleCount ?? "Unknown"} /{" "}
+              {agentFree.blockedCount ?? "Unknown"}
             </span>
           </div>
           <div>
             Working / Unknown:{" "}
             <span className="font-mono text-[var(--color-text)]">
-              {agentFree.workingCount ?? "Unknown"} / {agentFree.unknownCount ?? "Unknown"}
+              {agentFree.workingCount ?? "Unknown"} /{" "}
+              {agentFree.unknownCount ?? "Unknown"}
             </span>
           </div>
           <div>
@@ -164,7 +174,9 @@ export function HostSleepConsentDialog({
           </div>
           <div>
             Scheduled wake:{" "}
-            <span className="font-mono text-[var(--color-text)]">{wakeLabel}</span>
+            <span className="font-mono text-[var(--color-text)]">
+              {wakeLabel}
+            </span>
           </div>
         </div>
 
@@ -183,7 +195,8 @@ export function HostSleepConsentDialog({
             role="status"
             className="rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-2 text-[11px] text-[var(--color-warning)]"
           >
-            Waiting for per-socket decision capability receipt on this connection…
+            Waiting for per-socket decision capability receipt on this
+            connection…
           </div>
         )}
 
@@ -240,7 +253,9 @@ export function HostSleepConsentDialog({
               <Button
                 type="button"
                 variant="danger"
-                loading={item.isSubmitting && item.pendingDecision === "approve"}
+                loading={
+                  item.isSubmitting && item.pendingDecision === "approve"
+                }
                 disabled={item.isSubmitting || !item.hasReceipt}
                 onClick={() => void onApprove(item.actionTarget)}
                 className="min-h-11 w-full sm:w-auto px-4 text-xs"

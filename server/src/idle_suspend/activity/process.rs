@@ -9,9 +9,10 @@ use std::time::Instant;
 use crate::idle_suspend::activity::{
     ActivityUnavailable, ActivityUnavailableReason, BlockingProcessEvidence, FailureContext,
     MatchedManagedAgent, MonitoredTerminalEvidence, NetworkNamespaceIdentity, OwnedSocketInode,
-    OwnedSocketSet, ProcessChange, ProcessImageKey, ProcessSample, MAX_CMDLINE_BYTES_LIMIT,
-    MAX_MANAGED_ROOTS_LIMIT, MAX_OWNED_SOCKETS_LIMIT, MAX_PROCESS_FDS_LIMIT,
-    MAX_RELEVANT_PROCESSES_LIMIT, MAX_SAFE_EXECUTABLE_IDENTITY_BYTES, MAX_SCANNED_PROCESSES_LIMIT,
+    OwnedSocketSet, ProcessChange, ProcessImageKey, ProcessSample, RetainedManagedProcess,
+    MAX_CMDLINE_BYTES_LIMIT, MAX_MANAGED_ROOTS_LIMIT, MAX_OWNED_SOCKETS_LIMIT,
+    MAX_PROCESS_FDS_LIMIT, MAX_RELEVANT_PROCESSES_LIMIT, MAX_SAFE_EXECUTABLE_IDENTITY_BYTES,
+    MAX_SCANNED_PROCESSES_LIMIT,
 };
 use crate::idle_suspend::policy::{AgentExecutableEntry, AgentExecutableSet};
 use crate::pty::activity::{
@@ -104,7 +105,9 @@ impl ProcessSource for LinuxProcSource {
                 if let Ok(pid) = name_str.parse::<u32>() {
                     pids.push(pid);
                     if pids.len() > MAX_SCANNED_PROCESSES_LIMIT {
-                        return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                        return Err(ActivityUnavailable::new(
+                            ActivityUnavailableReason::ScanLimit,
+                        ));
                     }
                 }
             }
@@ -235,7 +238,9 @@ impl ProcessSource for LinuxProcSource {
         }
 
         if buf.len() > MAX_CMDLINE_BYTES_LIMIT {
-            return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+            return Err(ActivityUnavailable::new(
+                ActivityUnavailableReason::ScanLimit,
+            ));
         }
 
         if buf.is_empty() {
@@ -264,11 +269,9 @@ impl ProcessSource for LinuxProcSource {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
                 ActivityUnavailable::retryable(ActivityUnavailableReason::ProcAccess),
             ),
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                Err(ActivityUnavailable::new(
-                    ActivityUnavailableReason::ProcAccess,
-                ))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(
+                ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess),
+            ),
             Err(e) => {
                 tracing::debug!("Failed to readlink cwd {}: {e}", cwd_path.display());
                 Err(ActivityUnavailable::retryable(
@@ -279,11 +282,7 @@ impl ProcessSource for LinuxProcSource {
     }
 
     fn read_netns(&self, pid: u32) -> Result<NetworkNamespaceIdentity, ActivityUnavailable> {
-        let netns_path = self
-            .proc_root
-            .join(pid.to_string())
-            .join("ns")
-            .join("net");
+        let netns_path = self.proc_root.join(pid.to_string()).join("ns").join("net");
         let meta = match fs::metadata(&netns_path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -297,7 +296,10 @@ impl ProcessSource for LinuxProcSource {
                 ));
             }
             Err(e) => {
-                tracing::debug!("Failed to read netns metadata {}: {e}", netns_path.display());
+                tracing::debug!(
+                    "Failed to read netns metadata {}: {e}",
+                    netns_path.display()
+                );
                 return Err(ActivityUnavailable::retryable(
                     ActivityUnavailableReason::ProcAccess,
                 ));
@@ -319,7 +321,10 @@ impl ProcessSource for LinuxProcSource {
         };
 
         let meta = fs::metadata(&path).map_err(|e| {
-            tracing::debug!("Failed to read thread netns metadata {}: {e}", path.display());
+            tracing::debug!(
+                "Failed to read thread netns metadata {}: {e}",
+                path.display()
+            );
             ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess)
         })?;
         Ok(NetworkNamespaceIdentity {
@@ -371,7 +376,9 @@ impl ProcessSource for LinuxProcSource {
                 if let Ok(fd) = name_str.parse::<u32>() {
                     fds.push(fd);
                     if fds.len() > MAX_PROCESS_FDS_LIMIT {
-                        return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                        return Err(ActivityUnavailable::new(
+                            ActivityUnavailableReason::ScanLimit,
+                        ));
                     }
                 }
             }
@@ -407,7 +414,10 @@ impl ProcessSource for LinuxProcSource {
         };
 
         let s = target.to_string_lossy();
-        if let Some(inode_str) = s.strip_prefix("socket:[").and_then(|rem| rem.strip_suffix(']')) {
+        if let Some(inode_str) = s
+            .strip_prefix("socket:[")
+            .and_then(|rem| rem.strip_suffix(']'))
+        {
             let inode: u64 = inode_str.parse().map_err(|_| {
                 ActivityUnavailable::new(ActivityUnavailableReason::SocketDiagnostics)
             })?;
@@ -571,7 +581,12 @@ pub(crate) fn parse_bun_args(args: &[String]) -> InterpreterParseResult {
             return InterpreterParseResult::Unclassifiable;
         }
         let next = &args[1];
-        if next.contains('/') || next.ends_with(".js") || next.ends_with(".ts") || next.ends_with(".jsx") || next.ends_with(".tsx") {
+        if next.contains('/')
+            || next.ends_with(".js")
+            || next.ends_with(".ts")
+            || next.ends_with(".jsx")
+            || next.ends_with(".tsx")
+        {
             return InterpreterParseResult::Entrypoint(next.clone());
         } else {
             // Bare `bun run <package-script>` -> unclassifiable
@@ -739,7 +754,9 @@ pub(crate) fn parse_shell_args(args: &[String]) -> InterpreterParseResult {
                 continue;
             }
 
-            let valid_flags = flags.chars().all(|c| matches!(c, 'e' | 'f' | 'i' | 'l' | 'n' | 'u' | 'v' | 'x'));
+            let valid_flags = flags
+                .chars()
+                .all(|c| matches!(c, 'e' | 'f' | 'i' | 'l' | 'n' | 'u' | 'v' | 'x'));
             if valid_flags {
                 i += 1;
                 continue;
@@ -857,9 +874,8 @@ pub(crate) fn match_candidate_process<S: ProcessSource>(
             AgentExecutableEntry::AbsolutePath(p) => {
                 let norm_rule = normalize_path(p);
                 if norm_exe == norm_rule {
-                    let safe = validate_safe_executable_identity(
-                        p.to_str().unwrap_or(exe_basename),
-                    );
+                    let safe =
+                        validate_safe_executable_identity(p.to_str().unwrap_or(exe_basename));
                     return AgentMatchOutcome::Matched {
                         safe_executable_identity: safe,
                         entrypoint_token: None,
@@ -924,7 +940,9 @@ pub(crate) fn match_candidate_process<S: ProcessSource>(
                 }
 
                 // Only resolve cwd if an AbsolutePath rule exists
-                let has_abs_rules = agents.iter().any(|r| matches!(r, AgentExecutableEntry::AbsolutePath(_)));
+                let has_abs_rules = agents
+                    .iter()
+                    .any(|r| matches!(r, AgentExecutableEntry::AbsolutePath(_)));
                 if has_abs_rules {
                     let norm_abs_entrypoint = if entry_path.is_absolute() {
                         normalize_path(entry_path)
@@ -966,7 +984,6 @@ pub(crate) fn match_candidate_process<S: ProcessSource>(
 // ---------------------------------------------------------------------------
 // Internal state tracking
 // ---------------------------------------------------------------------------
-
 
 /// Retained attribution entry carrying terminal identity and raw-output counter handle.
 #[allow(dead_code)]
@@ -1043,25 +1060,27 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
         // 1. Snapshot qualification checks (Requirement 1)
         if !pty.is_complete() {
             let reason = match &pty.incomplete_reason {
-                Some(crate::pty::activity::ActivityIncompleteReason::ScanLimitExceeded { .. }) => {
-                    ActivityUnavailableReason::ScanLimit
-                }
-                Some(crate::pty::activity::ActivityIncompleteReason::CounterSaturated { .. }) => {
-                    ActivityUnavailableReason::CounterOverflow
-                }
+                Some(crate::pty::activity::ActivityIncompleteReason::ScanLimitExceeded {
+                    ..
+                }) => ActivityUnavailableReason::ScanLimit,
+                Some(crate::pty::activity::ActivityIncompleteReason::CounterSaturated {
+                    ..
+                }) => ActivityUnavailableReason::CounterOverflow,
                 Some(crate::pty::activity::ActivityIncompleteReason::RevisionSaturated) => {
                     ActivityUnavailableReason::CounterOverflow
                 }
-                Some(crate::pty::activity::ActivityIncompleteReason::RootUnqualified { .. }) => {
-                    ActivityUnavailableReason::IdentityUncertain
-                }
+                Some(crate::pty::activity::ActivityIncompleteReason::RootUnqualified {
+                    ..
+                }) => ActivityUnavailableReason::IdentityUncertain,
                 None => ActivityUnavailableReason::IdentityUncertain,
             };
             return Err(ActivityUnavailable::new(reason));
         }
 
         if pty.roots.len() > MAX_MANAGED_ROOTS_LIMIT {
-            return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+            return Err(ActivityUnavailable::new(
+                ActivityUnavailableReason::ScanLimit,
+            ));
         }
 
         // Validate unique terminals and qualified roots
@@ -1094,7 +1113,11 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 }
             }
 
-            qualified_roots.push((root.terminal.clone(), proc_id, root.raw_output_sequence.clone()));
+            qualified_roots.push((
+                root.terminal.clone(),
+                proc_id,
+                root.raw_output_sequence.clone(),
+            ));
         }
 
         // 2. Read raw sequence values for all live-root handles AND all retained handles BEFORE procfs work (Requirement 14)
@@ -1117,7 +1140,10 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                         ActivityUnavailableReason::CounterOverflow,
                     ));
                 }
-                terminal_handles.insert(retained.terminal.clone(), (retained.output_sequence.clone(), seq));
+                terminal_handles.insert(
+                    retained.terminal.clone(),
+                    (retained.output_sequence.clone(), seq),
+                );
             }
         }
 
@@ -1142,7 +1168,10 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                         pid: stat.pid,
                         start_ticks: stat.start_ticks,
                     };
-                    ppid_to_children.entry(stat.ppid).or_default().push(stat.pid);
+                    ppid_to_children
+                        .entry(stat.ppid)
+                        .or_default()
+                        .push(stat.pid);
                     pid_to_identity.insert(stat.pid, identity);
                     all_stats.insert(stat.pid, stat);
                 }
@@ -1195,7 +1224,8 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
             while let Some(curr_pid) = stack.pop() {
                 check_deadline()?;
                 if let Some(curr_id) = pid_to_identity.get(&curr_pid) {
-                    if let Some(existing_term) = current_attribution.insert(*curr_id, term.clone()) {
+                    if let Some(existing_term) = current_attribution.insert(*curr_id, term.clone())
+                    {
                         if existing_term != *term {
                             // Multiple root reachability conflict
                             return Err(ActivityUnavailable::new(
@@ -1230,7 +1260,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 if let Some(children) = ppid_to_children.get(&curr_pid) {
                     for child_pid in children {
                         if let Some(child_id) = pid_to_identity.get(child_pid) {
-                            if let Some(existing_term) = current_attribution.insert(*child_id, retained_attr.terminal.clone()) {
+                            if let Some(existing_term) = current_attribution
+                                .insert(*child_id, retained_attr.terminal.clone())
+                            {
                                 if existing_term != retained_attr.terminal {
                                     return Err(ActivityUnavailable::new(
                                         ActivityUnavailableReason::IdentityUncertain,
@@ -1248,7 +1280,8 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
 
         // 8. Match reachable processes against agent set (Requirement 7-12)
         let mut recognized_agents: HashSet<ProcessIdentity> = HashSet::new();
-        let mut agent_match_info: HashMap<ProcessIdentity, (Option<String>, Option<String>)> = HashMap::new();
+        let mut agent_match_info: HashMap<ProcessIdentity, (Option<String>, Option<String>)> =
+            HashMap::new();
 
         // Sort reachable processes by PID for deterministic evaluation
         let mut candidate_ids: Vec<ProcessIdentity> = current_attribution.keys().copied().collect();
@@ -1322,7 +1355,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 if let Some(curr_id) = pid_to_identity.get(&curr_pid) {
                     if relevant_processes.insert(*curr_id) {
                         if relevant_processes.len() > MAX_RELEVANT_PROCESSES_LIMIT {
-                            return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                            return Err(ActivityUnavailable::new(
+                                ActivityUnavailableReason::ScanLimit,
+                            ));
                         }
                         if let Some(children) = ppid_to_children.get(&curr_pid) {
                             for child_pid in children {
@@ -1347,7 +1382,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                     if let Some(curr_id) = pid_to_identity.get(&curr_pid) {
                         if relevant_processes.insert(*curr_id) {
                             if relevant_processes.len() > MAX_RELEVANT_PROCESSES_LIMIT {
-                                return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                                return Err(ActivityUnavailable::new(
+                                    ActivityUnavailableReason::ScanLimit,
+                                ));
                             }
                             if let Some(children) = ppid_to_children.get(&curr_pid) {
                                 for child_pid in children {
@@ -1360,7 +1397,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
             } else {
                 relevant_processes.insert(*retained_id);
                 if relevant_processes.len() > MAX_RELEVANT_PROCESSES_LIMIT {
-                    return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                    return Err(ActivityUnavailable::new(
+                        ActivityUnavailableReason::ScanLimit,
+                    ));
                 }
             }
         }
@@ -1394,7 +1433,8 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
         sorted_relevant.sort_by_key(|id| (id.pid, id.start_ticks));
 
         let mut owned_sockets_map: HashMap<u64, Vec<ProcessIdentity>> = HashMap::new();
-        let mut process_evidence: Vec<BlockingProcessEvidence> = Vec::with_capacity(sorted_relevant.len());
+        let mut process_evidence: Vec<BlockingProcessEvidence> =
+            Vec::with_capacity(sorted_relevant.len());
         let mut next_retained_map: HashMap<ProcessIdentity, RetainedAttribution> = HashMap::new();
 
         for proc_id in &sorted_relevant {
@@ -1427,7 +1467,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 }
             };
             if netns != thread_netns {
-                let safe_identity = agent_match_info.get(proc_id).and_then(|(safe, _)| safe.clone());
+                let safe_identity = agent_match_info
+                    .get(proc_id)
+                    .and_then(|(safe, _)| safe.clone());
                 return Err(ActivityUnavailable::with_context(
                     ActivityUnavailableReason::NamespaceMismatch,
                     FailureContext::single_process(*proc_id, safe_identity),
@@ -1445,13 +1487,17 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 Err(err) => return Err(err),
             };
 
-            let (safe_identity, entrypoint_token) = if let Some(info) = agent_match_info.get(proc_id) {
-                info.clone()
-            } else if let Some(retained) = next_retained.get(proc_id) {
-                (retained.safe_executable_identity.clone(), retained.image_key.entrypoint_token.clone())
-            } else {
-                (None, None)
-            };
+            let (safe_identity, entrypoint_token) =
+                if let Some(info) = agent_match_info.get(proc_id) {
+                    info.clone()
+                } else if let Some(retained) = next_retained.get(proc_id) {
+                    (
+                        retained.safe_executable_identity.clone(),
+                        retained.image_key.entrypoint_token.clone(),
+                    )
+                } else {
+                    (None, None)
+                };
 
             let image_key = ProcessImageKey {
                 exe_dev,
@@ -1465,9 +1511,12 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 ActivityUnavailable::new(ActivityUnavailableReason::IdentityUncertain)
             })?;
 
-            let output_sequence = terminal_handles.get(&terminal).map(|(arc, _)| arc.clone()).ok_or_else(|| {
-                ActivityUnavailable::new(ActivityUnavailableReason::IdentityUncertain)
-            })?;
+            let output_sequence = terminal_handles
+                .get(&terminal)
+                .map(|(arc, _)| arc.clone())
+                .ok_or_else(|| {
+                    ActivityUnavailable::new(ActivityUnavailableReason::IdentityUncertain)
+                })?;
 
             next_retained_map.insert(
                 *proc_id,
@@ -1493,7 +1542,9 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                     Ok(Some(inode)) => {
                         owned_sockets_map.entry(inode).or_default().push(*proc_id);
                         if owned_sockets_map.len() > MAX_OWNED_SOCKETS_LIMIT {
-                            return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                            return Err(ActivityUnavailable::new(
+                                ActivityUnavailableReason::ScanLimit,
+                            ));
                         }
                     }
                     Ok(None) => {}
@@ -1543,22 +1594,26 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
         };
 
         // 12. Monitored terminal evidence (Requirement 14)
-        let mut monitored_terminals_map: HashMap<TerminalIdentity, (Arc<AtomicU64>, u64)> = HashMap::new();
+        let mut monitored_terminals_map: HashMap<TerminalIdentity, (Arc<AtomicU64>, u64)> =
+            HashMap::new();
         for retained in next_retained_map.values() {
             if !monitored_terminals_map.contains_key(&retained.terminal) {
                 if let Some((handle, start_seq)) = terminal_handles.get(&retained.terminal) {
-                    monitored_terminals_map.insert(retained.terminal.clone(), (handle.clone(), *start_seq));
+                    monitored_terminals_map
+                        .insert(retained.terminal.clone(), (handle.clone(), *start_seq));
                 }
             }
         }
 
         let mut monitored_terminals: Vec<MonitoredTerminalEvidence> = monitored_terminals_map
             .into_iter()
-            .map(|(terminal, (output_sequence, sample_start_sequence))| MonitoredTerminalEvidence {
-                terminal,
-                output_sequence,
-                sample_start_sequence,
-            })
+            .map(
+                |(terminal, (output_sequence, sample_start_sequence))| MonitoredTerminalEvidence {
+                    terminal,
+                    output_sequence,
+                    sample_start_sequence,
+                },
+            )
             .collect();
         monitored_terminals.sort_by(|a, b| {
             a.terminal
@@ -1618,6 +1673,23 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
                 });
             }
         }
+        let mut covered_descendants: HashSet<ProcessIdentity> = HashSet::new();
+        for m in &matched_agents {
+            for d in &m.descendant_processes {
+                covered_descendants.insert(*d);
+            }
+        }
+
+        let mut uncovered_retained_processes: Vec<RetainedManagedProcess> = Vec::new();
+        for (id, attr) in &next_retained_map {
+            if !attr.is_matched_agent && !covered_descendants.contains(id) {
+                uncovered_retained_processes.push(RetainedManagedProcess {
+                    identity: *id,
+                    terminal: attr.terminal.clone(),
+                });
+            }
+        }
+        uncovered_retained_processes.sort_by_key(|p| (p.identity.pid, p.identity.start_ticks));
 
         let sample = ProcessSample {
             recognized_agent_count: recognized_agents.len(),
@@ -1626,6 +1698,7 @@ impl<S: ProcessSource> ProcessDiscovery<S> {
             process_evidence,
             change,
             matched_agents,
+            uncovered_retained_processes,
         };
 
         let next_state = ProcessDiscoveryState {
@@ -1659,11 +1732,11 @@ impl PreparedProcessSample {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::pty::activity::RootActivityRecord;
+    use crate::pty::fleet_state::PtyFleetSnapshot;
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
     use std::time::Duration;
-    use crate::pty::fleet_state::PtyFleetSnapshot;
-    use crate::pty::activity::RootActivityRecord;
 
     // -----------------------------------------------------------------------
     // Grammar tests
@@ -1694,10 +1767,7 @@ pub(crate) mod tests {
         );
 
         // End of options --
-        let args_dashes = vec![
-            "--".to_string(),
-            "--weird-name.js".to_string(),
-        ];
+        let args_dashes = vec!["--".to_string(), "--weird-name.js".to_string()];
         assert_eq!(
             parse_node_args(&args_dashes),
             InterpreterParseResult::Entrypoint("--weird-name.js".to_string())
@@ -1705,18 +1775,30 @@ pub(crate) mod tests {
 
         // Eval forms -> unclassifiable
         let args_eval = vec!["-e".to_string(), "console.log('hi')".to_string()];
-        assert_eq!(parse_node_args(&args_eval), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_node_args(&args_eval),
+            InterpreterParseResult::Unclassifiable
+        );
 
         let args_print = vec!["--print".to_string(), "1+1".to_string()];
-        assert_eq!(parse_node_args(&args_print), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_node_args(&args_print),
+            InterpreterParseResult::Unclassifiable
+        );
 
         // Unknown flag -> unclassifiable
         let args_unknown = vec!["--custom-flag".to_string(), "index.js".to_string()];
-        assert_eq!(parse_node_args(&args_unknown), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_node_args(&args_unknown),
+            InterpreterParseResult::Unclassifiable
+        );
 
         // Missing value for --require
         let args_missing = vec!["--require".to_string()];
-        assert_eq!(parse_node_args(&args_missing), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_node_args(&args_missing),
+            InterpreterParseResult::Unclassifiable
+        );
     }
 
     #[test]
@@ -1729,7 +1811,10 @@ pub(crate) mod tests {
 
         // Bare bun run <package-script> -> unclassifiable
         let args_run_bare = vec!["run".to_string(), "dev".to_string()];
-        assert_eq!(parse_bun_args(&args_run_bare), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_bun_args(&args_run_bare),
+            InterpreterParseResult::Unclassifiable
+        );
 
         // Direct script with flags
         let args_direct = vec!["--silent".to_string(), "runner.js".to_string()];
@@ -1740,9 +1825,15 @@ pub(crate) mod tests {
 
         // Package manager subcommands -> unclassifiable
         let args_test = vec!["test".to_string()];
-        assert_eq!(parse_bun_args(&args_test), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_bun_args(&args_test),
+            InterpreterParseResult::Unclassifiable
+        );
         let args_install = vec!["install".to_string()];
-        assert_eq!(parse_bun_args(&args_install), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_bun_args(&args_install),
+            InterpreterParseResult::Unclassifiable
+        );
     }
 
     #[test]
@@ -1762,15 +1853,24 @@ pub(crate) mod tests {
 
         // -c form -> unclassifiable
         let args_c = vec!["-c".to_string(), "import sys; print(1)".to_string()];
-        assert_eq!(parse_python_args(&args_c), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_python_args(&args_c),
+            InterpreterParseResult::Unclassifiable
+        );
 
         // -m module -> unclassifiable
         let args_m = vec!["-m".to_string(), "http.server".to_string()];
-        assert_eq!(parse_python_args(&args_m), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_python_args(&args_m),
+            InterpreterParseResult::Unclassifiable
+        );
 
         // stdin -> unclassifiable
         let args_stdin = vec!["-".to_string()];
-        assert_eq!(parse_python_args(&args_stdin), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_python_args(&args_stdin),
+            InterpreterParseResult::Unclassifiable
+        );
     }
 
     #[test]
@@ -1784,23 +1884,38 @@ pub(crate) mod tests {
 
         // bash -c 'codex' is a known command-string wrapper (Requirement 11) -> Nonmatching
         let args_wrapper = vec!["-c".to_string(), "codex".to_string()];
-        assert_eq!(parse_shell_args(&args_wrapper), InterpreterParseResult::Nonmatching);
+        assert_eq!(
+            parse_shell_args(&args_wrapper),
+            InterpreterParseResult::Nonmatching
+        );
 
         let args_combined_c = vec!["-xc".to_string(), "codex".to_string()];
-        assert_eq!(parse_shell_args(&args_combined_c), InterpreterParseResult::Nonmatching);
+        assert_eq!(
+            parse_shell_args(&args_combined_c),
+            InterpreterParseResult::Nonmatching
+        );
 
         // Stdin -s -> Nonmatching
         let args_s = vec!["-s".to_string()];
-        assert_eq!(parse_shell_args(&args_s), InterpreterParseResult::Nonmatching);
+        assert_eq!(
+            parse_shell_args(&args_s),
+            InterpreterParseResult::Nonmatching
+        );
 
         // Interactive shell with no entrypoint -> Nonmatching
         let args_interactive = vec!["-i".to_string()];
-        assert_eq!(parse_shell_args(&args_interactive), InterpreterParseResult::Nonmatching);
+        assert_eq!(
+            parse_shell_args(&args_interactive),
+            InterpreterParseResult::Nonmatching
+        );
         assert_eq!(parse_shell_args(&[]), InterpreterParseResult::Nonmatching);
 
         // Unknown flag -> unclassifiable
         let args_unknown = vec!["-z".to_string(), "script.sh".to_string()];
-        assert_eq!(parse_shell_args(&args_unknown), InterpreterParseResult::Unclassifiable);
+        assert_eq!(
+            parse_shell_args(&args_unknown),
+            InterpreterParseResult::Unclassifiable
+        );
     }
 
     #[test]
@@ -1825,7 +1940,8 @@ pub(crate) mod tests {
         assert_eq!(match_basename, AgentMatchOutcome::NotMatched);
 
         // Configured absolute path rule "/workspace/cli.js" matches
-        let agents_abs = AgentExecutableSet::from_strings(&["/workspace/cli.js".to_string()]).unwrap();
+        let agents_abs =
+            AgentExecutableSet::from_strings(&["/workspace/cli.js".to_string()]).unwrap();
         let match_abs = match_candidate_process(&src, pid, &agents_abs);
         assert!(matches!(match_abs, AgentMatchOutcome::Matched { .. }));
     }
@@ -1854,7 +1970,10 @@ pub(crate) mod tests {
     impl MockProcessSource {
         pub(crate) fn new() -> Self {
             Self {
-                thread_netns: NetworkNamespaceIdentity { device: 10, inode: 100 },
+                thread_netns: NetworkNamespaceIdentity {
+                    device: 10,
+                    inode: 100,
+                },
                 ..Default::default()
             }
         }
@@ -1872,7 +1991,11 @@ pub(crate) mod tests {
             if !self.pids.contains(&pid) {
                 self.pids.push(pid);
             }
-            let comm = exe.file_name().and_then(|s| s.to_str()).unwrap_or("proc").to_string();
+            let comm = exe
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("proc")
+                .to_string();
             self.stats.insert(
                 pid,
                 ProcessStat {
@@ -1900,7 +2023,9 @@ pub(crate) mod tests {
     impl ProcessSource for MockProcessSource {
         fn list_pids(&self) -> Result<Vec<u32>, ActivityUnavailable> {
             if self.pids.len() > MAX_SCANNED_PROCESSES_LIMIT {
-                return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                return Err(ActivityUnavailable::new(
+                    ActivityUnavailableReason::ScanLimit,
+                ));
             }
             Ok(self.pids.clone())
         }
@@ -1923,7 +2048,9 @@ pub(crate) mod tests {
 
         fn read_exe(&self, pid: u32) -> Result<PathBuf, ActivityUnavailable> {
             if self.deleted_exes.contains(&pid) {
-                return Err(ActivityUnavailable::new(ActivityUnavailableReason::IdentityUncertain));
+                return Err(ActivityUnavailable::new(
+                    ActivityUnavailableReason::IdentityUncertain,
+                ));
             }
             self.exes.get(&pid).cloned().ok_or_else(|| {
                 ActivityUnavailable::retryable(ActivityUnavailableReason::ProcAccess)
@@ -1961,7 +2088,9 @@ pub(crate) mod tests {
         fn list_fds(&self, pid: u32) -> Result<Vec<u32>, ActivityUnavailable> {
             let fds = self.fds.get(&pid).cloned().unwrap_or_default();
             if fds.len() > MAX_PROCESS_FDS_LIMIT {
-                return Err(ActivityUnavailable::new(ActivityUnavailableReason::ScanLimit));
+                return Err(ActivityUnavailable::new(
+                    ActivityUnavailableReason::ScanLimit,
+                ));
             }
             Ok(fds)
         }
@@ -1971,14 +2100,18 @@ pub(crate) mod tests {
         }
     }
 
-    fn make_test_pty_snapshot(roots: Vec<(TerminalIdentity, ProcessIdentity, Arc<AtomicU64>)>) -> PtyActivitySnapshot {
+    fn make_test_pty_snapshot(
+        roots: Vec<(TerminalIdentity, ProcessIdentity, Arc<AtomicU64>)>,
+    ) -> PtyActivitySnapshot {
         let records: Vec<RootActivityRecord> = roots
             .into_iter()
-            .map(|(terminal, identity, raw_output_sequence)| RootActivityRecord {
-                terminal,
-                qualification: RootQualification::Qualified { identity },
-                raw_output_sequence,
-            })
+            .map(
+                |(terminal, identity, raw_output_sequence)| RootActivityRecord {
+                    terminal,
+                    qualification: RootQualification::Qualified { identity },
+                    raw_output_sequence,
+                },
+            )
             .collect();
         PtyActivitySnapshot {
             fleet: PtyFleetSnapshot {
@@ -2001,8 +2134,14 @@ pub(crate) mod tests {
     #[test]
     fn test_valid_zero_agent_pass() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
         // Root process is an interactive bash shell
         src.set_proc(
@@ -2020,7 +2159,9 @@ pub(crate) mod tests {
         let pty = make_test_pty_snapshot(vec![(term, root_id, Arc::new(AtomicU64::new(0)))]);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        let prepared = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare should succeed");
+        let prepared = discovery
+            .prepare_sample(&pty, &agents, deadline)
+            .expect("prepare should succeed");
         let sample = prepared.sample();
 
         // Valid zero-agent pass produces 0 recognized agents and empty owned sockets
@@ -2032,29 +2173,70 @@ pub(crate) mod tests {
     #[test]
     fn test_matched_agent_and_descendants_relevant() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
         // Root process: bash (PID 10)
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
 
         // Child process: codex (PID 20, ppid 10) -> matches agent rule
-        src.set_proc(20, 10, PathBuf::from("/usr/local/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            20,
+            10,
+            PathBuf::from("/usr/local/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
 
         // Descendant process: worker (PID 30, ppid 20) -> relevant
-        src.set_proc(30, 20, PathBuf::from("/usr/bin/node"), vec!["node".to_string(), "worker.js".to_string()], PathBuf::from("/home"), (1, 30), 3000);
+        src.set_proc(
+            30,
+            20,
+            PathBuf::from("/usr/bin/node"),
+            vec!["node".to_string(), "worker.js".to_string()],
+            PathBuf::from("/home"),
+            (1, 30),
+            3000,
+        );
         src.add_socket(30, 4, 12345);
 
         // Nested descendant: helper (PID 40, ppid 30) -> also shares socket 12345
-        src.set_proc(40, 30, PathBuf::from("/usr/bin/helper"), vec!["helper".to_string()], PathBuf::from("/home"), (1, 40), 4000);
+        src.set_proc(
+            40,
+            30,
+            PathBuf::from("/usr/bin/helper"),
+            vec!["helper".to_string()],
+            PathBuf::from("/home"),
+            (1, 40),
+            4000,
+        );
         src.add_socket(40, 5, 12345);
 
         let mut discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
-        let pty = make_test_pty_snapshot(vec![(term.clone(), root_id, Arc::new(AtomicU64::new(5)))]);
+        let pty =
+            make_test_pty_snapshot(vec![(term.clone(), root_id, Arc::new(AtomicU64::new(5)))]);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        let prepared = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare should succeed");
+        let prepared = discovery
+            .prepare_sample(&pty, &agents, deadline)
+            .expect("prepare should succeed");
         let sample = prepared.sample();
 
         assert_eq!(sample.recognized_agent_count, 1);
@@ -2062,7 +2244,10 @@ pub(crate) mod tests {
         let matched_agent = &sample.matched_agents[0];
         assert_eq!(matched_agent.identity.pid, 20);
         assert_eq!(matched_agent.terminal, term);
-        assert_eq!(matched_agent.safe_executable_identity.as_deref(), Some("codex"));
+        assert_eq!(
+            matched_agent.safe_executable_identity.as_deref(),
+            Some("codex")
+        );
         assert_eq!(matched_agent.descendant_processes.len(), 2);
         assert_eq!(matched_agent.descendant_processes[0].pid, 30);
         assert_eq!(matched_agent.descendant_processes[1].pid, 40);
@@ -2082,28 +2267,54 @@ pub(crate) mod tests {
         assert_eq!(committed_sample.recognized_agent_count, 1);
 
         // Next pass with no changes emits ProcessChange::Unchanged
-        let prepared2 = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare 2 should succeed");
+        let prepared2 = discovery
+            .prepare_sample(&pty, &agents, deadline)
+            .expect("prepare 2 should succeed");
         assert_eq!(prepared2.sample().change, ProcessChange::Unchanged);
     }
 
     #[test]
     fn test_matched_agents_excludes_independent_external_process() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-managed".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-managed".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
         // Managed root process: bash (PID 10)
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
 
         // Independent external process: codex (PID 999, ppid 1 - NOT in managed tree!)
-        src.set_proc(999, 1, PathBuf::from("/usr/local/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 999), 9000);
+        src.set_proc(
+            999,
+            1,
+            PathBuf::from("/usr/local/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 999),
+            9000,
+        );
 
         let discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
         let pty = make_test_pty_snapshot(vec![(term, root_id, Arc::new(AtomicU64::new(0)))]);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        let prepared = discovery.prepare_sample(&pty, &agents, deadline).expect("prepare should succeed");
+        let prepared = discovery
+            .prepare_sample(&pty, &agents, deadline)
+            .expect("prepare should succeed");
         let sample = prepared.sample();
 
         // Independent external agent outside managed lineage is excluded per user validation
@@ -2114,13 +2325,35 @@ pub(crate) mod tests {
     #[test]
     fn test_retained_attribution_across_root_removal_and_reparenting() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
         let counter = Arc::new(AtomicU64::new(10));
 
         // Pass 1: root bash (10) -> child codex (20)
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
-        src.set_proc(20, 10, PathBuf::from("/usr/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
+        src.set_proc(
+            20,
+            10,
+            PathBuf::from("/usr/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
 
         let mut discovery = ProcessDiscovery::with_source(src.clone());
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
@@ -2146,7 +2379,9 @@ pub(crate) mod tests {
             committed: discovery.committed.clone(),
         };
 
-        let prep2 = discovery2.prepare_sample(&pty2, &agents, deadline).expect("prepare 2 should succeed with retained lineage");
+        let prep2 = discovery2
+            .prepare_sample(&pty2, &agents, deadline)
+            .expect("prepare 2 should succeed with retained lineage");
         let sample2 = prep2.sample();
 
         // Codex is still recognized and monitored through its retained terminal evidence!
@@ -2165,7 +2400,9 @@ pub(crate) mod tests {
             committed: prep2.next_state,
         };
 
-        let prep3 = discovery3.prepare_sample(&pty2, &agents, deadline).expect("prepare 3 should succeed");
+        let prep3 = discovery3
+            .prepare_sample(&pty2, &agents, deadline)
+            .expect("prepare 3 should succeed");
         assert_eq!(prep3.sample().recognized_agent_count, 0);
         assert_eq!(prep3.sample().monitored_terminal_count(), 0);
     }
@@ -2173,16 +2410,52 @@ pub(crate) mod tests {
     #[test]
     fn test_multi_root_ambiguity_fails() {
         let mut src = MockProcessSource::new();
-        let term1 = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let term2 = TerminalIdentity { session_id: "term-2".to_string(), incarnation: 1 };
-        let root1 = ProcessIdentity { pid: 10, start_ticks: 1000 };
-        let root2 = ProcessIdentity { pid: 20, start_ticks: 2000 };
+        let term1 = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let term2 = TerminalIdentity {
+            session_id: "term-2".to_string(),
+            incarnation: 1,
+        };
+        let root1 = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
+        let root2 = ProcessIdentity {
+            pid: 20,
+            start_ticks: 2000,
+        };
 
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
-        src.set_proc(20, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
+        src.set_proc(
+            20,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
 
         // Process 30 claimed under both root1 and root2 -> ambiguity
-        src.set_proc(30, 10, PathBuf::from("/usr/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 30), 3000);
+        src.set_proc(
+            30,
+            10,
+            PathBuf::from("/usr/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 30),
+            3000,
+        );
 
         let discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
@@ -2199,20 +2472,54 @@ pub(crate) mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         let res = discovery.prepare_sample(&pty_conflict, &agents, deadline);
-        assert!(matches!(res, Err(ActivityUnavailable { reason: ActivityUnavailableReason::IdentityUncertain, .. })));
+        assert!(matches!(
+            res,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::IdentityUncertain,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_namespace_mismatch_fails() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
-        src.set_proc(20, 10, PathBuf::from("/usr/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
+        src.set_proc(
+            20,
+            10,
+            PathBuf::from("/usr/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
 
         // Put codex in different network namespace
-        src.netns.insert(20, NetworkNamespaceIdentity { device: 99, inode: 999 });
+        src.netns.insert(
+            20,
+            NetworkNamespaceIdentity {
+                device: 99,
+                inode: 999,
+            },
+        );
 
         let discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
@@ -2233,11 +2540,33 @@ pub(crate) mod tests {
     #[test]
     fn test_identity_race_retryable() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
-        src.set_proc(20, 10, PathBuf::from("/usr/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
+        src.set_proc(
+            20,
+            10,
+            PathBuf::from("/usr/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
 
         // Start ticks for PID 20 changes on subsequent read (PID reuse)
         src.tick_shift_on_second_read.insert(20);
@@ -2261,11 +2590,33 @@ pub(crate) mod tests {
     #[test]
     fn test_deleted_executable_uncertain() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
-        src.set_proc(20, 10, PathBuf::from("/usr/bin/codex"), vec!["codex".to_string()], PathBuf::from("/home"), (1, 20), 2000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
+        src.set_proc(
+            20,
+            10,
+            PathBuf::from("/usr/bin/codex"),
+            vec!["codex".to_string()],
+            PathBuf::from("/home"),
+            (1, 20),
+            2000,
+        );
         src.deleted_exes.insert(20);
 
         let discovery = ProcessDiscovery::with_source(src);
@@ -2274,16 +2625,36 @@ pub(crate) mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         let res = discovery.prepare_sample(&pty, &agents, deadline);
-        assert!(matches!(res, Err(ActivityUnavailable { reason: ActivityUnavailableReason::IdentityUncertain, .. })));
+        assert!(matches!(
+            res,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::IdentityUncertain,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_counter_saturation_overflow() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
 
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
 
         let discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
@@ -2292,15 +2663,35 @@ pub(crate) mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         let res = discovery.prepare_sample(&pty, &agents, deadline);
-        assert!(matches!(res, Err(ActivityUnavailable { reason: ActivityUnavailableReason::CounterOverflow, .. })));
+        assert!(matches!(
+            res,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::CounterOverflow,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_deadline_scan_timeout() {
         let mut src = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 10, start_ticks: 1000 };
-        src.set_proc(10, 1, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 10), 1000);
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 10,
+            start_ticks: 1000,
+        };
+        src.set_proc(
+            10,
+            1,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 10),
+            1000,
+        );
 
         let discovery = ProcessDiscovery::with_source(src);
         let agents = AgentExecutableSet::from_strings(&["codex".to_string()]).unwrap();
@@ -2309,7 +2700,13 @@ pub(crate) mod tests {
         // Deadline in the past
         let past_deadline = Instant::now() - Duration::from_millis(10);
         let res = discovery.prepare_sample(&pty, &agents, past_deadline);
-        assert!(matches!(res, Err(ActivityUnavailable { reason: ActivityUnavailableReason::ScanTimeout, .. })));
+        assert!(matches!(
+            res,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::ScanTimeout,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2320,8 +2717,14 @@ pub(crate) mod tests {
         // 1. Root limit: 256 qualifies, 257 fails
         let mut roots_256 = Vec::new();
         for i in 1..=256 {
-            let term = TerminalIdentity { session_id: format!("term-{i}"), incarnation: 1 };
-            let root_id = ProcessIdentity { pid: i as u32, start_ticks: 1000 + i as u64 };
+            let term = TerminalIdentity {
+                session_id: format!("term-{i}"),
+                incarnation: 1,
+            };
+            let root_id = ProcessIdentity {
+                pid: i as u32,
+                start_ticks: 1000 + i as u64,
+            };
             roots_256.push((term, root_id, Arc::new(AtomicU64::new(0))));
         }
         let pty_256 = make_test_pty_snapshot(roots_256.clone());
@@ -2344,32 +2747,81 @@ pub(crate) mod tests {
 
         // 257th root fails with ScanLimit
         let mut roots_257 = roots_256;
-        let term_257 = TerminalIdentity { session_id: "term-257".to_string(), incarnation: 1 };
-        let root_id_257 = ProcessIdentity { pid: 257, start_ticks: 1257 };
+        let term_257 = TerminalIdentity {
+            session_id: "term-257".to_string(),
+            incarnation: 1,
+        };
+        let root_id_257 = ProcessIdentity {
+            pid: 257,
+            start_ticks: 1257,
+        };
         roots_257.push((term_257, root_id_257, Arc::new(AtomicU64::new(0))));
         let pty_257 = make_test_pty_snapshot(roots_257);
         let res_257 = disc_256.prepare_sample(&pty_257, &agents, deadline);
-        assert!(matches!(res_257, Err(ActivityUnavailable { reason: ActivityUnavailableReason::ScanLimit, .. })));
+        assert!(matches!(
+            res_257,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::ScanLimit,
+                ..
+            })
+        ));
 
         // 2. Scanned processes limit: 8192 qualifies, 8193 fails
         let mut src_8192 = MockProcessSource::new();
-        let term = TerminalIdentity { session_id: "term-1".to_string(), incarnation: 1 };
-        let root_id = ProcessIdentity { pid: 1, start_ticks: 1000 };
-        src_8192.set_proc(1, 0, PathBuf::from("/bin/bash"), vec!["bash".to_string()], PathBuf::from("/home"), (1, 1), 1000);
+        let term = TerminalIdentity {
+            session_id: "term-1".to_string(),
+            incarnation: 1,
+        };
+        let root_id = ProcessIdentity {
+            pid: 1,
+            start_ticks: 1000,
+        };
+        src_8192.set_proc(
+            1,
+            0,
+            PathBuf::from("/bin/bash"),
+            vec!["bash".to_string()],
+            PathBuf::from("/home"),
+            (1, 1),
+            1000,
+        );
         for p in 2..=8192 {
-            src_8192.set_proc(p, 0, PathBuf::from("/bin/other"), vec!["other".to_string()], PathBuf::from("/home"), (1, p as u64), 1000);
+            src_8192.set_proc(
+                p,
+                0,
+                PathBuf::from("/bin/other"),
+                vec!["other".to_string()],
+                PathBuf::from("/home"),
+                (1, p as u64),
+                1000,
+            );
         }
-        let pty_1 = make_test_pty_snapshot(vec![(term.clone(), root_id, Arc::new(AtomicU64::new(0)))]);
+        let pty_1 =
+            make_test_pty_snapshot(vec![(term.clone(), root_id, Arc::new(AtomicU64::new(0)))]);
         let disc_8192 = ProcessDiscovery::with_source(src_8192.clone());
         let res_8192 = disc_8192.prepare_sample(&pty_1, &agents, deadline);
         assert!(res_8192.is_ok(), "8192 processes should qualify");
 
         // 8193 fails
         let mut src_8193 = src_8192;
-        src_8193.set_proc(8193, 0, PathBuf::from("/bin/other"), vec!["other".to_string()], PathBuf::from("/home"), (1, 8193), 1000);
+        src_8193.set_proc(
+            8193,
+            0,
+            PathBuf::from("/bin/other"),
+            vec!["other".to_string()],
+            PathBuf::from("/home"),
+            (1, 8193),
+            1000,
+        );
         let disc_8193 = ProcessDiscovery::with_source(src_8193);
         let res_8193 = disc_8193.prepare_sample(&pty_1, &agents, deadline);
-        assert!(matches!(res_8193, Err(ActivityUnavailable { reason: ActivityUnavailableReason::ScanLimit, .. })));
+        assert!(matches!(
+            res_8193,
+            Err(ActivityUnavailable {
+                reason: ActivityUnavailableReason::ScanLimit,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2433,13 +2885,19 @@ pub(crate) mod tests {
         let proc_source = LinuxProcSource::new();
 
         // Verify LinuxProcSource reads real stat and start ticks > 0
-        let stat = proc_source.read_stat(pid).expect("read_stat on real child should succeed");
+        let stat = proc_source
+            .read_stat(pid)
+            .expect("read_stat on real child should succeed");
         assert_eq!(stat.pid, pid);
         assert!(stat.start_ticks > 0);
 
         // Verify netns
-        let netns = proc_source.read_netns(pid).expect("read_netns on real child should succeed");
-        let thread_netns = proc_source.read_thread_netns().expect("read_thread_netns should succeed");
+        let netns = proc_source
+            .read_netns(pid)
+            .expect("read_netns on real child should succeed");
+        let thread_netns = proc_source
+            .read_thread_netns()
+            .expect("read_thread_netns should succeed");
         assert_eq!(netns, thread_netns);
 
         // Clean up: terminate and reap fixture child
