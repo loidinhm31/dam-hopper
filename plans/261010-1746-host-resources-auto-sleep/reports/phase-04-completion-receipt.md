@@ -1,0 +1,45 @@
+# Phase 04 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-04`
+- **Phase Name**: `Phase 04 — Three-hour coordinator, immediate consent and final handoff`
+- **Task Run ID**: `5d2f133c-3a64-4306-9fe6-2891e49bdb65`
+- **Completion Task Revision**: `7`
+- **Evidence Revision**: `0`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `c52b8772-0d8a-4b9c-9321-9b2b9164a648`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted advisor review counsel for Phase 04 finalization`
+  - `action_id`: `f1010001-0001-4000-8000-000000000004`
+  - `episode_id`: `episode-finalization-phase-04`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `plans/reports/code-review-261011-0150-phase-04-coordinator-consent-handoff.md`
+    - `plans/reports/docs-manager-261011-phase-04-documentation.md`
+    - `plans/reports/project-manager-261011-phase-04-terminal-status.md`
+    - `plans/reports/tester-261011-0147-phase-04-coordinator-consent-handoff.md`
+    - `server/src/agent_status/runtime.rs`
+    - `server/src/api/idle_suspend.rs`
+    - `server/src/api/router.rs`
+    - `server/src/api/tests.rs`
+    - `server/src/api/ws.rs`
+    - `server/src/idle_suspend/coordinator.rs`
+    - `server/src/idle_suspend/server_audit.rs`
+    - `server/src/idle_suspend/tests.rs`
+    - `server/src/linux_release/diagnostics/redaction.rs`
+    - `server/src/state.rs`
+  - `validation_command`: `cargo test --manifest-path server/Cargo.toml idle_suspend`
+  - `validation_status`: `passed` (210 passed, 0 failed, 1 ignored)
+- **Git Commit**: `611ab220` (`feat(idle-suspend): implement three-hour coordinator, immediate consent and final handoff`)
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261011-0150-phase-04-coordinator-consent-handoff.md` (Score: 9.3/10, APPROVED)
+  - `plans/reports/tester-261011-0147-phase-04-coordinator-consent-handoff.md` (2,981 passed, 0 failed)
+- **Actual Full-Suite Validation Evidence**:
+  - `cargo test --manifest-path server/Cargo.toml idle_suspend`: 210 passed, 0 failed, 1 ignored
+  - `cargo test --manifest-path server/Cargo.toml test_idle_suspend_consent_decision`: 1 passed, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml test_agent_free`: 9 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit`: 0 diagnostics
+  - `pnpm --filter @dam-hopper/ui test`: 2,771 passed across 330 test files, 0 failed

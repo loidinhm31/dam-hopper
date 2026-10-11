@@ -1,0 +1,57 @@
+# Phase 05 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-05`
+- **Phase Name**: `Phase 05 — Host Resources status and always-mounted consent UI`
+- **Task Run ID**: `66fa7950-7615-4f32-9c9f-6a7f07f8f250`
+- **Completion Operation ID**: `651fb2dc-b609-449a-b8a0-81d14b149d6e`
+- **Completion Task Revision**: `7`
+- **Evidence Revision**: `1`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `1870d85b-aabb-43c5-b2f2-1bd9caca0b9e`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted user review approval and advisor counsel for Phase 05 finalization.`
+  - `action_id`: `f1050001-0001-4000-8000-000000000005`
+  - `episode_id`: `episode-finalization-phase-05`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `docs/frontend-components/host-and-usage.md`
+    - `docs/idle-suspend-status-ui.md`
+    - `docs/user-guide-multi-server-profiles.md`
+    - `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx`
+    - `packages/ui/src/api/client.ts`
+    - `packages/ui/src/api/idle-suspend-client.test.ts`
+    - `packages/ui/src/api/queries.ts`
+    - `packages/ui/src/api/ws-transport.test.ts`
+    - `packages/ui/src/api/ws-transport.ts`
+    - `packages/ui/src/components/organisms/HostIdleSuspendStatus.test.tsx`
+    - `packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx`
+    - `packages/ui/src/components/organisms/HostSleepConsentDialog.tsx`
+    - `packages/ui/src/components/organisms/HostSleepConsentHost.test.tsx`
+    - `packages/ui/src/components/organisms/HostSleepConsentHost.tsx`
+    - `packages/ui/src/components/organisms/SettingsIdleSuspendTimingSection.test.tsx`
+    - `packages/ui/src/components/organisms/SettingsIdleSuspendTimingSection.tsx`
+    - `packages/ui/src/embed/dam-hopper-app.tsx`
+    - `packages/ui/src/hooks/use-host-sleep-consent.ts`
+    - `packages/ui/src/hooks/use-sse.test.ts`
+    - `packages/ui/src/hooks/use-sse.ts`
+    - `plans/reports/code-review-261011-phase-05-host-resources-consent-ui.md`
+    - `plans/reports/docs-manager-261011-phase-05-documentation.md`
+    - `plans/reports/project-manager-261011-phase-05-terminal-status.md`
+    - `plans/reports/tester-261011-phase-05-host-resources-consent-ui.md`
+  - `validation_command`: `pnpm --filter @dam-hopper/ui test src/api/idle-suspend-client.test.ts src/api/ws-transport.test.ts src/hooks/use-sse.test.ts src/components/organisms/HostIdleSuspendStatus.test.tsx src/components/organisms/SettingsIdleSuspendTimingSection.test.tsx src/components/organisms/HostSleepConsentHost.test.tsx src/embed/dam-hopper-app.test.tsx`
+  - `validation_status`: `passed` (149 passed, 0 failed)
+- **Git Commit**: `740a2f2b` (`feat(ui): implement host resources agent-free status and shared sleep consent UI`)
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261011-phase-05-host-resources-consent-ui.md` (Score: 9.1/10, APPROVED)
+  - `plans/reports/tester-261011-phase-05-host-resources-consent-ui.md` (2,783 unit + 17 browser passed, 0 failed)
+  - `plans/reports/project-manager-261011-phase-05-terminal-status.md`
+  - `plans/reports/docs-manager-261011-phase-05-documentation.md`
+- **Actual Full-Suite Validation Evidence**:
+  - `pnpm --filter @dam-hopper/ui test src/api/idle-suspend-client.test.ts src/api/ws-transport.test.ts src/hooks/use-sse.test.ts src/components/organisms/HostIdleSuspendStatus.test.tsx src/components/organisms/SettingsIdleSuspendTimingSection.test.tsx src/components/organisms/HostSleepConsentHost.test.tsx src/embed/dam-hopper-app.test.tsx`: 149 passed across 7 files, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/idle-suspend-settings-status.browser.tsx`: 17 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui test`: 2,783 passed across 331 files, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit`: 0 diagnostics
