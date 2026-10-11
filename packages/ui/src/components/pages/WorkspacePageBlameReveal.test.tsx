@@ -173,21 +173,6 @@ vi.mock("@/hooks/use-server-profile.js", () => ({
   useServerProfile: () => ({ id: "profile-1", name: "Default" }),
 }));
 
-vi.mock("@/hooks/use-advisor.js", () => ({
-  useAdvisorVisibility: () => ({
-    isVisible: false,
-    isConnected: false,
-    isAdmin: false,
-    isEnabled: false,
-    isAvailable: false,
-    path: null,
-    sourceError: null,
-    status: undefined,
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
-}));
 
 vi.mock("@/stores/workspace.js", () => ({
   useWorkspaceStore: () => ({

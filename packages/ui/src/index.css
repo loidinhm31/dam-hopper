@@ -481,19 +481,6 @@
     inset 0 0 12px rgba(59, 130, 246, 0.03);
 }
 
-/* ── Workspace Advisor Host ── */
-.workspace-advisor-host-container {
-  display: flex;
-  flex-direction: column;
-}
-
-.workspace-advisor-host-container[data-advisor-mode="terminal"] {
-  border-bottom-left-radius: 1rem;
-  border-bottom-right-radius: 1rem;
-}
-
-.workspace-advisor-host-container,
-.workspace-advisor-host-content,
 [data-testid="terminal-floating-tool-panel"] {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.28) transparent;

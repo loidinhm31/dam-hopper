@@ -47,7 +47,6 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     { activePanelId: "git", targetId: "ports" },
     { activePanelId: "git", targetId: "project" },
     { activePanelId: "ports", targetId: "terminals" },
-    { activePanelId: "ports", targetId: "advisor" },
   ] as const)(
     "opens $targetId and replaces the active terminal workspace panel on toggle",
     ({ activePanelId, targetId }) => {
@@ -61,7 +60,7 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     },
   );
 
-  it.each(["git", "ports", "project", "terminals", "advisor"] as const)(
+  it.each(["git", "ports", "project", "terminals"] as const)(
     "closes %s when its active target is toggled again",
     (targetId) => {
       expect(
@@ -74,7 +73,7 @@ describe("resolveTerminalWorkspacePanelActivation", () => {
     },
   );
 
-  it.each(["git", "ports", "project", "terminals", "advisor"] as const)(
+  it.each(["git", "ports", "project", "terminals"] as const)(
     "keeps %s open when requested with reveal intent even if already active",
     (targetId) => {
       expect(

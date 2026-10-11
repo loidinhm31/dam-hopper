@@ -677,8 +677,6 @@ pub struct ServerConfig {
     pub workflow_stale_after_hours: u32,
     #[serde(default, alias = "idle_suspend")]
     pub idle_suspend: IdleSuspendConfig,
-    #[serde(default)]
-    pub advisor: AdvisorConfig,
 }
 pub const fn default_workflow_event_retention_days() -> u32 {
     90
@@ -705,7 +703,6 @@ impl ServerConfig {
             return Err("server.workflow_stale_after_hours must be between 1 and 8760".into());
         }
         self.idle_suspend.validate()?;
-        self.advisor.validate()?;
         Ok(())
     }
 }
@@ -721,21 +718,7 @@ impl Default for ServerConfig {
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
             workflow_stale_after_hours: default_workflow_stale_after_hours(),
             idle_suspend: IdleSuspendConfig::default(),
-            advisor: AdvisorConfig::default(),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdvisorConfig {
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-impl AdvisorConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        Ok(())
     }
 }
 

@@ -134,8 +134,7 @@ export type TerminalPanelToolId =
   | "git"
   | "ports"
   | "project"
-  | "terminals"
-  | "advisor";
+  | "terminals";
 
 export interface TerminalPanelShortcutInput {
   targetId: TerminalPanelToolId;
@@ -166,15 +165,6 @@ export function resolveTerminalPanelShortcut({
     return {
       nextActiveLeftBottomId: activeLeftBottomId,
       nextActiveRightTopId: isActive ? null : "project-info",
-      nextBottomMaximized: bottomMaximized,
-    };
-  }
-
-  if (targetId === "advisor") {
-    const isActive = activeRightTopId === "advisor";
-    return {
-      nextActiveLeftBottomId: activeLeftBottomId,
-      nextActiveRightTopId: isActive ? null : "advisor",
       nextBottomMaximized: bottomMaximized,
     };
   }

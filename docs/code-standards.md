@@ -1,13 +1,13 @@
 # Code Standards
 
-These standards describe the current Rust backend, shared React UI, and profile-aware transport model. The retired plugin platform is not normative; see the [roadmap](./project-roadmap.md) and [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md) for retirement status and the [Native Advisor architecture](./architecture/native-advisor.md) for its native replacement.
+These standards describe the current Rust backend, shared React UI, and profile-aware transport model. The retired plugin platform is not normative; see the [roadmap](./project-roadmap.md) and [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md) for retirement status.
 
 ## Repository structure
 
 | Path | Responsibility |
 | --- | --- |
 | `server/src/api/` | Axum route registration, handlers, auth, and WebSocket/API transport |
-| `server/src/{auth,config,crypto,fs,git,pty,workflow,advisor,agent_status}/` | Backend domain boundaries and services |
+| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status}/` | Backend domain boundaries and services |
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
@@ -51,16 +51,6 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Publish rewritten history only with an explicit confirmation and exact expected-OID lease. Ordinary push remains fast-forward-only.
 - Preserve final tree/index/working tree and required signature-loss consent. Never publish automatically after editing or squashing commits.
 
-### Native Advisor
-
-- Advisor belongs to the server's native `advisor` service and direct React panel. Do not reintroduce plugin SDK, runner, iframe, nested React root, or MessagePort bridge.
-- Keep it per-server and default-off; data operations require ordinary session authentication and the current administrator role. No-auth is explicitly denied.
-- Keep history and evaluation sources read-only. Persist only the server feature toggle and supported routing changes; route updates use strict revision CAS and atomic owner-only replacement.
-- Bound model discovery and fall back to normalized static catalogs when discovery cannot produce a usable catalog. Reject credential-like policy fields; preserve unrelated valid policy values.
-- Bind client/provider work to the selected profile/generation and abort/discard superseded requests.
-
-See the [Native Advisor guide](./architecture/native-advisor.md) and [Advisor configuration](./configuration/advisor.md).
-
 ### Agent Status
 
 - Correlate terminal ID with PTY incarnation and fence updates with reporter epochs and leases.
@@ -84,7 +74,7 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - Use exact allowed origins for credentialed browser requests. Keep auth/session cookies, bearer credentials, tickets, and encryption material out of URLs and logs.
 - Bind one-shot media/file capabilities to actor, profile client namespace, target, purpose, and revision/incarnation; revalidate after asynchronous work.
 - OPAQUE/AES encrypted writes must use one captured owner transport for authentication, encryption flow, and final write. Do not downgrade stale operations to plaintext or another profile.
-- Development `--no-auth` must be bound to loopback, is never SQLite lite mode, and must never be described as a production option. Native Advisor remains forbidden under `--no-auth`.
+- Development `--no-auth` must be bound to loopback, is never SQLite lite mode, and must never be described as a production option.
 
 ## Testing and delivery
 
@@ -95,7 +85,7 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - **4-Tier Runner Boundaries (see [Testing guide](./testing.md)):**
   - **Tier 1 — Rust Backend Tests (`cargo test`):** Unit and integration suites against real filesystems and repositories; avoid mocks for Git CAS, PTY, and SQLite persistence.
   - **Tier 2 — Frontend Unit Tests (Vitest jsdom):** Headless execution of stores, reducers, hooks, and data utilities under `packages/ui/src/**/*.test.{ts,tsx}`.
-  - **Tier 3 — Browser Component Regressions (Vitest Browser Mode):** Headless Chromium suites under `packages/ui/browser-tests/**/*.browser.{ts,tsx}` on ports 15173 and 15174 for focused DOM/xterm/advisor component verification.
+  - **Tier 3 — Browser Component Regressions (Vitest Browser Mode):** Headless Chromium suites under `packages/ui/browser-tests/**/*.browser.{ts,tsx}` on ports 15173 and 15174 for focused DOM/xterm component verification.
   - **Tier 4 — Application E2E Journeys (`@playwright/test`):** Full end-to-end user journeys under `packages/ui/e2e/**/*.spec.ts` against built web SPAs and production server containers with real MongoDB instances or isolated SQLite lite mode (`authBackend: "sqlite"`, starting no MongoDB container).
 - **Deterministic Auth Seeding:** Application E2E tests bootstrap sessions using the canonical `application_e2e_seed` tool (supporting both MongoDB and `--sqlite-path` / `DAM_HOPPER_AUTH_SQLITE_PATH`) and browser `storageState`, preventing test coupling to login UI flows. `--no-auth` must not be used for authenticated application journeys.
 - **Visual Evidence Capture Policy (`capture-policy.ts`):** E2E evidence must capture the complete viewport (1440x900 default, 320px narrow dock), validate PNG IHDR dimensions, and colocate machine-readable `evidence.json` and human `review.md` records in `packages/ui/e2e/<case>/`. Visual capture is disabled by default in CI (`CI=true` / `E2E_CAPTURE=0`) for functional parity without artifact bloat. Green automation does not bypass mandatory human visual review.

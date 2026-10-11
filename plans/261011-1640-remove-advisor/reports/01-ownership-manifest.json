@@ -1,0 +1,835 @@
+{
+  "root": "/home/loidinh/WS/dam-hopper-ws/remove-advisor",
+  "phases": [
+    {
+      "id": "01",
+      "name": "UI Presentation and Shortcuts Removal",
+      "dependsOn": [],
+      "files": [
+        {
+          "path": "packages/ui/src/advisor/advisor.css",
+          "action": "delete",
+          "reason": "Delete Advisor styling"
+        },
+        {
+          "path": "packages/ui/src/advisor/AdvisorPanel.test.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor panel unit tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/AdvisorPanel.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor panel component"
+        },
+        {
+          "path": "packages/ui/src/advisor/advisor-data-provider.ts",
+          "action": "delete",
+          "reason": "Delete Advisor data provider interface and types"
+        },
+        {
+          "path": "packages/ui/src/advisor/advisor-types.ts",
+          "action": "delete",
+          "reason": "Delete Advisor DTO and domain types"
+        },
+        {
+          "path": "packages/ui/src/advisor/index.ts",
+          "action": "delete",
+          "reason": "Delete Advisor package entry and exports"
+        },
+        {
+          "path": "packages/ui/src/advisor/native-advisor-provider.test.ts",
+          "action": "delete",
+          "reason": "Delete native advisor provider tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/native-advisor-provider.ts",
+          "action": "delete",
+          "reason": "Delete native advisor provider implementation"
+        },
+        {
+          "path": "packages/ui/src/advisor/policy-routing-validation.test.ts",
+          "action": "delete",
+          "reason": "Delete routing policy validation tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/policy-routing-validation.ts",
+          "action": "delete",
+          "reason": "Delete routing policy validation logic"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-state-selectors.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state selectors"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-state-types.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state types"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-state-selectors.test.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state selectors tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-state-reducer.test.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state reducer tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-state-reducer.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state reducer"
+        },
+        {
+          "path": "packages/ui/src/advisor/app-actions.ts",
+          "action": "delete",
+          "reason": "Delete Advisor state actions"
+        },
+        {
+          "path": "packages/ui/src/advisor/evaluation-comparison-helpers.ts",
+          "action": "delete",
+          "reason": "Delete evaluation comparison helpers"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/EvaluationsView.test.tsx",
+          "action": "delete",
+          "reason": "Delete evaluations view tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/ConfigurationView.tsx",
+          "action": "delete",
+          "reason": "Delete configuration view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/EvaluationDetail.tsx",
+          "action": "delete",
+          "reason": "Delete evaluation detail view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/HistoryView.tsx",
+          "action": "delete",
+          "reason": "Delete history view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/EvaluationsView.tsx",
+          "action": "delete",
+          "reason": "Delete evaluations view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/HistoryDetail.tsx",
+          "action": "delete",
+          "reason": "Delete history detail view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/views/OverviewView.tsx",
+          "action": "delete",
+          "reason": "Delete overview view component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/PolicySummaryCard.test.tsx",
+          "action": "delete",
+          "reason": "Delete policy summary card tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/PolicySummaryCard.tsx",
+          "action": "delete",
+          "reason": "Delete policy summary card component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/RouteFieldset.tsx",
+          "action": "delete",
+          "reason": "Delete route fieldset component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/CandidatePerformanceTable.tsx",
+          "action": "delete",
+          "reason": "Delete candidate performance table"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/ComparableGroupsSection.tsx",
+          "action": "delete",
+          "reason": "Delete comparable groups section"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/EvaluationGroupCard.tsx",
+          "action": "delete",
+          "reason": "Delete evaluation group card"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/ScoreProvenanceCard.tsx",
+          "action": "delete",
+          "reason": "Delete score provenance card"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/EvaluationDescriptorCard.tsx",
+          "action": "delete",
+          "reason": "Delete evaluation descriptor card"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/EvaluationDescriptorsSection.tsx",
+          "action": "delete",
+          "reason": "Delete evaluation descriptors section"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/PanelTabs.tsx",
+          "action": "delete",
+          "reason": "Delete panel tabs component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/PanelTabs.test.tsx",
+          "action": "delete",
+          "reason": "Delete panel tabs tests"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/EvaluationsHeader.tsx",
+          "action": "delete",
+          "reason": "Delete evaluations header component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/RouteGroupCard.tsx",
+          "action": "delete",
+          "reason": "Delete route group card component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/TextBlock.tsx",
+          "action": "delete",
+          "reason": "Delete text block component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/PaginationControls.tsx",
+          "action": "delete",
+          "reason": "Delete pagination controls component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/MetricRatio.tsx",
+          "action": "delete",
+          "reason": "Delete metric ratio component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/ActivityScopeControl.tsx",
+          "action": "delete",
+          "reason": "Delete activity scope control"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/DiagnosticPanel.tsx",
+          "action": "delete",
+          "reason": "Delete diagnostic panel component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/StatusBanner.tsx",
+          "action": "delete",
+          "reason": "Delete status banner component"
+        },
+        {
+          "path": "packages/ui/src/advisor/components/DataControls.tsx",
+          "action": "delete",
+          "reason": "Delete data controls component"
+        },
+        {
+          "path": "packages/ui/src/components/pages/settings-page/AdvisorSettingsSection.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor settings section component"
+        },
+        {
+          "path": "packages/ui/src/components/pages/settings-page/AdvisorSettingsSection.test.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor settings section tests"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/AdvisorPanelSlot.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor panel slot organism"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/AdvisorPanelSlot.test.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor panel slot tests"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx",
+          "action": "delete",
+          "reason": "Delete Workspace Advisor host organism"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/WorkspaceAdvisorHost.test.tsx",
+          "action": "delete",
+          "reason": "Delete Workspace Advisor host tests"
+        },
+        {
+          "path": "packages/ui/src/contexts/WorkspaceAdvisorContext.tsx",
+          "action": "delete",
+          "reason": "Delete Workspace Advisor context provider"
+        },
+        {
+          "path": "packages/ui/src/hooks/use-advisor.ts",
+          "action": "delete",
+          "reason": "Delete Advisor visibility and query hook"
+        },
+        {
+          "path": "packages/ui/src/hooks/use-advisor.test.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor visibility hook tests"
+        },
+        {
+          "path": "packages/ui/src/lib/workspace-advisor-placement.ts",
+          "action": "delete",
+          "reason": "Delete Advisor slot placement helper"
+        },
+        {
+          "path": "packages/ui/src/lib/workspace-advisor-placement.test.ts",
+          "action": "delete",
+          "reason": "Delete Advisor slot placement helper tests"
+        },
+        {
+          "path": "packages/ui/src/components/pages/WorkspacePage.tsx",
+          "action": "modify",
+          "reason": "Remove Advisor host, slots, placement provider, visibility hook, and compact surface IDs"
+        },
+        {
+          "path": "packages/ui/src/components/pages/WorkspacePage.test.tsx",
+          "action": "modify",
+          "reason": "Remove Advisor visibility mocks and gating test suites"
+        },
+        {
+          "path": "packages/ui/src/components/pages/WorkspacePageBlameReveal.test.tsx",
+          "action": "modify",
+          "reason": "Remove useAdvisorVisibility mock"
+        },
+        {
+          "path": "packages/ui/src/components/pages/SettingsPage.tsx",
+          "action": "modify",
+          "reason": "Remove AdvisorSettingsSection accordion"
+        },
+        {
+          "path": "packages/ui/src/components/pages/SettingsPage.test.tsx",
+          "action": "modify",
+          "reason": "Remove AdvisorSettingsSection mock and accordion title assertion"
+        },
+        {
+          "path": "packages/ui/src/components/templates/TerminalWorkspaceShell.tsx",
+          "action": "modify",
+          "reason": "Remove advisorContent prop and panel branch"
+        },
+        {
+          "path": "packages/ui/src/components/templates/TerminalWorkspaceShell.test.tsx",
+          "action": "modify",
+          "reason": "Remove advisor target test cases from matrix"
+        },
+        {
+          "path": "packages/ui/src/lib/ide-shell-layout.ts",
+          "action": "modify",
+          "reason": "Remove advisor from TerminalPanelToolId and panel shortcut resolution"
+        },
+        {
+          "path": "packages/ui/src/lib/ide-shell-layout.test.ts",
+          "action": "modify",
+          "reason": "Remove advisor panel toggle tests"
+        },
+        {
+          "path": "packages/ui/src/lib/terminal-workspace-panel.ts",
+          "action": "modify",
+          "reason": "Remove advisor from TerminalWorkspacePanelId union"
+        },
+        {
+          "path": "packages/ui/src/lib/reveal-active-file.ts",
+          "action": "modify",
+          "reason": "Remove advisor from ActivateToolRequest exclusiveTarget union"
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Client Transport and Test Infrastructure Removal",
+      "dependsOn": [],
+      "files": [
+        {
+          "path": "packages/ui/vitest.advisor-routing.browser.config.ts",
+          "action": "delete",
+          "reason": "Delete specialized Advisor Vitest browser runner config"
+        },
+        {
+          "path": "packages/ui/browser-tests/advisor-routing.browser.tsx",
+          "action": "delete",
+          "reason": "Delete Advisor routing browser test suite"
+        },
+        {
+          "path": "packages/ui/browser-tests/workspace-advisor.browser.tsx",
+          "action": "delete",
+          "reason": "Delete Workspace Advisor panel placement browser test suite"
+        },
+        {
+          "path": "packages/ui/e2e/counsel-evaluations-responsive/counsel-evaluations-responsive.spec.ts",
+          "action": "delete",
+          "reason": "Delete evaluations responsive E2E test spec"
+        },
+        {
+          "path": "packages/ui/e2e/counsel-evaluations-responsive/evidence.json",
+          "action": "delete",
+          "reason": "Delete evaluations responsive E2E evidence artifact"
+        },
+        {
+          "path": "packages/ui/e2e/counsel-evaluations-responsive/review.md",
+          "action": "delete",
+          "reason": "Delete evaluations responsive visual review artifact"
+        },
+        {
+          "path": "packages/ui/e2e/counsel-evaluations-responsive/screenshot.png",
+          "action": "delete",
+          "reason": "Delete evaluations responsive visual review screenshot"
+        },
+        {
+          "path": "packages/ui/e2e/advisor-model-dropdown-theme/advisor-model-dropdown-theme.spec.ts",
+          "action": "delete",
+          "reason": "Delete advisor model dropdown E2E test spec"
+        },
+        {
+          "path": "packages/ui/e2e/advisor-model-dropdown-theme/evidence.json",
+          "action": "delete",
+          "reason": "Delete advisor model dropdown E2E evidence artifact"
+        },
+        {
+          "path": "packages/ui/e2e/advisor-model-dropdown-theme/review.md",
+          "action": "delete",
+          "reason": "Delete advisor model dropdown visual review artifact"
+        },
+        {
+          "path": "packages/ui/e2e/advisor-model-dropdown-theme/screenshot.png",
+          "action": "delete",
+          "reason": "Delete advisor model dropdown visual review screenshot"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-routing.json",
+          "action": "delete",
+          "reason": "Delete canonical advisor routing fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-routing-invalid.json",
+          "action": "delete",
+          "reason": "Delete invalid advisor routing fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-routing-v1.json",
+          "action": "delete",
+          "reason": "Delete v1 advisor routing fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/models/codex.json",
+          "action": "delete",
+          "reason": "Delete Codex model discovery fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/models/omp.json",
+          "action": "delete",
+          "reason": "Delete OMP model discovery fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/models/pi.txt",
+          "action": "delete",
+          "reason": "Delete Pi model discovery fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/models/claude.json",
+          "action": "delete",
+          "reason": "Delete Claude model discovery fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-evaluations/eval-group-a.json",
+          "action": "delete",
+          "reason": "Delete evaluation document group A fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-evaluations/eval-group-b.json",
+          "action": "delete",
+          "reason": "Delete evaluation document group B fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-evaluations/eval-invalid.json",
+          "action": "delete",
+          "reason": "Delete invalid evaluation document fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/project-metadata.json",
+          "action": "delete",
+          "reason": "Delete history root project metadata fixture"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/13aea919e60e23089352d6284e556087ee1441c73b9ac30c076010741051bd0c/project-metadata.json",
+          "action": "delete",
+          "reason": "Delete project metadata fixture 13ae"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/13aea919e60e23089352d6284e556087ee1441c73b9ac30c076010741051bd0c/00000000-0000-4000-8000-000000000003/00000000-0000-4000-8000-000000000014/execution.json",
+          "action": "delete",
+          "reason": "Delete execution history fixture 13ae-0003"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/13aea919e60e23089352d6284e556087ee1441c73b9ac30c076010741051bd0c/00000000-0000-4000-8000-000000000003/00000000-0000-4000-8000-000000000014/outcome.json",
+          "action": "delete",
+          "reason": "Delete outcome history fixture 13ae-0003"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998/project-metadata.json",
+          "action": "delete",
+          "reason": "Delete project metadata fixture fd40"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000012/execution.json",
+          "action": "delete",
+          "reason": "Delete execution history fixture fd40-0012"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000011/execution.json",
+          "action": "delete",
+          "reason": "Delete execution history fixture fd40-0011"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000011/outcome.json",
+          "action": "delete",
+          "reason": "Delete outcome history fixture fd40-0011"
+        },
+        {
+          "path": "__fixtures__/native-advisor/advisor-history/fd402c49f00afafeaaff0ee1e4fa3240d2ade14f74a454f8d709b85cc1d70998/00000000-0000-4000-8000-000000000002/00000000-0000-4000-8000-000000000013/execution.json",
+          "action": "delete",
+          "reason": "Delete execution history fixture fd40-0013"
+        },
+        {
+          "path": "packages/ui/package.json",
+          "action": "modify",
+          "reason": "Remove test:browser advisor config chaining and public ./advisor package exports"
+        },
+        {
+          "path": "packages/ui/vitest.browser.config.ts",
+          "action": "modify",
+          "reason": "Remove obsolete advisor-routing.browser.tsx exclusion; retain general browser fixtures and screenshot exclusion"
+        },
+        {
+          "path": "packages/ui/src/api/client.ts",
+          "action": "modify",
+          "reason": "Remove Advisor DTO imports/exports, ApiClient.advisor sub-client, and interface"
+        },
+        {
+          "path": "packages/ui/src/api/ws-transport.ts",
+          "action": "modify",
+          "reason": "Remove all advisor:* REST endpoint mappings in WsTransport.invoke"
+        },
+        {
+          "path": "packages/ui/src/api/ws-transport.test.ts",
+          "action": "modify",
+          "reason": "Remove WsTransport Advisor endpoint tests"
+        },
+        {
+          "path": "packages/ui/e2e/fixtures/application-data.ts",
+          "action": "modify",
+          "reason": "Remove Advisor directory creation, policy file seeding, evaluation copying, and [server.advisor] TOML"
+        },
+        {
+          "path": "packages/ui/e2e/fixtures/application-readiness.ts",
+          "action": "modify",
+          "reason": "Replace Advisor status safety probe with existing /api/agent-status/paths and camelCase effectiveHome"
+        },
+        {
+          "path": "packages/ui/e2e/fixtures/application-services.ts",
+          "action": "modify",
+          "reason": "Remove readPolicyFile helper and AppServices interface signature"
+        },
+        {
+          "path": "packages/ui/e2e/fixtures/application-services.spec.ts",
+          "action": "modify",
+          "reason": "Update safety home verification probe in L01 and L06 and remove readPolicyFile test"
+        },
+        {
+          "path": "packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts",
+          "action": "modify",
+          "reason": "Excise Advisor accordion click/toggle and configuration panel interactions while preserving auth workbench journey"
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Native Server Removal",
+      "dependsOn": [],
+      "files": [
+        {
+          "path": "server/src/advisor/error.rs",
+          "action": "delete",
+          "reason": "Delete Advisor error types"
+        },
+        {
+          "path": "server/src/advisor/evaluation_comparison.rs",
+          "action": "delete",
+          "reason": "Delete evaluation comparison domain service"
+        },
+        {
+          "path": "server/src/advisor/evaluations.rs",
+          "action": "delete",
+          "reason": "Delete evaluations domain service"
+        },
+        {
+          "path": "server/src/advisor/history.rs",
+          "action": "delete",
+          "reason": "Delete history snapshot domain service"
+        },
+        {
+          "path": "server/src/advisor/history_scan.rs",
+          "action": "delete",
+          "reason": "Delete history scanner service"
+        },
+        {
+          "path": "server/src/advisor/metrics.rs",
+          "action": "delete",
+          "reason": "Delete Advisor metrics domain service"
+        },
+        {
+          "path": "server/src/advisor/mod.rs",
+          "action": "delete",
+          "reason": "Delete Advisor module root"
+        },
+        {
+          "path": "server/src/advisor/models.rs",
+          "action": "delete",
+          "reason": "Delete model catalog discovery domain service"
+        },
+        {
+          "path": "server/src/advisor/policy.rs",
+          "action": "delete",
+          "reason": "Delete routing policy CAS domain service"
+        },
+        {
+          "path": "server/src/advisor/snapshots.rs",
+          "action": "delete",
+          "reason": "Delete Advisor snapshots domain service"
+        },
+        {
+          "path": "server/src/advisor/status.rs",
+          "action": "delete",
+          "reason": "Delete Advisor root status inspection service"
+        },
+        {
+          "path": "server/src/advisor/types.rs",
+          "action": "delete",
+          "reason": "Delete Advisor domain and DTO types"
+        },
+        {
+          "path": "server/src/api/advisor.rs",
+          "action": "delete",
+          "reason": "Delete Axum advisor API route handlers"
+        },
+        {
+          "path": "server/examples/advisor_routing_browser_fixture.rs",
+          "action": "delete",
+          "reason": "Delete loopback advisor routing test fixture binary"
+        },
+        {
+          "path": "server/tests/advisor_history_api.rs",
+          "action": "delete",
+          "reason": "Delete Advisor history integration tests"
+        },
+        {
+          "path": "server/tests/advisor_policy_evaluations.rs",
+          "action": "delete",
+          "reason": "Delete Advisor policy and evaluation integration tests"
+        },
+        {
+          "path": "server/src/lib.rs",
+          "action": "modify",
+          "reason": "Remove pub mod advisor; declaration"
+        },
+        {
+          "path": "server/src/api/mod.rs",
+          "action": "modify",
+          "reason": "Remove pub mod advisor; declaration"
+        },
+        {
+          "path": "server/src/api/router.rs",
+          "action": "modify",
+          "reason": "Remove advisor_routes construction and router merge"
+        },
+        {
+          "path": "server/src/state.rs",
+          "action": "modify",
+          "reason": "Remove advisor_service and advisor_settings_lock fields, initialization, and with_advisor_service"
+        },
+        {
+          "path": "server/src/api/auth.rs",
+          "action": "modify",
+          "reason": "Delete now-unconsumed require_admin/get_user_role helpers; retain surviving auth and privileged-action gates"
+        },
+        {
+          "path": "server/src/config/schema.rs",
+          "action": "modify",
+          "reason": "Remove pub advisor: AdvisorConfig from ServerConfig, validation, default, and AdvisorConfig struct"
+        },
+        {
+          "path": "server/src/config/mod.rs",
+          "action": "modify",
+          "reason": "Remove AdvisorConfig re-export"
+        },
+        {
+          "path": "server/src/config/parser.rs",
+          "action": "modify",
+          "reason": "Remove [server.advisor] table serialization in write_config"
+        },
+        {
+          "path": "server/src/config/replacement.rs",
+          "action": "modify",
+          "reason": "Remove candidate.server.advisor replacement guard"
+        },
+        {
+          "path": "server/src/config/tests.rs",
+          "action": "modify",
+          "reason": "Remove advisor config literals and tests; add legacy TOML startup/roundtrip test"
+        },
+        {
+          "path": "server/tests/auth_lite_mode.rs",
+          "action": "modify",
+          "reason": "Remove Advisor-only gate test and role-helper assertions; retain real SQLite session/storage-failure/reauthentication coverage via /api/projects"
+        },
+        {
+          "path": "server/tests/linux_release_native_phase07.rs",
+          "action": "modify",
+          "reason": "Remove test_advisor_history_directory_validation_rejects_symlink and advisor import"
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Feature Documentation Removal",
+      "dependsOn": [],
+      "files": [
+        {
+          "path": "docs/configuration/advisor.md",
+          "action": "delete",
+          "reason": "Delete dedicated Advisor configuration guide"
+        },
+        {
+          "path": "docs/architecture/native-advisor.md",
+          "action": "delete",
+          "reason": "Delete dedicated Native Advisor architecture guide"
+        },
+        {
+          "path": "docs/api/advisor-and-workflow.md",
+          "action": "delete",
+          "reason": "Workflow-only rename source; delete Advisor content and move surviving contract to docs/api/workflow.md"
+        },
+        {
+          "path": "docs/api/workflow.md",
+          "action": "create",
+          "reason": "Workflow-only rename destination preserving existing live contract; no Advisor replacement documentation"
+        },
+        {
+          "path": "README.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor documentation table row and architecture mentions"
+        },
+        {
+          "path": "docs/README.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor documentation table row and link"
+        },
+        {
+          "path": "docs/api-reference.md",
+          "action": "modify",
+          "reason": "Update advisor-and-workflow.md link to workflow.md and remove Advisor endpoint section"
+        },
+        {
+          "path": "docs/code-standards.md",
+          "action": "modify",
+          "reason": "Remove advisor from backend domain list and delete Native Advisor section"
+        },
+        {
+          "path": "docs/codebase-summary.md",
+          "action": "modify",
+          "reason": "Remove advisor/ row and Native Advisor summary bullets"
+        },
+        {
+          "path": "docs/system-architecture.md",
+          "action": "modify",
+          "reason": "Excise Advisor from domain diagrams, AppState summary, and Native Advisor architecture section"
+        },
+        {
+          "path": "docs/configuration-guide.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor configuration reference"
+        },
+        {
+          "path": "docs/configuration/index.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor configuration link"
+        },
+        {
+          "path": "docs/deployment-guide.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor database guard bullet"
+        },
+        {
+          "path": "docs/frontend-components.md",
+          "action": "modify",
+          "reason": "Remove Native Advisor workbench component reference"
+        },
+        {
+          "path": "docs/frontend-components/workbench.md",
+          "action": "modify",
+          "reason": "Delete Native Advisor Workspace host and provider section"
+        },
+        {
+          "path": "docs/project-roadmap.md",
+          "action": "modify",
+          "reason": "Remove Native Evcrate Advisor completed milestone row and platform text"
+        },
+        {
+          "path": "docs/project-overview-pdr.md",
+          "action": "modify",
+          "reason": "Remove PR-027 Native Advisor requirement row, section, and security access paragraph"
+        },
+        {
+          "path": "docs/testing.md",
+          "action": "modify",
+          "reason": "Remove Advisor browser test runners, E2E journeys, and testing gap rows"
+        },
+        {
+          "path": "docs/linux-systemd.md",
+          "action": "modify",
+          "reason": "Retitle Section 12, remove /api/advisor/status probe, and preserve plugin cleanup safeguards"
+        },
+        {
+          "path": "docs/archive/retired-plugin-platform.md",
+          "action": "modify",
+          "reason": "Remove claims that Native Advisor supersedes plugin platform as current feature"
+        },
+        {
+          "path": "docs/CHANGELOG.md",
+          "action": "modify",
+          "reason": "Excise Native Advisor feature entries while preserving unrelated release history and external mentoring mentions"
+        },
+        {
+          "path": "docs/user-guide-multi-server-profiles.md",
+          "action": "modify",
+          "reason": "Remove Workspace Advisor bullet"
+        },
+        {
+          "path": "AGENTS.md",
+          "action": "modify",
+          "reason": "Remove advisor/ backend directory references, architecture guidelines, and commit convention examples"
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "Integration Verification",
+      "dependsOn": [
+        "01",
+        "02",
+        "03",
+        "04"
+      ],
+      "files": [
+        {
+          "path": "plans/261011-1640-remove-advisor/reports/02-integration-verification-report.md",
+          "action": "create",
+          "reason": "Final integration verification and evidence report."
+        }
+      ]
+    }
+  ]
+}

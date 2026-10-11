@@ -41,7 +41,6 @@ export interface ApplicationServices {
   readContainerFile(filePath: string): Promise<string>;
   writeContainerFile(filePath: string, content: string): Promise<void>;
   statContainerFile(filePath: string): Promise<{ mtime: string; size: number }>;
-  readPolicyFile(): Promise<unknown>;
   fetchApi(endpoint: string, init?: RequestInit): Promise<Response>;
   dispose(): Promise<void>;
 }
@@ -300,13 +299,6 @@ export async function startApplicationServices(
           mtime: mtimeStr ?? "",
           size: Number.parseInt(sizeStr ?? "0", 10),
         };
-      },
-      async readPolicyFile(): Promise<unknown> {
-        const raw = await execInContainer(appContainerId, [
-          "cat",
-          "/e2e/home/.evcrate/advisor-routing.json",
-        ]);
-        return JSON.parse(raw);
       },
       fetchApi(endpoint: string, init?: RequestInit): Promise<Response> {
         const headers = new Headers(init?.headers);

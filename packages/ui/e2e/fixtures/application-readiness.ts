@@ -23,7 +23,7 @@ export async function waitForHealth(appOrigin: string, timeoutMs = 30000): Promi
  * Validates security invariants before test execution:
  * 1. Unauthenticated request rejected (401)
  * 2. Authenticated user status verified
- * 3. Advisor safe home points to container root (/e2e/home/.evcrate/advisor-history)
+ * 3. Safe home points to container root (/e2e/home)
  */
 export async function verifyServiceSafety(appOrigin: string, token: string): Promise<void> {
   const unauthRes = await fetch(`${appOrigin}/api/projects`);
@@ -38,14 +38,14 @@ export async function verifyServiceSafety(appOrigin: string, token: string): Pro
     throw new Error(`Authenticated status check failed: ${authStatusRes.status}`);
   }
 
-  const advisorStatusRes = await fetch(`${appOrigin}/api/advisor/status`, {
+  const pathsRes = await fetch(`${appOrigin}/api/agent-status/paths`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!advisorStatusRes.ok) {
-    throw new Error(`Advisor status check failed: ${advisorStatusRes.status}`);
+  if (!pathsRes.ok) {
+    throw new Error(`Paths verification check failed: ${pathsRes.status}`);
   }
-  const advisorData = (await advisorStatusRes.json()) as { path?: string | null };
-  if (!advisorData.path?.includes("/e2e/home/.evcrate/advisor-history")) {
-    throw new Error(`Advisor resolved unsafe home path: ${advisorData.path}`);
+  const pathsData = (await pathsRes.json()) as { effectiveHome?: string | null };
+  if (pathsData.effectiveHome !== "/e2e/home") {
+    throw new Error(`Server resolved unsafe home path: ${pathsData.effectiveHome}`);
   }
 }

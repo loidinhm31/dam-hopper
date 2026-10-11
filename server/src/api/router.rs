@@ -28,7 +28,7 @@ const GIT_BLAME_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    advisor as advisor_api, agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
+    agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
     browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git,
     git_blame, git_diff, host_actions, idle_suspend, media_session, plans as plans_api,
     port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel,
@@ -562,79 +562,13 @@ pub fn build_router_with_web_dir_and_origins(
             state.clone(),
             resource_events::global_admission_layer,
         ));
-
-    let advisor_routes = Router::new()
-        .route(
-            "/api/advisor/status",
-            get(advisor_api::advisor_status_handler),
-        )
-        .route(
-            "/api/advisor/settings",
-            patch(advisor_api::advisor_settings_update_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/history/refresh",
-            post(advisor_api::history_refresh_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/history/summary",
-            post(advisor_api::history_summary_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/history/page",
-            post(advisor_api::history_page_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/history/detail",
-            post(advisor_api::history_detail_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/policy/current",
-            post(advisor_api::policy_current_handler).layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/policy",
-            patch(advisor_api::policy_update_handler)
-                .layer(RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/advisor/models",
-            post(advisor_api::models_list_handler)
-                .layer(RequestBodyLimitLayer::new(16 * 1024)),
-        )
-        .route(
-            "/api/advisor/evaluations/list",
-            post(advisor_api::evaluations_list_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/evaluations/read",
-            post(advisor_api::evaluations_read_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route(
-            "/api/advisor/evaluations/compare",
-            post(advisor_api::evaluations_compare_handler)
-                .layer(RequestBodyLimitLayer::new(64 * 1024)),
-        )
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_admin,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
-        ));
-
     let router = Router::new()
         .merge(public)
         .merge(protected)
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream)
-        .merge(host_resource_stream_routes)
-        .merge(advisor_routes);
+        .merge(host_resource_stream_routes);
     let router = match web_dir {
         Some(dir) => router
             // Preserve API 404 semantics; the SPA fallback is only for browser paths.

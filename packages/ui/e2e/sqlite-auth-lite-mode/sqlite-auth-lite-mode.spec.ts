@@ -71,7 +71,7 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
     const loginBody = (await loginRes.json()) as { code: string };
     expect(loginBody.code).toBe("ACCOUNT_DISABLED");
 
-    // 5. Navigate to Settings and exercise admin-gated Native Advisor toggle backed by SQLite auth
+    // 5. Navigate to Settings and verify healthy surviving controls backed by SQLite auth
     await page.goto(`${appServices.appOrigin}/settings`);
     const targetSelect = page.locator("#settings-target-select");
     await expect(targetSelect).toBeVisible({ timeout: 15_000 });
@@ -83,37 +83,16 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
       }
     }
 
-    const advisorAccordionBtn = page.locator(
-      "button:has-text('Native Advisor')",
-    );
-    await expect(advisorAccordionBtn).toBeVisible({ timeout: 15_000 });
-    await advisorAccordionBtn.click();
-
-    const toggleSwitch = page.locator(
-      'button[aria-label="Toggle native advisor"]',
-    );
-    await expect(toggleSwitch).toBeVisible({ timeout: 10_000 });
-    await toggleSwitch.click();
-    await expect(toggleSwitch).toHaveAttribute("aria-checked", "true", {
-      timeout: 10_000,
-    });
-    await expect(
-      page.locator('[data-testid="advisor-state-badge"]'),
-    ).toHaveText("Enabled");
-
-    // 6. Navigate to Workspace, open Advisor configuration panel, and capture visual checkpoint
+    // 6. Navigate to Workspace, assert workbench rendered healthy root tools (explorer / terminal), and capture visual checkpoint
     await page.goto(`${appServices.appOrigin}/workspace`);
-    const advisorActivityBtn = page
-      .locator('button[aria-label="Advisor"]')
+    const explorerBtn = page
+      .locator('button[aria-label="Explorer"]')
       .first();
-    await expect(advisorActivityBtn).toBeVisible({ timeout: 15_000 });
-    await advisorActivityBtn.click();
-
-    const configTab = page.locator("#tab-configuration");
-    await expect(configTab).toBeVisible({ timeout: 10_000 });
-    await configTab.click();
-    await expect(page.locator(".policy-card")).toBeVisible({ timeout: 10_000 });
-
+    await expect(explorerBtn).toBeVisible({ timeout: 15_000 });
+    const terminalBtn = page
+      .locator('button[aria-label="Terminal"]')
+      .first();
+    await expect(terminalBtn).toBeVisible({ timeout: 15_000 });
     await captureApplicationCheckpoint(page, {
       caseDir: CASE_DIR,
     });

@@ -14,7 +14,6 @@ DamHopper is a monorepo consisting of a Rust server backend, a shared React 19 U
   - `fs/` — Sandboxed filesystem operations, ticketed media access, and OPAQUE encrypted upload handlers.
   - `git/` — Git operations via libgit2 and porcelain fallback, CAS commit rewriting, safe squash, history search.
   - `pty/` — `portable-pty` session management, terminal output broadcast, process lifecycle.
-  - `advisor/` — Native Evcrate Advisor service, policy management, model catalog discovery, history scanner.
   - `agent_status/` — Multi-agent observation engine, status reducers (OMP, Codex, Claude hook ingress).
   - `idle_suspend/` — Server-authoritative terminal idle sleep coordinator and diagnostics.
   - `linux_release/` — Release manager, daemon state, systemd service templates, and updater.
@@ -25,7 +24,7 @@ DamHopper is a monorepo consisting of a Rust server backend, a shared React 19 U
 - **`apps/web/`** — React 19 / Vite SPA entry application. Thin host rendering `@dam-hopper/ui`.
 - **`apps/native/`** — Tauri 2 desktop entry application sharing `@dam-hopper/ui`, backed by `src-tauri/` Rust layer.
 - **`packages/ui/`** (`@dam-hopper/ui`) — Shared React 19 UI package:
-  - `components/` — UI organism, molecule, and atom components (IdeShell, TerminalPanel, GitPage, FileTree, Advisor, HostResources, PortsPanel, CognitoOverlay).
+  - `components/` — UI organism, molecule, and atom components (IdeShell, TerminalPanel, GitPage, FileTree, HostResources, PortsPanel, CognitoOverlay).
   - `lib/` — Frontend utilities (terminal buffer, crypto, git helpers, suggestion controller).
   - `api/` — Frontend API client and `WsTransport` implementation.
   - `hooks/` & `stores/` — React hooks and Zustand stores with strict profile/generation scoping.
@@ -154,7 +153,6 @@ dam-hopper-server (Rust, Axum on Tokio; default port 4801)
 ├── pty/          — portable-pty session manager (incarnation-fenced UUIDs)
 ├── git/          — libgit2 + git CLI (CAS rewrites, safe squash, history search)
 ├── fs/           — sandboxed filesystem, media tickets, encrypted chunk upload
-├── advisor/      — native Evcrate Advisor service, policy CAS, model catalogs
 ├── agent_status/ — OMP loopback WS, Codex/Claude hook ingress, PTY correlation
 ├── idle_suspend/ — helper socket IPC coordinator, systemd integration
 ├── persistence/  — SQLite persistence with bounded background writer
@@ -169,8 +167,7 @@ Browser / Tauri Host (React 19 SPA)
 │   ├── QueryClient scoped by ['profile', profileId, generation, ...]
 │   └── Independent server targets, active projects, and settings
 ├── xterm.js TerminalPanel (per-session input, stream replay, activity indicators)
-├── Cognito Privacy Overlay (ephemeral blur, input & keyboard isolation)
-└── Native Advisor UI (model routing editor, history review, evaluation inspector)
+└── Cognito Privacy Overlay (ephemeral blur, input & keyboard isolation)
 ```
 
 ---
@@ -200,22 +197,17 @@ Browser / Tauri Host (React 19 SPA)
    - Commit rewrites use Git object-database operations with compare-and-swap (CAS) ref publication and leased publication tied to exact expected OIDs. Never use force-push where safe rewrites are expected.
    - Squash operations require a contiguous parent chain and preserve author/tree semantics.
 
-5. **Native Advisor**:
-   - Advisor is native functionality in the Rust server; legacy plugin platform/runner is retired.
-   - Admin-gated via `/api/advisor/*`. Reads `.evcrate/advisor-history` from HOME; history cursors are signed and short-lived.
-   - Model selection is catalog discovery (`POST /api/advisor/models`), and routing policy is persisted atomically with SHA-256 CAS at `~/.evcrate/advisor-routing.json`.
-
-6. **Agent Status Engine**:
+5. **Agent Status Engine**:
    - In-memory status registry correlates PTY sessions with agent lifecycle.
    - OMP uses a local loopback WebSocket reporter with 5s heartbeat.
    - Codex and Claude use native hook ingress via protected Unix domain socket with peer-credential verification. Hook payloads admit identifiers and event metadata, never model prompts or sensitive user text.
 
-7. **Cognito Privacy Mode**:
+6. **Cognito Privacy Mode**:
    - Ephemeral privacy mode (cleared on reload) activated via configured keyboard shortcut.
    - Overlays a frosted backdrop (`blur(20px) saturate(140%)`, rgba(13, 17, 23, 0.52)) with opaque fallback.
    - Implements capture-phase input isolation to guarantee key events and clicks do not leak into live terminals or editors while active.
 
-8. **Zero-Knowledge Encrypted Uploads**:
+7. **Zero-Knowledge Encrypted Uploads**:
    - Client and server negotiate via OPAQUE PAKE (`@serenity-kit/opaque`); passphrase is never transmitted.
    - Derives AES-256-GCM key; uploaded in chunks via `fs:put_*` WebSocket protocol.
 
@@ -228,7 +220,7 @@ Browser / Tauri Host (React 19 SPA)
 - **File Naming**:
   - React components: PascalCase (e.g. `TerminalPanel.tsx`, `GitLogTree.tsx`).
   - Hooks, stores, and modules: kebab-case (e.g. `use-ports.ts`, `terminal-store.ts`).
-  - Rust modules: snake_case (e.g. `fs_subsystem.rs`, `advisor_service.rs`).
+  - Rust modules: snake_case (e.g. `fs_subsystem.rs`, `workflow_service.rs`).
 - **Case Conventions**: API JSON wire payloads use `camelCase`; on-disk TOML configuration uses `snake_case`.
 - **Patches Invariant**: Do not remove `patches/@radix-ui__react-compose-refs@1.1.2.patch` without proving upstream React 19 ref-identity loop resolution.
 
@@ -258,6 +250,6 @@ Browser / Tauri Host (React 19 SPA)
 
 ## 8. Commits, Pull Requests & Security
 
-- **Conventional Commits**: Use conventional commits (e.g., `feat(advisor): add model selector routing`, `fix(git): protect squash ref update with cas`).
+- **Conventional Commits**: Use conventional commits (e.g., `feat(git): add inactive branch rewrite`, `fix(git): protect squash ref update with cas`).
 - **Pull Requests**: Detail behavioral changes, include reproducible validation commands, link associated plans, and include visual screenshots/recordings for UI changes.
 - **Security**: Never commit tokens, private keys, or `.env` files. Keep production secrets out of version control.

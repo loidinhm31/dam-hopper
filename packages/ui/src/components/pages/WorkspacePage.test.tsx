@@ -180,22 +180,6 @@ vi.mock("@/components/organisms/WorkflowContextSurface.js", () => ({
 vi.mock("@/hooks/use-server-profile.js", () => ({
   useServerProfile: () => mockServerProfile,
 }));
-let mockAdvisorVisible = false;
-vi.mock("@/hooks/use-advisor.js", () => ({
-  useAdvisorVisibility: () => ({
-    isVisible: mockAdvisorVisible,
-    isConnected: mockAdvisorVisible,
-    isAdmin: mockAdvisorVisible,
-    isEnabled: mockAdvisorVisible,
-    isAvailable: mockAdvisorVisible,
-    path: mockAdvisorVisible ? "/home/test/.evcrate/advisor-history" : null,
-    sourceError: null,
-    status: undefined,
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
-}));
 vi.mock("@/components/organisms/TopNav.js", () => ({
   TopNav: ({ children }: { children?: ReactNode }) => (
     <div data-testid="top-nav">{children}</div>
@@ -407,7 +391,6 @@ describe("WorkspacePage", () => {
     lastIdeShellProps = null;
     lastTerminalWorkspaceShellProps = null;
     mockServerProfile = { id: "profile-default", name: "Default Profile" };
-    mockAdvisorVisible = false;
   });
 
   afterEach(() => {
@@ -775,6 +758,14 @@ describe("WorkspacePage", () => {
 
     expect(
       resolveActiveCompactSurfaceId(
+        "advisor",
+        [{ id: "explorer" }, { id: "editor" }, { id: "terminal" }],
+        "editor",
+      ),
+    ).toBe("editor");
+
+    expect(
+      resolveActiveCompactSurfaceId(
         "terminal",
         [{ id: "terminal" }, { id: "fleet" }, { id: "ports" }],
         "terminal",
@@ -968,27 +959,28 @@ describe("WorkspacePage", () => {
     });
   });
 
-  describe("Advisor surface gating", () => {
-    it("omits advisor from rightTools when isAdvisorVisible is false", () => {
-      mockWorkspaceMode = "ide";
-      mockAdvisorVisible = false;
-      stubMatchMedia(false);
+  it("exposes only surviving right-rail tools and omits Advisor surfaces across modes", () => {
+    mockWorkspaceMode = "ide";
+    stubMatchMedia(false);
 
-      renderToStaticMarkup(<WorkspacePage />);
+    const ideMarkup = renderToStaticMarkup(<WorkspacePage />);
+    const rightTools = lastIdeShellProps?.rightTools as Array<{ id: string }>;
+    expect(rightTools.map((t) => t.id)).toEqual(["project-info", "terminals"]);
+    expect(ideMarkup).not.toContain("workspace-advisor-host");
 
-      const rightTools = lastIdeShellProps?.rightTools as Array<{ id: string }>;
-      expect(rightTools.some((t) => t.id === "advisor")).toBe(false);
-    });
+    mockWorkspaceMode = "terminal";
+    renderToStaticMarkup(<WorkspacePage />);
+    const termContentMarkup = renderToStaticMarkup(
+      lastTerminalWorkspaceShellProps?.terminalContent as ReactElement,
+    );
+    expect(termContentMarkup).toContain("Git");
+    expect(termContentMarkup).toContain("Ports");
+    expect(termContentMarkup).toContain("Project");
+    expect(termContentMarkup).toContain("Fleet");
+    expect(termContentMarkup).not.toContain("Advisor");
 
-    it("includes advisor in rightTools when isAdvisorVisible is true", () => {
-      mockWorkspaceMode = "ide";
-      mockAdvisorVisible = true;
-      stubMatchMedia(false);
-
-      renderToStaticMarkup(<WorkspacePage />);
-
-      const rightTools = lastIdeShellProps?.rightTools as Array<{ id: string }>;
-      expect(rightTools.some((t) => t.id === "advisor")).toBe(true);
-    });
+    stubMatchMedia(true);
+    const compactMarkup = renderToStaticMarkup(<WorkspacePage />);
+    expect(compactMarkup).not.toContain("Advisor");
   });
 });

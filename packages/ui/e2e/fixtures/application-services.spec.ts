@@ -42,21 +42,16 @@ test.describe("Phase 02: Isolated Application Services (L01-L06)", () => {
     expect(authJson.authenticated).toBe(true);
     expect(authJson.user).toBe("admin");
 
-    // 3. Advisor safe home verification
-    const advisorRes = await appServices.fetchApi("/api/advisor/status");
-    expect(advisorRes.status).toBe(200);
-    const advisorJson = (await advisorRes.json()) as { path?: string | null };
-    expect(advisorJson.path).toContain("/e2e/home/.evcrate/advisor-history");
-
+    // 3. Safe home verification
+    const pathsRes = await appServices.fetchApi("/api/agent-status/paths");
+    expect(pathsRes.status).toBe(200);
+    const pathsJson = (await pathsRes.json()) as { effectiveHome?: string | null };
+    expect(pathsJson.effectiveHome).toBe("/e2e/home");
     // 4. Container file readback
     const readme = await appServices.readContainerFile(
       "/e2e/workspace/fixture-project/README.md",
     );
     expect(readme).toContain("fixture-project");
-
-    // 5. Policy file readback
-    const policy = (await appServices.readPolicyFile()) as { version: number };
-    expect(policy.version).toBe(2);
 
     // 6. Authenticated page loads SPA without crashing
     await expect(authenticatedPage).toHaveTitle(/Dam\s*Hopper/i);
@@ -138,11 +133,11 @@ test.describe("Phase 02: Isolated Application Services (L01-L06)", () => {
       process.env.HOME = "/tmp/poisoned-test-personal-home";
       const services = await startApplicationServices();
       try {
-        const advisorRes = await services.fetchApi("/api/advisor/status");
-        expect(advisorRes.status).toBe(200);
-        const json = (await advisorRes.json()) as { path?: string | null };
-        expect(json.path).toContain("/e2e/home/.evcrate/advisor-history");
-        expect(json.path).not.toContain("poisoned");
+        const pathsRes = await services.fetchApi("/api/agent-status/paths");
+        expect(pathsRes.status).toBe(200);
+        const json = (await pathsRes.json()) as { effectiveHome?: string | null };
+        expect(json.effectiveHome).toBe("/e2e/home");
+        expect(json.effectiveHome).not.toContain("poisoned");
       } finally {
         await services.dispose();
       }

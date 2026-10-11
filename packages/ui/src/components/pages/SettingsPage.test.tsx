@@ -104,9 +104,6 @@ vi.mock("@/components/pages/settings-page/SettingsConfigPanels.js", () => ({
   SettingsGlobalConfigPanel: () => <div>GlobalConfigPanel</div>,
   SettingsWorkspaceConfigPanel: () => <div>WorkspaceConfigPanel</div>,
 }));
-vi.mock("@/components/pages/settings-page/AdvisorSettingsSection.js", () => ({
-  AdvisorSettingsSection: () => <div>AdvisorSettingsSection</div>,
-}));
 
 describe("SettingsPage Import / Export integration", () => {
   let container: HTMLDivElement;
@@ -376,7 +373,6 @@ describe("SettingsPage accordion collapse behavior", () => {
     "Workspace Config",
     "Maintenance",
     "Import / Export Settings",
-    "Native Advisor",
   ];
 
   it("renders all sections collapsed by default", () => {

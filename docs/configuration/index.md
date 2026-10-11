@@ -10,7 +10,6 @@ Use these references to find the correct configuration owner.
 - [Server environment and authentication](./server-environment-auth.md) — environment variables, tokens, and MFA operations.
 - [Server deployment and transport](./server-deployment.md) — process modes, CORS, media, and SSE operations.
 - [Server operations and troubleshooting](./server-operations.md) — smoke checks, Windows direct-server setup, and support tasks.
-- [Native Advisor](./advisor.md) — default-off server setting, history source status, symlink handling, and administrator-only access.
 
 ## Quick Start
 

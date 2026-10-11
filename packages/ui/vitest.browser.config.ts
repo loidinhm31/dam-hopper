@@ -415,7 +415,6 @@ export default defineConfig({
     fileParallelism: false,
     include: ["browser-tests/**/*.browser.{ts,tsx}"],
     exclude: [
-      "browser-tests/advisor-routing.browser.tsx",
       "browser-tests/__screenshots__/**",
     ],
     browser: {
