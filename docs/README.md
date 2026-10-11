@@ -23,7 +23,6 @@ Use this index to find maintained product, architecture, API, development, and o
 | Reference | Scope |
 | --- | --- |
 | [Multi-server profiles](./user-guide-multi-server-profiles.md) | Profile setup and independently scoped connections |
-| [Native Advisor](./architecture/native-advisor.md) | Native Rust service, admin access, policy, history, and UI |
 | [Agent status](./architecture/agent-status.md) | OMP and native Codex/Claude status reporting and ownership |
 | [Git history search](./architecture/git-history-search.md) | Search, query ownership, persisted selection, and Git views |
 | [Host-resource SSE](./architecture/host-resource-sse.md) | Stream architecture and remaining rollout qualification |
@@ -45,5 +44,3 @@ Use this index to find maintained product, architecture, API, development, and o
 ## Change history
 
 - [Changelog](./CHANGELOG.md)
-
-The former DamHopper plugin platform is permanently retired. Former specifications are documented in the [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md); Native Advisor is the current in-process implementation.

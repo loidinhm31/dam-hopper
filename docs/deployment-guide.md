@@ -260,7 +260,6 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 1. **Loopback Only (`127.0.0.1`):** The server binary defaults to binding `0.0.0.0`. When running with `--no-auth`, **always pass `--host 127.0.0.1`**. Never bind `--no-auth` to a public IP, LAN, or untrusted network.
 2. **Forbidden in Production:** Server startup aborts if `RUST_ENV=production` or `ENVIRONMENT=production` is detected while `--no-auth` is active.
 3. **Database Guard:** If an authentication store is initialized (`auth_store.is_some()`), `--no-auth` mode is rejected.
-   - **Native Advisor:** All `/api/advisor/*` endpoints are denied (`NoAuthForbidden`). Advisor requires authenticated admin access.
    - **Host Actions:** Host lifecycle actions return `403 FORBIDDEN` (`actionsDisabledNoAuth`).
    - **Idle Suspend:** Timing configuration and manual force-sleep endpoints return `403 FORBIDDEN` (`idleSuspendTimingDisabledNoAuth`).
 

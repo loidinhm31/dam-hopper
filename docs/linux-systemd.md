@@ -496,9 +496,9 @@ a general release manager.
 
 Enrollment, helper security, host qualification, canaries, and rollback are covered in the [dedicated operator runbook](./linux-systemd/idle-suspend-runbook.md).
 
-## 12. Operator Runbook: Native Advisor Migration & Plugin Platform Retirement
+## 12. Operator Runbook: Plugin Platform Retirement
 
-With Native Advisor integrated directly into Dam-Hopper, the plugin runner service, worker Node, and plugin platform are retired.
+The plugin runner service, worker Node, and plugin platform are retired.
 
 ### Sequence of Operations
 
@@ -514,23 +514,13 @@ sudo dam-hopper install --bundle /path/to/release-bundle-directory --role both
 sudo dam-hopper start
 ```
 
-#### Step 2: Verify Native Advisor and Core Runtime
+#### Step 2: Verify Core Runtime
 
-Verify that the API server and Native Advisor endpoint respond:
-Use the session token returned by normal MFA sign-in; `server-token` is the
-server signing secret, not a bearer credential. See the
-[Authentication API](./api/authentication.md).
+Verify that the API server responds:
 
 ```bash
 # Health probe
 curl -s http://127.0.0.1:4801/api/health
-
-# Prompt for a session token returned after normal MFA sign-in
-read -rsp 'MFA-issued session token: ' SESSION_TOKEN
-printf '\n'
-curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" \
-  http://127.0.0.1:4801/api/advisor/status
-unset SESSION_TOKEN
 ```
 
 #### Step 3: Inspect Retired Plugin Platform (Dry-Run)

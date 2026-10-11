@@ -1,4 +1,3 @@
-pub mod advisor;
 pub mod agent_status;
 pub mod agent_store;
 pub mod api;

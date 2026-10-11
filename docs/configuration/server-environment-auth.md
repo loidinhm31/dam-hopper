@@ -361,6 +361,6 @@ Both methods lock pages consistently without interrupting active HTTP or WebSock
 - **Safe Rollback**: If an operator switches to SQLite and subsequently chooses to switch back to MongoDB (by removing `DAM_HOPPER_LITE_MODE=true`), the server seamlessly reconnects to the original MongoDB database, restoring access to all preexisting accounts and credentials intact.
 ## Historical Archive: Retired Plugin Platform
 
-The trusted plugin platform and external runner daemon (`dam-hopper-plugin-runner`) were decommissioned on 2026-10-02 and superseded by the in-process [Native Evcrate Advisor](../architecture/native-advisor.md).
+The trusted plugin platform and external runner daemon (`dam-hopper-plugin-runner`) were decommissioned on 2026-10-02.
 
 Former configuration parameters (such as `DAM_HOPPER_PLUGIN_ADMINS_FILE`, `/etc/dam-hopper/plugin-admins.json`, and runner management RPC allowlists) are no longer active. See [Retired Plugin Platform Archive Record](../archive/retired-plugin-platform.md) for architectural provenance and [Linux systemd Operations](../linux-systemd.md) for the host artifact removal runbook (`deploy/remove-plugin-platform.sh`).

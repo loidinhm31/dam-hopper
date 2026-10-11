@@ -1,6 +1,6 @@
 # Workbench and Profile Components
 
-Shared shell, owner selection, Git history, Settings, and Advisor composition details moved from the [component index](../frontend-components.md).
+Shared shell, owner selection, Git history, and Settings composition details moved from the [component index](../frontend-components.md).
 
 Architecture and documentation for the shared React UI used by the DamHopper
 browser host and Tauri native host.
@@ -252,21 +252,4 @@ The UI coordinates host resource streams across seven distinct operational modes
 
 See the [host-resource SSE architecture](../architecture/host-resource-sse.md)
 for source arbitration. The [Preferences, Settings, and Host Resources architecture](../architecture/preferences-settings-and-host-resources.md) documents the underlying owner boundary.
-## Native Advisor Workspace host and provider
-
-The Native Evcrate Advisor UI is hosted directly inside Dam-Hopper Workspace as a pure React component subtree (`packages/ui/src/advisor/AdvisorPanel.tsx`), eliminating iframe isolation, MessagePort bridges, and external plugin SDK dependencies.
-
-- **Workspace Integration:** `packages/ui/src/components/organisms/WorkspaceAdvisorHost.tsx` mounts `AdvisorPanel` across integrated placements (IDE dock right tool, Terminal floating panel, and compact overlay).
-- **Owner-Bound Provider:** `NativeAdvisorProvider` implements `AdvisorDataProvider` over the captured owner-bound `ApiClient.advisor`. It manages request IDs, maps them to per-request abort controllers for the eight history/policy/evaluation operations, and discards stale/cancelled responses.
-- **Views and Navigation:** Four views are provided: Overview (aggregate metrics and latency), History Records (filters, pagination, and consultation detail), Configuration (current account policy and route groups), and Evaluations (descriptor discovery, revision reads, and comparisons). Panel navigation uses local reducer state and roving keyboard controls; it never accesses `window.location.hash`.
-- **Visibility and Gating:** `useAdvisorVisibility` combines connected status, administrator role, and the per-server `server.advisor.enabled` setting. When disabled or unauthorized, Advisor surfaces and launchers are omitted from the UI.
-- **Settings Toggle:** `packages/ui/src/components/pages/settings-page/AdvisorSettingsSection.tsx` allows administrators to toggle the feature and view detected real-directory status without path-hash configuration or directory registration.
-- **Inline Routing Editor:** `PolicySummaryCard.tsx` provides an accessible inline editor for active account-wide routing policy (`$HOME/.evcrate/advisor-routing.json`):
-  - Dual `RouteFieldset` components for primary and backup routes.
-  - Dynamic harness model discovery (`POST /api/advisor/models`) with built-in fallback catalogs and custom model text input toggle.
-  - Real-time client duplicate validation prevents identical primary/backup triples (`ROUTE_BACKUP_IDENTICAL`), allowing differing effort levels.
-  - Backend-specific effort options with default suggestions and OMP/Pi provider prefix (`provider/model`) enforcement.
-  - Sequence-fenced CAS saves (`PATCH /api/advisor/policy`) with conflict recovery and cancellation resetting pristine state.
-  - Keyboard accessible with Tab/Shift+Tab focus traversal, Enter/Escape hotkeys, aria labels, and scoped `.native-advisor` CSS rules.
-
 

@@ -315,6 +315,7 @@ mod unix {
         stat_mtime_after_rename(&parent, &name)
     }
 
+    #[allow(dead_code)]
     pub fn read_regular_file_bounded(
         root: &Path,
         relative: &Path,
@@ -358,6 +359,7 @@ mod unix {
         Ok(buffer)
     }
 
+    #[allow(dead_code)]
     pub fn replace_regular_file_if_bytes_match(
         root: &Path,
         relative: &Path,
@@ -775,6 +777,7 @@ mod unix {
             .unwrap_or(0))
     }
 
+    #[allow(dead_code)]
     pub fn read_regular_file_bounded(
         root: &Path,
         relative: &Path,
@@ -806,6 +809,7 @@ mod unix {
         Ok(buffer)
     }
 
+    #[allow(dead_code)]
     pub fn replace_regular_file_if_bytes_match(
         root: &Path,
         relative: &Path,
@@ -1539,6 +1543,7 @@ pub(crate) fn write_bytes(
     unix::write_bytes(root, relative, bytes, expected_mtime, expected_root, fsync)
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_regular_file_bounded(
     root: &Path,
     relative: &Path,
@@ -1547,6 +1552,7 @@ pub(crate) fn read_regular_file_bounded(
     unix::read_regular_file_bounded(root, relative, max_bytes)
 }
 
+#[allow(dead_code)]
 pub(crate) fn replace_regular_file_if_bytes_match(
     root: &Path,
     relative: &Path,

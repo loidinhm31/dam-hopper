@@ -226,10 +226,6 @@ Distribution checks canonical symlink targets when available and falls back to
 lexical comparison for broken links. On Windows, directory and file links use
 the corresponding platform-specific symlink API.
 
-### Feature Flags
-
-Feature defaults are feature-specific. The native Advisor is off by default; see the [Advisor configuration](./configuration/advisor.md).
-
 ## Host Resource Monitoring (Read-only)
 
 The server-owned monitor is enabled with safe defaults and does not require a

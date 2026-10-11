@@ -14,7 +14,7 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
    - Run via `pnpm --filter @dam-hopper/ui test`.
 3. **Frontend Browser Component Regressions (Vitest Browser Mode):**
    - Headless Playwright Chromium tests under `packages/ui/browser-tests/**/*.browser.{ts,tsx}`.
-   - Two specialized runners: general component suites on port 15173 (`vitest.browser.config.ts`) and loopback Axum-backed advisor routing on port 15174 (`vitest.advisor-routing.browser.config.ts`).
+   - General component suites execute on port 15173 (`vitest.browser.config.ts`).
    - Validates focused component rendering, xterm.js buffer replay, keyboard shortcuts, context menus, and media ticket fixtures.
    - Run via `pnpm --filter @dam-hopper/ui test:browser`.
 4. **Application E2E User Journeys (Playwright Test):**
@@ -30,8 +30,7 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
 |---|---|---|---|---|---|
 | **Backend Unit + Integration** | `cargo test` | Unit: `server/src/**`<br>Integration: `server/tests/**` | Native binary, temp filesystems, real Git repos | `pnpm test` | Production server logic, CAS, PTY, Git operations, API routes |
 | **Frontend Unit** | Vitest (jsdom) | `packages/ui/src/**/*.test.{ts,tsx}` | Node.js / jsdom | `pnpm --filter @dam-hopper/ui test` | State reducers, hooks, pure helpers, data models |
-| **Browser Component Regressions** | Vitest Browser Mode | `packages/ui/browser-tests/**/*.browser.{ts,tsx}` (excl. advisor routing) | Headless Chromium, port 15173 | `pnpm --filter @dam-hopper/ui test:browser` | Focused component lifecycle, xterm geometry, media tickets |
-| **Specialized Component** | Vitest Browser Mode | `packages/ui/browser-tests/advisor-routing.browser.tsx` | Headless Chromium, port 15174, loopback Axum | `pnpm --filter @dam-hopper/ui test:browser` | Backend-backed component regression (not application E2E) |
+| **Browser Component Regressions** | Vitest Browser Mode | `packages/ui/browser-tests/**/*.browser.{ts,tsx}` | Headless Chromium, port 15173 | `pnpm --filter @dam-hopper/ui test:browser` | Focused component lifecycle, xterm geometry, media tickets |
 | **Application E2E Journeys** | `@playwright/test` | `packages/ui/e2e/**/*.spec.ts` | Headless Chromium, containerized web SPA + production server (MongoDB default or SQLite lite mode) | `pnpm --filter @dam-hopper/ui test:e2e` | Full application user journeys, layout bounds, auth seed |
 | **E2E Service Probes** | `@playwright/test` | `packages/ui/e2e/fixtures/application-services.spec.ts` | Docker / Podman container runtime | `pnpm --filter @dam-hopper/ui test:e2e:probes` | Container lifecycle, health checks, isolation, cleanup |
 
@@ -106,7 +105,7 @@ Application E2E tests interact with authentic production binaries rather than sy
   - Loopback port allocation is dynamic; no host database ports are shared or bound.
   - Test files, configurations, and effective home directories are mounted inside a transient `/e2e` container tree.
 - **Effective HOME & Environment Protection:**
-  - The application container enforces `HOME=/e2e/home` and controlled container `/etc`, ensuring server-side Advisor history resolves to `/e2e/home/.evcrate/advisor-history`.
+  - The application container enforces `HOME=/e2e/home` and controlled container `/etc`.
   - Runner workstation `$HOME` and user personal settings are never mounted, protecting against host configuration leakage or poisoning.
 
 ### Deterministic Auth Seeding
@@ -134,22 +133,11 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Validates complete viewport coverage, backdrop blur styles (`blur(20px) saturate(140%)`), and accessibility attributes (`aria-hidden="true"`, `inert`).
    - Verifies input isolation: clicks, typing chords, and terminal inputs do not leak into live editors or terminals.
    - Tests dismissal and reload retention.
-2. **Advisor Model Dropdown & Theme (`packages/ui/e2e/advisor-model-dropdown-theme/advisor-model-dropdown-theme.spec.ts` — A05):**
-   - Enables Advisor in `/settings`, opens ActivityBar Advisor routing editor in dark theme.
-   - Modifies routing rules, validates duplicate route rejection, and saves changes.
-   - Verifies persistence directly against backend REST API and on-disk policy file (`readPolicyFile()`).
-   - Verifies reload persistence without optimistic UI mocks.
-3. **Counsel Evaluations Responsive Narrow Dock (`packages/ui/e2e/counsel-evaluations-responsive/counsel-evaluations-responsive.spec.ts` — A06):**
-   - Seeds on-disk native evaluation documents (`eval-group-a`, `eval-group-b`).
-   - Discovers evaluations in Advisor Evaluations view, tests inspection and side-by-side comparison.
-   - Drags the native dock divider to narrow legal width (320px).
-   - Validates horizontal bounding box containment, lack of horizontal clipping, and vertical scrollability.
-
-4. **SQLite Auth Lite Mode (`packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):**
+2. **SQLite Auth Lite Mode (`packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):**
    - Starts isolated application services with `authBackend: "sqlite"` (starting no MongoDB container) and seeds an enabled `admin` session via `application_e2e_seed`.
    - Verifies unauthenticated `GET /api/projects` returns `401`, while bearer-authenticated `GET /api/auth/status` reports `authenticated: true`, `user: "admin"`, `role: "admin"`, and omits `devMode`.
    - Verifies `POST /api/auth/register` with JSON `{ "username", "password" }` returns `200` `{ "ok": true }` and that subsequent `POST /api/auth/login` for that unapproved account returns `401` with `code: "ACCOUNT_DISABLED"`.
-   - Navigates through `/settings` (exercising the Native Advisor admin toggle) and `/workspace` (opening Advisor configuration) and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
+   - Navigates through `/settings` and `/workspace` and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
 ---
 
 ## 6. Visual Evidence Authenticity & Governance
@@ -246,9 +234,9 @@ The following workflows represent documented gaps in full-application E2E covera
 
 | Priority | Workflow Area | Existing Targeted Coverage | Missing Application E2E Acceptance |
 |---|---|---|---|
-| **P1** | **Docked, Split & Mobile Layouts** | Component tests for traditional splits, floating tools, mobile accessory bar, zoom | Multi-pane drag resizing, combined editor + terminal + Advisor bounding boxes, orientation shifts. |
+| **P1** | **Docked, Split & Mobile Layouts** | Component tests for traditional splits, floating tools, mobile accessory bar, zoom | Multi-pane drag resizing, combined editor + terminal bounding boxes, orientation shifts. |
 | **P1** | **Multi-Profile & Project Switching** | Store unit tests, target selector component tests, backend qualification scripts | Switching active server profiles and worktrees while terminal sessions and editors are active without state crossover. |
-| **P1** | **Persistent Settings & Full Policy** | Settings usage insights component, loopback advisor routing test | End-to-end user configuration of all Settings tabs; full policy editing; login/MFA UI flow qualification. Distinguishes authentic backend REST/disk policy persistence from component-isolated `localStorage` mocks. |
+| **P1** | **Persistent Settings & Full Policy** | Settings usage insights component | End-to-end user configuration of all Settings tabs; full policy editing; login/MFA UI flow qualification. Distinguishes authentic backend REST/disk policy persistence from component-isolated `localStorage` mocks. |
 | **P1** | **Terminal & Workflow Continuity** | xterm fit adapter, replay notifications, workflow context tests | Live PTY reconnection, PTY output stream continuity across route transitions, bell notification click navigation. |
 | **P2** | **File Editing & Git Mutations** | Monaco editor wrappers, Git dialog component tests, backend Git tests | In-app file creation, dirty tab preservation, Git commit/squash/push with real conflict dialog resolution. |
 | **P2** | **Media Sessions & Token Revocation** | Explorer image/video ticket fixtures, native ticket issuance | Media ticket expiration, cookie-based token rotation, client-initiated logout and revocation. |

@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "advisor": {
-    "primary": {
-      "backend": "unknown_backend",
-      "model": "invalid"
-    }
-  }
-}

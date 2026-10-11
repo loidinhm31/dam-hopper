@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export {
   createBrowserStorageState,
@@ -13,9 +12,6 @@ export {
 export { seedPlanFixtures } from "./plan-fixtures.js";
 import { seedPlanFixtures } from "./plan-fixtures.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "../../../..");
 
 export interface SeedTreeConfig {
   serverToken?: string;
@@ -41,10 +37,6 @@ export interface SeedTreeResult {
 const DEFAULT_POLICY = JSON.stringify(
   {
     version: 2,
-    advisor: {
-      primary: { backend: "codex", model: "gpt-5.6-sol", effort: "high" },
-      backup: { backend: "omp", model: "openai/gpt-5.6-sol", effort: "medium" },
-    },
     wait: {
       mode: "until_terminal",
       warn_after_ms: 10000,
@@ -76,16 +68,11 @@ export async function createSeedTree(
 
   const homeDir = path.join(hostStagingDir, "home");
   const configDir = path.join(homeDir, ".config", "dam-hopper");
-  const evcrateDir = path.join(homeDir, ".evcrate");
-  const advisorHistoryDir = path.join(evcrateDir, "advisor-history");
-  const advisorEvaluationsDir = path.join(evcrateDir, "advisor-evaluations");
   const workspaceDir = path.join(hostStagingDir, "workspace");
   const projectDir = path.join(workspaceDir, projectName);
   const secondaryProjectDir = path.join(workspaceDir, secondaryProjectName);
 
   await fs.mkdir(configDir, { recursive: true });
-  await fs.mkdir(advisorHistoryDir, { recursive: true });
-  await fs.mkdir(advisorEvaluationsDir, { recursive: true });
   await fs.mkdir(projectDir, { recursive: true });
   await fs.mkdir(secondaryProjectDir, { recursive: true });
   await fs.mkdir(path.join(hostStagingDir, "logs"), { recursive: true });
@@ -100,39 +87,7 @@ export async function createSeedTree(
     mode: 0o600,
   });
 
-  // 3. Advisor routing policy in ~/.evcrate/advisor-routing.json
-  const canonicalRoutingPath = path.resolve(
-    REPO_ROOT,
-    "__fixtures__/native-advisor/advisor-routing.json",
-  );
-  const initialPolicyJson = existsSync(canonicalRoutingPath)
-    ? await fs.readFile(canonicalRoutingPath, "utf-8")
-    : DEFAULT_POLICY;
-  await fs.writeFile(
-    path.join(evcrateDir, "advisor-routing.json"),
-    initialPolicyJson,
-    { mode: 0o600 },
-  );
-
-  // 4. Copy canonical evaluation documents into ~/.evcrate/advisor-evaluations/
-  const canonicalEvalsDir = path.resolve(
-    REPO_ROOT,
-    "__fixtures__/native-advisor/advisor-evaluations",
-  );
-  if (existsSync(canonicalEvalsDir)) {
-    const evalFiles = await fs.readdir(canonicalEvalsDir);
-    for (const file of evalFiles) {
-      if (file.endsWith(".json")) {
-        const content = await fs.readFile(
-          path.join(canonicalEvalsDir, file),
-          "utf-8",
-        );
-        await fs.writeFile(path.join(advisorEvaluationsDir, file), content, {
-          mode: 0o600,
-        });
-      }
-    }
-  }
+  const initialPolicyJson = DEFAULT_POLICY;
 
   // 5. Fixture workspace project files
   await fs.writeFile(
@@ -157,7 +112,7 @@ export async function createSeedTree(
     config.idleSuspendPolicy === "agent-free"
       ? `\n[server.idle_suspend]\nenabled = true\nautomatic_policy = "agent-free"\nquiet_period_seconds = 10800\nwake_after_seconds = 600\n`
       : "";
-  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n${idleSuspendSection}\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
+  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n${idleSuspendSection}\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
   await fs.writeFile(path.join(hostStagingDir, "dam-hopper.toml"), tomlContent);
   const seedDigest = createHash("sha256")
     .update(serverToken)

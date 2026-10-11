@@ -8,13 +8,13 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use chrono::{Duration as ChronoDuration, Utc};
 use dam_hopper_server::api::auth::{
-    get_user_role, is_enabled_user, verify_actor_credentials, AuthenticatedActor,
+    is_enabled_user, verify_actor_credentials, AuthenticatedActor,
     CredentialVerificationError,
 };
 use dam_hopper_server::api::build_router;
 use dam_hopper_server::auth::model::{chrono_to_bson, AuthClaims, AuthSession};
 use dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION;
-use dam_hopper_server::auth::{AuthStore, UserRole};
+use dam_hopper_server::auth::AuthStore;
 use dam_hopper_server::config::{
     DamHopperConfig, FeaturesConfig, GlobalConfig, ServerConfig, WorkspaceInfo,
 };
@@ -254,52 +254,6 @@ async fn register_never_reports_success_when_storage_fails_or_is_absent() {
 }
 
 #[tokio::test]
-async fn administrator_gate_follows_the_selected_store() {
-    let lite = lite().await;
-    for name in ["root", "member", "pending"] {
-        assert_eq!(register(&lite.app, name, "pw").await.0, StatusCode::OK);
-    }
-    let root = bearer_for(&lite, "root").await;
-    let member = bearer_for(&lite, "member").await;
-    let pending = bearer_for(&lite, "pending").await;
-
-    // Operator approval + role assignment: local SQL on an independent connection.
-    operator(&lite.db_path)
-        .execute_batch(
-            "UPDATE auth_users SET is_enabled = 1 WHERE username IN ('member','root');
-             UPDATE auth_users SET role = 'admin' WHERE username = 'root';",
-        )
-        .unwrap();
-
-    let (status, body) = get(&lite.app, "/api/advisor/status", &member).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body["code"], "AdminRoleRequired");
-
-    let (status, _) = get(&lite.app, "/api/advisor/status", &pending).await;
-    assert!(
-        matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN),
-        "unapproved account denied, got {status}"
-    );
-
-    let (status, body) = get(&lite.app, "/api/advisor/status", &root).await;
-    assert_ne!(body["code"], "AdminRoleRequired", "admin passes the gate");
-    assert!(
-        status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN,
-        "admin reaches the handler, got {status}"
-    );
-
-    // Demotion and disablement take effect on the next request.
-    operator(&lite.db_path)
-        .execute_batch("UPDATE auth_users SET role = 'user' WHERE username = 'root'")
-        .unwrap();
-    let (status, body) = get(&lite.app, "/api/advisor/status", &root).await;
-    assert_eq!(
-        (status, &body["code"]),
-        (StatusCode::FORBIDDEN, &json!("AdminRoleRequired"))
-    );
-}
-
-#[tokio::test]
 async fn reauthentication_verifies_same_subject_password_against_sqlite() {
     let lite = lite().await;
     assert_eq!(
@@ -533,18 +487,11 @@ async fn storage_failure_denies_admin_actor_and_reauthentication_consumers() {
         .unwrap();
     let token = bearer_for(&lite, "root").await;
     let actor = AuthenticatedActor::new("root", None);
-    let admin_route = "/api/advisor/status";
+    let live_route = "/api/projects";
 
     // Controls: every consumer admits the healthy administrator.
-    let (status, _) = get(&lite.app, admin_route, &token).await;
-    assert!(
-        status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN,
-        "{status}"
-    );
-    assert_eq!(
-        get_user_role(lite.state.auth_service.store(), "root").await,
-        Some(UserRole::Admin)
-    );
+    let (status, _) = get(&lite.app, live_route, &token).await;
+    assert_eq!(status, StatusCode::OK);
     assert!(is_enabled_user(lite.state.auth_service.store(), "root").await);
     let mut password = "pw".to_string();
     assert_eq!(
@@ -557,21 +504,20 @@ async fn storage_failure_denies_admin_actor_and_reauthentication_consumers() {
         .execute_batch("DROP TABLE auth_users")
         .unwrap();
 
-    // Session evaluation fails closed before `require_admin` runs, so the route is denied.
-    let (status, _) = get(&lite.app, admin_route, &token).await;
+    // Session evaluation fails closed, so the route is denied.
+    let (status, _) = get(&lite.app, live_route, &token).await;
     assert!(
         !status.is_success(),
         "storage failure must deny, got {status}"
     );
     assert_ne!(status, StatusCode::NOT_FOUND);
 
-    // The lookups behind `require_admin`, the actor gates and re-authentication deny directly.
+    // The actor gates and re-authentication deny directly.
     let store = lite.state.auth_service.store();
     assert!(
         lite.store.get_user("root").await.is_err(),
         "fault is a real error"
     );
-    assert_eq!(get_user_role(store, "root").await, None);
     assert!(!is_enabled_user(store, "root").await);
     let mut password = "pw".to_string();
     assert_eq!(

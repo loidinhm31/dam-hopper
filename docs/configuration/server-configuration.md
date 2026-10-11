@@ -8,7 +8,6 @@ This index routes server-owned settings and operator tasks to focused references
 - [Environment and authentication](./server-environment-auth.md) — global defaults, environment variables, server tokens, and MFA.
 - [Deployment and transport](./server-deployment.md) — launch modes, deployment, CORS, media, and host-resource SSE.
 - [Operations and troubleshooting](./server-operations.md) — SSH key loading, smoke checks, Windows setup, and OMP integration.
-- [Native Advisor configuration](./advisor.md) — the default-off server setting and history status.
 
 ## Legacy section links
 

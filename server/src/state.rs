@@ -133,10 +133,6 @@ pub struct AppState {
     pub auth_service: Arc<crate::auth::AuthService>,
     /// Agent status runtime coordinating credentials, admission, and semantic events.
     pub agent_status: crate::agent_status::AgentStatusRuntime,
-    /// Native Advisor service owning history snapshots, real-directory validation, and queries.
-    pub advisor_service: Arc<crate::advisor::AdvisorService>,
-    /// Serializes advisor settings updates and disk synchronization.
-    pub advisor_settings_lock: Arc<tokio::sync::Mutex<()>>,
     /// Global admission semaphore for concurrent native git blame operations (2 permits).
     pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -427,20 +423,8 @@ impl AppState {
             client_presence: crate::idle_suspend::ClientPresenceRegistry::new(),
             auth_service,
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
-            advisor_service: Arc::new(crate::advisor::AdvisorService::new(
-                crate::api::agent_status::resolve_effective_home(),
-            )),
-            advisor_settings_lock: Arc::new(tokio::sync::Mutex::new(())),
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         })
-    }
-    /// Override the advisor service handle (used for testing or custom source injection).
-    pub fn with_advisor_service(
-        mut self,
-        advisor_service: Arc<crate::advisor::AdvisorService>,
-    ) -> Self {
-        self.advisor_service = advisor_service;
-        self
     }
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {

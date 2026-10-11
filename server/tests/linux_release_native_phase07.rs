@@ -2,9 +2,8 @@
 
 //! Comprehensive validation of Phase 07: Manager state schema3 migration,
 //! host config normalization, native rollback/staging plugin rejection,
-//! unit policy enforcement, and Advisor history root validation.
+//! and unit policy enforcement.
 
-use dam_hopper_server::advisor::status::inspect_history_root;
 use dam_hopper_server::linux_release::{
     load_host_config, load_or_init_manager_state, render_api_unit, render_helper_unit,
     validate_api_unit_policy, validate_helper_unit_policy, Layout, ParsedUnit, ReleaseError,
@@ -214,38 +213,6 @@ fn test_native_api_and_helper_unit_policy() {
     let rendered_helper = render_helper_unit(helper_in, &ctx).expect("rendered helper unit must pass policy");
     let parsed_helper = ParsedUnit::parse(&rendered_helper).unwrap();
     assert!(validate_helper_unit_policy(&parsed_helper, &ctx).is_ok());
-}
-
-#[test]
-fn test_advisor_history_directory_validation_rejects_symlink() {
-    let tmp = tempdir().unwrap();
-    let dot_evcrate = tmp.path().join(".evcrate");
-    std::fs::create_dir_all(&dot_evcrate).unwrap();
-
-    // 1. Real directory succeeds
-    let real_dir = dot_evcrate.join("advisor-history");
-    std::fs::create_dir(&real_dir).unwrap();
-    let status = inspect_history_root(true, Some(tmp.path()));
-    assert!(status.enabled);
-    assert!(status.available);
-    assert_eq!(status.path.as_deref(), Some(real_dir.to_str().unwrap()));
-    assert!(status.source_error.is_none());
-
-    // 2. Symlink is rejected
-    std::fs::remove_dir(&real_dir).unwrap();
-    let target_dir = tmp.path().join("external-history");
-    std::fs::create_dir(&target_dir).unwrap();
-
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&target_dir, &real_dir).unwrap();
-
-    let symlink_status = inspect_history_root(true, Some(tmp.path()));
-    assert!(symlink_status.enabled);
-    assert!(!symlink_status.available);
-    assert_eq!(
-        symlink_status.source_error.as_deref(),
-        Some("History root must be a real directory; symlink rejected")
-    );
 }
 
 #[test]

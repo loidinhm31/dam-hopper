@@ -11,7 +11,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 ## Product principles
 
 1. **Owner-scoped operation:** Asynchronous requests capture `{ profileId, generation }`; results from retired generations cannot update current state.
-2. **Safe defaults:** Authentication is the normal server mode (MongoDB by default, or environment-selected SQLite lite mode via `DAM_HOPPER_LITE_MODE=true` with no automatic backend fallback); new accounts registered via `POST /api/auth/register` start disabled (`user` role, `auth_version = 0`) and require local operator approval and explicit `admin` promotion. Native Advisor is off by default and administrator-only. Development `--no-auth` is a separate loopback-only bypass and does not unlock Advisor.
+2. **Safe defaults:** Authentication is the normal server mode (MongoDB by default, or environment-selected SQLite lite mode via `DAM_HOPPER_LITE_MODE=true` with no automatic backend fallback); new accounts registered via `POST /api/auth/register` start disabled (`user` role, `auth_version = 0`) and require local operator approval and explicit `admin` promotion. Development `--no-auth` is a separate loopback-only bypass.
 3. **Conservative semantics:** A terminal going quiet or an agent turn ending is not proof that work succeeded. Unknown or stale state remains explicit.
 4. **Bounded work and disclosure:** API work, uploads, histories, previews, and diagnostic output are bounded; secrets and user content are excluded from routine logs and agent-status reports.
 5. **Explicit destructive intent:** History rewriting and publication are separate operations protected by snapshot checks and exact-OID leases.
@@ -39,7 +39,6 @@ The workbench must make ownership explicit: a browser profile and its current co
 | PR-019–021 | Multi-profile terminal, Agent/port/Browser, preferences/settings/usage/host features | Implemented; owner scoping and native platform qualifications apply. |
 | PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. See [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md). |
 | PR-026 | Agent Status and notification ownership | Implemented and Linux-qualified for the documented OMP/Codex/Claude versions; other versions/platforms remain unqualified. |
-| PR-027 | Native Evcrate Advisor | Complete native replacement. Rust/Axum service, shared React UI, admin-only access, history/policy APIs, and plugin-platform retirement are delivered. |
 | PR-028 | Cognito Mode in-app privacy mask | Delivered. Ephemeral activation, configurable shortcut/style, overlay, and input isolation; it is not authentication, redaction, or OS-wide privacy. |
 
 ## Acceptance criteria for critical behavior
@@ -61,15 +60,6 @@ The workbench must make ownership explicit: a browser profile and its current co
 - History search uses literal matching and does not alter repository state.
 
 See [Git history architecture](./architecture/git-history-search.md) and [Git API reference](./api-reference.md#git-operations).
-
-### Native Advisor
-
-- Advisor is a native Rust service and React subtree, not a plugin, iframe, worker, or MessagePort host.
-- Server setting is per-server and defaults off. Data routes require normal session authentication plus current administrator role; `--no-auth` is denied.
-- History reads `$HOME/.evcrate/advisor-history`; routing policy is stored at `$HOME/.evcrate/advisor-routing.json` with revision-checked atomic update semantics.
-- UI requests and caches are bound to the current profile/generation owner. Bounds, credential-field rejection, and safe model-catalog fallback remain enforced.
-
-See [Native Advisor architecture](./architecture/native-advisor.md) and [Advisor configuration](./configuration/advisor.md).
 
 ### Agent status and privacy
 
@@ -102,10 +92,6 @@ qualified on every platform:
   publish results into a replacement runtime.
 - **Git safety:** A stale branch/HEAD snapshot cannot update local refs, and a
   remote update after preview cannot pass the exact expected-OID lease.
-- **Advisor access:** No-auth and non-administrator requests cannot read or
-  mutate Advisor data. When disabled, history, policy, and evaluation routes
-  are blocked; the documented status/settings endpoints remain available to
-  authenticated administrators. Enabled data routes require that same role.
 - **Disclosure control:** Agent-status reports and routine logs contain no
   prompts, transcript content, or authentication material.
 - **Qualification claims:** A release claim is limited to recorded OS, browser,

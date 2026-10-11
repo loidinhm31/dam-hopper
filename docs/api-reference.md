@@ -9,7 +9,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | Page | Coverage |
 | --- | --- |
 | [Authentication](./api/authentication.md) | Login, MFA, session, development-mode behavior |
-| [Advisor and workflow](./api/advisor-and-workflow.md) | Native Advisor and workflow REST routes |
+| [Workflow tracking](./api/workflow.md) | Workflow REST routes |
 | [System services](./api/system-services.md) | Diagnostics, browser-debug artifacts, native SSH forwarding, host resources |
 | [Terminal idle suspend](./api/idle-suspend.md) | Status, timing, manual force, helper protocol and status events |
 | [Agent status, usage, and sessions](./api/agent-usage-and-sessions.md) | Agent snapshot, Codex usage, and PTY session persistence |
@@ -22,11 +22,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 
 ## Authentication
 
-See the [authentication API reference](./api/authentication.md). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Native Advisor and privileged idle-suspend mutations remain denied in no-auth mode.
-
-## Native Evcrate Advisor API
-
-See the [Advisor endpoint reference](./api/advisor-and-workflow.md). Native Advisor is per-server, off by default, and requires an authenticated administrator. The former `/api/plugins/*` and `/api/plugins/admin*` routes are retired and no longer exist.
+See the [authentication API reference](./api/authentication.md). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations remain denied in no-auth mode.
 
 ## Terminal idle suspend
 

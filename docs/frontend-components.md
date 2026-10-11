@@ -6,7 +6,7 @@ Design guidelines, color tokens, and typography are defined in [Platform Integra
 
 ## Contents
 
-- [Workbench and profile components](./frontend-components/workbench.md) — Shell modes, profile connection lifecycle, Git history, Settings, and Native Advisor.
+- [Workbench and profile components](./frontend-components/workbench.md) — Shell modes, profile connection lifecycle, Git history, and Settings.
 - [Terminal and IDE components](./frontend-components/terminal-and-ide.md) — Terminal workspace, PaneContainer splitting, PortsPanel tunnels, and Explorer/editor UI.
 - [Platform integrations](./frontend-components/platform-integrations.md) — Shared design system, Browser Debug bridge, and native host contracts.
 - [Host resources and usage](./frontend-components/host-and-usage.md) — Host-resource fleet deck, usage analytics, idle-suspend status, and terminal integration.

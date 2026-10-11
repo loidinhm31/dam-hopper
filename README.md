@@ -7,7 +7,6 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 - Independent server profiles and profile/generation-scoped connections, queries, terminals, files, and settings.
 - Workspace IDE surfaces for project files, Monaco editor, federated search, Git history, and terminal panes.
 - Safe Git workflows, including compare-and-swap commit rewriting, inactive local branch editing/squash, and explicitly leased publication.
-- In-process Native Evcrate Advisor in the Rust server and shared UI; disabled by default, requires an authenticated administrator, and is denied in `--no-auth` mode.
 - Real-time agent status (OMP loopback WebSocket; Codex and Claude protected Unix sockets), workflow tracking, Agent Store distribution, browser debugging, and host-resource monitoring.
 - Optional Linux terminal idle suspend with privileged RTC wake helper, and encrypted file uploads via OPAQUE PAKE. Cognito Mode is an in-browser visual privacy mask, not authentication or content redaction.
 - Native desktop local SSH port forwarding (supported strictly on Windows desktop; non-Windows native desktop enforces exact same-origin profile URLs).
@@ -16,7 +15,7 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 
 | Path | Responsibility |
 | --- | --- |
-| `server/` | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, Advisor, workflow, telemetry, and host services |
+| `server/` | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, telemetry, and host services |
 | `packages/ui/` | Shared React UI, state, API/transport clients, and browser tests (canonical entry `src/embed/dam-hopper-app.tsx`) |
 | `apps/web/` | Vite browser host |
 | `apps/native/` | Tauri 2 desktop host and Windows-native SSH port forwarding |
@@ -68,7 +67,7 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 
 Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to/dam-hopper.toml` to the server command when you need a specific project registry.
 
-> **Security:** `--no-auth` bypasses authentication and is strictly for isolated local development. Never expose it to a LAN, the public Internet, or an untrusted network. The server binary defaults to `--host 0.0.0.0`; always pass `--host 127.0.0.1` for local development. The convenience scripts `pnpm dev:server` and `pnpm dev:server:no-auth` bind `0.0.0.0:4803` with `--no-auth`; do not execute them on public or untrusted networks. Native Advisor endpoints are unavailable in `--no-auth` mode.
+> **Security:** `--no-auth` bypasses authentication and is strictly for isolated local development. Never expose it to a LAN, the public Internet, or an untrusted network. The server binary defaults to `--host 0.0.0.0`; always pass `--host 127.0.0.1` for local development. The convenience scripts `pnpm dev:server` and `pnpm dev:server:no-auth` bind `0.0.0.0:4803` with `--no-auth`; do not execute them on public or untrusted networks.
 
 ### Authenticated Local Development (SQLite Lite Mode)
 

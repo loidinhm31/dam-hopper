@@ -380,59 +380,6 @@ pub async fn is_enabled_user(store: Option<&AuthStore>, username: &str) -> bool 
         .is_some_and(|user| user.is_enabled)
 }
 
-/// Get the enabled user's role from the selected store.
-/// Returns None if the store is unavailable, the user does not exist, or the account is disabled.
-pub async fn get_user_role(store: Option<&AuthStore>, username: &str) -> Option<UserRole> {
-    let user = store?.get_user(username).await.ok()??;
-    user.is_enabled.then_some(user.role)
-}
-
-/// Middleware that enforces the administrator role on protected routes.
-/// Denies --no-auth mode and accounts without the admin role.
-pub async fn require_admin(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if state.no_auth {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Admin operations are strictly denied in --no-auth mode",
-                "code": "NoAuthForbidden",
-            })),
-        )
-            .into_response();
-    }
-
-    let actor = request.extensions().get::<AuthenticatedActor>();
-    let Some(actor) = actor else {
-        return unauthorized();
-    };
-
-    // A configured store is the sole authority: a missing account or storage
-    // error denies and never falls through to an explicit test mock.
-    let role = match state.auth_service.store() {
-        Some(store) => get_user_role(Some(store), &actor.subject).await,
-        None => state
-            .auth_service
-            .mock_user()
-            .filter(|u| u.username == actor.subject && u.is_enabled)
-            .map(|u| u.role),
-    };
-
-    match role {
-        Some(UserRole::Admin) => next.run(request).await,
-        _ => (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Administrator role required",
-                "code": "AdminRoleRequired",
-            })),
-        )
-            .into_response(),
-    }
-}
 /// Re-authentication accepts credentials only for the same JWT subject.
 pub async fn verify_actor_credentials(
     state: &AppState,

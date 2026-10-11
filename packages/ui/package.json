@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.advisor-routing.browser.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:typecheck": "tsc -p tsconfig.e2e.json",
     "test:e2e:build-images": "node --experimental-strip-types e2e/fixtures/image-builder.ts",
@@ -17,9 +17,7 @@
     "./styles": "./src/index.css",
     "./api/*": "./src/api/*.ts",
     "./lib/*": "./src/lib/*.ts",
-    "./diagnostics-client": "./src/lib/diagnostics-client.ts",
-    "./advisor": "./src/advisor/index.ts",
-    "./advisor/*": "./src/advisor/*.ts"
+    "./diagnostics-client": "./src/lib/diagnostics-client.ts"
   },
   "dependencies": {
     "@dam-hopper/browser-bridge": "workspace:*",
