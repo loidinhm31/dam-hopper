@@ -60,7 +60,6 @@ export function ProjectWorktreesSection({
     refetch,
   } = useWorktrees(targetRef, {
     enabled: isVisible,
-    pollWhileVisible: isVisible,
   });
   const { data: sessions = [] } = useTerminalSessions(target?.target?.profileId ? { profileId: target.target.profileId } : undefined);
   const worktrees = useMemo<Worktree[]>(() => data ?? [], [data]);

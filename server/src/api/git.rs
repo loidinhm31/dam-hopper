@@ -354,6 +354,10 @@ pub async fn add_worktree_route(
         .await
         .map_err(map_worktree_git_error)?;
     state.invalidate_project_worktrees(&path).await;
+    state.event_sink.broadcast(
+        "worktree:changed",
+        serde_json::json!({ "projectName": project }),
+    );
     let worktrees = state
         .refresh_project_worktrees(&project)
         .await
@@ -453,6 +457,10 @@ pub async fn remove_worktree_route(
                 return Err(ApiError::from_app(error));
             }
             state.invalidate_project_worktrees(&project_path).await;
+            state.event_sink.broadcast(
+                "worktree:changed",
+                serde_json::json!({ "projectName": project }),
+            );
             Ok(Json(serde_json::json!({ "ok": true })))
         }
         Err(AppError::WorkspaceTarget(WorkspaceTargetError::UnavailableTarget)) => {
@@ -480,6 +488,10 @@ pub async fn remove_worktree_route(
                 let _ = remove_worktree(&project_path, &candidate.repository_path, false).await;
                 let _ = prune_worktrees(&project_path).await;
                 state.invalidate_project_worktrees(&project_path).await;
+                state.event_sink.broadcast(
+                    "worktree:changed",
+                    serde_json::json!({ "projectName": project }),
+                );
                 Ok(Json(serde_json::json!({ "ok": true })))
             } else {
                 Err(ApiError::from_app(AppError::WorkspaceTarget(
@@ -507,6 +519,10 @@ pub async fn prune_worktrees_route(
         .await
         .map_err(map_worktree_git_error)?;
     state.invalidate_project_worktrees(&project_path).await;
+    state.event_sink.broadcast(
+        "worktree:changed",
+        serde_json::json!({ "projectName": project }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
