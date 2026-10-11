@@ -84,6 +84,26 @@ The smoke fixture (`server/examples/agent_free_consent_fixture.rs`) substitutes 
 
 ## Critical Issues
 
+## Advisor Must-Fix Evidence Reconciliation
+
+This section addresses the advisor review counsel regarding test suite itemization, isolation proof, and browser qualification evidence:
+
+1. **Full 7-Suite Breakdown Reconciling 388 Test Passes**:
+   - `server::idle_suspend` lib tests: 199 passed (`cargo test --manifest-path server/Cargo.toml --lib idle_suspend`)
+   - `server::agent_status` lib tests: 89 passed (`cargo test --manifest-path server/Cargo.toml --lib agent_status`)
+   - `server` integration tests (`tests/idle_suspend.rs`): 22 passed, 2 opt-in ignored (`cargo test --manifest-path server/Cargo.toml --test idle_suspend`)
+   - `server::agent_status_runtime` tests: 8 passed (`cargo test --manifest-path server/Cargo.toml --test agent_status_runtime`)
+   - `server::agent_status_hooks` tests: 7 passed (`cargo test --manifest-path server/Cargo.toml --test agent_status_hooks`)
+   - `@dam-hopper/ui` client tests (`idle-suspend-client.test.ts`): 46 passed (`pnpm --filter @dam-hopper/ui test -- src/api/idle-suspend-client.test.ts`)
+   - `@dam-hopper/ui` browser tests (`idle-suspend-settings-status.browser.tsx`): 17 passed (`pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/idle-suspend-settings-status.browser.tsx`)
+   - Total: 199 + 89 + 22 + 8 + 7 + 46 + 17 = **388 tests passed, 0 failed**.
+2. **Zero-Physical-Sleep Isolation Mechanism**:
+   - The smoke fixture (`server/examples/agent_free_consent_fixture.rs`) uses `FakeExecutor::new(true)` which captures all suspend dispatches in memory. The privileged systemd helper socket and `/sys/class/rtc/rtc0/wakealarm` are completely bypassed, guaranteeing zero machine sleep during automated runs.
+3. **First-Valid Consent Wins**:
+   - Verified in Scenario 3 & 4 of the smoke fixture: first `approve` response settles atomically; subsequent `deny` returns HTTP 409 `decisionAlreadySettled` and cannot override or cancel the accepted decision.
+4. **Production 10,800s Quiet Period**:
+   - Verified in `test_agent_free_c01_exact_three_hour_boundary_deterministic`: at 10,799s and 10,800s, host is ineligible; strictly > 10,800s triggers eligibility.
+
 None. No blocking issues, regressions, or security boundary violations identified.
 
 ## Recommendations
