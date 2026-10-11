@@ -93,8 +93,7 @@ export function TraditionalTerminalWorktreeSelect({
     isError,
     refetch,
   } = useWorktrees(projectScope, {
-    enabled: isOpen || selectedPath != null || Boolean(lastUnavailablePath),
-    pollWhileVisible: isOpen,
+    enabled: true,
   });
 
   const {
@@ -322,7 +321,7 @@ export function TraditionalTerminalWorktreeSelect({
           {secondaryWorktrees.length === 0 && !hasMissingSelectedTarget ? (
             <SelectGroup>
               <SelectSeparator />
-              {isFetching ? (
+              {!isFetched || isFetching ? (
                 <SelectLabel className="text-[10px] font-normal text-[var(--color-text-muted)] italic">
                   Loading worktrees…
                 </SelectLabel>

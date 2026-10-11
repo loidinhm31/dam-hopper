@@ -156,7 +156,7 @@ describe("TraditionalTerminalWorktreeSelect", () => {
     expect(trigger.textContent).toContain("root");
     expect(mocks.useWorktrees).toHaveBeenCalledWith(
       "demo",
-      expect.objectContaining({ enabled: false }),
+      expect.objectContaining({ enabled: true }),
     );
 
     // Clicking trigger opens and refetches

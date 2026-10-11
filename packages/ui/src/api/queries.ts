@@ -791,11 +791,8 @@ export function useSubmitConsentDecision(options?: OwnerInput) {
   });
 }
 
-export const WORKTREE_DISCOVERY_POLL_INTERVAL_MS = 10_000;
-
 export interface WorktreeQueryOptions {
   enabled?: boolean;
-  pollWhileVisible?: boolean;
 }
 
 export function useWorktrees(
@@ -820,10 +817,7 @@ export function useWorktrees(
     enabled,
     refetchOnWindowFocus: enabled ? "always" : false,
     refetchOnReconnect: enabled ? "always" : false,
-    refetchInterval:
-      enabled && options.pollWhileVisible
-        ? WORKTREE_DISCOVERY_POLL_INTERVAL_MS
-        : false,
+    refetchInterval: false,
   });
 }
 
@@ -1996,11 +1990,16 @@ export function useAddWorktree(project: ProjectTargetInput) {
       branch: string;
       createBranch?: boolean;
     }) => getBoundApiClient(owner).git.addWorktree(projectName, opts),
-    onSuccess: () => {
+    onSuccess: (_data, opts) => {
       const queryKey = owner
         ? profileQueryKey(owner, "git", "worktrees", projectName)
         : ["worktrees", projectName];
       void qc.invalidateQueries({ queryKey });
+      if (opts?.createBranch) {
+        void qc.invalidateQueries({
+          queryKey: gitQueryKey("branches", normalized),
+        });
+      }
     },
   });
 }
