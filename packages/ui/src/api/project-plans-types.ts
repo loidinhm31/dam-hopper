@@ -8,12 +8,8 @@ export const DIAG_INVALID_METADATA = "INVALID_METADATA" as const;
 export const DIAG_INVALID_DOCUMENT = "INVALID_DOCUMENT" as const;
 export const DIAG_FIELD_TOO_LARGE = "FIELD_TOO_LARGE" as const;
 export const DIAG_PHASE_INVENTORY_INVALID = "PHASE_INVENTORY_INVALID" as const;
-export const DIAG_PHASE_UNREPORTED = "PHASE_UNREPORTED" as const;
-export const DIAG_PHASE_UNMATCHED = "PHASE_UNMATCHED" as const;
 export const DIAG_STATUS_CONFLICT = "STATUS_CONFLICT" as const;
 export const DIAG_UNSUPPORTED_STATUS = "UNSUPPORTED_STATUS" as const;
-export const DIAG_PROGRESS_MISSING = "PROGRESS_MISSING" as const;
-export const DIAG_PROGRESS_UNREADABLE = "PROGRESS_UNREADABLE" as const;
 export const DIAG_DOCUMENT_TOO_LARGE = "DOCUMENT_TOO_LARGE" as const;
 export const DIAG_DOCUMENT_CHANGED = "DOCUMENT_CHANGED" as const;
 export const DIAG_LINK_REJECTED = "LINK_REJECTED" as const;
@@ -31,7 +27,7 @@ export type PlanStatus =
   | "unknown"
   | "conflict";
 
-export type PlanAuthority = "plan" | "progress";
+export type PlanAuthority = "plan";
 
 export interface SourceRef {
   /** Target-relative path */
@@ -105,7 +101,6 @@ export interface FilePlanMetadata {
 
 export interface PlanDocuments {
   plan: PlanDocument;
-  progress: PlanDocument;
 }
 
 export interface PlanCompletion {

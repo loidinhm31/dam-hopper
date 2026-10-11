@@ -4,7 +4,6 @@
 import React, { useMemo } from "react";
 import {
   FileText,
-  Activity,
   AlertCircle,
   AlertTriangle,
   RefreshCw,
@@ -38,18 +37,15 @@ export function ProjectPlanDocument({
   className,
 }: ProjectPlanDocumentProps) {
   const planDoc = plan.documents.plan;
-  const progressDoc = plan.documents.progress;
 
   const isPlanTab = currentDocumentPath === planDoc.path;
-  const isProgressTab = currentDocumentPath === progressDoc.path;
-  const isCustomLocalDoc = !isPlanTab && !isProgressTab;
+  const isCustomLocalDoc = !isPlanTab;
 
   // Find document metadata for current view
   const currentDocMeta = useMemo(() => {
     if (isPlanTab) return planDoc;
-    if (isProgressTab) return progressDoc;
     return null;
-  }, [isPlanTab, isProgressTab, planDoc, progressDoc]);
+  }, [isPlanTab, planDoc]);
 
   const docState: PlanDocumentState = currentDocMeta?.state ?? "readable";
 
@@ -62,10 +58,7 @@ export function ProjectPlanDocument({
             className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)]/60 px-3 py-2 text-xs text-[var(--color-text-muted)]"
           >
             <Info className="h-4 w-4 shrink-0 text-[var(--color-primary)]" />
-            <span>
-              Document is absent. Progress tracking has not been opted into or
-              this document does not exist.
-            </span>
+            <span>Document is absent or does not exist.</span>
           </div>
         );
       case "unreadable":
@@ -148,27 +141,6 @@ export function ProjectPlanDocument({
           >
             <FileText className="h-3.5 w-3.5" />
             <span>Plan (plan.md)</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant={isProgressTab ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => onNavigateDocument(progressDoc.path)}
-            className={cn(
-              "h-7 gap-1.5 px-2 text-xs font-medium",
-              isProgressTab
-                ? "bg-[var(--color-surface)] shadow-xs text-[var(--color-primary)]"
-                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
-            )}
-          >
-            <Activity className="h-3.5 w-3.5" />
-            <span>Progress (progress.md)</span>
-            {progressDoc.state === "absent" && (
-              <span className="ml-1 text-[10px] text-[var(--color-text-muted)]/80 italic">
-                (absent)
-              </span>
-            )}
           </Button>
 
           {isCustomLocalDoc && (

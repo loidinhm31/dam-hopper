@@ -387,87 +387,6 @@ pub fn read_selected_plan(
         Err(_) => (PlanDocumentState::Unreadable, None, None, None),
     };
 
-    let progress_md_rel = format!("{}/progress.md", normalized_path);
-    let (progress_state, progress_bytes, progress_size, progress_modified, progress_diag) =
-        match secure_path::probe_file_marker(root, Path::new(&progress_md_rel)) {
-            Ok(FileMarkerKind::NotFound) => (PlanDocumentState::Absent, None, None, None, None),
-            Ok(FileMarkerKind::Symlink) => (
-                PlanDocumentState::Unreadable,
-                None,
-                None,
-                None,
-                Some(Diagnostic {
-                    code: DIAG_PROGRESS_UNREADABLE.to_string(),
-                    path: Some(progress_md_rel.clone()),
-                    line: None,
-                    message: "progress.md is a symlink and cannot be read".to_string(),
-                }),
-            ),
-            Ok(FileMarkerKind::RegularFile { .. }) => {
-                match secure_path::read_regular_snapshot(
-                    root,
-                    Path::new(&progress_md_rel),
-                    MAX_DOCUMENT_BYTES as u64,
-                ) {
-                    Ok(snap) => (
-                        PlanDocumentState::Readable,
-                        Some(snap.bytes),
-                        Some(snap.size_bytes),
-                        snap.modified_at,
-                        None,
-                    ),
-                    Err(FsError::TooLarge(size)) => (
-                        PlanDocumentState::Oversize,
-                        None,
-                        Some(size),
-                        None,
-                        Some(Diagnostic {
-                            code: DIAG_DOCUMENT_TOO_LARGE.to_string(),
-                            path: Some(progress_md_rel.clone()),
-                            line: None,
-                            message: "progress.md exceeds 64 KiB maximum size".to_string(),
-                        }),
-                    ),
-                    Err(FsError::Conflict) => (
-                        PlanDocumentState::Changed,
-                        None,
-                        None,
-                        None,
-                        Some(Diagnostic {
-                            code: DIAG_DOCUMENT_CHANGED.to_string(),
-                            path: Some(progress_md_rel.clone()),
-                            line: None,
-                            message: "progress.md changed during read".to_string(),
-                        }),
-                    ),
-                    Err(_) => (
-                        PlanDocumentState::Unreadable,
-                        None,
-                        None,
-                        None,
-                        Some(Diagnostic {
-                            code: DIAG_PROGRESS_UNREADABLE.to_string(),
-                            path: Some(progress_md_rel.clone()),
-                            line: None,
-                            message: "progress.md could not be read".to_string(),
-                        }),
-                    ),
-                }
-            }
-            _ => (
-                PlanDocumentState::Unreadable,
-                None,
-                None,
-                None,
-                Some(Diagnostic {
-                    code: DIAG_PROGRESS_UNREADABLE.to_string(),
-                    path: Some(progress_md_rel.clone()),
-                    line: None,
-                    message: "progress.md is not a regular file".to_string(),
-                }),
-            ),
-        };
-
     let plan_doc = DocumentSnapshot {
         path: &plan_md_rel,
         state: plan_state,
@@ -476,25 +395,7 @@ pub fn read_selected_plan(
         modified_at: plan_modified,
     };
 
-    let prog_doc = DocumentSnapshot {
-        path: &progress_md_rel,
-        state: progress_state,
-        bytes: progress_bytes.as_deref(),
-        size_bytes: progress_size,
-        modified_at: progress_modified,
-    };
-
-    let mut file_plan = crate::plans::parser::parse_plan(&normalized_path, &plan_doc, &prog_doc);
-
-    if let Some(diag) = progress_diag {
-        if !file_plan
-            .diagnostics
-            .iter()
-            .any(|d| d.code == diag.code && d.path == diag.path)
-        {
-            file_plan.diagnostics.push(diag);
-        }
-    }
+    let file_plan = crate::plans::parser::parse_plan(&normalized_path, &plan_doc);
 
     let watch_paths = compute_watch_paths(&normalized_path);
     let diagnostics = file_plan.diagnostics.clone();

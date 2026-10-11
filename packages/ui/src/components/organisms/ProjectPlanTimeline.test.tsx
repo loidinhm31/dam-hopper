@@ -24,12 +24,6 @@ describe("ProjectPlanTimeline", () => {
         sizeBytes: 1024,
         modifiedAt: "2026-10-06T12:00:00Z",
       },
-      progress: {
-        path: "plans/sample/progress.md",
-        state: "absent",
-        sizeBytes: null,
-        modifiedAt: null,
-      },
     },
     reportedStatus: {
       value: status,

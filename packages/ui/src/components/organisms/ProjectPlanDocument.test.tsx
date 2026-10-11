@@ -24,12 +24,6 @@ describe("ProjectPlanDocument", () => {
         sizeBytes: 1024,
         modifiedAt: "2026-10-06T12:00:00Z",
       },
-      progress: {
-        path: "plans/sample/progress.md",
-        state: "absent",
-        sizeBytes: null,
-        modifiedAt: null,
-      },
     },
     reportedStatus: {
       value: "pending",
@@ -58,7 +52,7 @@ describe("ProjectPlanDocument", () => {
     diagnostics: [],
   };
 
-  it("renders plan and progress tabs with snapshot banner", () => {
+  it("renders plan tab with snapshot banner", () => {
     const html = renderToStaticMarkup(
       <ProjectPlanDocument
         plan={samplePlan}
@@ -72,18 +66,18 @@ describe("ProjectPlanDocument", () => {
     );
 
     expect(html).toContain("Plan (plan.md)");
-    expect(html).toContain("Progress (progress.md)");
+    expect(html).not.toContain("Progress (progress.md)");
     expect(html).toContain("Read-Only Snapshot");
     expect(html).toContain("plans/sample/plan.md");
     expect(html).toContain("Sample Plan Markdown Content");
   });
 
-  it("renders absent notice when viewing absent progress.md", () => {
+  it("renders custom subdocument view with return to plan button", () => {
     const html = renderToStaticMarkup(
       <ProjectPlanDocument
         plan={samplePlan}
-        currentDocumentPath="plans/sample/progress.md"
-        documentContent=""
+        currentDocumentPath="plans/sample/phase-01.md"
+        documentContent="# Phase 01 Content"
         isDocumentLoading={false}
         documentError={null}
         onNavigateDocument={vi.fn()}
@@ -91,8 +85,9 @@ describe("ProjectPlanDocument", () => {
       />,
     );
 
-    expect(html).toContain("Document is absent");
-    expect(html).toContain("Progress tracking has not been opted into");
+    expect(html).toContain("Viewing:");
+    expect(html).toContain("plans/sample/phase-01.md");
+    expect(html).toContain("Return to plan");
   });
 
   it("renders oversize banner when document state is oversize", () => {

@@ -20,7 +20,6 @@ use dam_hopper_server::{
     state::AppState,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
-use jsonwebtoken::{encode, EncodingKey, Header};
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
 use tower::ServiceExt;

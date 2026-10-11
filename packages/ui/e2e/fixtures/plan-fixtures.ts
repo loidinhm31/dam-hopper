@@ -11,15 +11,15 @@ export async function seedPlanFixtures(
   const plansDir = path.join(primaryProjectDir, "plans");
   await fs.mkdir(plansDir, { recursive: true });
 
-  // 1. Ordinary sample plan with progress opt-in: 5 pending in plan.md, 5 completed in progress.md
+  // 1. Ordinary sample plan: 5 phases (2 completed, 1 in-progress, 2 pending)
   const sampleDir = path.join(plansDir, "261001-sample");
   await fs.mkdir(sampleDir, { recursive: true });
   await fs.writeFile(
     path.join(sampleDir, "plan.md"),
     `---
 title: "Sample Feature Plan"
-description: "Sample feature plan with reported completed progress"
-status: pending
+description: "Sample feature plan with declared phase inventory"
+status: in-progress
 priority: P2
 effort: 40h
 branch: feat/sample
@@ -33,30 +33,11 @@ created: 2026-10-01
 
 | # | Phase | Status | Progress | Effort | Detail |
 |---|---|---|---|---|---|
-| 01 | Phase 1 | Pending | 0% | 8h | [Phase 1](./phase-01.md) |
-| 02 | Phase 2 | Pending | 0% | 8h | [Phase 2](./phase-02.md) |
-| 03 | Phase 3 | Pending | 0% | 8h | [Phase 3](./phase-03.md) |
+| 01 | Phase 1 | Completed | 100% | 8h | [Phase 1](./phase-01.md) |
+| 02 | Phase 2 | Completed | 100% | 8h | [Phase 2](./phase-02.md) |
+| 03 | Phase 3 | In-Progress | 50% | 8h | [Phase 3](./phase-03.md) |
 | 04 | Phase 4 | Pending | 0% | 8h | [Phase 4](./phase-04.md) |
 | 05 | Phase 5 | Pending | 0% | 8h | [Phase 5](./phase-05.md) |
-`,
-  );
-  await fs.writeFile(
-    path.join(sampleDir, "progress.md"),
-    `# Current Progress — Sample Feature Plan
-
-**Plan:** [plan.md](./plan.md)
-**Published:** 2026-10-02
-**Current status:** In Progress (Phases 01, 02, 03, 04, and 05 completed)
-
-## Phase Reconciliation
-
-| Phase | Current status | Captured status | Completion basis / scope | Evidence / receipt |
-|---|---|---|---|---|
-| [01 — Phase 1](./phase-01.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-01-receipt.md) |
-| [02 — Phase 2](./phase-02.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-02-receipt.md) |
-| [03 — Phase 3](./phase-03.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-03-receipt.md) |
-| [04 — Phase 4](./phase-04.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-04-receipt.md) |
-| [05 — Phase 5](./phase-05.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-05-receipt.md) |
 `,
   );
   await fs.writeFile(
@@ -68,7 +49,7 @@ created: 2026-10-01
     `# Evidence Document\n\nHere is architecture evidence:\n\n\`\`\`mermaid\ngraph TD\n  A[Frontend] --> B[Backend]\n  B --> C[Storage]\n\`\`\`\n\nLocal asset reference:\n![Architecture Diagram](./assets/diagram.png)\n`,
   );
 
-  // 2. Undated plan (no progress.md, fallback to plan.md)
+  // 2. Undated plan
   const undatedDir = path.join(plansDir, "261002-undated");
   await fs.mkdir(undatedDir, { recursive: true });
   await fs.writeFile(
@@ -88,14 +69,14 @@ status: pending
 `,
   );
 
-  // 3. Conflicting plan (invalid progress)
+  // 3. Conflicting plan (frontmatter completed but phase pending)
   const conflictingDir = path.join(plansDir, "261003-conflicting");
   await fs.mkdir(conflictingDir, { recursive: true });
   await fs.writeFile(
     path.join(conflictingDir, "plan.md"),
     `---
 title: "Conflicting Plan"
-status: in_progress
+status: completed
 ---
 
 # Conflicting Plan
@@ -104,12 +85,8 @@ status: in_progress
 
 | # | Phase | Status |
 |---|---|---|
-| 01 | Analysis | In Progress |
+| 01 | Analysis | Pending |
 `,
-  );
-  await fs.writeFile(
-    path.join(conflictingDir, "progress.md"),
-    `# Broken Content Without Phase Reconciliation\nThis unparseable text causes conflict diagnostics.\n`,
   );
 
   // 4. Dated plan (explicit planned and actual ranges)
@@ -164,7 +141,7 @@ created: 2026-10-05
   // Unreadable document inside bulk directory (permissions restricted inside container post-copy)
   const unreadablePath = path.join(bulkDir, "unreadable-doc.txt");
   await fs.writeFile(unreadablePath, "Cannot read\n");
-  // 7. Secondary project plan with same relative path plans/261001-sample but different report
+  // 7. Secondary project plan with same relative path plans/261001-sample but different phase inventory
   if (secondaryProjectDir) {
     const secSampleDir = path.join(
       secondaryProjectDir,
@@ -177,7 +154,7 @@ created: 2026-10-05
       `---
 title: "Sample Feature Plan"
 description: "Secondary project version of sample feature plan"
-status: pending
+status: completed
 priority: P3
 created: 2026-10-01
 ---
@@ -188,22 +165,7 @@ created: 2026-10-01
 
 | # | Phase | Status | Progress | Effort | Detail |
 |---|---|---|---|---|---|
-| 01 | Phase 1 | Pending | 0% | 8h | [Phase 1](./phase-01.md) |
-`,
-    );
-    await fs.writeFile(
-      path.join(secSampleDir, "progress.md"),
-      `# Current Progress — Sample Feature Plan
-
-**Plan:** [plan.md](./plan.md)
-**Published:** 2026-10-02
-**Current status:** In Progress (Only Phase 01 completed)
-
-## Phase Reconciliation
-
-| Phase | Current status | Captured status | Completion basis / scope | Evidence / receipt |
-|---|---|---|---|---|
-| [01 — Phase 1](./phase-01.md) | Completed | Pending (initial snapshot) | Implemented & verified | [Receipt](./reports/phase-01-receipt.md) |
+| 01 | Phase 1 | Completed | 100% | 8h | [Phase 1](./phase-01.md) |
 `,
     );
   }
