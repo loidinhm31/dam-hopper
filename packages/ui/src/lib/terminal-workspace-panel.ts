@@ -2,8 +2,7 @@ export type TerminalWorkspacePanelId =
   | "git"
   | "ports"
   | "project"
-  | "terminals"
-  | "advisor";
+  | "terminals";
 
 export type TerminalFloatingPanelId = "files" | "tool";
 

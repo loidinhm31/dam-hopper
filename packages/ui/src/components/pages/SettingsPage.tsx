@@ -25,7 +25,6 @@ import {
   SettingsGlobalConfigPanel,
   SettingsWorkspaceConfigPanel,
 } from "@/components/pages/settings-page/SettingsConfigPanels.js";
-import { AdvisorSettingsSection } from "@/components/pages/settings-page/AdvisorSettingsSection.js";
 const SETTINGS_DIAGNOSTICS_SCOPE = {
   page: "settings",
   route: "/settings",
@@ -397,13 +396,6 @@ export function SettingsPage() {
                 : undefined
             }
           />
-        </SettingsSectionAccordion>
-
-        <SettingsSectionAccordion
-          title="Native Advisor"
-          description="Configure server-side Evcrate Advisor integration and inspect history directory status."
-        >
-          <AdvisorSettingsSection profileId={settingsProfileId} />
         </SettingsSectionAccordion>
       </div>
       <ConfirmDialog

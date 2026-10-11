@@ -19,8 +19,6 @@ import {
   LayoutGrid,
   Folder,
   Globe2,
-  Sparkles,
-  X,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,13 +27,6 @@ import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShel
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
-import { WorkspaceAdvisorHost } from "@/components/organisms/WorkspaceAdvisorHost.js";
-import { AdvisorPanelSlot } from "@/components/organisms/AdvisorPanelSlot.js";
-import {
-  WorkspaceAdvisorPlacementProvider,
-  type NativeAdvisorUiIntent,
-} from "@/contexts/WorkspaceAdvisorContext.js";
-import { useAdvisorVisibility } from "@/hooks/use-advisor.js";
 import {
   BrowserDebugKeepAliveHost,
   type BrowserDebugKeepAliveHandle,
@@ -265,7 +256,6 @@ const IDE_COMPACT_SURFACE_IDS = [
   "browser",
   "git",
   "project",
-  "advisor",
 ] as const;
 const TERMINAL_COMPACT_SURFACE_IDS = [
   "terminal",
@@ -274,7 +264,6 @@ const TERMINAL_COMPACT_SURFACE_IDS = [
   "browser",
   "git",
   "project",
-  "advisor",
 ] as const;
 const TERMINAL_LAYOUT_SENSITIVE_COMPACT_SURFACES = new Set(["terminal"]);
 const TERMINAL_USAGE_OPTIONS: TerminalUsageMode[] = ["traditional", "runtime"];
@@ -314,12 +303,10 @@ export function resolveActiveCompactSurfaceId(
     : fallbackSurfaceId;
 }
 
-function getCompactSurfaceIds(mode: WorkspaceMode, isAdvisorVisible = true) {
-  const ids =
-    mode === "terminal"
-      ? TERMINAL_COMPACT_SURFACE_IDS
-      : IDE_COMPACT_SURFACE_IDS;
-  return isAdvisorVisible ? ids : ids.filter((id) => id !== "advisor");
+function getCompactSurfaceIds(mode: WorkspaceMode) {
+  return mode === "terminal"
+    ? TERMINAL_COMPACT_SURFACE_IDS
+    : IDE_COMPACT_SURFACE_IDS;
 }
 
 function getDefaultCompactSurfaceId(mode: WorkspaceMode) {
@@ -425,8 +412,6 @@ export default function WorkspacePage() {
     : activeProfile && fallbackConnection?.status === "connected"
       ? fallbackConnection
       : null;
-  const workspaceOwner = workspaceConnection?.owner ?? null;
-  const { isVisible: isAdvisorVisible } = useAdvisorVisibility(workspaceOwner);
   const { level: appZoomLevel } = useAppZoom();
   const navigateBrowserTo = browserDebug.navigateTo;
   const registeredTerminalIds = useSyncExternalStore(
@@ -477,8 +462,8 @@ export default function WorkspacePage() {
   );
   const defaultCompactSurfaceId = getDefaultCompactSurfaceId(workspaceMode);
   const availableCompactSurfaceIds = useMemo(
-    () => getCompactSurfaceIds(workspaceMode, isAdvisorVisible),
-    [workspaceMode, isAdvisorVisible],
+    () => getCompactSurfaceIds(workspaceMode),
+    [workspaceMode],
   );
   const [requestedCompactSurface, setRequestedCompactSurface] = useState(
     defaultCompactSurfaceId,
@@ -488,13 +473,6 @@ export default function WorkspacePage() {
     availableCompactSurfaceIds,
     defaultCompactSurfaceId,
   );
-  const priorCompactSurfaceRef = useRef<string | null>(null);
-  const advisorLauncherRef = useRef<HTMLElement | null>(null);
-  const handleCloseCompactAdvisor = useCallback(() => {
-    setRequestedCompactSurface(
-      priorCompactSurfaceRef.current ?? defaultCompactSurfaceId,
-    );
-  }, [defaultCompactSurfaceId]);
   const isBrowserViewportVisible =
     !isCompactWorkspace || activeCompactSurface === "browser";
   const compactTerminalLayoutRevision =
@@ -1011,7 +989,6 @@ export default function WorkspacePage() {
   const activateTerminalPanelShortcut = useCallback(
     (targetId: TerminalPanelToolId) => {
       if (isCompactWorkspace) return;
-      if (targetId === "advisor" && !isAdvisorVisible) return;
       const nonce = ++panelShortcutNonceRef.current;
       if (workspaceMode === "terminal") {
         setTerminalWorkspacePanelRequest({
@@ -1026,17 +1003,13 @@ export default function WorkspacePage() {
         toolId: targetId === "project" ? "project-info" : targetId,
         exclusiveTarget: targetId,
       };
-      if (
-        targetId === "terminals" ||
-        targetId === "project" ||
-        targetId === "advisor"
-      ) {
+      if (targetId === "terminals" || targetId === "project") {
         setIdeRightTopToolRequest(request);
       } else {
         setIdeBottomToolRequest(request);
       }
     },
-    [isAdvisorVisible, isCompactWorkspace, workspaceMode],
+    [isCompactWorkspace, workspaceMode],
   );
 
   const focusEmbeddedBrowserAddress = useCallback(() => {
@@ -1221,14 +1194,14 @@ export default function WorkspacePage() {
       setRequestedCompactSurface((current) =>
         resolveActiveCompactSurfaceId(
           current,
-          getCompactSurfaceIds(mode, isAdvisorVisible),
+          getCompactSurfaceIds(mode),
           getDefaultCompactSurfaceId(mode),
         ),
       );
       saveWorkspaceMode(mode);
       setTerminalLayoutRevision((current) => current + 1);
     },
-    [isAdvisorVisible, setRequestedCompactSurface],
+    [setRequestedCompactSurface],
   );
 
   const toggleWorkspaceMode = useCallback(() => {
@@ -1242,7 +1215,7 @@ export default function WorkspacePage() {
       setRequestedCompactSurface((activeSurface) =>
         resolveActiveCompactSurfaceId(
           activeSurface,
-          getCompactSurfaceIds(next, isAdvisorVisible),
+          getCompactSurfaceIds(next),
           getDefaultCompactSurfaceId(next),
         ),
       );
@@ -1250,7 +1223,7 @@ export default function WorkspacePage() {
       setTerminalLayoutRevision((revision) => revision + 1);
       return next;
     });
-  }, [isAdvisorVisible, setRequestedCompactSurface]);
+  }, [setRequestedCompactSurface]);
 
   const setTerminalUsageMode = useCallback((mode: TerminalUsageMode) => {
     setTerminalUsageModeState((current) => {
@@ -1596,17 +1569,11 @@ export default function WorkspacePage() {
                   { id: "ports", label: "Ports" },
                   { id: "project", label: "Project" },
                   { id: "terminals", label: "Fleet" },
-                  ...(isAdvisorVisible
-                    ? [{ id: "advisor", label: "Advisor" }]
-                    : []),
                 ].map(({ id, label }) => (
                   <button
                     key={id}
                     type="button"
-                    onClick={(e) => {
-                      if (id === "advisor") {
-                        advisorLauncherRef.current = e.currentTarget;
-                      }
+                    onClick={() => {
                       activateTerminalPanelShortcut(id as TerminalPanelToolId);
                     }}
                     className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
@@ -1942,7 +1909,6 @@ export default function WorkspacePage() {
       handleVisibleSplitSessionsChange,
       renderBrowserContent,
       toggleEmbeddedBrowser,
-      isAdvisorVisible,
     ],
   );
 
@@ -2211,33 +2177,22 @@ export default function WorkspacePage() {
   );
 
   const rightTools = useMemo<ToolWindowDef[]>(
-    () => {
-      const tools: ToolWindowDef[] = [
-        {
-          id: "project-info",
-          label: "Project",
-          icon: Folder,
-          defaultActive: true,
-          content: projectContent,
-        },
-        {
-          id: "terminals",
-          label: "Fleet Terminal",
-          icon: LayoutGrid,
-          content: fleetContent,
-        },
-      ];
-      if (isAdvisorVisible) {
-        tools.push({
-          id: "advisor",
-          label: "Advisor",
-          icon: Sparkles,
-          content: <AdvisorPanelSlot mode="ide" />,
-        });
-      }
-      return tools;
-    },
-    [fleetContent, isAdvisorVisible, projectContent],
+    () => [
+      {
+        id: "project-info",
+        label: "Project",
+        icon: Folder,
+        defaultActive: true,
+        content: projectContent,
+      },
+      {
+        id: "terminals",
+        label: "Fleet Terminal",
+        icon: LayoutGrid,
+        content: fleetContent,
+      },
+    ],
+    [fleetContent, projectContent],
   );
   const compactGitSurface = useMemo<MobileWorkspaceSurface>(
     () => ({
@@ -2288,34 +2243,6 @@ export default function WorkspacePage() {
       ),
     }),
     [handleLaunchTerminal, projectName, projectTarget, selectedProjectId],
-  );
-
-  const compactAdvisorSurface = useMemo<MobileWorkspaceSurface>(
-    () => ({
-      id: "advisor",
-      label: "Advisor",
-      icon: Sparkles,
-      content: (
-        <div className="flex h-full min-h-0 flex-1 flex-col">
-          <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3">
-            <span className="text-xs font-semibold text-[var(--color-text)]">
-              EVCrate Advisor
-            </span>
-            <button
-              type="button"
-              onClick={handleCloseCompactAdvisor}
-              className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-              aria-label="Back to previous surface"
-              title="Back"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <AdvisorPanelSlot mode="compact" />
-        </div>
-      ),
-    }),
-    [handleCloseCompactAdvisor],
   );
 
   const compactIdeSurfaces = useMemo<MobileWorkspaceSurface[]>(
@@ -2404,7 +2331,6 @@ export default function WorkspacePage() {
       },
       compactGitSurface,
       compactProjectSurface,
-      ...(isAdvisorVisible ? [compactAdvisorSurface] : []),
     ],
     [
       compactGitSurface,
@@ -2418,8 +2344,6 @@ export default function WorkspacePage() {
       terminalContent,
       browserContent,
       projectTarget,
-      compactAdvisorSurface,
-      isAdvisorVisible,
       activeCompactSurface,
       handleRevealGitCommit,
     ],
@@ -2453,7 +2377,6 @@ export default function WorkspacePage() {
       },
       compactGitSurface,
       compactProjectSurface,
-      ...(isAdvisorVisible ? [compactAdvisorSurface] : []),
     ],
     [
       compactGitSurface,
@@ -2462,50 +2385,15 @@ export default function WorkspacePage() {
       portsContent,
       terminalContent,
       browserContent,
-      compactAdvisorSurface,
-      isAdvisorVisible,
     ],
   );
 
   const compactSurfaces =
     workspaceMode === "terminal" ? compactTerminalSurfaces : compactIdeSurfaces;
 
-  const handleCompactSurfaceChange = useCallback(
-    (surfaceId: string) => {
-      if (surfaceId === "advisor" && activeCompactSurface !== "advisor") {
-        priorCompactSurfaceRef.current = activeCompactSurface;
-      }
-      setRequestedCompactSurface(surfaceId);
-    },
-    [activeCompactSurface],
-  );
-
-  const handleCloseAdvisor = useCallback(() => {
-    if (isCompactWorkspace) {
-      handleCloseCompactAdvisor();
-    } else if (workspaceMode === "terminal") {
-      setTerminalWorkspacePanelRequest({
-        nonce: ++panelShortcutNonceRef.current,
-        targetId: "advisor",
-        intent: "toggle",
-      });
-    } else {
-      setIdeRightTopToolRequest({
-        nonce: ++panelShortcutNonceRef.current,
-        toolId: "advisor",
-      });
-    }
-  }, [handleCloseCompactAdvisor, isCompactWorkspace, workspaceMode]);
-
-  const handleAdvisorUiIntent = useCallback(
-    (intent: NativeAdvisorUiIntent | string) => {
-      if (intent === "dismiss") {
-        handleCloseAdvisor();
-      }
-    },
-    [handleCloseAdvisor],
-  );
-
+  const handleCompactSurfaceChange = useCallback((surfaceId: string) => {
+    setRequestedCompactSurface(surfaceId);
+  }, []);
   const terminalFilePanelContent = useMemo(
     () => (controls: TerminalWorkspacePanelControls) => (
       <TerminalFloatingFilePanel
@@ -2695,11 +2583,7 @@ export default function WorkspacePage() {
     ],
   );
   return (
-    <WorkspaceAdvisorPlacementProvider
-      onUiIntent={handleAdvisorUiIntent}
-      onClose={handleCloseAdvisor}
-      launcherRef={advisorLauncherRef}
-    >
+    <>
       <BrowserDebugKeepAliveHost
         ref={browserKeepAliveRef}
         browser={browserDebug}
@@ -2722,13 +2606,6 @@ export default function WorkspacePage() {
             webglEnabledSessionIds={webglEnabledSessionIds}
           />
         </Suspense>
-      )}
-      {isAdvisorVisible && (
-        <WorkspaceAdvisorHost
-          project={selectedProject ?? null}
-          projectTarget={selectedProject ? projectTarget : null}
-          connection={workspaceConnection}
-        />
       )}
       {isCompactWorkspace ? (
         <MobileWorkspaceShell
@@ -2840,6 +2717,6 @@ export default function WorkspacePage() {
           </div>
         </div>
       )}
-    </WorkspaceAdvisorPlacementProvider>
+    </>
   );
 }
