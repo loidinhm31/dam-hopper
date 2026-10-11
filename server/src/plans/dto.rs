@@ -5,12 +5,8 @@ pub const DIAG_INVALID_METADATA: &str = "INVALID_METADATA";
 pub const DIAG_INVALID_DOCUMENT: &str = "INVALID_DOCUMENT";
 pub const DIAG_FIELD_TOO_LARGE: &str = "FIELD_TOO_LARGE";
 pub const DIAG_PHASE_INVENTORY_INVALID: &str = "PHASE_INVENTORY_INVALID";
-pub const DIAG_PHASE_UNREPORTED: &str = "PHASE_UNREPORTED";
-pub const DIAG_PHASE_UNMATCHED: &str = "PHASE_UNMATCHED";
 pub const DIAG_STATUS_CONFLICT: &str = "STATUS_CONFLICT";
 pub const DIAG_UNSUPPORTED_STATUS: &str = "UNSUPPORTED_STATUS";
-pub const DIAG_PROGRESS_MISSING: &str = "PROGRESS_MISSING";
-pub const DIAG_PROGRESS_UNREADABLE: &str = "PROGRESS_UNREADABLE";
 pub const DIAG_DOCUMENT_TOO_LARGE: &str = "DOCUMENT_TOO_LARGE";
 pub const DIAG_DOCUMENT_CHANGED: &str = "DOCUMENT_CHANGED";
 pub const DIAG_LINK_REJECTED: &str = "LINK_REJECTED";
@@ -47,7 +43,6 @@ pub enum PlanStatus {
 #[serde(rename_all = "lowercase")]
 pub enum PlanAuthority {
     Plan,
-    Progress,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,7 +140,6 @@ pub struct FilePlanMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct PlanDocuments {
     pub plan: PlanDocument,
-    pub progress: PlanDocument,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

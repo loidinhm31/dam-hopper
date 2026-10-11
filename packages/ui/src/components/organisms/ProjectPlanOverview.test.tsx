@@ -24,16 +24,10 @@ describe("ProjectPlanOverview", () => {
         sizeBytes: 2048,
         modifiedAt: "2026-10-06T12:00:00Z",
       },
-      progress: {
-        path: "plans/my-feature/progress.md",
-        state: "readable",
-        sizeBytes: 1024,
-        modifiedAt: "2026-10-06T12:05:00Z",
-      },
     },
     reportedStatus: {
       value: "in-progress",
-      authority: "progress",
+      authority: "plan",
       raw: "in-progress",
       evidence: [dummyRef],
       captured: [],
@@ -46,7 +40,7 @@ describe("ProjectPlanOverview", () => {
         path: "plans/my-feature/phase-01.md",
         reportedStatus: {
           value: "completed",
-          authority: "progress",
+          authority: "plan",
           raw: "completed",
           evidence: [dummyRef],
           captured: [],
@@ -60,7 +54,7 @@ describe("ProjectPlanOverview", () => {
         path: "plans/my-feature/phase-02.md",
         reportedStatus: {
           value: "in-progress",
-          authority: "progress",
+          authority: "plan",
           raw: "in-progress",
           evidence: [dummyRef],
           captured: [],

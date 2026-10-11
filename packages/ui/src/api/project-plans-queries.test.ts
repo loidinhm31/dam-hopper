@@ -85,16 +85,10 @@ const validPlanResponse: SelectedPlanResponse = {
         sizeBytes: 1024,
         modifiedAt: "2026-10-06T12:00:00Z",
       },
-      progress: {
-        path: "plans/261006-plan-a/progress.md",
-        state: "readable",
-        sizeBytes: 512,
-        modifiedAt: "2026-10-06T12:05:00Z",
-      },
     },
     reportedStatus: {
       value: "in-progress",
-      authority: "progress",
+      authority: "plan",
       raw: "In Progress",
       evidence: [],
       captured: [],
@@ -107,7 +101,7 @@ const validPlanResponse: SelectedPlanResponse = {
         path: "phase-01.md",
         reportedStatus: {
           value: "completed",
-          authority: "progress",
+          authority: "plan",
           raw: "Completed",
           evidence: [],
           captured: [],

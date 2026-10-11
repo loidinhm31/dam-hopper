@@ -47,3 +47,14 @@ No implementation, production documentation edits, build/lint/test/browser smoke
 
 ## Unresolved questions
 None blocking plan creation. Validate optional substantive tradeoffs with user after plan delivery.
+
+## Scope Amendment (2026-10-11): File Plans progress.md Deprecation
+
+User requested extending scope to remove `progress.md` in plan view at "File plans" because it will be deprecated as tooling removes "advice" mode.
+
+### Advisory Consultation & Refinements:
+1. **Explicit Basis Recorded:** Recorded as an explicit dated amendment linked to advice mode tooling deprecation.
+2. **Preserve Plan-Only Semantics:** Status, dates, phases, and completion fractions derive strictly from `plan.md`. Frontmatter conflict detection and date-range validation (`validate_date_range`) remain active. `lastDocumentUpdate` uses `plan_doc.modified_at` alone.
+3. **Generic Markdown Navigation Maintained:** The server stops probing or treating `progress.md` as an authoritative status document, but general Markdown link navigation to relative files (including legacy `progress.md` or other notes) remains possible via `isCustomLocalDoc` without altering plan status. User progress files are never deleted.
+4. **Regression Coverage:** Server scanner tests verify that presence of legacy `progress.md` (even with conflicting status or newer timestamp) does not affect plan status or emit diagnostics.
+5. **Group F Boundary:** Group F owns the 18 files across server plans parser/scanner/DTOs, UI viewer/tabs, E2E fixtures/specs, and documentation.

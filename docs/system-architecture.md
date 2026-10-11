@@ -119,14 +119,13 @@ See [Workflow API Specification](./workflow-api.md).
 - Extends current Plan surface with folder-first selection, then one selected plan's Overview,
   Timeline, and read-only documents; preserves separate SQLite manual tracking.
 - Resolves configured project / registered worktree on server; browses immediate
-  folders under fixed `plans/`, reading plan/progress only after explicit selection.
+  folders under fixed `plans/`, reading `plan.md` only after explicit selection.
 - `plan.md` supplies metadata and the complete declared phase inventory, including
-  valid short GFM rows. Presence of `progress.md` opts into its current report;
-  unreadable progress retains historical evidence but makes current phase
-  completion unknown. Conflicting/duplicate phase identity claims cannot complete
-  another phase. Explicit Current status columns take precedence over Status.
-- Progress is an administrative report, not verified completion or permission to
-  execute. The dashboard never calls controllers, runs agents, or updates files.
+  valid short GFM rows. Status, phases, completion fractions, and dates derive
+  exclusively from `plan.md` frontmatter and declared phase rows. Explicit Current status
+  columns take precedence over Status.
+- Reported status is an administrative declaration, not verified execution evidence.
+  The dashboard never calls controllers, runs agents, or updates files.
 - Selected Timeline uses explicit planned/actual ranges, creation milestones, or
   Undated state. No mtime/effort duration inference, cross-plan Board, or bulk status load.
 - Scopes requests, queries, document links, and watcher cleanup to the captured

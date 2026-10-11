@@ -65,11 +65,9 @@ A missing `plans/` directory is an empty state covered by the target-root watch.
 The final JSON is limited to 2 MiB; truncation retains whole sorted entries.
 
 **GET /api/plans?project=NAME&planPath=REL[&worktreePath=PATH]**
-reads one selected plan. `plan.md` declares metadata and phase inventory;
-present `progress.md` opts into reported current status. Unreadable/changed
-progress never silently falls back to historical completed phases. Identity
-conflicts and duplicate progress rows remain diagnostic; completion is unknown
-when decisive current evidence is unavailable.
+reads one selected plan. `plan.md` declares metadata, phase inventory,
+and reported status. Frontmatter status and declared phase rows determine
+overall reported status and completion fractions.
 
 `GET /api/fs/read` with `mode=plan-document`, and WebSocket `fs:read` with
 `readMode: "plan-document"`, are bounded strict UTF-8 Markdown reads

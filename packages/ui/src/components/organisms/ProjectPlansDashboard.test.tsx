@@ -101,12 +101,6 @@ describe("ProjectPlansDashboard", () => {
           sizeBytes: 100,
           modifiedAt: "2026-10-06T12:00:00Z",
         },
-        progress: {
-          path: "plans/261001-plan-a/progress.md",
-          state: "absent",
-          sizeBytes: null,
-          modifiedAt: null,
-        },
       },
       reportedStatus: {
         value: "in-progress",

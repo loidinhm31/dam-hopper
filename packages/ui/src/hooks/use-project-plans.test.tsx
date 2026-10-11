@@ -83,16 +83,10 @@ const mockPlanData: SelectedPlanResponse = {
         sizeBytes: 100,
         modifiedAt: "2026-10-06T10:00:00Z",
       },
-      progress: {
-        path: "plans/261006-plan-a/progress.md",
-        state: "readable",
-        sizeBytes: 50,
-        modifiedAt: "2026-10-06T10:01:00Z",
-      },
     },
     reportedStatus: {
       value: "in-progress",
-      authority: "progress",
+      authority: "plan",
       raw: "In Progress",
       evidence: [],
       captured: [],
@@ -506,8 +500,8 @@ describe("useProjectPlans hook", () => {
         await act(async () => {
           emitForPath("plans/261006-plan-a", {
             kind: "modified",
-            path: "/workspace/repo/plans/261006-plan-a/progress.md",
-            targetRelativePath: "plans/261006-plan-a/progress.md",
+            path: "/workspace/repo/plans/261006-plan-a/plan.md",
+            targetRelativePath: "plans/261006-plan-a/plan.md",
           });
           await vi.advanceTimersByTimeAsync(60);
         });
@@ -586,7 +580,7 @@ describe("useProjectPlans hook", () => {
       await act(async () => {
         emitForPath("plans", {
           kind: "modified",
-          path: "/workspace/plans/progress.md",
+          path: "/workspace/plans/plan.md",
         });
         await vi.advanceTimersByTimeAsync(60);
       });
@@ -736,7 +730,7 @@ describe("useProjectPlans hook", () => {
         await act(async () => {
           emitForPath("plans", {
             kind: "modified",
-            path: "/workspace/plans/progress.md",
+            path: "/workspace/plans/plan.md",
           });
           await vi.advanceTimersByTimeAsync(60);
         });
@@ -775,7 +769,7 @@ describe("useProjectPlans hook", () => {
       await act(async () => {
         emitForPath("plans", {
           kind: "modified",
-          path: "/workspace/plans/progress.md",
+          path: "/workspace/plans/plan.md",
         });
         await vi.advanceTimersByTimeAsync(60);
       });
@@ -784,7 +778,7 @@ describe("useProjectPlans hook", () => {
         await act(async () => {
           emitForPath("plans", {
             kind: "modified",
-            path: "/workspace/plans/progress.md",
+            path: "/workspace/plans/plan.md",
           });
           pendingReads[pass].resolve(mockFoldersData);
           await vi.advanceTimersByTimeAsync(0);
@@ -809,7 +803,7 @@ describe("useProjectPlans hook", () => {
       await act(async () => {
         emitForPath("plans", {
           kind: "modified",
-          path: "/workspace/plans/progress.md",
+          path: "/workspace/plans/plan.md",
         });
         await vi.advanceTimersByTimeAsync(60);
       });
@@ -948,7 +942,7 @@ describe("useProjectPlans hook", () => {
       await act(async () => {
         emitForPath("plans", {
           kind: "modified",
-          path: "/workspace/plans/progress.md",
+          path: "/workspace/plans/plan.md",
         });
         await vi.advanceTimersByTimeAsync(60);
       });
