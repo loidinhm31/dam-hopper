@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({ invoke: mocks.invoke, onEvent: () => () => {} }),
+  getTransportGeneration: () => 0,
+  subscribeTransportChanges: () => () => {},
   reconfigureTransport: vi.fn(),
   initTransport: vi.fn(),
   resetTransport: vi.fn(),

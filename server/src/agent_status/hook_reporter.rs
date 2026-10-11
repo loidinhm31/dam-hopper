@@ -34,7 +34,11 @@ pub const MAX_HOOK_STDIN_BYTES: usize = 1_048_576;
 /// Maximum normalized serialized envelope size allowed over the wire (4 KiB).
 pub const MAX_ENVELOPE_WIRE_BYTES: usize = 4_096;
 
-/// Timeout deadline for sending the hook report to the local collector (250 ms).
+/// Timeout deadline for sending the hook report to the local collector
+/// (250 ms in release builds; 2,000 ms in debug builds to account for unoptimized cold startup).
+#[cfg(debug_assertions)]
+pub const REPORT_HOOK_DEADLINE: Duration = Duration::from_millis(2_000);
+#[cfg(not(debug_assertions))]
 pub const REPORT_HOOK_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Allowlisted subset of incoming native hook fields.

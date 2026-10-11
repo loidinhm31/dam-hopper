@@ -1337,11 +1337,23 @@ async fn test_smoke_end_to_end_real_tcp_ws_deadline_and_recovery() {
         .set(base_time + ChronoDuration::seconds(MFA_VALIDITY_SECS));
 
     // WebSocket should be terminated with 4403 (CLOSE_MFA_REQUIRED)
-    let close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), ws.next())
-        .await
-        .expect("Server must send close frame on MFA deadline")
-        .expect("Stream should not terminate without frame")
-        .expect("Valid message expected");
+    let close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))
+                    if t.contains("\"kind\":\"host:uiConnection\"") =>
+                {
+                    continue;
+                }
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(_))) => continue,
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("Server must send close frame on MFA deadline")
+    .expect("Stream should not terminate without frame")
+    .expect("Valid message expected");
 
     match close_msg {
         tokio_tungstenite::tungstenite::Message::Close(Some(frame)) => {
@@ -1421,11 +1433,23 @@ async fn test_smoke_end_to_end_real_tcp_ws_deadline_and_recovery() {
     assert_eq!(reset_res.modified_count, 1);
 
     // Live socket must be closed with 4401 (CLOSE_FULL_LOGIN_REQUIRED) within <= 8s
-    let reset_close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), new_ws.next())
-        .await
-        .expect("Server must terminate live socket after DB reset")
-        .expect("Stream should not terminate without frame")
-        .expect("Valid message expected");
+    let reset_close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            match new_ws.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))
+                    if t.contains("\"kind\":\"host:uiConnection\"") =>
+                {
+                    continue;
+                }
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(_))) => continue,
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("Server must terminate live socket after DB reset")
+    .expect("Stream should not terminate without frame")
+    .expect("Valid message expected");
 
     match reset_close_msg {
         tokio_tungstenite::tungstenite::Message::Close(Some(frame)) => {

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   ApiRequestError,
@@ -11,6 +18,7 @@ import {
 } from "@/api/client.js";
 import {
   getAllConnectionSnapshots,
+  getApi,
   getConnectionSnapshot,
   getUiConnectionReceipt,
   isCurrentConnection,
@@ -18,14 +26,17 @@ import {
   subscribeUiConnectionReceipt,
 } from "@/api/connections.js";
 import { connectionKey, type ConnectionRef } from "@/api/ownership.js";
-import { getBoundApiClient } from "@/api/queries.js";
 import { profileQueryKey } from "@/api/query-client.js";
-import { getHostResourceSource, subscribeHostResourceSource } from "@/api/host-resource-stream-coordinator.js";
+import {
+  getHostResourceSource,
+  subscribeHostResourceSource,
+} from "@/api/host-resource-stream-coordinator.js";
 import { getProfiles, subscribeToProfileChanges } from "@/api/server-config.js";
 import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface HostSleepConsentActionTarget {
   readonly owner: ConnectionRef;
@@ -79,7 +90,9 @@ interface LocalRequestState {
 export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
   const qc = useQueryClient();
   const agentProfiles = useAgentStatusStore((s) => s.profiles);
-  const [localStates, setLocalStates] = useState<Record<string, LocalRequestState>>({});
+  const [localStates, setLocalStates] = useState<
+    Record<string, LocalRequestState>
+  >({});
   const [dismissedKeys, setDismissedKeys] = useState<Record<string, true>>({});
   const seenActiveKeysRef = useRef<Set<string>>(new Set());
   const inFlightRef = useRef<Set<string>>(new Set());
@@ -94,7 +107,12 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
     subscribeConnections,
     () =>
       JSON.stringify(
-        getAllConnectionSnapshots().map((s) => [s.owner.profileId, s.status, s.owner.generation, s.serverUrl]),
+        getAllConnectionSnapshots().map((s) => [
+          s.owner.profileId,
+          s.status,
+          s.owner.generation,
+          s.serverUrl,
+        ]),
       ),
     () => "[]",
   );
@@ -102,11 +120,20 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
   const connectedTargets = useMemo(() => {
     const profiles = getProfiles();
     const byId = new Map(profiles.map((p) => [p.id, p]));
-    const result: Array<{ profileId: string; profileName: string; endpointLabel: string; owner: ConnectionRef }> = [];
+    const result: Array<{
+      profileId: string;
+      profileName: string;
+      endpointLabel: string;
+      owner: ConnectionRef;
+    }> = [];
     const added = new Set<string>();
     for (const p of profiles) {
       const snap = getConnectionSnapshot(p.id);
-      if (snap && snap.status === "connected" && isCurrentConnection(snap.owner)) {
+      if (
+        snap &&
+        snap.status === "connected" &&
+        isCurrentConnection(snap.owner)
+      ) {
         added.add(p.id);
         result.push({
           profileId: p.id,
@@ -118,7 +145,11 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
     }
     for (const snap of getAllConnectionSnapshots()) {
       const profId = snap.owner.profileId;
-      if (!added.has(profId) && snap.status === "connected" && isCurrentConnection(snap.owner)) {
+      if (
+        !added.has(profId) &&
+        snap.status === "connected" &&
+        isCurrentConnection(snap.owner)
+      ) {
         const p = byId.get(profId);
         result.push({
           profileId: profId,
@@ -134,7 +165,9 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
   const receiptSig = useSyncExternalStore(
     useCallback(
       (notify) => {
-        const unsubs = connectedTargets.map((t) => subscribeUiConnectionReceipt(t.owner, () => notify()));
+        const unsubs = connectedTargets.map((t) =>
+          subscribeUiConnectionReceipt(t.owner, () => notify()),
+        );
         for (const t of connectedTargets) {
           unsubs.push(subscribeHostResourceSource(t.owner, qc, notify));
         }
@@ -155,10 +188,13 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
 
   useEffect(() => {
     if (!enabled) return;
-    const activeOwnerPrefixes = new Set(connectedTargets.map((t) => `${connectionKey(t.owner)}:`));
+    const activeOwnerPrefixes = new Set(
+      connectedTargets.map((t) => `${connectionKey(t.owner)}:`),
+    );
     for (const key of Array.from(seenActiveKeysRef.current)) {
       const prefix = key.slice(0, key.lastIndexOf(":") + 1);
-      if (!activeOwnerPrefixes.has(prefix)) seenActiveKeysRef.current.delete(key);
+      if (!activeOwnerPrefixes.has(prefix))
+        seenActiveKeysRef.current.delete(key);
     }
     const currentOwnerKeys = new Set<string>();
     for (const t of connectedTargets) {
@@ -169,7 +205,15 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
       if (prev !== connId) {
         prevReceiptsRef.current.set(oKey, connId);
         if (connId !== null && isCurrentConnection(t.owner)) {
-          void qc.invalidateQueries({ queryKey: profileQueryKey(t.owner, "system", "idle-suspend", "v1", "status") });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(
+              t.owner,
+              "system",
+              "idle-suspend",
+              "v1",
+              "status",
+            ),
+          });
         }
       }
     }
@@ -180,8 +224,14 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
 
   const queries = useQueries({
     queries: connectedTargets.map((t) => ({
-      queryKey: profileQueryKey(t.owner, "system", "idle-suspend", "v1", "status"),
-      queryFn: () => getBoundApiClient(t.owner).system.idleSuspendStatus(),
+      queryKey: profileQueryKey(
+        t.owner,
+        "system",
+        "idle-suspend",
+        "v1",
+        "status",
+      ),
+      queryFn: () => getApi(t.owner).system.idleSuspendStatus(),
       enabled: enabled && isCurrentConnection(t.owner),
       staleTime: 5_000,
       retry: false,
@@ -190,19 +240,30 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
 
   const queue = useMemo<HostSleepConsentQueueItem[]>(() => {
     if (!enabled) return [];
-    const byDedupe = new Map<string, HostSleepConsentQueueItem & { mutableAliases: string[] }>();
+    const byDedupe = new Map<
+      string,
+      HostSleepConsentQueueItem & { mutableAliases: string[] }
+    >();
     for (let i = 0; i < connectedTargets.length; i++) {
       const target = connectedTargets[i];
       if (!isCurrentConnection(target.owner)) continue;
       const status = queries[i]?.data;
-      if (!status || status.automaticPolicy !== "agent-free" || !status.agentFree || !status.clientPresence || !status.consent) {
+      if (
+        !status ||
+        status.automaticPolicy !== "agent-free" ||
+        !status.agentFree ||
+        !status.clientPresence ||
+        !status.consent
+      ) {
         continue;
       }
       const consent = status.consent;
       const itemKey = `${connectionKey(target.owner)}:${consent.requestId}`;
       const isLiveHandoff =
         consent.state === "approved" &&
-        (status.agentFree.phase === "approved" || status.agentFree.phase === "finalCheck" || status.agentFree.phase === "handedOff");
+        (status.agentFree.phase === "approved" ||
+          status.agentFree.phase === "finalCheck" ||
+          status.agentFree.phase === "handedOff");
       if (consent.state === "pending" || isLiveHandoff) {
         seenActiveKeysRef.current.add(itemKey);
       }
@@ -210,10 +271,15 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
       if (!seenActiveKeysRef.current.has(itemKey) && !local) continue;
 
       const resSource = getHostResourceSource(target.owner, qc);
-      const resEpoch = resSource.freshness.isSnapshotFresh ? resSource.freshness.serverEpoch : null;
+      const resEpoch = resSource.freshness.isSnapshotFresh
+        ? resSource.freshness.serverEpoch
+        : null;
       const agentProf = agentProfiles.get(target.profileId);
       const agentEpoch =
-        agentProf && agentProf.owner.generation === target.owner.generation && agentProf.availability === "ready" && agentProf.epoch !== null
+        agentProf &&
+        agentProf.owner.generation === target.owner.generation &&
+        agentProf.availability === "ready" &&
+        agentProf.epoch !== null
           ? String(agentProf.epoch)
           : null;
       const serverEpoch = resEpoch ?? agentEpoch ?? null;
@@ -225,7 +291,9 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
       if (dismissedKeys[itemKey] || dismissedKeys[dedupeKey]) continue;
 
       const effectiveState: ConsentState =
-        consent.state !== "pending" ? consent.state : (local?.settledState ?? "pending");
+        consent.state !== "pending"
+          ? consent.state
+          : (local?.settledState ?? "pending");
       const effectiveDecision: ConsentDecision | null =
         consent.decision ?? local?.settledDecision ?? null;
       const isSettled = effectiveState !== "pending";
@@ -275,31 +343,59 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
       }
       const pCmp = a.owner.profileId.localeCompare(b.owner.profileId);
       if (pCmp !== 0) return pCmp;
-      if (a.owner.generation !== b.owner.generation) return a.owner.generation - b.owner.generation;
+      if (a.owner.generation !== b.owner.generation)
+        return a.owner.generation - b.owner.generation;
       return a.consent.requestId.localeCompare(b.consent.requestId);
     });
-  }, [enabled, connectedTargets, queries, localStates, dismissedKeys, qc, agentProfiles, receiptSig]);
+  }, [
+    enabled,
+    connectedTargets,
+    queries,
+    localStates,
+    dismissedKeys,
+    qc,
+    agentProfiles,
+    receiptSig,
+  ]);
 
   const submitDecision = useCallback(
-    async (target: HostSleepConsentActionTarget, decision: ConsentDecision, source: "button" | "dismiss", dedupeKey?: string) => {
+    async (
+      target: HostSleepConsentActionTarget,
+      decision: ConsentDecision,
+      source: "button" | "dismiss",
+      dedupeKey?: string,
+    ) => {
       if (useCognitoModeStore.getState().active) return;
       if (!isCurrentConnection(target.owner)) return;
       const itemKey = `${connectionKey(target.owner)}:${target.requestId}`;
       if (inFlightRef.current.has(itemKey)) return;
 
       const receipt = getUiConnectionReceipt(target.owner);
-      if (!receipt || (target.connectionId !== null && receipt.connectionId !== target.connectionId)) {
+      if (
+        !receipt ||
+        (target.connectionId !== null &&
+          receipt.connectionId !== target.connectionId)
+      ) {
         setLocalStates((prev) => ({
           ...prev,
           [itemKey]: {
             ...prev[itemKey],
             isSubmitting: false,
             pendingDecision: null,
-            errorMessage: "Socket capability changed or is not yet ready. Reconciling server status.",
+            errorMessage:
+              "Socket capability changed or is not yet ready. Reconciling server status.",
           },
         }));
         if (isCurrentConnection(target.owner)) {
-          void qc.invalidateQueries({ queryKey: profileQueryKey(target.owner, "system", "idle-suspend", "v1", "status") });
+          void qc.invalidateQueries({
+            queryKey: profileQueryKey(
+              target.owner,
+              "system",
+              "idle-suspend",
+              "v1",
+              "status",
+            ),
+          });
         }
         return;
       }
@@ -317,14 +413,18 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
       }));
 
       try {
-        const resp = await getBoundApiClient(target.owner).system.submitConsentDecision({
+        const resp = await getApi(target.owner).system.submitConsentDecision({
           requestId: target.requestId,
           requestRevision: target.requestRevision,
           connectionId: receipt.connectionId,
           decisionCapability: receipt.decisionCapability,
           decision,
         });
-        if (!isCurrentConnection(target.owner) || getUiConnectionReceipt(target.owner)?.connectionId !== receipt.connectionId) {
+        if (
+          !isCurrentConnection(target.owner) ||
+          getUiConnectionReceipt(target.owner)?.connectionId !==
+            receipt.connectionId
+        ) {
           return;
         }
         setLocalStates((prev) => ({
@@ -345,14 +445,34 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
             ...(dedupeKey ? { [dedupeKey]: true } : {}),
           }));
         }
-        void qc.invalidateQueries({ queryKey: profileQueryKey(target.owner, "system", "idle-suspend", "v1", "status") });
+        void qc.invalidateQueries({
+          queryKey: profileQueryKey(
+            target.owner,
+            "system",
+            "idle-suspend",
+            "v1",
+            "status",
+          ),
+        });
       } catch (err) {
         if (!isCurrentConnection(target.owner)) return;
-        void qc.invalidateQueries({ queryKey: profileQueryKey(target.owner, "system", "idle-suspend", "v1", "status") });
+        void qc.invalidateQueries({
+          queryKey: profileQueryKey(
+            target.owner,
+            "system",
+            "idle-suspend",
+            "v1",
+            "status",
+          ),
+        });
         if (err instanceof ApiRequestError && err.status === 409) {
           const code = err.code;
           const contraryDecision: ConsentDecision | null =
-            code === "decisionAlreadySettled" ? (decision === "approve" ? "deny" : "approve") : null;
+            code === "decisionAlreadySettled"
+              ? decision === "approve"
+                ? "deny"
+                : "approve"
+              : null;
           const settledState: ConsentState =
             code === "consentExpired"
               ? "expired"
@@ -369,7 +489,9 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
               isSubmitting: false,
               pendingDecision: null,
               settledState,
-              settledDecision: contraryDecision ?? (code === "idleSuspendHandoffInProgress" ? "approve" : null),
+              settledDecision:
+                contraryDecision ??
+                (code === "idleSuspendHandoffInProgress" ? "approve" : null),
               errorMessage:
                 code === "idleSuspendHandoffInProgress"
                   ? "Host suspend handoff is already in progress and cannot be cancelled."
@@ -394,7 +516,11 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
             ...prev[itemKey],
             isSubmitting: false,
             pendingDecision: null,
-            errorMessage: isUncertain ? null : (err instanceof Error ? err.message : "Failed to submit consent decision."),
+            errorMessage: isUncertain
+              ? null
+              : err instanceof Error
+                ? err.message
+                : "Failed to submit consent decision.",
             uncertaintyMessage: isUncertain
               ? "Outcome uncertain due to timeout or server unavailability. Reconciling authoritative status."
               : null,
@@ -407,13 +533,26 @@ export function useHostSleepConsent(enabled = true): UseHostSleepConsentResult {
     [qc],
   );
 
-  const approve = useCallback((target: HostSleepConsentActionTarget) => submitDecision(target, "approve", "button"), [submitDecision]);
-  const deny = useCallback((target: HostSleepConsentActionTarget) => submitDecision(target, "deny", "button"), [submitDecision]);
+  const approve = useCallback(
+    (target: HostSleepConsentActionTarget) =>
+      submitDecision(target, "approve", "button"),
+    [submitDecision],
+  );
+  const deny = useCallback(
+    (target: HostSleepConsentActionTarget) =>
+      submitDecision(target, "deny", "button"),
+    [submitDecision],
+  );
   const dismiss = useCallback(
     async (target: HostSleepConsentActionTarget) => {
       if (useCognitoModeStore.getState().active) return;
       const itemKey = `${connectionKey(target.owner)}:${target.requestId}`;
-      const matched = queue.find((q) => q.key === itemKey || (q.owner.profileId === target.owner.profileId && q.consent.requestId === target.requestId));
+      const matched = queue.find(
+        (q) =>
+          q.key === itemKey ||
+          (q.owner.profileId === target.owner.profileId &&
+            q.consent.requestId === target.requestId),
+      );
       if (!matched || matched.isSettled) {
         setDismissedKeys((prev) => ({
           ...prev,

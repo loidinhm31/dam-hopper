@@ -9,6 +9,79 @@ use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 mod netlink;
 #[cfg(target_os = "linux")]
 pub(crate) mod process;
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod process {
+    use std::time::Instant;
+
+    use crate::idle_suspend::activity::{
+        ActivityUnavailable, ActivityUnavailableReason, NetworkNamespaceIdentity, OwnedSocketSet,
+        ProcessChange, ProcessSample,
+    };
+    use crate::idle_suspend::policy::AgentExecutableSet;
+    use crate::pty::activity::PtyActivitySnapshot;
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct PreparedProcessSample {
+        pub(crate) sample: ProcessSample,
+    }
+
+    impl PreparedProcessSample {
+        #[allow(dead_code)]
+        pub(crate) fn sample(&self) -> &ProcessSample {
+            &self.sample
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct ProcessDiscovery {
+        baseline_established: bool,
+    }
+
+    impl ProcessDiscovery {
+        pub(crate) fn new() -> Self {
+            Self {
+                baseline_established: false,
+            }
+        }
+
+        pub(crate) fn prepare_sample(
+            &self,
+            pty: &PtyActivitySnapshot,
+            _agents: &AgentExecutableSet,
+            _deadline: Instant,
+        ) -> Result<PreparedProcessSample, ActivityUnavailable> {
+            if !pty.is_complete() || !pty.roots.is_empty() {
+                return Err(ActivityUnavailable::new(
+                    ActivityUnavailableReason::UnsupportedTransport,
+                ));
+            }
+            let change = if !self.baseline_established {
+                ProcessChange::BaselineEstablished
+            } else {
+                ProcessChange::Unchanged
+            };
+            Ok(PreparedProcessSample {
+                sample: ProcessSample {
+                    recognized_agent_count: 0,
+                    monitored_terminals: Vec::new(),
+                    owned_sockets: OwnedSocketSet::empty(NetworkNamespaceIdentity {
+                        device: 0,
+                        inode: 0,
+                    }),
+                    process_evidence: Vec::new(),
+                    change,
+                    matched_agents: Vec::new(),
+                    uncovered_retained_processes: Vec::new(),
+                },
+            })
+        }
+
+        pub(crate) fn commit_sample(&mut self, prepared: PreparedProcessSample) -> ProcessSample {
+            self.baseline_established = true;
+            prepared.sample
+        }
+    }
+}
 pub(crate) mod sampler;
 #[cfg(target_os = "linux")]
 pub(crate) mod tcp;

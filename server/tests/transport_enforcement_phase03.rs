@@ -601,11 +601,23 @@ async fn test_websocket_live_revocation_closes_connection() {
         .unwrap();
 
     // Within bounded polling window (<= 7s), background watcher must close socket with 4401
-    let close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), ws.next())
-        .await
-        .expect("Server must send close frame within 8s")
-        .expect("Stream should not terminate without frame")
-        .expect("Valid message expected");
+    let close_msg = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))
+                    if t.contains("\"kind\":\"host:uiConnection\"") =>
+                {
+                    continue;
+                }
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(_))) => continue,
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("Server must send close frame within 8s")
+    .expect("Stream should not terminate without frame")
+    .expect("Valid message expected");
 
     match close_msg {
         tokio_tungstenite::tungstenite::Message::Close(Some(frame)) => {

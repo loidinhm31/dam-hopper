@@ -151,7 +151,13 @@ async fn next_json(
         }
         match tokio::time::timeout(remaining, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
-                return serde_json::from_str(&t).ok();
+                if let Ok(val) = serde_json::from_str::<Value>(&t) {
+                    if val.get("kind").and_then(|v| v.as_str()) == Some("host:uiConnection") {
+                        continue;
+                    }
+                    return Some(val);
+                }
+                return None;
             }
             Ok(Some(Ok(_))) => continue, // Ping/Binary
             _ => return None,
