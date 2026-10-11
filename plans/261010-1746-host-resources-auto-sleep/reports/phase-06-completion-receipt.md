@@ -1,0 +1,41 @@
+# Phase 06 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-06`
+- **Phase Name**: `Phase 06 — End-to-end verification, security review and safe rollout`
+- **Task Run ID**: `fffa1fdb-edd7-4034-8fec-1669369d9e2e`
+- **Completion Operation ID**: `9c92b314-e5f8-49e0-8cb1-84754bfd124d`
+- **Completion Task Revision**: `7`
+- **Evidence Revision**: `1`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `559e2f2e-c915-4ce2-8bf6-79e87a59e074`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted advisor guidance to record evidence reconciliation, FakeExecutor isolation proof, and browser qualification in terminal reports.`
+  - `action_id`: `55eb2e02-4d86-481a-ba34-c97771d53b52`
+  - `episode_id`: `episode-advisor-evidence-reconciliation`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `plans/reports/tester-261011-phase-06-e2e-verification.md`
+  - `validation_command`: `cargo test --manifest-path server/Cargo.toml --lib idle_suspend`
+  - `validation_status`: `passed` (199 passed, 0 failed)
+- **Git Commit**: `8f9125acf90621c176134c3b258461a9f7f03f5d` (`feat(idle-suspend): complete phase 06 e2e verification, security review and safe rollout`)
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261011-phase-06-e2e-verification.md` (Score: 9.3/10, APPROVED)
+  - `plans/reports/tester-261011-phase-06-e2e-verification.md` (388/388 passed across 7 suites, 0 failed)
+  - `plans/reports/project-manager-261011-phase-06-terminal-status.md`
+  - `plans/reports/docs-manager-261011-phase-06-documentation.md`
+- **Actual Full-Suite Validation Evidence**:
+  - `cargo test --manifest-path server/Cargo.toml --lib idle_suspend`: 199 passed, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml --lib agent_status`: 89 passed, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml --test idle_suspend`: 22 passed, 2 opt-in ignored, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml --test agent_status_runtime`: 8 passed, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml --test agent_status_hooks`: 7 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui test -- src/api/idle-suspend-client.test.ts`: 46 passed (2,795 full suite across 331 files), 0 failed
+  - `pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/idle-suspend-settings-status.browser.tsx`: 17 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit`: 0 diagnostics
+  - `pnpm --filter @dam-hopper/ui test:e2e:typecheck`: 0 diagnostics
+  - `bash scripts/verify-idle-suspend-boundary.sh`: 15/15 passed
+  - `cargo run --manifest-path server/Cargo.toml --example agent_free_consent_fixture`: 5/5 loopback smoke scenarios passed

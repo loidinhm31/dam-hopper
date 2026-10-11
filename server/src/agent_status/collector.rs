@@ -228,7 +228,7 @@ async fn ws_upgrade_handler(
         .max_frame_size(MAX_PRIVATE_FRAME_BYTES)
         .max_message_size(MAX_PRIVATE_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            handle_reporter_socket(socket, runtime, terminal_id, incarnation, token)
+            handle_reporter_socket(socket, runtime, terminal_id, incarnation, token, peer_addr)
         })
 }
 #[cfg(target_os = "linux")]
@@ -609,6 +609,144 @@ async fn read_bounded_http_request(
 
     Ok((method, path, headers, body))
 }
+#[cfg(target_os = "linux")]
+pub(crate) fn verify_tcp_peer_process(
+    peer_addr: SocketAddr,
+    claimed_pid: Option<u32>,
+    registered_root: Option<crate::pty::activity::ProcessIdentity>,
+) -> Option<crate::pty::activity::ProcessIdentity> {
+    let pid = claimed_pid?;
+    if pid == 0 {
+        return None;
+    }
+
+    // 1. Read /proc/<pid>/stat pre-check to get start_ticks
+    let stat_before = match crate::pty::activity::read_process_stat(Path::new("/proc"), pid) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    if stat_before.state == 'Z' || stat_before.state == 'X' {
+        return None;
+    }
+
+    // 2. Discover client socket inode from /proc/net/tcp and /proc/net/tcp6 matching peer_addr.port()
+    let peer_port = peer_addr.port();
+    let mut matching_inode: Option<u64> = None;
+
+    if let Ok(entries) = procfs::net::tcp() {
+        for e in entries {
+            if e.local_address.port() == peer_port {
+                if matching_inode.is_some() && matching_inode != Some(e.inode) {
+                    return None;
+                }
+                matching_inode = Some(e.inode);
+            }
+        }
+    }
+    if matching_inode.is_none() {
+        if let Ok(entries) = procfs::net::tcp6() {
+            for e in entries {
+                if e.local_address.port() == peer_port {
+                    if matching_inode.is_some() && matching_inode != Some(e.inode) {
+                        return None;
+                    }
+                    matching_inode = Some(e.inode);
+                }
+            }
+        }
+    }
+
+    let target_inode = matching_inode?;
+    if target_inode == 0 {
+        return None;
+    }
+
+    // 3. Verify /proc/<pid>/fd/ has a link pointing to socket:[<target_inode>]
+    const MAX_PEER_FDS_SCAN: usize = 256;
+    let fd_dir = format!("/proc/{}/fd", pid);
+    let mut found_socket = false;
+    if let Ok(entries) = std::fs::read_dir(&fd_dir) {
+        for (idx, entry_res) in entries.enumerate() {
+            if idx >= MAX_PEER_FDS_SCAN {
+                break;
+            }
+            if let Ok(entry) = entry_res {
+                if let Ok(target) = std::fs::read_link(entry.path()) {
+                    let target_str = target.to_string_lossy();
+                    if let Some(rest) = target_str.strip_prefix("socket:[") {
+                        if let Some(inode_str) = rest.strip_suffix(']') {
+                            if let Ok(inode) = inode_str.parse::<u64>() {
+                                if inode == target_inode {
+                                    found_socket = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found_socket {
+        return None;
+    }
+
+    // 4. Verify ancestry: pid must equal registered_root or be a descendant of registered_root
+    if let Some(root) = registered_root {
+        if pid == root.pid {
+            if stat_before.start_ticks != root.start_ticks {
+                return None;
+            }
+        } else {
+            let mut curr = pid;
+            let mut matched_ancestry = false;
+            for _ in 0..32 {
+                match crate::pty::activity::read_process_stat(Path::new("/proc"), curr) {
+                    Ok(stat) => {
+                        if stat.ppid == root.pid {
+                            matched_ancestry = true;
+                            break;
+                        }
+                        if stat.ppid == 0 || stat.ppid == 1 || stat.ppid == curr {
+                            break;
+                        }
+                        curr = stat.ppid;
+                    }
+                    Err(_) => break,
+                }
+            }
+            if !matched_ancestry {
+                return None;
+            }
+        }
+    }
+
+    // 5. Read /proc/<pid>/stat post-check to verify start_ticks unchanged
+    let stat_after = match crate::pty::activity::read_process_stat(Path::new("/proc"), pid) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    if stat_after.start_ticks != stat_before.start_ticks
+        || stat_after.state == 'Z'
+        || stat_after.state == 'X'
+    {
+        return None;
+    }
+
+    Some(crate::pty::activity::ProcessIdentity {
+        pid: stat_before.pid,
+        start_ticks: stat_before.start_ticks,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn verify_tcp_peer_process(
+    _peer_addr: SocketAddr,
+    _claimed_pid: Option<u32>,
+    _registered_root: Option<crate::pty::activity::ProcessIdentity>,
+) -> Option<crate::pty::activity::ProcessIdentity> {
+    None
+}
 
 /// WebSocket connection loop managing hello handshake, report ingress, rate limits, and fenced cleanup.
 async fn handle_reporter_socket(
@@ -617,6 +755,7 @@ async fn handle_reporter_socket(
     terminal_id: String,
     incarnation: u64,
     authenticated_token: String,
+    peer_addr: SocketAddr,
 ) {
     // Enforce pre-auth connection concurrency limit (32)
     let pre_auth_permit = match PRE_AUTH_SEMAPHORE.try_acquire() {
@@ -677,11 +816,14 @@ async fn handle_reporter_socket(
 
     // 2. Admit reporter with close notification channel for replacement/teardown
     let (close_tx, mut close_rx) = tokio::sync::oneshot::channel::<()>();
-    let accepted = match runtime.admit_reporter(
+    let registered_root = runtime.get_terminal_root(&terminal_id, incarnation);
+    let verified_process = verify_tcp_peer_process(peer_addr, hello.pid, registered_root);
+    let accepted = match runtime.admit_reporter_with_process(
         &terminal_id,
         incarnation,
         &authenticated_token,
         &hello,
+        verified_process,
         close_tx,
     ) {
         Ok(acc) => acc,

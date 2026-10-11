@@ -8,6 +8,7 @@
 import type {
   BrowserDebugArtifactResponse,
   TerminalLifecycleEvent,
+  UiConnectionFrame,
 } from "./client.js";
 import { IdleTransport } from "./idle-transport.js";
 
@@ -108,6 +109,14 @@ export interface Transport {
 
   /** Connection status subscription. Returns unsubscribe fn. */
   onStatusChange?(cb: (status: string) => void): () => void;
+
+  /** Returns the current connection decision capability receipt bound to this exact socket session. */
+  getUiConnectionReceipt?(): UiConnectionFrame | null;
+
+  /** Subscribes to changes in the connection decision capability receipt. Returns unsubscribe fn. */
+  subscribeUiConnection?(
+    listener: (receipt: UiConnectionFrame | null) => void,
+  ): () => void;
 }
 
 let _transport: Transport | null = null;

@@ -60,6 +60,8 @@ import type {
   IdleSuspendTimingPatchResponse,
   ForceSuspendRequest,
   ForceSuspendAcceptedResponse,
+  ConsentDecisionRequest,
+  ConsentDecisionResponse,
   DiagnosticExportResponse,
   SettingsImportResponse,
   KnownWorkspacesResponse,
@@ -762,6 +764,24 @@ export function useForceSuspend(options?: OwnerInput) {
       getBoundApiClient(owner).system.forceSuspend(request),
     retry: false,
     onSettled: () => {
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "system", "idle-suspend", "v1", "status")
+          : IDLE_SUSPEND_STATUS_QUERY_KEY,
+      });
+    },
+  });
+}
+
+export function useSubmitConsentDecision(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  return useMutation<ConsentDecisionResponse, Error, ConsentDecisionRequest>({
+    mutationFn: (request: ConsentDecisionRequest) =>
+      getBoundApiClient(owner).system.submitConsentDecision(request),
+    retry: false,
+    onSettled: () => {
+      if (owner && !isCurrentConnection(owner)) return;
       void qc.invalidateQueries({
         queryKey: owner
           ? profileQueryKey(owner, "system", "idle-suspend", "v1", "status")

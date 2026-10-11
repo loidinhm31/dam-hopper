@@ -1,0 +1,45 @@
+# Phase 02 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-02`
+- **Phase Name**: `Phase 02 — Managed agent inventory and qualified semantic evidence`
+- **Task Run ID**: `00a533ce-2ba5-4bf7-9d13-9ab582c77e30`
+- **Completion Operation ID**: `1a4fd096-1081-4e55-826f-6d893c43ab4d`
+- **Completion Task Revision**: `10`
+- **Evidence Revision**: `0`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `5eb7aa7f-0d83-4a69-86de-5c4a102486a3`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted user review approval for Phase 02 finalization`
+  - `action_id`: `98a96caf-b870-41e7-94d7-c15d3e169cb7`
+  - `episode_id`: `episode-finalization-phase-02`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `docs/system-architecture.md`
+    - `plans/261010-1746-host-resources-auto-sleep/phase-02-agent-inventory-and-semantic-evidence.md`
+    - `plans/261010-1746-host-resources-auto-sleep/progress.md`
+    - `server/src/agent_status/assets/omp-agent-status.ts`
+    - `server/src/agent_status/collector.rs`
+    - `server/src/agent_status/reducer.rs`
+    - `server/src/agent_status/runtime.rs`
+    - `server/src/agent_status/tests.rs`
+    - `server/src/agent_status/types.rs`
+    - `server/src/idle_suspend/activity/mod.rs`
+    - `server/src/idle_suspend/activity/process.rs`
+    - `server/src/idle_suspend/activity/sampler.rs`
+    - `server/src/pty/manager.rs`
+    - `server/src/pty/tests.rs`
+    - `server/tests/agent_status_runtime.rs`
+  - `validation_command`: `cargo test --manifest-path server/Cargo.toml --lib`
+  - `validation_status`: `passed` (1,458 passed, 0 failed)
+- **Git Commit**: `ae0bad46` (`feat(agent-status): implement managed agent inventory, verified peer binding, and semantic evidence`)
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261010-2321-phase-02-managed-agent-inventory.md` (Score: 9.3/10, APPROVED)
+  - `plans/reports/tester-261010-2317-phase-02-managed-agent-inventory-and-evidence.md` (3,261 passed, 0 failed)
+- **Actual Full-Suite Validation Evidence**:
+  - `cargo test --manifest-path server/Cargo.toml`: 1,969 passed across 60 suites, 0 failed
+  - `pnpm --filter @dam-hopper/ui test`: 2,769 passed across 330 test files, 0 failed
+  - `pnpm lint`: 0 errors

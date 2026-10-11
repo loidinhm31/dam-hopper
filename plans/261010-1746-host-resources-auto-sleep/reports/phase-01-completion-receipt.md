@@ -1,0 +1,32 @@
+# Phase 01 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-01`
+- **Phase Name**: `Phase 01 — Contracts, configuration and admission interfaces`
+- **Task Run ID**: `ae52fd84-6791-4ff6-8ac4-88d18961d15e`
+- **Completion Operation ID**: `c457d54e-9ff1-4a43-9ce2-5981081393bf`
+- **Completion Task Revision**: `7`
+- **Evidence Revision**: `1`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `a5a495f3-8891-446c-bb7f-e69e056d7869`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted advisor guidance to verify full test suites and add observable startup and timing PATCH enforcement test.`
+  - `action_id`: `ff46937a-4668-44f0-8cd9-41d4b385af18`
+  - `episode_id`: `episode-1`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `server/src/api/tests.rs`
+    - `server/src/idle_suspend/tests.rs`
+  - `validation_command`: `cargo test --manifest-path server/Cargo.toml idle_suspend`
+  - `validation_status`: `passed` (195 passed, 0 failed)
+- **Sealed Baseline Digest**: `cbde6a45798fbe4cab83423b24f16ea5307638e408769f705e4e375ff98e0783`
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261010-2152-phase-01-contracts-and-configuration.md` (Score: 9.4/10, APPROVED)
+  - `plans/reports/tester-261010-2148-phase-01-contracts-and-configuration.md` (225 passed, 0 failed)
+- **Actual Full-Suite Validation Evidence**:
+  - `cargo test --manifest-path server/Cargo.toml`: 1,957 passed across 60 suites, 0 failed
+  - `pnpm --filter @dam-hopper/ui test`: 2,769 passed across 330 test files, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit`: 0 errors

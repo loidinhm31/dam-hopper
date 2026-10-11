@@ -20,6 +20,7 @@ fn sample_hello(reporter_id: &str, session_id: &str) -> ReporterHello {
         reporter_id: reporter_id.to_string(),
         agent_session_id: session_id.to_string(),
         adapter_version: "18.3.5".to_string(),
+        pid: None,
     }
 }
 

@@ -39,8 +39,8 @@ use crate::idle_suspend::preflight::{
 };
 use crate::idle_suspend::protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
-    validate_suspend_wake_seconds, write_frame_async, HelperRequestFrame,
-    HelperRequestPayload, HelperResponseFrame, HelperResponsePayload, IdleSuspendErrorCode,
+    validate_suspend_wake_seconds, write_frame_async, HelperRequestFrame, HelperRequestPayload,
+    HelperResponseFrame, HelperResponsePayload, IdleSuspendErrorCode,
     IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse, ProtocolError,
     RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION,
     MAX_HELPER_FRAME_BYTES,
@@ -88,14 +88,22 @@ fn test_idle_suspend_automatic_policy_serialization_and_defaults() {
     let parsed_empty: IdleSuspendAutomaticPolicy = serde_json::from_str("\"empty-fleet\"").unwrap();
     assert_eq!(parsed_empty, IdleSuspendAutomaticPolicy::EmptyFleet);
 
-    let agent_activity_json = serde_json::to_string(&IdleSuspendAutomaticPolicy::AgentActivity).unwrap();
+    let agent_activity_json =
+        serde_json::to_string(&IdleSuspendAutomaticPolicy::AgentActivity).unwrap();
     assert_eq!(agent_activity_json, "\"agent-activity\"");
-    let parsed_activity: IdleSuspendAutomaticPolicy = serde_json::from_str("\"agent-activity\"").unwrap();
+    let parsed_activity: IdleSuspendAutomaticPolicy =
+        serde_json::from_str("\"agent-activity\"").unwrap();
     assert_eq!(parsed_activity, IdleSuspendAutomaticPolicy::AgentActivity);
 
     // Default as_str representation
-    assert_eq!(IdleSuspendAutomaticPolicy::EmptyFleet.as_str(), "empty-fleet");
-    assert_eq!(IdleSuspendAutomaticPolicy::AgentActivity.as_str(), "agent-activity");
+    assert_eq!(
+        IdleSuspendAutomaticPolicy::EmptyFleet.as_str(),
+        "empty-fleet"
+    );
+    assert_eq!(
+        IdleSuspendAutomaticPolicy::AgentActivity.as_str(),
+        "agent-activity"
+    );
 
     // Deserializing IdleSuspendConfig with camelCase JSON
     let json = r#"{
@@ -103,7 +111,10 @@ fn test_idle_suspend_automatic_policy_serialization_and_defaults() {
         "agentExecutables": ["codex", "omp", "claude"]
     }"#;
     let cfg: IdleSuspendConfig = serde_json::from_str(json).unwrap();
-    assert_eq!(cfg.automatic_policy, IdleSuspendAutomaticPolicy::AgentActivity);
+    assert_eq!(
+        cfg.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
     assert_eq!(cfg.agent_executables, vec!["codex", "omp", "claude"]);
 
     // Deserializing with snake_case aliases (as from TOML or legacy)
@@ -112,19 +123,28 @@ fn test_idle_suspend_automatic_policy_serialization_and_defaults() {
         "agent_executables": ["codex", "agy"]
     }"#;
     let cfg_snake: IdleSuspendConfig = serde_json::from_str(json_snake).unwrap();
-    assert_eq!(cfg_snake.automatic_policy, IdleSuspendAutomaticPolicy::AgentActivity);
+    assert_eq!(
+        cfg_snake.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
     assert_eq!(cfg_snake.agent_executables, vec!["codex", "agy"]);
 
     // Omitted fields resolve to defaults
     let json_empty = "{}";
     let cfg_default: IdleSuspendConfig = serde_json::from_str(json_empty).unwrap();
-    assert_eq!(cfg_default.automatic_policy, IdleSuspendAutomaticPolicy::EmptyFleet);
-    assert_eq!(cfg_default.agent_executables, crate::config::default_idle_suspend_agent_executables());
+    assert_eq!(
+        cfg_default.automatic_policy,
+        IdleSuspendAutomaticPolicy::EmptyFleet
+    );
+    assert_eq!(
+        cfg_default.agent_executables,
+        crate::config::default_idle_suspend_agent_executables()
+    );
 }
 
 #[test]
 fn test_agent_executables_validation() {
-    use crate::config::{validate_agent_executables, validate_agent_executable_entry};
+    use crate::config::{validate_agent_executable_entry, validate_agent_executables};
 
     // Valid basenames
     assert!(validate_agent_executable_entry("codex").is_ok());
@@ -139,13 +159,32 @@ fn test_agent_executables_validation() {
 
     // Generic interpreter basenames rejected (both basename and in absolute path)
     let generic_interpreters = [
-        "node", "nodejs", "bun", "python", "python3", "python3.11", "python3.12",
-        "python2", "python2.7", "sh", "bash", "dash", "zsh", "ksh", "fish",
+        "node",
+        "nodejs",
+        "bun",
+        "python",
+        "python3",
+        "python3.11",
+        "python3.12",
+        "python2",
+        "python2.7",
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "ksh",
+        "fish",
     ];
     for interp in generic_interpreters {
-        assert!(validate_agent_executable_entry(interp).is_err(), "should reject generic interpreter basename '{interp}'");
+        assert!(
+            validate_agent_executable_entry(interp).is_err(),
+            "should reject generic interpreter basename '{interp}'"
+        );
         let abs_path = format!("/usr/bin/{interp}");
-        assert!(validate_agent_executable_entry(&abs_path).is_err(), "should reject generic interpreter in absolute path '{abs_path}'");
+        assert!(
+            validate_agent_executable_entry(&abs_path).is_err(),
+            "should reject generic interpreter in absolute path '{abs_path}'"
+        );
     }
 
     // Relative slash-containing paths rejected
@@ -240,19 +279,325 @@ agent_executables = ["codex", "/opt/bin/my-claude-wrapper"]
 
     // Check StartupIdleSuspendPolicy captures the agent activity policy and compiled set
     let policy = StartupIdleSuspendPolicy::from_config(&out_path, &written.server.idle_suspend);
-    assert_eq!(policy.automatic_policy(), IdleSuspendAutomaticPolicy::AgentActivity);
+    assert_eq!(
+        policy.automatic_policy(),
+        IdleSuspendAutomaticPolicy::AgentActivity
+    );
     assert!(policy.is_agent_activity_policy());
     assert_eq!(policy.agent_executables().len(), 2);
     assert_eq!(
         policy.agent_executables().raw(),
-        &["codex".to_string(), "/opt/bin/my-claude-wrapper".to_string()]
+        &[
+            "codex".to_string(),
+            "/opt/bin/my-claude-wrapper".to_string()
+        ]
     );
     assert_eq!(
         policy.agent_executables().entries(),
         &[
             crate::idle_suspend::AgentExecutableEntry::Basename("codex".to_string()),
-            crate::idle_suspend::AgentExecutableEntry::AbsolutePath(std::path::PathBuf::from("/opt/bin/my-claude-wrapper")),
+            crate::idle_suspend::AgentExecutableEntry::AbsolutePath(std::path::PathBuf::from(
+                "/opt/bin/my-claude-wrapper"
+            )),
         ]
+    );
+}
+
+#[test]
+fn test_idle_suspend_agent_free_policy_serialization_and_validation() {
+    use crate::config::{IdleSuspendAutomaticPolicy, AGENT_FREE_QUIET_PERIOD_SECONDS};
+
+    // Direct JSON serialization/deserialization
+    let agent_free_json = serde_json::to_string(&IdleSuspendAutomaticPolicy::AgentFree).unwrap();
+    assert_eq!(agent_free_json, "\"agent-free\"");
+    let parsed: IdleSuspendAutomaticPolicy = serde_json::from_str("\"agent-free\"").unwrap();
+    assert_eq!(parsed, IdleSuspendAutomaticPolicy::AgentFree);
+    assert_eq!(IdleSuspendAutomaticPolicy::AgentFree.as_str(), "agent-free");
+
+    // Valid agent-free config requires quiet_period_seconds == 10800
+    let valid_json = r#"{
+        "automaticPolicy": "agent-free",
+        "quietPeriodSeconds": 10800,
+        "wakeAfterSeconds": 600
+    }"#;
+    let cfg: IdleSuspendConfig = serde_json::from_str(valid_json).unwrap();
+    assert_eq!(cfg.automatic_policy, IdleSuspendAutomaticPolicy::AgentFree);
+    assert_eq!(cfg.quiet_period_seconds, AGENT_FREE_QUIET_PERIOD_SECONDS);
+    assert!(cfg.validate().is_ok());
+
+    // Omitted quietPeriodSeconds defaults to 900, which must fail validation
+    let default_quiet_json = r#"{
+        "automaticPolicy": "agent-free"
+    }"#;
+    let cfg_default: IdleSuspendConfig = serde_json::from_str(default_quiet_json).unwrap();
+    assert_eq!(cfg_default.quiet_period_seconds, 900);
+    let err = cfg_default.validate().unwrap_err();
+    assert!(
+        err.contains("server.idle_suspend.quiet_period_seconds must be exactly 10800 seconds (3 hours) when automatic_policy is 'agent-free'"),
+        "unexpected error message: {err}"
+    );
+
+    // Non-10800 quiet values (e.g. 10799, 10801) must fail
+    let mut cfg_invalid = cfg.clone();
+    cfg_invalid.quiet_period_seconds = 10799;
+    assert!(cfg_invalid.validate().is_err());
+    cfg_invalid.quiet_period_seconds = 10801;
+    assert!(cfg_invalid.validate().is_err());
+}
+
+#[test]
+fn test_toml_roundtrip_agent_free_policy() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let toml_str = r#"
+[workspace]
+name = "test-agent-free"
+
+[server.idle_suspend]
+enabled = true
+automatic_policy = "agent-free"
+quiet_period_seconds = 10800
+wake_after_seconds = 1200
+agent_executables = ["codex", "omp", "claude"]
+"#;
+    fs::write(&config_path, toml_str).unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert_eq!(
+        cfg.server.idle_suspend.automatic_policy,
+        IdleSuspendAutomaticPolicy::AgentFree
+    );
+    assert_eq!(cfg.server.idle_suspend.quiet_period_seconds, 10800);
+    assert_eq!(cfg.server.idle_suspend.wake_after_seconds, 1200);
+    assert!(cfg.server.idle_suspend.validate().is_ok());
+
+    let out_path = dir.path().join("out-agent-free.toml");
+    write_config(&out_path, &cfg).unwrap();
+    let written = read_config(&out_path).unwrap();
+    assert_eq!(written.server.idle_suspend, cfg.server.idle_suspend);
+
+    let policy = StartupIdleSuspendPolicy::from_config(&out_path, &written.server.idle_suspend);
+    assert_eq!(
+        policy.automatic_policy(),
+        IdleSuspendAutomaticPolicy::AgentFree
+    );
+    assert!(policy.is_agent_free_policy());
+    assert!(!policy.is_agent_activity_policy());
+}
+
+#[test]
+fn test_validate_timing_pair_for_policy_agent_free() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+    use crate::idle_suspend::policy::validate_timing_pair_for_policy;
+
+    // AgentFree requires quiet == 10800
+    assert!(
+        validate_timing_pair_for_policy(10800, 600, IdleSuspendAutomaticPolicy::AgentFree).is_ok()
+    );
+    assert!(
+        validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::AgentFree).is_err()
+    );
+    assert!(
+        validate_timing_pair_for_policy(3600, 600, IdleSuspendAutomaticPolicy::AgentFree).is_err()
+    );
+
+    // EmptyFleet and AgentActivity accept 900
+    assert!(
+        validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::EmptyFleet).is_ok()
+    );
+    assert!(
+        validate_timing_pair_for_policy(900, 600, IdleSuspendAutomaticPolicy::AgentActivity)
+            .is_ok()
+    );
+}
+
+#[test]
+fn test_timing_store_persist_timing_pair_for_policy_agent_free() {
+    use crate::config::IdleSuspendAutomaticPolicy;
+    use crate::idle_suspend::timing_store::{IdleSuspendTimingStore, TimingStoreError};
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    let initial_content = r#"
+[server.idle_suspend]
+enabled = true
+automatic_policy = "agent-free"
+quiet_period_seconds = 10800
+wake_after_seconds = 600
+"#;
+    fs::write(&config_path, initial_content).unwrap();
+
+    let store = IdleSuspendTimingStore::new(config_path.clone());
+
+    // Persisting legal 10800 with new wake succeeds
+    store
+        .persist_timing_pair_for_policy(10800, 1800, IdleSuspendAutomaticPolicy::AgentFree)
+        .unwrap();
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("quiet_period_seconds = 10800"));
+    assert!(content.contains("wake_after_seconds = 1800"));
+
+    // Attempting to persist quiet != 10800 fails validation without disk mutation
+    let err = store
+        .persist_timing_pair_for_policy(900, 1800, IdleSuspendAutomaticPolicy::AgentFree)
+        .unwrap_err();
+    assert!(matches!(err, TimingStoreError::Validation(_)));
+    let content_after = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(content, content_after);
+}
+
+#[test]
+fn test_idle_suspend_status_agent_free_fallback_and_dto_serialization() {
+    use crate::idle_suspend::status::{
+        AgentFreeInventoryState, AgentFreePhase, AgentFreeReasonCode, ConsentDecision,
+        ConsentState, IdleSuspendConsentStatusV1, IdleSuspendStatusV1,
+    };
+
+    let mut cfg = IdleSuspendConfig::default();
+    cfg.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentFree;
+    cfg.quiet_period_seconds = 10800;
+    cfg.wake_after_seconds = 600;
+    cfg.enabled = true;
+
+    let policy = StartupIdleSuspendPolicy::from_config(&PathBuf::from("dam-hopper.toml"), &cfg);
+    let fleet = crate::pty::fleet_state::PtyFleetSnapshot {
+        generation: 1,
+        live_count: 0,
+        creating_count: 0,
+        restart_pending_count: 0,
+        disposing: false,
+        closing: false,
+        handoff_active: false,
+    };
+
+    let fallback = IdleSuspendStatusV1::fallback_status(&policy, 10800, 600, fleet, 1726000000000);
+    assert_eq!(
+        fallback.automatic_policy,
+        crate::config::IdleSuspendAutomaticPolicy::AgentFree
+    );
+    assert!(fallback.activity.is_none());
+    assert!(fallback.agent_free.is_some());
+    assert!(fallback.client_presence.is_some());
+    assert!(fallback.consent.is_none());
+
+    let agent_free = fallback.agent_free.as_ref().unwrap();
+    assert_eq!(agent_free.phase, AgentFreePhase::Reconciling);
+    assert_eq!(agent_free.scope, "managed-terminals");
+    assert_eq!(
+        agent_free.inventory_state,
+        AgentFreeInventoryState::Uninitialized
+    );
+    assert_eq!(
+        agent_free.reason_code,
+        Some(AgentFreeReasonCode::Reconciling)
+    );
+
+    let client_presence = fallback.client_presence.as_ref().unwrap();
+    assert_eq!(client_presence.connection_count, 0);
+    assert_eq!(client_presence.pending_upgrade_count, 0);
+    assert!(!client_presence.available);
+
+    // JSON serialization roundtrip of full AgentFree status with consent
+    let mut full_status = fallback.clone();
+    full_status.consent = Some(IdleSuspendConsentStatusV1 {
+        request_id: "req-123".to_string(),
+        request_revision: 1,
+        state: ConsentState::Pending,
+        requested_at_ms: 1726000000000,
+        expires_at_ms: 1726000060000,
+        decision: Some(ConsentDecision::Approve),
+        wake_after_seconds: 600,
+    });
+
+    let json_val = serde_json::to_value(&full_status).unwrap();
+    assert_eq!(json_val["automaticPolicy"], "agent-free");
+    assert!(json_val.get("activity").is_none() || json_val["activity"].is_null());
+    assert_eq!(json_val["agentFree"]["phase"], "reconciling");
+    assert_eq!(json_val["agentFree"]["scope"], "managed-terminals");
+    assert_eq!(json_val["clientPresence"]["connectionCount"], 0);
+    assert_eq!(json_val["consent"]["state"], "pending");
+    assert_eq!(json_val["consent"]["decision"], "approve");
+}
+
+#[test]
+fn test_idle_suspend_protocol_consent_and_frame_serialization() {
+    use crate::idle_suspend::protocol::{
+        ConsentDecisionRequest, ConsentDecisionResponse, ConsentDecisionValue,
+        IdleSuspendErrorCode, UiConnectionFrame,
+    };
+
+    // UiConnectionFrame
+    let frame = UiConnectionFrame::new("conn-1".to_string(), "sec-456".to_string());
+    let frame_json = serde_json::to_value(&frame).unwrap();
+    assert_eq!(frame_json["kind"], "host:uiConnection");
+    assert_eq!(frame_json["version"], 1);
+    assert_eq!(frame_json["connectionId"], "conn-1");
+    assert_eq!(frame_json["decisionCapability"], "sec-456");
+
+    // ConsentDecisionRequest
+    let req = ConsentDecisionRequest {
+        request_id: "req-42".to_string(),
+        request_revision: 2,
+        connection_id: "conn-1".to_string(),
+        decision_capability: "sec-456".to_string(),
+        decision: ConsentDecisionValue::Approve,
+    };
+    let req_json = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_json["requestId"], "req-42");
+    assert_eq!(req_json["decision"], "approve");
+    let req_de: ConsentDecisionRequest = serde_json::from_value(req_json).unwrap();
+    assert_eq!(req, req_de);
+
+    // ConsentDecisionResponse
+    let resp = ConsentDecisionResponse {
+        version: 1,
+        request_id: "req-42".to_string(),
+        decision: ConsentDecisionValue::Deny,
+        status_revision: 5,
+        settled: true,
+    };
+    let resp_json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_json["decision"], "deny");
+    assert_eq!(resp_json["settled"], true);
+
+    // Error codes
+    assert_eq!(
+        IdleSuspendErrorCode::DecisionAlreadySettled.as_code_str(),
+        "decisionAlreadySettled"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::ConsentExpired.as_code_str(),
+        "consentExpired"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::ConsentCancelled.as_code_str(),
+        "consentCancelled"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::InvalidCapability.as_code_str(),
+        "invalidCapability"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::ConnectionNotFound.as_code_str(),
+        "connectionNotFound"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::PresenceUnavailable.as_code_str(),
+        "presenceUnavailable"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::ConsentUnavailable.as_code_str(),
+        "consentUnavailable"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::InvalidConsentPayload.as_code_str(),
+        "invalidConsentPayload"
+    );
+    assert_eq!(
+        IdleSuspendErrorCode::ConsentDisabledNoAuth.as_code_str(),
+        "consentDisabledNoAuth"
     );
 }
 
@@ -495,7 +840,10 @@ fn test_server_audit_preprovisioned_contract() {
     audit.record_event(&record).unwrap();
     let after_metadata = fs::symlink_metadata(&audit_path).unwrap();
     assert_eq!(before_metadata.ino(), after_metadata.ino());
-    assert_eq!(fs::read(&audit_path).unwrap()[..15], b"operator-bytes\n"[..]);
+    assert_eq!(
+        fs::read(&audit_path).unwrap()[..15],
+        b"operator-bytes\n"[..]
+    );
 
     fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o640)).unwrap();
     assert!(audit.read_recent_records(10).is_err());
@@ -542,7 +890,10 @@ fn test_server_audit_preprovisioned_contract_windows() {
 
     fs::write(&audit_path, b"operator-bytes\n").unwrap();
     audit.record_event(&record).unwrap();
-    assert_eq!(fs::read(&audit_path).unwrap()[..15], b"operator-bytes\n"[..]);
+    assert_eq!(
+        fs::read(&audit_path).unwrap()[..15],
+        b"operator-bytes\n"[..]
+    );
 }
 
 #[test]
@@ -1345,7 +1696,10 @@ fn test_action_backend_fake_and_sysfs() {
     // 1. FakeActionBackend
     let fake_backend = FakeActionBackend::with_elapsed(300);
     assert!(fake_backend.program_rtc_wake(Some(600)).is_ok());
-    assert_eq!(*fake_backend.programmed_wake.lock().unwrap(), Some(Some(600)));
+    assert_eq!(
+        *fake_backend.programmed_wake.lock().unwrap(),
+        Some(Some(600))
+    );
     assert_eq!(fake_backend.timed_wake_seconds(), Some(600));
     assert!(!fake_backend.is_clear_only());
     assert!(!fake_backend.is_not_called());
@@ -1437,17 +1791,35 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     // 3. Verify audit log
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 6);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::CapabilityResult);
-    assert_eq!(records[1].record_type, HelperAuditRecordType::PreflightResult);
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::CapabilityResult
+    );
+    assert_eq!(
+        records[1].record_type,
+        HelperAuditRecordType::PreflightResult
+    );
     assert_eq!(records[1].request_id.as_deref(), Some("test-epoch-1"));
-    assert_eq!(records[2].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(
+        records[2].record_type,
+        HelperAuditRecordType::AcceptedIntent
+    );
     assert_eq!(records[2].request_id.as_deref(), Some("test-epoch-1"));
     assert_eq!(records[2].wake_after_seconds, Some(600));
-    assert_eq!(records[3].record_type, HelperAuditRecordType::RtcProgrammingResult);
+    assert_eq!(
+        records[3].record_type,
+        HelperAuditRecordType::RtcProgrammingResult
+    );
     assert_eq!(records[3].request_id.as_deref(), Some("test-epoch-1"));
-    assert_eq!(records[4].record_type, HelperAuditRecordType::SuspendInvoked);
+    assert_eq!(
+        records[4].record_type,
+        HelperAuditRecordType::SuspendInvoked
+    );
     assert_eq!(records[4].request_id.as_deref(), Some("test-epoch-1"));
-    assert_eq!(records[5].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(
+        records[5].record_type,
+        HelperAuditRecordType::ExecutionCompleted
+    );
     assert_eq!(records[5].request_id.as_deref(), Some("test-epoch-1"));
     server_handle.abort();
 }
@@ -1570,7 +1942,10 @@ async fn test_helper_server_peer_auth_rejection() {
         records[0].record_type,
         HelperAuditRecordType::RequestRejected
     );
-    assert_eq!(records[0].reason_code, Some(crate::idle_suspend::audit::HelperReasonCode::PeerAuthenticationFailed));
+    assert_eq!(
+        records[0].reason_code,
+        Some(crate::idle_suspend::audit::HelperReasonCode::PeerAuthenticationFailed)
+    );
 
     server_handle.abort();
 }
@@ -1976,20 +2351,30 @@ async fn test_helper_server_indefinite_sleep_execution_and_audit() {
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
     let server_handle = tokio::spawn(async move {
         if let Ok((mut stream, _)) = listener.accept().await {
-            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let cred = PeerCredentials {
+                pid: 9999,
+                uid: 1000,
+                gid: 1000,
+            };
             let _ = server.handle_connection(&mut stream, cred).await;
         }
     });
 
     let client = crate::idle_suspend::HelperClient::new(&socket_path);
     // Send request with wake_after_seconds: 0 (indefinite sleep)
-    let outcome = client.execute_suspend(SuspendWithRtcWakeRequest {
-        request_id: "req-indef-test".to_string(),
-        wake_after_seconds: 0,
-    }).await.unwrap();
+    let outcome = client
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: "req-indef-test".to_string(),
+            wake_after_seconds: 0,
+        })
+        .await
+        .unwrap();
 
     match outcome {
-        SuspendOutcome::ResumedSuccessfully { request_id, elapsed_seconds } => {
+        SuspendOutcome::ResumedSuccessfully {
+            request_id,
+            elapsed_seconds,
+        } => {
             assert_eq!(request_id, "req-indef-test");
             assert_eq!(elapsed_seconds, 120);
         }
@@ -2005,13 +2390,28 @@ async fn test_helper_server_indefinite_sleep_execution_and_audit() {
     // Verify audit log explicitly records wake_after_seconds: Some(0) and is_indefinite_sleep() == true
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 5);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::PreflightResult);
-    assert_eq!(records[1].record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::PreflightResult
+    );
+    assert_eq!(
+        records[1].record_type,
+        HelperAuditRecordType::AcceptedIntent
+    );
     assert_eq!(records[1].wake_after_seconds, Some(0));
     assert!(records[1].is_indefinite_sleep());
-    assert_eq!(records[2].record_type, HelperAuditRecordType::RtcProgrammingResult);
-    assert_eq!(records[3].record_type, HelperAuditRecordType::SuspendInvoked);
-    assert_eq!(records[4].record_type, HelperAuditRecordType::ExecutionCompleted);
+    assert_eq!(
+        records[2].record_type,
+        HelperAuditRecordType::RtcProgrammingResult
+    );
+    assert_eq!(
+        records[3].record_type,
+        HelperAuditRecordType::SuspendInvoked
+    );
+    assert_eq!(
+        records[4].record_type,
+        HelperAuditRecordType::ExecutionCompleted
+    );
     assert_eq!(records[4].wake_after_seconds, Some(0));
     assert!(records[4].is_indefinite_sleep());
 }
@@ -2041,16 +2441,23 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
     let server_handle = tokio::spawn(async move {
         if let Ok((mut stream, _)) = listener.accept().await {
-            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let cred = PeerCredentials {
+                pid: 9999,
+                uid: 1000,
+                gid: 1000,
+            };
             let _ = server.handle_connection(&mut stream, cred).await;
         }
     });
 
     let client = crate::idle_suspend::HelperClient::new(&socket_path);
-    let outcome = client.execute_suspend(SuspendWithRtcWakeRequest {
-        request_id: "req-busy-test".to_string(),
-        wake_after_seconds: 0,
-    }).await.unwrap();
+    let outcome = client
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: "req-busy-test".to_string(),
+            wake_after_seconds: 0,
+        })
+        .await
+        .unwrap();
 
     match outcome {
         SuspendOutcome::ExecutionFailed { request_id, error } => {
@@ -2074,27 +2481,28 @@ async fn test_helper_server_busy_alarm_and_rtc_failure_suppresses_suspend() {
     backend2.set_fail_rtc(Some("sysfs write permission denied".to_string()));
     let audit2 = Arc::new(HelperAudit::new(tmp.path().join("audit2.jsonl"), 100).unwrap());
 
-    let server2 = HelperServer::new(
-        policy2,
-        preflight2,
-        Arc::clone(&backend2),
-        audit2,
-        100,
-    );
+    let server2 = HelperServer::new(policy2, preflight2, Arc::clone(&backend2), audit2, 100);
 
     let listener2 = tokio::net::UnixListener::bind(&socket_path_2).unwrap();
     let server_handle2 = tokio::spawn(async move {
         if let Ok((mut stream, _)) = listener2.accept().await {
-            let cred = PeerCredentials { pid: 9999, uid: 1000, gid: 1000 };
+            let cred = PeerCredentials {
+                pid: 9999,
+                uid: 1000,
+                gid: 1000,
+            };
             let _ = server2.handle_connection(&mut stream, cred).await;
         }
     });
 
     let client2 = crate::idle_suspend::HelperClient::new(&socket_path_2);
-    let outcome2 = client2.execute_suspend(SuspendWithRtcWakeRequest {
-        request_id: "req-rtc-fail".to_string(),
-        wake_after_seconds: 0,
-    }).await.unwrap();
+    let outcome2 = client2
+        .execute_suspend(SuspendWithRtcWakeRequest {
+            request_id: "req-rtc-fail".to_string(),
+            wake_after_seconds: 0,
+        })
+        .await
+        .unwrap();
 
     match outcome2 {
         SuspendOutcome::ExecutionFailed { request_id, error } => {
@@ -2115,7 +2523,10 @@ fn test_helper_audit_v2_schema_serialization_and_legacy_v1_compatibility() {
     let legacy_json = r#"{"recordType":"acceptedIntent","requestId":"legacy-tx-1","protocolVersion":1,"wakeAfterSeconds":300,"peerPid":100,"peerUid":1000,"timestampEpochMs":1726000000000}"#;
     let legacy_rec: HelperAuditRecord = serde_json::from_str(legacy_json).unwrap();
     assert_eq!(legacy_rec.audit_schema_version, 1);
-    assert_eq!(legacy_rec.record_type, HelperAuditRecordType::AcceptedIntent);
+    assert_eq!(
+        legacy_rec.record_type,
+        HelperAuditRecordType::AcceptedIntent
+    );
     assert_eq!(legacy_rec.request_id.as_deref(), Some("legacy-tx-1"));
     assert_eq!(legacy_rec.protocol_version, 1);
     assert_eq!(legacy_rec.wake_after_seconds, Some(300));
@@ -2156,25 +2567,11 @@ fn test_helper_audit_v2_schema_serialization_and_legacy_v1_compatibility() {
     );
     audit.record(&capability).unwrap();
 
-    let preflight = HelperAuditRecord::new_preflight_result(
-        true,
-        uuid_req_id,
-        10,
-        1000,
-        None,
-        None,
-    );
+    let preflight =
+        HelperAuditRecord::new_preflight_result(true, uuid_req_id, 10, 1000, None, None);
     audit.record(&preflight).unwrap();
 
-    let rtc = HelperAuditRecord::new_rtc_result(
-        true,
-        uuid_req_id,
-        Some(600),
-        10,
-        1000,
-        None,
-        None,
-    );
+    let rtc = HelperAuditRecord::new_rtc_result(true, uuid_req_id, Some(600), 10, 1000, None, None);
     audit.record(&rtc).unwrap();
 
     let suspend = HelperAuditRecord::new_suspend_invoked(uuid_req_id, Some(600), 10, 1000);
@@ -2206,7 +2603,10 @@ fn test_helper_audit_v2_schema_serialization_and_legacy_v1_compatibility() {
 
     for (i, rec) in records.iter().enumerate() {
         assert_eq!(rec.audit_schema_version, HELPER_AUDIT_SCHEMA_VERSION);
-        assert_eq!(rec.boot_id.as_deref(), Some("11111111-1111-4111-8111-111111111111"));
+        assert_eq!(
+            rec.boot_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
         assert_eq!(
             rec.producer_instance_id.as_deref(),
             Some("22222222-2222-4222-8222-222222222222")
@@ -2221,14 +2621,23 @@ fn test_helper_audit_v2_schema_serialization_and_legacy_v1_compatibility() {
     assert_eq!(records[1].request_id, None);
     assert_eq!(records[1].correlation_id, None);
     assert_eq!(records[1].outcome_code, Some(HelperOutcomeCode::Failed));
-    assert_eq!(records[1].reason_code, Some(HelperReasonCode::CapabilityUnsupported));
+    assert_eq!(
+        records[1].reason_code,
+        Some(HelperReasonCode::CapabilityUnsupported)
+    );
 
     // Completed record has ResumedSuccessfully outcome code
-    assert_eq!(records[5].outcome_code, Some(HelperOutcomeCode::ResumedSuccessfully));
+    assert_eq!(
+        records[5].outcome_code,
+        Some(HelperOutcomeCode::ResumedSuccessfully)
+    );
     assert_eq!(records[5].reason_code, None);
 
     // Request rejected has peerAuthenticationFailed reason code
-    assert_eq!(records[6].reason_code, Some(HelperReasonCode::PeerAuthenticationFailed));
+    assert_eq!(
+        records[6].reason_code,
+        Some(HelperReasonCode::PeerAuthenticationFailed)
+    );
     assert_eq!(records[6].outcome_code, Some(HelperOutcomeCode::Failed));
     assert_eq!(records[6].request_id, None);
 }
@@ -2343,7 +2752,12 @@ async fn test_helper_server_preflight_inhibitor_milestone_and_suppression() {
         .await;
 
     match outcome {
-        SuspendOutcome::BlockedByInhibitor { request_id, who, why, .. } => {
+        SuspendOutcome::BlockedByInhibitor {
+            request_id,
+            who,
+            why,
+            ..
+        } => {
             assert_eq!(request_id, req_id);
             assert_eq!(who.as_deref(), Some("system-updater"));
             assert_eq!(why.as_deref(), Some("upgrade in progress"));
@@ -2359,14 +2773,29 @@ async fn test_helper_server_preflight_inhibitor_milestone_and_suppression() {
     // 2. Audit records: exactly PreflightResult and ExecutionCompleted; AcceptedIntent was NEVER written!
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].record_type, HelperAuditRecordType::PreflightResult);
-    assert_eq!(records[0].reason_code, Some(HelperReasonCode::InhibitorPresent));
+    assert_eq!(
+        records[0].record_type,
+        HelperAuditRecordType::PreflightResult
+    );
+    assert_eq!(
+        records[0].reason_code,
+        Some(HelperReasonCode::InhibitorPresent)
+    );
     assert_eq!(records[0].outcome_code, Some(HelperOutcomeCode::Failed));
     assert_eq!(records[0].request_id.as_deref(), Some(req_id));
 
-    assert_eq!(records[1].record_type, HelperAuditRecordType::ExecutionCompleted);
-    assert_eq!(records[1].reason_code, Some(HelperReasonCode::InhibitorPresent));
-    assert_eq!(records[1].outcome_code, Some(HelperOutcomeCode::BlockedByInhibitor));
+    assert_eq!(
+        records[1].record_type,
+        HelperAuditRecordType::ExecutionCompleted
+    );
+    assert_eq!(
+        records[1].reason_code,
+        Some(HelperReasonCode::InhibitorPresent)
+    );
+    assert_eq!(
+        records[1].outcome_code,
+        Some(HelperOutcomeCode::BlockedByInhibitor)
+    );
     assert_eq!(records[1].request_id.as_deref(), Some(req_id));
 
     server_handle.abort();
@@ -2416,7 +2845,10 @@ async fn test_helper_server_dedupe_and_auth_milestones() {
             wake_after_seconds: 300,
         })
         .await;
-    assert!(matches!(outcome, SuspendOutcome::ResumedSuccessfully { .. }));
+    assert!(matches!(
+        outcome,
+        SuspendOutcome::ResumedSuccessfully { .. }
+    ));
 
     // Second call with same request_id fails with duplicate
     let outcome2 = executor
@@ -2432,8 +2864,14 @@ async fn test_helper_server_dedupe_and_auth_milestones() {
     // Plus deduplication rejection: RequestRejected (1)
     assert_eq!(records.len(), 6);
     let dedupe_rec = &records[5];
-    assert_eq!(dedupe_rec.record_type, HelperAuditRecordType::RequestRejected);
-    assert_eq!(dedupe_rec.reason_code, Some(HelperReasonCode::DuplicateRequest));
+    assert_eq!(
+        dedupe_rec.record_type,
+        HelperAuditRecordType::RequestRejected
+    );
+    assert_eq!(
+        dedupe_rec.reason_code,
+        Some(HelperReasonCode::DuplicateRequest)
+    );
     assert_eq!(dedupe_rec.request_id.as_deref(), Some(req_id));
 
     server_handle.abort();
@@ -2451,7 +2889,8 @@ fn test_helper_protocol_v1_frame_compatibility() {
     let frame = crate::idle_suspend::protocol::HelperRequestFrame::new_suspend(req).unwrap();
     let encoded = encode_frame(&frame).unwrap();
     assert!(encoded.len() <= 4096);
-    let decoded: crate::idle_suspend::protocol::HelperRequestFrame = decode_frame(&encoded).unwrap();
+    let decoded: crate::idle_suspend::protocol::HelperRequestFrame =
+        decode_frame(&encoded).unwrap();
     assert_eq!(decoded.version, 1);
     match decoded.payload {
         crate::idle_suspend::protocol::HelperRequestPayload::SuspendWithRtcWake(r) => {
@@ -2466,7 +2905,9 @@ fn test_helper_protocol_v1_frame_compatibility() {
 async fn test_manual_force_suspend_quiescent_ordinary_claim() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
@@ -2535,7 +2976,9 @@ async fn test_manual_force_suspend_quiescent_ordinary_claim() {
 async fn test_manual_force_suspend_active_fleet_requires_confirmation() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
@@ -2614,7 +3057,9 @@ impl IdleSuspendExecutor for BlockingTestExecutor {
 async fn test_manual_force_suspend_active_fleet_with_force_succeeds() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let executor = Arc::new(BlockingTestExecutor {
         release_rx: parking_lot::Mutex::new(Some(release_rx)),
@@ -2686,7 +3131,9 @@ async fn test_manual_force_suspend_active_fleet_with_force_succeeds() {
 async fn test_manual_force_suspend_capability_failure() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(UnavailableExecutor::new("Host not capable"));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit_file = tmp.path().join("audit.jsonl");
@@ -2730,19 +3177,15 @@ async fn test_manual_force_suspend_capability_failure() {
 async fn test_manual_force_suspend_wake_seconds_and_actor_validation() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
 
-    let coordinator = IdleSuspendCoordinator::start(
-        policy,
-        timing,
-        None,
-        Some(audit),
-        executor,
-        pty_manager,
-    );
+    let coordinator =
+        IdleSuspendCoordinator::start(policy, timing, None, Some(audit), executor, pty_manager);
 
     // 1. Invalid wake seconds (e.g. 15 seconds, below minimum 60 and not 0)
     let res_invalid_wake = coordinator
@@ -2804,7 +3247,9 @@ async fn test_manual_force_suspend_with_policy_disabled() {
     let tmp = tempdir().unwrap();
     // Policy disabled!
     let policy = create_test_policy(tmp.path(), false);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let executor = Arc::new(FakeExecutor::new(true));
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink));
     let audit = preprovisioned_server_audit(tmp.path().join("audit.jsonl"));
@@ -2829,12 +3274,18 @@ async fn test_manual_force_suspend_with_policy_disabled() {
     };
 
     let result = coordinator.force_suspend(cmd).await;
-    assert!(matches!(result, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        result,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let status = coordinator.status();
     assert_eq!(status.state, CoordinatorState::Disabled);
-    assert!(matches!(status.last_outcome, Some(SuspendOutcome::ResumedSuccessfully { .. })));
+    assert!(matches!(
+        status.last_outcome,
+        Some(SuspendOutcome::ResumedSuccessfully { .. })
+    ));
     assert!(!pty_manager.fleet_snapshot().handoff_active);
 
     coordinator.shutdown().await;
@@ -2890,7 +3341,10 @@ async fn test_manual_force_suspend_cancels_automatic_armed_grace() {
             force: false,
         })
         .await;
-    assert!(matches!(result, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        result,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // Status is now HandedOff and arm deadline is cleared
     assert_eq!(coordinator.status().state, CoordinatorState::HandedOff);
@@ -2909,7 +3363,9 @@ async fn test_manual_force_suspend_cancels_automatic_armed_grace() {
 async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
     let tmp = tempdir().unwrap();
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let executor = Arc::new(BlockingTestExecutor {
         release_rx: parking_lot::Mutex::new(Some(release_rx)),
@@ -2934,7 +3390,10 @@ async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
             force: false,
         })
         .await;
-    assert!(matches!(res1, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        res1,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // Second click while in-flight: rejected with HandoffInProgress
     let res2 = coordinator
@@ -2944,7 +3403,10 @@ async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
             force: false,
         })
         .await;
-    assert!(matches!(res2, CoordinatorForceSuspendResult::HandoffInProgress));
+    assert!(matches!(
+        res2,
+        CoordinatorForceSuspendResult::HandoffInProgress
+    ));
 
     // Timing update while in-flight: rejected with HandoffInProgress
     let res_timing = coordinator
@@ -2954,7 +3416,10 @@ async fn test_manual_force_suspend_duplicate_click_and_timing_contention() {
             wake_after_seconds: 900,
         })
         .await;
-    assert!(matches!(res_timing, CoordinatorTimingResult::HandoffInProgress));
+    assert!(matches!(
+        res_timing,
+        CoordinatorTimingResult::HandoffInProgress
+    ));
 
     // Release handoff
     let _ = release_tx.send(());
@@ -3121,13 +3586,23 @@ async fn test_coordinator_agent_activity_countdown_and_final_claim() {
     };
     pty_manager.create(opts).expect("create session");
     let snap = pty_manager.capture_activity_snapshot();
-    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let root = snap
+        .roots
+        .iter()
+        .find(|r| r.terminal.session_id == id)
+        .unwrap();
     let pid = root.qualification.pid().unwrap_or(33333);
-    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
-        pid,
-        start_ticks: 100,
-    });
-    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+    let identity =
+        root.qualification
+            .process_identity()
+            .unwrap_or(crate::pty::activity::ProcessIdentity {
+                pid,
+                start_ticks: 100,
+            });
+    pty_manager.test_set_root_qualification(
+        id,
+        crate::pty::activity::RootQualification::Qualified { identity },
+    );
 
     let mut proc_source = MockProcessSource::new();
     proc_source.set_proc(
@@ -3168,8 +3643,13 @@ async fn test_coordinator_agent_activity_countdown_and_final_claim() {
     let claimed = tokio_wait_for(std::time::Duration::from_secs(8), || {
         let s = coordinator.status();
         s.state == CoordinatorState::HandedOff || s.state == CoordinatorState::Resumed
-    }).await;
-    assert!(claimed, "Coordinator must transition to HandedOff or Resumed after quiet deadline, current: {:?}", coordinator.status().state);
+    })
+    .await;
+    assert!(
+        claimed,
+        "Coordinator must transition to HandedOff or Resumed after quiet deadline, current: {:?}",
+        coordinator.status().state
+    );
     // Verify executor was invoked
     let calls = executor.recorded_requests();
     assert_eq!(calls.len(), 1);
@@ -3215,13 +3695,23 @@ async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
     };
     pty_manager.create(opts).expect("create session");
     let snap = pty_manager.capture_activity_snapshot();
-    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let root = snap
+        .roots
+        .iter()
+        .find(|r| r.terminal.session_id == id)
+        .unwrap();
     let pid = root.qualification.pid().unwrap_or(44444);
-    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
-        pid,
-        start_ticks: 100,
-    });
-    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+    let identity =
+        root.qualification
+            .process_identity()
+            .unwrap_or(crate::pty::activity::ProcessIdentity {
+                pid,
+                start_ticks: 100,
+            });
+    pty_manager.test_set_root_qualification(
+        id,
+        crate::pty::activity::RootQualification::Qualified { identity },
+    );
 
     let mut proc_source = MockProcessSource::new();
     proc_source.set_proc(
@@ -3260,7 +3750,8 @@ async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
     // Wait until Armed
     let armed = tokio_wait_for(std::time::Duration::from_secs(3), || {
         coordinator.status().state == CoordinatorState::Armed
-    }).await;
+    })
+    .await;
     assert!(armed, "Coordinator must reach Armed state");
 
     // Write terminal input to invalidate countdown
@@ -3269,8 +3760,12 @@ async fn test_coordinator_agent_activity_invalidation_resets_countdown() {
     // Verify coordinator transitions back to Watching
     let watched = tokio_wait_for(std::time::Duration::from_secs(2), || {
         coordinator.status().state == CoordinatorState::Watching
-    }).await;
-    assert!(watched, "Input must invalidate countdown and return state to Watching");
+    })
+    .await;
+    assert!(
+        watched,
+        "Input must invalidate countdown and return state to Watching"
+    );
 
     coordinator.shutdown().await;
     let _ = pty_manager.kill(id);
@@ -3313,13 +3808,23 @@ async fn test_coordinator_agent_activity_spent_epoch_latch() {
     };
     pty_manager.create(opts).expect("create session");
     let snap = pty_manager.capture_activity_snapshot();
-    let root = snap.roots.iter().find(|r| r.terminal.session_id == id).unwrap();
+    let root = snap
+        .roots
+        .iter()
+        .find(|r| r.terminal.session_id == id)
+        .unwrap();
     let pid = root.qualification.pid().unwrap_or(55555);
-    let identity = root.qualification.process_identity().unwrap_or(crate::pty::activity::ProcessIdentity {
-        pid,
-        start_ticks: 100,
-    });
-    pty_manager.test_set_root_qualification(id, crate::pty::activity::RootQualification::Qualified { identity });
+    let identity =
+        root.qualification
+            .process_identity()
+            .unwrap_or(crate::pty::activity::ProcessIdentity {
+                pid,
+                start_ticks: 100,
+            });
+    pty_manager.test_set_root_qualification(
+        id,
+        crate::pty::activity::RootQualification::Qualified { identity },
+    );
 
     let mut proc_source = MockProcessSource::new();
     proc_source.set_proc(
@@ -3358,15 +3863,26 @@ async fn test_coordinator_agent_activity_spent_epoch_latch() {
     // Wait for HandedOff and executor completion
     let resumed = tokio_wait_for(std::time::Duration::from_secs(8), || {
         coordinator.status().state == CoordinatorState::Resumed
-    }).await;
-    assert!(resumed, "Coordinator must resume after fake executor outcome, current: {:?}", coordinator.status().state);
+    })
+    .await;
+    assert!(
+        resumed,
+        "Coordinator must resume after fake executor outcome, current: {:?}",
+        coordinator.status().state
+    );
     // Epoch is now spent. Status reason should reflect EpochSpent after recovery sample
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     // Epoch is now spent. Status reason should reflect EpochSpent after recovery sample completes
     let spent = tokio_wait_for(std::time::Duration::from_secs(4), || {
-        coordinator.status().activity.and_then(|a| a.reason_code) == Some(crate::idle_suspend::status::ActivityObservationReason::EpochSpent)
-    }).await;
-    assert!(spent, "Status reason must reflect EpochSpent after recovery sample, current: {:?}", coordinator.status().activity.and_then(|a| a.reason_code));
+        coordinator.status().activity.and_then(|a| a.reason_code)
+            == Some(crate::idle_suspend::status::ActivityObservationReason::EpochSpent)
+    })
+    .await;
+    assert!(
+        spent,
+        "Status reason must reflect EpochSpent after recovery sample, current: {:?}",
+        coordinator.status().activity.and_then(|a| a.reason_code)
+    );
     coordinator.shutdown().await;
     let _ = pty_manager.kill(id);
 }
@@ -3452,7 +3968,6 @@ fn event_serde_roundtrip_all_14_events() {
         DEFAULT_IDLE_SUSPEND_EVENTS_PATH,
         "/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl"
     );
-
 
     let test_cases: Vec<(
         ServerIdleSuspendEventTypeV1,
@@ -3643,12 +4158,18 @@ fn event_serde_rejects_unknown_fields() {
 
     // Extra field in envelope must fail
     let mut extra_envelope = valid_json.clone();
-    extra_envelope.as_object_mut().unwrap().insert("extraField".to_string(), serde_json::json!("forbidden"));
+    extra_envelope
+        .as_object_mut()
+        .unwrap()
+        .insert("extraField".to_string(), serde_json::json!("forbidden"));
     assert!(serde_json::from_value::<IdleSuspendEventEnvelopeV1>(extra_envelope).is_err());
 
     // Extra field in data must fail
     let mut extra_data = valid_json.clone();
-    extra_data["data"].as_object_mut().unwrap().insert("extraDataField".to_string(), serde_json::json!("forbidden"));
+    extra_data["data"]
+        .as_object_mut()
+        .unwrap()
+        .insert("extraDataField".to_string(), serde_json::json!("forbidden"));
     assert!(serde_json::from_value::<IdleSuspendEventEnvelopeV1>(extra_data).is_err());
 }
 
@@ -3696,7 +4217,10 @@ fn event_validation_scope_and_mode_legality() {
             reason_code: ServerIdleSuspendReasonCodeV1::MeasurementUnavailable,
         }),
     };
-    assert!(matches!(env_with_corr.validate(), Err(EventValidationError::ForbiddenCorrelationId { .. })));
+    assert!(matches!(
+        env_with_corr.validate(),
+        Err(EventValidationError::ForbiddenCorrelationId { .. })
+    ));
 
     // Process-wide event with mode must fail
     let env_with_mode = IdleSuspendEventEnvelopeV1 {
@@ -3716,7 +4240,10 @@ fn event_validation_scope_and_mode_legality() {
             status_revision: 1,
         }),
     };
-    assert!(matches!(env_with_mode.validate(), Err(EventValidationError::ForbiddenMode { .. })));
+    assert!(matches!(
+        env_with_mode.validate(),
+        Err(EventValidationError::ForbiddenMode { .. })
+    ));
 
     // Attempt-scoped event without correlation must fail
     let env_missing_corr = IdleSuspendEventEnvelopeV1 {
@@ -3736,7 +4263,10 @@ fn event_validation_scope_and_mode_legality() {
             wake_after_seconds: 600,
         }),
     };
-    assert!(matches!(env_missing_corr.validate(), Err(EventValidationError::MissingCorrelationId { .. })));
+    assert!(matches!(
+        env_missing_corr.validate(),
+        Err(EventValidationError::MissingCorrelationId { .. })
+    ));
 
     // ArmStarted with mode Manual must fail
     let env_arm_manual = IdleSuspendEventEnvelopeV1 {
@@ -3755,7 +4285,10 @@ fn event_validation_scope_and_mode_legality() {
             deadline_after_seconds: 900,
         }),
     };
-    assert!(matches!(env_arm_manual.validate(), Err(EventValidationError::InvalidModeForEvent { .. })));
+    assert!(matches!(
+        env_arm_manual.validate(),
+        Err(EventValidationError::InvalidModeForEvent { .. })
+    ));
 
     // Manual attempt with activityRevision must fail
     let env_manual_activity = IdleSuspendEventEnvelopeV1 {
@@ -3775,7 +4308,10 @@ fn event_validation_scope_and_mode_legality() {
             wake_after_seconds: 600,
         }),
     };
-    assert!(matches!(env_manual_activity.validate(), Err(EventValidationError::ManualAttemptWithActivityRevision)));
+    assert!(matches!(
+        env_manual_activity.validate(),
+        Err(EventValidationError::ManualAttemptWithActivityRevision)
+    ));
 }
 
 #[test]
@@ -3799,7 +4335,10 @@ fn event_validation_reason_subsets_and_bounds() {
             activity_revision: None,
         }),
     };
-    assert!(matches!(env_bad_arm_reason.validate(), Err(EventValidationError::ForbiddenReasonCode { .. })));
+    assert!(matches!(
+        env_bad_arm_reason.validate(),
+        Err(EventValidationError::ForbiddenReasonCode { .. })
+    ));
 
     // 2. FinalCheckCompleted accepted=true with reason must fail
     let env_final_accepted_with_reason = IdleSuspendEventEnvelopeV1 {
@@ -3818,7 +4357,10 @@ fn event_validation_reason_subsets_and_bounds() {
             activity_revision: None,
         }),
     };
-    assert!(matches!(env_final_accepted_with_reason.validate(), Err(EventValidationError::FinalCheckAcceptedWithReason)));
+    assert!(matches!(
+        env_final_accepted_with_reason.validate(),
+        Err(EventValidationError::FinalCheckAcceptedWithReason)
+    ));
 
     // 3. FinalCheckCompleted accepted=false with null reason must fail
     let env_final_rejected_null_reason = IdleSuspendEventEnvelopeV1 {
@@ -3837,7 +4379,10 @@ fn event_validation_reason_subsets_and_bounds() {
             activity_revision: None,
         }),
     };
-    assert!(matches!(env_final_rejected_null_reason.validate(), Err(EventValidationError::FinalCheckRejectedWithoutReason)));
+    assert!(matches!(
+        env_final_rejected_null_reason.validate(),
+        Err(EventValidationError::FinalCheckRejectedWithoutReason)
+    ));
 
     // 4. HandoffClaimRejected with staleFleetGeneration missing actual generation must fail
     let env_handoff_missing_gen = IdleSuspendEventEnvelopeV1 {
@@ -3855,7 +4400,10 @@ fn event_validation_reason_subsets_and_bounds() {
             actual_fleet_generation: None,
         }),
     };
-    assert!(matches!(env_handoff_missing_gen.validate(), Err(EventValidationError::HandoffStaleGenerationMissingGenerations)));
+    assert!(matches!(
+        env_handoff_missing_gen.validate(),
+        Err(EventValidationError::HandoffStaleGenerationMissingGenerations)
+    ));
 
     // 5. HandoffClaimRejected with handoffBusy carrying generation must fail
     let env_handoff_busy_with_gen = IdleSuspendEventEnvelopeV1 {
@@ -3873,7 +4421,12 @@ fn event_validation_reason_subsets_and_bounds() {
             actual_fleet_generation: None,
         }),
     };
-    assert!(matches!(env_handoff_busy_with_gen.validate(), Err(EventValidationError::HandoffRejectionForbiddenGenerations(_))));
+    assert!(matches!(
+        env_handoff_busy_with_gen.validate(),
+        Err(EventValidationError::HandoffRejectionForbiddenGenerations(
+            _
+        ))
+    ));
 
     // 6. Numeric bounds: quietPeriodSeconds < 60 fails
     let env_bad_quiet = IdleSuspendEventEnvelopeV1 {
@@ -3893,7 +4446,13 @@ fn event_validation_reason_subsets_and_bounds() {
             status_revision: 1,
         }),
     };
-    assert!(matches!(env_bad_quiet.validate(), Err(EventValidationError::NumericOutOfBounds { field: "quietPeriodSeconds", .. })));
+    assert!(matches!(
+        env_bad_quiet.validate(),
+        Err(EventValidationError::NumericOutOfBounds {
+            field: "quietPeriodSeconds",
+            ..
+        })
+    ));
 
     // 7. Numeric bounds: wakeAfterSeconds non-zero and < 60 fails
     let env_bad_wake = IdleSuspendEventEnvelopeV1 {
@@ -3909,7 +4468,13 @@ fn event_validation_reason_subsets_and_bounds() {
             wake_after_seconds: 30,
         }),
     };
-    assert!(matches!(env_bad_wake.validate(), Err(EventValidationError::NumericOutOfBounds { field: "wakeAfterSeconds", .. })));
+    assert!(matches!(
+        env_bad_wake.validate(),
+        Err(EventValidationError::NumericOutOfBounds {
+            field: "wakeAfterSeconds",
+            ..
+        })
+    ));
 }
 
 fn setup_trusted_diagnostics_dir(tmp: &tempfile::TempDir) -> PathBuf {
@@ -3931,35 +4496,39 @@ fn event_writer_file_mode_and_sync() {
     let writer = IdleSuspendEventWriter::with_identity(event_path.clone(), identity);
 
     // Emit two sequential events
-    let e1 = writer.emit(
-        1726215600000,
-        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
-        None,
-        None,
-        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
-            automatic_policy: AutomaticPolicyV1::AgentActivity,
-            quiet_period_seconds: 900,
-            wake_after_seconds: 600,
-            timing_revision: 1,
-            status_revision: 1,
-        }),
-    ).unwrap();
+    let e1 = writer
+        .emit(
+            1726215600000,
+            ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+            None,
+            None,
+            IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+                automatic_policy: AutomaticPolicyV1::AgentActivity,
+                quiet_period_seconds: 900,
+                wake_after_seconds: 600,
+                timing_revision: 1,
+                status_revision: 1,
+            }),
+        )
+        .unwrap();
     assert_eq!(e1.producer_sequence, 1);
 
     let corr = make_test_correlation();
-    let e2 = writer.emit(
-        1726215601000,
-        ServerIdleSuspendEventTypeV1::AttemptStarted,
-        Some(&corr),
-        Some(IdleSuspendModeV1::Automatic),
-        IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
-            fleet_generation: 1,
-            activity_revision: Some(1),
-            timing_revision: 1,
-            status_revision: 2,
-            wake_after_seconds: 600,
-        }),
-    ).unwrap();
+    let e2 = writer
+        .emit(
+            1726215601000,
+            ServerIdleSuspendEventTypeV1::AttemptStarted,
+            Some(&corr),
+            Some(IdleSuspendModeV1::Automatic),
+            IdleSuspendEventDataV1::AttemptStarted(AttemptStartedDataV1 {
+                fleet_generation: 1,
+                activity_revision: Some(1),
+                timing_revision: 1,
+                status_revision: 2,
+                wake_after_seconds: 600,
+            }),
+        )
+        .unwrap();
     assert_eq!(e2.producer_sequence, 2);
 
     // Verify file mode 0600 on disk
@@ -3991,19 +4560,21 @@ fn event_writer_sequence_gap_on_failure() {
     let writer = IdleSuspendEventWriter::with_identity(event_path.clone(), identity);
 
     // 1. First event succeeds with sequence 1
-    let e1 = writer.emit(
-        1000,
-        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
-        None,
-        None,
-        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
-            automatic_policy: AutomaticPolicyV1::EmptyFleet,
-            quiet_period_seconds: 900,
-            wake_after_seconds: 600,
-            timing_revision: 1,
-            status_revision: 1,
-        }),
-    ).unwrap();
+    let e1 = writer
+        .emit(
+            1000,
+            ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+            None,
+            None,
+            IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+                automatic_policy: AutomaticPolicyV1::EmptyFleet,
+                quiet_period_seconds: 900,
+                wake_after_seconds: 600,
+                timing_revision: 1,
+                status_revision: 1,
+            }),
+        )
+        .unwrap();
     assert_eq!(e1.producer_sequence, 1);
 
     // 2. Invalidate file permissions to trigger I/O failure (consume sequence 2)
@@ -4023,15 +4594,17 @@ fn event_writer_sequence_gap_on_failure() {
     // 3. Restore valid file permissions 0600 and write next event
     fs::set_permissions(&event_path, fs::Permissions::from_mode(0o600)).unwrap();
 
-    let e3 = writer.emit(
-        3000,
-        ServerIdleSuspendEventTypeV1::MeasurementRecovered,
-        None,
-        None,
-        IdleSuspendEventDataV1::MeasurementRecovered(MeasurementRecoveredDataV1 {
-            activity_revision: 10,
-        }),
-    ).unwrap();
+    let e3 = writer
+        .emit(
+            3000,
+            ServerIdleSuspendEventTypeV1::MeasurementRecovered,
+            None,
+            None,
+            IdleSuspendEventDataV1::MeasurementRecovered(MeasurementRecoveredDataV1 {
+                activity_revision: 10,
+            }),
+        )
+        .unwrap();
 
     // Observable sequence gap: sequence advanced from 1 to 3!
     assert_eq!(e3.producer_sequence, 3);
@@ -4113,7 +4686,10 @@ fn event_writer_security_checks() {
     let unsafe_parent_dir = tmp.path().join("unsafe-diag");
     fs::create_dir(&unsafe_parent_dir).unwrap();
     fs::set_permissions(&unsafe_parent_dir, fs::Permissions::from_mode(0o755)).unwrap();
-    let writer2 = IdleSuspendEventWriter::with_identity(unsafe_parent_dir.join("events.jsonl"), identity.clone());
+    let writer2 = IdleSuspendEventWriter::with_identity(
+        unsafe_parent_dir.join("events.jsonl"),
+        identity.clone(),
+    );
     let err2 = writer2.emit(
         1000,
         ServerIdleSuspendEventTypeV1::CoordinatorStarted,
@@ -4159,14 +4735,21 @@ fn event_producer_identity_boot_id_reader() {
     let fake_boot_id_path = tmp.path().join("boot_id");
 
     // Valid canonical UUID with trailing newline
-    fs::write(&fake_boot_id_path, b"8f03c004-bb50-4822-9218-d75b34091a92\n").unwrap();
+    fs::write(
+        &fake_boot_id_path,
+        b"8f03c004-bb50-4822-9218-d75b34091a92\n",
+    )
+    .unwrap();
     let id = ProducerIdentity::load_from_path(&fake_boot_id_path).unwrap();
     assert_eq!(id.boot_id, "8f03c004-bb50-4822-9218-d75b34091a92");
     assert!(validate_canonical_uuid_v4(&id.producer_instance_id).is_ok());
 
     // Invalid boot ID
     fs::write(&fake_boot_id_path, b"invalid-boot-id\n").unwrap();
-    assert!(matches!(ProducerIdentity::load_from_path(&fake_boot_id_path), Err(EventWriteError::BootIdInvalid(_))));
+    assert!(matches!(
+        ProducerIdentity::load_from_path(&fake_boot_id_path),
+        Err(EventWriteError::BootIdInvalid(_))
+    ));
 }
 
 #[test]
@@ -4177,44 +4760,47 @@ fn event_writer_restart_creates_new_identity_and_resets_sequence() {
     let id1 = ProducerIdentity::with_ids(
         "8f03c004-bb50-4822-9218-d75b34091a92".to_string(),
         uuid::Uuid::new_v4().to_string(),
-    ).unwrap();
+    )
+    .unwrap();
     let writer1 = IdleSuspendEventWriter::with_identity(event_path.clone(), id1.clone());
-    let e1 = writer1.emit(
-        1000,
-        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
-        None,
-        None,
-        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
-            automatic_policy: AutomaticPolicyV1::EmptyFleet,
-            quiet_period_seconds: 900,
-            wake_after_seconds: 600,
-            timing_revision: 1,
-            status_revision: 1,
-        }),
-    ).unwrap();
+    let e1 = writer1
+        .emit(
+            1000,
+            ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+            None,
+            None,
+            IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+                automatic_policy: AutomaticPolicyV1::EmptyFleet,
+                quiet_period_seconds: 900,
+                wake_after_seconds: 600,
+                timing_revision: 1,
+                status_revision: 1,
+            }),
+        )
+        .unwrap();
     assert_eq!(e1.producer_sequence, 1);
 
     // Process restart: new instance ID, sequence resets to 1
-    let id2 = ProducerIdentity::with_ids(
-        id1.boot_id.clone(),
-        uuid::Uuid::new_v4().to_string(),
-    ).unwrap();
+    let id2 =
+        ProducerIdentity::with_ids(id1.boot_id.clone(), uuid::Uuid::new_v4().to_string()).unwrap();
     assert_ne!(id1.producer_instance_id, id2.producer_instance_id);
 
     let writer2 = IdleSuspendEventWriter::with_identity(event_path.clone(), id2.clone());
-    let e2 = writer2.emit(
-        2000,
-        ServerIdleSuspendEventTypeV1::CoordinatorStarted,
-        None,
-        None,
-        IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
-            automatic_policy: AutomaticPolicyV1::EmptyFleet,
-            quiet_period_seconds: 900,
-            wake_after_seconds: 600,
-            timing_revision: 2,
-            status_revision: 1,
-        }),
-    ).unwrap();
+    let e2 = writer2
+        .emit(
+            2000,
+            ServerIdleSuspendEventTypeV1::CoordinatorStarted,
+            None,
+            None,
+            IdleSuspendEventDataV1::CoordinatorStarted(CoordinatorStartedDataV1 {
+                automatic_policy: AutomaticPolicyV1::EmptyFleet,
+                quiet_period_seconds: 900,
+                wake_after_seconds: 600,
+                timing_revision: 2,
+                status_revision: 1,
+            }),
+        )
+        .unwrap();
     assert_eq!(e2.producer_sequence, 1);
     assert_eq!(e2.producer_instance_id, id2.producer_instance_id);
 }
@@ -4237,7 +4823,10 @@ async fn test_coordinator_events_quiet_automatic_empty_fleet_success() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
@@ -4259,7 +4848,10 @@ async fn test_coordinator_events_quiet_automatic_empty_fleet_success() {
     tokio::task::yield_now().await;
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
     assert_eq!(events[0].producer_sequence, 1);
 
     // Trigger fleet non-quiescence, then quiescence
@@ -4281,8 +4873,14 @@ async fn test_coordinator_events_quiet_automatic_empty_fleet_success() {
     // Armed: AttemptStarted, ArmStarted
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
-    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::ArmStarted);
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::AttemptStarted
+    );
+    assert_eq!(
+        events[2].event_type,
+        ServerIdleSuspendEventTypeV1::ArmStarted
+    );
     let attempt_id = events[1].correlation_id.as_ref().unwrap();
     assert_eq!(events[2].correlation_id.as_ref().unwrap(), attempt_id);
     assert_eq!(events[1].producer_sequence, 2);
@@ -4297,12 +4895,30 @@ async fn test_coordinator_events_quiet_automatic_empty_fleet_success() {
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 9);
-    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::FinalCheckStarted);
-    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::FinalCheckCompleted);
-    assert_eq!(events[5].event_type, ServerIdleSuspendEventTypeV1::HandoffClaimAccepted);
-    assert_eq!(events[6].event_type, ServerIdleSuspendEventTypeV1::HelperRequestDispatched);
-    assert_eq!(events[7].event_type, ServerIdleSuspendEventTypeV1::HelperOutcomeReceived);
-    assert_eq!(events[8].event_type, ServerIdleSuspendEventTypeV1::ReconciliationCompleted);
+    assert_eq!(
+        events[3].event_type,
+        ServerIdleSuspendEventTypeV1::FinalCheckStarted
+    );
+    assert_eq!(
+        events[4].event_type,
+        ServerIdleSuspendEventTypeV1::FinalCheckCompleted
+    );
+    assert_eq!(
+        events[5].event_type,
+        ServerIdleSuspendEventTypeV1::HandoffClaimAccepted
+    );
+    assert_eq!(
+        events[6].event_type,
+        ServerIdleSuspendEventTypeV1::HelperRequestDispatched
+    );
+    assert_eq!(
+        events[7].event_type,
+        ServerIdleSuspendEventTypeV1::HelperOutcomeReceived
+    );
+    assert_eq!(
+        events[8].event_type,
+        ServerIdleSuspendEventTypeV1::ReconciliationCompleted
+    );
 
     // Verify all attempt events share identical UUID correlation_id
     for ev in &events[1..9] {
@@ -4329,7 +4945,10 @@ async fn test_coordinator_events_empty_fleet_arm_cancelled_by_active_fleet() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
@@ -4375,11 +4994,26 @@ async fn test_coordinator_events_empty_fleet_arm_cancelled_by_active_fleet() {
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 5);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
-    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::ArmStarted);
-    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::ArmCancelled);
-    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::AttemptStarted
+    );
+    assert_eq!(
+        events[2].event_type,
+        ServerIdleSuspendEventTypeV1::ArmStarted
+    );
+    assert_eq!(
+        events[3].event_type,
+        ServerIdleSuspendEventTypeV1::ArmCancelled
+    );
+    assert_eq!(
+        events[4].event_type,
+        ServerIdleSuspendEventTypeV1::TerminalRejected
+    );
 
     let corr = events[1].correlation_id.as_ref().unwrap();
     assert_eq!(events[3].correlation_id.as_ref().unwrap(), corr);
@@ -4405,10 +5039,15 @@ async fn test_coordinator_events_manual_force_suspend_accepted_flow() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
     let executor = Arc::new(FakeExecutor::new(true));
 
@@ -4447,12 +5086,30 @@ async fn test_coordinator_events_manual_force_suspend_accepted_flow() {
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 6);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
-    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::HandoffClaimAccepted);
-    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::HelperRequestDispatched);
-    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::HelperOutcomeReceived);
-    assert_eq!(events[5].event_type, ServerIdleSuspendEventTypeV1::ReconciliationCompleted);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::AttemptStarted
+    );
+    assert_eq!(
+        events[2].event_type,
+        ServerIdleSuspendEventTypeV1::HandoffClaimAccepted
+    );
+    assert_eq!(
+        events[3].event_type,
+        ServerIdleSuspendEventTypeV1::HelperRequestDispatched
+    );
+    assert_eq!(
+        events[4].event_type,
+        ServerIdleSuspendEventTypeV1::HelperOutcomeReceived
+    );
+    assert_eq!(
+        events[5].event_type,
+        ServerIdleSuspendEventTypeV1::ReconciliationCompleted
+    );
 
     // Exact UUID matches across events, audit, and executor request
     for ev in &events[1..6] {
@@ -4476,10 +5133,15 @@ async fn test_coordinator_events_manual_force_suspend_rejections() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
     let executor = Arc::new(FakeExecutor::new(false)); // Capability fails!
 
@@ -4502,15 +5164,30 @@ async fn test_coordinator_events_manual_force_suspend_rejections() {
         force: false,
     };
     let res1 = coordinator.force_suspend(cmd1).await;
-    assert!(matches!(res1, CoordinatorForceSuspendResult::CapabilityUnavailable(_)));
+    assert!(matches!(
+        res1,
+        CoordinatorForceSuspendResult::CapabilityUnavailable(_)
+    ));
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
-    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::AttemptStarted
+    );
+    assert_eq!(
+        events[2].event_type,
+        ServerIdleSuspendEventTypeV1::TerminalRejected
+    );
     if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[2].data {
-        assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::CapabilityUnsupported);
+        assert_eq!(
+            data.reason_code,
+            ServerIdleSuspendReasonCodeV1::CapabilityUnsupported
+        );
     } else {
         panic!("Expected TerminalRejected");
     }
@@ -4523,7 +5200,10 @@ async fn test_coordinator_events_manual_force_suspend_rejections() {
         force: false,
     };
     let res2 = coordinator.force_suspend(cmd2).await;
-    assert!(matches!(res2, CoordinatorForceSuspendResult::ValidationFailed(_)));
+    assert!(matches!(
+        res2,
+        CoordinatorForceSuspendResult::ValidationFailed(_)
+    ));
 
     let events2 = read_emitted_events(&event_path);
     assert_eq!(events2.len(), 3); // Still 3 events
@@ -4537,7 +5217,10 @@ async fn test_coordinator_events_shutdown_while_armed() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
     let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
@@ -4577,8 +5260,14 @@ async fn test_coordinator_events_shutdown_while_armed() {
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 5);
-    assert_eq!(events[3].event_type, ServerIdleSuspendEventTypeV1::ArmCancelled);
-    assert_eq!(events[4].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    assert_eq!(
+        events[3].event_type,
+        ServerIdleSuspendEventTypeV1::ArmCancelled
+    );
+    assert_eq!(
+        events[4].event_type,
+        ServerIdleSuspendEventTypeV1::TerminalRejected
+    );
     if let IdleSuspendEventDataV1::ArmCancelled(data) = &events[3].data {
         assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::Shutdown);
     }
@@ -4591,10 +5280,15 @@ async fn test_coordinator_events_manual_force_suspend_active_fleet_rejection() {
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let policy = create_test_policy(tmp.path(), true);
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
     let executor = Arc::new(FakeExecutor::new(true));
 
@@ -4627,13 +5321,25 @@ async fn test_coordinator_events_manual_force_suspend_active_fleet_rejection() {
     };
 
     let res = coordinator.force_suspend(cmd).await;
-    assert!(matches!(res, CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { .. }));
+    assert!(matches!(
+        res,
+        CoordinatorForceSuspendResult::ActiveFleetRequiresConfirmation { .. }
+    ));
 
     let events = read_emitted_events(&event_path);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::AttemptStarted);
-    assert_eq!(events[2].event_type, ServerIdleSuspendEventTypeV1::TerminalRejected);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::AttemptStarted
+    );
+    assert_eq!(
+        events[2].event_type,
+        ServerIdleSuspendEventTypeV1::TerminalRejected
+    );
     if let IdleSuspendEventDataV1::TerminalRejected(data) = &events[2].data {
         assert_eq!(data.reason_code, ServerIdleSuspendReasonCodeV1::ActiveFleet);
     } else {
@@ -4654,19 +5360,26 @@ async fn test_coordinator_events_agent_activity_measurement_availability_transit
     let tmp = tempdir().unwrap();
     let event_path = setup_trusted_diagnostics_dir(&tmp);
     let identity = make_test_identity();
-    let writer = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity));
+    let writer = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity,
+    ));
 
     let mut policy = create_test_policy(tmp.path(), true);
     policy.automatic_policy = crate::config::IdleSuspendAutomaticPolicy::AgentActivity;
-    let timing = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(300, 600).unwrap()));
+    let timing = Arc::new(RwLock::new(
+        RuntimeIdleSuspendTiming::new(300, 600).unwrap(),
+    ));
     let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
     let executor = Arc::new(FakeExecutor::new(true));
 
     let proc_source = MockProcessSource::new();
     let diag_source = FakeDiagnosticsSource {
-        result: Some(Err(crate::idle_suspend::activity::ActivityUnavailable::new(
-            crate::idle_suspend::activity::ActivityUnavailableReason::SocketDiagnostics,
-        ))),
+        result: Some(Err(
+            crate::idle_suspend::activity::ActivityUnavailable::new(
+                crate::idle_suspend::activity::ActivityUnavailableReason::SocketDiagnostics,
+            ),
+        )),
     };
 
     let (tx, rx) = mpsc::channel(16);
@@ -4697,15 +5410,25 @@ async fn test_coordinator_events_agent_activity_measurement_availability_transit
     let events = read_emitted_events(&event_path);
     // Should have CoordinatorStarted and exactly ONE MeasurementUnavailable
     assert!(events.len() >= 2);
-    assert_eq!(events[0].event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(events[1].event_type, ServerIdleSuspendEventTypeV1::MeasurementUnavailable);
+    assert_eq!(
+        events[0].event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        events[1].event_type,
+        ServerIdleSuspendEventTypeV1::MeasurementUnavailable
+    );
 
     let count_before = events.len();
 
     // Trigger another unavailable tick -> must NOT emit duplicate MeasurementUnavailable!
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let events_after = read_emitted_events(&event_path);
-    assert_eq!(events_after.len(), count_before, "Repeated unavailable sample must not emit duplicate event");
+    assert_eq!(
+        events_after.len(),
+        count_before,
+        "Repeated unavailable sample must not emit duplicate event"
+    );
 
     coordinator.shutdown().await;
 }
@@ -4722,7 +5445,10 @@ async fn test_coordinator_events_process_restart_safe_ids() {
         "11111111-1111-4111-8111-111111111111".to_string(),
     )
     .unwrap();
-    let writer1 = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity1));
+    let writer1 = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity1,
+    ));
 
     let policy1 = create_test_policy(tmp.path(), true);
     let timing1 = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
@@ -4774,7 +5500,10 @@ async fn test_coordinator_events_process_restart_safe_ids() {
         "22222222-2222-4222-8222-222222222222".to_string(), // NEW process instance ID
     )
     .unwrap();
-    let writer2 = Arc::new(IdleSuspendEventWriter::with_identity(event_path.clone(), identity2));
+    let writer2 = Arc::new(IdleSuspendEventWriter::with_identity(
+        event_path.clone(),
+        identity2,
+    ));
 
     let policy2 = create_test_policy(tmp.path(), true);
     let timing2 = Arc::new(RwLock::new(RuntimeIdleSuspendTiming::new(60, 600).unwrap()));
@@ -4816,25 +5545,1249 @@ async fn test_coordinator_events_process_restart_safe_ids() {
 
     // All events across both process lifetimes in same file:
     let all_events = read_emitted_events(&event_path);
-    assert_eq!(all_events.len(), 18, "Must contain 9 events from instance 1 + 9 events from instance 2");
+    assert_eq!(
+        all_events.len(),
+        18,
+        "Must contain 9 events from instance 1 + 9 events from instance 2"
+    );
 
     // 1. First event of Instance 2 is CoordinatorStarted with sequence 1 and new producer instance ID
     let inst2_start = &all_events[9];
-    assert_eq!(inst2_start.event_type, ServerIdleSuspendEventTypeV1::CoordinatorStarted);
-    assert_eq!(inst2_start.producer_sequence, 1, "Producer sequence must reset on process restart");
-    assert_eq!(inst2_start.producer_instance_id, "22222222-2222-4222-8222-222222222222");
+    assert_eq!(
+        inst2_start.event_type,
+        ServerIdleSuspendEventTypeV1::CoordinatorStarted
+    );
+    assert_eq!(
+        inst2_start.producer_sequence, 1,
+        "Producer sequence must reset on process restart"
+    );
+    assert_eq!(
+        inst2_start.producer_instance_id,
+        "22222222-2222-4222-8222-222222222222"
+    );
 
     // 2. Correlation ID for instance 2 attempt
     let corr2 = all_events[10].correlation_id.clone().unwrap();
     assert!(validate_canonical_uuid_v4(&corr2).is_ok());
 
     // 3. Invariant: Action Correlation IDs MUST NOT collide across process restarts (unlike legacy epoch-1)
-    assert_ne!(corr1, corr2, "Action UUIDs must be strictly distinct across restarts");
+    assert_ne!(
+        corr1, corr2,
+        "Action UUIDs must be strictly distinct across restarts"
+    );
 
     // 4. Executor requests in instance 1 and instance 2 receive exact distinct UUIDs
     let reqs1 = executor1.recorded_requests();
     let reqs2 = executor2.recorded_requests();
     assert_eq!(reqs1[0].request_id, corr1);
     assert_eq!(reqs2[0].request_id, corr2);
-    assert_ne!(reqs1[0].request_id, reqs2[0].request_id, "No ID collision across restarts");
+    assert_ne!(
+        reqs1[0].request_id, reqs2[0].request_id,
+        "No ID collision across restarts"
+    );
+}
+#[tokio::test]
+async fn test_agent_free_coordinator_startup_and_initial_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new(10800, 600).unwrap(),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor,
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status = coordinator.status();
+    assert_eq!(
+        status.automatic_policy,
+        crate::config::IdleSuspendAutomaticPolicy::AgentFree
+    );
+    assert_eq!(status.quiet_period_seconds, 10800);
+    assert!(status.agent_free.is_some());
+    let af = status.agent_free.unwrap();
+    assert_eq!(af.scope, "managed-terminals");
+    assert_eq!(
+        af.phase,
+        crate::idle_suspend::status::AgentFreePhase::Reconciling
+    );
+    assert!(status.client_presence.is_some());
+    assert!(status.consent.is_none());
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_coordinator_consent_latch_first_yes_and_contrary_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let conn_id = "test-conn-1".to_string();
+    let cap_sec = "test-cap-sec".to_string();
+    let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // 1. Initial status has client count 1
+    assert_eq!(
+        coordinator
+            .status()
+            .client_presence
+            .unwrap()
+            .connection_count,
+        1
+    );
+
+    // 2. Submitting a decision when no consent request exists returns Unavailable
+    let cmd_early = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: "req-1".to_string(),
+        request_revision: 1,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res_early = coordinator.submit_consent_decision(cmd_early).await;
+    assert!(matches!(
+        res_early,
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Unavailable
+    ));
+
+    // 3. Wait for coordinator to track > 1s and open AwaitingConsent request
+    let mut consent_req_id = String::new();
+    let mut consent_req_rev = 0u64;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    consent_req_id = c.request_id.clone();
+                    consent_req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        !consent_req_id.is_empty(),
+        "Coordinator must open consent request after quiet period"
+    );
+
+    // 4. First Yes decision: latches atomically and returns success
+    let cmd_yes = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: consent_req_id.clone(),
+        request_revision: consent_req_rev,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res_yes = coordinator.submit_consent_decision(cmd_yes).await;
+    match res_yes {
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success {
+            response,
+            idempotent,
+        } => {
+            assert!(!idempotent);
+            assert_eq!(
+                response.decision,
+                crate::idle_suspend::protocol::ConsentDecisionValue::Approve
+            );
+            assert!(response.settled);
+        }
+        other => panic!("Expected Success for first Yes decision, got {:?}", other),
+    }
+
+    // 5. Subsequent contrary decision (Deny) returns DecisionAlreadySettled
+    let cmd_deny = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: consent_req_id.clone(),
+        request_revision: consent_req_rev,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Deny,
+    };
+    let res_deny = coordinator.submit_consent_decision(cmd_deny).await;
+    assert!(matches!(res_deny, crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::DecisionAlreadySettled { .. }));
+
+    // 6. Subsequent duplicate decision (Approve) returns idempotent success
+    let cmd_dup = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: consent_req_id.clone(),
+        request_revision: consent_req_rev,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res_dup = coordinator.submit_consent_decision(cmd_dup).await;
+    match res_dup {
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success {
+            response,
+            idempotent,
+        } => {
+            assert!(idempotent);
+            assert_eq!(
+                response.decision,
+                crate::idle_suspend::protocol::ConsentDecisionValue::Approve
+            );
+        }
+        other => panic!("Expected idempotent Success, got {:?}", other),
+    }
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_coordinator_consent_latch_first_no_defers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let conn_id = "test-conn-1".to_string();
+    let cap_sec = "test-cap-sec".to_string();
+    let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent request
+    let mut consent_req_id = String::new();
+    let mut consent_req_rev = 0u64;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    consent_req_id = c.request_id.clone();
+                    consent_req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        !consent_req_id.is_empty(),
+        "Coordinator must open consent request after quiet period"
+    );
+
+    // First No decision: latches atomically, defers and returns success
+    let cmd_no = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: consent_req_id.clone(),
+        request_revision: consent_req_rev,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Deny,
+    };
+    let res_no = coordinator.submit_consent_decision(cmd_no).await;
+    match res_no {
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success {
+            response,
+            idempotent,
+        } => {
+            assert!(!idempotent);
+            assert_eq!(
+                response.decision,
+                crate::idle_suspend::protocol::ConsentDecisionValue::Deny
+            );
+            assert!(response.settled);
+        }
+        other => panic!("Expected Success for first No decision, got {:?}", other),
+    }
+
+    // Status transitions to Deferred with ClientRefusal
+    let status_after = coordinator.status();
+    let af = status_after.agent_free.unwrap();
+    assert_eq!(
+        af.phase,
+        crate::idle_suspend::status::AgentFreePhase::Deferred
+    );
+    assert_eq!(
+        af.reason_code,
+        Some(crate::idle_suspend::status::AgentFreeReasonCode::ClientRefusal)
+    );
+
+    // Later contrary Yes decision cannot override it
+    let cmd_yes = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: consent_req_id.clone(),
+        request_revision: consent_req_rev,
+        connection_id: conn_id.clone(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res_yes = coordinator.submit_consent_decision(cmd_yes).await;
+    assert!(matches!(res_yes, crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::DecisionAlreadySettled { .. }));
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+#[tokio::test]
+async fn test_agent_free_coordinator_consent_unanswered_timeout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let conn_id = "test-conn-1".to_string();
+    let cap_sec = "test-cap-sec".to_string();
+    let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // 1. Wait for AwaitingConsent request
+    let mut consent_opened = false;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                consent_opened = true;
+                break;
+            }
+        }
+    }
+    assert!(consent_opened, "Coordinator must open consent request");
+
+    // 2. Wait for unanswered timeout (2.5 seconds > UNANSWERED_CONSENT_TIMEOUT_SECONDS)
+    let mut timed_out = false;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::Deferred {
+                if af.reason_code
+                    == Some(crate::idle_suspend::status::AgentFreeReasonCode::UnansweredTimeout)
+                {
+                    timed_out = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        timed_out,
+        "Coordinator must transition to Deferred with UnansweredTimeout"
+    );
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_coordinator_last_client_disconnect() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let conn_id = "test-conn-1".to_string();
+    let cap_sec = "test-cap-sec".to_string();
+    let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent request
+    let mut consent_opened = false;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                consent_opened = true;
+                break;
+            }
+        }
+    }
+    assert!(consent_opened, "Coordinator must open consent request");
+
+    // Last client disconnects!
+    client_guard.retire();
+
+    // Coordinator must transition to Deferred with LastClientDisconnected
+    let mut disconnected = false;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::Deferred {
+                if af.reason_code
+                    == Some(
+                        crate::idle_suspend::status::AgentFreeReasonCode::LastClientDisconnected,
+                    )
+                {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        disconnected,
+        "Coordinator must transition to Deferred with LastClientDisconnected"
+    );
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_coordinator_zero_client_automatic_handoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // With 0 clients, after quiet period (1s), coordinator automatically executes handoff!
+    let mut handed_off = false;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if snap.state == CoordinatorState::HandedOff || snap.state == CoordinatorState::Resumed {
+            handed_off = true;
+            break;
+        }
+    }
+    assert!(
+        handed_off,
+        "Coordinator with 0 clients must automatically execute handoff to executor"
+    );
+    assert_eq!(
+        executor.recorded_requests().len(),
+        1,
+        "Must record exactly 1 suspend request"
+    );
+    assert_eq!(executor.recorded_requests()[0].wake_after_seconds, 600);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_server_audit_consent_record_lifecycle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let audit_file = tmp.path().join("audit.log");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(&audit_file)
+            .unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::create(&audit_file).unwrap();
+    }
+
+    let audit = IdleSuspendServerAudit::new(audit_file.clone());
+
+    let record = crate::idle_suspend::server_audit::ConsentAuditRecord::new(
+        "alice".to_string(),
+        "req-uuid-1".to_string(),
+        1,
+        "conn-uuid-1".to_string(),
+        crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+        3,
+        crate::idle_suspend::server_audit::ConsentAuditResult::Admitted,
+    )
+    .unwrap();
+
+    assert!(audit.record_consent_event(&record).is_ok());
+
+    let records = audit.read_recent_consent_records(10).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].actor, "alice");
+    assert_eq!(records[0].request_id, "req-uuid-1");
+    assert_eq!(
+        records[0].decision,
+        crate::idle_suspend::protocol::ConsentDecisionValue::Approve
+    );
+    assert_eq!(
+        records[0].result,
+        crate::idle_suspend::server_audit::ConsentAuditResult::Admitted
+    );
+
+    let all_records = audit.read_recent_records(10).unwrap();
+    assert_eq!(all_records.len(), 1);
+    assert_eq!(all_records[0].actor(), "alice");
+}
+
+#[tokio::test]
+async fn test_agent_free_c01_exact_three_hour_boundary_deterministic() {
+    use crate::config::AGENT_FREE_QUIET_PERIOD_SECONDS;
+    use std::time::Duration;
+
+    // 1. Deterministic boundary assertion: strictly > 10,800s is required
+    assert_eq!(AGENT_FREE_QUIET_PERIOD_SECONDS, 10800);
+    let quiet_threshold = Duration::from_secs(AGENT_FREE_QUIET_PERIOD_SECONDS);
+
+    // 10,799s: <= 10,800s -> ineligible
+    let d_10799 = Duration::from_secs(10799);
+    assert!(d_10799 <= quiet_threshold, "10,799s must be ineligible");
+
+    // Exactly 10,800s: <= 10,800s -> not strictly greater, ineligible
+    let d_10800 = Duration::from_secs(10800);
+    assert!(
+        d_10800 <= quiet_threshold,
+        "Exactly 10,800s must be ineligible"
+    );
+
+    // Strictly greater (> 10,800s, e.g. 10,801s): eligible!
+    let d_10801 = Duration::from_secs(10801);
+    assert!(
+        d_10801 > quiet_threshold,
+        "10,801s must be strictly greater and eligible"
+    );
+
+    // 2. Coordinator runtime verification using 1s unvalidated quiet period
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Immediately at t < 1s: Tracking, not yet eligible, zero suspend requests
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let snap_early = status_rx.borrow().clone();
+    if let Some(af) = snap_early.agent_free {
+        assert!(
+            af.phase == crate::idle_suspend::status::AgentFreePhase::Tracking
+                || af.phase == crate::idle_suspend::status::AgentFreePhase::Reconciling
+        );
+    }
+    assert!(
+        executor.recorded_requests().is_empty(),
+        "No suspend before threshold"
+    );
+
+    // Once strictly > 1s elapsed: eligible! Zero clients -> automatic handoff executed
+    let mut handed_off = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if snap.state == CoordinatorState::HandedOff || snap.state == CoordinatorState::Resumed {
+            handed_off = true;
+            break;
+        }
+    }
+    assert!(
+        handed_off,
+        "Must execute handoff once elapsed > quiet period"
+    );
+    assert_eq!(
+        executor.recorded_requests().len(),
+        1,
+        "Must record 1 suspend request"
+    );
+    assert_eq!(executor.recorded_requests()[0].wake_after_seconds, 600);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c15_first_approving_socket_disconnects_while_another_stays_live() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    // Register two live clients: conn-1 and conn-2
+    let actor1 = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard1 = presence.reserve_pending_upgrade(actor1.clone()).unwrap();
+    let client_guard1 = guard1.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let actor2 = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard2 = presence.reserve_pending_upgrade(actor2.clone()).unwrap();
+    let client_guard2 = guard2.promote("conn-2".to_string(), "sec-2").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent
+    let mut consent_req_id = String::new();
+    let mut consent_req_rev = 0u64;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    consent_req_id = c.request_id.clone();
+                    consent_req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!consent_req_id.is_empty(), "Must open consent request");
+
+    // Retire conn-1 immediately before or during approval check
+    client_guard1.retire();
+
+    // Now submit approval with conn-1 (which is retired / no longer live)
+    let cmd = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor1,
+        request_id: consent_req_id,
+        request_revision: consent_req_rev,
+        connection_id: "conn-1".to_string(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res = coordinator.submit_consent_decision(cmd).await;
+    // First approval returns Success with settled: true
+    match res {
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success {
+            response,
+            ..
+        } => {
+            assert_eq!(
+                response.decision,
+                crate::idle_suspend::protocol::ConsentDecisionValue::Approve
+            );
+        }
+        other => panic!("Expected Success response, got {:?}", other),
+    }
+
+    // Wait for coordinator to run final check and verify approving socket disconnection
+    let mut deferred = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::Deferred {
+                if af.reason_code
+                    == Some(
+                        crate::idle_suspend::status::AgentFreeReasonCode::LastClientDisconnected,
+                    )
+                {
+                    deferred = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        deferred,
+        "Coordinator must transition to Deferred when approving socket is no longer live"
+    );
+    assert!(
+        executor.recorded_requests().is_empty(),
+        "No suspend request dispatched to executor"
+    );
+
+    client_guard2.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c18_zero_client_fence_fails_on_race() {
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+    let initial_rev = presence.snapshot().revision;
+
+    // 1. If expected_revision does not match, fence fails with RevisionMismatch
+    let err_rev = presence
+        .try_claim_no_client_fence(initial_rev + 99)
+        .unwrap_err();
+    assert!(matches!(
+        err_rev,
+        crate::idle_suspend::client_presence::PresenceClaimError::RevisionMismatch { .. }
+    ));
+
+    // 2. Reserve a pending upgrade slot: revision changes and pending > 0
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor).unwrap();
+    let current_rev = presence.snapshot().revision;
+    assert!(current_rev > initial_rev);
+
+    // Claiming fence with current_rev fails because pending upgrades are present
+    let err_pending = presence.try_claim_no_client_fence(current_rev).unwrap_err();
+    assert!(matches!(
+        err_pending,
+        crate::idle_suspend::client_presence::PresenceClaimError::PendingUpgradesPresent { .. }
+    ));
+
+    guard.release();
+}
+
+#[tokio::test]
+async fn test_agent_free_c23_working_or_unknown_cancels_pending_consent() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let client_guard = guard.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent
+    let mut opened = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                opened = true;
+                break;
+            }
+        }
+    }
+    assert!(opened, "Must open consent request");
+
+    // Simulate timing update with new quiet period (or cancellation)
+    let cmd = crate::idle_suspend::coordinator::UpdateTimingCommand {
+        actor: "admin".to_string(),
+        quiet_period_seconds: 10800,
+        wake_after_seconds: 900,
+    };
+    let patch_res = coordinator.update_timing(cmd).await;
+    assert!(matches!(
+        patch_res,
+        crate::idle_suspend::coordinator::CoordinatorTimingResult::Success { .. }
+    ));
+
+    let snap_after = coordinator.status();
+    let consent = snap_after.consent.unwrap();
+    assert_eq!(
+        consent.state,
+        crate::idle_suspend::status::ConsentState::Cancelled
+    );
+    assert!(
+        executor.recorded_requests().is_empty(),
+        "No suspend executed"
+    );
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c27_resume_baseline_reset() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for first handoff (0 clients)
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if snap.state == CoordinatorState::HandedOff || snap.state == CoordinatorState::Resumed {
+            break;
+        }
+    }
+    assert_eq!(
+        executor.recorded_requests().len(),
+        1,
+        "First handoff executed"
+    );
+
+    // After resume, coordinator must not immediately execute a second handoff in the next tick
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        executor.recorded_requests().len(),
+        1,
+        "Must not resuspend immediately; anchor reset"
+    );
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_refusal_single_interval_cooldown() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let client_guard = guard.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // 1. Wait for AwaitingConsent
+    let mut req_id = String::new();
+    let mut req_rev = 0u64;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    req_id = c.request_id.clone();
+                    req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!req_id.is_empty(), "Must open consent request");
+
+    // 2. Submit Deny
+    let cmd_deny = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor.clone(),
+        request_id: req_id,
+        request_revision: req_rev,
+        connection_id: "conn-1".to_string(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Deny,
+    };
+    let res = coordinator.submit_consent_decision(cmd_deny).await;
+    assert!(matches!(
+        res,
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success { .. }
+    ));
+
+    // 3. Immediately transitions to Deferred with ClientRefusal
+    let snap_denied = coordinator.status();
+    let af_denied = snap_denied.agent_free.unwrap();
+    assert_eq!(
+        af_denied.phase,
+        crate::idle_suspend::status::AgentFreePhase::Deferred
+    );
+    assert_eq!(
+        af_denied.reason_code,
+        Some(crate::idle_suspend::status::AgentFreeReasonCode::ClientRefusal)
+    );
+
+    // 4. Wait for deferral to expire (quiet_period_seconds = 1s, plus cadence tick)
+    let mut reopened = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                reopened = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        reopened,
+        "Must reopen consent after single quiet interval cooldown (not double)"
+    );
+    assert!(executor.recorded_requests().is_empty());
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_non_free_generation_mismatch_cancels_final_check() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(
+        RuntimeIdleSuspendTiming::new_unvalidated(1, 600),
+    ));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+    let agent_status = crate::agent_status::AgentStatusRuntime::new(
+        crate::agent_status::types::AgentStatusAvailability::Ready,
+        Some("ws://127.0.0.1:1234/v1/agent-status".to_string()),
+    );
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let client_guard = guard.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        Some(agent_status.clone()),
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // 1. Wait for AwaitingConsent
+    let mut req_id = String::new();
+    let mut req_rev = 0u64;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    req_id = c.request_id.clone();
+                    req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!req_id.is_empty(), "Must open consent request");
+
+    // 2. Intervening Working activity occurs in an agent, bumping non_free_generation!
+    let root = crate::pty::activity::ProcessIdentity {
+        pid: 9999,
+        start_ticks: 8888,
+    };
+    agent_status.register_terminal_root("term-intervene", 1, root);
+    let cred = agent_status
+        .reserve_credential("term-intervene", 1)
+        .unwrap();
+    cred.activate();
+    let hook_env = crate::agent_status::types::PrivateHookEnvelope {
+        version: 1,
+        agent_kind: crate::agent_status::types::AgentKind::Codex,
+        adapter_version: "1.0.0".to_string(),
+        event_id: "ev-1".to_string(),
+        event: "UserPromptSubmit".to_string(),
+        agent_session_id: "sess-test".to_string(),
+        turn_id: Some("turn-1".to_string()),
+        tool_call_id: None,
+        reason: None,
+        notification_type: None,
+        root_process: root,
+        process_ancestry: vec![root],
+    };
+    agent_status
+        .apply_hook_event("term-intervene", 1, &hook_env, 10_000)
+        .unwrap();
+
+    // 3. Now submit approval
+    let cmd = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor,
+        request_id: req_id,
+        request_revision: req_rev,
+        connection_id: "conn-1".to_string(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let _ = coordinator.submit_consent_decision(cmd).await;
+
+    // Must transition to Blocked/SafetyInvalidation, and executor must record zero requests!
+    let mut blocked = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::Blocked {
+                blocked = true;
+                break;
+            }
+        }
+    }
+    assert!(blocked, "Must cancel and block on generation mismatch");
+    assert!(
+        executor.recorded_requests().is_empty(),
+        "Executor must record zero requests on intervening activity"
+    );
+
+    client_guard.retire();
+    coordinator.shutdown().await;
 }

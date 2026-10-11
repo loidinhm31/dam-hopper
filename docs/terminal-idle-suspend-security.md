@@ -279,6 +279,32 @@ cancellation. No netlink payload, address, terminal content, command data,
 credential, or raw diagnostic detail enters REST, WebSocket, audit, or logs.
 See [Owned TCP Byte Observation](./tcp-activity-observation.md).
 
+### Semantic Agent-Free Auto-Sleep Security and Privacy Model (2026-10-11)
+
+The `agent-free` automatic policy operates under a zero-trust capability model designed to guarantee privacy, prevent authorization bypass, and eliminate cross-client decision races:
+
+1. **Immediate Consent & First-Valid Latching**:
+   - Any enabled authenticated user holding an active session may submit a decision (`approve` or `deny`).
+   - The first valid decision accepted by the server latches atomically into `active_consent.decision` and records `last_settled_consent`.
+   - Immediate approval proceeds directly to fresh final checks without waiting for the 60s timeout.
+   - Any subsequent contrary decision is rejected with HTTP 409 `decisionAlreadySettled`. Decisions cannot be overridden, flipped, or cancelled by late contrary input.
+2. **Cryptographic Per-Socket Capability Secrets**:
+   - Upon successful public WebSocket connection promotion, the server generates a high-entropy 122-bit CSPRNG capability secret (`Uuid::new_v4()`).
+   - The server hashes this secret immediately via SHA-256 and stores only the 32-byte digest (`hash_capability`) in memory. Plaintext capability secrets are never stored, logged, emitted to event sinks, or included in GET/status responses.
+   - Candidate secrets submitted in `POST /api/system/idle-suspend/v1/consent/decision` are validated using constant-time equality (`subtle::ConstantTimeEq`) to eliminate timing side-channel attacks.
+   - Per-connection capabilities bind strictly to connection ID, actor subject, and session credentials. Socket disconnect, close, error, reconnect, or transport disposal immediately revokes the capability.
+3. **Managed-Terminals Scope Limitation**:
+   - Candidate process matching is strictly bounded to DamHopper-managed PTY session roots and their verified descendant closures (`ProcessDiscovery`).
+   - Independent external work running outside DamHopper's managed PTY lineages (such as external tmux sessions, screen sessions, raw SSH sessions, or cron jobs) is deliberately excluded by validated product policy and will not prevent host suspension.
+4. **Zero-Knowledge Privacy Projection**:
+   - Only coarse semantic counts (`idleCount`, `blockedCount`, `workingCount`, `unknownCount`) and overall phases are exposed in public status DTOs.
+   - Process IDs, executable paths, socket inodes, argv, environment variables, terminal output buffers, authentication tokens, and LLM prompts are strictly excluded from status DTOs, logs, and audit entries.
+5. **Zero-Client Admission Fence**:
+   - When zero clients are connected, the coordinator claims the atomic `try_claim_no_client_fence` asserting exact revision match and zero live/pending connections before arming automatic suspend.
+   - Any client connection arriving during the final check gap invalidates the fence and transitions the coordinator to the consent branch.
+6. **Pre-Dispatch Actor Revalidation**:
+   - Before executing suspend, the server re-validates the approving actor against the database: account enabled, auth version matched, session unrevoked, non-expired, and MFA freshness verified. Revalidation failure aborts handoff with `SafetyInvalidation` and defers for 3 hours.
+
 ## Approval Gates for Privileged Execution (Production CLI helper execution) — Approved (2026-09-05)
 
 The Production CLI helper execution (privileged systemd helper and unit enrollment) was reviewed and approved on 2026-09-05 with the following agreed architectural specifications:

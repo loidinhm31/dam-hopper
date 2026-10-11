@@ -108,4 +108,39 @@ describe("SettingsIdleSuspendTimingSection", () => {
     expect(output).toContain("Host suspend handoff is in progress");
     expect(output).toContain("disabled");
   });
+
+  it("renders fixed read-only 10800s quiet period in agent-free mode while keeping wake duration mutable", () => {
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-free",
+      quietPeriodSeconds: 10800,
+      wakeAfterSeconds: 600,
+      activity: null,
+      agentFree: {
+        phase: "tracking",
+        scope: "managed-terminals",
+        inventoryState: "consistent",
+        inventoryRevision: 1,
+        semanticRevision: 1,
+        idleCount: 1,
+        blockedCount: 0,
+        workingCount: 0,
+        unknownCount: 0,
+        freeSinceMs: 1726000000000,
+        eligibleAtMs: 1726010800000,
+        deferredUntilMs: null,
+        reasonCode: "allFree",
+      },
+      clientPresence: {
+        connectionCount: 1,
+        pendingUpgradeCount: 0,
+        revision: 1,
+        available: true,
+      },
+      consent: null,
+    });
+    const output = markup();
+    expect(output).toContain("Fixed at 3 hours (10,800s) of continuous free state");
+    expect(output).toContain('value="10800"');
+    expect(output).toContain("readOnly");
+  });
 });

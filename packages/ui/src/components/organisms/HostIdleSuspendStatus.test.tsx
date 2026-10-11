@@ -344,4 +344,62 @@ describe("HostIdleSuspendStatus", () => {
     expect(output).not.toContain("Arm Countdown:");
     expect(isButtonDisabled(output)).toBe(false);
   });
+
+  it("renders agent-free semantic eligibility, client presence, consent status, and null-count Unknown labels", () => {
+    const fakeNow = 1725548400000;
+    vi.spyOn(Date, "now").mockReturnValue(fakeNow);
+
+    mocks.status = mockStatus({
+      automaticPolicy: "agent-free",
+      quietPeriodSeconds: 10800,
+      activity: null,
+      agentFree: {
+        phase: "awaitingConsent",
+        scope: "managed-terminals",
+        inventoryState: "consistent",
+        inventoryRevision: 3,
+        semanticRevision: 8,
+        idleCount: 2,
+        blockedCount: 1,
+        workingCount: 0,
+        unknownCount: null,
+        freeSinceMs: fakeNow - 10805000,
+        eligibleAtMs: fakeNow - 5000,
+        deferredUntilMs: null,
+        reasonCode: "allFree",
+      },
+      clientPresence: {
+        connectionCount: 2,
+        pendingUpgradeCount: 1,
+        revision: 4,
+        available: true,
+      },
+      consent: {
+        requestId: "req-1",
+        requestRevision: 1,
+        state: "pending",
+        requestedAtMs: fakeNow - 5000,
+        expiresAtMs: fakeNow + 55000,
+        decision: null,
+        wakeAfterSeconds: 600,
+      },
+    });
+
+    const output = markup();
+    expect(output).toContain("Policy: Agent Free (&gt;3h)");
+    expect(output).toContain("Semantic Agent-Free Eligibility");
+    expect(output).toContain("Awaiting consent (consistent)");
+    expect(output).toContain("2 / 1");
+    expect(output).toContain("0 / Unknown");
+    expect(output).toContain("2 live (+1 pending)");
+    expect(output).toContain("All recognized agents free (Idle + Blocked)");
+    expect(output).toContain("Response deadline:");
+    expect(output).toContain("55s");
+    expect(output).toContain(
+      "Tracks DamHopper terminals only; external work does not block sleep.",
+    );
+    expect(output).not.toContain("Activity Observation");
+
+    vi.restoreAllMocks();
+  });
 });

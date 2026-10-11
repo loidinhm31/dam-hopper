@@ -1,3 +1,19 @@
+# 2026-10-11
+
+- **Host Resources: agent-aware automatic sleep (Phases 01–06).** Introduced opt-in `agent-free` automatic idle suspend with continuous >3-hour (10,800s) quiet period, immediate-first-answer client consent, and managed-terminals process discovery:
+  - **Policy & Configuration (`server/src/idle_suspend/`):** Added `agent-free` automatic policy with immutable startup pinning and fail-closed fixed 10,800s quiet period. Preserves legacy `empty-fleet` and `agent-activity` policies without regression. Full configuration updates, workspace switches, and settings imports preserve running startup policy.
+  - **Managed Agent Process Discovery & Semantic Authority (`server/src/idle_suspend/activity/`, `server/src/agent_status/`):** Bounds process discovery strictly to managed PTY session roots and descendant closures (up to 64 roots, 1024 relevant processes). Discovers Codex, Claude, and OMP agents. Verified loopback WebSocket peer binding to Linux `/proc/net/tcp` socket inodes defeating PID reuse. Hard fail-closed native freshness gate (15s lease expiry) without artificial lease stretching. Monotonic `non_free_generation` invalidates quiet epochs on any intervening non-free state. Independent external work (tmux, SSH) outside managed lineage is deliberately excluded by validated product choice.
+  - **Public Client Presence Registry & Cryptographic Capabilities (`server/src/idle_suspend/client_presence.rs`, `server/src/api/ws.rs`):** In-memory bounded presence registry (1024 clients) tracking public UI WebSockets. Decoupled frame reader guarantees heartbeat liveness (30s ping / 90s timeout). High-entropy 122-bit capability secrets hashed to 32-byte SHA-256 digests; constant-time equality validation. Exact-owner receipt binding in `@dam-hopper/ui` prevents cross-profile / cross-generation leakage.
+  - **Coordinator Consent Engine & Safe Execution (`server/src/idle_suspend/coordinator.rs`, `server/src/api/idle_suspend.rs`):** Evaluates strictly >10,800s continuous quiet duration. Automatic handoff when zero clients are connected. Issues active consent prompt when clients are present; first valid server-accepted Yes/No wins immediately, latching settled decision and returning 409 to contrary answers. 60s unanswered timeout or last-client disconnect defers for a full 3-hour cooldown. Protected `POST /api/system/idle-suspend/v1/consent/decision` endpoint bounded to 16 KiB.
+  - **Always-Mounted Shared UI & Status Presentation (`packages/ui/`):** Mounted `HostSleepConsentHost` and `HostSleepConsentDialog` at `DamHopperApp` root covering IDE, Traditional Terminal, and mobile surfaces across web and desktop. Accessible focus trapping, Escape denial, and Cognito privacy mode isolation. Read-only fixed 10,800s quiet period display in Settings.
+  - **Comprehensive Verification & Safe Canary Governance:** 199 unit tests in `idle_suspend`, 22 integration tests in `tests/idle_suspend.rs`, 15 in `agent_status` suites; 2,795 UI unit tests in Vitest and 17 in Chromium browser mode passing 100%; real router safe smoke fixture (`server/examples/agent_free_consent_fixture.rs`) verifying all core routes with recording FakeExecutor; authenticated real-app E2E journey in `packages/ui/e2e/host-auto-sleep/host-auto-sleep.spec.ts`. Security boundary verification script `verify-idle-suspend-boundary.sh` passing all 15 checks. Operational hardware canary defined as separate explicit maintenance gate.
+  - **PR #57 Review Remediation & Correctness Hardening:** Resolved all 10 review findings across backend coordinator, process discovery, agent status reducer, WebSocket presence, and UI:
+    - _Coordinator Pre-Dispatch & Admission Fences (`server/src/idle_suspend/coordinator.rs`):_ Bound free epochs strictly to initial `non_free_generation`; any intervening Working/Unknown activity resets the epoch. Implemented `try_claim_approved_client_fence` in `client_presence.rs` to atomically check approving socket liveness and actor identity at commitment. Added pre-dispatch connection liveness recheck in the executor execution closure. Fixed refusal cooldown doubling so that total wait time after denial is exactly one quiet interval (10,800s).
+    - _Process Discovery & Descendant Survivor Coverage (`server/src/idle_suspend/activity/`):_ Added `uncovered_retained_processes` tracking in `ProcessSample` so that living retained descendants whose recognized agent parent exited are not dropped; `evaluate_managed_agents_with_details` reports `Unknown(SubagentUncovered)`, preventing premature free sleep.
+    - _Semantic Freshness & Executable Binding (`server/src/agent_status/reducer.rs`):_ Replaced wall-clock lease expiration with monotonic `Instant` tracking (`last_report_instant`) to defend against backward wall-clock rollbacks. Verified that observed executable identity matches expected agent kind (`Omp`, `Codex`, `Claude`), failing closed to `Unknown(AmbiguousOwner)` on executable mismatch. Fixed `non_free_generation` increment on reporter reconnect.
+    - _WebSocket Frame Reader & Presence Serialization (`server/src/api/ws.rs`, `server/src/idle_suspend/client_presence.rs`):_ Configured 128 MiB message and frame size upgrade ceilings. Made data frame enqueue in `frame_reader` nonblocking via `try_send` with immediate overflow connection closure, preventing slow filesystem operations from starving Ping/Pong/Close control frames. Serialized `status_tx` snapshot publication under the presence registry lock with monotonic revision advancement.
+    - _Consent UI & E2E Fixture (`packages/ui/`):_ Updated `HostSleepConsentDialog` settled summary to prioritize authoritative lifecycle state (`cancelled`, `expired`) over historical decisions. Added typed `idleSuspendPolicy: "agent-free"` option to E2E seed tree and application services, and repaired `host-auto-sleep.spec.ts` with real dialog role and accessible selectors.
+
 # 2026-10-10
 
 - **Traditional terminal Agents sidebar groups by project and status with color-coded badges.** The `agents` section shows one item per (project, primary status) with an agent count badge. Each item features distinct color-coded micro-badges adhering to unified typography and border geometry (`text-[9px] font-mono font-medium tracking-wide border rounded-sm px-1.5 py-0.5`):
@@ -46,6 +62,7 @@
   - **Owner-bound client queries & real-time refresh:** Query keys scoped by `['profile', profileId, generation, 'plans', ...]` preventing ambient transport fallback. Server-side `watchOnly` directory subscriptions trigger targeted cache invalidation without reading sibling content.
   - **Responsive dual-mode UI surface:** Integrated `ProjectPlansDashboard` into `WorkflowContextDeck` and `WorkflowContextSheet` with dual "File plans" and "Manual tracking" tabs, preserving in-progress manual tracking drafts and terminal continuity when browsing file plans.
   - **Historical checks:** Initial implementation recorded 13 Rust API, 33 Vitest unit, 4 integration, and 5 Chromium interaction tests plus an application journey. These checks did not cover the later review reproductions and do not certify complete qualification or human visual acceptance. Windows runtime remains unqualified.
+
 # 2026-10-06
 
 - **PR48 blame and exact-inspection hardening.** Unified direct/staged-rename baseline mode, header-size and binary guards; reject missing-disk HEAD symlinks and revalidate HEAD before early responses. Fence late root discovery and profile/generation/worktree/root invalidations; retain single-flight focus coalescing and recompute after same-HEAD index changes. Use Monaco's typed line-height geometry and current-state-guarded row click/Enter reveal. Publish author email and complete committer metadata; provide real SHA-256 exact details, changed files, historical diffs and supporting status/log reads through read-only Git CLI paths. Runtime images now include Git. Native libgit2 blame/mutations remain SHA-1; EOL normalization preserves row boundaries, not EOL-insensitive attribution for CRLF-committed baselines.
@@ -234,39 +251,39 @@
 
 - **Configured-agent activity idle suspend — documentation, runbooks, and controlled rollout complete (2026-09-11).** Integrated operator documentation, operations runbooks, controlled rollout stages, and rollback procedures across all system guides.
 - Delivered across: `system-architecture.md` (implemented dataflow & heuristic boundaries), `api-reference.md` (v1 status DTO, all enums, nullable counts, privacy boundaries), `configuration-guide.md` (exact paths, startup immutability, TOML examples, rollout stages, two-level rollback), `terminal-idle-suspend-security.md` (unprivileged procfs/netlink boundaries, fail-closed policy, warning exclusions, final race caveat, canary prerequisites), `linux-systemd.md` (observer qualification, operator reason guide, observation soak, bounded canary, stop criteria, rollback runbooks), `linux-release-manager.md`, `code-standards.md`, `codebase-summary.md`, `project-overview-pdr.md`, `project-roadmap.md`, `docs/README.md`, `README.md`, and `scripts/run-uat.sh`.
-- Validation passed: boundary checks **14/14**; idle-suspend integration exercised **20/20** scenarios (**19/19** default tests plus **1/1** ignored live Linux smoke in **0.74s**, with 2 other tests ignored); Chromium browser tests **16/16**; full UI suite **1606/1606** across 233 files (1,642 qualified tests plus 14 boundary checks); code review approved **9.6/10**. 
+- Validation passed: boundary checks **14/14**; idle-suspend integration exercised **20/20** scenarios (**19/19** default tests plus **1/1** ignored live Linux smoke in **0.74s**, with 2 other tests ignored); Chromium browser tests **16/16**; full UI suite **1606/1606** across 233 files (1,642 qualified tests plus 14 boundary checks); code review approved **9.6/10**.
 - Rollout status: Real-host automatic suspend canary remains an explicit Operations-supervised deployment gate with host qualification, exclusive RTC ownership, and bounded wake.
 
 - **Configured-agent activity idle suspend — integrated qualification complete (2026-09-11).** Qualified managed PTY output/input, attributable TCP traffic, protected status/API warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
 - Validation passed: backend/PTY/API/integration **323 passed**, security boundary **14/14**, Chromium **16/16**, and the ignored live Linux PTY/TCP smoke **1/1 in 0.72s**; code review approved **9.4/10**. Automated evidence used fake suspend outcomes and did not invoke host suspend, RTC programming, helper execution, sudo, or root installation.
 - **Configured-agent activity idle suspend — complete.** Added a
- strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
- old-server normalization and fail-closed malformed/partial response
- handling. The protected status remains version 1, authenticated, and
- `Cache-Control: no-store`.
+  strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
+  old-server normalization and fail-closed malformed/partial response
+  handling. The protected status remains version 1, authenticated, and
+  `Cache-Control: no-store`.
 - Extended `HostIdleSuspendStatus` with policy, aggregate measurement state and
- reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic
- limits, bounded measurement-warning duration and PID/safe identity examples,
- and the sole `armDeadlineMs` countdown. Manual force confirmation still uses
- actual fleet counts and existing handoff/409/no-retry behavior.
+  reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic
+  limits, bounded measurement-warning duration and PID/safe identity examples,
+  and the sole `armDeadlineMs` countdown. Manual force confirmation still uses
+  actual fleet counts and existing handoff/409/no-retry behavior.
 - Validation passed: protected API **9/9**, frontend unit **41/41**, Chromium
- **13/13**; code review approved **9.7/10**. Warning serialization tests
- reject command arguments, matcher data, socket details, terminal/session
- identities, and tokens. Integrated real-observer qualification remains integrated
- verification work.
+  **13/13**; code review approved **9.7/10**. Warning serialization tests
+  reject command arguments, matcher data, socket details, terminal/session
+  identities, and tokens. Integrated real-observer qualification remains integrated
+  verification work.
 
 - **Configured-agent activity idle suspend — complete.** Added the
- dedicated joinable transactional sampler worker, sequential process/TCP
- prepare with raw-output and manager invalidation fences, one-deep
- retryable-close-race retry, back-to-back baseline commit, and opaque final
- admission tickets.
+  dedicated joinable transactional sampler worker, sequential process/TCP
+  prepare with raw-output and manager invalidation fences, one-deep
+  retryable-close-race retry, back-to-back baseline commit, and opaque final
+  admission tickets.
 - Added manager-locked automatic admission for policy, request/activity/epoch/
- timing revisions, quiet deadline, observation age, input/generation/root/
- output fences, and PTY lifecycle blockers. Public status now requires
- `automaticPolicy`, reports nullable `activity`, and projects bounded
- `measurementWarning` process identities (maximum 32, no args or socket
- details). Coordinator recovery latches spent epochs and joins the sampler
- before PTY teardown.
+  timing revisions, quiet deadline, observation age, input/generation/root/
+  output fences, and PTY lifecycle blockers. Public status now requires
+  `automaticPolicy`, reports nullable `activity`, and projects bounded
+  `measurementWarning` process identities (maximum 32, no args or socket
+  details). Coordinator recovery latches spent epochs and joins the sampler
+  before PTY teardown.
 
 - **Configured-agent activity idle suspend — complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
 - Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues.
@@ -293,126 +310,126 @@
 - Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and an unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up.
 
 - **Cross-Origin Port Transport Guard Fix.**
- Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
- Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`.
- Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
+  Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
+  Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`.
+  Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
 
 # 2026-09-06
 
 - **Authenticated Manual Force Sleep — protocol/helper complete.**
- Extended the version-1 enrolled helper execution domain to accept
- `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted
- automatic timing at `60.=86400`.
+  Extended the version-1 enrolled helper execution domain to accept
+  `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted
+  automatic timing at `60.=86400`.
 - Zero converts to clear-only RTC behavior: write and verify `0`, with no
- target-epoch arithmetic or write. Timed values clear and verify, calculate a
- checked target, write it, and verify the readback.
+  target-epoch arithmetic or write. Timed values clear and verify, calculate a
+  checked target, write it, and verify the readback.
 - Added fail-closed RTC ownership preflight (`RtcAlarmBusy`), explicit
- zero-valued helper intent/completion audit records, and no-suspend behavior
- for RTC, audit, capability, inhibitor, or preflight failures.
+  zero-valued helper intent/completion audit records, and no-suspend behavior
+  for RTC, audit, capability, inhibitor, or preflight failures.
 - Added protocol, backend, preflight, helper IPC, audit, and automatic timing
- regression coverage using temporary files and fake backends only; tests never
- invoke host suspend, logind, or real RTC hardware.
+  regression coverage using temporary files and fake backends only; tests never
+  invoke host suspend, logind, or real RTC hardware.
 
 - **Authenticated Manual Force Sleep — coordinator/fleet complete.**
- Added generation-fenced forced fleet admission that bypasses only active-fleet
- quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes
- manual work with automatic timing, and releases the handoff on every outcome.
+  Added generation-fenced forced fleet admission that bypasses only active-fleet
+  quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes
+  manual work with automatic timing, and releases the handoff on every outcome.
 - **Authenticated Manual Force Sleep — REST API complete (2026-09-06 12:00:21 +07:00).**
- Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint
- with strict DTOs and wake bounds, cookie same-origin and enabled-actor
- enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
- admission, typed fleet/handoff conflicts, sanitized closed errors, and
- `Cache-Control: no-store` responses.
+  Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint
+  with strict DTOs and wake bounds, cookie same-origin and enabled-actor
+  enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
+  admission, typed fleet/handoff conflicts, sanitized closed errors, and
+  `Cache-Control: no-store` responses.
 - **Authenticated Manual Force Sleep — host popover UI and confirmation dialog complete (2026-09-06 12:20:00 +07:00).**
- Added the destructive "Force Machine to Sleep" action within
- HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to
- Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional
- bounded RTC wake duration input, active managed session warning and
- confirmation checkbox, authoritative 409 conflict refresh, disabled
- controls during pending mutation, live regions, and 44px touch targets.
+  Added the destructive "Force Machine to Sleep" action within
+  HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to
+  Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional
+  bounded RTC wake duration input, active managed session warning and
+  confirmation checkbox, authoritative 409 conflict refresh, disabled
+  controls during pending mutation, live regions, and 44px touch targets.
 - **Authenticated Manual Force Sleep — integration, qualification, and documentation complete (2026-09-06 15:45:00 +07:00).**
- Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
+  Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
 - Validation passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 boundary checks, and `cargo check`. Automated evidence uses fakes and temporary files only; the indefinite real-host canary remains explicitly deferred pending Operations approval and verified physical/out-of-band recovery.
 
 # 2026-09-02
 
 - **Workflow tracking domain and relational persistence.** Added the
- additive `010_workflow_tracking.sql` migration for workspace identities,
- Plan/Phase/Task items, manual sessions, terminal/agent resource links,
- durable notes, and append-only activity events. Existing terminal-session
- tables remain unchanged and all workflow tables share the configured
- `sessions.db`.
+  additive `010_workflow_tracking.sql` migration for workspace identities,
+  Plan/Phase/Task items, manual sessions, terminal/agent resource links,
+  durable notes, and append-only activity events. Existing terminal-session
+  tables remain unchanged and all workflow tables share the configured
+  `sessions.db`.
 - Added serializable workflow models and closed enums for item kind/status,
- session lifecycle, resource observations, provenance, and event types.
- Validation enforces bounded titles/bodies/identifiers/payloads, timestamps,
- transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with
- standalone or Plan-level tasks).
+  session lifecycle, resource observations, provenance, and event types.
+  Validation enforces bounded titles/bodies/identifiers/payloads, timestamps,
+  transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with
+  standalone or Plan-level tasks).
 - Added `WorkflowStore` repositories for workspace/item/session/resource/note/
- event CRUD, bounded overview aggregation, keyset history, and retention.
- Mutations use SQLite transactions; optional audit events commit atomically,
- event IDs are retry-idempotent, and resource observations never rewrite
- session lifecycle state.
+  event CRUD, bounded overview aggregation, keyset history, and retention.
+  Mutations use SQLite transactions; optional audit events commit atomically,
+  event IDs are retry-idempotent, and resource observations never rewrite
+  session lifecycle state.
 - `server/src/workflow/tests.rs` covers model rules, migration preservation,
- hierarchy/scope checks, idempotency, overlapping sessions, note retention,
- overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
- remain outside this scope.
+  hierarchy/scope checks, idempotency, overlapping sessions, note retention,
+  overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
+  remain outside this scope.
 - **Workflow service and REST API.** Added the profile/workspace-
- scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded
- overview/history, Plan-first item CRUD, manual session lifecycle,
- terminal/agent links, durable notes, and explicit history purge.
+  scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded
+  overview/history, Plan-first item CRUD, manual session lifecycle,
+  terminal/agent links, durable notes, and explicit history purge.
 - REST mutations use strict camelCase DTOs, UUID request replay keys,
- optimistic `updatedAt` CAS for item/note/link updates, typed sanitized
- workflow errors, and a focused 32 KiB body limit. Events use opaque keyset
- cursors; automatic retention purges in bounded batches.
+  optimistic `updatedAt` CAS for item/note/link updates, typed sanitized
+  workflow errors, and a focused 32 KiB body limit. Events use opaque keyset
+  cursors; automatic retention purges in bounded batches.
 - Added API integration coverage in `server/tests/workflow_api.rs` for auth,
- hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
- invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
+  hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
+  invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
 - **Terminal lifecycle correlation and agent adapter.** Added the
- closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded
- `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart
- hot paths; queue-full and storage failures are counted/logged without
- blocking terminal operation.
+  closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded
+  `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart
+  hot paths; queue-full and storage failures are counted/logged without
+  blocking terminal operation.
 - Lifecycle payloads are strictly allowlisted (terminal ID, incarnation,
- configured project, validated worktree target, server time, exit/restart
- metadata, and action). Command lines, arguments, CWD, environment, prompts,
- output, and arbitrary adapter payloads are excluded.
+  configured project, validated worktree target, server time, exit/restart
+  metadata, and action). Command lines, arguments, CWD, environment, prompts,
+  output, and arbitrary adapter payloads are excluded.
 - Terminal links transition through `attached`, `stale`, `exited`, `crashed`,
- and `detached` with incarnation ordering and deterministic replay
- suppression. Final exit/removal may suggest an end time but never changes
- manual session status or `startedAt`/`endedAt`.
+  and `detached` with incarnation ordering and deterministic replay
+  suppression. Final exit/removal may suggest an end time but never changes
+  manual session status or `startedAt`/`endedAt`.
 - Startup restores PTYs before reconciling persisted terminal links against
- live `(sessionId, incarnation)` identities. Agent links remain bounded manual
- `harnessLabel`/`runId` metadata; no automatic harness producer or generic
- observation endpoint was added. Direct Plan sessions do not synthesize
- Phase/Task children.
+  live `(sessionId, incarnation)` identities. Agent links remain bounded manual
+  `harnessLabel`/`runId` metadata; no automatic harness producer or generic
+  observation endpoint was added. Direct Plan sessions do not synthesize
+  Phase/Task children.
 - Workflow service review reports 28 workflow tests and 907 full-server tests passing;
- review approved 9.8/10.
+  review approved 9.8/10.
 - **Client types, transport, and query state.** Added strict shared-UI workflow DTOs and domain helpers, all 13 protected REST operation mappings, profile/transport-generation-isolated React Query hooks, mutation invalidation and request-ID replay handling, and manual timestamp/resource-observation helpers. Existing terminal navigation and localStorage state remain unchanged.
 - Validation: Targeted workflow client UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(..)` warning is non-blocking.
 - **Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states.
 - Validation: targeted workflow surface UI tests passed 62/62 (100%), full UI suite passed 1,493/1,493 (100%), and Rust server executed tests passed 907/907 (2 ignored). Review approved 9.8/10. Responsive browser geometry, safe-area, and terminal/editor continuity remain subsequent integration validation work.
-- **WorkspacePage and shell integration.** Complete / 
- 2026-09-02. Mounted one `WorkflowContextSurface` through the existing
- `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and
- `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav
- item, or duplicate PTY lifecycle.
+- **WorkspacePage and shell integration.** Complete /
+  2026-09-02. Mounted one `WorkflowContextSurface` through the existing
+  `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and
+  `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav
+  item, or duplicate PTY lifecycle.
 - Added pure `packages/ui/src/lib/workflow-workspace-integration.ts` decisions:
- `deriveWorkflowTerminalCandidates` merges mounted/session-map observations
- with target-unavailable state without command, CWD, or output;
- `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs,
- reuses `handleSelectTerminal`, and requests the compact Terminal surface only
- in compact mode; `resolveWorkflowTargetSelection` validates configured
- project/worktree availability before using existing workspace and
- project-target stores.
+  `deriveWorkflowTerminalCandidates` merges mounted/session-map observations
+  with target-unavailable state without command, CWD, or output;
+  `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs,
+  reuses `handleSelectTerminal`, and requests the compact Terminal surface only
+  in compact mode; `resolveWorkflowTargetSelection` validates configured
+  project/worktree availability before using existing workspace and
+  project-target stores.
 - Wired `onOpenTerminal` through `WorkflowContextSurface`,
- `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and
- `WorkflowSessionCard`; wired `onSelectTarget` through the surface,
- deck/sheet, and `WorkflowProjectList`. Keyed the surface by
- `activeProfileId` so profile changes reset workflow presentation state while
- terminal/editor/Browser keep-alive state remains mounted.
+  `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and
+  `WorkflowSessionCard`; wired `onSelectTarget` through the surface,
+  deck/sheet, and `WorkflowProjectList`. Keyed the surface by
+  `activeProfileId` so profile changes reset workflow presentation state while
+  terminal/editor/Browser keep-alive state remains mounted.
 - Validation: targeted UI 62/62, full UI 1,515/1,515, relevant Chromium
- smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation
- passed; review approved 9.8/10.
+  smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation
+  passed; review approved 9.8/10.
 - **Verification, rollout, observability, and docs.** Completed the additive migration/restart/rollback rehearsal, privacy-safe workflow diagnostics, old-server compatibility, responsive accessibility contracts, real-terminal continuity, and documentation gates. Migration 010 remains additive; rollback retains workflow tables/data, and older binaries ignore them.
 - Added fixed-cardinality workflow diagnostics in `DiagnosticStore`: `workflow_operation_duration_seconds` (duration capped at 60 seconds), `workflow_queue_dropped_total` (non-blocking 256-entry observation queue drops), `workflow_reconciliation_total` (attached/detached counts capped at 1,000), and `workflow_storage_errors_total` (bounded store-failure outcomes). Operation/result dimensions are enums; duration, row, event, and count fields are bounded. No IDs, projects, paths, notes, external runs, commands, CWD, environment, prompts, or output are recorded.
 - Older servers that return HTTP 404 for `GET /api/workflow/overview` now produce a profile-scoped feature-unavailable state, suppress query retries, close/hide workflow controls, and announce the unavailable state. Authentication and 5xx failures remain explicit errors with retry behavior; other workflow 404s retain their API semantics.
@@ -430,32 +447,32 @@
 - Create and authenticated `PATCH` rename trim/validate names (≤64 Unicode scalars, no control characters) and blank/`null` clear overrides. Names flow through respawn/restore, API/WebSocket, and frontend terminal labels; rename UX is durable and cleared names return to existing fallback labels.
 - Validation: backend full `cargo test` **874 tests, 2 ignored**; UI full **212 files / 1,411 tests**; production build and focused browser smoke passed. Broad browser remains **183/187**, with four failures in unchanged baseline areas: `app-zoom` (320×180 expected, 352×198 received), `ssh-forward-multi-connection` (switches expected disabled, enabled), and `terminal-panel-replay-notifications` (activity expected inactive, active). No restart-persistence manual claim: graceful stop removes sessions by design.
 - **Traditional-mode Global Search focus retention.** Callback-only pane
- rerenders no longer move focus from Global Search to xterm while typing;
- semantic pane/session focus and native-input suppression remain intact.
+  rerenders no longer move focus from Global Search to xterm while typing;
+  semantic pane/session focus and native-input suppression remain intact.
 - **Traditional active-pane floating scroll controls.** Enabled
- `TerminalScrollButtons` now render only for the active Traditional pane above
- `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail
- contract; inactive panes and Browser remain excluded. Runtime source and
- behavior remain unchanged.
+  `TerminalScrollButtons` now render only for the active Traditional pane above
+  `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail
+  contract; inactive panes and Browser remain excluded. Runtime source and
+  behavior remain unchanged.
 - Focused validation passed: UI TypeScript build, focused unit tests (2 files/5
- tests), focused Chromium tests (2 files/8 tests), and actual-app smoke
- confirming three-character search focus retention, scroll trigger/group
- placement above keyboard controls, no xterm focus on scroll activation, and
- Runtime contrast. Final code review found no issues; no broad repository-suite
- or production/cross-platform release validation is claimed.
+  tests), focused Chromium tests (2 files/8 tests), and actual-app smoke
+  confirming three-character search focus retention, scroll trigger/group
+  placement above keyboard controls, no xterm focus on scroll activation, and
+  Runtime contrast. Final code review found no issues; no broad repository-suite
+  or production/cross-platform release validation is claimed.
 - **Traditional terminal close selection fix.** Closing a Traditional terminal now
- keeps the selected terminal within the same project instead of selecting one
- from another project; Runtime behavior is preserved. Focused validation passed:
- 23 unit tests, 9 Traditional Chromium tests, and the UI TypeScript build.
- Production-like callback integration coverage remains a follow-up.
+  keeps the selected terminal within the same project instead of selecting one
+  from another project; Runtime behavior is preserved. Focused validation passed:
+  23 unit tests, 9 Traditional Chromium tests, and the UI TypeScript build.
+  Production-like callback integration coverage remains a follow-up.
 
 # 2026-08-30
 
 - **Browser Debug/native support documentation refresh.** Recorded the Windows
- WebView2 v1 gate, Linux runtime-unverified status, macOS deferral, Android
- iframe fallback, profile-scoped storage, generation/nonce/request validation,
- raw bounds plus mirrored app zoom, relay capabilities, and popup/download/
- permission/console boundaries. See [Native Browser Debug Support](./native-browser-debug-support.md).
+  WebView2 v1 gate, Linux runtime-unverified status, macOS deferral, Android
+  iframe fallback, profile-scoped storage, generation/nonce/request validation,
+  raw bounds plus mirrored app zoom, relay capabilities, and popup/download/
+  permission/console boundaries. See [Native Browser Debug Support](./native-browser-debug-support.md).
 
 # 2026-08-15
 
@@ -464,23 +481,23 @@
 ## 2026-08-11
 
 - **Host-resource restoration alerts.** Added additive snapshot
- `currentAlerts` for concurrent thermal/disk incidents without changing the
- legacy memory alert, newest-first mixed incident history, and compatible
- `host:alertChanged` resource payloads. The client validates event shape and
- nested evidence before cache updates, preserves active incidents if an older
- server omits the additive field, and removes only the recovered target. Known
- accepted UI caveat: after acknowledgement, a resource-only critical badge can
- render info-colored while its active count and incident state remain correct.
+  `currentAlerts` for concurrent thermal/disk incidents without changing the
+  legacy memory alert, newest-first mixed incident history, and compatible
+  `host:alertChanged` resource payloads. The client validates event shape and
+  nested evidence before cache updates, preserves active incidents if an older
+  server omits the additive field, and removes only the recovered target. Known
+  accepted UI caveat: after acknowledgement, a resource-only critical badge can
+  render info-colored while its active count and incident state remain correct.
 
 ## 2026-08-05
 
 - **Codex OTel-only Usage refactor.** Removed terminal Usage work from PTY production paths and
- made bounded Codex `response.completed` OTLP events the sole usage write source. The fresh
- Codex-only `telemetry.db` schema, aggregate/session API, Usage page, and Settings exporter flow
- now document retention-bounded (not permanent) session summaries, WAL/SHM reset boundaries, and
- privacy-safe data contracts. `sessions.db` remains protected from telemetry resets. Automated Rust, UI, web,
- and browser gates pass; manual PTY benchmarking, signing, and target-environment release checks
- remain follow-ups.
+  made bounded Codex `response.completed` OTLP events the sole usage write source. The fresh
+  Codex-only `telemetry.db` schema, aggregate/session API, Usage page, and Settings exporter flow
+  now document retention-bounded (not permanent) session summaries, WAL/SHM reset boundaries, and
+  privacy-safe data contracts. `sessions.db` remains protected from telemetry resets. Automated Rust, UI, web,
+  and browser gates pass; manual PTY benchmarking, signing, and target-environment release checks
+  remain follow-ups.
 
 ## 2026-07-30
 
@@ -489,37 +506,37 @@
 ## 2026-08-01
 
 - **Stale lazy-chunk recovery.** The shared `ErrorBoundary` now
- recognizes only known browser module-load signatures (`ChunkLoadError`, failed
- Vite chunk loads, and dynamic-import/module-script fetch failures). It writes
- the namespaced `dam-hopper:stale-chunk-reload-attempted` key to
- `sessionStorage` before one reload per tab session. Storage read/write errors
- fail closed and retain the existing fallback; second stale failures and
- unrelated render errors also retain the existing fallback and diagnostics.
- Focused `ErrorBoundary` tests cover classifier boundaries, first/second
- failures, unrelated errors, and unavailable storage.
+  recognizes only known browser module-load signatures (`ChunkLoadError`, failed
+  Vite chunk loads, and dynamic-import/module-script fetch failures). It writes
+  the namespaced `dam-hopper:stale-chunk-reload-attempted` key to
+  `sessionStorage` before one reload per tab session. Storage read/write errors
+  fail closed and retain the existing fallback; second stale failures and
+  unrelated render errors also retain the existing fallback and diagnostics.
+  Focused `ErrorBoundary` tests cover classifier boundaries, first/second
+  failures, unrelated errors, and unavailable storage.
 
 ## 2026-07-25
 
 - **Controlled browser debug preview and terminal handoff.** Added an
- extension-assisted iframe Browser tool with bundled client extension setup,
- bounded DOM/ARIA
- selection, optional user-mediated tab capture, manual-image fallback, and
- short-lived authenticated JSON/PNG artifacts. Explicit confirmation inserts
- only generated artifact paths into a selected live terminal, without page
- text, terminal controls, or auto-submit. Target reloads invalidate prior
- selection state; CSP/framing failures, capture denial, stale tunnels, and
- closed terminals fail closed.
- Automated hardening covers malformed/nested bridge messages,
- capture cleanup and JPEG conversion, tunnel invalidation, private artifact
- boundaries, and the no-read artifact contract. Chromium permission chooser,
- HiDPI crop, live tunnel, and real-xterm checks remain manual release gates.
+  extension-assisted iframe Browser tool with bundled client extension setup,
+  bounded DOM/ARIA
+  selection, optional user-mediated tab capture, manual-image fallback, and
+  short-lived authenticated JSON/PNG artifacts. Explicit confirmation inserts
+  only generated artifact paths into a selected live terminal, without page
+  text, terminal controls, or auto-submit. Target reloads invalidate prior
+  selection state; CSP/framing failures, capture denial, stale tunnels, and
+  closed terminals fail closed.
+  Automated hardening covers malformed/nested bridge messages,
+  capture cleanup and JPEG conversion, tunnel invalidation, private artifact
+  boundaries, and the no-read artifact contract. Chromium permission chooser,
+  HiDPI crop, live tunnel, and real-xterm checks remain manual release gates.
 
 ## 2026-07-16
 
 - **Configurable terminal panel shortcuts.** Added settings-backed shortcuts for
- Git (`Ctrl+Shift+G`), Ports (`Ctrl+Shift+P`), and Fleet Terminal
- (`Ctrl+Shift+M`). Each shortcut toggles its target and closes the other two;
- xterm input suppresses the bindings so they never reach the PTY.
+  Git (`Ctrl+Shift+G`), Ports (`Ctrl+Shift+P`), and Fleet Terminal
+  (`Ctrl+Shift+M`). Each shortcut toggles its target and closes the other two;
+  xterm input suppresses the bindings so they never reach the PTY.
 
 ## 2026-07-14
 
@@ -566,12 +583,12 @@
 # Changelog
 
 - **Git-unavailable production state.** Complete ✓ 2026-08-01.
- Git-uninitialized projects now return HTTP 409 with error code
- `GIT_NOT_INITIALIZED`; the typed client exposes `ApiRequestError` and the
- `GitDiffResult` unavailable variant. Root/branch/history surfaces and
- `GitLocalChanges`/Changes panels render actionable `git init` guidance,
- while discovered usable nested roots remain root-scoped for branch and diff
- operations.
+  Git-uninitialized projects now return HTTP 409 with error code
+  `GIT_NOT_INITIALIZED`; the typed client exposes `ApiRequestError` and the
+  `GitDiffResult` unavailable variant. Root/branch/history surfaces and
+  `GitLocalChanges`/Changes panels render actionable `git init` guidance,
+  while discovered usable nested roots remain root-scoped for branch and diff
+  operations.
 
 All notable changes to this project will be documented in this file.
 
@@ -584,27 +601,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## 2026-07-26
 
 - **Terminal usage analytics persistence.** Added opt-in telemetry startup/shutdown with a
- dedicated bounded worker, private `telemetry.db` SQLite/WAL storage, idempotent command and token
- writes, UTC daily rollups before detail purge, configurable retention and project exclusions, and
- HMAC-key/file permission hardening. Database failures remain isolated from PTY flow; aggregate API
- routes remain scheduled for subsequent API milestones.
+  dedicated bounded worker, private `telemetry.db` SQLite/WAL storage, idempotent command and token
+  writes, UTC daily rollups before detail purge, configurable retention and project exclusions, and
+  HMAC-key/file permission hardening. Database failures remain isolated from PTY flow; aggregate API
+  routes remain scheduled for subsequent API milestones.
 
 - **Validated shell lifecycle capture.** Bash, Zsh, and Fish now report
- bounded completion status through versioned OSC 633 adapters. PTY lifecycle events
- carry terminal-run/sequence identity and privacy-safe normalized command metadata
- through a bounded non-blocking telemetry sink. The default path is no-op and
- non-durable; `ChannelTelemetrySink` is reserved as the durable-worker telemetry
- boundary.
- and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+  bounded completion status through versioned OSC 633 adapters. PTY lifecycle events
+  carry terminal-run/sequence identity and privacy-safe normalized command metadata
+  through a bounded non-blocking telemetry sink. The default path is no-op and
+  non-durable; `ChannelTelemetrySink` is reserved as the durable-worker telemetry
+  boundary.
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Added
 
 - IntelliJ-style **Edit Commit Message** for any unpushed commit reachable from
- the checked-out branch. Added full-message read and guarded message-rewrite
- REST APIs, root-commit and descendant replay support, shared Git history UI
- wiring, multiline editing, and pushed/non-active-branch availability guards.
+  the checked-out branch. Added full-message read and guarded message-rewrite
+  REST APIs, root-commit and descendant replay support, shared Git history UI
+  wiring, multiline editing, and pushed/non-active-branch availability guards.
 
 - **Workspace Split.** Complete ✓ 2026-05-24. Split the web frontend into a thin `apps/web` Vite host plus a shared `packages/ui` React package, preserving current browser behavior while moving shared components, hooks, styles, tests, assets, and transport-facing UI code behind explicit UI package exports. No native behavior was added yet in this initial layout.
 
@@ -642,7 +659,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **IDE Tool Windows Refactoring.** Complete ✓ 2026-04-25. Refactored `IdeShell.tsx` to support a flexible, extensible Tool Window system with an Activity Bar, similar to IntelliJ IDEA: (1) New `ActivityBar` component for switching between tool windows (Files, Terminals, etc.); (2) Extensible `ToolWindowDef` interface for defining tool name, icon, and component; (3) `ToolPanel` container with header, actions, and auto-focusing behavior; (4) Persisted layout state in `IdeShell` (active tool ID, sidebar width); (5) Refactored `IdeShell` to use a cleaner tool window state management pattern; (6) Migrated `FileTree` to the new system as the default 'files' tool; (7) Seamless integration with existing `react-resizable-panels` layout; (8) Full TypeScript coverage and logic verification.
 
 - **OPAQUE PAKE Server Integration (Stealth Encrypted Upload).** Complete ✓ 2026-04-27.
- Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit file upload feature: (1) New `server/src/crypto/` module — `DamHopperOpaqueSuite` implementing `CipherSuite` (Ristretto255 + TripleDH + Identity KSF, matching `@serenity-kit/opaque` client defaults); (2) `load_or_create_server_setup()` generates or loads the server long-term keypair at `~/.config/dam-hopper/opaque-server-setup` with 0o600 permissions; (3) Registration handlers: `handle_register_start()` / `handle_register_finish()` — stateless two-message flow, returning `RegistrationResponse` and `ServerRegistration`; (4) Login handlers: `handle_login_start()` / `handle_login_finish()` — two-message flow, returning intermediate `ServerLogin` state and final AES key derived via HKDF-SHA256 with label `"dam-hopper-aes-256-gcm-v1"`; (5) `export_key` wrapped in `Zeroizing<Vec<u8>>`, zeroed on drop; (6) New `AppState` fields: `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` (shared) and `opaque_registrations: OpaqueRegistrations` (in-memory HashMap, ephemeral by design — no disk persistence); (7) 8 new `ClientMsg` WS variants (`auth:register_start/finish`, `auth:login_start/finish`, `fs:put_begin/chunk/commit/save`) and 8 new `ServerMsg` response variants with neutral `auth:*` / `fs:put_*` kind names to avoid IDS/DLP fingerprinting; (8) Full WS dispatch in `ws.rs` with all OPAQUE ops in `spawn_blocking`; per-connection caps: 16 in-flight login states, 16 active session keys; `overwrite: bool` on `auth:register_finish` prevents silent credential overwrite; (9) Chunked `fs:put_*` handlers stubbed (return not-implemented error); (10) Identifier validation: alphanumeric + hyphens + underscores, max 128 chars. New Cargo dependencies: `opaque-ke = "4"`, `hkdf = "0.12"`, `rand`, `aes-gcm = "0.10"`, `sha2 = "0.10"`, `zeroize = "1"`.
+  Server-side OPAQUE password-authenticated key exchange for the encrypt-in-transit file upload feature: (1) New `server/src/crypto/` module — `DamHopperOpaqueSuite` implementing `CipherSuite` (Ristretto255 + TripleDH + Identity KSF, matching `@serenity-kit/opaque` client defaults); (2) `load_or_create_server_setup()` generates or loads the server long-term keypair at `~/.config/dam-hopper/opaque-server-setup` with 0o600 permissions; (3) Registration handlers: `handle_register_start()` / `handle_register_finish()` — stateless two-message flow, returning `RegistrationResponse` and `ServerRegistration`; (4) Login handlers: `handle_login_start()` / `handle_login_finish()` — two-message flow, returning intermediate `ServerLogin` state and final AES key derived via HKDF-SHA256 with label `"dam-hopper-aes-256-gcm-v1"`; (5) `export_key` wrapped in `Zeroizing<Vec<u8>>`, zeroed on drop; (6) New `AppState` fields: `opaque_server_setup: Arc<ServerSetup<DamHopperOpaqueSuite>>` (shared) and `opaque_registrations: OpaqueRegistrations` (in-memory HashMap, ephemeral by design — no disk persistence); (7) 8 new `ClientMsg` WS variants (`auth:register_start/finish`, `auth:login_start/finish`, `fs:put_begin/chunk/commit/save`) and 8 new `ServerMsg` response variants with neutral `auth:*` / `fs:put_*` kind names to avoid IDS/DLP fingerprinting; (8) Full WS dispatch in `ws.rs` with all OPAQUE ops in `spawn_blocking`; per-connection caps: 16 in-flight login states, 16 active session keys; `overwrite: bool` on `auth:register_finish` prevents silent credential overwrite; (9) Chunked `fs:put_*` handlers stubbed (return not-implemented error); (10) Identifier validation: alphanumeric + hyphens + underscores, max 128 chars. New Cargo dependencies: `opaque-ke = "4"`, `hkdf = "0.12"`, `rand`, `aes-gcm = "0.10"`, `sha2 = "0.10"`, `zeroize = "1"`.
 
 - **Combined Ports & Tunnel Panel (F-09 Auto Port Forwarding).** Complete ✓ 2026-04-25. Unified sidebar panel merging port detection and tunnel management into single component: (1) `PortsPanel.tsx` replaces deprecated `TunnelPanel` + `PortsPanel`, deletes former; (2) `usePorts` hook merges `DetectedPort[]` (from `/api/ports` via WS `port:list` channel) with `TunnelInfo[]` (from `/api/tunnels`) by port number into single `PortEntry[]`; (3) Three port row states: A (no tunnel, "Open localhost" button if same-host + "Start tunnel"), B (tunnel starting with spinner), C (tunnel ready with public URL + copy/QR/stop buttons); (4) `isLocalServer()` helper determines if browser and server on same host — gates "Open localhost" button visibility; (5) WS event subscriptions: `port:discovered`, `port:lost`, `tunnel:ready`, `tunnel:failed`, `tunnel:stopped` invalidate queries in real-time; (6) Custom port form allows starting tunnels for specific ports not yet detected; (7) cloudflared installer row preserved (shows missing binary state); (8) Public URL warning banner localStorage-gated, shown once per browser; (9) Sidebar integration: single `{!collapsed && <PortsPanel />}` replaces both former panels; (10) `use-tunnels.ts` kept for subsequent evaluation. Zero breaking changes, full backward compatibility with existing port/tunnel infrastructure. [See documentation](./frontend-components.md#portspanel).
 
@@ -739,20 +756,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## 2026-08-18
 
 - **Project worktree target lifecycle.** Added exact-target removal
- blockers for dirty editor tabs and live terminal sessions, fresh discovery
- before Git removal, unavailable-target root fallback, preserved editor state,
- and orphaned terminal labels for sessions whose project/cwd still points at a
- disappeared worktree. Added real-repository lifecycle coverage and a
- Chromium coverage through the real `WorkspacePage` surface wiring for the
- selected-target request boundary; broader Explorer, search, replace, Git,
- editor/diff, media, and terminal routing uses the shared target context.
- Terminal creation now carries the selected target through `terminal:create`;
- the server validates and persists canonical `worktreePath` metadata, loads
- the configured environment file relative to that target, and coordinates
- creation/removal ownership checks. Stable opaque target-scoped command/profile
- IDs prevent root/worktree collisions. Legacy sessions still reconcile
- through project/cwd metadata, while target-scoped sessions use their immutable
- server-validated marker. Target-loss create and respawn failures emit
- reconciliation events only after fresh validation confirms disappearance;
- unavailable sessions retain their identity and scrollback for close/retry
- while new work falls back to root.
+  blockers for dirty editor tabs and live terminal sessions, fresh discovery
+  before Git removal, unavailable-target root fallback, preserved editor state,
+  and orphaned terminal labels for sessions whose project/cwd still points at a
+  disappeared worktree. Added real-repository lifecycle coverage and a
+  Chromium coverage through the real `WorkspacePage` surface wiring for the
+  selected-target request boundary; broader Explorer, search, replace, Git,
+  editor/diff, media, and terminal routing uses the shared target context.
+  Terminal creation now carries the selected target through `terminal:create`;
+  the server validates and persists canonical `worktreePath` metadata, loads
+  the configured environment file relative to that target, and coordinates
+  creation/removal ownership checks. Stable opaque target-scoped command/profile
+  IDs prevent root/worktree collisions. Legacy sessions still reconcile
+  through project/cwd metadata, while target-scoped sessions use their immutable
+  server-validated marker. Target-loss create and respawn failures emit
+  reconciliation events only after fresh validation confirms disappearance;
+  unavailable sessions retain their identity and scrollback for close/retry
+  while new work falls back to root.

@@ -172,6 +172,8 @@ pub struct ReporterHello {
     pub reporter_id: String,
     pub agent_session_id: String,
     pub adapter_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 /// Server acknowledgement upon admitting a reporter.
@@ -378,6 +380,97 @@ pub enum AgentStatusBroadcastEvent {
     Removed(AgentStatusRemovedPayload),
     #[serde(rename = "terminal:agentStatusInvalidated")]
     Invalidated(AgentStatusInvalidatedPayload),
+}
+
+// ── Private Per-Process Semantic Evidence & Evaluation ────────────────────────
+
+/// Reasons why a managed agent blocks sleep or represents uncertainty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSemanticBlockReason {
+    WorkingAgent {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+        agent_kind: AgentKind,
+    },
+    ExpiredLease {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+        agent_kind: AgentKind,
+    },
+    UnrefreshedNativeProvider {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+        agent_kind: AgentKind,
+    },
+    UnverifiedProcessBinding {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+    },
+    UnresolvedOwner {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+    },
+    AmbiguousOwner {
+        pid: u32,
+        start_ticks: u64,
+        terminal_id: String,
+        incarnation: u64,
+    },
+    SubagentUncovered {
+        pid: u32,
+        start_ticks: u64,
+        parent_pid: u32,
+        parent_start_ticks: u64,
+    },
+}
+
+/// Qualified semantic evaluation of all in-scope managed agents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSemanticEvaluation {
+    /// Complete in-scope coverage where every managed agent is Idle or Blocked with valid leases (or zero agents).
+    Free {
+        idle_count: usize,
+        blocked_count: usize,
+        min_lease_remaining_ms: u64,
+        non_free_generation: u64,
+        semantic_revision: u64,
+    },
+    /// One or more managed agents are actively working.
+    Working {
+        working_count: usize,
+        implicated: Vec<crate::pty::activity::ProcessIdentity>,
+        non_free_generation: u64,
+    },
+    /// One or more managed agents have missing authority, expired leases, or uncertainty.
+    Unknown {
+        reason: AgentSemanticBlockReason,
+        non_free_generation: u64,
+    },
+}
+
+/// Private per-process semantic evidence record held by the registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSemanticEvidence {
+    pub process: crate::pty::activity::ProcessIdentity,
+    pub terminal: crate::pty::activity::TerminalIdentity,
+    pub agent_kind: AgentKind,
+    pub reporter_epoch: u64,
+    pub state: AgentState,
+    pub blocked_reason: Option<BlockedReason>,
+    pub turn_id: Option<String>,
+    pub lease_deadline_ms: u64,
+    pub is_verified_binding: bool,
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────

@@ -10,14 +10,15 @@ use crate::{
     api::auth::{self, AuthenticatedActor},
     idle_suspend::{
         coordinator::{
-            CoordinatorForceSuspendResult, CoordinatorTimingResult, ForceSuspendCommand,
+            CoordinatorConsentDecisionResult, CoordinatorForceSuspendResult,
+            CoordinatorTimingResult, ForceSuspendCommand, SubmitConsentDecisionCommand,
             UpdateTimingCommand,
         },
-        policy::validate_timing_pair,
+        policy::validate_timing_pair_for_policy,
         protocol::{
-            validate_suspend_wake_seconds, ForceSuspendAcceptedResponse, ForceSuspendRequest,
-            IdleSuspendConflictResponse, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
-            IdleSuspendTimingPatchResponse,
+            validate_suspend_wake_seconds, ConsentDecisionRequest,
+            ForceSuspendAcceptedResponse, ForceSuspendRequest, IdleSuspendConflictResponse,
+            IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
         },
         status::IdleSuspendStatusV1,
     },
@@ -235,9 +236,11 @@ pub async fn update_timing(
     };
 
     // 8. Validate timing pair bounds
-    if let Err(err) =
-        validate_timing_pair(patch_req.quiet_period_seconds, patch_req.wake_after_seconds)
-    {
+    if let Err(err) = validate_timing_pair_for_policy(
+        patch_req.quiet_period_seconds,
+        patch_req.wake_after_seconds,
+        state.idle_suspend_policy.automatic_policy,
+    ) {
         return idle_suspend_error_response(
             StatusCode::BAD_REQUEST,
             IdleSuspendErrorCode::InvalidTiming.as_code_str(),
@@ -472,5 +475,173 @@ pub async fn force_suspend(
             IdleSuspendErrorCode::CoordinatorShuttingDown.as_code_str(),
             "server is shutting down",
         ),
+    }
+}
+/// Submit a user consent decision for automatic machine sleep.
+///
+/// `POST /api/system/idle-suspend/v1/consent/decision`
+pub async fn submit_consent_decision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(actor): Extension<AuthenticatedActor>,
+    Json(req): Json<ConsentDecisionRequest>,
+) -> Response {
+    // 1. Verify media type and cookie origin guards
+    if let Err(resp) = verify_transport_guards(
+        &state,
+        &headers,
+        "content type must be application/json",
+        "cookie-authenticated requests must originate from allowed origin",
+    ) {
+        return resp;
+    }
+
+    // 2. Production authentication and enabled actor verification
+    let actor = match verify_enabled_actor(
+        &state,
+        Some(&actor),
+        IdleSuspendErrorCode::ConsentDisabledNoAuth.as_code_str(),
+        "consent decision disabled when authentication is bypassed",
+        "consent decision requires database authentication",
+        "disabled actor cannot submit consent decision",
+    )
+    .await
+    {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+
+    // 3. Validate request payload fields
+    if req.request_id.trim().is_empty()
+        || req.request_id.len() > 64
+        || req.connection_id.trim().is_empty()
+        || req.connection_id.len() > 128
+        || req.decision_capability.trim().is_empty()
+        || req.decision_capability.len() > 128
+    {
+        return idle_suspend_error_response(
+            StatusCode::BAD_REQUEST,
+            IdleSuspendErrorCode::InvalidConsentPayload.as_code_str(),
+            "invalid consent decision payload",
+        );
+    }
+
+    // 4. Verify decision capability against client presence registry
+    if let Err(cap_err) = state.client_presence.verify_decision_capability(
+        &req.connection_id,
+        &req.decision_capability,
+        &actor,
+    ) {
+        match cap_err {
+            crate::idle_suspend::CapabilityVerificationError::NotFound { .. } => {
+                return idle_suspend_error_response(
+                    StatusCode::NOT_FOUND,
+                    IdleSuspendErrorCode::ConnectionNotFound.as_code_str(),
+                    "connection not found in client presence registry",
+                );
+            }
+            crate::idle_suspend::CapabilityVerificationError::Closing { .. }
+            | crate::idle_suspend::CapabilityVerificationError::CapabilityMismatch
+            | crate::idle_suspend::CapabilityVerificationError::SubjectMismatch { .. }
+            | crate::idle_suspend::CapabilityVerificationError::SessionMismatch { .. }
+            | crate::idle_suspend::CapabilityVerificationError::AuthVersionMismatch { .. }
+            | crate::idle_suspend::CapabilityVerificationError::CredentialVersionMismatch { .. }
+            | crate::idle_suspend::CapabilityVerificationError::DeadlineExpired => {
+                return idle_suspend_error_response(
+                    StatusCode::FORBIDDEN,
+                    IdleSuspendErrorCode::InvalidCapability.as_code_str(),
+                    "decision capability invalid or expired for current connection",
+                );
+            }
+        }
+    }
+
+    // 5. Submit command to coordinator
+    let coordinator = match state.get_idle_suspend_coordinator().await {
+        Some(c) => c,
+        None => {
+            return idle_suspend_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                IdleSuspendErrorCode::ConsentUnavailable.as_code_str(),
+                "idle suspend coordinator is unavailable",
+            );
+        }
+    };
+
+    let cmd = SubmitConsentDecisionCommand {
+        actor,
+        request_id: req.request_id,
+        request_revision: req.request_revision,
+        connection_id: req.connection_id,
+        decision: req.decision,
+    };
+
+    let result = coordinator.submit_consent_decision(cmd).await;
+
+    match result {
+        CoordinatorConsentDecisionResult::Success { response, .. } => {
+            let mut resp = (StatusCode::OK, Json(response)).into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            resp
+        }
+        CoordinatorConsentDecisionResult::DecisionAlreadySettled { .. } => {
+            idle_suspend_error_response(
+                StatusCode::CONFLICT,
+                IdleSuspendErrorCode::DecisionAlreadySettled.as_code_str(),
+                "consent decision already settled",
+            )
+        }
+        CoordinatorConsentDecisionResult::Expired => {
+            idle_suspend_error_response(
+                StatusCode::CONFLICT,
+                IdleSuspendErrorCode::ConsentExpired.as_code_str(),
+                "consent request has expired",
+            )
+        }
+        CoordinatorConsentDecisionResult::Cancelled => {
+            idle_suspend_error_response(
+                StatusCode::CONFLICT,
+                IdleSuspendErrorCode::ConsentCancelled.as_code_str(),
+                "consent request was cancelled",
+            )
+        }
+        CoordinatorConsentDecisionResult::Unavailable => {
+            idle_suspend_error_response(
+                StatusCode::CONFLICT,
+                IdleSuspendErrorCode::ConsentUnavailable.as_code_str(),
+                "no active consent request matching request identifier and revision",
+            )
+        }
+        CoordinatorConsentDecisionResult::HandoffInProgress => {
+            idle_suspend_error_response(
+                StatusCode::CONFLICT,
+                IdleSuspendErrorCode::HandoffInProgress.as_code_str(),
+                "machine suspend handoff is already in progress",
+            )
+        }
+        CoordinatorConsentDecisionResult::Disabled => {
+            idle_suspend_error_response(
+                StatusCode::FORBIDDEN,
+                IdleSuspendErrorCode::CoordinatorDisabled.as_code_str(),
+                "idle suspend coordinator is disabled",
+            )
+        }
+        CoordinatorConsentDecisionResult::ShuttingDown => {
+            idle_suspend_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                IdleSuspendErrorCode::CoordinatorShuttingDown.as_code_str(),
+                "idle suspend coordinator is shutting down",
+            )
+        }
+        CoordinatorConsentDecisionResult::AuditFailed(msg) => {
+            idle_suspend_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                IdleSuspendErrorCode::ForceSuspendAuditUnavailable.as_code_str(),
+                &msg,
+            )
+        }
     }
 }

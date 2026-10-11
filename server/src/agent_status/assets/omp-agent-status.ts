@@ -35,6 +35,7 @@ export interface ReporterHello {
   reporterId: string;
   agentSessionId: string;
   adapterVersion: string;
+  pid?: number;
 }
 
 export interface ReporterAccepted {
@@ -562,12 +563,17 @@ export class OmpAgentStatusAdapter {
 
   private sendHello(): void {
     if (!this.ws || !this.isConnected) return;
+    const pid =
+      typeof process !== "undefined" && typeof process.pid === "number"
+        ? process.pid
+        : undefined;
     const hello: ReporterHello = {
       version: AGENT_STATUS_PROTOCOL_VERSION,
       agentKind: "omp",
       reporterId: this.reporterId,
       agentSessionId: this.agentSessionId,
       adapterVersion: this.adapterVersion,
+      ...(pid !== undefined ? { pid } : {}),
     };
     try {
       this.ws.send(JSON.stringify(hello));

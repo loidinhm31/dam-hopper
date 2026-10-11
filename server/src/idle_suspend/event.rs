@@ -204,6 +204,7 @@ pub fn validate_canonical_uuid_v4(s: &str) -> Result<(), EventValidationError> {
 pub enum AutomaticPolicyV1 {
     EmptyFleet,
     AgentActivity,
+    AgentFree,
 }
 
 /// Closed mode enum for attempt-scoped server events.
@@ -302,6 +303,14 @@ pub enum ServerIdleSuspendReasonCodeV1 {
     SuspendFailed,
     SuspendReturned,
     ResumedSuccessfully,
+    DecisionAlreadySettled,
+    UnansweredTimeout,
+    ClientRefusal,
+    LastClientDisconnected,
+    SafetyInvalidation,
+    ConsentApproved,
+    ConsentDenied,
+    NoClientPresent,
 }
 
 impl ServerIdleSuspendReasonCodeV1 {
@@ -333,6 +342,14 @@ impl ServerIdleSuspendReasonCodeV1 {
             Self::SuspendFailed => "suspendFailed",
             Self::SuspendReturned => "suspendReturned",
             Self::ResumedSuccessfully => "resumedSuccessfully",
+            Self::DecisionAlreadySettled => "decisionAlreadySettled",
+            Self::UnansweredTimeout => "unansweredTimeout",
+            Self::ClientRefusal => "clientRefusal",
+            Self::LastClientDisconnected => "lastClientDisconnected",
+            Self::SafetyInvalidation => "safetyInvalidation",
+            Self::ConsentApproved => "consentApproved",
+            Self::ConsentDenied => "consentDenied",
+            Self::NoClientPresent => "noClientPresent",
         }
     }
 

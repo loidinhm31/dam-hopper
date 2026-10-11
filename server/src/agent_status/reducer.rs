@@ -2,10 +2,11 @@ use std::collections::{BTreeMap, VecDeque};
 
 use super::types::{
     validate_opaque_id, validate_safe_integer, AgentAttentionEvent, AgentKind,
-    AgentObservationSource, AgentState, AgentStatusAvailability, AgentStatusError,
-    AgentStatusRemovedPayload, AgentStatusSnapshotV1, AttentionKind, BlockedReason,
-    PrivateHookEnvelope, ReporterEventKind, ReporterHello, ReporterReport, TerminalAgentStatusRow,
-    TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION, DEFAULT_LEASE_MS,
+    AgentObservationSource, AgentSemanticBlockReason, AgentSemanticEvaluation, AgentState,
+    AgentStatusAvailability, AgentStatusError, AgentStatusRemovedPayload, AgentStatusSnapshotV1,
+    AttentionKind, BlockedReason, PrivateHookEnvelope, ReporterEventKind, ReporterHello,
+    ReporterReport, TerminalAgentStatusRow, TurnOutcome, AGENT_STATUS_PROTOCOL_VERSION,
+    DEFAULT_LEASE_MS,
 };
 
 /// Result of applying an event to an agent reducer.
@@ -52,6 +53,7 @@ pub struct TerminalAgentReducer {
     // Reporter connection
     pub agent_kind: AgentKind,
     pub native_root: Option<crate::pty::activity::ProcessIdentity>,
+    pub verified_process: Option<crate::pty::activity::ProcessIdentity>,
     pub reporter_id: String,
     pub reporter_epoch: u64,
     pub adapter_version: String,
@@ -60,6 +62,7 @@ pub struct TerminalAgentReducer {
     pub reporter_lease_active: bool,
     pub last_report_time_ms: u64,
     pub observed_at_ms: Option<u64>,
+    pub last_report_instant: Option<std::time::Instant>,
 
     // Semantic state
     pub state: AgentState,
@@ -108,6 +111,7 @@ impl TerminalAgentReducer {
         Ok(Self {
             terminal_id,
             native_root: None,
+            verified_process: None,
             incarnation,
             server_epoch,
             agent_kind: hello.agent_kind,
@@ -119,6 +123,7 @@ impl TerminalAgentReducer {
             reporter_lease_active: true,
             last_report_time_ms: now_ms,
             observed_at_ms: None,
+            last_report_instant: Some(std::time::Instant::now()),
             state: AgentState::Unknown,
             agent_session_id: hello.agent_session_id.clone(),
             current_turn_id: None,
@@ -157,6 +162,7 @@ impl TerminalAgentReducer {
             server_epoch,
             agent_kind: envelope.agent_kind,
             native_root: Some(envelope.root_process),
+            verified_process: Some(envelope.root_process),
             reporter_id: format!("hook:{}", envelope.agent_session_id),
             reporter_epoch,
             adapter_version: envelope.adapter_version.clone(),
@@ -165,6 +171,7 @@ impl TerminalAgentReducer {
             reporter_lease_active: false,
             last_report_time_ms: now_ms,
             observed_at_ms: Some(now_ms),
+            last_report_instant: Some(std::time::Instant::now()),
             state: AgentState::Unknown,
             agent_session_id: envelope.agent_session_id.clone(),
             current_turn_id: None,
@@ -305,6 +312,7 @@ impl TerminalAgentReducer {
                     // prevents callbacks from the previous process.
                     self.retired_turn_ids.clear();
                     self.native_root = Some(envelope.root_process);
+                    self.verified_process = Some(envelope.root_process);
                     self.agent_kind = envelope.agent_kind;
                     self.reporter_id = format!("hook:{}", envelope.agent_session_id);
                     self.agent_session_id = envelope.agent_session_id.clone();
@@ -324,8 +332,8 @@ impl TerminalAgentReducer {
                 if is_qualifying_baseline {
                     self.retired_turn_ids.clear();
                     self.native_root = Some(envelope.root_process);
+                    self.verified_process = Some(envelope.root_process);
                     self.agent_kind = envelope.agent_kind;
-                    self.reporter_id = format!("hook:{}", envelope.agent_session_id);
                     self.agent_session_id = envelope.agent_session_id.clone();
                     self.current_turn_id = None;
                     self.state = AgentState::Unknown;
@@ -375,6 +383,7 @@ impl TerminalAgentReducer {
             self.state = AgentState::Unknown;
             self.last_report_time_ms = now_ms;
             self.observed_at_ms = Some(now_ms);
+            self.last_report_instant = Some(std::time::Instant::now());
             self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
             self.last_published_freshness_ms = now_ms;
             return Ok(ReducerOutput {
@@ -728,6 +737,7 @@ impl TerminalAgentReducer {
 
             "SessionEnd" => {
                 if let Some(root) = self.native_root.take() {
+                    self.verified_process = None;
                     self.retired_native_roots.push_back(root);
                     if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
                         self.retired_native_roots.pop_front();
@@ -766,6 +776,7 @@ impl TerminalAgentReducer {
         self.last_accepted_seq = self.last_accepted_seq.saturating_add(1);
         self.last_report_time_ms = now_ms;
         self.observed_at_ms = self.native_root.map(|_| now_ms);
+        self.last_report_instant = Some(std::time::Instant::now());
 
         if attention.is_some() {
             self.latest_attention = attention.clone();
@@ -860,6 +871,7 @@ impl TerminalAgentReducer {
         // OMP takeover: an incoming OMP reporter evicts and retires any native owner.
         if self.agent_kind != AgentKind::Omp && hello.agent_kind == AgentKind::Omp {
             if let Some(root) = self.native_root.take() {
+                self.verified_process = None;
                 self.retired_native_roots.push_back(root);
                 if self.retired_native_roots.len() > MAX_RETIRED_ROOTS {
                     self.retired_native_roots.pop_front();
@@ -894,6 +906,7 @@ impl TerminalAgentReducer {
         self.reporter_lease_active = true;
         self.last_report_time_ms = now_ms;
         self.observed_at_ms = None;
+        self.last_report_instant = Some(std::time::Instant::now());
         self.agent_session_id = hello.agent_session_id.clone();
         self.state = AgentState::Unknown;
         self.current_turn_id = None;
@@ -975,6 +988,7 @@ impl TerminalAgentReducer {
         self.last_report = Some(report.clone());
         self.last_report_time_ms = now_ms;
 
+        self.last_report_instant = Some(std::time::Instant::now());
         let old_state = self.state;
         let old_reason = self.blocked_reason;
         let old_turn_id = self.current_turn_id.clone();
@@ -1225,7 +1239,16 @@ impl TerminalAgentReducer {
         let has_evidence = self.reporter_lease_active
             || self.observed_at_ms.is_some()
             || self.current_turn_id.is_some();
-        if !has_evidence || now_ms.saturating_sub(self.last_report_time_ms) < lease_ms {
+        let elapsed_inst = self.last_report_instant.map(|rep| {
+            std::time::Instant::now()
+                .saturating_duration_since(rep)
+                .as_millis() as u64
+        });
+        let elapsed_ms = match elapsed_inst {
+            Some(inst_ms) => inst_ms.max(now_ms.saturating_sub(self.last_report_time_ms)),
+            None => now_ms.saturating_sub(self.last_report_time_ms),
+        };
+        if !has_evidence || elapsed_ms < lease_ms {
             return None;
         }
         if self.agent_kind == AgentKind::Omp {
@@ -1378,13 +1401,13 @@ impl TerminalAgentReducer {
 }
 
 /// Global registry of terminal agent status reducers.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentStatusRegistry {
     pub server_epoch: u64,
     pub revision: u64,
     pub availability: AgentStatusAvailability,
     terminals: BTreeMap<(String, u64), TerminalAgentReducer>,
     next_reporter_epoch: u64,
+    pub non_free_generation: u64,
 }
 
 impl AgentStatusRegistry {
@@ -1396,6 +1419,7 @@ impl AgentStatusRegistry {
             availability,
             terminals: BTreeMap::new(),
             next_reporter_epoch: 0,
+            non_free_generation: 1,
         }
     }
 
@@ -1432,17 +1456,31 @@ impl AgentStatusRegistry {
         hello: &ReporterHello,
         now_ms: u64,
     ) -> Result<TerminalAgentStatusRow, AgentStatusError> {
+        self.admit_reporter_with_process(terminal_id, incarnation, hello, None, now_ms)
+    }
+
+    /// Admit a reporter for a terminal incarnation with verified process identity.
+    pub fn admit_reporter_with_process(
+        &mut self,
+        terminal_id: String,
+        incarnation: u64,
+        hello: &ReporterHello,
+        verified_process: Option<crate::pty::activity::ProcessIdentity>,
+        now_ms: u64,
+    ) -> Result<TerminalAgentStatusRow, AgentStatusError> {
         let reporter_epoch = self.allocate_owner_generation()?;
         let key = (terminal_id.clone(), incarnation);
         if let Some(existing) = self.terminals.get_mut(&key) {
             let changed = existing.reconnect(reporter_epoch, hello, now_ms)?;
+            existing.verified_process = verified_process;
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             let row = existing.to_row();
             if changed {
                 self.advance_revision()?;
             }
             Ok(row)
         } else {
-            let reducer = TerminalAgentReducer::new(
+            let mut reducer = TerminalAgentReducer::new(
                 self.server_epoch,
                 terminal_id,
                 incarnation,
@@ -1450,9 +1488,11 @@ impl AgentStatusRegistry {
                 hello,
                 now_ms,
             )?;
+            reducer.verified_process = verified_process;
             let row = reducer.to_row();
             self.terminals.insert(key, reducer);
             self.advance_revision()?;
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             Ok(row)
         }
     }
@@ -1472,7 +1512,17 @@ impl AgentStatusRegistry {
             .get_mut(&key)
             .ok_or_else(|| AgentStatusError::AuthorityLost("terminal not found".to_string()))?;
 
+        let old_state = reducer.state;
         let output = reducer.apply_report(reporter_epoch, report, now_ms)?;
+        let new_state = reducer.state;
+        if old_state != new_state
+            && (old_state == AgentState::Working
+                || new_state == AgentState::Working
+                || old_state == AgentState::Unknown
+                || new_state == AgentState::Unknown)
+        {
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
+        }
         if output.state_changed {
             self.advance_revision()?;
         }
@@ -1507,13 +1557,14 @@ impl AgentStatusRegistry {
         }
         let candidate_generation = self.next_reporter_epoch.saturating_add(1);
         validate_safe_integer("reporter_epoch", candidate_generation)?;
-        let output = if let Some(existing) = self.terminals.get_mut(&key) {
+        let (output, state_transitioned) = if let Some(existing) = self.terminals.get_mut(&key) {
             if existing.agent_kind == AgentKind::Omp && existing.reporter_lease_active {
                 return Err(AgentStatusError::AuthorityLost(
                     "terminal is occupied by OMP reporter".to_string(),
                 ));
             }
             let prior_root = existing.native_root;
+            let old_state = existing.state;
             let expired = existing.check_lease(now_ms, DEFAULT_LEASE_MS).is_some();
             let mut output =
                 existing.apply_hook_with_prior_exited(envelope, now_ms, exited_owner.is_some())?;
@@ -1526,7 +1577,13 @@ impl AgentStatusRegistry {
                 output.row = Some(existing.to_row());
                 output.state_changed = true;
             }
-            output
+            let new_state = existing.state;
+            let transitioned = old_state != new_state
+                && (old_state == AgentState::Working
+                    || new_state == AgentState::Working
+                    || old_state == AgentState::Unknown
+                    || new_state == AgentState::Unknown);
+            (output, transitioned)
         } else {
             // Candidate/unknown hooks cannot claim a terminal or manufacture freshness.
             if envelope.event != "SessionStart"
@@ -1552,8 +1609,11 @@ impl AgentStatusRegistry {
             // Inserting an Unknown baseline still publishes a new terminal row.
             output.state_changed = true;
             self.terminals.insert(key, reducer);
-            output
+            (output, true)
         };
+        if state_transitioned {
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
+        }
 
         if output.state_changed {
             self.advance_revision()?;
@@ -1606,6 +1666,7 @@ impl AgentStatusRegistry {
             output.state_changed = true;
         }
         if output.state_changed {
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             self.advance_revision()?;
         }
         Ok(output)
@@ -1624,6 +1685,7 @@ impl AgentStatusRegistry {
             }
         }
         if !expired_outputs.is_empty() {
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             self.advance_revision()?;
         }
         Ok(expired_outputs)
@@ -1638,6 +1700,7 @@ impl AgentStatusRegistry {
     ) -> Result<Option<AgentStatusRemovedPayload>, AgentStatusError> {
         let key = (terminal_id.to_string(), incarnation);
         if self.terminals.remove(&key).is_some() {
+            self.non_free_generation = self.non_free_generation.saturating_add(1);
             self.advance_revision()?;
             Ok(Some(AgentStatusRemovedPayload {
                 server_epoch: self.server_epoch,
@@ -1647,6 +1710,260 @@ impl AgentStatusRegistry {
             }))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Read the private non-Free generation counter.
+    pub fn non_free_generation(&self) -> u64 {
+        self.non_free_generation
+    }
+
+    /// Authoritative semantic evaluation of in-scope managed agents.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        now_ms: u64,
+    ) -> AgentSemanticEvaluation {
+        self.evaluate_managed_agents_with_details(matched_agents, &[], now_ms, None)
+    }
+
+    /// Authoritative semantic evaluation with uncovered retained processes and monotonic time.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents_with_details(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        uncovered_retained: &[crate::idle_suspend::activity::RetainedManagedProcess],
+        now_ms: u64,
+        now_instant: Option<std::time::Instant>,
+    ) -> AgentSemanticEvaluation {
+        if let Some(uncovered) = uncovered_retained.first() {
+            return AgentSemanticEvaluation::Unknown {
+                reason: AgentSemanticBlockReason::SubagentUncovered {
+                    pid: uncovered.identity.pid,
+                    start_ticks: uncovered.identity.start_ticks,
+                    parent_pid: 0,
+                    parent_start_ticks: 0,
+                },
+                non_free_generation: self.non_free_generation,
+            };
+        }
+
+        if matched_agents.is_empty() {
+            return AgentSemanticEvaluation::Free {
+                idle_count: 0,
+                blocked_count: 0,
+                min_lease_remaining_ms: u64::MAX,
+                non_free_generation: self.non_free_generation,
+                semantic_revision: self.revision,
+            };
+        }
+        let mut idle_count = 0;
+        let mut blocked_count = 0;
+        let mut working_count = 0;
+        let mut working_procs = Vec::new();
+        let mut min_lease_remaining_ms = u64::MAX;
+
+        // Group matched agents by terminal to detect multiple agents sharing one terminal
+        let mut procs_by_terminal: std::collections::HashMap<
+            (String, u64),
+            Vec<&crate::idle_suspend::activity::MatchedManagedAgent>,
+        > = std::collections::HashMap::new();
+        for agent in matched_agents {
+            procs_by_terminal
+                .entry((
+                    agent.terminal.session_id.to_string(),
+                    agent.terminal.incarnation,
+                ))
+                .or_default()
+                .push(agent);
+        }
+
+        for agent in matched_agents {
+            let key = (
+                agent.terminal.session_id.to_string(),
+                agent.terminal.incarnation,
+            );
+            let siblings = procs_by_terminal
+                .get(&key)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            let reducer = match self.terminals.get(&key) {
+                Some(r) => r,
+                None => {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::UnresolvedOwner {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            };
+
+            // Check verified process binding
+            if reducer.agent_kind == AgentKind::Omp {
+                if let Some(verified) = reducer.verified_process {
+                    if verified != agent.identity {
+                        return AgentSemanticEvaluation::Unknown {
+                            reason: AgentSemanticBlockReason::AmbiguousOwner {
+                                pid: agent.identity.pid,
+                                start_ticks: agent.identity.start_ticks,
+                                terminal_id: agent.terminal.session_id.to_string(),
+                                incarnation: agent.terminal.incarnation,
+                            },
+                            non_free_generation: self.non_free_generation,
+                        };
+                    }
+                    if siblings.len() > 1 {
+                        return AgentSemanticEvaluation::Unknown {
+                            reason: AgentSemanticBlockReason::AmbiguousOwner {
+                                pid: agent.identity.pid,
+                                start_ticks: agent.identity.start_ticks,
+                                terminal_id: agent.terminal.session_id.to_string(),
+                                incarnation: agent.terminal.incarnation,
+                            },
+                            non_free_generation: self.non_free_generation,
+                        };
+                    }
+                } else {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::UnverifiedProcessBinding {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            } else {
+                // Native hook provider (Codex or Claude)
+                if let Some(root) = reducer.native_root {
+                    if root != agent.identity {
+                        return AgentSemanticEvaluation::Unknown {
+                            reason: AgentSemanticBlockReason::SubagentUncovered {
+                                pid: agent.identity.pid,
+                                start_ticks: agent.identity.start_ticks,
+                                parent_pid: root.pid,
+                                parent_start_ticks: root.start_ticks,
+                            },
+                            non_free_generation: self.non_free_generation,
+                        };
+                    }
+                } else {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::UnresolvedOwner {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            }
+            // Check executable identity matches agent kind
+            let expected_exec = match reducer.agent_kind {
+                AgentKind::Omp => "omp",
+                AgentKind::Codex => "codex",
+                AgentKind::Claude => "claude",
+            };
+            if let Some(actual_exec) = &agent.safe_executable_identity {
+                if !actual_exec.eq_ignore_ascii_case(expected_exec) {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::AmbiguousOwner {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            }
+
+            // Check lease expiration with monotonic time defense
+            let lease_duration = DEFAULT_LEASE_MS;
+            let elapsed_inst = now_instant.and_then(|inst| {
+                reducer
+                    .last_report_instant
+                    .map(|rep| inst.saturating_duration_since(rep).as_millis() as u64)
+            });
+            let elapsed_ms = match elapsed_inst {
+                Some(inst_ms) => inst_ms.max(now_ms.saturating_sub(reducer.last_report_time_ms)),
+                None => now_ms.saturating_sub(reducer.last_report_time_ms),
+            };
+            if elapsed_ms >= lease_duration {
+                let reason = if reducer.agent_kind != AgentKind::Omp {
+                    AgentSemanticBlockReason::UnrefreshedNativeProvider {
+                        pid: agent.identity.pid,
+                        start_ticks: agent.identity.start_ticks,
+                        terminal_id: agent.terminal.session_id.to_string(),
+                        incarnation: agent.terminal.incarnation,
+                        agent_kind: reducer.agent_kind,
+                    }
+                } else {
+                    AgentSemanticBlockReason::ExpiredLease {
+                        pid: agent.identity.pid,
+                        start_ticks: agent.identity.start_ticks,
+                        terminal_id: agent.terminal.session_id.to_string(),
+                        incarnation: agent.terminal.incarnation,
+                        agent_kind: reducer.agent_kind,
+                    }
+                };
+                return AgentSemanticEvaluation::Unknown {
+                    reason,
+                    non_free_generation: self.non_free_generation,
+                };
+            }
+
+            let lease_remaining = lease_duration.saturating_sub(elapsed_ms);
+            min_lease_remaining_ms = min_lease_remaining_ms.min(lease_remaining);
+
+            match reducer.state {
+                AgentState::Working => {
+                    working_count += 1;
+                    working_procs.push(agent.identity);
+                }
+                AgentState::Idle => {
+                    idle_count += 1;
+                }
+                AgentState::Blocked => {
+                    blocked_count += 1;
+                }
+                AgentState::Unknown => {
+                    return AgentSemanticEvaluation::Unknown {
+                        reason: AgentSemanticBlockReason::ExpiredLease {
+                            pid: agent.identity.pid,
+                            start_ticks: agent.identity.start_ticks,
+                            terminal_id: agent.terminal.session_id.to_string(),
+                            incarnation: agent.terminal.incarnation,
+                            agent_kind: reducer.agent_kind,
+                        },
+                        non_free_generation: self.non_free_generation,
+                    };
+                }
+            }
+        }
+
+        if working_count > 0 {
+            AgentSemanticEvaluation::Working {
+                working_count,
+                implicated: working_procs,
+                non_free_generation: self.non_free_generation,
+            }
+        } else {
+            AgentSemanticEvaluation::Free {
+                idle_count,
+                blocked_count,
+                min_lease_remaining_ms,
+                non_free_generation: self.non_free_generation,
+                semantic_revision: self.revision,
+            }
         }
     }
 

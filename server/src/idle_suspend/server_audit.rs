@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::idle_suspend::protocol::SuspendOutcome;
+use crate::idle_suspend::protocol::{ConsentDecisionValue, SuspendOutcome};
 
 pub const MAX_AUDIT_RECORDS: usize = 10_000;
 pub const MAX_ACTOR_LEN: usize = 128;
@@ -169,12 +169,70 @@ impl ManualAuditRecord {
         })
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentAuditResult {
+    Admitted,
+    RejectedSettled,
+    RejectedExpired,
+    RejectedCancelled,
+    RejectedCapability,
+    RejectedAuth,
+    RejectedConflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsentAuditRecord {
+    pub version: u32,
+    pub timestamp_ms: u64,
+    pub actor: String,
+    pub request_id: String,
+    pub request_revision: u64,
+    pub connection_id: String,
+    pub decision: ConsentDecisionValue,
+    pub status_revision: u64,
+    pub result: ConsentAuditResult,
+}
+
+impl ConsentAuditRecord {
+    pub fn new(
+        actor: String,
+        request_id: String,
+        request_revision: u64,
+        connection_id: String,
+        decision: ConsentDecisionValue,
+        status_revision: u64,
+        result: ConsentAuditResult,
+    ) -> Result<Self, AuditError> {
+        let valid_actor = validate_actor(&actor)?;
+        let valid_req_id = validate_request_id(&request_id)?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        Ok(Self {
+            version: 1,
+            timestamp_ms: now_ms,
+            actor: valid_actor,
+            request_id: valid_req_id,
+            request_revision,
+            connection_id,
+            decision,
+            status_revision,
+            result,
+        })
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerAuditRecord {
     Timing(TimingAuditRecord),
     Manual(ManualAuditRecord),
+    Consent(ConsentAuditRecord),
 }
 
 impl ServerAuditRecord {
@@ -182,6 +240,7 @@ impl ServerAuditRecord {
         match self {
             Self::Timing(t) => &t.actor,
             Self::Manual(m) => &m.actor,
+            Self::Consent(c) => &c.actor,
         }
     }
 
@@ -189,6 +248,7 @@ impl ServerAuditRecord {
         match self {
             Self::Timing(t) => t.timestamp_ms,
             Self::Manual(m) => m.timestamp_ms,
+            Self::Consent(c) => c.timestamp_ms,
         }
     }
 }
@@ -216,6 +276,18 @@ impl From<&ManualAuditRecord> for ServerAuditRecord {
         ServerAuditRecord::Manual(r.clone())
     }
 }
+impl From<ConsentAuditRecord> for ServerAuditRecord {
+    fn from(r: ConsentAuditRecord) -> Self {
+        ServerAuditRecord::Consent(r)
+    }
+}
+
+impl From<&ConsentAuditRecord> for ServerAuditRecord {
+    fn from(r: &ConsentAuditRecord) -> Self {
+        ServerAuditRecord::Consent(r.clone())
+    }
+}
+
 
 #[derive(Clone)]
 pub struct IdleSuspendServerAudit {
@@ -305,6 +377,10 @@ impl IdleSuspendServerAudit {
     pub fn record_manual_event(&self, record: &ManualAuditRecord) -> Result<(), AuditError> {
         self.record_raw(record)
     }
+    pub fn record_consent_event(&self, record: &ConsentAuditRecord) -> Result<(), AuditError> {
+        self.record_raw(record)
+    }
+
 
     pub fn record_event(&self, record: impl Into<ServerAuditRecord>) -> Result<(), AuditError> {
         let rec = record.into();
@@ -363,6 +439,25 @@ impl IdleSuspendServerAudit {
                 continue;
             }
             if let Ok(record) = serde_json::from_str::<ManualAuditRecord>(line) {
+                records.push(record);
+                if records.len() >= limit || records.len() >= MAX_AUDIT_RECORDS {
+                    break;
+                }
+            }
+        }
+
+        Ok(records)
+    }
+    pub fn read_recent_consent_records(&self, limit: usize) -> Result<Vec<ConsentAuditRecord>, AuditError> {
+        let _guard = self.lock.lock();
+
+        let content = self.read_verified_content()?;
+        let mut records = Vec::new();
+        for line in content.lines().rev() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(record) = serde_json::from_str::<ConsentAuditRecord>(line) {
                 records.push(record);
                 if records.len() >= limit || records.len() >= MAX_AUDIT_RECORDS {
                     break;

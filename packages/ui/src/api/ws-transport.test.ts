@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiRequestError, createApiClient } from "./client.js";
+import { ApiRequestError, createApiClient, type UiConnectionFrame } from "./client.js";
 import { WsTransport } from "./ws-transport.js";
 import { setActiveProfile, setAuthToken } from "./server-config.js";
 
@@ -1549,6 +1549,55 @@ describe("WsTransport idle suspend endpoints", () => {
     });
     transport.destroy();
   });
+
+  it("maps submitConsentDecision to POST /api/system/idle-suspend/v1/consent/decision with credentials omit", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          requestId: "req-abc",
+          decision: "approve",
+          statusRevision: 7,
+          settled: true,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport({
+      baseUrl: "http://localhost:4800",
+      authToken: "token-xyz",
+    });
+
+    const payload = {
+      requestId: "req-abc",
+      requestRevision: 1,
+      connectionId: "conn-1",
+      decisionCapability: "cap-1",
+      decision: "approve",
+    };
+    const result = await transport.invoke("system:submitConsentDecision", payload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/system/idle-suspend/v1/consent/decision",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      credentials: "omit",
+      body: JSON.stringify(payload),
+    });
+    expect(result).toEqual({
+      version: 1,
+      requestId: "req-abc",
+      decision: "approve",
+      statusRevision: 7,
+      settled: true,
+    });
+    transport.destroy();
+  });
 });
 
 describe("WsTransport settings export/import", () => {
@@ -2282,6 +2331,71 @@ describe("WsTransport Advisor endpoints (Phase 03)", () => {
       code: "ROUTE_BACKUP_IDENTICAL",
     });
 
+    transport.destroy();
+  });
+});
+describe("WsTransport host:uiConnection receipt lifecycle (Phase 03)", () => {
+  it("stores receipt on host:uiConnection frame, notifies subscribers, supports late subscribers, and clears on close/error", () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    const socket = sockets[0];
+
+    // Initially null
+    expect(transport.getUiConnectionReceipt()).toBeNull();
+
+    // Subscribe listener
+    const receipts: Array<UiConnectionFrame | null> = [];
+    const unsubscribe = transport.subscribeUiConnection((receipt) => {
+      receipts.push(receipt);
+    });
+
+    // Subscriber was called immediately with initial null
+    expect(receipts).toEqual([null]);
+
+    // Simulate server sending host:uiConnection frame
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "host:uiConnection",
+        version: 1,
+        connectionId: "conn-123",
+        decisionCapability: "secret-xyz",
+      }),
+    });
+
+    expect(transport.getUiConnectionReceipt()).toEqual({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-123",
+      decisionCapability: "secret-xyz",
+    });
+    expect(receipts.length).toBe(2);
+    expect(receipts[1]).toEqual({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-123",
+      decisionCapability: "secret-xyz",
+    });
+
+    // Late subscriber receives current receipt immediately
+    let lateReceipt: UiConnectionFrame | null = null;
+    const unsubLate = transport.subscribeUiConnection((r) => {
+      lateReceipt = r;
+    });
+    expect(lateReceipt).toEqual({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-123",
+      decisionCapability: "secret-xyz",
+    });
+    unsubLate();
+
+    // Socket close clears receipt and notifies subscribers with null
+    socket.onclose?.();
+    expect(transport.getUiConnectionReceipt()).toBeNull();
+    expect(receipts.length).toBe(3);
+    expect(receipts[2]).toBeNull();
+
+    unsubscribe();
     transport.destroy();
   });
 });

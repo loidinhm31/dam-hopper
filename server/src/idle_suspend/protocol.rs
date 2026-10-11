@@ -149,6 +149,15 @@ pub enum IdleSuspendErrorCode {
     ForceSuspendAuditUnavailable,
     CoordinatorShuttingDown,
     CoordinatorDisabled,
+    DecisionAlreadySettled,
+    ConsentExpired,
+    ConsentCancelled,
+    InvalidCapability,
+    ConnectionNotFound,
+    PresenceUnavailable,
+    ConsentUnavailable,
+    InvalidConsentPayload,
+    ConsentDisabledNoAuth,
 }
 
 impl IdleSuspendErrorCode {
@@ -174,6 +183,80 @@ impl IdleSuspendErrorCode {
             Self::ForceSuspendAuditUnavailable => "idleSuspendAuditUnavailable",
             Self::CoordinatorShuttingDown => "idleSuspendShuttingDown",
             Self::CoordinatorDisabled => "idleSuspendDisabled",
+            Self::DecisionAlreadySettled => "decisionAlreadySettled",
+            Self::ConsentExpired => "consentExpired",
+            Self::ConsentCancelled => "consentCancelled",
+            Self::InvalidCapability => "invalidCapability",
+            Self::ConnectionNotFound => "connectionNotFound",
+            Self::PresenceUnavailable => "presenceUnavailable",
+            Self::ConsentUnavailable => "consentUnavailable",
+            Self::InvalidConsentPayload => "invalidConsentPayload",
+            Self::ConsentDisabledNoAuth => "consentDisabledNoAuth",
+        }
+    }
+}
+
+/// Binary decision payload value for consent decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConsentDecisionValue {
+    Approve,
+    Deny,
+}
+
+impl ConsentDecisionValue {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+/// Exact payload for `POST /api/system/idle-suspend/v1/consent/decision`.
+///
+/// Disallows unknown fields and bounds body memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsentDecisionRequest {
+    pub request_id: String,
+    pub request_revision: u64,
+    pub connection_id: String,
+    pub decision_capability: String,
+    pub decision: ConsentDecisionValue,
+}
+
+/// Accepted response for `POST /api/system/idle-suspend/v1/consent/decision` (200 OK).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsentDecisionResponse {
+    pub version: u32,
+    pub request_id: String,
+    pub decision: ConsentDecisionValue,
+    pub status_revision: u64,
+    pub settled: bool,
+}
+
+/// Per-socket frame pushed strictly to individual public UI WebSocket connections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiConnectionFrame {
+    pub kind: String,
+    pub version: u32,
+    pub connection_id: String,
+    pub decision_capability: String,
+}
+
+impl UiConnectionFrame {
+    pub const KIND: &'static str = "host:uiConnection";
+    pub const VERSION: u32 = 1;
+
+    pub fn new(connection_id: String, decision_capability: String) -> Self {
+        Self {
+            kind: Self::KIND.to_string(),
+            version: Self::VERSION,
+            connection_id,
+            decision_capability,
         }
     }
 }

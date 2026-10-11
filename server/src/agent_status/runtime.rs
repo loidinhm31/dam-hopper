@@ -53,6 +53,8 @@ struct LiveReporterHandle {
     reporter_id: String,
     reporter_epoch: u64,
     credential_token: String,
+    #[allow(dead_code)]
+    verified_process: Option<ProcessIdentity>,
     close_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -151,12 +153,45 @@ struct Inner {
 #[derive(Clone)]
 pub struct AgentStatusRuntime(Arc<Inner>);
 
+/// Proof of process exit state for eligibility and ownership retirement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessExitProof {
+    /// Validated exit: proc entry absent (NotFound), recycled with differing start_ticks, or state is zombie ('Z' or 'X').
+    Exited,
+    /// Validated alive: proc entry exists with matching start_ticks and running/sleeping state.
+    Alive,
+    /// Uncertainty: permission denied, read error, or parse failure. MUST fail closed for eligibility.
+    Uncertain,
+}
+
+#[cfg(target_os = "linux")]
+pub fn verify_process_exit(root: ProcessIdentity) -> ProcessExitProof {
+    let stat_path = format!("/proc/{}/stat", root.pid);
+    match std::fs::read_to_string(&stat_path) {
+        Ok(contents) => {
+            if let Ok(stat) = crate::pty::activity::parse_proc_stat(&contents) {
+                if stat.start_ticks != root.start_ticks || stat.state == 'Z' || stat.state == 'X' {
+                    ProcessExitProof::Exited
+                } else {
+                    ProcessExitProof::Alive
+                }
+            } else {
+                ProcessExitProof::Uncertain
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProcessExitProof::Exited,
+        Err(_) => ProcessExitProof::Uncertain,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn verify_process_exit(_root: ProcessIdentity) -> ProcessExitProof {
+    ProcessExitProof::Uncertain
+}
+
 #[cfg(target_os = "linux")]
 fn check_process_exited(root: ProcessIdentity) -> bool {
-    match crate::pty::activity::read_process_stat(std::path::Path::new("/proc"), root.pid) {
-        Ok(stat) => stat.start_ticks != root.start_ticks,
-        Err(_) => true,
-    }
+    matches!(verify_process_exit(root), ProcessExitProof::Exited)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -549,6 +584,26 @@ impl AgentStatusRuntime {
         hello: &ReporterHello,
         close_tx: tokio::sync::oneshot::Sender<()>,
     ) -> Result<ReporterAccepted, AgentStatusError> {
+        self.admit_reporter_with_process(
+            terminal_id,
+            incarnation,
+            expected_token,
+            hello,
+            None,
+            close_tx,
+        )
+    }
+
+    /// Admit a reporter connection with verified process identity.
+    pub fn admit_reporter_with_process(
+        &self,
+        terminal_id: &str,
+        incarnation: u64,
+        expected_token: &str,
+        hello: &ReporterHello,
+        verified_process: Option<ProcessIdentity>,
+        close_tx: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<ReporterAccepted, AgentStatusError> {
         let now_ms = crate::pty::session::now_ms();
         let (reporter_epoch, row, revision) = {
             let mut reporters = self.0.reporters.lock();
@@ -566,7 +621,13 @@ impl AgentStatusRuntime {
             }
 
             let mut reg = self.0.registry.write();
-            let row = reg.admit_reporter(terminal_id.to_string(), incarnation, hello, now_ms)?;
+            let row = reg.admit_reporter_with_process(
+                terminal_id.to_string(),
+                incarnation,
+                hello,
+                verified_process,
+                now_ms,
+            )?;
             let reporter_epoch = row.reporter_epoch;
             if let Some(existing) = reporters.get_mut(&key) {
                 if let Some(tx) = existing.close_tx.take() {
@@ -580,6 +641,7 @@ impl AgentStatusRuntime {
                     reporter_id: hello.reporter_id.clone(),
                     reporter_epoch,
                     credential_token: expected_token.to_string(),
+                    verified_process,
                     close_tx: Some(close_tx),
                 },
             );
@@ -699,6 +761,44 @@ impl AgentStatusRuntime {
     /// Read public snapshot.
     pub fn snapshot(&self) -> AgentStatusSnapshotV1 {
         self.0.registry.read().snapshot()
+    }
+
+    /// Read the private non-Free generation counter.
+    pub fn non_free_generation(&self) -> u64 {
+        self.0.registry.read().non_free_generation()
+    }
+    /// Read the current semantic status revision.
+    pub fn revision(&self) -> u64 {
+        self.0.registry.read().revision
+    }
+
+    /// Authoritative semantic evaluation of managed agents against current registry state.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        now_ms: u64,
+    ) -> crate::agent_status::types::AgentSemanticEvaluation {
+        self.0
+            .registry
+            .read()
+            .evaluate_managed_agents(matched_agents, now_ms)
+    }
+    /// Authoritative semantic evaluation with uncovered retained processes and monotonic time.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_managed_agents_with_details(
+        &self,
+        matched_agents: &[crate::idle_suspend::activity::MatchedManagedAgent],
+        uncovered_retained: &[crate::idle_suspend::activity::RetainedManagedProcess],
+        now_ms: u64,
+        now_instant: Option<std::time::Instant>,
+    ) -> crate::agent_status::types::AgentSemanticEvaluation {
+        self.0.registry.read().evaluate_managed_agents_with_details(
+            matched_agents,
+            uncovered_retained,
+            now_ms,
+            now_instant,
+        )
     }
 
     /// Subscribe to semantic agent status broadcast events.

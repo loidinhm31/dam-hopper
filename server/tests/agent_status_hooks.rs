@@ -228,6 +228,9 @@ async fn native_hook_reporter_updates_only_live_capability_and_expires_without_a
         .spawn()
         .unwrap();
     let cli_pid = child.id().unwrap();
+    child.stdin.take().unwrap().write_all(
+        br#"{"hook_event_name":"UserPromptSubmit","session_id":"session-1","turn_id":"turn-1","prompt":"do not publish this"}"#,
+    ).await.unwrap();
     let cli_stat = dam_hopper_server::pty::activity::read_process_stat(Path::new("/proc"), cli_pid)
         .expect("native CLI root alive");
     assert!(
@@ -240,9 +243,6 @@ async fn native_hook_reporter_updates_only_live_capability_and_expires_without_a
         "simulated native CLI must qualify: {}",
         cli_stat.comm
     );
-    child.stdin.take().unwrap().write_all(
-        br#"{"hook_event_name":"UserPromptSubmit","session_id":"session-1","turn_id":"turn-1","prompt":"do not publish this"}"#,
-    ).await.unwrap();
     let output = tokio::time::timeout(Duration::from_secs(3), child.wait_with_output())
         .await
         .unwrap()

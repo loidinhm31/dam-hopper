@@ -11,7 +11,7 @@ mod pty_tests {
         fs,
         path::Path,
         process::Command,
-        sync::{atomic::Ordering, Arc, Mutex},
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
 
@@ -2705,7 +2705,8 @@ mod agent_activity_claim_tests {
     use crate::config::schema::RestartPolicy;
     use crate::error::AppError;
     use crate::idle_suspend::activity::{
-        ActivityClaimTicket, AgentActivityAdmission, MonitoredOutputFence,
+        ActivityClaimTicket, AgentActivityAdmission, AgentFreeAdmission, AgentFreeClaimTicket,
+        ManagedAgentClaimEvidence, MonitoredOutputFence,
     };
     use crate::idle_suspend::policy::IdleSuspendAutomaticPolicy;
     use crate::pty::activity::{
@@ -3052,6 +3053,166 @@ mod agent_activity_claim_tests {
         assert_eq!(
             manager.try_claim_agent_activity_handoff(adm_busy),
             Err(HandoffClaimError::LifecycleBusy)
+        );
+
+        let _ = manager.kill(id);
+    }
+
+    fn make_valid_agent_free_ticket(
+        manager: &PtySessionManager,
+        terminal: TerminalIdentity,
+        identity: ProcessIdentity,
+        now: Instant,
+    ) -> AgentFreeClaimTicket {
+        let snap = manager.capture_activity_snapshot();
+        AgentFreeClaimTicket {
+            request_id: 10,
+            completed_at: now - Duration::from_millis(100),
+            semantic_revision: 2,
+            non_free_generation: 1,
+            timing_revision: 1,
+            fleet_generation: snap.fleet.generation,
+            input_revision: snap.input_revision,
+            roots: vec![(terminal.clone(), identity)],
+            matched_agents: vec![ManagedAgentClaimEvidence {
+                identity,
+                terminal,
+                safe_executable_identity: Some("omp".to_string()),
+                is_idle: true,
+            }],
+            idle_count: 1,
+            blocked_count: 0,
+            min_lease_remaining_ms: 10000,
+            eligibility_deadline: now - Duration::from_millis(50),
+        }
+    }
+
+    fn make_valid_agent_free_admission<'a>(
+        ticket: &'a AgentFreeClaimTicket,
+        now: Instant,
+    ) -> AgentFreeAdmission<'a> {
+        AgentFreeAdmission {
+            ticket,
+            automatic_policy: IdleSuspendAutomaticPolicy::AgentFree,
+            automatic_enabled: true,
+            accepted_request_id: ticket.request_id,
+            accepted_semantic_revision: ticket.semantic_revision,
+            accepted_non_free_generation: ticket.non_free_generation,
+            accepted_timing_revision: ticket.timing_revision,
+            now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_free_claim_success() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:free-claim-success";
+        let (terminal, identity, _) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_agent_free_ticket(&manager, terminal, identity, now);
+        let admission = make_valid_agent_free_admission(&ticket, now);
+
+        let claim = manager
+            .try_claim_agent_free_handoff(admission)
+            .expect("agent free claim succeeds");
+        assert!(claim.generation > ticket.fleet_generation);
+        assert!(manager.fleet_snapshot().handoff_active);
+
+        // Release handoff
+        manager.release_handoff();
+        assert!(!manager.fleet_snapshot().handoff_active);
+        let _ = manager.kill(id);
+    }
+
+    #[tokio::test]
+    async fn test_agent_free_claim_fences() {
+        let manager = PtySessionManager::new(Arc::new(NoopEventSink));
+        let id = "term:free-claim-fences";
+        let (terminal, identity, _) = create_test_session(&manager, id);
+        let now = Instant::now();
+        let ticket = make_valid_agent_free_ticket(&manager, terminal.clone(), identity, now);
+
+        // 1. Policy mismatch
+        let mut adm_policy = make_valid_agent_free_admission(&ticket, now);
+        adm_policy.automatic_policy = IdleSuspendAutomaticPolicy::AgentActivity;
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_policy),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // 2. Disabled policy
+        let mut adm_disabled = make_valid_agent_free_admission(&ticket, now);
+        adm_disabled.automatic_enabled = false;
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_disabled),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // 3. Revision mismatch
+        let mut adm_req = make_valid_agent_free_admission(&ticket, now);
+        adm_req.accepted_request_id = ticket.request_id + 1;
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_req),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        let mut adm_sem = make_valid_agent_free_admission(&ticket, now);
+        adm_sem.accepted_semantic_revision = ticket.semantic_revision + 1;
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_sem),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        let mut adm_gen = make_valid_agent_free_admission(&ticket, now);
+        adm_gen.accepted_non_free_generation = ticket.non_free_generation + 1;
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_gen),
+            Err(HandoffClaimError::PolicyMismatch)
+        );
+
+        // 4. Monotonic deadline not expired
+        let mut ticket_unexpired = ticket.clone();
+        ticket_unexpired.eligibility_deadline = now + Duration::from_secs(10);
+        let adm_unexpired = make_valid_agent_free_admission(&ticket_unexpired, now);
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_unexpired),
+            Err(HandoffClaimError::DeadlineNotExpired)
+        );
+
+        // 5. Stale observation (> 5s)
+        let mut ticket_stale = ticket.clone();
+        ticket_stale.completed_at = now - Duration::from_secs(6);
+        let adm_stale = make_valid_agent_free_admission(&ticket_stale, now);
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_stale),
+            Err(HandoffClaimError::ObservationStale)
+        );
+
+        // 6. Input revision mismatch
+        manager.test_set_input_revision(ticket.input_revision + 1);
+        let adm_input = make_valid_agent_free_admission(&ticket, now);
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_input),
+            Err(HandoffClaimError::InputRevisionMismatch)
+        );
+        manager.test_set_input_revision(ticket.input_revision);
+
+        // 7. Fleet generation mismatch
+        let mut ticket_gen_err = ticket.clone();
+        ticket_gen_err.fleet_generation = ticket.fleet_generation + 1;
+        let adm_gen_err = make_valid_agent_free_admission(&ticket_gen_err, now);
+        assert!(matches!(
+            manager.try_claim_agent_free_handoff(adm_gen_err),
+            Err(HandoffClaimError::GenerationMismatch { .. })
+        ));
+
+        // 8. Root identity mismatch
+        let mut ticket_root_err = ticket.clone();
+        ticket_root_err.roots = vec![];
+        let adm_root_err = make_valid_agent_free_admission(&ticket_root_err, now);
+        assert_eq!(
+            manager.try_claim_agent_free_handoff(adm_root_err),
+            Err(HandoffClaimError::RootIdentityMismatch)
         );
 
         let _ = manager.kill(id);

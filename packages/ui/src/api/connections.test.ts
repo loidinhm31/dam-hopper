@@ -14,7 +14,10 @@ import {
   resetConnections,
   registerConnectionRegistryQueryClient,
   isQueryClientRegistered,
+  getUiConnectionReceipt,
+  subscribeUiConnectionReceipt,
 } from "./connections.js";
+import type { UiConnectionFrame } from "./client.js";
 import { syncActiveProfileConnection } from "./connections.js";
 import { latestTerminalSessionIncarnation, rememberTerminalSessionIncarnation } from "../lib/terminal-incarnation-state.js";
 import { ConnectionOwnerError } from "./ownership.js";
@@ -354,5 +357,76 @@ describe("connections registry", () => {
     // Intent should have initiated reconnect rather than remaining disconnected
     const snapAfter = getConnectionSnapshot("prof-valid");
     expect(snapAfter).toBeDefined();
+  });
+  it("getUiConnectionReceipt and subscribeUiConnectionReceipt return receipt when connected and null when disconnected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ authenticated: true, workbenchProtocol: 2 }),
+      }),
+    );
+
+    // Before connect: owner ref is disconnected
+    const disconnectedOwner = { profileId: "prof-valid", generation: 1 };
+    expect(getUiConnectionReceipt(disconnectedOwner)).toBeNull();
+
+    let receivedReceipt: UiConnectionFrame | null = null;
+    const unsubEarly = subscribeUiConnectionReceipt(disconnectedOwner, (r) => {
+      receivedReceipt = r;
+    });
+    expect(receivedReceipt).toBeNull();
+    unsubEarly();
+
+    // Connect
+    await connectProfile("prof-valid");
+    const owner = captureConnection("prof-valid");
+    expect(owner).toBeDefined();
+
+    // Initially null until frame received
+    expect(getUiConnectionReceipt(owner)).toBeNull();
+
+    // Subscribe to receipt
+    const receipts: Array<UiConnectionFrame | null> = [];
+    const unsub = subscribeUiConnectionReceipt(owner, (r) => {
+      receipts.push(r);
+    });
+    expect(receipts).toEqual([null]);
+
+    // Send host:uiConnection frame on the underlying mock socket
+    const socket = MockWebSocket.sockets[0];
+    socket?.onmessage?.({
+      data: JSON.stringify({
+        kind: "host:uiConnection",
+        version: 1,
+        connectionId: "conn-owner-1",
+        decisionCapability: "sec-owner-1",
+      }),
+    });
+
+    expect(getUiConnectionReceipt(owner)).toEqual({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-owner-1",
+      decisionCapability: "sec-owner-1",
+    });
+    expect(receipts.length).toBe(2);
+    expect(receipts[1]).toEqual({
+      kind: "host:uiConnection",
+      version: 1,
+      connectionId: "conn-owner-1",
+      decisionCapability: "sec-owner-1",
+    });
+
+    // Stale owner (previous generation) strictly returns null
+    const staleOwner = { profileId: "prof-valid", generation: 999 };
+    expect(getUiConnectionReceipt(staleOwner)).toBeNull();
+
+    // Disconnecting profile invalidates receipt and returns null
+    disconnectProfile("prof-valid");
+    expect(getUiConnectionReceipt(owner)).toBeNull();
+
+    unsub();
   });
 });

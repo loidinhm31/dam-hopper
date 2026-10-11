@@ -6,22 +6,95 @@ use serde::{Deserialize, Serialize};
 use crate::pty::activity::{ProcessIdentity, TerminalIdentity};
 
 #[cfg(target_os = "linux")]
-pub(crate) mod process;
-#[cfg(target_os = "linux")]
 mod netlink;
-mod tcp_info;
+#[cfg(target_os = "linux")]
+pub(crate) mod process;
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod process {
+    use std::time::Instant;
+
+    use crate::idle_suspend::activity::{
+        ActivityUnavailable, ActivityUnavailableReason, NetworkNamespaceIdentity, OwnedSocketSet,
+        ProcessChange, ProcessSample,
+    };
+    use crate::idle_suspend::policy::AgentExecutableSet;
+    use crate::pty::activity::PtyActivitySnapshot;
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct PreparedProcessSample {
+        pub(crate) sample: ProcessSample,
+    }
+
+    impl PreparedProcessSample {
+        #[allow(dead_code)]
+        pub(crate) fn sample(&self) -> &ProcessSample {
+            &self.sample
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct ProcessDiscovery {
+        baseline_established: bool,
+    }
+
+    impl ProcessDiscovery {
+        pub(crate) fn new() -> Self {
+            Self {
+                baseline_established: false,
+            }
+        }
+
+        pub(crate) fn prepare_sample(
+            &self,
+            pty: &PtyActivitySnapshot,
+            _agents: &AgentExecutableSet,
+            _deadline: Instant,
+        ) -> Result<PreparedProcessSample, ActivityUnavailable> {
+            if !pty.is_complete() || !pty.roots.is_empty() {
+                return Err(ActivityUnavailable::new(
+                    ActivityUnavailableReason::UnsupportedTransport,
+                ));
+            }
+            let change = if !self.baseline_established {
+                ProcessChange::BaselineEstablished
+            } else {
+                ProcessChange::Unchanged
+            };
+            Ok(PreparedProcessSample {
+                sample: ProcessSample {
+                    recognized_agent_count: 0,
+                    monitored_terminals: Vec::new(),
+                    owned_sockets: OwnedSocketSet::empty(NetworkNamespaceIdentity {
+                        device: 0,
+                        inode: 0,
+                    }),
+                    process_evidence: Vec::new(),
+                    change,
+                    matched_agents: Vec::new(),
+                    uncovered_retained_processes: Vec::new(),
+                },
+            })
+        }
+
+        pub(crate) fn commit_sample(&mut self, prepared: PreparedProcessSample) -> ProcessSample {
+            self.baseline_established = true;
+            prepared.sample
+        }
+    }
+}
+pub(crate) mod sampler;
 #[cfg(target_os = "linux")]
 pub(crate) mod tcp;
-pub(crate) mod sampler;
+mod tcp_info;
 
 #[allow(unused_imports)]
 pub(crate) use crate::idle_suspend::status::{ActivityMeasurementState, ActivityObservationReason};
 #[allow(unused_imports)]
 pub(crate) use sampler::{
     ActivityClaimTicket, ActivityDelta, ActivityObservation, ActivitySampler,
-    ActivitySamplerResult, AgentActivityAdmission, MonitoredOutputFence,
-    QualifyingActivityKind, SampleKind, SampleRequest,
-    MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_ACCEPTANCE_TIMEOUT, SAMPLE_CADENCE,
+    ActivitySamplerResult, AgentActivityAdmission, AgentFreeAdmission, AgentFreeClaimTicket,
+    ManagedAgentClaimEvidence, MonitoredOutputFence, QualifyingActivityKind, SampleKind,
+    SampleRequest, MAX_ACCEPTED_OBSERVATION_AGE, SAMPLE_ACCEPTANCE_TIMEOUT, SAMPLE_CADENCE,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,7 +145,10 @@ impl NetworkNamespaceIdentity {
             std::path::Path::new("/proc/self/ns/net")
         };
         let meta = std::fs::metadata(path).map_err(|e| {
-            tracing::debug!("Failed to read thread netns metadata {}: {e}", path.display());
+            tracing::debug!(
+                "Failed to read thread netns metadata {}: {e}",
+                path.display()
+            );
             ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess)
         })?;
         Ok(Self {
@@ -83,7 +159,9 @@ impl NetworkNamespaceIdentity {
 
     #[cfg(windows)]
     pub(crate) fn current_thread() -> Result<Self, ActivityUnavailable> {
-        Err(ActivityUnavailable::new(ActivityUnavailableReason::ProcAccess))
+        Err(ActivityUnavailable::new(
+            ActivityUnavailableReason::ProcAccess,
+        ))
     }
 }
 
@@ -279,6 +357,30 @@ impl ActivityUnavailable {
 // Process sample result
 // ---------------------------------------------------------------------------
 
+/// Minimal private key tracking process image without raw argv.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProcessImageKey {
+    pub(crate) exe_dev: u64,
+    pub(crate) exe_ino: u64,
+    pub(crate) entrypoint_token: Option<String>,
+}
+
+/// Qualified evidence of a single matched agent running within managed terminal lineage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MatchedManagedAgent {
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) terminal: TerminalIdentity,
+    pub(crate) safe_executable_identity: Option<String>,
+    pub(crate) image_key: ProcessImageKey,
+    pub(crate) descendant_processes: Vec<ProcessIdentity>,
+}
+/// Evidence of an uncovered retained process from managed agent lineage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedManagedProcess {
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) terminal: TerminalIdentity,
+}
+
 /// Qualified outcome of a complete process discovery pass.
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessSample {
@@ -289,8 +391,13 @@ pub(crate) struct ProcessSample {
     /// Current relevant processes; sorted by (pid, start_ticks); len <= 1024.
     pub(crate) process_evidence: Vec<BlockingProcessEvidence>,
     pub(crate) change: ProcessChange,
+    /// Distinct matched agents within managed lineage with image and descendant coverage.
+    #[allow(dead_code)]
+    pub(crate) matched_agents: Vec<MatchedManagedAgent>,
+    /// Living retained descendant processes from agent lineage not covered by any active matched agent.
+    #[allow(dead_code)]
+    pub(crate) uncovered_retained_processes: Vec<RetainedManagedProcess>,
 }
-
 impl ProcessSample {
     pub(crate) fn monitored_terminal_count(&self) -> usize {
         self.monitored_terminals.len()

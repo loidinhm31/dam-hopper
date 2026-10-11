@@ -56,6 +56,11 @@ const FS_WS_READ_MAX: u64 = 5 * 1024 * 1024;
 /// Max write size cap (100 MB). Enforced at write_begin.
 const FS_WRITE_MAX: u64 = 100 * 1024 * 1024;
 
+/// Maximum assembled WebSocket message size (128 MB).
+pub const MAX_WS_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
+/// Maximum individual WebSocket frame size (128 MB).
+pub const MAX_WS_FRAME_BYTES: usize = 128 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // In-flight write state (per connection)
 // ---------------------------------------------------------------------------
@@ -233,7 +238,25 @@ pub async fn ws_handler(
         }
     };
 
-    upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor))
+    let pending_guard = match state.client_presence.reserve_pending_upgrade(actor.clone()) {
+        Ok(guard) => guard,
+        Err(err) => {
+            warn!(%err, "Rejecting WebSocket upgrade due to presence admission failure");
+            return axum::response::IntoResponse::into_response((
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": err.to_string(),
+                    "code": "PRESENCE_UNAVAILABLE",
+                })),
+            ));
+        }
+    };
+
+    let upgrade = upgrade
+        .max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_FRAME_BYTES);
+
+    upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, pending_guard))
 }
 
 fn websocket_origin_allowed(
@@ -266,7 +289,18 @@ async fn handle_socket(
     socket: WebSocket,
     state: AppState,
     actor: crate::api::auth::AuthenticatedActor,
+    pending_guard: crate::idle_suspend::PendingUpgradeGuard,
 ) {
+    let connection_id = Uuid::new_v4().to_string();
+    let capability_secret = Uuid::new_v4().to_string();
+    let presence_guard = match pending_guard.promote(connection_id.clone(), &capability_secret) {
+        Ok(guard) => Arc::new(guard),
+        Err(err) => {
+            warn!(%err, "Failed to promote pending upgrade to live connection");
+            return;
+        }
+    };
+
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Split channels: alerts get a priority queue ahead of PTY output; FS uses
@@ -275,10 +309,14 @@ async fn handle_socket(
     let (fs_tx, mut fs_rx) = mpsc::channel::<WireMsg>(FS_CHAN_CAP);
     let (alert_tx, mut alert_rx) = mpsc::channel::<WireMsg>(ALERT_CHAN_CAP);
 
-    // Writer task: drains both channels → WS sink using select.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+
+    // Writer task: drains channels → WS sink using select.
     let writer_state = state.clone();
     let writer_actor = actor.clone();
-    let writer = tokio::spawn(async move {
+    let writer_presence_guard = Arc::clone(&presence_guard);
+    let writer_cancel_tx = cancel_tx.clone();
+    let mut writer = tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
                 biased;
@@ -291,6 +329,8 @@ async fn handle_socket(
             let wire = match msg {
                 WireMsg::Text(t) => Message::Text(t.into()),
                 WireMsg::Binary(b) => Message::Binary(b.into()),
+                WireMsg::Ping(p) => Message::Ping(p.into()),
+                WireMsg::Pong(p) => Message::Pong(p.into()),
                 WireMsg::CloseOverflow => {
                     let _ = ws_tx
                         .send(Message::Close(Some(CloseFrame {
@@ -340,7 +380,122 @@ async fn handle_socket(
                 break;
             }
         }
+        writer_presence_guard.mark_closing();
+        let _ = writer_cancel_tx.send(true);
     });
+
+    // Dedicated frame reader task: processes control frames (Ping/Pong/Close) immediately
+    // and feeds data frames into a bounded application queue, ensuring long filesystem
+    // operations cannot starve heartbeat liveness.
+    const APP_MSG_CAP: usize = 64;
+    let (app_msg_tx, mut app_msg_rx) = mpsc::channel::<Message>(APP_MSG_CAP);
+    let reader_presence_guard = Arc::clone(&presence_guard);
+    let reader_cancel_tx = cancel_tx.clone();
+    let mut reader_cancel_rx = cancel_rx.clone();
+    let reader_alert_tx = alert_tx.clone();
+    let frame_reader = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = reader_cancel_rx.changed() => break,
+                item = ws_rx.next() => {
+                    let msg = match item {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(err)) => {
+                            debug!(%err, "WebSocket read error — closing");
+                            reader_presence_guard.mark_closing();
+                            let _ = reader_cancel_tx.send(true);
+                            break;
+                        }
+                        None => {
+                            reader_presence_guard.mark_closing();
+                            let _ = reader_cancel_tx.send(true);
+                            break;
+                        }
+                    };
+
+                    match msg {
+                        Message::Ping(payload) => {
+                            reader_presence_guard.record_pong();
+                            let _ = reader_alert_tx.try_send(WireMsg::Pong(payload.to_vec()));
+                        }
+                        Message::Pong(_) => {
+                            reader_presence_guard.record_pong();
+                        }
+                        Message::Close(_) => {
+                            reader_presence_guard.mark_closing();
+                            let _ = reader_cancel_tx.send(true);
+                            break;
+                        }
+                        Message::Text(_) | Message::Binary(_) => {
+                            reader_presence_guard.record_pong();
+                            match app_msg_tx.try_send(msg) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    warn!("WebSocket application queue saturated — closing connection due to backpressure");
+                                    reader_presence_guard.mark_closing();
+                                    let _ = reader_alert_tx.try_send(WireMsg::CloseOverflow);
+                                    let _ = reader_cancel_tx.send(true);
+                                    break;
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    reader_presence_guard.mark_closing();
+                                    let _ = reader_cancel_tx.send(true);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Heartbeat supervisor: sends periodic pings and monitors 90s deadline.
+    let heartbeat_guard = Arc::clone(&presence_guard);
+    let heartbeat_alert_tx = alert_tx.clone();
+    let heartbeat_cancel_tx = cancel_tx.clone();
+    let mut heartbeat_cancel_rx = cancel_rx.clone();
+    let heartbeat_task = tokio::spawn(async move {
+        let mut ping_interval = tokio::time::interval(crate::idle_suspend::HEARTBEAT_INTERVAL);
+        ping_interval.tick().await;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = heartbeat_cancel_rx.changed() => break,
+                _ = ping_interval.tick() => {
+                    if heartbeat_guard.check_deadline(crate::idle_suspend::HEARTBEAT_DEADLINE) {
+                        warn!(
+                            connection_id = heartbeat_guard.connection_id(),
+                            "WebSocket heartbeat deadline exceeded (no pong in 90s) — closing socket"
+                        );
+                        heartbeat_guard.mark_closing();
+                        let _ = heartbeat_cancel_tx.send(true);
+                        break;
+                    }
+                    let nonce = Uuid::new_v4().as_bytes().to_vec();
+                    let send_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        heartbeat_alert_tx.send(WireMsg::Ping(nonce)),
+                    )
+                    .await;
+                    if matches!(send_result, Err(_) | Ok(Err(_))) {
+                        heartbeat_guard.mark_closing();
+                        let _ = heartbeat_cancel_tx.send(true);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Send host:uiConnection receipt directly to this socket's private channel.
+    let ui_connection_frame =
+        crate::idle_suspend::UiConnectionFrame::new(connection_id, capability_secret);
+    if let Ok(json) = serde_json::to_string(&ui_connection_frame) {
+        let _ = alert_tx.send(WireMsg::Text(json)).await;
+    }
 
     // PTY output and host alerts use independent broadcast streams, so a noisy
     // terminal cannot cause an alert-stream gap.
@@ -360,8 +515,6 @@ async fn handle_socket(
         alert_tx.clone(),
         agent_status_server_epoch,
     ));
-
-    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     let auth_watcher = if !state.no_auth && actor.session_id.is_some() {
         let state_c = state.clone();
         let actor_c = actor.clone();
@@ -523,10 +676,10 @@ async fn handle_socket(
     loop {
         let msg = tokio::select! {
             _ = cancel_rx.changed() => break,
-            m = ws_rx.next() => {
+            m = app_msg_rx.recv() => {
                 match m {
-                    Some(Ok(msg)) => msg,
-                    _ => break,
+                    Some(msg) => msg,
+                    None => break,
                 }
             }
         };
@@ -1921,10 +2074,13 @@ async fn handle_socket(
     }
 
     // Cleanup
+    presence_guard.mark_closing();
     let _ = cancel_tx.send(true);
     if let Some(watcher) = auth_watcher {
         watcher.abort();
     }
+    heartbeat_task.abort();
+    frame_reader.abort();
     for (sub_id, handle) in fs_pumps {
         handle.abort();
         state.fs.unsubscribe_tree(sub_id);
@@ -1934,7 +2090,15 @@ async fn handle_socket(
     idle_suspend_pump.abort();
     agent_status_pump.abort();
     // Allow writer up to 500ms to flush pending close frames before aborting
-    let _ = tokio::time::timeout(std::time::Duration::from_millis(500), writer).await;
+    if tokio::time::timeout(std::time::Duration::from_millis(500), &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+    }
+    state
+        .client_presence
+        .retire_live(presence_guard.connection_id());
 }
 
 // ---------------------------------------------------------------------------
@@ -3054,6 +3218,17 @@ async fn pump_idle_suspend_hints(
                     dropped = n,
                     "idle suspend broadcast lagged; client reconciles via REST status"
                 );
+                let resync_hint = serde_json::json!({
+                    "kind": "host:idleSuspendChanged",
+                    "payload": {
+                        "version": 1,
+                        "revision": 0,
+                    }
+                })
+                .to_string();
+                if alert_tx.send(WireMsg::Text(resync_hint)).await.is_err() {
+                    break;
+                }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

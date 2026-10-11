@@ -372,6 +372,73 @@ sudo ./deploy/reset-linux-production.sh --dry-run
 sudo ./deploy/reset-linux-production.sh
 ```
 
+
+### 11.12 Semantic Agent-Free Policy Canary & Rollback Runbook
+
+The `agent-free` automatic policy operates on DamHopper-managed terminals only, requiring continuous qualifying free state (Idle + Blocked) for strictly more than three hours (`10,800s`), with immediate first-answer client consent:
+
+#### 1. Prerequisites and Operator Disclosures
+
+1. **Managed-Terminals Scope Disclosure**: Independent external agents (running in external tmux, screen, raw SSH, or cron outside DamHopper-managed PTY lineages) are deliberately excluded by design. An operator must explicitly acknowledge that background work in external shells will not prevent host suspension.
+2. **Maintenance Window**: Select a dedicated operator maintenance window with verified physical access, remote power management (IPMI/BMC), or out-of-band wake access.
+3. **Hardware & RTC Verification**: Verify `/sys/class/rtc/rtc0/wakealarm` exists and is unwritable by other services.
+
+#### 2. Pre-Deployment Safe Qualification Smoke
+
+Before enabling `agent-free` in production, execute the safe loopback smoke fixture on the target host from a source checkout:
+
+```bash
+cargo run --manifest-path server/Cargo.toml --example agent_free_consent_fixture
+```
+
+Ensure all 5 core loopback scenarios pass (`PASS (recorded 1 suspend request, wake=600s)`, `PASS (immediate approval settled, contrary decision returned 409)`, `PASS (deferred with LastClientDisconnected)`). This smoke runs in user space against a recording `FakeExecutor` and will not sleep the host.
+
+#### 3. Enabling Agent-Free Policy in Production
+
+1. Edit `/var/lib/dam-hopper/dam-hopper.toml`:
+   ```toml
+   [server.idle_suspend]
+   enabled = true
+   automatic_policy = "agent-free"
+   quiet_period_seconds = 10800
+   wake_after_seconds = 600
+   ```
+2. Restart the API daemon:
+   ```bash
+   sudo systemctl restart dam-hopper-api.service
+   ```
+3. Verify initial status:
+   ```bash
+   curl -s -H "Authorization: Bearer <operator-token>" \
+     http://127.0.0.1:4801/api/system/idle-suspend/v1/status | jq '{automaticPolicy, agentFree, clientPresence}'
+   ```
+   Verify `automaticPolicy: "agent-free"`, `agentFree.scope: "managed-terminals"`, and `agentFree.phase: "tracking"`.
+
+#### 4. Canary Verification Scenarios
+
+- **Canary Path A (Zero Connected Clients)**: Disconnect all web and desktop UI clients. Keep managed agents in Idle or Blocked state for >3 hours. Verify host automatically suspends and wakes after 600s.
+- **Canary Path B (Connected Client Immediate Approval)**: Connect a browser client. After >3 hours of qualifying free agents, verify the always-mounted `HostSleepConsentDialog` appears. Click "Approve". Verify the host immediately proceeds to suspend and wakes after 600s.
+
+#### 5. Rollback Procedure
+
+If unexpected sleep behavior, unrefreshed native agent blockers, or client connectivity issues arise:
+
+1. Edit `/var/lib/dam-hopper/dam-hopper.toml`:
+   ```toml
+   [server.idle_suspend]
+   enabled = false
+   automatic_policy = "empty-fleet"
+   ```
+2. Restart the API daemon:
+   ```bash
+   sudo systemctl restart dam-hopper-api.service
+   ```
+3. Verify status:
+   ```bash
+   curl -s -H "Authorization: Bearer <operator-token>" \
+     http://127.0.0.1:4801/api/system/idle-suspend/v1/status | jq '{enabled, automaticPolicy, state}'
+   ```
+   Verify `enabled: false` and `state: "disabled"`. Manual force-sleep remains available if the helper is enrolled. Never silently fall back to an untested legacy automatic mode.
 ---
 
 

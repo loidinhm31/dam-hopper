@@ -31,18 +31,32 @@ export function SettingsIdleSuspendTimingSection({
     return <div className="py-4 text-xs text-[var(--color-danger)]">Failed to load idle suspend status. Check server connection.</div>;
   }
 
-  const effectiveQuiet = quietInput ?? String(status.quietPeriodSeconds);
+  const isAgentFreeMode = status.automaticPolicy === "agent-free";
+  const effectiveQuiet = isAgentFreeMode
+    ? "10800"
+    : (quietInput ?? String(status.quietPeriodSeconds));
   const effectiveWake = wakeInput ?? String(status.wakeAfterSeconds);
 
-  const quietNum = parseInt(effectiveQuiet, 10);
+  const quietNum = isAgentFreeMode ? 10800 : parseInt(effectiveQuiet, 10);
   const wakeNum = parseInt(effectiveWake, 10);
-  const isQuietValid = !isNaN(quietNum) && quietNum >= status.minQuietPeriodSeconds && quietNum <= status.maxQuietPeriodSeconds;
-  const isWakeValid = !isNaN(wakeNum) && wakeNum >= status.minWakeAfterSeconds && wakeNum <= status.maxWakeAfterSeconds;
-  const isSamePair = quietNum === status.quietPeriodSeconds && wakeNum === status.wakeAfterSeconds;
+  const isQuietValid = isAgentFreeMode
+    ? quietNum === 10800
+    : !isNaN(quietNum) &&
+      quietNum >= status.minQuietPeriodSeconds &&
+      quietNum <= status.maxQuietPeriodSeconds;
+  const isWakeValid =
+    !isNaN(wakeNum) &&
+    wakeNum >= status.minWakeAfterSeconds &&
+    wakeNum <= status.maxWakeAfterSeconds;
+  const isSamePair = isAgentFreeMode
+    ? wakeNum === status.wakeAfterSeconds
+    : quietNum === status.quietPeriodSeconds &&
+      wakeNum === status.wakeAfterSeconds;
   const isHandedOff = status.state === "handedOff";
   const canMutate = status.timingMutable && !isHandedOff;
   const isPending = updateTiming.isPending;
-  const canSave = isQuietValid && isWakeValid && !isSamePair && canMutate && !isPending;
+  const canSave =
+    isQuietValid && isWakeValid && !isSamePair && canMutate && !isPending;
 
   async function handleSave() {
     if (!canSave) return;
@@ -97,16 +111,23 @@ export function SettingsIdleSuspendTimingSection({
       )}
       <SettingsActionRow
         title="Quiet Period (seconds)"
-        description={`Quiet duration with zero managed PTYs before suspend arms. Bounds: ${status.minQuietPeriodSeconds}s – ${status.maxQuietPeriodSeconds}s.`}
+        description={
+          isAgentFreeMode
+            ? "Fixed at 3 hours (10,800s) of continuous free state (Idle + Blocked) in DamHopper terminals under agent-free policy. External work does not block sleep."
+            : `Quiet duration with zero managed PTYs before suspend arms. Bounds: ${status.minQuietPeriodSeconds}s – ${status.maxQuietPeriodSeconds}s.`
+        }
         action={
           <input
             type="number"
             aria-label="Quiet period in seconds"
-            min={status.minQuietPeriodSeconds}
-            max={status.maxQuietPeriodSeconds}
+            min={isAgentFreeMode ? 10800 : status.minQuietPeriodSeconds}
+            max={isAgentFreeMode ? 10800 : status.maxQuietPeriodSeconds}
             value={effectiveQuiet}
-            disabled={!canMutate || isPending}
-            onChange={(e) => setQuietInput(e.target.value)}
+            readOnly={isAgentFreeMode}
+            disabled={isAgentFreeMode || !canMutate || isPending}
+            onChange={(e) => {
+              if (!isAgentFreeMode) setQuietInput(e.target.value);
+            }}
             className={inputClass}
           />
         }

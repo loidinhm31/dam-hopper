@@ -390,6 +390,10 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/system/idle-suspend/v1/force-suspend",
             post(idle_suspend::force_suspend).layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
+        .route(
+            "/api/system/idle-suspend/v1/consent/decision",
+            post(idle_suspend::submit_consent_decision).layer(RequestBodyLimitLayer::new(16 * 1024)),
+        )
         // Diagnostics
         .route(
             "/api/diagnostics/export",

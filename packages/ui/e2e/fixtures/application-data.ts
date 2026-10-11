@@ -24,6 +24,7 @@ export interface SeedTreeConfig {
   secondaryProjectName?: string;
   mfaKeyHex?: string;
   seedPlans?: boolean;
+  idleSuspendPolicy?: "agent-free";
 }
 
 export interface SeedTreeResult {
@@ -44,25 +45,33 @@ const DEFAULT_POLICY = JSON.stringify(
       primary: { backend: "codex", model: "gpt-5.6-sol", effort: "high" },
       backup: { backend: "omp", model: "openai/gpt-5.6-sol", effort: "medium" },
     },
-    wait: { mode: "until_terminal", warn_after_ms: 10000, warn_every_ms: 30000 },
+    wait: {
+      mode: "until_terminal",
+      warn_after_ms: 10000,
+      warn_every_ms: 30000,
+    },
     history: { retention_days: 30, max_bytes: 104857600 },
   },
   null,
   2,
 );
 
-
 /**
  * Creates an isolated deterministic seed tree on the host in a temporary directory.
  */
-export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedTreeResult> {
-  const hostStagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "dam-hopper-e2e-seed-"));
+export async function createSeedTree(
+  config: SeedTreeConfig = {},
+): Promise<SeedTreeResult> {
+  const hostStagingDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "dam-hopper-e2e-seed-"),
+  );
 
   const serverToken = config.serverToken ?? randomUUID().replace(/-/g, "");
   const mfaKeyHex = config.mfaKeyHex ?? randomBytes(32).toString("hex");
   const workspaceName = config.workspaceName ?? "e2e-workspace";
   const projectName = config.projectName ?? "fixture-project";
-  const secondaryProjectName = config.secondaryProjectName ?? "fixture-worktree-project";
+  const secondaryProjectName =
+    config.secondaryProjectName ?? "fixture-worktree-project";
   const seedPlans = config.seedPlans ?? true;
 
   const homeDir = path.join(hostStagingDir, "home");
@@ -82,41 +91,73 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
   await fs.mkdir(path.join(hostStagingDir, "logs"), { recursive: true });
   await fs.mkdir(path.join(hostStagingDir, "tmp"), { recursive: true });
   // 1. Server token file in ~/.config/dam-hopper/server-token
-  await fs.writeFile(path.join(configDir, "server-token"), serverToken + "\n", { mode: 0o600 });
+  await fs.writeFile(path.join(configDir, "server-token"), serverToken + "\n", {
+    mode: 0o600,
+  });
 
   // 2. MFA key file (64 hex characters, mode 0o600)
-  await fs.writeFile(path.join(homeDir, "mfa.key"), mfaKeyHex + "\n", { mode: 0o600 });
+  await fs.writeFile(path.join(homeDir, "mfa.key"), mfaKeyHex + "\n", {
+    mode: 0o600,
+  });
 
   // 3. Advisor routing policy in ~/.evcrate/advisor-routing.json
-  const canonicalRoutingPath = path.resolve(REPO_ROOT, "__fixtures__/native-advisor/advisor-routing.json");
+  const canonicalRoutingPath = path.resolve(
+    REPO_ROOT,
+    "__fixtures__/native-advisor/advisor-routing.json",
+  );
   const initialPolicyJson = existsSync(canonicalRoutingPath)
     ? await fs.readFile(canonicalRoutingPath, "utf-8")
     : DEFAULT_POLICY;
-  await fs.writeFile(path.join(evcrateDir, "advisor-routing.json"), initialPolicyJson, { mode: 0o600 });
+  await fs.writeFile(
+    path.join(evcrateDir, "advisor-routing.json"),
+    initialPolicyJson,
+    { mode: 0o600 },
+  );
 
   // 4. Copy canonical evaluation documents into ~/.evcrate/advisor-evaluations/
-  const canonicalEvalsDir = path.resolve(REPO_ROOT, "__fixtures__/native-advisor/advisor-evaluations");
+  const canonicalEvalsDir = path.resolve(
+    REPO_ROOT,
+    "__fixtures__/native-advisor/advisor-evaluations",
+  );
   if (existsSync(canonicalEvalsDir)) {
     const evalFiles = await fs.readdir(canonicalEvalsDir);
     for (const file of evalFiles) {
       if (file.endsWith(".json")) {
-        const content = await fs.readFile(path.join(canonicalEvalsDir, file), "utf-8");
-        await fs.writeFile(path.join(advisorEvaluationsDir, file), content, { mode: 0o600 });
+        const content = await fs.readFile(
+          path.join(canonicalEvalsDir, file),
+          "utf-8",
+        );
+        await fs.writeFile(path.join(advisorEvaluationsDir, file), content, {
+          mode: 0o600,
+        });
       }
     }
   }
 
   // 5. Fixture workspace project files
-  await fs.writeFile(path.join(projectDir, "README.md"), `# ${projectName}\nDeterministic E2E project workspace.\n`);
-  await fs.writeFile(path.join(projectDir, "sample.txt"), "Hello from E2E isolated environment.\n");
-  await fs.writeFile(path.join(secondaryProjectDir, "README.md"), `# ${secondaryProjectName}\nSecondary target workspace.\n`);
+  await fs.writeFile(
+    path.join(projectDir, "README.md"),
+    `# ${projectName}\nDeterministic E2E project workspace.\n`,
+  );
+  await fs.writeFile(
+    path.join(projectDir, "sample.txt"),
+    "Hello from E2E isolated environment.\n",
+  );
+  await fs.writeFile(
+    path.join(secondaryProjectDir, "README.md"),
+    `# ${secondaryProjectName}\nSecondary target workspace.\n`,
+  );
 
   if (seedPlans) {
     await seedPlanFixtures(projectDir, secondaryProjectDir);
   }
 
   // 6. Root dam-hopper.toml for the container
-  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
+  const idleSuspendSection =
+    config.idleSuspendPolicy === "agent-free"
+      ? `\n[server.idle_suspend]\nenabled = true\nautomatic_policy = "agent-free"\nquiet_period_seconds = 10800\nwake_after_seconds = 600\n`
+      : "";
+  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n\n[server.advisor]\nenabled = false\n${idleSuspendSection}\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
   await fs.writeFile(path.join(hostStagingDir, "dam-hopper.toml"), tomlContent);
   const seedDigest = createHash("sha256")
     .update(serverToken)
@@ -138,6 +179,14 @@ export async function createSeedTree(config: SeedTreeConfig = {}): Promise<SeedT
     }
   };
 
-  return { hostStagingDir, serverToken, mfaKeyHex, workspaceName, projectName, secondaryProjectName, seedDigest, dispose };
+  return {
+    hostStagingDir,
+    serverToken,
+    mfaKeyHex,
+    workspaceName,
+    projectName,
+    secondaryProjectName,
+    seedDigest,
+    dispose,
+  };
 }
-

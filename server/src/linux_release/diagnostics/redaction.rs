@@ -5,7 +5,7 @@ use crate::idle_suspend::event::{
     validate_canonical_uuid, validate_canonical_uuid_v4, IdleSuspendEventEnvelopeV1,
 };
 use crate::idle_suspend::protocol::SuspendOutcome;
-use crate::idle_suspend::server_audit::{ManualAuditResult, ServerAuditRecord, TimingAuditResult};
+use crate::idle_suspend::server_audit::{ConsentAuditResult, ManualAuditResult, ServerAuditRecord, TimingAuditResult};
 use super::model::{
     ProjectedDiagnosticEvent, ProjectedHelperAudit, ProjectedServerAudit, ProjectedServerEvent,
     MAX_REDACTED_STRING_BYTES,
@@ -260,6 +260,36 @@ pub fn project_server_audit(record: ServerAuditRecord) -> Result<ProjectedServer
                 details: Some(format!(
                     "generation={},liveCount={},creatingCount={}",
                     m.generation, m.live_count, m.creating_count
+                )),
+            })
+        }
+        ServerAuditRecord::Consent(c) => {
+            let (result_str, reason_code) = match c.result {
+                ConsentAuditResult::Admitted => ("admitted", None),
+                ConsentAuditResult::RejectedSettled => ("rejected", Some("decision_already_settled")),
+                ConsentAuditResult::RejectedExpired => ("rejected", Some("consent_expired")),
+                ConsentAuditResult::RejectedCancelled => ("rejected", Some("consent_cancelled")),
+                ConsentAuditResult::RejectedCapability => ("rejected", Some("invalid_capability")),
+                ConsentAuditResult::RejectedAuth => ("rejected", Some("unauthorized")),
+                ConsentAuditResult::RejectedConflict => ("rejected", Some("conflict")),
+            };
+            let corr_id = if validate_canonical_uuid_v4(&c.request_id).is_ok() {
+                Some(c.request_id.clone())
+            } else {
+                None
+            };
+            Ok(ProjectedServerAudit {
+                timestamp_ms: c.timestamp_ms,
+                audit_type: "consent".to_string(),
+                action: format!("consent_{}", c.decision.as_str()),
+                correlation_id: corr_id,
+                actor_present: !c.actor.is_empty(),
+                result: result_str.to_string(),
+                reason_code: reason_code.map(ToString::to_string),
+                wake_after_seconds: None,
+                details: Some(format!(
+                    "requestRevision={},statusRevision={}",
+                    c.request_revision, c.status_revision
                 )),
             })
         }

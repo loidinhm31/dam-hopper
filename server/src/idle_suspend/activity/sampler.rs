@@ -240,6 +240,63 @@ pub(crate) struct AgentActivityAdmission<'a> {
     pub(crate) now: Instant,
 }
 
+/// Qualified claim evidence for an individual managed agent under AgentFree policy.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManagedAgentClaimEvidence {
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) terminal: TerminalIdentity,
+    pub(crate) safe_executable_identity: Option<String>,
+    pub(crate) is_idle: bool,
+}
+
+/// Private opaque ticket minted for successful Final samples under AgentFree policy.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct AgentFreeClaimTicket {
+    pub(crate) request_id: u64,
+    pub(crate) completed_at: Instant,
+    pub(crate) semantic_revision: u64,
+    pub(crate) non_free_generation: u64,
+    pub(crate) timing_revision: u64,
+    pub(crate) fleet_generation: u64,
+    pub(crate) input_revision: u64,
+    pub(crate) roots: Vec<(TerminalIdentity, ProcessIdentity)>,
+    pub(crate) matched_agents: Vec<ManagedAgentClaimEvidence>,
+    pub(crate) idle_count: usize,
+    pub(crate) blocked_count: usize,
+    pub(crate) min_lease_remaining_ms: u64,
+    pub(crate) eligibility_deadline: Instant,
+}
+
+impl std::fmt::Debug for AgentFreeClaimTicket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentFreeClaimTicket")
+            .field("request_id", &self.request_id)
+            .field("semantic_revision", &self.semantic_revision)
+            .field("non_free_generation", &self.non_free_generation)
+            .field("timing_revision", &self.timing_revision)
+            .field("fleet_generation", &self.fleet_generation)
+            .field("input_revision", &self.input_revision)
+            .field("idle_count", &self.idle_count)
+            .field("blocked_count", &self.blocked_count)
+            .finish()
+    }
+}
+
+/// Admission request presented to `PtySessionManager::try_claim_agent_free_handoff`.
+#[allow(dead_code)]
+pub(crate) struct AgentFreeAdmission<'a> {
+    pub(crate) ticket: &'a AgentFreeClaimTicket,
+    pub(crate) automatic_policy: IdleSuspendAutomaticPolicy,
+    pub(crate) automatic_enabled: bool,
+    pub(crate) accepted_request_id: u64,
+    pub(crate) accepted_semantic_revision: u64,
+    pub(crate) accepted_non_free_generation: u64,
+    pub(crate) accepted_timing_revision: u64,
+    pub(crate) now: Instant,
+}
+
 /// Result delivered from the activity sampler worker to the coordinator.
 #[derive(Clone, Debug)]
 pub(crate) struct ActivitySamplerResult {

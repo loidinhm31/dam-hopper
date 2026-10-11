@@ -1,0 +1,46 @@
+# Phase 03 Completion Receipt
+
+- **Project ID**: `01f213d10527601cb1e19d466dab1ea3d4c82d7f6e7cbb775b6f5949770691c1`
+- **Plan**: `plans/261010-1746-host-resources-auto-sleep/plan.md`
+- **Phase ID**: `phase-03`
+- **Phase Name**: `Phase 03 — Public WebSocket presence, liveness and session binding`
+- **Task Run ID**: `252d12a0-fc0b-40e8-987e-fe5a60961c84`
+- **Completion Task Revision**: `7`
+- **Evidence Revision**: `0`
+- **Gate Status**: `completed`
+- **Last Consultation ID**: `ec7c08ca-289f-4811-90a7-bd67bc132e7a`
+- **Accepted Disposition**:
+  - `action`: `accept`
+  - `rationale`: `Accepted user review approval for Phase 03 finalization`
+  - `action_id`: `fd81425f-139a-4caa-9557-81dd24734847`
+  - `episode_id`: `episode-finalization-phase-03`
+- **Resolved Outcome**:
+  - `result`: `resolved`
+  - `actual_changed_paths`:
+    - `packages/ui/src/api/connections.test.ts`
+    - `packages/ui/src/api/connections.ts`
+    - `packages/ui/src/api/transport.ts`
+    - `packages/ui/src/api/ws-transport.test.ts`
+    - `packages/ui/src/api/ws-transport.ts`
+    - `plans/reports/code-review-261011-0026-phase-03-websocket-presence.md`
+    - `plans/reports/docs-manager-261011-phase-03-documentation.md`
+    - `plans/reports/project-manager-261011-phase-03-terminal-status.md`
+    - `plans/reports/tester-261011-0024-phase-03-websocket-presence.md`
+    - `server/src/api/ws.rs`
+    - `server/src/api/ws_protocol.rs`
+    - `server/src/idle_suspend/client_presence.rs`
+    - `server/src/idle_suspend/mod.rs`
+    - `server/src/state.rs`
+    - `server/tests/ws_client_presence.rs`
+  - `validation_command`: `cargo test --manifest-path server/Cargo.toml --test ws_client_presence`
+  - `validation_status`: `passed` (5 passed, 0 failed)
+- **Git Commit**: `7073536d` (`feat(idle-suspend): implement public websocket presence, liveness and session binding`)
+- **Reviewed Evidence**:
+  - `plans/reports/code-review-261011-0026-phase-03-websocket-presence.md` (Score: 9.6/10, APPROVED)
+  - `plans/reports/tester-261011-0024-phase-03-websocket-presence.md` (2,851 passed, 0 failed)
+- **Actual Full-Suite Validation Evidence**:
+  - `cargo test --manifest-path server/Cargo.toml idle_suspend::client_presence::tests`: 6 passed, 0 failed
+  - `cargo test --manifest-path server/Cargo.toml --test ws_client_presence`: 5 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui test src/api/ws-transport.test.ts src/api/connections.test.ts`: 69 passed, 0 failed
+  - `pnpm --filter @dam-hopper/ui exec tsc --noEmit`: 0 diagnostics
+  - `pnpm --filter @dam-hopper/ui test`: 2,771 passed across 330 test files, 0 failed
