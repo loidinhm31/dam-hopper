@@ -11,7 +11,7 @@ mod pty_tests {
         fs,
         path::Path,
         process::Command,
-        sync::{atomic::Ordering, Arc, Mutex},
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
 

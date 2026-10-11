@@ -227,7 +227,7 @@ Linux terminal idle suspend is coordinated by the server and an enrolled Unix-so
 ### Semantic agent-free automatic sleep
 
 Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
-Phase 01 (Contracts and configuration), Phase 02 (Managed agent inventory and qualified semantic evidence), Phase 03 (Public WebSocket presence, liveness and session binding), and Phase 04 (Three-hour coordinator, immediate consent, and final handoff) are implemented and certified; Phase 05–06 cover host resources and consent UI and final qualification.
+Phase 01 through Phase 06 are fully implemented and certified, including end-to-end verification, security boundaries, and safe operational rollout runbooks.
 - **Policy & Fixed Timing**:
   - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
   - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.

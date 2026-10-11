@@ -801,3 +801,195 @@ describe("api.system.submitConsentDecision", () => {
     expect(() => decodeConsentDecisionResponse(null)).toThrow(/expected plain object/);
   });
 });
+
+describe("decodeAgentFreeStatus", () => {
+  const validAgentFree = {
+    phase: "tracking",
+    scope: "managed-terminals",
+    inventoryState: "consistent",
+    inventoryRevision: 1,
+    semanticRevision: 2,
+    idleCount: 2,
+    blockedCount: 1,
+    workingCount: 0,
+    unknownCount: 0,
+    freeSinceMs: 1726000000000,
+    eligibleAtMs: 1726010800000,
+    deferredUntilMs: null,
+    reasonCode: "allFree",
+  };
+
+  it("decodes valid agentFree payload with all fields populated", () => {
+    const decoded = decodeAgentFreeStatus(validAgentFree);
+    expect(decoded.phase).toBe("tracking");
+    expect(decoded.scope).toBe("managed-terminals");
+    expect(decoded.inventoryState).toBe("consistent");
+    expect(decoded.idleCount).toBe(2);
+    expect(decoded.blockedCount).toBe(1);
+    expect(decoded.workingCount).toBe(0);
+    expect(decoded.unknownCount).toBe(0);
+    expect(decoded.reasonCode).toBe("allFree");
+  });
+
+  it("decodes valid agentFree payload with nullable counts and timestamps as null", () => {
+    const minimal = {
+      phase: "reconciling",
+      scope: "managed-terminals",
+      inventoryState: "uninitialized",
+      inventoryRevision: 0,
+      semanticRevision: 0,
+      idleCount: null,
+      blockedCount: null,
+      workingCount: null,
+      unknownCount: null,
+      freeSinceMs: null,
+      eligibleAtMs: null,
+      deferredUntilMs: null,
+      reasonCode: "reconciling",
+    };
+    const decoded = decodeAgentFreeStatus(minimal);
+    expect(decoded.idleCount).toBeNull();
+    expect(decoded.freeSinceMs).toBeNull();
+    expect(decoded.reasonCode).toBe("reconciling");
+  });
+
+  it("rejects invalid scope", () => {
+    expect(() =>
+      decodeAgentFreeStatus({ ...validAgentFree, scope: "all-host-processes" }),
+    ).toThrow(/invalid scope/);
+  });
+
+  it("rejects invalid phase or inventoryState", () => {
+    expect(() =>
+      decodeAgentFreeStatus({ ...validAgentFree, phase: "unknownPhase" }),
+    ).toThrow(/invalid phase/);
+    expect(() =>
+      decodeAgentFreeStatus({
+        ...validAgentFree,
+        inventoryState: "invalidState",
+      }),
+    ).toThrow(/invalid inventoryState/);
+  });
+
+  it("rejects negative counts", () => {
+    expect(() =>
+      decodeAgentFreeStatus({ ...validAgentFree, idleCount: -1 }),
+    ).toThrow(/invalid idleCount/);
+    expect(() =>
+      decodeAgentFreeStatus({ ...validAgentFree, workingCount: -5 }),
+    ).toThrow(/invalid workingCount/);
+  });
+
+  it("rejects non-object value", () => {
+    expect(() => decodeAgentFreeStatus("not an object")).toThrow(
+      /expected plain object/,
+    );
+  });
+});
+
+describe("decodeClientPresenceStatus", () => {
+  it("decodes valid presence payload", () => {
+    const valid = {
+      connectionCount: 3,
+      pendingUpgradeCount: 1,
+      revision: 4,
+      available: true,
+    };
+    const decoded = decodeClientPresenceStatus(valid);
+    expect(decoded.connectionCount).toBe(3);
+    expect(decoded.pendingUpgradeCount).toBe(1);
+    expect(decoded.revision).toBe(4);
+    expect(decoded.available).toBe(true);
+  });
+
+  it("rejects negative counts or non-boolean available", () => {
+    expect(() =>
+      decodeClientPresenceStatus({
+        connectionCount: -1,
+        pendingUpgradeCount: 0,
+        revision: 1,
+        available: true,
+      }),
+    ).toThrow(/invalid connectionCount/);
+    expect(() =>
+      decodeClientPresenceStatus({
+        connectionCount: 1,
+        pendingUpgradeCount: 0,
+        revision: 1,
+        available: "yes",
+      }),
+    ).toThrow(/invalid available/);
+    expect(() => decodeClientPresenceStatus(null)).toThrow(
+      /expected plain object/,
+    );
+  });
+});
+
+describe("decodeConsentStatus", () => {
+  const validPending = {
+    requestId: "11111111-1111-4000-8000-111111111111",
+    requestRevision: 1,
+    state: "pending",
+    requestedAtMs: 1726000000000,
+    expiresAtMs: 1726000060000,
+    decision: null,
+    wakeAfterSeconds: 600,
+  };
+
+  it("decodes valid pending consent status with null decision", () => {
+    const decoded = decodeConsentStatus(validPending);
+    expect(decoded.requestId).toBe("11111111-1111-4000-8000-111111111111");
+    expect(decoded.state).toBe("pending");
+    expect(decoded.decision).toBeNull();
+    expect(decoded.wakeAfterSeconds).toBe(600);
+  });
+
+  it("decodes valid approved or denied consent status with matching decision", () => {
+    const approved = {
+      ...validPending,
+      state: "approved",
+      decision: "approve",
+    };
+    expect(decodeConsentStatus(approved).decision).toBe("approve");
+
+    const denied = {
+      ...validPending,
+      state: "denied",
+      decision: "deny",
+    };
+    expect(decodeConsentStatus(denied).decision).toBe("deny");
+  });
+
+  it("rejects state and decision mismatch", () => {
+    expect(() =>
+      decodeConsentStatus({
+        ...validPending,
+        state: "pending",
+        decision: "approve",
+      }),
+    ).toThrow(/state and decision mismatch/);
+    expect(() =>
+      decodeConsentStatus({
+        ...validPending,
+        state: "approved",
+        decision: "deny",
+      }),
+    ).toThrow(/state and decision mismatch/);
+    expect(() =>
+      decodeConsentStatus({
+        ...validPending,
+        state: "denied",
+        decision: null,
+      }),
+    ).toThrow(/state and decision mismatch/);
+  });
+
+  it("rejects empty requestId or invalid wakeAfterSeconds", () => {
+    expect(() =>
+      decodeConsentStatus({ ...validPending, requestId: "" }),
+    ).toThrow(/invalid requestId/);
+    expect(() =>
+      decodeConsentStatus({ ...validPending, wakeAfterSeconds: -10 }),
+    ).toThrow(/invalid wakeAfterSeconds/);
+  });
+});

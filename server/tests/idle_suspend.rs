@@ -6,11 +6,8 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::Utc;
-use jsonwebtoken::{encode, EncodingKey, Header};
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
-use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -48,11 +45,6 @@ mod common;
 
 const TEST_SECRET: &str = "test-secret-jwt-key-12345";
 
-#[derive(Serialize, Deserialize)]
-struct TestClaims {
-    sub: String,
-    exp: usize,
-}
 
 fn make_auth_cookie() -> String {
     use dam_hopper_server::auth::model::AuthClaims;
@@ -270,6 +262,114 @@ agent_executables = [{}]
                 wake_after_seconds: safe_wake,
                 automatic_policy: IdleSuspendAutomaticPolicy::AgentActivity,
                 agent_executables: agent_execs,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        projects: vec![],
+        features: FeaturesConfig::default(),
+        config_path: config_path.clone(),
+    };
+    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
+
+    let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
+    let fs = FsSubsystem::new(vec![]);
+    let tunnel_manager = common::make_tunnel_manager(&event_sink);
+    let diagnostics = DiagnosticStore::new(workspace_dir.join("diagnostics.jsonl"));
+
+    let state = AppState::new(
+        workspace_dir,
+        config,
+        GlobalConfig::default(),
+        pty_manager,
+        agent_store,
+        event_sink,
+        TEST_SECRET.to_string(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+        diagnostics,
+        TelemetryRuntime::new(),
+    )
+    .expect("AppState::new")
+    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
+
+    if quiet < 60 || wake < 60 {
+        let mut timing_guard = state.idle_suspend_timing.write().await;
+        timing_guard.quiet_period_seconds = quiet;
+        timing_guard.wake_after_seconds = wake;
+    }
+
+    TestFixture {
+        _tmp: tmp,
+        state,
+        config_path,
+    }
+}
+
+async fn setup_agent_free_fixture(
+    idle_enabled: bool,
+    quiet: u64,
+    wake: u64,
+) -> TestFixture {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace_dir = tmp.path().to_path_buf();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&workspace_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let config_path = workspace_dir.join("dam-hopper.toml");
+
+    let safe_quiet = quiet.max(60);
+    let safe_wake = wake.max(60);
+    let initial_toml = format!(
+        r#"[workspace]
+name = "test-agent-free-ws"
+root = "{}"
+
+[server.idle_suspend]
+enabled = {}
+quiet_period_seconds = {}
+wake_after_seconds = {}
+automatic_policy = "agent-free"
+"#,
+        workspace_dir.display().to_string().replace('\\', "/"),
+        idle_enabled,
+        safe_quiet,
+        safe_wake,
+    );
+    std::fs::write(&config_path, initial_toml).expect("write initial toml");
+
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(workspace_dir.join("idle-suspend-audit.jsonl"))
+            .expect("preprovision audit log");
+    }
+    let (event_sink, _rx) = BroadcastEventSink::new(512);
+    let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+
+    let mut config = DamHopperConfig {
+        workspace: WorkspaceInfo {
+            name: "test-agent-free-ws".into(),
+            root: workspace_dir.display().to_string(),
+        },
+        agent_store: None,
+        server: ServerConfig {
+            idle_suspend: IdleSuspendConfig {
+                enabled: idle_enabled,
+                quiet_period_seconds: safe_quiet,
+                wake_after_seconds: safe_wake,
+                automatic_policy: IdleSuspendAutomaticPolicy::AgentFree,
                 ..Default::default()
             },
             ..Default::default()
@@ -1353,6 +1453,84 @@ async fn test_integrated_agent_activity_shutdown_cleanly_joins() {
         .expect("shutdown must join before timeout");
 
     let _ = fixture.state.pty_manager.kill(&session.id);
+}
+
+#[tokio::test]
+async fn test_integrated_agent_free_consent_route_auth_and_body_limits() {
+    let fixture = setup_agent_free_fixture(true, 10800, 600).await;
+    let app = dam_hopper_server::api::build_router(fixture.state.clone());
+
+    // 1. Unauthenticated POST to /api/system/idle-suspend/v1/consent/decision -> 401 Unauthorized
+    let unauth_req = Request::builder()
+        .method("POST")
+        .uri("/api/system/idle-suspend/v1/consent/decision")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"version":1,"requestId":"req-1","requestRevision":1,"connectionId":"c-1","capabilitySecret":"s-1","decision":"approve"}"#))
+        .unwrap();
+    let res = app.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Authenticated POST with oversized body (> 16 KiB) -> 413 Payload Too Large
+    let oversized = vec![b'a'; 17 * 1024];
+    let oversized_req = Request::builder()
+        .method("POST")
+        .uri("/api/system/idle-suspend/v1/consent/decision")
+        .header("Cookie", make_auth_cookie())
+        .header("Content-Type", "application/json")
+        .body(Body::from(oversized))
+        .unwrap();
+    let res_oversized = app.clone().oneshot(oversized_req).await.unwrap();
+    assert_eq!(res_oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn test_integrated_agent_free_status_includes_managed_terminals_scope() {
+    let fixture = setup_agent_free_fixture(true, 10800, 600).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor)
+        .await;
+
+    let app = dam_hopper_server::api::build_router(fixture.state.clone());
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/system/idle-suspend/v1/status")
+        .header("Cookie", make_auth_cookie())
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(body["automaticPolicy"], "agent-free");
+    assert_eq!(body["agentFree"]["scope"], "managed-terminals");
+    assert!(body["clientPresence"]["available"].as_bool().unwrap());
+    assert_eq!(body["clientPresence"]["connectionCount"], 0);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_integrated_agent_free_zero_client_automatic_suspend() {
+    let fixture = setup_agent_free_fixture(true, 1, 600).await;
+    let executor = Arc::new(FakeExecutor::new(true));
+    let coordinator = fixture
+        .state
+        .start_idle_suspend_coordinator(executor.clone())
+        .await;
+
+    // With 0 clients, after quiet period (1s), coordinator automatically executes handoff
+    let succeeded = wait_for_predicate(Duration::from_secs(5), || {
+        executor.recorded_requests().len() == 1
+    })
+    .await;
+    assert!(succeeded, "Zero-client automatic handoff must record 1 suspend request");
+    assert_eq!(executor.recorded_requests()[0].wake_after_seconds, 600);
+
+    coordinator.shutdown().await;
 }
 
 

@@ -368,6 +368,16 @@ impl ClientPresenceRegistry {
         }
     }
 
+    /// Returns whether the specified connection ID is currently live and not closing.
+    pub fn is_connection_live(&self, connection_id: &str) -> bool {
+        let inner = self.inner.lock();
+        inner
+            .live
+            .get(connection_id)
+            .map(|record| !record.closing)
+            .unwrap_or(false)
+    }
+
     /// Verifies that a decision capability matches the live connection record and current actor.
     pub fn verify_decision_capability(
         &self,

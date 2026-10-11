@@ -24,7 +24,7 @@ field names; snake_case aliases are accepted when decoding this block.
 | `wake_after_seconds`   | `wakeAfterSeconds`    | bounded automatic timing                    |
 | `enrollment_reference` | `enrollmentReference` | optional startup enrollment                 |
 | `capability_selection` | `capabilitySelection` | startup capability selector                 |
-| `automatic_policy`     | `automaticPolicy`     | `empty-fleet` (default) or `agent-activity` |
+| `automatic_policy`     | `automaticPolicy`     | `empty-fleet` (default), `agent-activity`, or `agent-free` |
 | `agent_executables`    | `agentExecutables`    | literal executable matcher list             |
 
 The default executable list is `["codex", "omp", "claude", "agy"]`. Entries
@@ -79,8 +79,8 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
   - `statusRevision`: integer (monotonic revision)
   - `state`: enum (`"disabled"`, `"watching"`, `"armed"`, `"finalCheck"`, `"handedOff"`, `"suppressed"`, `"failed"`, `"resumed"`)
   - `enabled`: boolean (operator startup policy)
-  - `automaticPolicy`: required enum (`"empty-fleet"` or `"agent-activity"`)
-  - `activity`: nullable activity status; null for `empty-fleet`, otherwise:
+  - `automaticPolicy`: required enum (`"empty-fleet"`, `"agent-activity"`, or `"agent-free"`)
+  - `activity`: nullable activity status; null for `empty-fleet` and `agent-free`, otherwise:
     - `measurementState`: enum (`"initializing"`, `"available"`, or `"unavailable"`)
     - `reasonCode`: optional closed activity reason enum:
       - `"recentInput"`: Accepted terminal input reset quiet globally
@@ -125,6 +125,33 @@ Returns the immutable authoritative `IdleSuspendStatusV1` snapshot.
     - **Privacy and Data Exclusions**: Protected status GET is the only interface exposing warning PID and safe executable identity. It never exposes command-line arguments, environment variables, full matcher lists, terminal/session/root/start IDs, socket addresses/ports/inodes, terminal output bytes, tokens, or raw kernel diagnostics. Server/helper logs, JSONL audit trails, and WebSocket notifications strictly exclude warning process details.
     - **Client Normalization & Old-Server Fallback**: A client receiving a valid v1 response with both `automaticPolicy` and `activity` absent normalizes them to `automaticPolicy: "empty-fleet"` and `activity: null`. Any partial omission, malformed enum, out-of-domain number, or policy/activity mismatch is rejected as a decode error.
   - `timingMutable`: boolean (`true` when enabled and not currently handed off)
+  - `agentFree`: nullable agent-free status; present only when `automaticPolicy` is `"agent-free"`:
+    - `phase`: enum (`"reconciling"`, `"tracking"`, `"awaitingConsent"`, `"approved"`, `"finalCheck"`, `"blocked"`, `"deferred"`)
+    - `scope`: string (always `"managed-terminals"`; independent external agents like tmux/SSH are excluded by deliberate user choice)
+    - `inventoryState`: enum (`"uninitialized"`, `"consistent"`, or `"degraded"`)
+    - `inventoryRevision`: integer (monotonic revision of process discovery)
+    - `semanticRevision`: integer (monotonic revision of agent status reducer)
+    - `idleCount`: optional integer (nullable; null represents unknown/uninitialized, not zero)
+    - `blockedCount`: optional integer (nullable; null represents unknown/uninitialized, not zero)
+    - `workingCount`: optional integer (nullable; null represents unknown/uninitialized, not zero)
+    - `unknownCount`: optional integer (nullable; null represents unknown/uninitialized, not zero)
+    - `freeSinceMs`: optional epoch ms display timestamp
+    - `eligibleAtMs`: optional epoch ms display timestamp
+    - `deferredUntilMs`: optional epoch ms display timestamp
+    - `reasonCode`: optional enum (`"reconciling"`, `"allFree"`, `"working"`, `"unknown"`, `"expired"`, `"ambiguous"`, `"unansweredTimeout"`, `"clientRefusal"`, `"lastClientDisconnected"`, `"safetyInvalidation"`, `"unavailable"`)
+  - `clientPresence`: nullable client presence status; present only when `automaticPolicy` is `"agent-free"`:
+    - `connectionCount`: integer (count of authenticated public WebSocket connections)
+    - `pendingUpgradeCount`: integer (count of connections in HTTP-to-WS upgrade phase)
+    - `revision`: integer (monotonic membership revision)
+    - `available`: boolean (false when capacity saturated or host suspending)
+  - `consent`: nullable sleep consent status; present only when `automaticPolicy` is `"agent-free"` and a consent request has been opened:
+    - `requestId`: string (UUID of current consent request)
+    - `requestRevision`: integer (monotonic sequence number)
+    - `state`: enum (`"pending"`, `"approved"`, `"denied"`, `"expired"`, `"cancelled"`)
+    - `requestedAtMs`: epoch ms display timestamp
+    - `expiresAtMs`: epoch ms display timestamp (server 60s unanswered timeout)
+    - `decision`: optional enum (`"approve"`, `"deny"`, or null when pending)
+    - `wakeAfterSeconds`: integer
   - `timingMutableReason`: optional string (e.g. `"disabled"`, `"handoffInProgress"`)
   - `capabilityCode`: string (e.g. `"unavailable"`, `"fake"`, `"systemd"`)
   - `currentEpoch`: integer (idle epoch counter)
@@ -283,6 +310,8 @@ Submits a user consent decision (`approve` or `deny`) for an active automatic sl
     - `consentCancelled`: request cancelled due to intervening agent activity, disconnect, or safety invalidation.
     - `consentUnavailable`: no active request or mismatched `requestId`/`requestRevision`.
     - `handoffInProgress`: machine suspend handoff is already executing.
+  - **`401 Unauthorized`**:
+    - Missing or invalid session cookie or Bearer token (`AUTH_REQUIRED`, `SESSION_EXPIRED`).
   - **`403 Forbidden`**:
     - `invalidCapability`: capability secret mismatch, actor invariant mismatch, or deadline expired.
     - `consentDisabledNoAuth`: rejected because server runs with `--no-auth`.
@@ -292,10 +321,13 @@ Submits a user consent decision (`approve` or `deny`) for an active automatic sl
     - `connectionNotFound`: connection ID not present in `ClientPresenceRegistry`.
   - **`400 Bad Request`**:
     - `invalidConsentPayload`: field lengths out of bounds, empty strings, or invalid JSON.
+  - **`413 Payload Too Large`**:
+    - Request body exceeds 16 KiB limit (`RequestBodyLimitLayer`).
   - **`503 Service Unavailable`**:
+    - `presenceUnavailable`: presence registry capacity saturated.
+    - `authenticationUnavailable`: authentication database unavailable.
     - `coordinatorShuttingDown`: server is shutting down.
     - `forceSuspendAuditUnavailable`: audit logging write failed.
-
 
 #### Configured-agent activity qualification boundary (2026-09-11)
 
@@ -318,6 +350,17 @@ an ignored Linux observer smoke passing in **0.72s**. Automated tests use fake
 suspend outcomes and never invoke the helper, RTC programming, `systemctl
 suspend`, `sudo`, or root installation. A real suspend/resume canary remains an
 Operations gate.
+
+#### Semantic agent-free qualification boundary (2026-10-11)
+
+The `agent-free` automatic policy and consent decision route contracts are qualified across four consumer and integration boundaries:
+
+- `server/src/idle_suspend/` unit suites (**199 passed**) and `server/src/agent_status/` unit suites (**89 passed**) cover deterministic 3-hour boundary calculation (`elapsed > 10,800s`), client presence tracking, connection capabilities, first-valid latching, contrary rejection, and disconnect cancellation.
+- `server/tests/idle_suspend.rs` (**22 passed**, 2 opt-in ignored) and agent status integration suites (**15 passed**) cover cross-module lifecycle, pre-dispatch database revalidation, zero-client handoff fences, and safe coordinator dispatch.
+- `packages/ui/src/api/idle-suspend-client.test.ts` (**46 passed**) and `packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx` (**17 passed** in Chromium) cover status decoding, client presence fields, consent prompts, and responsive touch-target UI rendering.
+- `server/examples/agent_free_consent_fixture.rs` (**5 loopback scenarios passed**) and `packages/ui/e2e/host-auto-sleep/host-auto-sleep.spec.ts` cover real Axum HTTP router + WebSocket routes, authenticated user sessions, and multi-surface dialog mounting without physical machine sleep.
+
+The Phase 06 QA record reports **388 targeted unit and integration tests passing**, **15/15** automated security boundary checks (`scripts/verify-idle-suspend-boundary.sh`), and **5/5** safe smoke scenarios.
 
 #### `host:idleSuspendChanged` transport event
 

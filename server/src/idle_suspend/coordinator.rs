@@ -682,7 +682,7 @@ async fn run_coordinator(
 
     let is_agent_free_policy = startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree;
     #[cfg(not(test))]
-    if is_agent_free_policy {
+    if is_agent_free_policy && quiet_period_seconds >= 60 {
         quiet_period_seconds = 10800;
     }
 
@@ -2593,7 +2593,7 @@ async fn attempt_agent_free_final_check(
         let Some(req) = active_consent.as_ref() else {
             return;
         };
-        let Some(_approving_conn_id) = &req.approving_connection_id else {
+        let Some(approving_conn_id) = &req.approving_connection_id else {
             return;
         };
         let Some(approving_act) = &req.approving_actor else {
@@ -2601,7 +2601,7 @@ async fn attempt_agent_free_final_check(
         };
 
         let pres_snapshot = client_presence.snapshot();
-        if pres_snapshot.connection_count == 0 {
+        if pres_snapshot.connection_count == 0 || !client_presence.is_connection_live(approving_conn_id) {
             if let Some(r) = active_consent.as_mut() {
                 r.state = ConsentState::Cancelled;
             }

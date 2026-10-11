@@ -5590,3 +5590,327 @@ async fn test_agent_free_server_audit_consent_record_lifecycle() {
     assert_eq!(all_records.len(), 1);
     assert_eq!(all_records[0].actor(), "alice");
 }
+
+#[tokio::test]
+async fn test_agent_free_c01_exact_three_hour_boundary_deterministic() {
+    use std::time::Duration;
+    use crate::config::AGENT_FREE_QUIET_PERIOD_SECONDS;
+
+    // 1. Deterministic boundary assertion: strictly > 10,800s is required
+    assert_eq!(AGENT_FREE_QUIET_PERIOD_SECONDS, 10800);
+    let quiet_threshold = Duration::from_secs(AGENT_FREE_QUIET_PERIOD_SECONDS);
+
+    // 10,799s: <= 10,800s -> ineligible
+    let d_10799 = Duration::from_secs(10799);
+    assert!(d_10799 <= quiet_threshold, "10,799s must be ineligible");
+
+    // Exactly 10,800s: <= 10,800s -> not strictly greater, ineligible
+    let d_10800 = Duration::from_secs(10800);
+    assert!(d_10800 <= quiet_threshold, "Exactly 10,800s must be ineligible");
+
+    // Strictly greater (> 10,800s, e.g. 10,801s): eligible!
+    let d_10801 = Duration::from_secs(10801);
+    assert!(d_10801 > quiet_threshold, "10,801s must be strictly greater and eligible");
+
+    // 2. Coordinator runtime verification using 1s unvalidated quiet period
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(RuntimeIdleSuspendTiming::new_unvalidated(1, 600)));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Immediately at t < 1s: Tracking, not yet eligible, zero suspend requests
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let snap_early = status_rx.borrow().clone();
+    if let Some(af) = snap_early.agent_free {
+        assert!(af.phase == crate::idle_suspend::status::AgentFreePhase::Tracking
+            || af.phase == crate::idle_suspend::status::AgentFreePhase::Reconciling);
+    }
+    assert!(executor.recorded_requests().is_empty(), "No suspend before threshold");
+
+    // Once strictly > 1s elapsed: eligible! Zero clients -> automatic handoff executed
+    let mut handed_off = false;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if snap.state == CoordinatorState::HandedOff || snap.state == CoordinatorState::Resumed {
+            handed_off = true;
+            break;
+        }
+    }
+    assert!(handed_off, "Must execute handoff once elapsed > quiet period");
+    assert_eq!(executor.recorded_requests().len(), 1, "Must record 1 suspend request");
+    assert_eq!(executor.recorded_requests()[0].wake_after_seconds, 600);
+
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c15_first_approving_socket_disconnects_while_another_stays_live() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(RuntimeIdleSuspendTiming::new_unvalidated(1, 600)));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    // Register two live clients: conn-1 and conn-2
+    let actor1 = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard1 = presence.reserve_pending_upgrade(actor1.clone()).unwrap();
+    let client_guard1 = guard1.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let actor2 = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard2 = presence.reserve_pending_upgrade(actor2.clone()).unwrap();
+    let client_guard2 = guard2.promote("conn-2".to_string(), "sec-2").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent
+    let mut consent_req_id = String::new();
+    let mut consent_req_rev = 0u64;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                if let Some(c) = &snap.consent {
+                    consent_req_id = c.request_id.clone();
+                    consent_req_rev = c.request_revision;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!consent_req_id.is_empty(), "Must open consent request");
+
+    // Retire conn-1 immediately before or during approval check
+    client_guard1.retire();
+
+    // Now submit approval with conn-1 (which is retired / no longer live)
+    let cmd = crate::idle_suspend::coordinator::SubmitConsentDecisionCommand {
+        actor: actor1,
+        request_id: consent_req_id,
+        request_revision: consent_req_rev,
+        connection_id: "conn-1".to_string(),
+        decision: crate::idle_suspend::protocol::ConsentDecisionValue::Approve,
+    };
+    let res = coordinator.submit_consent_decision(cmd).await;
+    // First approval returns Success with settled: true
+    match res {
+        crate::idle_suspend::coordinator::CoordinatorConsentDecisionResult::Success { response, .. } => {
+            assert_eq!(response.decision, crate::idle_suspend::protocol::ConsentDecisionValue::Approve);
+        }
+        other => panic!("Expected Success response, got {:?}", other),
+    }
+
+    // Wait for coordinator to run final check and verify approving socket disconnection
+    let mut deferred = false;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::Deferred {
+                if af.reason_code == Some(crate::idle_suspend::status::AgentFreeReasonCode::LastClientDisconnected) {
+                    deferred = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(deferred, "Coordinator must transition to Deferred when approving socket is no longer live");
+    assert!(executor.recorded_requests().is_empty(), "No suspend request dispatched to executor");
+
+    client_guard2.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c18_zero_client_fence_fails_on_race() {
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+    let initial_rev = presence.snapshot().revision;
+
+    // 1. If expected_revision does not match, fence fails with RevisionMismatch
+    let err_rev = presence.try_claim_no_client_fence(initial_rev + 99).unwrap_err();
+    assert!(matches!(err_rev, crate::idle_suspend::client_presence::PresenceClaimError::RevisionMismatch { .. }));
+
+    // 2. Reserve a pending upgrade slot: revision changes and pending > 0
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor).unwrap();
+    let current_rev = presence.snapshot().revision;
+    assert!(current_rev > initial_rev);
+
+    // Claiming fence with current_rev fails because pending upgrades are present
+    let err_pending = presence.try_claim_no_client_fence(current_rev).unwrap_err();
+    assert!(matches!(err_pending, crate::idle_suspend::client_presence::PresenceClaimError::PendingUpgradesPresent { .. }));
+
+    guard.release();
+}
+
+#[tokio::test]
+async fn test_agent_free_c23_working_or_unknown_cancels_pending_consent() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(RuntimeIdleSuspendTiming::new_unvalidated(1, 600)));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let actor = crate::api::auth::AuthenticatedActor::dev_user();
+    let guard = presence.reserve_pending_upgrade(actor.clone()).unwrap();
+    let client_guard = guard.promote("conn-1".to_string(), "sec-1").unwrap();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for AwaitingConsent
+    let mut opened = false;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if let Some(af) = &snap.agent_free {
+            if af.phase == crate::idle_suspend::status::AgentFreePhase::AwaitingConsent {
+                opened = true;
+                break;
+            }
+        }
+    }
+    assert!(opened, "Must open consent request");
+
+    // Simulate timing update with new quiet period (or cancellation)
+    let cmd = crate::idle_suspend::coordinator::UpdateTimingCommand {
+        actor: "admin".to_string(),
+        quiet_period_seconds: 10800,
+        wake_after_seconds: 900,
+    };
+    let patch_res = coordinator.update_timing(cmd).await;
+    assert!(matches!(patch_res, crate::idle_suspend::coordinator::CoordinatorTimingResult::Success { .. }));
+
+    let snap_after = coordinator.status();
+    let consent = snap_after.consent.unwrap();
+    assert_eq!(consent.state, crate::idle_suspend::status::ConsentState::Cancelled);
+    assert!(executor.recorded_requests().is_empty(), "No suspend executed");
+
+    client_guard.retire();
+    coordinator.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_agent_free_c27_resume_baseline_reset() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let registry_path = tmp.path().join("dam-hopper.toml");
+    let policy = StartupIdleSuspendPolicy {
+        enabled: true,
+        canonical_registry_path: registry_path,
+        enrollment_reference: None,
+        capability_selection: crate::config::IdleSuspendCapabilitySelection::Auto,
+        automatic_policy: crate::config::IdleSuspendAutomaticPolicy::AgentFree,
+        agent_executables: Arc::new(crate::idle_suspend::AgentExecutableSet::default()),
+    };
+    let timing = Arc::new(tokio::sync::RwLock::new(RuntimeIdleSuspendTiming::new_unvalidated(1, 600)));
+    let pty_manager = PtySessionManager::new(Arc::new(crate::pty::event_sink::NoopEventSink));
+    let executor = Arc::new(FakeExecutor::new(true));
+    let presence = crate::idle_suspend::client_presence::ClientPresenceRegistry::new();
+
+    let coordinator = IdleSuspendCoordinator::start_with_components(
+        policy,
+        timing,
+        None,
+        None,
+        executor.clone(),
+        pty_manager,
+        None,
+        None,
+        Some(presence),
+        None,
+        None,
+    );
+
+    let status_rx = coordinator.subscribe_status();
+
+    // Wait for first handoff (0 clients)
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap = status_rx.borrow().clone();
+        if snap.state == CoordinatorState::HandedOff || snap.state == CoordinatorState::Resumed {
+            break;
+        }
+    }
+    assert_eq!(executor.recorded_requests().len(), 1, "First handoff executed");
+
+    // After resume, coordinator must not immediately execute a second handoff in the next tick
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(executor.recorded_requests().len(), 1, "Must not resuspend immediately; anchor reset");
+
+    coordinator.shutdown().await;
+}

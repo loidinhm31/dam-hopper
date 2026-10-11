@@ -95,17 +95,21 @@ if [[ ! -f "packages/ui/browser-tests/idle-suspend-settings-status.browser.tsx" 
 fi
 echo "PASS: UI browser test suite present."
 
-# 8. Verify protected force-suspend route registration with body limit
-echo "--> Verifying force-suspend route registration and body limit..."
+# 8. Verify protected force-suspend and consent-decision route registration with body limit
+echo "--> Verifying force-suspend and consent-decision route registration and body limit..."
 if ! grep -q '/api/system/idle-suspend/v1/force-suspend' server/src/api/router.rs; then
     echo "FAIL: force-suspend route not registered in server/src/api/router.rs" >&2
     exit 1
 fi
-if ! grep -q 'RequestBodyLimitLayer::new(16 \* 1024)' server/src/api/router.rs; then
-    echo "FAIL: force-suspend route missing 16 KiB RequestBodyLimitLayer" >&2
+if ! grep -q '/api/system/idle-suspend/v1/consent/decision' server/src/api/router.rs; then
+    echo "FAIL: consent-decision route not registered in server/src/api/router.rs" >&2
     exit 1
 fi
-echo "PASS: force-suspend route registered with 16 KiB body limit."
+if ! grep -q 'RequestBodyLimitLayer::new(16 \* 1024)' server/src/api/router.rs; then
+    echo "FAIL: route missing 16 KiB RequestBodyLimitLayer" >&2
+    exit 1
+fi
+echo "PASS: force-suspend and consent-decision routes registered with 16 KiB body limit."
 
 # 9. Verify helper execution domain accepts zero while automatic timing enforces minimum
 echo "--> Verifying wake duration domain and bounds enforcement..."
@@ -198,5 +202,21 @@ if ! grep -q 'HELPER_SERVICE_UNIT' server/src/linux_release/status.rs; then
     exit 1
 fi
 echo "PASS: Release manager helper unit staging, activation, and status verified."
+
+# 15. Verify UI HostSleepConsent components and E2E spec existence
+echo "--> Verifying UI HostSleepConsent components and E2E spec..."
+if [[ ! -f "packages/ui/src/components/organisms/HostSleepConsentHost.tsx" ]]; then
+    echo "FAIL: HostSleepConsentHost.tsx is missing" >&2
+    exit 1
+fi
+if [[ ! -f "packages/ui/src/components/organisms/HostSleepConsentDialog.tsx" ]]; then
+    echo "FAIL: HostSleepConsentDialog.tsx is missing" >&2
+    exit 1
+fi
+if [[ ! -f "packages/ui/e2e/host-auto-sleep/host-auto-sleep.spec.ts" ]]; then
+    echo "FAIL: host-auto-sleep.spec.ts is missing" >&2
+    exit 1
+fi
+echo "PASS: UI HostSleepConsent components and E2E spec present."
 
 echo "=== All Idle Suspend Boundary Checks Passed ==="
