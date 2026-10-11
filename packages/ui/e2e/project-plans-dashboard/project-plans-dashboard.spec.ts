@@ -194,18 +194,19 @@ created: 2026-10-01
 | 04 | Phase 4 | Completed | 100% | 8h | [Phase 4](./phase-04.md) |
 | 05 | Phase 5 | Completed | 100% | 8h | [Phase 5](./phase-05.md) |
 `;
+    const preWriteStat = await appServices.statContainerFile(planFilePath);
     expect(await appServices.readContainerFile(planFilePath)).toBe(
       initialPlanBytes,
     );
-    expect((await appServices.statContainerFile(planFilePath)).size).toBe(
-      initialPlanStat.size,
-    );
+    expect(preWriteStat.size).toBe(initialPlanStat.size);
+    expect(preWriteStat.mtime).toBe(initialPlanStat.mtime);
     await appServices.writeContainerFile(
       planFilePath,
       updatedPlan,
     );
     const postUpdatePlanBytes = await appServices.readContainerFile(planFilePath);
     const postUpdatePlanStat = await appServices.statContainerFile(planFilePath);
+    expect(postUpdatePlanBytes).toBe(updatedPlan.trim());
     await expect(selectedStatus).toBeHidden();
     await expect(
       planDashboard
