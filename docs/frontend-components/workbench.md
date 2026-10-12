@@ -88,10 +88,14 @@ Authentication work is profile-owned. `ServerSettingsDialog` fences pending
 responses to the captured profile/endpoint and request ID; opening a profile
 already marked `mfa-required` requests a step-up challenge with that profile's
 current token. A successful proof stores only that profile's replacement token
-and creates a new transport generation. `ServerProfilesDialog` and `TopNav`
+and creates a new transport generation. `ServerSettingsDialog` keeps its header
+and footer pinned (`shrink-0`) while scrolling its body region
+(`data-dialog-scroll-body="true"`) within `.dialog-viewport-fit`, adjusting
+`scrollTop` when an MFA challenge opens, receives focus/input, or resizes via
+`visualViewport` so the verification/enrollment action buttons remain reachable
+on mobile viewports. `ServerProfilesDialog` and `TopNav`
 expose/report each profile's state without turning one stale profile into a
 global lockout.
-
 `connections.ts` maps `MFA_REQUIRED` status/REST errors and WebSocket close
 `4403` to profile-local `mfa-required`, without the generic reconnect loop. A
 live stale transport is retired; the profile token remains available for HTTP

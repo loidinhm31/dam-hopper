@@ -1,13 +1,13 @@
 {
-  "run_id": "e2e-run-1791379023313-91118f90",
+  "run_id": "e2e-run-1791791128585-90d88202",
   "command": "pnpm --filter @dam-hopper/ui test:e2e",
-  "started_at": "2026-10-07T13:17:03.313Z",
-  "completed_at": "2026-10-07T13:17:09.395Z",
+  "started_at": "2026-10-12T07:45:28.585Z",
+  "completed_at": "2026-10-12T07:45:35.330Z",
   "case_name": "sqlite-auth-lite-mode",
   "route": "/workspace",
-  "git_head": "8203e01c7be7be78314ba950a6dc51237ddbbacc",
-  "source_fingerprint": "fbc5d6d11501bab92d70e85087ad6420a07dc3b07afa346964868ad41c17f284",
-  "seed_digest": "d8de725aa4edcd8415180ad2d2f96d9e3de67a069596ab2b750226a75f7f94aa",
+  "git_head": "43dc6d56d58d928b8ae8a612b0134f38c9c4eff6",
+  "source_fingerprint": "bf0892e65f76765fe653965211e04186ee0c1c5ce7611f32c4dd9372c629bfce",
+  "seed_digest": "f87f986f7002a5ae659143f25827b737cdcb60f589b5b1b93ae5cef804371565",
   "browser": "chromium",
   "browser_version": "151.0.7922.173",
   "os": "linux",
@@ -20,10 +20,28 @@
     {
       "checkpoint": "primary",
       "file_name": "screenshot.png",
-      "sha256": "98dafa4a4ed6ba51ae41a67901c474af8eaad4aa80b93375475ceabde02fdf01",
+      "sha256": "aabf319472e0423813d9af9bcf5284dfe0a09704967bc1d00fc8989b0eb26e60",
       "dimensions": {
         "width": 1440,
         "height": 900
+      }
+    },
+    {
+      "checkpoint": "mobile-mfa-enrollment",
+      "file_name": "mobile-mfa-enrollment.png",
+      "sha256": "ccba1601f024273d86ad4f0d78f3890c9a44de586ad87deffb0a77d1d1b05abc",
+      "dimensions": {
+        "width": 375,
+        "height": 667
+      }
+    },
+    {
+      "checkpoint": "mobile-mfa-verify",
+      "file_name": "mobile-mfa-verify.png",
+      "sha256": "31f093df99663d0886f290709e98e73a4d0bffb0811886c55b2e1ae3773a753d",
+      "dimensions": {
+        "width": 375,
+        "height": 667
       }
     }
   ],

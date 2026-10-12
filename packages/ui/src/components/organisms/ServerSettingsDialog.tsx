@@ -107,6 +107,9 @@ export function ServerSettingsDialog({
   const latestProfileIdRef = useRef<string | undefined>(profile?.id);
   const testRequestIdRef = useRef(0);
   latestProfileIdRef.current = profile?.id;
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const mfaSectionRef = useRef<HTMLDivElement>(null);
+  const hasMfaSetupData = Boolean(mfaSetupData);
 
   const isEditMode = profile !== undefined;
   const clearAuthDraft = useCallback(() => {
@@ -211,6 +214,30 @@ export function ServerSettingsDialog({
       clearAuthDraft();
     };
   }, [open, profile, isEditMode, clearAuthDraft, initiateStepUp]);
+
+  useEffect(() => {
+    if (!open || testState !== "challenge" || mfaLoading) return;
+    const scrollBody = bodyScrollRef.current;
+    const mfaSection = mfaSectionRef.current;
+    if (!scrollBody || !mfaSection) return;
+
+    const bodyRect = scrollBody.getBoundingClientRect();
+    const sectionRect = mfaSection.getBoundingClientRect();
+    const bodyHeight = bodyRect.height || bodyRect.bottom - bodyRect.top;
+    const sectionHeight =
+      sectionRect.height || sectionRect.bottom - sectionRect.top;
+    if (bodyHeight <= 0 || sectionHeight <= 0) return;
+
+    if (sectionHeight <= bodyHeight) {
+      if (sectionRect.bottom > bodyRect.bottom) {
+        scrollBody.scrollTop += sectionRect.bottom - bodyRect.bottom;
+      } else if (sectionRect.top < bodyRect.top) {
+        scrollBody.scrollTop -= bodyRect.top - sectionRect.top;
+      }
+    } else if (sectionRect.top !== bodyRect.top) {
+      scrollBody.scrollTop += sectionRect.top - bodyRect.top;
+    }
+  }, [open, testState, mfaMode, mfaLoading, hasMfaSetupData]);
 
   const rawUrl = url.trim();
   // Auto-prepend protocol for display normalization (matches setServerUrl behavior)
@@ -736,7 +763,7 @@ export function ServerSettingsDialog({
         style={{ background: "var(--color-surface)" }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
           <div className="flex items-center gap-2">
             <Server size={16} className="text-[var(--color-primary)]" />
             <span className="text-sm font-semibold text-[var(--color-text)] tracking-wide">
@@ -754,7 +781,12 @@ export function ServerSettingsDialog({
         </div>
 
         {/* Body */}
-        <div className="px-5 py-5 space-y-4">
+        <div
+          ref={bodyScrollRef}
+          data-testid="server-settings-dialog-body"
+          data-dialog-scroll-body="true"
+          className="compact-scroll-region min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5"
+        >
           {isEditMode && (
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--color-text)]">
@@ -953,7 +985,11 @@ export function ServerSettingsDialog({
           </div>
 
           {testState === "challenge" && (
-            <div className="pt-2 border-t border-[var(--color-border)]/60">
+            <div
+              ref={mfaSectionRef}
+              data-testid="server-settings-mfa-section"
+              className="pt-2 border-t border-[var(--color-border)]/60"
+            >
               <MfaChallengeForm
                 mode={mfaMode}
                 setupData={mfaSetupData}
@@ -980,7 +1016,7 @@ export function ServerSettingsDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] px-5 py-4">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] px-5 py-4">
           <div className="flex gap-4 items-center">
             <button
               onClick={handleReset}

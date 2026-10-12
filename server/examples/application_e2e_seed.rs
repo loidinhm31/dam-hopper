@@ -108,10 +108,11 @@ async fn main() -> anyhow::Result<()> {
     let expires_at_bson = chrono_to_bson(expires_at);
     let mfa_verified_at_bson = chrono_to_bson(now);
 
+    let password_hash = bcrypt::hash("StrongPassword123!", bcrypt::DEFAULT_COST)?;
     let user = UserRecord {
         id: None,
         username: username.clone(),
-        password_hash: "$2b$12$e2e_seeded_admin_hash_placeholder".to_string(),
+        password_hash,
         is_enabled: true,
         role: UserRole::Admin,
         auth_version: 0,
