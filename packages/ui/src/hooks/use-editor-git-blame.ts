@@ -282,7 +282,7 @@ export function useEditorGitBlame({
   const bypassCacheNextRef = useRef<boolean>(false);
 
   const lastHeadCommitRef = useRef<string | null>(
-    warmHit?.hit && warmHit.data ? (warmHit.data.baseCommitOid ?? "") : null,
+    warmHit?.hit && warmHit.data ? (warmHit.data.baseCommitOid ?? null) : null,
   );
   const lastOwningRootIdRef = useRef<string | null>(
     warmHit?.hit && warmHit.data ? warmHit.data.rootId : null,
@@ -299,7 +299,7 @@ export function useEditorGitBlame({
       setData(warmHit.data);
       dataRef.current = warmHit.data;
       setStatus("ready");
-      lastHeadCommitRef.current = warmHit.data.baseCommitOid ?? "";
+      lastHeadCommitRef.current = warmHit.data.baseCommitOid ?? null;
       lastOwningRootIdRef.current = warmHit.data.rootId;
     } else {
       setData(null);
@@ -334,7 +334,7 @@ export function useEditorGitBlame({
     setStatus("ready");
     setData(warmHit.data);
     dataRef.current = warmHit.data;
-    lastHeadCommitRef.current = warmHit.data.baseCommitOid ?? "";
+    lastHeadCommitRef.current = warmHit.data.baseCommitOid ?? null;
     lastOwningRootIdRef.current = warmHit.data.rootId;
     setError(null);
     setErrorCode(null);
@@ -404,7 +404,7 @@ export function useEditorGitBlame({
           setStatus("ready");
           setData(hit.data);
           dataRef.current = hit.data;
-          lastHeadCommitRef.current = hit.data.baseCommitOid ?? "";
+          lastHeadCommitRef.current = hit.data.baseCommitOid ?? null;
           lastOwningRootIdRef.current = hit.data.rootId;
           setError(null);
           setErrorCode(null);
@@ -505,7 +505,7 @@ export function useEditorGitBlame({
         setStatus("ready");
         setData(validation.response);
         dataRef.current = validation.response;
-        lastHeadCommitRef.current = validation.response.baseCommitOid ?? "";
+        lastHeadCommitRef.current = validation.response.baseCommitOid ?? null;
         if (validation.response.rootId) {
           lastOwningRootIdRef.current = validation.response.rootId;
         }
@@ -692,7 +692,7 @@ export function useEditorGitBlame({
             return;
           }
 
-          const headOid = owningRoot.status?.lastCommit?.hash ?? "";
+          const headOid: string | null = owningRoot.status?.lastCommit?.hash ?? null;
           const rootId = owningRoot.rootId;
 
           const discResult = completeRootDiscovery(
@@ -981,6 +981,16 @@ export function useEditorGitBlame({
       ) {
         if (e.generation !== snapshotRef.current.owner.generation) return;
       }
+      if (queryClient && snapshotRef.current?.owner && tabRef.current) {
+        advanceTargetEpoch(
+          queryClient,
+          snapshotRef.current.owner,
+          tabRef.current.target,
+        );
+      }
+      setData(null);
+      dataRef.current = null;
+      setStatus("waiting");
       triggerRepositoryRefresh({ reblameOnSameHead: false });
     });
 
@@ -1002,20 +1012,16 @@ export function useEditorGitBlame({
               lastOwningRootIdRef.current,
             );
             if (match.matches) {
-              if (
-                match.isDiffMutation &&
-                queryClient &&
-                snapshotRef.current?.owner
-              ) {
+              if (queryClient && snapshotRef.current?.owner) {
                 advanceTargetEpoch(
                   queryClient,
                   snapshotRef.current.owner,
                   currentTab.target,
                 );
-                setData(null);
-                dataRef.current = null;
-                setStatus("waiting");
               }
+              setData(null);
+              dataRef.current = null;
+              setStatus("waiting");
               triggerRepositoryRefresh({
                 reblameOnSameHead: match.isDiffMutation,
               });
@@ -1023,7 +1029,6 @@ export function useEditorGitBlame({
           }
         })
       : () => {};
-
     return () => {
       window.removeEventListener("focus", onWindowFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);

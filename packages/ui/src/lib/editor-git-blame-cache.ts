@@ -664,19 +664,24 @@ export function setCompletedBlamePayload(
 
   const keyString = JSON.stringify(queryKey);
   const existingEntry = state.lruEntries.get(keyString);
-  const existingWeight = existingEntry ? existingEntry.weight : 0;
-  const entryCountDelta = existingEntry ? 0 : 1;
+
+  // If replacing an existing key, remove it first so totalBytes reflects only other entries
+  if (existingEntry) {
+    state.totalBytes -= existingEntry.weight;
+    state.lruEntries.delete(keyString);
+    targetState.completedEntryKeys.delete(keyString);
+  }
 
   // Evict until within entry count and memory budget
   while (
-    (state.totalBytes - existingWeight + weight > BLAME_CACHE_MAX_BYTES ||
-      state.lruEntries.size + entryCountDelta > BLAME_CACHE_MAX_ENTRIES) &&
+    (state.totalBytes + weight > BLAME_CACHE_MAX_BYTES ||
+      state.lruEntries.size >= BLAME_CACHE_MAX_ENTRIES) &&
     state.lruEntries.size > 0
   ) {
     evictOldestLRUEntry(state, queryClient);
   }
 
-  if (state.totalBytes - existingWeight + weight > BLAME_CACHE_MAX_BYTES) {
+  if (state.totalBytes + weight > BLAME_CACHE_MAX_BYTES) {
     return false;
   }
 
@@ -699,7 +704,7 @@ export function setCompletedBlamePayload(
     weight,
     lastAccessed: ++globalLruAccessCounter,
   });
-  state.totalBytes = state.totalBytes - existingWeight + weight;
+  state.totalBytes += weight;
   targetState.completedEntryKeys.add(keyString);
 
   return true;
@@ -733,8 +738,6 @@ export function advanceTargetEpoch(
     const targetState = state.targets.get(targetKey);
     if (targetState) {
       targetState.repositoryEpoch = newEpoch;
-      targetState.trustedRootId = undefined;
-      targetState.trustedHeadOid = undefined;
 
       for (const keyString of targetState.completedEntryKeys) {
         const entry = state.lruEntries.get(keyString);
@@ -954,7 +957,7 @@ export function completeRootDiscovery(
   queryClient: QueryClient,
   handle: DiscoveryHandle,
   discoveredRootId: string,
-  discoveredHeadOid: string,
+  discoveredHeadOid: string | null,
 ): { isStale: boolean; headChanged: boolean; rootChanged: boolean } {
   const state = clientStateMap.get(queryClient);
   if (!state) return { isStale: true, headChanged: true, rootChanged: true };
@@ -963,11 +966,15 @@ export function completeRootDiscovery(
     return { isStale: true, headChanged: true, rootChanged: true };
   }
 
-  if (
-    targetState.discoveryToken !== handle.token ||
-    targetState.repositoryEpoch !== handle.capturedEpoch
-  ) {
+  // Finding 3 fix: Only the active discovery token can clear discoveryPending
+  if (targetState.discoveryToken !== handle.token) {
+    return { isStale: true, headChanged: true, rootChanged: true };
+  }
+
+  if (targetState.repositoryEpoch !== handle.capturedEpoch) {
     targetState.discoveryPending = false;
+    targetState.discoveryToken = null;
+    targetState.discoveryEpoch = null;
     return { isStale: true, headChanged: true, rootChanged: true };
   }
 
@@ -978,6 +985,8 @@ export function completeRootDiscovery(
   const prevHead = targetState.trustedHeadOid;
   const prevRoot = targetState.trustedRootId;
 
+  // If prevHead is known (string or null for unborn), compare against discoveredHeadOid.
+  // Initial discovery (prevHead === undefined) establishes baseline without reporting false change.
   const headChanged = prevHead !== undefined && prevHead !== discoveredHeadOid;
   const rootChanged = prevRoot !== undefined && prevRoot !== discoveredRootId;
 

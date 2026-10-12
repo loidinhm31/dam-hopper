@@ -994,4 +994,143 @@ describe("editor-git-blame-cache", () => {
       ).toBe(false);
     });
   });
+
+  describe("Review regressions (PR 65 Findings 2, 3, 4)", () => {
+    it("Finding 2: replacing an existing cache key with a larger payload accurately tracks weight without double subtraction", () => {
+      const contentSmall = "small content\n";
+      const shaSmall = computeBufferSha256(contentSmall);
+      const respSmall = makeValidBlameResponse(contentSmall);
+
+      const lease1 = beginRequestLease(queryClient, owner, target, "path1.ts");
+      setCompletedBlamePayload(
+        queryClient,
+        owner,
+        target,
+        "path1.ts",
+        shaSmall,
+        respSmall,
+        lease1.capturedEpoch,
+        lease1,
+      );
+      endRequestLease(queryClient, lease1);
+
+      const lease2 = beginRequestLease(queryClient, owner, target, "path2.ts");
+      setCompletedBlamePayload(
+        queryClient,
+        owner,
+        target,
+        "path2.ts",
+        shaSmall,
+        respSmall,
+        lease2.capturedEpoch,
+        lease2,
+      );
+      endRequestLease(queryClient, lease2);
+
+      // Now replace path1.ts with a larger response
+      const largeRanges = Array.from({ length: 500 }, (_, i) => ({
+        startLine: i + 1,
+        lineCount: 1,
+        commitIndex: 0,
+      }));
+      const respLarge = {
+        ...respSmall,
+        bufferLineCount: 500,
+        ranges: largeRanges,
+      };
+      const lease3 = beginRequestLease(queryClient, owner, target, "path1.ts");
+      const replaced = setCompletedBlamePayload(
+        queryClient,
+        owner,
+        target,
+        "path1.ts",
+        shaSmall,
+        respLarge,
+        lease3.capturedEpoch,
+        lease3,
+      );
+      endRequestLease(queryClient, lease3);
+      expect(replaced).toBe(true);
+
+      // path1.ts is still in cache with new size
+      const hit = getCompletedBlameHit(
+        queryClient,
+        owner,
+        target,
+        "path1.ts",
+        shaSmall,
+        500,
+        1,
+        "snap-check",
+      );
+      expect(hit.hit).toBe(true);
+      expect(hit.data?.bufferLineCount).toBe(500);
+    });
+
+    it("Finding 3: older overlapping discovery completing late cannot cancel newer discovery pending protection", () => {
+      // Establish initial baseline discovery
+      const initialHandle = beginRootDiscovery(queryClient, owner, target);
+      completeRootDiscovery(queryClient, initialHandle, "root-1", "head-initial");
+
+      // Discovery A begins
+      const handleA = beginRootDiscovery(queryClient, owner, target);
+      // Discovery B begins while A is in flight
+      const handleB = beginRootDiscovery(queryClient, owner, target);
+      expect(handleA.token).not.toBe(handleB.token);
+
+      // Discovery A completes late
+      const resultA = completeRootDiscovery(
+        queryClient,
+        handleA,
+        "root-1",
+        "head-A",
+      );
+      expect(resultA.isStale).toBe(true);
+
+      // Cache hit must STILL be blocked because Discovery B is still pending!
+      const content = "file content\n";
+      const sha = computeBufferSha256(content);
+      const hitDuringPendingB = getCompletedBlameHit(
+        queryClient,
+        owner,
+        target,
+        "file.ts",
+        sha,
+        computeMonacoLineCount(content),
+        1,
+        "snap-1",
+      );
+      expect(hitDuringPendingB.hit).toBe(false);
+
+      // Now Discovery B completes
+      const resultB = completeRootDiscovery(
+        queryClient,
+        handleB,
+        "root-1",
+        "head-B",
+      );
+      expect(resultB.isStale).toBe(false);
+      expect(resultB.headChanged).toBe(true);
+    });
+
+    it("Finding 4: unborn repositories (null HEAD) establish unborn state and do not report false headChanged on repeat discovery", () => {
+      // Initial discovery of unborn repository
+      const handle1 = beginRootDiscovery(queryClient, owner, target);
+      const disc1 = completeRootDiscovery(queryClient, handle1, "root-unborn", null);
+      expect(disc1.isStale).toBe(false);
+      expect(disc1.headChanged).toBe(false); // Initial discovery establishes baseline
+
+      // Repeat discovery while repository remains unborn (HEAD is still null)
+      const handle2 = beginRootDiscovery(queryClient, owner, target);
+      const disc2 = completeRootDiscovery(queryClient, handle2, "root-unborn", null);
+      expect(disc2.isStale).toBe(false);
+      expect(disc2.headChanged).toBe(false); // Must NOT falsely report head changed!
+
+      // When first commit lands, HEAD becomes a commit hash
+      const handle3 = beginRootDiscovery(queryClient, owner, target);
+      const disc3 = completeRootDiscovery(queryClient, handle3, "root-unborn", "first-commit-sha");
+      expect(disc3.isStale).toBe(false);
+      expect(disc3.headChanged).toBe(true); // Now HEAD genuinely changed from null to commit!
+    });
+  });
 });
