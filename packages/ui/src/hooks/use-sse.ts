@@ -28,6 +28,10 @@ import type { ConnectionRef, ProfileId } from "../api/ownership.js";
 import { profileQueryKey, profileQueryPrefix } from "../api/query-client.js";
 import { isCurrentConnection } from "../api/connections.js";
 import {
+  invalidateBlameForOwner,
+  invalidateBlameForProject,
+} from "@/lib/editor-git-blame-cache.js";
+import {
   canUseResourceRest,
   getHostResourceSource,
   captureResourceSource,
@@ -535,6 +539,7 @@ export function installTransportBridge(
         }
       } else if (channel === "config:changed") {
         for (const qc of qcs) {
+          invalidateBlameForOwner(qc, owner);
           void qc.invalidateQueries({
             queryKey: profileQueryKey(owner, "config"),
           });
@@ -552,6 +557,7 @@ export function installTransportBridge(
         try {
           const { projectName } = data as { projectName: string };
           for (const qc of qcs) {
+            invalidateBlameForProject(qc, owner, projectName);
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "git", projectName, null),
             });
@@ -561,6 +567,7 @@ export function installTransportBridge(
           }
         } catch {
           for (const qc of qcs) {
+            invalidateBlameForProject(qc, owner);
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "projects"),
             });
@@ -574,6 +581,7 @@ export function installTransportBridge(
         ) {
           const projectName = data.projectName.trim();
           for (const qc of qcs) {
+            invalidateBlameForProject(qc, owner, projectName);
             void qc.invalidateQueries({
               queryKey: profileQueryKey(owner, "git", "worktrees", projectName),
             });
@@ -739,6 +747,9 @@ export function handleWorkspaceChanged(
   >,
   owner?: ConnectionRef,
 ): Promise<void> {
+  if (owner) {
+    invalidateBlameForOwner(queryClient, owner);
+  }
   return removeExplorerLanguageScanCaches(queryClient).then(() => {
     if (owner) {
       void queryClient.invalidateQueries({

@@ -43,11 +43,12 @@ pub async fn blame_route(
         .map_err(|_| ApiError::from(GitBlameError::Busy))?;
 
     let target_path = resolve_target_path(&state, &project, input.worktree_path.clone()).await?;
+    let cache = state.git_blame_cache.clone();
 
     let resp: GitBlameResponse = tokio::task::spawn_blocking(move || {
         // Keep permit owned inside the blocking closure for its full lifetime.
         let _permit = permit;
-        execute_native_blame(&target_path, &input)
+        execute_native_blame(&target_path, &input, &cache)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?

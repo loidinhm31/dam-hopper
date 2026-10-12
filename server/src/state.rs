@@ -135,6 +135,8 @@ pub struct AppState {
     pub agent_status: crate::agent_status::AgentStatusRuntime,
     /// Global admission semaphore for concurrent native git blame operations (2 permits).
     pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Shared in-memory LRU cache retaining historical git blame baselines.
+    pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
 }
 
 impl AppState {
@@ -424,6 +426,7 @@ impl AppState {
             auth_service,
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
+            git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
         })
     }
     /// Override the auth service handle (used for testing or custom clock injection).

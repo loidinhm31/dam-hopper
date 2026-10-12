@@ -720,3 +720,220 @@ async fn crlf_head_attribution_preserves_history_and_real_buffer_edits() {
         before_mixed
     );
 }
+
+async fn request_blame_envelope(
+    app: &TestApp,
+    path: &str,
+    content: &str,
+    snapshot_id: &str,
+    model_version: i64,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/git/test-repo/blame")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "path": path,
+                "content": content,
+                "snapshotId": snapshot_id,
+                "modelVersion": model_version,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn test_api_blame_cache_sequential_clean_repeat_and_dirty_projection() {
+    let app = setup_test_app();
+    let head_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    let disk_content = std::fs::read_to_string(app.project_path.join("app.rs")).unwrap();
+
+    assert_eq!(app.state.git_blame_cache.len(), 0);
+
+    // 1. First clean request (cold miss)
+    let (status1, resp1) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-seq-1", 1).await;
+    assert_eq!(status1, StatusCode::OK);
+    assert_eq!(resp1["status"], "ready");
+    assert_eq!(resp1["snapshotId"], "snap-seq-1");
+    assert_eq!(resp1["modelVersion"], 1);
+    assert_eq!(resp1["baseCommitOid"], head_oid);
+    assert_eq!(app.state.git_blame_cache.len(), 1);
+    assert!(app.state.git_blame_cache.retained_bytes() > 0);
+
+    // 2. Sequential clean repeat (warm hit, rebound envelope)
+    let (status2, resp2) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-seq-2", 2).await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(resp2["status"], "ready");
+    assert_eq!(resp2["snapshotId"], "snap-seq-2");
+    assert_eq!(resp2["modelVersion"], 2);
+    assert_eq!(resp2["baseCommitOid"], head_oid);
+    assert_eq!(resp2["ranges"], resp1["ranges"]);
+    assert_eq!(resp2["commits"], resp1["commits"]);
+    assert_eq!(app.state.git_blame_cache.len(), 1);
+
+    // 3. Dirty replacement buffer at same HEAD (reuses baseline from cache)
+    let dirty_content = "fn main() {\n    println!(\"v2-dirty\");\n}\n";
+    let (status3, resp3) =
+        request_blame_envelope(&app, "app.rs", dirty_content, "snap-seq-3", 3).await;
+    assert_eq!(status3, StatusCode::OK);
+    assert_eq!(resp3["status"], "ready");
+    assert_eq!(resp3["snapshotId"], "snap-seq-3");
+    assert_eq!(resp3["modelVersion"], 3);
+    assert_eq!(resp3["baseCommitOid"], head_oid);
+    let ranges = resp3["ranges"].as_array().unwrap();
+    assert_eq!(ranges.len(), 4);
+    assert_eq!(ranges[0]["commitIndex"], 0);
+    assert!(ranges[1]["commitIndex"].is_null());
+    assert_eq!(ranges[2]["commitIndex"], 0);
+    assert!(ranges[3]["commitIndex"].is_null());
+    assert_eq!(app.state.git_blame_cache.len(), 1);
+}
+
+#[tokio::test]
+async fn test_api_blame_cache_new_head_advances_cache() {
+    let app = setup_test_app();
+    let disk_content = std::fs::read_to_string(app.project_path.join("app.rs")).unwrap();
+
+    let (status1, _resp1) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-head-1", 1).await;
+    assert_eq!(status1, StatusCode::OK);
+    assert_eq!(app.state.git_blame_cache.len(), 1);
+
+    // Advance HEAD by committing second.rs
+    std::fs::write(app.project_path.join("second.rs"), "pub fn test() {}\n").unwrap();
+    git(&["add", "second.rs"], &app.project_path);
+    git(&["commit", "-m", "feat: advance head"], &app.project_path);
+    let new_head = git_output(&["rev-parse", "HEAD"], &app.project_path);
+
+    let (status2, resp2) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-head-2", 2).await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(resp2["baseCommitOid"], new_head);
+    assert_eq!(app.state.git_blame_cache.len(), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_api_blame_cache_warm_disk_symlink_rejected() {
+    let app = setup_test_app();
+    let disk_content = std::fs::read_to_string(app.project_path.join("app.rs")).unwrap();
+
+    // Warm cache for app.rs
+    let (status1, _resp1) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-sym-1", 1).await;
+    assert_eq!(status1, StatusCode::OK);
+    assert_eq!(app.state.git_blame_cache.len(), 1);
+
+    // Replace disk app.rs with symlink
+    let app_rs_path = app.project_path.join("app.rs");
+    std::fs::remove_file(&app_rs_path).unwrap();
+    std::os::unix::fs::symlink("target.txt", &app_rs_path).unwrap();
+
+    let (status2, resp2) =
+        request_blame_envelope(&app, "app.rs", &disk_content, "snap-sym-2", 2).await;
+    assert_eq!(status2, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(resp2["code"], "GIT_BLAME_UNSUPPORTED_FILE");
+}
+
+#[tokio::test]
+#[ignore]
+async fn blame_cache_large_file_performance() {
+    let app = setup_test_app();
+    let large_file = "large.txt";
+    let large_path = app.project_path.join(large_file);
+
+    // Generate 10,000 line file
+    let mut lines = Vec::with_capacity(10_000);
+    for i in 0..10_000 {
+        lines.push(format!("line {} initial content for large file\n", i + 1));
+    }
+    std::fs::write(&large_path, lines.concat()).unwrap();
+    git(&["add", large_file], &app.project_path);
+    git(&["commit", "-m", "feat: initial 10k line file"], &app.project_path);
+
+    // Add 100 commits modifying different chunks
+    for commit_idx in 0..100 {
+        let line_to_modify = (commit_idx * 97) % 10_000;
+        lines[line_to_modify] = format!("line {} modified in commit {}\n", line_to_modify + 1, commit_idx + 1);
+        std::fs::write(&large_path, lines.concat()).unwrap();
+        git(&["add", large_file], &app.project_path);
+        git(
+            &["commit", "-m", &format!("chore: churn commit {}", commit_idx + 1)],
+            &app.project_path,
+        );
+    }
+
+    let head_oid = git_output(&["rev-parse", "HEAD"], &app.project_path);
+    let content = lines.concat();
+
+    println!("\n=== Blame Cache Large File Performance Benchmark ===");
+    println!("File: 10,000 lines, 101 commits, bytes: {}", content.len());
+
+    // 1. Cold miss
+    let start_cold = std::time::Instant::now();
+    let (status_cold, resp_cold) =
+        request_blame_envelope(&app, large_file, &content, "snap-perf-cold", 1).await;
+    let cold_duration = start_cold.elapsed();
+    assert_eq!(status_cold, StatusCode::OK);
+    assert_eq!(resp_cold["baseCommitOid"], head_oid);
+    println!("Cold request duration: {:?}", cold_duration);
+    println!("Cache entries: {}, retained bytes: {}", app.state.git_blame_cache.len(), app.state.git_blame_cache.retained_bytes());
+
+    // 2. Sequential warm requests (20 iterations)
+    let mut warm_durations = Vec::with_capacity(20);
+    for iter in 0..20 {
+        let start_warm = std::time::Instant::now();
+        let (status_warm, resp_warm) = request_blame_envelope(
+            &app,
+            large_file,
+            &content,
+            &format!("snap-perf-warm-{}", iter),
+            (iter + 2) as i64,
+        )
+        .await;
+        let warm_elapsed = start_warm.elapsed();
+        assert_eq!(status_warm, StatusCode::OK);
+        assert_eq!(resp_warm["baseCommitOid"], head_oid);
+        warm_durations.push(warm_elapsed);
+    }
+    warm_durations.sort();
+    let median_warm = warm_durations[warm_durations.len() / 2];
+    let p95_warm = warm_durations[18];
+    println!("Warm requests (20 samples): median = {:?}, p95 = {:?}", median_warm, p95_warm);
+
+    // 3. Dirty requests (20 iterations modifying different lines, >=20 samples)
+    let mut dirty_durations = Vec::with_capacity(20);
+    for iter in 0..20 {
+        let mut dirty_lines = lines.clone();
+        dirty_lines[(iter * 137) % 10_000] = format!("line dirty edit {}\n", iter);
+        let dirty_content = dirty_lines.concat();
+        let start_dirty = std::time::Instant::now();
+        let (status_dirty, resp_dirty) = request_blame_envelope(
+            &app,
+            large_file,
+            &dirty_content,
+            &format!("snap-perf-dirty-{}", iter),
+            (iter + 100) as i64,
+        )
+        .await;
+        let dirty_elapsed = start_dirty.elapsed();
+        assert_eq!(status_dirty, StatusCode::OK);
+        assert_eq!(resp_dirty["baseCommitOid"], head_oid);
+        dirty_durations.push(dirty_elapsed);
+    }
+    dirty_durations.sort();
+    let median_dirty = dirty_durations[dirty_durations.len() / 2];
+    let p95_dirty = dirty_durations[18];
+    println!("Dirty requests (20 samples): median = {:?}, p95 = {:?}", median_dirty, p95_dirty);
+    println!("Final cache entries: {}, retained bytes: {}", app.state.git_blame_cache.len(), app.state.git_blame_cache.retained_bytes());
+}
