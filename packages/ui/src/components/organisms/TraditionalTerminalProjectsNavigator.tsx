@@ -1,8 +1,16 @@
-import { useId, useMemo, useRef } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { TraditionalTerminalAgentGroupRow } from "@/components/molecules/traditional-terminal-agent-group-row.js";
+import { TraditionalTerminalAgentFilter } from "@/components/molecules/traditional-terminal-agent-filter.js";
 import { groupTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-agent-groups.js";
+import {
+  countTraditionalTerminalAgentsByStatus,
+  filterTraditionalTerminalAgentRows,
+  loadTraditionalTerminalAgentFilter,
+  saveTraditionalTerminalAgentFilter,
+  type TraditionalAgentStatusFilter,
+} from "@/lib/traditional-terminal-agent-filter.js";
 import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { useProjectStatus, useWorktrees } from "@/api/queries.js";
@@ -259,10 +267,27 @@ export function TraditionalTerminalProjectsNavigator({
 }: TraditionalTerminalProjectsNavigatorProps) {
   const projectsHeadingId = useId();
   const agentsHeadingId = useId();
-  const agentGroups = useMemo(
-    () => groupTraditionalTerminalAgentRows(agentRows),
+  const [selectedFilter, setSelectedFilter] =
+    useState<TraditionalAgentStatusFilter>(() =>
+      loadTraditionalTerminalAgentFilter(),
+    );
+  const agentCounts = useMemo(
+    () => countTraditionalTerminalAgentsByStatus(agentRows),
     [agentRows],
   );
+  const filteredAgentRows = useMemo(
+    () => filterTraditionalTerminalAgentRows(agentRows, selectedFilter),
+    [agentRows, selectedFilter],
+  );
+  const agentGroups = useMemo(
+    () => groupTraditionalTerminalAgentRows(filteredAgentRows),
+    [filteredAgentRows],
+  );
+
+  function handleFilterChange(next: TraditionalAgentStatusFilter) {
+    setSelectedFilter(next);
+    saveTraditionalTerminalAgentFilter(next);
+  }
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
   const showCommitStatus = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -358,6 +383,14 @@ export function TraditionalTerminalProjectsNavigator({
             </Link>
           ) : null}
         </div>
+        <div className="w-full shrink-0 border-b border-[var(--color-border)] p-2">
+          <TraditionalTerminalAgentFilter
+            value={selectedFilter}
+            onValueChange={handleFilterChange}
+            counts={agentCounts}
+            touchOptimized={touchOptimized}
+          />
+        </div>
         <fieldset disabled={!onSelectAgent} className="m-0 min-h-0 min-w-0 flex-1 overflow-y-auto border-0 p-0">
           {agentGroups.length ? (
             <ul aria-label="Observed agents in open terminals" className="py-1">
@@ -372,9 +405,13 @@ export function TraditionalTerminalProjectsNavigator({
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : agentRows.length === 0 ? (
             <p className="px-4 py-3 text-xs leading-relaxed text-[var(--color-text-muted)]">
               No observed agents in open terminals. OMP, Codex and Claude appear after supported integrations report status.
+            </p>
+          ) : (
+            <p role="status" className="px-4 py-3 text-xs leading-relaxed text-[var(--color-text-muted)]">
+              No observed agents match {selectedFilter}.
             </p>
           )}
         </fieldset>

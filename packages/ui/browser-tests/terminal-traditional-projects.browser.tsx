@@ -53,6 +53,7 @@ import {
   settleTraditionalFixtureQueries,
 } from "./terminal-traditional-projects.browser-fixture.js";
 import { traditionalTerminalLayoutStorageKey } from "@/lib/traditional-terminal-projects.js";
+import { TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY } from "@/lib/traditional-terminal-agent-filter.js";
 import { TraditionalTerminalAgentGroupRow } from "@/components/molecules/traditional-terminal-agent-group-row.js";
 import type { TraditionalTerminalAgentStatusGroup } from "@/lib/traditional-terminal-agent-groups.js";
 import "@/index.css";
@@ -348,6 +349,7 @@ describe("Traditional terminal projects in Chromium", () => {
       traditionalTerminalLayoutStorageKey("project:beta"),
     );
     localStorage.removeItem("dam-hopper:traditional-projects-navigator-width");
+    localStorage.removeItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY);
     customWorktrees = null;
     worktreeDiscoveryError = null;
     useProjectTargetStore.setState({
@@ -376,6 +378,7 @@ describe("Traditional terminal projects in Chromium", () => {
         traditionalTerminalLayoutStorageKey(projectKey({ profileId, project })),
       );
     }
+    localStorage.removeItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY);
     customWorktrees = null;
     worktreeDiscoveryError = null;
     useProjectTargetStore.setState({
@@ -1185,6 +1188,125 @@ describe("Traditional terminal projects in Chromium", () => {
       .toBeVisible();
   });
 
+  it("filters traditional terminal agents by status and persists filter across remount", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const filterTrigger = page.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(filterTrigger).toBeVisible();
+    await expect.element(filterTrigger).toHaveTextContent(/All statuses/);
+
+    const roster = page.getByRole("list", {
+      name: "Observed agents in open terminals",
+    });
+    expect(roster.element().querySelectorAll("li")).toHaveLength(2);
+
+    // Open filter dropdown and select Idle
+    await userEvent.click(filterTrigger);
+    const idleOption = page.getByRole("option", { name: /^Idle\b/ });
+    await expect.element(idleOption).toBeVisible();
+    await userEvent.click(idleOption);
+
+    // Filter trigger now reflects Idle
+    await expect.element(filterTrigger).toHaveTextContent(/Idle/);
+    expect(
+      localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
+    ).toBe("Idle");
+
+    // Both agent groups are Idle so both remain visible
+    expect(roster.element().querySelectorAll("li")).toHaveLength(2);
+
+    // Verify persistence across remount while Idle is active
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(<TraditionalProjectsFixture withAgents />);
+    });
+    await settleTraditionalFixtureQueries();
+
+    const reloadedTrigger = page.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(reloadedTrigger).toBeVisible();
+    await expect.element(reloadedTrigger).toHaveTextContent(/Idle/);
+    expect(
+      page
+        .getByRole("list", { name: "Observed agents in open terminals" })
+        .element()
+        .querySelectorAll("li"),
+    ).toHaveLength(2);
+
+    // Switch filter to "Working" (which initially has 0 matching agents in fixture)
+    await userEvent.click(reloadedTrigger);
+    const workingOption = page.getByRole("option", { name: /^Working\b/ });
+    await userEvent.click(workingOption);
+
+    await expect.element(reloadedTrigger).toHaveTextContent(/Working/);
+    expect(
+      localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
+    ).toBe("Working");
+    await expect
+      .element(page.getByText("No observed agents match Working."))
+      .toBeVisible();
+
+    // Switch back to "All statuses"
+    await userEvent.click(reloadedTrigger);
+    const allOption = page.getByRole("option", { name: /^All statuses\b/ });
+    await userEvent.click(allOption);
+    await expect.element(reloadedTrigger).toHaveTextContent(/All statuses/);
+    expect(
+      localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
+    ).toBe("all");
+    expect(
+      page
+        .getByRole("list", { name: "Observed agents in open terminals" })
+        .element()
+        .querySelectorAll("li"),
+    ).toHaveLength(2);
+
+    // Live update test: transition Claude to Working
+    await act(async () => {
+      updateTraditionalAgentFixtureStatus(agentFixtureRefs.claude, {
+        state: "working",
+        turnId: "claude-turn",
+      });
+    });
+    await settleTraditionalFixtureQueries();
+
+    // Now filter by Working -> exactly 1 agent group visible (Claude)
+    await userEvent.click(reloadedTrigger);
+    await userEvent.click(page.getByRole("option", { name: /^Working\b/ }));
+    await expect.element(reloadedTrigger).toHaveTextContent(/Working/);
+
+    const filteredRoster = page.getByRole("list", {
+      name: "Observed agents in open terminals",
+    });
+    expect(filteredRoster.element().querySelectorAll("li")).toHaveLength(1);
+    await expect
+      .element(
+        filteredRoster.getByRole("button", {
+          name: /^Claude: beta Claude #3;/,
+        }),
+      )
+      .toBeVisible();
+
+    // Live update: Claude finishes turn and transitions back to Idle
+    await act(async () => {
+      updateTraditionalAgentFixtureStatus(agentFixtureRefs.claude, {
+        state: "idle",
+        turnId: undefined,
+        lastOutcome: "ended",
+      });
+    });
+    await settleTraditionalFixtureQueries();
+
+    // Working filter retains active selection, now matches 0 agents
+    await expect
+      .element(page.getByText("No observed agents match Working."))
+      .toBeVisible();
+  });
+
   it("rejects a retained agent callback after terminal removal", async () => {
     await mountAgents();
     const staleActivate = retainAgentActivation(
@@ -1711,6 +1833,138 @@ describe("Traditional terminal projects in Chromium", () => {
     await userEvent.click(page.getByRole("button", { name: "New terminal in selected project" }));
     await expect.element(page.getByTestId("fixture-new-terminal-project")).toHaveTextContent("beta");
   });
+  it("operates status filter inside compact sheet dialog without dismissing sheet or triggering terminal selection", async () => {
+    await page.viewport(375, 700);
+    container.style.width = "375px";
+    compactState.value = true;
+    await mountAgents();
+    const initialSession =
+      page.getByTestId("fixture-active-session").element().textContent;
+    const opener = page.getByRole("button", { name: "Projects + Agents" });
+    await userEvent.click(opener);
+    const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+    await expect.element(dialog).toBeVisible();
+
+    const filterTrigger = dialog.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(filterTrigger).toBeVisible();
+
+    // Verify touch sizing on trigger in compact mode (>= 48px)
+    expect(
+      filterTrigger.element().getBoundingClientRect().height,
+    ).toBeGreaterThanOrEqual(48);
+
+    // Open filter dropdown inside sheet
+    await userEvent.click(filterTrigger);
+    const idleOption = page.getByRole("option", { name: /^Idle\b/ });
+    await expect.element(idleOption).toBeVisible();
+
+    // Escape closes the listbox dropdown while keeping dialog open
+    await userEvent.keyboard("{Escape}");
+    await expect.element(idleOption).not.toBeInTheDocument();
+    await expect.element(dialog).toBeVisible();
+
+    // Reopen and select an option
+    await userEvent.click(filterTrigger);
+    const workingOption = page.getByRole("option", { name: /^Working\b/ });
+    await expect.element(workingOption).toBeVisible();
+    await userEvent.click(workingOption);
+
+    // Sheet dialog remains open; selection was committed
+    await expect.element(dialog).toBeVisible();
+    await expect.element(filterTrigger).toHaveTextContent(/Working/);
+    await expect
+      .element(dialog.getByText("No observed agents match Working."))
+      .toBeVisible();
+
+    // Filtering did not trigger terminal selection
+    expect(
+      page.getByTestId("fixture-active-session").element().textContent,
+    ).toBe(initialSession);
+
+    // Dismiss sheet explicitly
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Close", exact: true }),
+    );
+    await waitForProjectsSheetDismissal(opener.element());
+    expect(
+      page.getByTestId("fixture-active-session").element().textContent,
+    ).toBe(initialSession);
+  });
+
+  it("navigates status filter options via keyboard arrows and typeahead in Chromium", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const filterTrigger = page.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(filterTrigger).toBeVisible();
+
+    // Open via Enter key
+    await act(async () => filterTrigger.element().focus());
+    await userEvent.keyboard("{Enter}");
+    const allOption = page.getByRole("option", { name: /^All statuses\b/ });
+    await expect.element(allOption).toBeVisible();
+
+    // Navigate down with ArrowDown and commit with Enter
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Enter}");
+
+    // Option at index 2 is "Working"
+    await expect.element(filterTrigger).toHaveTextContent(/Working/);
+
+    // Test real typeahead typing: focus, open, type 'i' for Idle, commit
+    await act(async () => filterTrigger.element().focus());
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByRole("option", { name: /^Idle\b/ })).toBeVisible();
+    await userEvent.keyboard("i");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(filterTrigger).toHaveTextContent(/Idle/);
+  });
+
+  it.each([320, 375, 390])(
+    "verifies compact filter touch target sizing (>=48px) and layout geometry at %ipx",
+    async (width) => {
+      await page.viewport(width, 844);
+      container.style.width = `${width}px`;
+      compactState.value = true;
+      await mountAgents();
+      const opener = page.getByRole("button", { name: "Projects + Agents" });
+      await userEvent.click(opener);
+      const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+      await expect.element(dialog).toBeVisible();
+
+      const filterTrigger = dialog.getByRole("combobox", {
+        name: "Filter agents by status",
+      });
+      await expect.element(filterTrigger).toBeVisible();
+
+      // Trigger bounds
+      const triggerRect = filterTrigger.element().getBoundingClientRect();
+      expect(triggerRect.height).toBeGreaterThanOrEqual(48);
+      expect(triggerRect.width).toBeGreaterThanOrEqual(48);
+      expect(triggerRect.right).toBeLessThanOrEqual(width + 4);
+
+      // Open dropdown and check option touch targets
+      await userEvent.click(filterTrigger);
+      const options = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
+      expect(options).toHaveLength(8);
+
+      for (const option of options) {
+        const rect = option.getBoundingClientRect();
+        expect(rect.height).toBeGreaterThanOrEqual(48);
+        expect(rect.width).toBeGreaterThanOrEqual(48);
+        expect(rect.right).toBeLessThanOrEqual(width + 10);
+      }
+
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(dialog.getByRole("button", { name: "Close", exact: true }));
+      await waitForProjectsSheetDismissal(opener.element());
+    },
+  );
+
 
   it("selects a feature worktree target then returns to root, preserving running session tabs, active splits, and distinct project context", async () => {
     await page.viewport(1280, 700);

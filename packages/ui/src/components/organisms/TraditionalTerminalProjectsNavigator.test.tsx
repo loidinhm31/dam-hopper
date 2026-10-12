@@ -10,9 +10,43 @@ import type { GitStatus, Worktree } from "@/api/client.js";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
 import { terminalInstanceKey, terminalKey } from "@/api/ownership.js";
 import type { TraditionalTerminalAgentRow as RowModel } from "@/lib/traditional-terminal-agents.js";
+import {
+  TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+  type TraditionalAgentStatusFilter,
+} from "@/lib/traditional-terminal-agent-filter.js";
+import type { TraditionalAgentStatusLabel } from "@/lib/traditional-terminal-agents.js";
 import { traditionalTerminalProjectPanelId, traditionalTerminalProjectTabId } from "@/lib/traditional-terminal-projects.js";
 
 type SettingsState = { terminalCommitStatusEnabled: boolean };
+
+const originalScrollIntoViewDesc = Object.getOwnPropertyDescriptor(
+  window.HTMLElement.prototype,
+  "scrollIntoView",
+);
+const originalHasPointerCaptureDesc = Object.getOwnPropertyDescriptor(
+  window.HTMLElement.prototype,
+  "hasPointerCapture",
+);
+const originalSetPointerCaptureDesc = Object.getOwnPropertyDescriptor(
+  window.HTMLElement.prototype,
+  "setPointerCapture",
+);
+const originalReleasePointerCaptureDesc = Object.getOwnPropertyDescriptor(
+  window.HTMLElement.prototype,
+  "releasePointerCapture",
+);
+
+function restoreDescriptor(
+  target: object,
+  prop: string,
+  desc: PropertyDescriptor | undefined,
+) {
+  if (desc) {
+    Object.defineProperty(target, prop, desc);
+  } else {
+    Reflect.deleteProperty(target, prop);
+  }
+}
 
 const mocks = vi.hoisted(() => {
   const settings: SettingsState = { terminalCommitStatusEnabled: true };
@@ -85,7 +119,20 @@ const group: TraditionalTerminalProjectGroup = {
   mountedSessions: [{ sessionId: "demo:1", project: "demo", command: "bash" }],
 };
 
-function makeAgentRow(profileId: string, title: string, { id = "terminal-1", groupId = `project-${profileId}` } = {}): RowModel {
+function makeAgentRow(
+  profileId: string,
+  title: string,
+  {
+    id = "terminal-1",
+    groupId = `project-${profileId}`,
+    label = "Working" as TraditionalAgentStatusLabel,
+    reasonLabel = null as "Approval" | "Question" | "Error" | null,
+    outcomeHint = null as "Done (turn ended)" | null,
+    harnessLabel = "OMP" as "OMP" | "Codex" | "Claude",
+    availability = "ready" as "ready" | "unavailable" | "platform-unqualified" | null,
+    state = "working" as "working" | "idle" | "blocked" | "unknown",
+  } = {},
+): RowModel {
   const terminalRef = { profileId, id };
   return {
     key: terminalInstanceKey({ ...terminalRef, incarnation: 1 }),
@@ -96,17 +143,30 @@ function makeAgentRow(profileId: string, title: string, { id = "terminal-1", gro
     projectLabel: "demo",
     profileLabel: profileId === "server-a" ? "Development" : "Production",
     terminalTitle: title,
-    harnessLabel: "OMP",
+    harnessLabel,
     statusOwner: { profileId, generation: 2 },
-    availability: "ready",
+    availability,
     status: {
-      id: terminalRef.id, incarnation: 1, agentKind: "omp",
-      agentSessionId: "private-agent-session", reporterEpoch: 1,
-      state: "working", source: "lifecycle", attentionRevision: 0,
+      id: terminalRef.id,
+      incarnation: 1,
+      agentKind:
+        harnessLabel === "Claude"
+          ? "claude"
+          : harnessLabel === "Codex"
+            ? "codex"
+            : "omp",
+      agentSessionId: "private-agent-session",
+      reporterEpoch: 1,
+      state,
+      source: "lifecycle",
+      attentionRevision: 0,
     },
     presentation: {
-      label: "Working", reasonLabel: null, outcomeHint: null,
-      sourceLabel: "Lifecycle observation", coverageHint: null,
+      label,
+      reasonLabel,
+      outcomeHint,
+      sourceLabel: "Lifecycle observation",
+      coverageHint: null,
     },
   };
 }
@@ -128,20 +188,126 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       </MemoryRouter>,
     ));
   }
+
+  function getFilterTrigger(): HTMLButtonElement {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[role="combobox"][aria-label="Filter agents by status"]',
+    );
+    if (!trigger) throw new Error("Filter trigger not found");
+    return trigger;
+  }
+
+  async function openFilterDropdown() {
+    const trigger = getFilterTrigger();
+    await act(async () => {
+      trigger.click();
+    });
+    const options = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    );
+    return { trigger, options };
+  }
+
+  async function selectFilterOption(
+    filter: TraditionalAgentStatusFilter | "All statuses",
+  ) {
+    const targetLabel = filter === "all" ? "All statuses" : filter;
+    const { options } = await openFilterDropdown();
+    const targetOption = options.find((el) => {
+      const ariaLabel = el.getAttribute("aria-label") ?? "";
+      const text = el.textContent ?? "";
+      return ariaLabel.startsWith(targetLabel) || text.includes(targetLabel);
+    });
+    if (!targetOption) {
+      throw new Error(`Filter option "${filter}" not found in dropdown`);
+    }
+    await act(async () => {
+      targetOption.click();
+    });
+  }
+
+  function getAgentButtons(): HTMLButtonElement[] {
+    const list = container.querySelector(
+      'ul[aria-label="Observed agents in open terminals"]',
+    );
+    if (!list) return [];
+    return Array.from(list.querySelectorAll<HTMLButtonElement>("button"));
+  }
+
   beforeEach(() => {
     useProjectTargetStore.getState().resetTarget("demo");
     mocks.settings.terminalCommitStatusEnabled = true;
+    mocks.useSettingsStore.mockImplementation(
+      (selector: (state: SettingsState) => unknown) => selector(mocks.settings),
+    );
     mocks.useProjectStatus.mockClear();
     mocks.useWorktrees.mockClear();
-    mocks.useProjectStatus.mockReturnValue({ data: mocks.status, isLoading: false, isError: false });
-    mocks.useWorktrees.mockReturnValue({ data: [mocks.worktree], isLoading: false, isError: false });
+    mocks.useProjectStatus.mockReturnValue({
+      data: mocks.status,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+    mocks.useWorktrees.mockReturnValue({
+      data: [mocks.worktree],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+    window.HTMLElement.prototype.setPointerCapture = vi.fn();
+    window.HTMLElement.prototype.releasePointerCapture = vi.fn();
+    try {
+      window.localStorage.removeItem(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+      );
+      window.localStorage.removeItem("unrelated-user-pref");
+    } catch {
+      // ignore
+    }
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
   });
+
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    for (const portal of Array.from(
+      document.body.querySelectorAll("[data-radix-popper-content-wrapper]"),
+    )) {
+      portal.remove();
+    }
+    vi.restoreAllMocks();
+    restoreDescriptor(
+      window.HTMLElement.prototype,
+      "scrollIntoView",
+      originalScrollIntoViewDesc,
+    );
+    restoreDescriptor(
+      window.HTMLElement.prototype,
+      "hasPointerCapture",
+      originalHasPointerCaptureDesc,
+    );
+    restoreDescriptor(
+      window.HTMLElement.prototype,
+      "setPointerCapture",
+      originalSetPointerCaptureDesc,
+    );
+    restoreDescriptor(
+      window.HTMLElement.prototype,
+      "releasePointerCapture",
+      originalReleasePointerCaptureDesc,
+    );
+    try {
+      window.localStorage.removeItem(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+      );
+      window.localStorage.removeItem("unrelated-user-pref");
+    } catch {
+      // ignore
+    }
   });
 
   it("shows project Git metadata and the selected-project terminal action", () => {
@@ -170,7 +336,9 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     const status = container.querySelector('[role="status"]');
     expect(status?.textContent).toContain("/workspace/feature");
     expect(status?.textContent).not.toContain("/workspace/main");
-    const combobox = container.querySelector('[role="combobox"]');
+    const combobox = container.querySelector(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
     expect(combobox?.getAttribute("aria-label")).toContain("feature");
   });
 
@@ -204,8 +372,16 @@ describe("TraditionalTerminalProjectsNavigator", () => {
 
     expect(markup).not.toContain("Ship the demo terminal workflow");
     // Worktree dropdown remains present
-    expect(markup).toContain('role="combobox"');
+    const doc = new DOMParser().parseFromString(markup, "text/html");
+    const worktreeCombobox = doc.querySelector(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
+    expect(worktreeCombobox).not.toBeNull();
+    expect(worktreeCombobox?.getAttribute("aria-label")).toContain(
+      "Worktree for demo",
+    );
   });
+
   it("queries project status and worktrees scoped to the group profile", () => {
     const qualifiedGroup: TraditionalTerminalProjectGroup = {
       ...group,
@@ -387,15 +563,22 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       mountedSessions: [],
     };
     renderNavigator({ groups: [group, freeGroup] });
-    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    const comboboxes = container.querySelectorAll(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
     expect(comboboxes).toHaveLength(1);
     expect(comboboxes[0]!.getAttribute("aria-label")).toContain("Worktree for demo");
+    expect(
+      container.querySelector('[role="combobox"][aria-label="Filter agents by status"]'),
+    ).not.toBeNull();
   });
 
   it("interacting with worktree selector does not invoke onSelectGroup", () => {
     const onSelectGroup = vi.fn();
     renderNavigator({ groups: [group], onSelectGroup });
-    const combobox = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+    const combobox = container.querySelector<HTMLButtonElement>(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    )!;
     expect(combobox).not.toBeNull();
     act(() => combobox.click());
     expect(onSelectGroup).not.toHaveBeenCalled();
@@ -409,8 +592,13 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       isSuccess: false,
     });
     renderNavigator({ groups: [group] });
-    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    const comboboxes = container.querySelectorAll(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
     expect(comboboxes).toHaveLength(0);
+    expect(
+      container.querySelector('[role="combobox"][aria-label="Filter agents by status"]'),
+    ).not.toBeNull();
   });
 
   it("omits worktree selector for non-Git projects with statusError", () => {
@@ -421,8 +609,13 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       isSuccess: true,
     });
     renderNavigator({ groups: [group] });
-    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    const comboboxes = container.querySelectorAll(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
     expect(comboboxes).toHaveLength(0);
+    expect(
+      container.querySelector('[role="combobox"][aria-label="Filter agents by status"]'),
+    ).not.toBeNull();
   });
 
   it("renders worktree selector when commit status is disabled but project is a valid Git repo", () => {
@@ -437,10 +630,673 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       isSuccess: true,
     });
     renderNavigator({ groups: [group] });
-    const comboboxes = container.querySelectorAll('[role="combobox"]');
+    const comboboxes = container.querySelectorAll(
+      '[role="combobox"][aria-label^="Worktree for"]',
+    );
     expect(comboboxes).toHaveLength(1);
     expect(comboboxes[0]!.getAttribute("aria-label")).toContain(
       "Worktree for demo",
     );
+    expect(
+      container.querySelector('[role="combobox"][aria-label="Filter agents by status"]'),
+    ).not.toBeNull();
+  });
+
+  describe("Agent status filter integration", () => {
+    it("renders 'All statuses' default filter outside activation fieldset, with correct placement and touch prop", () => {
+      const agent1 = makeAgentRow("server-a", "First", { id: "t-1" });
+      const agent2 = makeAgentRow("server-a", "Second", {
+        id: "t-2",
+        label: "Idle",
+      });
+      renderNavigator({ agentRows: [agent1, agent2], touchOptimized: true });
+
+      const trigger = getFilterTrigger();
+      expect(trigger.textContent).toContain("All statuses");
+      expect(trigger.textContent).toContain("2");
+      expect(trigger.className).toContain("min-h-12");
+
+      // Located within agents section, below agents heading and outside fieldset
+      const agentsSection = container.querySelectorAll("section")[1]!;
+      expect(agentsSection.contains(trigger)).toBe(true);
+      const agentsHeading = agentsSection.querySelector("h2")!;
+      expect(agentsHeading.textContent?.trim()).toBe("agents");
+      const fieldset = agentsSection.querySelector("fieldset")!;
+      expect(fieldset.contains(trigger)).toBe(false);
+
+      // Projects section unaffected
+      const projectsSection = container.querySelectorAll("section")[0]!;
+      expect(projectsSection.contains(trigger)).toBe(false);
+    });
+
+    const storedStatusCases: readonly (readonly [TraditionalAgentStatusFilter, string])[] = [
+      ["Needs attention", "Needs attention"],
+      ["Working", "Working"],
+      ["Idle", "Idle"],
+      ["Unknown", "Unknown"],
+      ["Unavailable", "Unavailable"],
+      ["Platform unqualified", "Platform unqualified"],
+      ["Unsupported", "Unsupported"],
+      ["all", "All statuses"],
+    ];
+
+    it.each(storedStatusCases)(
+      "restores stored filter '%s' on fresh mount and immediately filters rows",
+      (targetStatus, expectedLabel) => {
+        const labels: readonly TraditionalAgentStatusLabel[] = [
+          "Needs attention",
+          "Working",
+          "Idle",
+          "Unknown",
+          "Unavailable",
+          "Platform unqualified",
+          "Unsupported",
+        ];
+        const agentRoster = labels.map((statusLabel, idx) =>
+          makeAgentRow("server-a", `Agent ${idx}`, {
+            id: `t-${idx}`,
+            groupId: `project-${idx}`,
+            label: statusLabel,
+          }),
+        );
+
+        window.localStorage.setItem(
+          TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+          targetStatus,
+        );
+        renderNavigator({ agentRows: agentRoster });
+        const trigger = getFilterTrigger();
+        expect(trigger.textContent).toContain(expectedLabel);
+        const buttons = getAgentButtons();
+        if (targetStatus === "all") {
+          expect(buttons).toHaveLength(7);
+        } else {
+          expect(buttons).toHaveLength(1);
+          expect(buttons[0]!.getAttribute("aria-label")).toContain(targetStatus);
+        }
+      },
+    );
+
+    it("filters to matching rows when selecting each status without affecting projects, routes or worktrees", async () => {
+      const working = makeAgentRow("server-a", "Working Agent", {
+        id: "t-1",
+        label: "Working",
+      });
+      const idle = makeAgentRow("server-a", "Idle Agent", {
+        id: "t-2",
+        groupId: "project-2",
+        label: "Idle",
+      });
+      const attention = makeAgentRow("server-a", "Attention Agent", {
+        id: "t-3",
+        groupId: "project-3",
+        label: "Needs attention",
+      });
+      const onSelectGroup = vi.fn();
+      const settingsHref = "/agent-store?tab=settings";
+
+      renderNavigator({
+        agentRows: [working, idle, attention],
+        onSelectGroup,
+        agentSettingsHref: settingsHref,
+      });
+
+      expect(getAgentButtons()).toHaveLength(3);
+
+      await selectFilterOption("Working");
+      let buttons = getAgentButtons();
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]!.getAttribute("aria-label")).toContain("Working");
+
+      await selectFilterOption("Idle");
+      buttons = getAgentButtons();
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]!.getAttribute("aria-label")).toContain("Idle");
+
+      await selectFilterOption("Needs attention");
+      buttons = getAgentButtons();
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]!.getAttribute("aria-label")).toContain("Needs attention");
+
+      await selectFilterOption("all");
+      expect(getAgentButtons()).toHaveLength(3);
+
+      expect(onSelectGroup).not.toHaveBeenCalled();
+      const settingsLink = container.querySelector<HTMLAnchorElement>("a")!;
+      expect(settingsLink.getAttribute("href")).toBe(settingsHref);
+      const locationOutput = container.querySelector(
+        '[aria-label="Current location"]',
+      );
+      expect(locationOutput?.textContent).toBe("/terminals");
+      const worktreeCombobox = container.querySelector(
+        '[role="combobox"][aria-label^="Worktree for"]',
+      );
+      expect(worktreeCombobox).not.toBeNull();
+    });
+
+    it("aggregates counts accurately across profiles, projects, and multiple agents in groups", async () => {
+      const serverA_working1 = makeAgentRow("server-a", "W1", {
+        id: "t-1",
+        groupId: "proj-1",
+        label: "Working",
+        harnessLabel: "OMP",
+      });
+      const serverA_working2 = makeAgentRow("server-a", "W2", {
+        id: "t-2",
+        groupId: "proj-1",
+        label: "Working",
+        harnessLabel: "OMP",
+      });
+      const serverB_working = makeAgentRow("server-b", "W3", {
+        id: "t-3",
+        groupId: "proj-2",
+        label: "Working",
+        harnessLabel: "Codex",
+      });
+      const serverC_idle = makeAgentRow("server-c", "I1", {
+        id: "t-4",
+        groupId: "proj-3",
+        label: "Idle",
+        harnessLabel: "Claude",
+      });
+
+      renderNavigator({
+        agentRows: [
+          serverA_working1,
+          serverA_working2,
+          serverB_working,
+          serverC_idle,
+        ],
+      });
+
+      const trigger = getFilterTrigger();
+      expect(
+        trigger.querySelector('[data-testid="agent-filter-count-badge"]')!
+          .textContent,
+      ).toBe("4");
+
+      const { options } = await openFilterDropdown();
+      const allOption = options.find((el) =>
+        el.textContent?.includes("All statuses"),
+      );
+      const workingOption = options.find((el) =>
+        el.textContent?.includes("Working"),
+      );
+      const idleOption = options.find((el) =>
+        el.textContent?.includes("Idle"),
+      );
+      const attentionOption = options.find((el) =>
+        el.textContent?.includes("Needs attention"),
+      );
+
+      expect(allOption?.getAttribute("aria-label")).toBe(
+        "All statuses, 4 agents",
+      );
+      expect(workingOption?.getAttribute("aria-label")).toBe(
+        "Working, 3 agents",
+      );
+      expect(idleOption?.getAttribute("aria-label")).toBe("Idle, 1 agent");
+      expect(attentionOption?.getAttribute("aria-label")).toBe(
+        "Needs attention, 0 agents",
+      );
+
+      await act(async () => {
+        workingOption?.click();
+      });
+
+      expect(trigger.textContent).toContain("Working");
+      expect(
+        trigger.querySelector('[data-testid="agent-filter-count-badge"]')!
+          .textContent,
+      ).toBe("3");
+    });
+
+    it("handles attention reasons as separate groups, retains Done hint in Idle, and overrides raw wire state", async () => {
+      const approval = makeAgentRow("server-a", "Appr", {
+        id: "t-1",
+        label: "Needs attention",
+        reasonLabel: "Approval",
+      });
+      const question = makeAgentRow("server-a", "Quest", {
+        id: "t-2",
+        label: "Needs attention",
+        reasonLabel: "Question",
+      });
+      const error = makeAgentRow("server-a", "Err", {
+        id: "t-3",
+        label: "Needs attention",
+        reasonLabel: "Error",
+      });
+      const doneAgent = makeAgentRow("server-a", "Done", {
+        id: "t-4",
+        label: "Idle",
+        outcomeHint: "Done (turn ended)",
+      });
+      const wireWorkingBlocked = makeAgentRow(
+        "server-a",
+        "Wire working blocked",
+        {
+          id: "t-5",
+          label: "Needs attention",
+          reasonLabel: "Approval",
+          state: "working",
+        },
+      );
+
+      renderNavigator({
+        agentRows: [
+          approval,
+          question,
+          error,
+          doneAgent,
+          wireWorkingBlocked,
+        ],
+      });
+
+      await selectFilterOption("Needs attention");
+      const attentionButtons = getAgentButtons();
+      expect(attentionButtons).toHaveLength(3);
+      expect(attentionButtons[0]!.getAttribute("aria-label")).toContain(
+        "Approval",
+      );
+      expect(attentionButtons[1]!.getAttribute("aria-label")).toContain("Error");
+      expect(attentionButtons[2]!.getAttribute("aria-label")).toContain(
+        "Question",
+      );
+
+      await selectFilterOption("Idle");
+      const idleButtons = getAgentButtons();
+      expect(idleButtons).toHaveLength(1);
+      expect(idleButtons[0]!.getAttribute("aria-label")).toContain("Idle");
+      expect(idleButtons[0]!.textContent).toContain("Done (turn ended)");
+      await selectFilterOption("Working");
+      expect(getAgentButtons()).toHaveLength(0);
+      expect(container.textContent).toContain(
+        "No observed agents match Working.",
+      );
+    });
+
+    it("distinguishes zero observations from filtered unmatched empty states and allows recovery", async () => {
+      window.localStorage.setItem(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        "Working",
+      );
+      renderNavigator({ agentRows: [] });
+      const fieldset = container.querySelector("fieldset")!;
+      expect(fieldset.textContent).toContain(
+        "No observed agents in open terminals. OMP, Codex and Claude appear after supported integrations report status.",
+      );
+      expect(fieldset.textContent).not.toContain(
+        "No observed agents match Working.",
+      );
+
+      const idle1 = makeAgentRow("server-a", "I1", {
+        id: "t-1",
+        label: "Idle",
+      });
+      const idle2 = makeAgentRow("server-a", "I2", {
+        id: "t-2",
+        label: "Idle",
+      });
+      renderNavigator({ agentRows: [idle1, idle2] });
+
+      expect(fieldset.textContent).toContain(
+        "No observed agents match Working.",
+      );
+      expect(fieldset.textContent).not.toContain(
+        "No observed agents in open terminals. OMP, Codex and Claude appear after supported integrations report status.",
+      );
+
+      await selectFilterOption("all");
+      expect(getAgentButtons()).toHaveLength(1);
+      expect(
+        getAgentButtons()[0]!.querySelector(
+          '[data-testid="agent-count-badge"]',
+        )!.textContent,
+      ).toBe("2");
+    });
+
+    it("retains selected filter across dynamic observation changes and roster emptying", async () => {
+      const working = makeAgentRow("server-a", "W1", {
+        id: "t-1",
+        label: "Working",
+      });
+      const idle = makeAgentRow("server-a", "I1", {
+        id: "t-2",
+        label: "Idle",
+      });
+
+      renderNavigator({ agentRows: [working, idle] });
+      await selectFilterOption("Working");
+      expect(getFilterTrigger().textContent).toContain("Working");
+      expect(getAgentButtons()).toHaveLength(1);
+
+      const workingNowIdle = {
+        ...working,
+        presentation: { ...working.presentation, label: "Idle" as const },
+      };
+      renderNavigator({ agentRows: [workingNowIdle, idle] });
+      expect(getFilterTrigger().textContent).toContain("Working");
+      expect(
+        getFilterTrigger().querySelector(
+          '[data-testid="agent-filter-count-badge"]',
+        )!.textContent,
+      ).toBe("0");
+      expect(container.textContent).toContain(
+        "No observed agents match Working.",
+      );
+
+      renderNavigator({ agentRows: [] });
+      expect(getFilterTrigger().textContent).toContain("Working");
+      expect(container.textContent).toContain(
+        "No observed agents in open terminals.",
+      );
+
+      const newWorking = makeAgentRow("server-a", "New Working", {
+        id: "t-new",
+        label: "Working",
+      });
+      renderNavigator({ agentRows: [newWorking] });
+      expect(getFilterTrigger().textContent).toContain("Working");
+      expect(getAgentButtons()).toHaveLength(1);
+      expect(getAgentButtons()[0]!.getAttribute("aria-label")).toContain(
+        "New Working",
+      );
+    });
+
+    it("preserves active session identity when hidden by filter and restores aria-current on unfiltering", async () => {
+      const working = makeAgentRow("server-a", "W1", {
+        id: "t-1",
+        label: "Working",
+      });
+      const idle = makeAgentRow("server-a", "I1", {
+        id: "t-2",
+        groupId: "proj-2",
+        label: "Idle",
+      });
+      const onSelectAgent = vi.fn();
+      const onSelectGroup = vi.fn();
+
+      renderNavigator({
+        agentRows: [working, idle],
+        activeSessionId: idle.sessionId,
+        onSelectAgent,
+        onSelectGroup,
+      });
+
+      let buttons = getAgentButtons();
+      expect(buttons).toHaveLength(2);
+      expect(buttons[1]!.getAttribute("aria-current")).toBe("true");
+
+      await selectFilterOption("Working");
+      buttons = getAgentButtons();
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]!.getAttribute("aria-label")).toContain("W1");
+      expect(buttons[0]!.hasAttribute("aria-current")).toBe(false);
+      expect(onSelectAgent).not.toHaveBeenCalled();
+      expect(onSelectGroup).not.toHaveBeenCalled();
+
+      const workingProfileB = makeAgentRow("server-b", "W1-B", {
+        id: "t-1",
+        label: "Working",
+      });
+      renderNavigator({
+        agentRows: [working, idle, workingProfileB],
+        activeSessionId: idle.sessionId,
+        onSelectAgent,
+        onSelectGroup,
+      });
+      await selectFilterOption("Working");
+      expect(getAgentButtons()).toHaveLength(2);
+
+      await selectFilterOption("all");
+      buttons = getAgentButtons();
+      expect(buttons).toHaveLength(3);
+      const idleButton = buttons.find((btn) =>
+        btn.getAttribute("aria-label")?.includes("I1"),
+      );
+      expect(idleButton?.getAttribute("aria-current")).toBe("true");
+    });
+
+    it("cycles only within matching members of a grouped row under controlled selection", async () => {
+      const w1 = makeAgentRow("server-a", "W1", {
+        id: "t-1",
+        groupId: "proj-1",
+        label: "Working",
+      });
+      const w2 = makeAgentRow("server-a", "W2", {
+        id: "t-2",
+        groupId: "proj-1",
+        label: "Working",
+      });
+      const w3 = makeAgentRow("server-a", "W3", {
+        id: "t-3",
+        groupId: "proj-1",
+        label: "Working",
+      });
+      const idle = makeAgentRow("server-a", "I1", {
+        id: "t-4",
+        groupId: "proj-1",
+        label: "Idle",
+      });
+
+      const selectedSessions: string[] = [];
+      function CyclingHarness() {
+        const [activeSessionId, setActiveSessionId] = useState<string | null>(
+          w1.sessionId,
+        );
+        return (
+          <MemoryRouter>
+            <TraditionalTerminalProjectsNavigator
+              groups={[group]}
+              activeGroupId={group.id}
+              onSelectGroup={vi.fn()}
+              agentRows={[w1, w2, w3, idle]}
+              activeSessionId={activeSessionId}
+              onSelectAgent={(sessionId) => {
+                selectedSessions.push(sessionId);
+                setActiveSessionId(sessionId);
+              }}
+            />
+          </MemoryRouter>
+        );
+      }
+
+      act(() => {
+        root.render(<CyclingHarness />);
+      });
+
+      await selectFilterOption("Working");
+      const buttons = getAgentButtons();
+      expect(buttons).toHaveLength(1);
+      expect(
+        buttons[0]!.querySelector('[data-testid="agent-count-badge"]')!
+          .textContent,
+      ).toBe("3");
+
+      // First click: w1 is active -> selects w2
+      act(() => {
+        buttons[0]!.click();
+      });
+      expect(selectedSessions).toEqual([w2.sessionId]);
+      expect(buttons[0]!.getAttribute("aria-current")).toBe("true");
+
+      // Second click: w2 is active -> selects w3
+      act(() => {
+        buttons[0]!.click();
+      });
+      expect(selectedSessions).toEqual([w2.sessionId, w3.sessionId]);
+      expect(buttons[0]!.getAttribute("aria-current")).toBe("true");
+
+      // Third click: w3 is active -> wraps and selects w1
+      act(() => {
+        buttons[0]!.click();
+      });
+      expect(selectedSessions).toEqual([
+        w2.sessionId,
+        w3.sessionId,
+        w1.sessionId,
+      ]);
+      expect(buttons[0]!.getAttribute("aria-current")).toBe("true");
+
+      // Filtered-out idle agent was never selected in the cycle
+      expect(selectedSessions).not.toContain(idle.sessionId);
+    });
+
+    it("maintains DOM element identity for unchanged agent group row during status changes", () => {
+      const stableAgent = makeAgentRow("server-a", "Stable", {
+        id: "t-1",
+        groupId: "proj-1",
+        label: "Working",
+      });
+      const dynamicAgent = makeAgentRow("server-a", "Dynamic", {
+        id: "t-2",
+        groupId: "proj-2",
+        label: "Working",
+      });
+
+      renderNavigator({ agentRows: [stableAgent, dynamicAgent] });
+      const initialButtons = getAgentButtons();
+      expect(initialButtons).toHaveLength(2);
+      const stableButton = initialButtons[0]!;
+
+      const updatedDynamic = {
+        ...dynamicAgent,
+        presentation: { ...dynamicAgent.presentation, label: "Idle" as const },
+      };
+      renderNavigator({ agentRows: [stableAgent, updatedDynamic] });
+
+      const updatedButtons = getAgentButtons();
+      expect(updatedButtons).toHaveLength(2);
+      expect(updatedButtons[0]).toBe(stableButton);
+    });
+
+    it("keeps filter combobox enabled when onSelectAgent is omitted", async () => {
+      const agent = makeAgentRow("server-a", "Agent", {
+        id: "t-1",
+        label: "Working",
+      });
+      renderNavigator({ agentRows: [agent], onSelectAgent: undefined });
+
+      const fieldset = container.querySelector("fieldset")!;
+      expect(fieldset.matches(":disabled")).toBe(true);
+      const agentButton = getAgentButtons()[0]!;
+      expect(agentButton.matches(":disabled")).toBe(true);
+
+      const filterTrigger = getFilterTrigger();
+      expect(filterTrigger.matches(":disabled")).toBe(false);
+
+      await selectFilterOption("Idle");
+      expect(filterTrigger.textContent).toContain("Idle");
+      expect(container.textContent).toContain("No observed agents match Idle.");
+    });
+
+    it("persists selection to storage immediately and restores it across fresh root remounts", async () => {
+      const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+      const agent = makeAgentRow("server-a", "Agent", {
+        id: "t-1",
+        label: "Working",
+      });
+
+      renderNavigator({ agentRows: [agent] });
+      expect(setItemSpy).not.toHaveBeenCalled();
+
+      await selectFilterOption("Working");
+      expect(setItemSpy).toHaveBeenCalledWith(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        "Working",
+      );
+      expect(
+        window.localStorage.getItem(
+          TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        ),
+      ).toBe("Working");
+
+      // Unmount root and mount fresh root reassigned to suite variables
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+      container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+
+      renderNavigator({ agentRows: [agent] });
+
+      const newTrigger = getFilterTrigger();
+      expect(newTrigger.textContent).toContain("Working");
+      expect(getAgentButtons()).toHaveLength(1);
+
+      // Switching back to all persists all
+      await selectFilterOption("all");
+      expect(setItemSpy).toHaveBeenCalledWith(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        "all",
+      );
+      expect(
+        window.localStorage.getItem(
+          TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        ),
+      ).toBe("all");
+    });
+
+    it("handles invalid stored values, storage getter/setter errors gracefully without modifying unrelated keys", async () => {
+      window.localStorage.setItem("unrelated-user-pref", "keep-me");
+      window.localStorage.setItem(
+        TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY,
+        "totally-bogus-status",
+      );
+
+      const agent = makeAgentRow("server-a", "Agent", {
+        id: "t-1",
+        label: "Working",
+      });
+      renderNavigator({ agentRows: [agent] });
+
+      // Invalid value gracefully defaults to all
+      expect(getFilterTrigger().textContent).toContain("All statuses");
+
+      // Storage setter error: UI still updates in memory
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new Error("QuotaExceededError");
+      });
+
+      await selectFilterOption("Working");
+      expect(getFilterTrigger().textContent).toContain("Working");
+      expect(getAgentButtons()).toHaveLength(1);
+
+      // Unrelated key is preserved
+      expect(window.localStorage.getItem("unrelated-user-pref")).toBe("keep-me");
+
+      // Storage getter throws (e.g. SecurityError in iframe / private browsing)
+      const originalDesc = Object.getOwnPropertyDescriptor(
+        window,
+        "localStorage",
+      );
+      try {
+        Object.defineProperty(window, "localStorage", {
+          configurable: true,
+          get() {
+            throw new Error("SecurityError: localStorage access is denied");
+          },
+        });
+        act(() => {
+          root.unmount();
+        });
+        container.remove();
+        container = document.createElement("div");
+        document.body.append(container);
+        root = createRoot(container);
+        renderNavigator({ agentRows: [agent] });
+        expect(getFilterTrigger().textContent).toContain("All statuses");
+        await selectFilterOption("Working");
+        expect(getFilterTrigger().textContent).toContain("Working");
+        expect(getAgentButtons()).toHaveLength(1);
+      } finally {
+        if (originalDesc) {
+          Object.defineProperty(window, "localStorage", originalDesc);
+        }
+      }
+    });
   });
 });

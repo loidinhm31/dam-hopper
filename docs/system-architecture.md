@@ -51,6 +51,8 @@ Connection generation/status and profile metadata are subscribed once in the dis
 
 Primary labels are Working, Idle, Needs attention and Unknown. `Done (turn ended)` is a secondary historical hint only for ready, nonexpired Idle evidence with explicit ended outcome and no current turn; it is not task success. Notification preferences and server semantics are unchanged. Component, focused browser, and production application journey gates have been qualified; full-viewport visual review is accepted. See [implementation progress](../plans/261008-0233-traditional-terminal-agents-sidebar/progress.md).
 
+The navigator includes an accessible status filter dropdown (`TraditionalTerminalAgentFilter`) directly beneath the `agents` header that filters observed agents by primary presentation label (`all`, `Needs attention`, `Working`, `Idle`, `Unknown`, `Unavailable`, `Platform unqualified`, `Unsupported`) with live count badges. The user's selection is saved to `localStorage` under `dam-hopper:traditional-terminal-agents-status-filter` and restored on page refresh or component mount. When no agents match an active filter, a descriptive empty state is displayed (`No observed agents match <status>.`). Filtering is purely presentational: it operates before status grouping, never interferes with active session selection or PTY processes, and preserves exact cycling and tab activation semantics.
+
 ### Traditional Terminal Worktree Shortcut
 
 **Implemented and qualified.** See [implementation plan](../plans/261009-1403-traditional-terminal-worktree-switching/phase-01-scoped-target-routing.md).

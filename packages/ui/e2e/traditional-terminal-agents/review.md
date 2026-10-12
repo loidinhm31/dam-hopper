@@ -2,21 +2,19 @@
 
 - **Status:** ACCEPTED
 - **Reviewer:** loidinh
-- **Reviewed At:** 2026-10-10T14:52:00Z
-- **Run ID:** e2e-run-1791643813632-0ce851d2
-- **Git HEAD:** 3fbf6ecb91c8204c9aef9feeebfb18f4b232971e
-- **Source Fingerprint:** a5803226dbdad81fd2df34947dcf7b8ae33d6d956b3d7adfdfdda7d1c4d26b04
-- **Primary Screenshot SHA-256:** 55aef9844359bfc2479f494a91305018284f1210ff6ea850e71fac2f78d1b404
+- **Reviewed At:** 2026-10-12T14:58:00Z
+- **Run ID:** e2e-run-1791816157811-eb403860
+- **Git HEAD:** bc24ce04bcd039f3a5d572e022717cda756bf4cf
+- **Source Fingerprint:** caac0a58268b03d6e1700269910b196c537e22d818f2dbdd43dc4cea3e2d56d5
+- **Primary Screenshot SHA-256:** b6f15c35691fd58eeafed0cde3bda42b5a3354ce978be33fa98f413bcab4e08c
 
 ## Inspected Checkpoints
-- `screenshot.png` (1440x900, SHA-256: `55aef9844359bfc2479f494a91305018284f1210ff6ea850e71fac2f78d1b404`)
+- `screenshot.png` (1440x900, SHA-256: `b6f15c35691fd58eeafed0cde3bda42b5a3354ce978be33fa98f413bcab4e08c`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `compact.png` (390x844, SHA-256: `3bdef30181e996d9274998a09ca044ac1a48daac7ee29df4c46f6c7661930e86`)
+- `status-filter-options.png` (1440x900, SHA-256: `de4db5d878a5eeaa32a3f4677ab98b77e6ce41117def08d695d8fb44aa6d6838`)
   - Context: Complete application viewport, fully rendered shell and state.
-- `agent-badges-grouped.png` (1280x700, SHA-256: `900ff4fec51a0694a3dc6ca814c1e131686d7891ce5928bfb01393d5aeb6b18e`)
-  - Context: Grouped agent items displaying OMP (purple), Codex (emerald), Claude (amber), Project (cyan), and Profile badges with agent count badges.
-- `agent-badges-split.png` (1280x700, SHA-256: `890a12c41a8f5b67c5ff30a55d1dabfb781aa1b4f640b876c4dd00a918422102`)
-  - Context: Split agent state displaying active Working Claude item with icon badge alongside Idle OMP and Codex.
+- `compact.png` (390x844, SHA-256: `61499b537d9bd780a03f7f50aed70c395a43e60cf0c397a08bfb26c3199da677`)
+  - Context: Complete application viewport, fully rendered shell and state.
 
 ## Decision
 - **Outcome:** ACCEPTED
