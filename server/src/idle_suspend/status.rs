@@ -358,9 +358,16 @@ pub struct IdleSuspendStatusV1 {
     /// Current consent status if consent is requested or settled (null under legacy or when no request exists).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent: Option<IdleSuspendConsentStatusV1>,
+    /// Safe latest probe reason code, or None if no probe has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_reason_code: Option<String>,
+    /// Timestamp in milliseconds of the latest probe, or None if no probe has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_checked_at_ms: Option<u64>,
     /// Unix timestamp in milliseconds when this status snapshot was generated.
     pub timestamp_ms: u64,
 }
+
 
 impl IdleSuspendStatusV1 {
     pub fn now_ms() -> u64 {
@@ -451,6 +458,8 @@ impl IdleSuspendStatusV1 {
             agent_free,
             client_presence,
             consent,
+            probe_reason_code: None,
+            probe_checked_at_ms: None,
             timestamp_ms: Self::now_ms(),
         }
     }
@@ -472,6 +481,7 @@ impl IdleSuspendStatusV1 {
             || self.arm_deadline_ms != other.arm_deadline_ms
             || self.last_outcome != other.last_outcome
             || self.detail != other.detail
+            || self.probe_reason_code != other.probe_reason_code
         {
             return true;
         }

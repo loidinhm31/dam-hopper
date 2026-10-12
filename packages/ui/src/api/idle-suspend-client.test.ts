@@ -54,6 +54,59 @@ describe("decodeIdleSuspendStatusV1", () => {
     expect(isIdleSuspendStatusV1(raw)).toBe(true);
     expect(asIdleSuspendStatusV1(raw)).toEqual(decoded);
   });
+  it("decodes valid probeReasonCode and probeCheckedAtMs fields", () => {
+    const raw = {
+      ...makeBaseStatus(),
+      automaticPolicy: "empty-fleet",
+      activity: null,
+      probeReasonCode: "socketNotFound",
+      probeCheckedAtMs: 1726000005000,
+    };
+    const decoded = decodeIdleSuspendStatusV1(raw);
+    expect(decoded.probeReasonCode).toBe("socketNotFound");
+    expect(decoded.probeCheckedAtMs).toBe(1726000005000);
+    expect(isIdleSuspendStatusV1(raw)).toBe(true);
+
+    const rawNull = {
+      ...makeBaseStatus(),
+      automaticPolicy: "empty-fleet",
+      activity: null,
+      probeReasonCode: null,
+      probeCheckedAtMs: null,
+    };
+    const decodedNull = decodeIdleSuspendStatusV1(rawNull);
+    expect(decodedNull.probeReasonCode).toBeNull();
+    expect(decodedNull.probeCheckedAtMs).toBeNull();
+
+    expect(() =>
+      decodeIdleSuspendStatusV1({
+        ...raw,
+        probeReasonCode: 12345,
+      }),
+    ).toThrow(/invalid probeReasonCode/);
+
+    expect(() =>
+      decodeIdleSuspendStatusV1({
+        ...raw,
+        probeReasonCode: "arbitraryUnknownCode",
+      }),
+    ).toThrow(/invalid probeReasonCode/);
+
+    for (const protoProp of ["constructor", "toString", "__proto__", "valueOf"]) {
+      expect(() =>
+        decodeIdleSuspendStatusV1({
+          ...raw,
+          probeReasonCode: protoProp,
+        }),
+      ).toThrow(/invalid probeReasonCode/);
+    }
+    expect(() =>
+      decodeIdleSuspendStatusV1({
+        ...raw,
+        probeCheckedAtMs: -1,
+      }),
+    ).toThrow(/invalid probeCheckedAtMs/);
+  });
 
   it("decodes valid new-server status with agent-activity policy (available, warning null)", () => {
     const raw = {

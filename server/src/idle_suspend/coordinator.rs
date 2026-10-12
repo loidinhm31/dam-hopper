@@ -30,7 +30,8 @@ use crate::idle_suspend::policy::{
     StartupIdleSuspendPolicy,
 };
 use crate::idle_suspend::protocol::{
-    validate_suspend_wake_seconds, SuspendOutcome, SuspendWithRtcWakeRequest,
+    validate_suspend_wake_seconds, CapabilityProbeOutcome, CapabilityProbeRequest, ProbeFailure,
+    ProbeFailureReason, SuspendOutcome, SuspendWithRtcWakeRequest,
 };
 use crate::idle_suspend::server_audit::{
     validate_actor, IdleSuspendServerAudit, ManualAuditRecord, ManualAuditResult,
@@ -124,8 +125,8 @@ pub enum CoordinatorForceSuspendResult {
     },
     /// Audit logging failed before mutation could be admitted.
     AuditFailed(String),
-    /// Host lacks RTC alarm or suspend capability, or helper probe failed.
-    CapabilityUnavailable(String),
+    /// Capability probe failed or helper unavailable.
+    ProbeUnavailable { reason: ProbeFailureReason },
     /// Input bounds or actor validation failed.
     ValidationFailed(String),
     /// Coordinator is disabled.
@@ -533,6 +534,8 @@ impl IdleSuspendCoordinator {
             agent_free: initial_agent_free,
             client_presence: initial_client_presence,
             consent: initial_consent,
+            probe_reason_code: None,
+            probe_checked_at_ms: None,
             timestamp_ms: IdleSuspendStatusV1::now_ms(),
         };
 
@@ -679,7 +682,6 @@ async fn run_coordinator(
     let mut armed_generation: Option<u64> = None;
     let mut last_outcome: Option<SuspendOutcome> = None;
     let mut detail: Option<String> = None;
-
     let is_agent_free_policy =
         startup_policy.automatic_policy == IdleSuspendAutomaticPolicy::AgentFree;
     #[cfg(not(test))]
@@ -1213,6 +1215,7 @@ async fn run_coordinator(
                             in_flight_suspend.is_some(),
                             timing_rev,
                             event_writer.as_deref(),
+                            &status_tx,
                         ).await;
                         if maybe_fut.is_some() {
                             in_flight_suspend = maybe_fut;
@@ -3024,6 +3027,7 @@ fn publish_agent_free_status_checked(
     client_presence: Option<IdleSuspendClientPresenceStatusV1>,
     consent: Option<IdleSuspendConsentStatusV1>,
 ) {
+    let prev = tx.borrow().clone();
     let new_status = IdleSuspendStatusV1 {
         version: 1,
         status_revision: *status_revision,
@@ -3048,12 +3052,14 @@ fn publish_agent_free_status_checked(
         max_wake_after_seconds: MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
         fleet_snapshot,
         arm_deadline_ms: None,
-        last_outcome: last_outcome.clone(),
+        last_outcome: last_outcome.as_ref().map(|o| o.public_safe()),
         detail: detail.clone(),
         activity: None,
         agent_free,
         client_presence,
         consent,
+        probe_reason_code: prev.probe_reason_code.clone(),
+        probe_checked_at_ms: prev.probe_checked_at_ms,
         timestamp_ms: IdleSuspendStatusV1::now_ms(),
     };
 
@@ -3096,6 +3102,7 @@ fn publish_status_checked(
     is_armed: bool,
     epoch_spent: bool,
 ) {
+    let prev = tx.borrow().clone();
     let arm_deadline_ms = arm_deadline.map(|d| {
         let now = tokio::time::Instant::now();
         let sys_now = IdleSuspendStatusV1::now_ms();
@@ -3278,12 +3285,14 @@ fn publish_status_checked(
         max_wake_after_seconds: MAX_IDLE_SUSPEND_WAKE_AFTER_SECONDS,
         fleet_snapshot,
         arm_deadline_ms,
-        last_outcome: last_outcome.clone(),
+        last_outcome: last_outcome.as_ref().map(|o| o.public_safe()),
         detail: detail.clone(),
         activity,
         agent_free,
         client_presence,
         consent,
+        probe_reason_code: prev.probe_reason_code.clone(),
+        probe_checked_at_ms: prev.probe_checked_at_ms,
         timestamp_ms: IdleSuspendStatusV1::now_ms(),
     };
 
@@ -3669,9 +3678,10 @@ fn handle_outcome(
     last_qualifying_activity_at: Option<Instant>,
     epoch_spent: bool,
 ) {
-    *last_outcome = Some(outcome.clone());
+    let safe_outcome = outcome.public_safe();
+    *last_outcome = Some(safe_outcome.clone());
 
-    match outcome {
+    match &safe_outcome {
         SuspendOutcome::ResumedSuccessfully { .. } => {
             *state = CoordinatorState::Resumed;
             *detail = None;
@@ -3748,6 +3758,7 @@ async fn handle_force_suspend(
     in_flight_suspend_active: bool,
     timing_revision: u64,
     event_writer: Option<&IdleSuspendEventWriter>,
+    status_tx: &watch::Sender<IdleSuspendStatusV1>,
 ) -> (
     CoordinatorForceSuspendResult,
     Option<BoxFuture<'static, SuspendOutcome>>,
@@ -3858,12 +3869,49 @@ async fn handle_force_suspend(
         );
     }
 
-    // Bounded capability probe (3s timeout)
-    let has_capability = tokio::time::timeout(Duration::from_secs(3), executor.check_capability())
-        .await
-        .unwrap_or_default();
+    // Bounded capability probe (3s timeout) with attempt correlation
+    let started = Instant::now();
+    let probe_outcome = match tokio::time::timeout(
+        Duration::from_secs(3),
+        executor.check_capability(CapabilityProbeRequest {
+            request_id: request_id.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => CapabilityProbeOutcome::Unavailable(ProbeFailure::timeout()),
+    };
 
-    if !has_capability {
+    let now_ms = IdleSuspendStatusV1::now_ms();
+    status_tx.send_modify(|s| match &probe_outcome {
+        CapabilityProbeOutcome::Supported => {
+            s.probe_reason_code = Some("supported".to_string());
+            s.probe_checked_at_ms = Some(now_ms);
+        }
+        CapabilityProbeOutcome::Unavailable(failure) => {
+            s.probe_reason_code = Some(failure.reason.safe_code().to_string());
+            s.probe_checked_at_ms = Some(now_ms);
+        }
+    });
+
+    if let CapabilityProbeOutcome::Unavailable(failure) = probe_outcome {
+        tracing::warn!(
+            correlation_id = ctx.correlation_id.as_str(),
+            reason = failure.reason.safe_code(),
+            dimension = ?failure.reason.dimension(),
+            stage = ?failure.diagnostics.stage,
+            errno = ?failure.diagnostics.errno,
+            socket = ?failure.diagnostics.socket_path,
+            actual_uid = ?failure.diagnostics.actual_uid,
+            expected_uid = ?failure.diagnostics.expected_uid,
+            actual_pid = ?failure.diagnostics.actual_pid,
+            expected_pid = ?failure.diagnostics.expected_pid,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            detail = %failure.diagnostics.bounded_detail,
+            "idle-suspend admission probe rejected"
+        );
+
         let snapshot = pty_manager.fleet_snapshot();
         if let Some(audit) = server_audit {
             if let Ok(rec) = ManualAuditRecord::new(
@@ -3887,15 +3935,15 @@ async fn handle_force_suspend(
             Some(&ctx.correlation_id),
             Some(ctx.mode),
             IdleSuspendEventDataV1::TerminalRejected(TerminalRejectedDataV1 {
-                reason_code: ServerIdleSuspendReasonCodeV1::CapabilityUnsupported,
+                reason_code: failure.reason.event_reason_code(),
                 fleet_generation: Some(snapshot.generation),
                 activity_revision: None,
             }),
         );
         return (
-            CoordinatorForceSuspendResult::CapabilityUnavailable(
-                "Host lacks required suspend capability or capability probe failed".into(),
-            ),
+            CoordinatorForceSuspendResult::ProbeUnavailable {
+                reason: failure.reason,
+            },
             None,
             None,
             None,

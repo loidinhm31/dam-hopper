@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
 };
 use tower::ServiceExt;
 
@@ -14,7 +14,7 @@ use crate::{
         DamHopperConfig, FeaturesConfig, GlobalConfig, ProjectConfig, ProjectType, WorkspaceInfo,
     },
     crypto::DamHopperOpaqueSuite,
-    diagnostics::{DiagnosticEvent, DiagnosticStore, now_ms},
+    diagnostics::{now_ms, DiagnosticEvent, DiagnosticStore},
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
@@ -23,10 +23,10 @@ use crate::{
         ResourceAlertState, ResourceAlertSummary,
     },
     telemetry::{
-        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality,
-        TELEMETRY_SCHEMA_VERSION, TelemetryCmd, TelemetryKeyRing, TelemetryStore,
-        TokenCounterSemantic, TokenQuality,
         worker::{TelemetryControl, TelemetryHandle},
+        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
+        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
+        TELEMETRY_SCHEMA_VERSION,
     },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
     workspace_target::ProjectTargetRef,
@@ -449,12 +449,10 @@ async fn backend_emits_no_cors_headers_or_preflight_behavior_without_allowlist()
         .unwrap();
     let origin_response = router.clone().oneshot(origin_request).await.unwrap();
     assert_eq!(origin_response.status(), StatusCode::OK);
-    assert!(
-        origin_response
-            .headers()
-            .keys()
-            .all(|name| !name.as_str().starts_with("access-control-"))
-    );
+    assert!(origin_response
+        .headers()
+        .keys()
+        .all(|name| !name.as_str().starts_with("access-control-")));
 
     let preflight = Request::builder()
         .method("OPTIONS")
@@ -1034,21 +1032,15 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
         Some(backend_events.len() as u64)
     );
     assert_eq!(json["manifest"]["terminalSessionCount"], 1);
-    assert!(
-        backend_events
-            .iter()
-            .any(|event| event["message"] == "terminal.a")
-    );
-    assert!(
-        backend_events
-            .iter()
-            .any(|event| event["message"] == "global")
-    );
-    assert!(
-        !backend_events
-            .iter()
-            .any(|event| event["message"] == "terminal.b")
-    );
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.a"));
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.b"));
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], "shell:diag-a");
 
@@ -1071,16 +1063,12 @@ async fn diagnostics_export_scopes_sessions_to_terminal_ids() {
     assert_eq!(json["scope"]["terminalIds"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["sessions"].as_array().unwrap().len(), 0);
     assert_eq!(json["terminals"]["tails"].as_array().unwrap().len(), 0);
-    assert!(
-        backend_events
-            .iter()
-            .any(|event| event["message"] == "global")
-    );
-    assert!(
-        !backend_events
-            .iter()
-            .any(|event| event["message"] == "terminal.a")
-    );
+    assert!(backend_events
+        .iter()
+        .any(|event| event["message"] == "global"));
+    assert!(!backend_events
+        .iter()
+        .any(|event| event["message"] == "terminal.a"));
 
     state.pty_manager.kill("shell:diag-a").unwrap();
     state.pty_manager.kill("shell:diag-b").unwrap();
@@ -1891,7 +1879,9 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project failed")
-    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
+    .with_auth_service(std::sync::Arc::new(
+        crate::auth::AuthService::new_mock_default().0,
+    ))
 }
 
 fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> AppState {
@@ -1959,7 +1949,9 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_roots failed")
-    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
+    .with_auth_service(std::sync::Arc::new(
+        crate::auth::AuthService::new_mock_default().0,
+    ))
 }
 
 #[tokio::test]
@@ -2032,11 +2024,9 @@ async fn language_files_returns_normalized_contract_and_enforces_project_boundar
     assert_eq!(json["files"][0]["language"], "rust");
     assert!(json["files"][0]["size"].is_u64());
     assert!(json["files"][0]["mtime"].is_i64());
-    assert!(
-        !bytes
-            .windows(alpha.to_string_lossy().len())
-            .any(|window| { window == alpha.to_string_lossy().as_bytes() })
-    );
+    assert!(!bytes
+        .windows(alpha.to_string_lossy().len())
+        .any(|window| { window == alpha.to_string_lossy().as_bytes() }));
 
     let empty = get(state.clone(), "/api/fs/language-files?project=beta").await;
     assert_eq!(empty.status(), StatusCode::OK);
@@ -2097,7 +2087,9 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_env_file failed")
-    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
+    .with_auth_service(std::sync::Arc::new(
+        crate::auth::AuthService::new_mock_default().0,
+    ))
 }
 
 fn make_state_with_project_root_env_file(
@@ -2142,7 +2134,9 @@ fn make_state_with_project_root_env_file(
         crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_root_env_file failed")
-    .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::new_mock_default().0))
+    .with_auth_service(std::sync::Arc::new(
+        crate::auth::AuthService::new_mock_default().0,
+    ))
 }
 
 #[test]
@@ -2290,18 +2284,14 @@ async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
         "gpt-5.6-sol"
     );
     assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
-    assert!(
-        !list_value["sessions"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("terminals")
-    );
-    assert!(
-        !list_value["sessions"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("lineage")
-    );
+    assert!(!list_value["sessions"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("terminals"));
+    assert!(!list_value["sessions"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("lineage"));
     let serialized = String::from_utf8(list_body.to_vec()).unwrap();
     for forbidden in [
         "raw-provider-session",
@@ -2398,12 +2388,10 @@ async fn usage_session_cursor_preserves_active_null_end() {
     let first_sessions = first_value["sessions"].as_array().unwrap();
     assert_eq!(first_sessions.len(), 2);
     assert_eq!(first_sessions[1]["id"], "b".repeat(64));
-    assert!(
-        first_sessions[1]
-            .as_object()
-            .unwrap()
-            .contains_key("endedAtUtcMs")
-    );
+    assert!(first_sessions[1]
+        .as_object()
+        .unwrap()
+        .contains_key("endedAtUtcMs"));
     assert!(first_sessions[1]["endedAtUtcMs"].is_null());
     let cursor = first_value["nextCursor"].as_str().unwrap();
 
@@ -2481,14 +2469,12 @@ async fn usage_session_cursor_bounds_and_ids_are_strict() {
         .unwrap();
     let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(
-        !first_ids.contains(
-            &second_value["sessions"][0]["id"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        )
-    );
+    assert!(!first_ids.contains(
+        &second_value["sessions"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    ));
     let changed_scope = get(
         state.clone(),
         &format!(
@@ -2702,12 +2688,10 @@ async fn usage_session_detail_is_flat_and_caps_model_summaries() {
         .unwrap();
     let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(
-        !filtered_value["sessions"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("terminals")
-    );
+    assert!(!filtered_value["sessions"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("terminals"));
 }
 
 #[tokio::test]
@@ -2776,11 +2760,9 @@ async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation(
     assert_eq!(updated.status(), StatusCode::OK);
     let telemetry = state.telemetry.read().unwrap().clone();
     assert!(!telemetry.control.is_enabled());
-    assert!(
-        std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
-            .unwrap()
-            .contains("paused = true")
-    );
+    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
+        .unwrap()
+        .contains("paused = true"));
 
     let rejected = delete_json(
         state.clone(),
@@ -4082,13 +4064,11 @@ async fn terminal_create_preserves_explicit_otel_attributes_without_usage_work()
             .get_buffer("terminal:otel-conflict")
             .is_ok_and(|buffer| buffer.contains("user.attribute=preserved"))
     }));
-    assert!(
-        !state
-            .pty_manager
-            .get_buffer("terminal:otel-conflict")
-            .unwrap()
-            .contains("dam_hopper.run_id=")
-    );
+    assert!(!state
+        .pty_manager
+        .get_buffer("terminal:otel-conflict")
+        .unwrap()
+        .contains("dam_hopper.run_id="));
     state.pty_manager.remove("terminal:otel-conflict").unwrap();
 }
 
@@ -4198,13 +4178,11 @@ async fn terminal_create_loads_target_worktree_env_file() {
             .get_buffer("target-env-session")
             .is_ok_and(|buffer| buffer.contains("feature"))
     }));
-    assert!(
-        !state
-            .pty_manager
-            .get_buffer("target-env-session")
-            .unwrap()
-            .contains("root")
-    );
+    assert!(!state
+        .pty_manager
+        .get_buffer("target-env-session")
+        .unwrap()
+        .contains("root"));
     state.pty_manager.remove("target-env-session").unwrap();
 }
 
@@ -4531,13 +4509,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(
-        branches_json
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true)
-    );
+    assert!(branches_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|branch| branch["name"] == "feature" && branch["isCurrent"] == true));
 
     let status = get(
         state.clone(),
@@ -4565,13 +4541,11 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
             .unwrap(),
     )
     .unwrap();
-    assert!(
-        roots_json
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|root| root["rootId"] == "nested")
-    );
+    assert!(roots_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|root| root["rootId"] == "nested"));
 
     let nested_branches = get(
         state.clone(),
@@ -4595,11 +4569,9 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .filter_map(|entry| entry["path"].as_str())
         .collect();
     assert!(root_paths.contains(&"root-only.txt"));
-    assert!(
-        !root_paths
-            .iter()
-            .any(|path| path.ends_with("worktree-only.txt"))
-    );
+    assert!(!root_paths
+        .iter()
+        .any(|path| path.ends_with("worktree-only.txt")));
 
     let target_diff = get(
         state,
@@ -4619,16 +4591,12 @@ async fn git_routes_isolate_selected_worktree_and_nested_roots() {
         .iter()
         .filter_map(|entry| entry["path"].as_str())
         .collect();
-    assert!(
-        target_paths
-            .iter()
-            .any(|path| path.ends_with("worktree-only.txt"))
-    );
-    assert!(
-        !target_paths
-            .iter()
-            .any(|path| path.ends_with("root-only.txt"))
-    );
+    assert!(target_paths
+        .iter()
+        .any(|path| path.ends_with("worktree-only.txt")));
+    assert!(!target_paths
+        .iter()
+        .any(|path| path.ends_with("root-only.txt")));
 }
 
 #[tokio::test]
@@ -4719,11 +4687,9 @@ async fn git_bulk_routes_accept_and_validate_selected_targets() {
     assert_eq!(invalid_json[0]["projectName"], "test-project");
     assert_eq!(invalid_json[0]["success"], false);
     assert_eq!(invalid_json[0]["targetUnavailable"], true);
-    assert!(
-        invalid_json[0]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("registered worktree"))
-    );
+    assert!(invalid_json[0]["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("registered worktree")));
 }
 
 #[tokio::test]
@@ -4814,12 +4780,10 @@ async fn git_worktree_add_and_remove_routes_use_project_targets() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("configured project root cannot be removed")
-    );
+    assert!(json["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("configured project root cannot be removed"));
 
     let resp = post_json(
         state.clone(),
@@ -5139,12 +5103,10 @@ async fn terminal_target_metadata_blocks_concurrent_worktree_removal() {
         .await
         .unwrap();
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
-    assert!(
-        blocked_json["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("live terminal session")
-    );
+    assert!(blocked_json["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("live terminal session"));
 
     let killed = delete_json(
         state.clone(),
@@ -5939,18 +5901,14 @@ async fn workspace_reinitialization_revokes_every_media_ticket() {
     .await;
     assert!(reinitialized.is_ok());
 
-    assert!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(&ticket)
-            .is_none()
-    );
-    assert!(
-        state
-            .image_stream_tickets
-            .lookup_and_touch(&image_ticket)
-            .is_none()
-    );
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&ticket)
+        .is_none());
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
+        .is_none());
 }
 
 #[cfg(unix)]
@@ -6115,12 +6073,10 @@ async fn video_stream_uses_bound_ticket_capability_and_logout_revokes_it() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(
-        response.headers()[header::SET_COOKIE]
-            .to_str()
-            .unwrap()
-            .contains("Max-Age=0")
-    );
+    assert!(response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
     assert_eq!(
         stream_video(state, &ticket, "GET", &origin).await.status(),
         StatusCode::NOT_FOUND
@@ -6216,12 +6172,10 @@ async fn video_stream_serves_zero_byte_files_but_rejects_zero_byte_ranges() {
     let full = stream_video(state.clone(), &ticket, "GET", &[]).await;
     assert_eq!(full.status(), StatusCode::OK);
     assert_eq!(full.headers()["content-length"], "0");
-    assert!(
-        axum::body::to_bytes(full.into_body(), 1)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(axum::body::to_bytes(full.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
 
     let range = stream_video(state, &ticket, "GET", &[("range", "bytes=0-0")]).await;
     assert_eq!(range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6270,12 +6224,10 @@ async fn video_stream_revokes_stale_files_and_handles_sparse_ranges_without_full
         assert!(stale.headers().get(name).is_none());
     }
     assert_eq!(stale.headers()[axum::http::header::CONTENT_LENGTH], "0");
-    assert!(
-        axum::body::to_bytes(stale.into_body(), 1)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(axum::body::to_bytes(stale.into_body(), 1)
+        .await
+        .unwrap()
+        .is_empty());
     assert_eq!(
         stream_video(state.clone(), &stale_ticket, "GET", &[])
             .await
@@ -6495,14 +6447,12 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     )
     .await;
     assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
-    assert!(
-        !String::from_utf8_lossy(
-            &axum::body::to_bytes(traversal.into_body(), usize::MAX)
-                .await
-                .unwrap()
-        )
-        .contains("outside.png")
-    );
+    assert!(!String::from_utf8_lossy(
+        &axum::body::to_bytes(traversal.into_body(), usize::MAX)
+            .await
+            .unwrap()
+    )
+    .contains("outside.png"));
 }
 
 #[cfg(unix)]
@@ -6516,13 +6466,11 @@ async fn image_ticket_issuance_rejects_symlinks_and_fifos() {
     std::fs::write(real_dir.join("nested.png"), b"png").unwrap();
     std::os::unix::fs::symlink(&real_dir, tmp.path().join("link-dir")).unwrap();
     let fifo = tmp.path().join("trap.gif");
-    assert!(
-        Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
     let state = make_state_with_project(&tmp);
 
     for path in ["link.png", "link-dir/nested.png", "trap.gif"] {
@@ -6712,12 +6660,10 @@ async fn image_stream_is_session_bound_inline_mime_typed_and_rangeable() {
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "10");
     assert!(head.headers().get("content-range").is_none());
-    assert!(
-        axum::body::to_bytes(head.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(axum::body::to_bytes(head.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .is_empty());
 
     let invalid = stream_image(state, &ticket, "GET", &[("range", "bytes=0-1,2-3")]).await;
     assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
@@ -6861,18 +6807,14 @@ async fn image_revoke_requires_auth_and_context_reload_revokes_both_media_kinds(
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     state.media_tickets.revoke_all();
-    assert!(
-        state
-            .image_stream_tickets
-            .lookup_and_touch(&image_ticket)
-            .is_none()
-    );
-    assert!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(&video_ticket)
-            .is_none()
-    );
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&image_ticket)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&video_ticket)
+        .is_none());
 }
 
 #[tokio::test]
@@ -6894,18 +6836,14 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(config_response.status(), StatusCode::OK);
-    assert!(
-        state
-            .image_stream_tickets
-            .lookup_and_touch(&config_image)
-            .is_none()
-    );
-    assert!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(&config_video)
-            .is_none()
-    );
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&config_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&config_video)
+        .is_none());
 
     let settings_image = issue_image_stream_ticket(state.clone(), "cover.png").await;
     let settings_video = issue_video_stream_ticket(state.clone(), "clip.webm", "playback").await;
@@ -6916,18 +6854,14 @@ async fn config_and_settings_reload_revoke_shared_media_tickets() {
     )
     .await;
     assert_eq!(settings_response.status(), StatusCode::OK);
-    assert!(
-        state
-            .image_stream_tickets
-            .lookup_and_touch(&settings_image)
-            .is_none()
-    );
-    assert!(
-        state
-            .video_stream_tickets
-            .lookup_and_touch(&settings_video)
-            .is_none()
-    );
+    assert!(state
+        .image_stream_tickets
+        .lookup_and_touch(&settings_image)
+        .is_none());
+    assert!(state
+        .video_stream_tickets
+        .lookup_and_touch(&settings_video)
+        .is_none());
 }
 
 #[tokio::test]
@@ -7493,6 +7427,8 @@ async fn idle_suspend_status_agent_activity_available_measurement_warning_is_nul
         agent_free: None,
         client_presence: None,
         consent: None,
+        probe_reason_code: None,
+        probe_checked_at_ms: None,
         timestamp_ms: 1724500001000,
     };
 
@@ -7571,6 +7507,8 @@ async fn idle_suspend_status_warning_serialization_privacy_and_bounds() {
         agent_free: None,
         client_presence: None,
         consent: None,
+        probe_reason_code: None,
+        probe_checked_at_ms: None,
         timestamp_ms: 1724500000000,
     };
 
@@ -7729,20 +7667,24 @@ async fn idle_suspend_timing_patch_agent_free_policy_enforcement() {
     idle_suspend_cfg.quiet_period_seconds = 10800;
     idle_suspend_cfg.wake_after_seconds = 600;
 
-
-    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
-    store.create_user(crate::auth::UserRecord {
-        id: None,
-        username: crate::auth::MOCK_USER.to_string(),
-        password_hash: String::new(),
-        is_enabled: true,
-        role: crate::auth::UserRole::Admin,
-        auth_version: 0,
-        mfa: None,
-        mfa_attempt_window_started_at: None,
-        mfa_attempt_count: 0,
-        mfa_blocked_until: None,
-    }).await.unwrap();
+    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db"))
+        .await
+        .unwrap();
+    store
+        .create_user(crate::auth::UserRecord {
+            id: None,
+            username: crate::auth::MOCK_USER.to_string(),
+            password_hash: String::new(),
+            is_enabled: true,
+            role: crate::auth::UserRole::Admin,
+            auth_version: 0,
+            mfa: None,
+            mfa_attempt_window_started_at: None,
+            mfa_attempt_count: 0,
+            mfa_blocked_until: None,
+        })
+        .await
+        .unwrap();
 
     let (auth_cookie_str, session) = {
         use crate::auth::model::{chrono_to_bson, AuthClaims};
@@ -7774,8 +7716,12 @@ async fn idle_suspend_timing_patch_agent_free_policy_enforcement() {
     };
     store.create_session(session).await.unwrap();
 
-    let state = make_state_with_idle_suspend_config(&tmp, idle_suspend_cfg)
-        .with_auth_service(std::sync::Arc::new(crate::auth::AuthService::with_system_clock(Some(store), None)));
+    let state = make_state_with_idle_suspend_config(&tmp, idle_suspend_cfg).with_auth_service(
+        std::sync::Arc::new(crate::auth::AuthService::with_system_clock(
+            Some(store),
+            None,
+        )),
+    );
     let audit_file = state.idle_suspend_audit.path().clone();
     if let Some(parent) = audit_file.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -8288,26 +8234,39 @@ async fn idle_suspend_actor_gate_uses_selected_store_account_state() {
     }
 
     let tmp = tempfile::tempdir().unwrap();
-    let store = AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
-    store.create_user(account("enabled-actor", true)).await.unwrap();
-    store.create_user(account("disabled-actor", false)).await.unwrap();
+    let store = AuthStore::open_sqlite(tmp.path().join("auth.db"))
+        .await
+        .unwrap();
+    store
+        .create_user(account("enabled-actor", true))
+        .await
+        .unwrap();
+    store
+        .create_user(account("disabled-actor", false))
+        .await
+        .unwrap();
     let state = make_state(&tmp)
         .with_auth_service(Arc::new(AuthService::with_system_clock(Some(store), None)));
 
-    assert_eq!(gate(&state, "enabled-actor").await.unwrap().subject, "enabled-actor");
+    assert_eq!(
+        gate(&state, "enabled-actor").await.unwrap().subject,
+        "enabled-actor"
+    );
 
     for subject in ["disabled-actor", "unknown-actor"] {
         let resp = gate(&state, subject).await.unwrap_err();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{subject}");
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "actorDisabled", "{subject}");
     }
 
     // Without a selected store there is no authority to consult: unavailable, not a default account.
-    let no_store = make_state(&tmp)
-        .with_auth_service(Arc::new(AuthService::with_system_clock(None, None)));
+    let no_store =
+        make_state(&tmp).with_auth_service(Arc::new(AuthService::with_system_clock(None, None)));
     let resp = gate(&no_store, "enabled-actor").await.unwrap_err();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
@@ -8371,7 +8330,9 @@ async fn test_get_agent_status_snapshot_unauthorized() {
 #[tokio::test]
 async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db")).await.unwrap();
+    let store = crate::auth::AuthStore::open_sqlite(tmp.path().join("auth.db"))
+        .await
+        .unwrap();
     let user_record = crate::auth::UserRecord {
         id: None,
         username: crate::auth::MOCK_USER.to_string(),
@@ -8430,10 +8391,17 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
     let client_guard = guard.promote(conn_id.clone(), &cap_sec).unwrap();
 
     let state = make_state(&tmp)
-        .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(Some(store.clone()), None)))
+        .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(
+            Some(store.clone()),
+            None,
+        )))
         .with_client_presence(presence.clone());
 
-    let _coord = state.start_idle_suspend_coordinator(Arc::new(crate::idle_suspend::UnavailableExecutor::default())).await;
+    let _coord = state
+        .start_idle_suspend_coordinator(Arc::new(
+            crate::idle_suspend::UnavailableExecutor::default(),
+        ))
+        .await;
 
     // 1. Unauthenticated -> 401
     {
@@ -8442,13 +8410,16 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             .method("POST")
             .uri("/api/system/idle-suspend/v1/consent/decision")
             .header("Content-Type", "application/json")
-            .body(Body::from(serde_json::json!({
-                "requestId": "req-1",
-                "requestRevision": 1,
-                "connectionId": conn_id,
-                "decisionCapability": cap_sec,
-                "decision": "approve"
-            }).to_string()))
+            .body(Body::from(
+                serde_json::json!({
+                    "requestId": "req-1",
+                    "requestRevision": 1,
+                    "connectionId": conn_id,
+                    "decisionCapability": cap_sec,
+                    "decision": "approve"
+                })
+                .to_string(),
+            ))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -8480,17 +8451,22 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             .header("Cookie", &auth_cookie_str)
             .header("Origin", "http://127.0.0.1:4801")
             .header("Host", "127.0.0.1:4801")
-            .body(Body::from(serde_json::json!({
-                "requestId": "req-1",
-                "requestRevision": 1,
-                "connectionId": "non-existent-conn",
-                "decisionCapability": cap_sec,
-                "decision": "approve"
-            }).to_string()))
+            .body(Body::from(
+                serde_json::json!({
+                    "requestId": "req-1",
+                    "requestRevision": 1,
+                    "connectionId": "non-existent-conn",
+                    "decisionCapability": cap_sec,
+                    "decision": "approve"
+                })
+                .to_string(),
+            ))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "connectionNotFound");
     }
@@ -8505,17 +8481,22 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             .header("Cookie", &auth_cookie_str)
             .header("Origin", "http://127.0.0.1:4801")
             .header("Host", "127.0.0.1:4801")
-            .body(Body::from(serde_json::json!({
-                "requestId": "req-1",
-                "requestRevision": 1,
-                "connectionId": conn_id,
-                "decisionCapability": "wrong-capability-secret",
-                "decision": "approve"
-            }).to_string()))
+            .body(Body::from(
+                serde_json::json!({
+                    "requestId": "req-1",
+                    "requestRevision": 1,
+                    "connectionId": conn_id,
+                    "decisionCapability": "wrong-capability-secret",
+                    "decision": "approve"
+                })
+                .to_string(),
+            ))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "invalidCapability");
     }
@@ -8530,17 +8511,22 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             .header("Cookie", &auth_cookie_str)
             .header("Origin", "http://127.0.0.1:4801")
             .header("Host", "127.0.0.1:4801")
-            .body(Body::from(serde_json::json!({
-                "requestId": "req-1",
-                "requestRevision": 1,
-                "connectionId": conn_id,
-                "decisionCapability": cap_sec,
-                "decision": "approve"
-            }).to_string()))
+            .body(Body::from(
+                serde_json::json!({
+                    "requestId": "req-1",
+                    "requestRevision": 1,
+                    "connectionId": conn_id,
+                    "decisionCapability": cap_sec,
+                    "decision": "approve"
+                })
+                .to_string(),
+            ))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "idleSuspendDisabled");
     }
@@ -8553,9 +8539,16 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
         enabled_cfg.quiet_period_seconds = 10800;
         enabled_cfg.wake_after_seconds = 600;
         let enabled_state = make_state_with_idle_suspend_config(&tmp, enabled_cfg)
-            .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(Some(store), None)))
+            .with_auth_service(Arc::new(crate::auth::AuthService::with_system_clock(
+                Some(store),
+                None,
+            )))
             .with_client_presence(presence.clone());
-        let _coord2 = enabled_state.start_idle_suspend_coordinator(Arc::new(crate::idle_suspend::UnavailableExecutor::default())).await;
+        let _coord2 = enabled_state
+            .start_idle_suspend_coordinator(Arc::new(
+                crate::idle_suspend::UnavailableExecutor::default(),
+            ))
+            .await;
 
         let app = build_router(enabled_state);
         let req = Request::builder()
@@ -8565,17 +8558,22 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             .header("Cookie", &auth_cookie_str)
             .header("Origin", "http://127.0.0.1:4801")
             .header("Host", "127.0.0.1:4801")
-            .body(Body::from(serde_json::json!({
-                "requestId": "req-1",
-                "requestRevision": 1,
-                "connectionId": conn_id,
-                "decisionCapability": cap_sec,
-                "decision": "approve"
-            }).to_string()))
+            .body(Body::from(
+                serde_json::json!({
+                    "requestId": "req-1",
+                    "requestRevision": 1,
+                    "connectionId": conn_id,
+                    "decisionCapability": cap_sec,
+                    "decision": "approve"
+                })
+                .to_string(),
+            ))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "consentUnavailable");
     }

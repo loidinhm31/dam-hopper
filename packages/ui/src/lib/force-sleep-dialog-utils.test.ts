@@ -5,6 +5,7 @@ import {
   getActiveSessionCount,
   getForceSleepErrorMessage,
   getInitialTimedWakeSeconds,
+  getProbeDiagnosticsMessage,
 } from "./force-sleep-dialog-utils.js";
 
 function mockStatus(overrides: Partial<IdleSuspendStatusV1> = {}): IdleSuspendStatusV1 {
@@ -109,5 +110,45 @@ describe("force-sleep-dialog-utils", () => {
         new ApiRequestError("unauthorized", 401, "unauthorized"),
       ),
     ).toContain("Authentication expired or required");
+    expect(
+      getForceSleepErrorMessage(
+        new ApiRequestError("unavailable", 503, "idleSuspendCapabilityUnavailable"),
+      ),
+    ).toContain("Host lacks required sleep or timed-wake capability");
+    expect(
+      getForceSleepErrorMessage(
+        new ApiRequestError("unavailable", 503, "idleSuspendHelperUnavailable"),
+      ),
+    ).toContain("Idle suspend helper is unavailable or unreachable");
+    expect(
+      getForceSleepErrorMessage(
+        new ApiRequestError("unavailable", 503, "idleSuspendProbeTimeout"),
+      ),
+    ).toContain("capability probe timed out");
+    expect(
+      getForceSleepErrorMessage(
+        new ApiRequestError("conflict", 409, "idleSuspendInhibited"),
+      ),
+    ).toContain("blocked by an active system inhibitor");
+    expect(
+      getForceSleepErrorMessage(
+        new ApiRequestError("conflict", 409, "idleSuspendRtcBusy"),
+      ),
+    ).toContain("wake timer is currently in use");
+  });
+
+  it("translates probe diagnostic reason codes", () => {
+    expect(getProbeDiagnosticsMessage(null)).toBeNull();
+    expect(getProbeDiagnosticsMessage("supported")).toBeNull();
+    expect(getProbeDiagnosticsMessage("socketNotFound")).toContain("Helper communication socket is missing");
+    expect(getProbeDiagnosticsMessage("connectionRefused")).toContain("Connection refused");
+    expect(getProbeDiagnosticsMessage("peerAuthFailed")).toContain("Peer authentication failed");
+    expect(getProbeDiagnosticsMessage("probeTimeout")).toContain("timed out contacting");
+    expect(getProbeDiagnosticsMessage("suspendStateUnsupported")).toContain("does not support suspend");
+    expect(getProbeDiagnosticsMessage("rtcAlarmMissing")).toContain("functional RTC wake alarm");
+    expect(getProbeDiagnosticsMessage("inhibitorPresent")).toContain("active system inhibitor");
+    expect(
+      getProbeDiagnosticsMessage("unknownReason" as unknown as SafeProbeReasonCode),
+    ).toContain("unrecognized diagnostic condition");
   });
 });

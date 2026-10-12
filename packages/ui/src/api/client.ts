@@ -872,8 +872,35 @@ export interface IdleSuspendStatusV1 {
   agentFree?: IdleSuspendAgentFreeStatusV1 | null;
   clientPresence?: IdleSuspendClientPresenceStatusV1 | null;
   consent?: IdleSuspendConsentStatusV1 | null;
+  probeReasonCode?: SafeProbeReasonCode | null;
+  probeCheckedAtMs?: number | null;
   timestampMs: number;
 }
+
+export const SAFE_PROBE_REASON_CODES = [
+  "supported",
+  "socketNotFound",
+  "socketPermissionDenied",
+  "connectionRefused",
+  "peerAuthFailed",
+  "ipcIoError",
+  "ipcProtocolError",
+  "protocolVersionMismatch",
+  "probeExecutionError",
+  "probeTimeout",
+  "executorUnavailable",
+  "unknownHelperFailure",
+  "suspendStateUnsupported",
+  "rtcAlarmMissing",
+  "inhibitorPresent",
+  "rtcAlarmBusy",
+] as const;
+
+export type SafeProbeReasonCode = (typeof SAFE_PROBE_REASON_CODES)[number];
+
+const SAFE_PROBE_REASON_CODE_SET: Record<string, true> = Object.fromEntries(
+  SAFE_PROBE_REASON_CODES.map((code) => [code, true]),
+);
 
 const COORDINATOR_STATES: Record<string, true> = {
   disabled: true,
@@ -1479,6 +1506,21 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
   ) {
     throw new Error("Invalid idle suspend status: invalid detail");
   }
+  if (
+    value.probeReasonCode !== undefined &&
+    value.probeReasonCode !== null &&
+    (typeof value.probeReasonCode !== "string" ||
+      !Object.hasOwn(SAFE_PROBE_REASON_CODE_SET, value.probeReasonCode))
+  ) {
+    throw new Error("Invalid idle suspend status: invalid probeReasonCode");
+  }
+  if (
+    value.probeCheckedAtMs !== undefined &&
+    value.probeCheckedAtMs !== null &&
+    !isValidEpochMs(value.probeCheckedAtMs)
+  ) {
+    throw new Error("Invalid idle suspend status: invalid probeCheckedAtMs");
+  }
   if (!isValidEpochMs(value.timestampMs)) {
     throw new Error("Invalid idle suspend status: invalid timestampMs");
   }
@@ -1632,6 +1674,8 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
     agentFree,
     clientPresence,
     consent,
+    probeReasonCode: (value.probeReasonCode ?? null) as SafeProbeReasonCode | null,
+    probeCheckedAtMs: (value.probeCheckedAtMs ?? null) as number | null,
     timestampMs: value.timestampMs as number,
   };
 }

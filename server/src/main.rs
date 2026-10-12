@@ -983,7 +983,6 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| PathBuf::from("/run/dam-hopper/idle-suspend.sock"));
         tracing::info!(
             socket = %socket_path.display(),
-            socket_exists = socket_path.exists(),
             "Enrolling SystemdIdleSuspendExecutor with privileged helper socket"
         );
         Arc::new(dam_hopper_server::idle_suspend::SystemdIdleSuspendExecutor::new(&socket_path))

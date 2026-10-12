@@ -221,19 +221,22 @@ impl Default for SysfsPreflightChecker {
 
 impl PreflightChecker for SysfsPreflightChecker {
     fn check_suspend_state(&self) -> Result<(), PreflightError> {
-        if !self.power_state_path.exists() {
-            return Err(PreflightError::UnsupportedSuspend(format!(
-                "Power state file not found at {}",
-                self.power_state_path.display()
-            )));
-        }
-        let content = std::fs::read_to_string(&self.power_state_path).map_err(|e| {
-            PreflightError::ProbeError(format!(
-                "Failed to read {}: {}",
-                self.power_state_path.display(),
-                e
-            ))
-        })?;
+        let content = match std::fs::read_to_string(&self.power_state_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PreflightError::UnsupportedSuspend(format!(
+                    "Power state file not found at {}",
+                    self.power_state_path.display()
+                )));
+            }
+            Err(e) => {
+                return Err(PreflightError::ProbeError(format!(
+                    "Failed to read {}: {}",
+                    self.power_state_path.display(),
+                    e
+                )));
+            }
+        };
         let supported_modes: Vec<&str> = content.split_whitespace().collect();
         if !supported_modes.contains(&self.expected_mode.as_str()) {
             return Err(PreflightError::UnsupportedSuspend(format!(
@@ -245,19 +248,22 @@ impl PreflightChecker for SysfsPreflightChecker {
     }
 
     fn check_rtc_wakealarm(&self) -> Result<(), PreflightError> {
-        if !self.rtc_wakealarm_path.exists() {
-            return Err(PreflightError::UnsupportedRtc(format!(
-                "RTC wakealarm device not found at {}",
-                self.rtc_wakealarm_path.display()
-            )));
-        }
-        let content = std::fs::read_to_string(&self.rtc_wakealarm_path).map_err(|e| {
-            PreflightError::ProbeError(format!(
-                "Failed to read RTC wakealarm at {}: {}",
-                self.rtc_wakealarm_path.display(),
-                e
-            ))
-        })?;
+        let content = match std::fs::read_to_string(&self.rtc_wakealarm_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PreflightError::UnsupportedRtc(format!(
+                    "RTC wakealarm device not found at {}",
+                    self.rtc_wakealarm_path.display()
+                )));
+            }
+            Err(e) => {
+                return Err(PreflightError::ProbeError(format!(
+                    "Failed to read RTC wakealarm at {}: {}",
+                    self.rtc_wakealarm_path.display(),
+                    e
+                )));
+            }
+        };
         let trimmed = content.trim();
         if !trimmed.is_empty() && trimmed != "0" {
             return Err(PreflightError::RtcAlarmBusy(format!(

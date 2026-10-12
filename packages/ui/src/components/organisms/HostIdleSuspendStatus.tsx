@@ -10,7 +10,7 @@ import type {
   IdleSuspendStatusV1,
 } from "@/api/client.js";
 import { cn } from "@/lib/utils.js";
-
+import { getProbeDiagnosticsMessage } from "@/lib/force-sleep-dialog-utils.js";
 export interface HostIdleSuspendStatusProps {
   onForceSleep?: (status: IdleSuspendStatusV1) => void;
   isForceSleepPending?: boolean;
@@ -543,6 +543,16 @@ export function HostIdleSuspendStatus({
             Free = Idle + Blocked (waiting for input/approval, not task
             completion); Working or Unknown blocks automatic sleep.
           </div>
+        </div>
+      )}
+      {status.probeReasonCode && status.probeReasonCode !== "supported" && (
+        <div
+          role="note"
+          aria-label="Capability diagnostic"
+          className="rounded border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-1.5 text-[10px] text-[var(--color-warning)]"
+        >
+          <span className="font-semibold">Capability probe notice: </span>
+          <span>{getProbeDiagnosticsMessage(status.probeReasonCode) ?? status.probeReasonCode}</span>
         </div>
       )}
 

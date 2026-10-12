@@ -14,11 +14,10 @@ use tower::ServiceExt;
 
 use dam_hopper_server::{
     agent_store::AgentStoreService,
-        config::{
-            DamHopperConfig, FeaturesConfig, GlobalConfig, IdleSuspendAutomaticPolicy,
-            IdleSuspendConfig, RestartPolicy, ServerConfig, WorkspaceInfo,
-            DEFAULT_RESTART_MAX_RETRIES,
-        },
+    config::{
+        DamHopperConfig, FeaturesConfig, GlobalConfig, IdleSuspendAutomaticPolicy,
+        IdleSuspendConfig, RestartPolicy, ServerConfig, WorkspaceInfo, DEFAULT_RESTART_MAX_RETRIES,
+    },
     crypto::DamHopperOpaqueSuite,
     diagnostics::DiagnosticStore,
     fs::FsSubsystem,
@@ -33,8 +32,7 @@ use dam_hopper_server::{
             SuspendWithRtcWakeRequest,
         },
         status::{CoordinatorState, IdleSuspendStatusV1},
-        UnavailableExecutor,
-        validate_canonical_uuid_v4,
+        validate_canonical_uuid_v4, UnavailableExecutor,
     },
     pty::{BroadcastEventSink, PtyCreateOpts, PtySessionManager},
     state::AppState,
@@ -45,10 +43,11 @@ mod common;
 
 const TEST_SECRET: &str = "test-secret-jwt-key-12345";
 
-
 fn make_auth_cookie() -> String {
     use dam_hopper_server::auth::model::AuthClaims;
-    use dam_hopper_server::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER};
+    use dam_hopper_server::auth::{
+        AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS, MOCK_SESSION_ID, MOCK_USER,
+    };
     let claims = AuthClaims {
         v: AUTH_PROTOCOL_VERSION,
         sub: MOCK_USER.to_string(),
@@ -177,7 +176,9 @@ wake_after_seconds = {}
         TelemetryRuntime::new(),
     )
     .expect("AppState::new")
-    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
+    .with_auth_service(std::sync::Arc::new(
+        dam_hopper_server::auth::AuthService::new_mock_default().0,
+    ));
 
     TestFixture {
         _tmp: tmp,
@@ -295,7 +296,9 @@ agent_executables = [{}]
         TelemetryRuntime::new(),
     )
     .expect("AppState::new")
-    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
+    .with_auth_service(std::sync::Arc::new(
+        dam_hopper_server::auth::AuthService::new_mock_default().0,
+    ));
 
     if quiet < 60 || wake < 60 {
         let mut timing_guard = state.idle_suspend_timing.write().await;
@@ -310,11 +313,7 @@ agent_executables = [{}]
     }
 }
 
-async fn setup_agent_free_fixture(
-    idle_enabled: bool,
-    quiet: u64,
-    wake: u64,
-) -> TestFixture {
+async fn setup_agent_free_fixture(idle_enabled: bool, quiet: u64, wake: u64) -> TestFixture {
     let tmp = tempfile::tempdir().expect("tempdir");
     let workspace_dir = tmp.path().to_path_buf();
     #[cfg(unix)]
@@ -403,7 +402,9 @@ automatic_policy = "agent-free"
         TelemetryRuntime::new(),
     )
     .expect("AppState::new")
-    .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));
+    .with_auth_service(std::sync::Arc::new(
+        dam_hopper_server::auth::AuthService::new_mock_default().0,
+    ));
 
     if quiet < 60 || wake < 60 {
         let mut timing_guard = state.idle_suspend_timing.write().await;
@@ -542,10 +543,20 @@ async fn test_idle_suspend_cross_module_lifecycle_empty_to_armed_to_resumed() {
         .parent()
         .unwrap()
         .join("idle-suspend-events-v1.jsonl");
-    assert!(event_path.exists(), "Event log must exist at fixed diagnostics sibling path");
+    assert!(
+        event_path.exists(),
+        "Event log must exist at fixed diagnostics sibling path"
+    );
     let raw_events = std::fs::read_to_string(&event_path).expect("read events");
-    let event_lines: Vec<&str> = raw_events.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert_eq!(event_lines.len(), 9, "Must emit exactly 9 events in complete lifecycle");
+    let event_lines: Vec<&str> = raw_events
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert_eq!(
+        event_lines.len(),
+        9,
+        "Must emit exactly 9 events in complete lifecycle"
+    );
     coordinator.shutdown().await;
 }
 
@@ -775,7 +786,11 @@ async fn test_idle_suspend_automatic_timing_rejects_zero_wake_after_seconds() {
     let result = coordinator.update_timing(cmd).await;
     match result {
         CoordinatorTimingResult::ValidationFailed(error) => {
-            assert!(error.contains("wakeAfterSeconds") || error.contains("wake") || error.contains("Bounds"));
+            assert!(
+                error.contains("wakeAfterSeconds")
+                    || error.contains("wake")
+                    || error.contains("Bounds")
+            );
         }
         other => panic!("Expected ValidationFailed for wake_after_seconds=0, got: {other:?}"),
     }
@@ -793,10 +808,14 @@ struct InFlightHandoffExecutor {
 }
 
 impl IdleSuspendExecutor for InFlightHandoffExecutor {
-    fn check_capability(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async { true })
+    fn check_capability(
+        &self,
+        _request: dam_hopper_server::idle_suspend::protocol::CapabilityProbeRequest,
+    ) -> BoxFuture<'_, dam_hopper_server::idle_suspend::protocol::CapabilityProbeOutcome> {
+        Box::pin(async {
+            dam_hopper_server::idle_suspend::protocol::CapabilityProbeOutcome::Supported
+        })
     }
-
     fn execute_suspend(&self, req: SuspendWithRtcWakeRequest) -> BoxFuture<'_, SuspendOutcome> {
         let entered = Arc::clone(&self.entered);
         let release = Arc::clone(&self.release);
@@ -977,12 +996,18 @@ async fn test_idle_suspend_inhibitor_blocks_and_suppresses() {
 
     let status = coordinator.status();
     assert_eq!(status.state, CoordinatorState::Suppressed);
-    assert!(status
-        .detail
-        .as_deref()
-        .unwrap()
-        .contains("system-update-lock"));
-
+    assert_eq!(
+        status.detail.as_deref().unwrap(),
+        "inhibited by active sleep inhibitor"
+    );
+    assert!(!status.detail.as_deref().unwrap().contains("system-update-lock"));
+    if let Some(dam_hopper_server::idle_suspend::protocol::SuspendOutcome::BlockedByInhibitor { inhibitor, who, why, .. }) = &status.last_outcome {
+        assert_eq!(inhibitor, "active sleep inhibitor");
+        assert!(who.is_none());
+        assert!(why.is_none());
+    } else {
+        panic!("Expected BlockedByInhibitor in last_outcome");
+    }
     coordinator.shutdown().await;
 }
 
@@ -1057,7 +1082,10 @@ async fn test_idle_suspend_forced_handoff_with_active_ptys_and_outcome_release()
             force: true,
         })
         .await;
-    assert!(matches!(res_force, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        res_force,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // 4. Wait for resume outcome
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -1086,13 +1114,8 @@ async fn test_idle_suspend_force_suspend_dtos_and_conflict_responses() {
     assert_eq!(snapshot.running_count(), 3);
 
     // 1. Accepted response construction and serialization
-    let accepted = ForceSuspendAcceptedResponse::new(
-        "req-abc-123".to_string(),
-        10,
-        0,
-        true,
-        snapshot,
-    );
+    let accepted =
+        ForceSuspendAcceptedResponse::new("req-abc-123".to_string(), 10, 0, true, snapshot);
     assert_eq!(accepted.version, 1);
     assert_eq!(accepted.state, "handedOff");
     assert_eq!(accepted.request_id, "req-abc-123");
@@ -1122,7 +1145,10 @@ async fn test_idle_suspend_force_suspend_dtos_and_conflict_responses() {
     assert_eq!(conflict.fleet_snapshot.live_count, 2);
 
     let conflict_json = serde_json::to_value(&conflict).unwrap();
-    assert_eq!(conflict_json["code"], "idleSuspendActiveFleetConfirmationRequired");
+    assert_eq!(
+        conflict_json["code"],
+        "idleSuspendActiveFleetConfirmationRequired"
+    );
     assert_eq!(conflict_json["activeSessionCount"], 3);
     assert_eq!(conflict_json["fleetSnapshot"]["generation"], 42);
 
@@ -1167,7 +1193,10 @@ async fn test_idle_suspend_manual_force_suspend_policy_disabled_still_succeeds()
         })
         .await;
 
-    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        res,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // Wait for fake resume outcome
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -1214,7 +1243,10 @@ async fn test_idle_suspend_manual_force_suspend_cancels_armed_grace() {
         })
         .await;
 
-    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        res,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // Wait for fake resume outcome
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -1351,7 +1383,10 @@ async fn test_integrated_agent_activity_accepted_input_invalidates_quiet() {
     assert!(armed, "Coordinator must reach Armed state");
 
     // Write accepted terminal input to invalidate countdown
-    let _ = fixture.state.pty_manager.write(&session.id, b"echo active\n");
+    let _ = fixture
+        .state
+        .pty_manager
+        .write(&session.id, b"echo active\n");
 
     // Verify coordinator transitions back to Watching
     let returned_to_watching = wait_for_predicate(Duration::from_secs(3), || {
@@ -1392,7 +1427,10 @@ async fn test_integrated_agent_activity_manual_force_race_with_final_check() {
             force: true,
         })
         .await;
-    assert!(matches!(res, CoordinatorForceSuspendResult::Accepted { .. }));
+    assert!(matches!(
+        res,
+        CoordinatorForceSuspendResult::Accepted { .. }
+    ));
 
     // Wait for resume
     let resumed = wait_for_predicate(Duration::from_secs(4), || {
@@ -1487,10 +1525,7 @@ async fn test_integrated_agent_free_consent_route_auth_and_body_limits() {
 async fn test_integrated_agent_free_status_includes_managed_terminals_scope() {
     let fixture = setup_agent_free_fixture(true, 10800, 600).await;
     let executor = Arc::new(FakeExecutor::new(true));
-    let coordinator = fixture
-        .state
-        .start_idle_suspend_coordinator(executor)
-        .await;
+    let coordinator = fixture.state.start_idle_suspend_coordinator(executor).await;
 
     let app = dam_hopper_server::api::build_router(fixture.state.clone());
     let req = Request::builder()
@@ -1502,7 +1537,9 @@ async fn test_integrated_agent_free_status_includes_managed_terminals_scope() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
     assert_eq!(body["automaticPolicy"], "agent-free");
@@ -1527,20 +1564,26 @@ async fn test_integrated_agent_free_zero_client_automatic_suspend() {
         executor.recorded_requests().len() == 1
     })
     .await;
-    assert!(succeeded, "Zero-client automatic handoff must record 1 suspend request");
+    assert!(
+        succeeded,
+        "Zero-client automatic handoff must record 1 suspend request"
+    );
     assert_eq!(executor.recorded_requests()[0].wake_after_seconds, 600);
 
     coordinator.shutdown().await;
 }
 
-
 struct PanicExecutor;
 
 impl IdleSuspendExecutor for PanicExecutor {
-    fn check_capability(&self) -> BoxFuture<'static, bool> {
-        Box::pin(async { true })
+    fn check_capability(
+        &self,
+        _request: dam_hopper_server::idle_suspend::protocol::CapabilityProbeRequest,
+    ) -> BoxFuture<'static, dam_hopper_server::idle_suspend::protocol::CapabilityProbeOutcome> {
+        Box::pin(async {
+            dam_hopper_server::idle_suspend::protocol::CapabilityProbeOutcome::Supported
+        })
     }
-
     fn execute_suspend(
         &self,
         _request: SuspendWithRtcWakeRequest,
@@ -1637,7 +1680,8 @@ async fn activity_live_linux_pty_tcp_smoke() {
         });
 
         // Setup fixture recognizing current_exe as agent
-        let fixture = setup_agent_activity_fixture(true, 300, 600, Some(vec![exe_str.clone()])).await;
+        let fixture =
+            setup_agent_activity_fixture(true, 300, 600, Some(vec![exe_str.clone()])).await;
         let panic_executor = Arc::new(PanicExecutor);
         let coordinator = fixture
             .state

@@ -9,7 +9,8 @@ use crate::idle_suspend::peer_auth::{EnrolledPeerPolicy, PeerCredentials};
 use crate::idle_suspend::preflight::{PreflightChecker, PreflightError};
 use crate::idle_suspend::protocol::{
     read_frame_async, write_frame_async, HelperRequestFrame, HelperRequestPayload,
-    HelperResponseFrame, HelperResponsePayload, ProtocolError, RequestDeduplicator, SuspendOutcome,
+    HelperResponseFrame, HelperResponsePayload, ProbeFailureReason, ProtocolError,
+    RequestDeduplicator, SuspendOutcome,
 };
 
 /// Core server handling helper IPC requests, peer authentication, preflight, audit, and execution.
@@ -99,34 +100,61 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
 
         // 4. Dispatch request
         match req_frame.payload {
-            HelperRequestPayload::ProbeCapability => {
-                let (supported, detail, reason_code) = match self.preflight.run_all() {
-                    Ok(()) => (true, "Host supports RTC wake and suspend".to_string(), None),
+            HelperRequestPayload::ProbeCapability(req) => {
+                let (supported, detail, reason, reason_code) = match self.preflight.run_all() {
+                    Ok(()) => (
+                        true,
+                        "Host supports RTC wake and suspend".to_string(),
+                        None,
+                        None,
+                    ),
                     Err(e) => {
-                        let reason = match &e {
-                            PreflightError::Inhibited(..) => HelperReasonCode::InhibitorPresent,
-                            PreflightError::UnsupportedSuspend(..)
-                            | PreflightError::UnsupportedRtc(..) => {
-                                HelperReasonCode::CapabilityUnsupported
+                        let (fail_reason, audit_code) = match &e {
+                            PreflightError::Inhibited(..) => (
+                                ProbeFailureReason::InhibitorPresent,
+                                HelperReasonCode::InhibitorPresent,
+                            ),
+                            PreflightError::UnsupportedSuspend(..) => (
+                                ProbeFailureReason::SuspendStateUnsupported,
+                                HelperReasonCode::CapabilityUnsupported,
+                            ),
+                            PreflightError::UnsupportedRtc(..) => (
+                                ProbeFailureReason::RtcAlarmMissing,
+                                HelperReasonCode::CapabilityUnsupported,
+                            ),
+                            PreflightError::RtcAlarmBusy(..) => {
+                                (ProbeFailureReason::RtcAlarmBusy, HelperReasonCode::RtcBusy)
                             }
-                            PreflightError::RtcAlarmBusy(..) => HelperReasonCode::RtcBusy,
-                            PreflightError::ProbeError(..) => HelperReasonCode::PreflightFailed,
+                            PreflightError::ProbeError(..) => (
+                                ProbeFailureReason::ProbeExecutionError,
+                                HelperReasonCode::PreflightFailed,
+                            ),
                         };
-                        (false, format!("Preflight check failed: {e}"), Some(reason))
+                        (
+                            false,
+                            format!("Preflight check failed: {e}"),
+                            Some(fail_reason),
+                            Some(audit_code),
+                        )
                     }
                 };
 
-                let _ = self.audit.record(&HelperAuditRecord::new_capability_result(
-                    supported,
-                    cred.pid,
-                    cred.uid,
-                    reason_code,
-                    Some(detail.clone()),
-                ));
+                let _ =
+                    self.audit
+                        .record(&HelperAuditRecord::new_capability_result_with_request_id(
+                            Some(req.request_id.clone()),
+                            supported,
+                            cred.pid,
+                            cred.uid,
+                            reason_code,
+                            Some(detail.clone()),
+                        ));
 
                 let resp = HelperResponseFrame::new(HelperResponsePayload::Capability {
+                    request_id: req.request_id,
                     supported,
-                    detail,
+                    reason,
+                    detail: Some(detail),
                 });
                 write_frame_async(stream, &resp).await?;
             }
@@ -310,8 +338,7 @@ impl<P: PreflightChecker, B: SuspendActionBackend> HelperServer<P, B> {
                 ));
 
                 // Send terminal outcome frame
-                let resp =
-                    HelperResponseFrame::new(HelperResponsePayload::SuspendOutcome(outcome));
+                let resp = HelperResponseFrame::new(HelperResponsePayload::SuspendOutcome(outcome));
                 write_frame_async(stream, &resp).await?;
             }
         }
