@@ -59,10 +59,8 @@ export function GitHistoryToolbar({
   onCompositionEnd,
   isFiltered = false,
 
-  page,
-  offset,
-  logsCount,
-  pageSize = 200,
+  logsCount = 0,
+  offset = 0,
   hasPreviousPage,
   hasNextPage,
   onPreviousPage,
@@ -72,10 +70,7 @@ export function GitHistoryToolbar({
   isRefreshing = false,
   isLoading = false,
   disabled = false,
-
   followActive = true,
-  isViewingActiveBranch = true,
-  branchLabel,
   onFollowCheckedOutBranch,
 
   notice,
@@ -90,7 +85,7 @@ export function GitHistoryToolbar({
   onClearSquashSelection,
   focusRef,
 }: GitHistoryToolbarProps) {
-  const isSearchDisabled = disabled || isLoading;
+  const isSearchDisabled = disabled;
   const isPaginationDisabled = disabled || isLoading || isRefreshing;
   const squashHelpId = useId();
 

@@ -138,6 +138,67 @@ describe("Git history search and persistence browser tests in Chromium", () => {
     await userEvent.keyboard("{Escape}");
     await expect.element(searchInput).toHaveValue("");
   });
+  it("retains search input focus and interactivity in Chromium while isLoading toggles", async () => {
+    let toggleLoadingFn: ((loading: boolean) => void) | undefined;
+
+    function LoadingToolbarHarness() {
+      const [searchText, setSearchText] = useState("");
+      const [isLoading, setIsLoading] = useState(false);
+
+      toggleLoadingFn = (next) => setIsLoading(next);
+
+      return (
+        <GitHistoryToolbar
+          searchText={searchText}
+          onSearchChange={setSearchText}
+          onClearSearch={() => setSearchText("")}
+          isLoading={isLoading}
+        />
+      );
+    }
+
+    await act(async () => {
+      root.render(<LoadingToolbarHarness />);
+    });
+
+    const searchInput = page.getByRole("textbox", {
+      name: "Search commit messages",
+    });
+    await expect.element(searchInput).toBeVisible();
+
+    const domInput = container.querySelector("input")!;
+    domInput.focus();
+    expect(document.activeElement).toBe(domInput);
+
+    // 1. Type initial character
+    await userEvent.type(searchInput, "f");
+    await expect.element(searchInput).toHaveValue("f");
+    expect(document.activeElement).toBe(domInput);
+
+    // 2. Debounce triggers background fetch (isLoading: true)
+    await act(async () => {
+      toggleLoadingFn?.(true);
+    });
+    expect(domInput.disabled).toBe(false);
+    expect(document.activeElement).toBe(domInput);
+
+    // 3. Continue typing while loading without refocusing
+    await userEvent.type(searchInput, "i");
+    await expect.element(searchInput).toHaveValue("fi");
+    expect(document.activeElement).toBe(domInput);
+
+    // 4. Background fetch settles (isLoading: false)
+    await act(async () => {
+      toggleLoadingFn?.(false);
+    });
+    expect(domInput.disabled).toBe(false);
+    expect(document.activeElement).toBe(domInput);
+
+    // 5. Continue typing seamlessly after load completion
+    await userEvent.type(searchInput, "x");
+    await expect.element(searchInput).toHaveValue("fix");
+    expect(document.activeElement).toBe(domInput);
+  });
 
   it("observes IME composition start and end events in GitHistoryToolbar", async () => {
     const onStart = vi.fn();

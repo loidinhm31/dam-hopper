@@ -41,13 +41,22 @@ const PROJECT_TYPES = [
   "custom",
 ] as const;
 
-interface CommandRowIdState {
+export interface CommandRowIdState {
   ids: Record<string, string>;
   nextId: number;
 }
 
-export function createCommandRowIdState(): CommandRowIdState {
-  return { ids: {}, nextId: 0 };
+export function createCommandRowIdState(
+  commands?: Record<string, string>,
+): CommandRowIdState {
+  const ids: Record<string, string> = {};
+  let nextId = 0;
+  if (commands) {
+    for (const key of Object.keys(commands)) {
+      ids[key] = `command-row-${nextId++}`;
+    }
+  }
+  return { ids, nextId };
 }
 
 export function ensureCommandRowId(state: CommandRowIdState, key: string) {
@@ -83,6 +92,140 @@ export function removeCommandRowId(state: CommandRowIdState, key: string) {
   delete nextIds[key];
   return { ids: nextIds, nextId: state.nextId };
 }
+
+export interface ListRowIdState {
+  ids: string[];
+  nextId: number;
+}
+
+export function createListRowIdState(
+  count = 0,
+  prefix = "row",
+  startId = 0,
+): ListRowIdState {
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    ids.push(`${prefix}-${startId + i}`);
+  }
+  return { ids, nextId: startId + count };
+}
+
+export function addListRowId(
+  state: ListRowIdState,
+  prefix = "row",
+): { id: string; state: ListRowIdState } {
+  const newId = `${prefix}-${state.nextId}`;
+  return {
+    id: newId,
+    state: {
+      ids: [...state.ids, newId],
+      nextId: state.nextId + 1,
+    },
+  };
+}
+
+export function removeListRowId(
+  state: ListRowIdState,
+  index: number,
+): ListRowIdState {
+  return {
+    ids: state.ids.filter((_, idx) => idx !== index),
+    nextId: state.nextId,
+  };
+}
+export function reconcileProjectRowIds(
+  prevIds: ListRowIdState,
+  prevProjects: ProjectConfig[],
+  nextProjects: ProjectConfig[],
+  prefix = "project-row",
+): ListRowIdState {
+  let nextId = prevIds.nextId;
+  const assignedIds: (string | null)[] = new Array(nextProjects.length).fill(null);
+  const usedIds = new Set<string>();
+
+  // Count occurrences of each path in prevProjects and nextProjects to identify unique paths
+  const prevPathCounts = new Map<string, number>();
+  prevProjects.forEach((p) => {
+    if (p.path) {
+      prevPathCounts.set(p.path, (prevPathCounts.get(p.path) ?? 0) + 1);
+    }
+  });
+  const nextPathCounts = new Map<string, number>();
+  nextProjects.forEach((p) => {
+    if (p.path) {
+      nextPathCounts.set(p.path, (nextPathCounts.get(p.path) ?? 0) + 1);
+    }
+  });
+
+  const idByName = new Map<string, string>();
+  const idByUniquePath = new Map<string, string>();
+  prevProjects.forEach((p, idx) => {
+    const id = prevIds.ids[idx];
+    if (id) {
+      if (p.name) idByName.set(p.name, id);
+      if (
+        p.path &&
+        prevPathCounts.get(p.path) === 1 &&
+        nextPathCounts.get(p.path) === 1
+      ) {
+        idByUniquePath.set(p.path, id);
+      }
+    }
+  });
+
+  // Pass 1: Reserve all exact project name matches
+  for (let i = 0; i < nextProjects.length; i++) {
+    const nextP = nextProjects[i]!;
+    if (nextP.name && idByName.has(nextP.name)) {
+      const nameId = idByName.get(nextP.name)!;
+      if (!usedIds.has(nameId)) {
+        assignedIds[i] = nameId;
+        usedIds.add(nameId);
+      }
+    }
+  }
+
+  // Pass 2: Fill remaining unassigned projects via unique path, same-index fallback, or fresh ID
+  for (let i = 0; i < nextProjects.length; i++) {
+    if (assignedIds[i] !== null) continue;
+
+    const nextP = nextProjects[i]!;
+
+    // 2a. Match by unique, unassigned path
+    if (nextP.path && idByUniquePath.has(nextP.path)) {
+      const pathId = idByUniquePath.get(nextP.path)!;
+      if (!usedIds.has(pathId)) {
+        assignedIds[i] = pathId;
+        usedIds.add(pathId);
+        continue;
+      }
+    }
+
+    // 2b. Same-index fallback if previous project at this index was unnamed and unchanged
+    const prevP = prevProjects[i];
+    const prevId = prevIds.ids[i];
+    if (
+      prevP &&
+      prevId &&
+      !usedIds.has(prevId) &&
+      !prevP.name &&
+      !nextP.name &&
+      prevP.path === nextP.path
+    ) {
+      assignedIds[i] = prevId;
+      usedIds.add(prevId);
+      continue;
+    }
+
+    // 2c. Allocate fresh monotonic ID
+    const freshId = `${prefix}-${nextId++}`;
+    assignedIds[i] = freshId;
+    usedIds.add(freshId);
+  }
+
+  return { ids: assignedIds as string[], nextId };
+}
+
 
 // ── ServiceForm ──────────────────────────────────────────────────────────
 
@@ -168,7 +311,25 @@ export function CommandsForm({
   textDisabled?: boolean;
 }) {
   const entries = Object.entries(commands);
-  const [commandRowIds, setCommandRowIds] = useState(createCommandRowIdState);
+  const [commandRowIds, setCommandRowIds] = useState(() =>
+    createCommandRowIdState(commands),
+  );
+  const [prevCommands, setPrevCommands] = useState(commands);
+
+  if (commands !== prevCommands) {
+    setPrevCommands(commands);
+    let changed = false;
+    let nextState = commandRowIds;
+    for (const key of Object.keys(commands)) {
+      if (!nextState.ids[key]) {
+        nextState = ensureCommandRowId(nextState, key).state;
+        changed = true;
+      }
+    }
+    if (changed) {
+      setCommandRowIds(nextState);
+    }
+  }
 
   function getCommandRowId(key: string) {
     return commandRowIds.ids[key] ?? `command-row-key:${key}`;
@@ -252,6 +413,29 @@ function TerminalProfilesForm({
   disabled?: boolean;
   textDisabled?: boolean;
 }) {
+  const [profileRowIds, setProfileRowIds] = useState(() =>
+    createListRowIdState(profiles.length, "profile-row"),
+  );
+  const [prevLength, setPrevLength] = useState(profiles.length);
+
+  if (profiles.length !== prevLength) {
+    setPrevLength(profiles.length);
+    if (profileRowIds.ids.length < profiles.length) {
+      const addedCount = profiles.length - profileRowIds.ids.length;
+      const newIds = [...profileRowIds.ids];
+      let nextId = profileRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`profile-row-${nextId++}`);
+      }
+      setProfileRowIds({ ids: newIds, nextId });
+    } else if (profileRowIds.ids.length > profiles.length) {
+      setProfileRowIds({
+        ids: profileRowIds.ids.slice(0, profiles.length),
+        nextId: profileRowIds.nextId,
+      });
+    }
+  }
+
   function updateField(i: number, field: keyof TerminalProfile, value: string) {
     const next = profiles.map((p, idx) =>
       idx === i ? { ...p, [field]: value } : p,
@@ -260,10 +444,12 @@ function TerminalProfilesForm({
   }
 
   function remove(i: number) {
+    setProfileRowIds((prev) => removeListRowId(prev, i));
     onChange(profiles.filter((_, idx) => idx !== i));
   }
 
   function add() {
+    setProfileRowIds((prev) => addListRowId(prev, "profile-row").state);
     onChange([...profiles, { name: "", command: "bash", cwd: "." }]);
   }
 
@@ -271,7 +457,7 @@ function TerminalProfilesForm({
     <div className="space-y-2">
       {profiles.map((profile, i) => (
         <div
-          key={i}
+          key={profileRowIds.ids[i] ?? `profile-row-${i}`}
           className="rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 space-y-2"
         >
           <div className="flex items-center justify-between mb-1">
@@ -347,6 +533,31 @@ function ProjectForm({
   textDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(() => !project.name);
+  const [serviceRowIds, setServiceRowIds] = useState(() =>
+    createListRowIdState(project.services?.length ?? 0, "service-row"),
+  );
+  const [prevServiceCount, setPrevServiceCount] = useState(
+    project.services?.length ?? 0,
+  );
+  const currentServiceCount = project.services?.length ?? 0;
+
+  if (currentServiceCount !== prevServiceCount) {
+    setPrevServiceCount(currentServiceCount);
+    if (serviceRowIds.ids.length < currentServiceCount) {
+      const addedCount = currentServiceCount - serviceRowIds.ids.length;
+      const newIds = [...serviceRowIds.ids];
+      let nextId = serviceRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`service-row-${nextId++}`);
+      }
+      setServiceRowIds({ ids: newIds, nextId });
+    } else if (serviceRowIds.ids.length > currentServiceCount) {
+      setServiceRowIds({
+        ids: serviceRowIds.ids.slice(0, currentServiceCount),
+        nextId: serviceRowIds.nextId,
+      });
+    }
+  }
 
   function updateService(i: number, s: ServiceConfig) {
     const services = [...(project.services ?? [])];
@@ -355,6 +566,7 @@ function ProjectForm({
   }
 
   function removeService(i: number) {
+    setServiceRowIds((prev) => removeListRowId(prev, i));
     const services = (project.services ?? []).filter((_, idx) => idx !== i);
     onChange({
       ...project,
@@ -363,13 +575,13 @@ function ProjectForm({
   }
 
   function addService() {
+    setServiceRowIds((prev) => addListRowId(prev, "service-row").state);
     const services = [
       ...(project.services ?? []),
       { name: `service${(project.services?.length ?? 0) + 1}` },
     ];
     onChange({ ...project, services });
   }
-
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
       {/* Header */}
@@ -488,7 +700,7 @@ function ProjectForm({
             )}
             {(project.services ?? []).map((s, i) => (
               <ServiceForm
-                key={`${s.name}-${i}`}
+                key={serviceRowIds.ids[i] ?? `service-row-${i}`}
                 service={s}
                 onChange={(s) => updateService(i, s)}
                 onRemove={() => removeService(i)}
@@ -574,10 +786,40 @@ export function ConfigEditor({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [externalChange, setExternalChange] = useState(false);
+  const [projectRowIds, setProjectRowIds] = useState(() =>
+    createListRowIdState(draft.projects.length, "project-row"),
+  );
+  const [prevProjectCount, setPrevProjectCount] = useState(
+    draft.projects.length,
+  );
 
-  // Track whether draft has been modified from the current prop
+  if (draft.projects.length !== prevProjectCount) {
+    setPrevProjectCount(draft.projects.length);
+    if (projectRowIds.ids.length < draft.projects.length) {
+      const addedCount = draft.projects.length - projectRowIds.ids.length;
+      const newIds = [...projectRowIds.ids];
+      let nextId = projectRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`project-row-${nextId++}`);
+      }
+      setProjectRowIds({ ids: newIds, nextId });
+    } else if (projectRowIds.ids.length > draft.projects.length) {
+      setProjectRowIds({
+        ids: projectRowIds.ids.slice(0, draft.projects.length),
+        nextId: projectRowIds.nextId,
+      });
+    }
+  }
+
+  // Baseline config against which local user edits are measured
+  const [baselineConfig, setBaselineConfig] = useState<DamHopperConfig>(() =>
+    structuredClone(config),
+  );
+  const prevConfigRef = useRef<DamHopperConfig>(config);
+
+  // Track whether draft has been modified by the user from baseline
   const isDirtyRef = useRef(false);
-  const isDirty = JSON.stringify(draft) !== JSON.stringify(config);
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(baselineConfig);
 
   useEffect(() => {
     isDirtyRef.current = isDirty;
@@ -585,17 +827,26 @@ export function ConfigEditor({
 
   // C1: Detect external config changes while editor is open
   useEffect(() => {
+    if (prevConfigRef.current === config) return;
+    prevConfigRef.current = config;
+
     queueMicrotask(() => {
       if (!isDirtyRef.current) {
-        // No unsaved changes — silently update draft to match new config.
+        // No unsaved changes — silently update draft and baseline to match new config.
+        const prevProjects = draft.projects;
+        setBaselineConfig(structuredClone(config));
         setDraft(structuredClone(config));
+        setProjectRowIds((prev) =>
+          reconcileProjectRowIds(prev, prevProjects, config.projects),
+        );
+        setPrevProjectCount(config.projects.length);
         setExternalChange(false);
       } else {
         // Has unsaved changes — warn user.
         setExternalChange(true);
       }
     });
-  }, [config]);
+  }, [config, draft.projects]);
 
   function validate(): boolean {
     const errs: Record<string, string> = {};
@@ -632,6 +883,7 @@ export function ConfigEditor({
         projects: draft.projects,
       };
       await onSave(payload);
+      setBaselineConfig(structuredClone(payload));
       setSaved(true);
       setExternalChange(false);
       setTimeout(() => setSaved(false), 3000);
@@ -641,7 +893,13 @@ export function ConfigEditor({
   }
 
   function handleReset() {
+    const prevProjects = draft.projects;
+    setBaselineConfig(structuredClone(config));
     setDraft(structuredClone(config));
+    setProjectRowIds((prev) =>
+      reconcileProjectRowIds(prev, prevProjects, config.projects),
+    );
+    setPrevProjectCount(config.projects.length);
     setErrors({});
     setSaved(false);
     setExternalChange(false);
@@ -654,6 +912,7 @@ export function ConfigEditor({
   }
 
   function removeProject(i: number) {
+    setProjectRowIds((prev) => removeListRowId(prev, i));
     setDraft({
       ...draft,
       projects: draft.projects.filter((_, idx) => idx !== i),
@@ -661,6 +920,7 @@ export function ConfigEditor({
   }
 
   function addProject() {
+    setProjectRowIds((prev) => addListRowId(prev, "project-row").state);
     setDraft({
       ...draft,
       projects: [
@@ -735,7 +995,7 @@ export function ConfigEditor({
           <div className="space-y-2">
             {draft.projects.map((p, i) => (
               <ProjectForm
-                key={i}
+                key={projectRowIds.ids[i] ?? `project-row-${i}`}
                 project={p}
                 onChange={(p) => updateProject(i, p)}
                 onRemove={() => removeProject(i)}
