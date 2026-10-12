@@ -792,6 +792,17 @@ export default function WorkspacePage() {
       ? { profileId: activeProfileId, project: projectName }
       : projectName);
   const projectTarget = useProjectTarget(projectTargetInput);
+  const rootGitTarget = useMemo<ProjectTargetRef | undefined>(() => {
+    if (!projectName) return undefined;
+    return activeProfileId
+      ? { profileId: activeProfileId, project: projectName }
+      : { project: projectName };
+  }, [activeProfileId, projectName]);
+  const isRootGitAvailable = useMemo(() => {
+    if (!projectName) return false;
+    if (!activeProfileId) return true;
+    return workspaceConnection?.status === "connected";
+  }, [activeProfileId, projectName, workspaceConnection?.status]);
 
   const closeTerminalDiagnosticsMenu = useCallback(() => {
     setTerminalDiagnosticsMenuTarget(null);
@@ -1028,9 +1039,9 @@ export default function WorkspacePage() {
         !isGitCommitRevealRequestMatchingTarget(
           request,
           currentOwner,
-          projectTarget?.target,
+          rootGitTarget,
         ) ||
-        !projectTarget?.available
+        !isRootGitAvailable
       ) {
         return;
       }
@@ -1055,7 +1066,8 @@ export default function WorkspacePage() {
     },
     [
       isCompactWorkspace,
-      projectTarget,
+      rootGitTarget,
+      isRootGitAvailable,
       setRequestedCompactSurface,
       workspaceConnection,
       workspaceMode,
@@ -1989,10 +2001,10 @@ export default function WorkspacePage() {
       projectName ? (
         <Suspense fallback={<PanelFallback label="Loading Git…" />}>
           <WorkspaceGitPanel
-            key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+            key={`${activeProfileId ?? "ambient"}:${projectName}:root`}
             project={projectName}
-            target={projectTarget?.target}
-            available={projectTarget?.available}
+            target={rootGitTarget}
+            available={isRootGitAvailable}
             revealRequest={gitCommitRevealRequest}
             onRevealRequestConsumed={handleGitCommitRevealConsumed}
           />
@@ -2004,7 +2016,9 @@ export default function WorkspacePage() {
       ),
     [
       projectName,
-      projectTarget,
+      activeProfileId,
+      rootGitTarget,
+      isRootGitAvailable,
       gitCommitRevealRequest,
       handleGitCommitRevealConsumed,
     ],
@@ -2138,10 +2152,10 @@ export default function WorkspacePage() {
         content: projectName ? (
           <Suspense fallback={<PanelFallback label="Loading Git…" />}>
             <WorkspaceGitPanel
-              key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+              key={`${activeProfileId ?? "ambient"}:${projectName}:root`}
               project={projectName}
-              target={projectTarget?.target}
-              available={projectTarget?.available}
+              target={rootGitTarget}
+              available={isRootGitAvailable}
               revealRequest={gitCommitRevealRequest}
               onRevealRequestConsumed={handleGitCommitRevealConsumed}
             />
@@ -2173,6 +2187,9 @@ export default function WorkspacePage() {
       projectTarget,
       gitCommitRevealRequest,
       handleGitCommitRevealConsumed,
+      activeProfileId,
+      rootGitTarget,
+      isRootGitAvailable,
     ],
   );
 
@@ -2202,10 +2219,10 @@ export default function WorkspacePage() {
       content: projectName ? (
         <Suspense fallback={<PanelFallback label="Loading Git…" />}>
         <WorkspaceGitPanel
-          key={`${projectName}:${projectTarget?.targetKey ?? "root"}`}
+          key={`${activeProfileId ?? "ambient"}:${projectName}:root`}
           project={projectName}
-          target={projectTarget?.target}
-          available={projectTarget?.available}
+          target={rootGitTarget}
+          available={isRootGitAvailable}
           revealRequest={gitCommitRevealRequest}
           onRevealRequestConsumed={handleGitCommitRevealConsumed}
         />
@@ -2216,7 +2233,9 @@ export default function WorkspacePage() {
     }),
     [
       projectName,
-      projectTarget,
+      activeProfileId,
+      rootGitTarget,
+      isRootGitAvailable,
       gitCommitRevealRequest,
       handleGitCommitRevealConsumed,
     ],

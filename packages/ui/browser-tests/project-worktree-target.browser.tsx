@@ -779,15 +779,21 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
       testState.captures.fileSearch,
       testState.captures.fsSubscription,
       testState.captures.gitDiff,
-      testState.captures.gitRoots,
-      testState.captures.branches,
-      testState.captures.gitLog,
       testState.captures.projectStatus,
       testState.captures.explorerLanguageScan,
       testState.captures.diff,
       testState.captures.media,
     ]) {
       expect(captures).toContainEqual(featureTarget);
+    }
+    // Git panel retains project root target and does not switch to worktree
+    for (const captures of [
+      testState.captures.gitRoots,
+      testState.captures.branches,
+      testState.captures.gitLog,
+    ]) {
+      expect(captures).toContainEqual({ project: PROJECT });
+      expect(captures).not.toContainEqual(featureTarget);
     }
     expect(
       container.querySelector('[data-testid="actual-file-tree"]'),

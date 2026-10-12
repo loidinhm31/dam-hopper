@@ -15,8 +15,9 @@ export interface GitCommitRevealRequest {
 
 /**
  * Validates that a reveal request matches the currently connected profile/generation
- * and active project target. Mismatched profile, generation, or target project/worktree
- * rejects the reveal request to prevent routing to unqualified or disconnected targets.
+ * and target project. When currentTarget is root (worktreePath == null), it accepts
+ * any reveal request from the project's worktrees. When currentTarget is worktree-scoped,
+ * it requires exact worktree match. Mismatched profile, generation, or project is rejected.
  */
 export function isGitCommitRevealRequestMatchingTarget(
   request: GitCommitRevealRequest,
@@ -35,6 +36,9 @@ export function isGitCommitRevealRequestMatchingTarget(
   }
   const requestWorktree = request.target.worktreePath ?? null;
   const currentWorktree = currentTarget.worktreePath ?? null;
+  if (currentWorktree == null) {
+    return true;
+  }
   return requestWorktree === currentWorktree;
 }
 

@@ -1,3 +1,10 @@
+# 2026-10-12
+
+- **Workspace Git panel root workspace target retention.** Decoupled `WorkspaceGitPanel` mounts in `WorkspacePage` from active worktree target switching:
+  - **Root target binding:** All three Git panel mounts (`terminalGitContent`, IDE bottom tool `git`, `compactGitSurface`) retain the project root target (`{ profileId, project }`) and key `${profileId}:${projectName}:root` with connection-bound availability. Ensures repository history, branches, and object mutations remain anchored to the configured project root checkout while FileTree, EditorTabs, SearchPanel, and Terminals track the selected worktree.
+  - **Blame commit reveal routing:** Updated `isGitCommitRevealRequestMatchingTarget` and `WorkspaceGitPanel` reveal request consumption so that commit reveal requests originating from any worktree tab of the same project and connection owner correctly open and highlight the commit in the root Git panel.
+  - **Validation:** 322 unit test files (2,726 tests) and Chromium browser test suite passing cleanly with verified separation between worktree-bound file/terminal surfaces and root-retained Git operations.
+
 # 2026-10-11
 
 - **Project Plans Dashboard ("File plans"): `progress.md` deprecation and removal.** Removed `progress.md` probing, parsing, status/date reconciliation, `PlanDocuments.progress`, `PlanAuthority::Progress`, progress-only diagnostic codes (`PROGRESS_MISSING`, `PROGRESS_UNREADABLE`, `PHASE_UNREPORTED`, `PHASE_UNMATCHED`), and the secondary `Progress (progress.md)` document tab in `ProjectPlanDocument`. `plan.md` is now the sole authority for plan metadata, declared phase inventory, reported status, completion fractions, and dates; legacy `progress.md` files on disk are ignored by the scanner/parser while remaining accessible as generic local Markdown links when explicitly linked from `plan.md`.

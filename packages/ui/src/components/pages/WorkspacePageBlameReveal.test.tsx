@@ -25,6 +25,9 @@ interface CapturedEditorTabsProps {
 }
 
 interface CapturedWorkspaceGitPanelProps {
+  project?: string;
+  target?: ProjectTargetRef;
+  available?: boolean;
   revealRequest?: GitCommitRevealRequest | null;
   onRevealRequestConsumed?: (nonce: number) => void;
 }
@@ -49,20 +52,28 @@ vi.mock("@/components/organisms/WorkspaceGitPanel.js", () => ({
 vi.mock("@/components/organisms/SearchPanel.js", () => ({
   SearchPanel: () => <div data-testid="search-panel" />,
 }));
+interface ToolWindowDef {
+  id: string;
+  content: React.ReactNode;
+}
 let lastIdeShellProps: {
   activateBottomToolRequest?: { nonce: number; toolId: string } | null;
   editor?: React.ReactNode;
+  leftTools?: ToolWindowDef[];
 } | null = null;
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
   IdeShell: (props: {
     activateBottomToolRequest?: { nonce: number; toolId: string } | null;
     editor?: React.ReactNode;
+    leftTools?: ToolWindowDef[];
   }) => {
     lastIdeShellProps = props;
+    const gitTool = props.leftTools?.find((t) => t.id === "git");
     return (
       <div data-testid="ide-shell">
         {props.editor}
+        {gitTool?.content}
       </div>
     );
   },
@@ -444,5 +455,45 @@ describe("WorkspacePage Blame Reveal Integration", () => {
       targetId: "git",
       intent: "reveal",
     });
+  });
+
+  it("in IDE layout, handleRevealGitCommit accepts reveal request originating from a worktree tab of the same project", async () => {
+    mockWorkspaceMode = "ide";
+    compactMock.current = false;
+
+    await act(async () => {
+      root?.render(<WorkspacePage />);
+    });
+    await flushLazy();
+
+    const editorProps = capturedEditorTabsProps[capturedEditorTabsProps.length - 1];
+
+    const worktreeRevealRequest: GitCommitRevealRequest = {
+      nonce: 88,
+      owner: { profileId: "profile-1", generation: 1 },
+      target: {
+        project: "demo-project",
+        profileId: "profile-1",
+        worktreePath: "/workspace/demo-wt",
+      },
+      rootId: "root-main",
+      hash: "wt-commit-hash-1234",
+    };
+
+    act(() => {
+      editorProps?.onRevealGitCommit?.(worktreeRevealRequest);
+    });
+
+    expect(lastIdeShellProps?.activateBottomToolRequest).toEqual({
+      nonce: 1,
+      toolId: "git",
+    });
+    const gitPanelProps = capturedGitPanelProps[capturedGitPanelProps.length - 1];
+    expect(gitPanelProps?.target).toEqual({
+      profileId: "profile-1",
+      project: "demo-project",
+    });
+    expect(gitPanelProps?.target?.worktreePath).toBeUndefined();
+    expect(gitPanelProps?.available).toBe(true);
   });
 });
