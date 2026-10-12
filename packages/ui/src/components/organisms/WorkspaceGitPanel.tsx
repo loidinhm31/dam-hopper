@@ -144,9 +144,13 @@ export function WorkspaceGitPanel({
     if (!revealRequest) return;
     if (lastConsumedNonceRef.current === revealRequest.nonce) return;
     // Enforce target project, worktree, and profileId isolation
-    if (
-      projectTargetKey(revealRequest.target) !== projectTargetKey(targetRef)
-    ) {
+    const isTargetMatching =
+      targetRef.worktreePath != null
+        ? projectTargetKey(revealRequest.target) === projectTargetKey(targetRef)
+        : revealRequest.target.project === targetRef.project &&
+          (!targetRef.profileId ||
+            revealRequest.target.profileId === targetRef.profileId);
+    if (!isTargetMatching) {
       return;
     }
 

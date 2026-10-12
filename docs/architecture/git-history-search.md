@@ -87,7 +87,7 @@ same commit rows, selection, keyboard interaction, and context-menu actions.
 
 ## Workspace Git panel integration
 
-`WorkspacePage` mounts `WorkspaceGitPanel` in the desktop IDE Git tool, terminal floating panel, and compact Git surface. Each mount receives the selected project target and its availability. The panel passes the qualified target and availability to `useGitHistoryView`, so a missing or prunable worktree stays unavailable instead of falling back to the project root.
+`WorkspacePage` mounts `WorkspaceGitPanel` in the desktop IDE Git tool, terminal floating panel, and compact Git surface. Each mount retains the project root target (`{ profileId, project }`) and connection-bound availability. Repository history, branches, and commit mutations remain anchored to the configured project root while editor, file explorer, and terminal surfaces track the active worktree checkout.
 
 The shared controller supplies persisted VCS-root and history-branch choices plus search, paging, selected commit, and refresh state. Target/root/branch/generation changes reset transient history state; the panel also resets pending mutation dialogs at the effective-scope boundary. Choosing a history branch is view-only and never checks it out.
 

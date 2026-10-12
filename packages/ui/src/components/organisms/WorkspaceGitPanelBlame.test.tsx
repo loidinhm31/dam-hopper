@@ -22,6 +22,7 @@ let qc: QueryClient;
 async function renderPanel(props: {
   revealRequest?: GitCommitRevealRequest | null;
   onRevealRequestConsumed?: (nonce: number) => void;
+  target?: ProjectTargetRef;
 }) {
   await act(async () => {
     root.render(
@@ -30,7 +31,7 @@ async function renderPanel(props: {
         { client: qc },
         createElement(WorkspaceGitPanel, {
           project: fixture.target.project,
-          target: fixture.target,
+          target: props.target ?? fixture.target,
           available: true,
           revealRequest: props.revealRequest,
           onRevealRequestConsumed: props.onRevealRequestConsumed,
@@ -138,6 +139,37 @@ describe("WorkspaceGitPanel Git blame reveal & inspection mode", () => {
       '[data-testid="outside-history-view-notice"]',
     );
     expect(detailsPanel).toBeNull();
+  });
+
+  it("consumes revealRequest from a worktree tab when WorkspaceGitPanel is root-scoped", async () => {
+    const onConsumed = vi.fn();
+    const rootTarget = {
+      profileId: fixture.target.profileId,
+      project: fixture.target.project,
+    };
+    const worktreeRevealRequest: GitCommitRevealRequest = {
+      nonce: 199,
+      owner: { profileId: fixture.target.profileId, generation: 1 },
+      target: {
+        profileId: fixture.target.profileId,
+        project: fixture.target.project,
+        worktreePath: "/trees/feature",
+      },
+      rootId: ".",
+      hash: "7777777777777777777777777777777777777777",
+    };
+
+    await renderPanel({
+      target: rootTarget,
+      revealRequest: worktreeRevealRequest,
+      onRevealRequestConsumed: onConsumed,
+    });
+
+    expect(onConsumed).toHaveBeenCalledWith(199);
+    const notice = container.querySelector(
+      '[data-testid="outside-history-view-notice"]',
+    );
+    expect(notice).not.toBeNull();
   });
 
   it("exits inspection mode when user selects a real history row", async () => {

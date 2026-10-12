@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { GitBranch, GitMerge, Folder, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { CollapsibleSection } from "@/components/atoms/CollapsibleSection.js";
@@ -9,6 +9,7 @@ import type { ProjectTargetSnapshot } from "@/stores/project-target.js";
 import { ProjectInfoCommandsSection } from "@/components/organisms/ProjectInfoCommandsSection.js";
 import { ProjectInfoGitSection } from "@/components/organisms/ProjectInfoGitSection.js";
 import { ProjectWorktreesSection } from "@/components/organisms/ProjectWorktreesSection.js";
+import type { ProjectTargetRef } from "@/api/client.js";
 
 export * from "./ProjectInfoHelpers.js";
 
@@ -51,6 +52,10 @@ export function ProjectInfoPanel({
   const target = targetOverride ?? derivedTarget;
   const targetRef = target?.target ?? { project: projectName };
   const { data: targetStatus } = useProjectStatus(targetRef);
+  const rootTargetRef = useMemo<ProjectTargetRef>(() => ({
+    project: projectName,
+    profileId: targetOverride?.target.profileId,
+  }), [projectName, targetOverride?.target.profileId]);
   const [worktreesOpen, setWorktreesOpen] = useState(false);
 
   if (isLoading) {
@@ -98,7 +103,7 @@ export function ProjectInfoPanel({
           icon={GitBranch}
           defaultOpen={true}
         >
-          <ProjectInfoGitSection projectName={projectName} target={targetRef} />
+          <ProjectInfoGitSection projectName={projectName} target={rootTargetRef} />
         </CollapsibleSection>
 
         <CollapsibleSection
