@@ -140,50 +140,90 @@ export function reconcileProjectRowIds(
   prefix = "project-row",
 ): ListRowIdState {
   let nextId = prevIds.nextId;
-  const newIds: string[] = [];
+  const assignedIds: (string | null)[] = new Array(nextProjects.length).fill(null);
   const usedIds = new Set<string>();
 
-  const idByProjectKey = new Map<string, string>();
-  prevProjects.forEach((p, idx) => {
-    const id = prevIds.ids[idx];
-    if (id) {
-      if (p.path) idByProjectKey.set(`path:${p.path}`, id);
-      if (p.name) idByProjectKey.set(`name:${p.name}`, id);
+  // Count occurrences of each path in prevProjects and nextProjects to identify unique paths
+  const prevPathCounts = new Map<string, number>();
+  prevProjects.forEach((p) => {
+    if (p.path) {
+      prevPathCounts.set(p.path, (prevPathCounts.get(p.path) ?? 0) + 1);
+    }
+  });
+  const nextPathCounts = new Map<string, number>();
+  nextProjects.forEach((p) => {
+    if (p.path) {
+      nextPathCounts.set(p.path, (nextPathCounts.get(p.path) ?? 0) + 1);
     }
   });
 
+  const idByName = new Map<string, string>();
+  const idByUniquePath = new Map<string, string>();
+  prevProjects.forEach((p, idx) => {
+    const id = prevIds.ids[idx];
+    if (id) {
+      if (p.name) idByName.set(p.name, id);
+      if (
+        p.path &&
+        prevPathCounts.get(p.path) === 1 &&
+        nextPathCounts.get(p.path) === 1
+      ) {
+        idByUniquePath.set(p.path, id);
+      }
+    }
+  });
+
+  // Pass 1: Reserve all exact project name matches
   for (let i = 0; i < nextProjects.length; i++) {
     const nextP = nextProjects[i]!;
-    const prevP = prevProjects[i];
+    if (nextP.name && idByName.has(nextP.name)) {
+      const nameId = idByName.get(nextP.name)!;
+      if (!usedIds.has(nameId)) {
+        assignedIds[i] = nameId;
+        usedIds.add(nameId);
+      }
+    }
+  }
 
+  // Pass 2: Fill remaining unassigned projects via unique path, same-index fallback, or fresh ID
+  for (let i = 0; i < nextProjects.length; i++) {
+    if (assignedIds[i] !== null) continue;
+
+    const nextP = nextProjects[i]!;
+
+    // 2a. Match by unique, unassigned path
+    if (nextP.path && idByUniquePath.has(nextP.path)) {
+      const pathId = idByUniquePath.get(nextP.path)!;
+      if (!usedIds.has(pathId)) {
+        assignedIds[i] = pathId;
+        usedIds.add(pathId);
+        continue;
+      }
+    }
+
+    // 2b. Same-index fallback if previous project at this index was unnamed and unchanged
+    const prevP = prevProjects[i];
+    const prevId = prevIds.ids[i];
     if (
       prevP &&
-      prevIds.ids[i] &&
-      !usedIds.has(prevIds.ids[i]!) &&
-      JSON.stringify(prevP) === JSON.stringify(nextP)
+      prevId &&
+      !usedIds.has(prevId) &&
+      !prevP.name &&
+      !nextP.name &&
+      prevP.path === nextP.path
     ) {
-      const id = prevIds.ids[i]!;
-      newIds.push(id);
-      usedIds.add(id);
+      assignedIds[i] = prevId;
+      usedIds.add(prevId);
       continue;
     }
 
-    const matchedId =
-      (nextP.path && idByProjectKey.get(`path:${nextP.path}`)) ||
-      (nextP.name && idByProjectKey.get(`name:${nextP.name}`));
-
-    if (matchedId && !usedIds.has(matchedId)) {
-      newIds.push(matchedId);
-      usedIds.add(matchedId);
-      continue;
-    }
-
+    // 2c. Allocate fresh monotonic ID
     const freshId = `${prefix}-${nextId++}`;
-    newIds.push(freshId);
+    assignedIds[i] = freshId;
     usedIds.add(freshId);
   }
 
-  return { ids: newIds, nextId };
+  return { ids: assignedIds as string[], nextId };
 }
 
 

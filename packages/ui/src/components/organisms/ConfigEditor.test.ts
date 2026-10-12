@@ -130,6 +130,74 @@ describe("list row id helpers", () => {
     expect(reconciledReplaced.ids).toEqual(["project-row-0", "project-row-2"]);
     expect(reconciledReplaced.nextId).toBe(3);
   });
+
+  it("reconciles reordered projects sharing identical paths by unique project name without allocating new IDs", () => {
+    const initialIds = createListRowIdState(2, "project-row");
+    const projectsBefore = [
+      { name: "api", path: ".", type: "custom" as const },
+      { name: "web", path: ".", type: "custom" as const },
+    ];
+    const projectsReordered = [
+      { name: "web", path: ".", type: "custom" as const },
+      { name: "api", path: ".", type: "custom" as const },
+    ];
+
+    const reconciled = reconcileProjectRowIds(
+      initialIds,
+      projectsBefore,
+      projectsReordered,
+    );
+    // web preserves project-row-1, api preserves project-row-0
+    expect(reconciled.ids).toEqual(["project-row-1", "project-row-0"]);
+    // No new IDs allocated
+    expect(reconciled.nextId).toBe(2);
+  });
+
+  it("preserves IDs of surviving projects when inserting a new project before them sharing identical paths", () => {
+    const initialIds = createListRowIdState(2, "project-row");
+    const projectsBefore = [
+      { name: "api", path: ".", type: "custom" as const },
+      { name: "web", path: ".", type: "custom" as const },
+    ];
+    const projectsWithInsertion = [
+      { name: "mobile", path: ".", type: "custom" as const },
+      { name: "api", path: ".", type: "custom" as const },
+      { name: "web", path: ".", type: "custom" as const },
+    ];
+
+    const reconciled = reconcileProjectRowIds(
+      initialIds,
+      projectsBefore,
+      projectsWithInsertion,
+    );
+    // api and web preserve project-row-0 and project-row-1; only mobile gets fresh project-row-2
+    expect(reconciled.ids).toEqual([
+      "project-row-2",
+      "project-row-0",
+      "project-row-1",
+    ]);
+    expect(reconciled.nextId).toBe(3);
+  });
+
+  it("does not transfer row ID when path becomes duplicated in nextProjects and names do not match", () => {
+    const initialIds = createListRowIdState(1, "project-row");
+    const projectsBefore = [
+      { name: "api", path: ".", type: "custom" as const },
+    ];
+    const projectsAfter = [
+      { name: "mobile", path: ".", type: "custom" as const },
+      { name: "api-renamed", path: ".", type: "custom" as const },
+    ];
+
+    const reconciled = reconcileProjectRowIds(
+      initialIds,
+      projectsBefore,
+      projectsAfter,
+    );
+    // Path '.' is ambiguous in projectsAfter (count = 2), so neither project steals project-row-0
+    expect(reconciled.ids).toEqual(["project-row-1", "project-row-2"]);
+    expect(reconciled.nextId).toBe(3);
+  });
 });
 
 describe("CommandsForm focus retention across edits", () => {
@@ -610,6 +678,74 @@ describe("ConfigEditor terminal profiles and reset behavior", () => {
     );
     expect(pathInputAfter).toBe(pathInputBefore);
     expect(document.activeElement).toBe(pathInputBefore);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("preserves project input focus and DOM identity when projects sharing identical paths are reordered externally", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    const configV1: DamHopperConfig = {
+      workspace: { name: "demo", root: "/tmp" },
+      projects: [
+        { name: "api", path: ".", type: "custom" },
+        { name: "web", path: ".", type: "custom" },
+      ],
+    };
+    const configV2: DamHopperConfig = {
+      workspace: { name: "demo", root: "/tmp" },
+      projects: [
+        { name: "web", path: ".", type: "custom" },
+        { name: "api", path: ".", type: "custom" },
+      ],
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(ConfigEditor, {
+          config: configV1,
+          onSave: vi.fn(async () => undefined),
+        }),
+      );
+    });
+
+    // Expand project 'api'
+    const apiButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((b) => b.textContent?.includes("api"));
+    expect(apiButton).toBeDefined();
+    await act(async () => {
+      apiButton!.click();
+    });
+
+    // Focus 'api' name input
+    const inputsBefore = Array.from(container.querySelectorAll("input"));
+    const apiNameInputBefore = inputsBefore.find((inp) => inp.value === "api");
+    expect(apiNameInputBefore).toBeDefined();
+    apiNameInputBefore!.focus();
+    expect(document.activeElement).toBe(apiNameInputBefore);
+
+    // Reorder projects externally (web, api)
+    await act(async () => {
+      root.render(
+        createElement(ConfigEditor, {
+          config: configV2,
+          onSave: vi.fn(async () => undefined),
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    // 'api' name input is still the exact same DOM node and still focused
+    const inputsAfter = Array.from(container.querySelectorAll("input"));
+    const apiNameInputAfter = inputsAfter.find((inp) => inp.value === "api");
+    expect(apiNameInputAfter).toBe(apiNameInputBefore);
+    expect(document.activeElement).toBe(apiNameInputBefore);
 
     await act(async () => {
       root.unmount();
