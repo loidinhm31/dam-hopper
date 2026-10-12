@@ -151,6 +151,18 @@ External repository modifications trigger event-driven refresh coordination with
   - `GIT_BLAME_STALE_REVISION` (HTTP 409): Base commit shifted; sets `status: "waiting"`, awaiting revision refresh.
   - `GIT_BLAME_INVALID_RESPONSE` or Transport Error: Malformed response or network failure; sets `status: "error"`.
 
+#### Git Blame Caching Architecture
+
+Dual-layer caching optimizes "Annotate with Git blame" by eliminating repeated historical graph traversal on the server and avoiding redundant API calls across editor tab switches on the client:
+
+- **Server Baseline Cache:** Process-wide bounded LRU cache (`BlameBaselineCache`, 128 entries / 64 MiB cap) shared across `AppState` clones. Keys combine canonical owning repository root path, project-relative `rootId`, `headOid`, and committed baseline path. Caches owned normalized baseline bytes, line counts, and historical attribution spans `(start_line, line_count, final_commit_oid)`, completely avoiding borrowed `git2::Blame` native handles in shared memory. Shallow repositories (`repo.is_shallow()`) bypass baseline caching to prevent stale attribution if history deepens.
+- **Zero-Context Projection:** In-memory dirty buffers project against the cached historical baseline using zero-context diff, avoiding repeated `repo.blame_file` graph traversals. Admission retains the global 2-permit semaphore and verifies HEAD stability before and after computation.
+- **Client Query Cache:** TanStack Query-backed completed attribution cache in `@dam-hopper/ui` (bounded LRU: 64 entries, 32 MiB total weight ceiling, 5-minute TanStack Query GC, SHA-256 buffer fingerprint via `@noble/hashes` with Monaco `WeakMap` memoization). Synchronously restores `status: "ready"` on tab remount/reopen when owner, target, root, HEAD, and buffer fingerprint match, eliminating the "Loading blame…" spinner frame and avoiding HTTP requests.
+- **Shared Invalidation & Epoch Separation:**
+  - *Local edit epoch*: Buffer keystrokes advance local edit epoch and clear annotations (250 ms debounce), preserving cache entries for instant undo-to-cache reuse.
+  - *Shared target epoch*: Advanced by Git mutations (commit, checkout, stash, pull) and SSE events, invalidating cached entries across all unmounted editors.
+  - *Refresh escape hatch*: Context-menu "Refresh Annotations" forces cache bypass (`bypassCache: true`) and advances target epoch.
+  - *Owner retirement*: Profile disconnection cleans up client cache entries, request leases, and listeners.
 #### Gutter UI and Geometry Contract
 
 - **Gutter Presentation:** Line-number gutter context menu toggles dedicated annotations and exposes Refresh Annotations while enabled; existing markers and left-click diff remain separate. Whole editor-wrapper width ≥640px uses 220px author/date; narrower panes use author-only `min(120px, wrapperWidth / 3)`, with full date/timezone/hash/subject on hover/focus. Wide viewport does not prevent a narrow source Split from compacting.
@@ -254,7 +266,8 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 | Shared history view | `packages/ui/src/hooks/use-git-history-view.ts`, `packages/ui/src/components/molecules/GitHistoryToolbar.tsx`, `packages/ui/src/components/organisms/GitBranchControl.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx` |
 | Git-page history integration | `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/ProjectInfoHelpers.ts` |
 | Git edit and leased publication | `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`, `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/organisms/GitLogTree.tsx`, `hooks/use-git-with-ssh-retry.ts`, `hooks/use-leased-git-push.ts`, `hooks/use-git-squash.ts`, `api/queries.ts`, `server/src/git/commit_message_rewrite.rs`, `server/src/git/leased_push.rs`, `server/src/api/git.rs` |
-| Git blame client and buffer lifecycle | `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame.ts`, `packages/ui/src/stores/editor.ts` |
+| Git blame client, cache, and buffer lifecycle | `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame.ts`, `packages/ui/src/lib/editor-git-blame-cache.ts`, `packages/ui/src/stores/editor.ts` |
+| Git blame backend cache and projection | `server/src/git/blame-cache.rs`, `server/src/git/blame.rs`, `server/src/api/git_blame.rs` |
 | Git blame Monaco gutter and context menu | `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx` |
 | Git blame host integration and edge states | `packages/ui/src/components/organisms/EditorTabs.tsx`, `MonacoHost.tsx`, `MarkdownHost.tsx`, `HtmlHost.tsx` |
 | Git blame API client and transport | `packages/ui/src/api/client.ts`, `packages/ui/src/api/ws-transport.ts`, `packages/ui/src/api/queries.ts` |

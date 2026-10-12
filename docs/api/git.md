@@ -312,12 +312,8 @@ Response format (`GitBlameResponse`):
   ],
   "commits": [
     {
-      "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba",
-      "authorName": "Alice Dev",
-      "authorEmail": "alice@example.com",
-      "authorTimestamp": 1790000000,
-      "authorTimezoneOffsetMinutes": -420,
-      "subject": "feat: initial commit"
+      "hash": "06e52d719f2bdf7fb96891b8c09d7f7a4a816cba", "authorName": "Alice Dev", "authorEmail": "alice@example.com",
+      "authorTimestamp": 1790000000, "authorTimezoneOffsetMinutes": -420, "subject": "feat: initial commit"
     }
   ]
 }
@@ -342,17 +338,22 @@ Error codes:
 | 415 | `GIT_BLAME_UNSUPPORTED_FILE` | Binary buffer content (contains NUL bytes), symlink, or non-blob tree entry. |
 | 503 | `GIT_BLAME_BUSY` | All 2 concurrent blame worker permits are occupied. |
 
+#### Blame Caching and Baseline Projection
+
+To optimize editor gutter annotations across keystrokes and tab switches, the server and client implement dual-layer caching:
+
+- **Server Baseline Cache (`BlameBaselineCache`):** An in-memory, process-wide LRU cache (bounded at 128 entries and 64 MiB retained bytes) stores historical attribution baselines keyed by `(canonical_repo_root, root_id, head_oid, baseline_path)`. Caches owned normalized baseline text, line count, and historical spans `(start_line, line_count, final_commit_oid)`, avoiding native `git2::Blame` handles in shared application memory.
+- **Zero-Context Projection:** Subsequent requests with clean or dirty buffer snapshots project against the cached baseline using a zero-context diff, avoiding repeated `repo.blame_file` historical graph traversals.
+- **Shallow Repository Bypass:** Repositories detected as shallow (`repo.is_shallow()`) completely bypass baseline caching (neither reading nor populating the cache) to ensure attribution correctness if history is subsequently deepened.
+- **HEAD Fencing & Concurrency Semaphore:** Cache admission retains the global 2-permit concurrency semaphore (`503 GIT_BLAME_BUSY`). HEAD stability is checked before lookup and before publication (`GIT_BLAME_STALE_REVISION`).
+- **Client Attribution Cache:** `@dam-hopper/ui` caches completed attribution in TanStack Query (bounded LRU: 64 entries, 32 MiB, 5-minute GC) keyed by profile, generation, project, worktree, root, HEAD OID, repository epoch, relative path, and buffer SHA-256 fingerprint. Restores `status: "ready"` synchronously on tab remount/reopen. Keystroke edits clear annotations immediately (250 ms debounce) without advancing target epoch; Git mutations, staged renames, and SSE events advance target epoch to invalidate unmounted editors. Context-menu "Refresh Annotations" bypasses client cache.
+
 **POST /api/git/{project}/branches**
 
 Create a branch. Set `checkout` to switch to it after creation.
 
 ```json
-{
-  "name": "feature/git-flow",
-  "startPoint": "main",
-  "checkout": true,
-  "root": "modules/child"
-}
+{ "name": "feature/git-flow", "startPoint": "main", "checkout": true, "root": "modules/child" }
 ```
 
 **POST /api/git/{project}/branches/checkout**
@@ -715,16 +716,12 @@ Body:
 ```json
 {
   "snapshot": {
-    "branch": "refs/heads/feature",
-    "sourceOid": "1111111111111111111111111111111111111111",
-    "remoteName": "origin",
-    "destinationRef": "refs/heads/feature",
+    "branch": "refs/heads/feature", "sourceOid": "1111111111111111111111111111111111111111",
+    "remoteName": "origin", "destinationRef": "refs/heads/feature",
     "expectedRemoteOid": "2222222222222222222222222222222222222222",
-    "remoteIdentity": "sha256-of-push-url",
-    "repositoryIdentity": "sha256-of-repo-roots"
+    "remoteIdentity": "sha256-of-push-url", "repositoryIdentity": "sha256-of-repo-roots"
   },
-  "worktreePath": "/worktrees/demo",
-  "root": "modules/child"
+  "worktreePath": "/worktrees/demo", "root": "modules/child"
 }
 ```
 
@@ -734,7 +731,6 @@ The server validates `snapshot.branch` directly:
 - Repository identity and remote URL identity must match the snapshot.
 - Push negotiation uses an exact-OID lease (`expectedRemoteOid`): if another writer updated the remote destination ref, the push is safely aborted with `stale-remote`.
 - Response returns `PublishResult` with status: `published`, `already-current`, `stale-remote`, `stale-local`, `stale-config`, `rejected`, `auth-required`, or `unknown`.
-
 
 ### Frontend Transport, Hooks, Action Controllers, and UI Surfaces
 

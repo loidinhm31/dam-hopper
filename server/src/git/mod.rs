@@ -1,4 +1,6 @@
 pub mod blame;
+#[path = "blame-cache.rs"]
+pub mod blame_cache;
 pub mod bulk;
 pub mod cli_fallback;
 pub mod commit_details;
@@ -18,6 +20,7 @@ mod tests;
 
 pub use bulk::BulkGitService;
 pub use blame::execute_native_blame;
+pub use blame_cache::{BlameBaseline, BlameBaselineCache, CacheKey};
 pub use commit_details::get_commit_details;
 pub use commit_file_ops::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,

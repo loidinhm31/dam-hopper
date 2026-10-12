@@ -737,6 +737,44 @@ describe("useEditorGitBlame", () => {
     expect(blameMock).toHaveBeenCalledTimes(1);
   });
 
+  it("Finding 1: mounted editor with ready attribution invalidates on shared Git mutation, discovers new HEAD, and fetches new attribution", async () => {
+    const mock = createMockEditor("content\n");
+    await mount(defaultTab, mock.editor, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(blameMock).toHaveBeenCalledTimes(1);
+    expect(currentHook?.status).toBe("ready");
+
+    // Mock new HEAD commit returned by roots
+    rootsMock.mockResolvedValueOnce([
+      {
+        ...sampleRoots[0],
+        status: {
+          ...sampleRoots[0].status,
+          lastCommit: {
+            hash: "new-commit-hash-2",
+            author: "Bob",
+            message: "feat: second commit",
+            date: "2026-10-06",
+          },
+        },
+      },
+    ]);
+
+    // Shared invalidation advances repository epoch for the target via branches prefix
+    const branchQueryKey = gitQueryKey("branches", target);
+    await act(async () => {
+      queryClient.setQueryData(branchQueryKey, { branches: [] });
+      await queryClient.invalidateQueries({ queryKey: branchQueryKey });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    // Blame must have re-run with the new HEAD!
+    expect(blameMock).toHaveBeenCalledTimes(2);
+    expect(currentHook?.status).toBe("ready");
+  });
+
   it("coalesces window focus with active in-flight request without aborting", async () => {
     const deferred = createDeferred<GitBlameResponse>();
     blameMock.mockReturnValueOnce(deferred.promise);
