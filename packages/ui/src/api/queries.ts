@@ -23,6 +23,7 @@ import {
   explorerLanguageScanQueryKey,
   getExplorerLanguageScanCache,
 } from "@/lib/explorer-language-scan.js";
+import { invalidateBlameForTarget } from "@/lib/editor-git-blame-cache.js";
 import type {
   DamHopperConfig,
   ProjectConfig,
@@ -334,6 +335,8 @@ export async function invalidateGitFileOperation(
   path: string,
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  invalidateBlameForTarget(qc, owner, normalized);
   await Promise.all([
     qc.invalidateQueries({ queryKey: gitQueryKey("git-diff", normalized) }),
     qc.invalidateQueries({
@@ -352,6 +355,8 @@ export async function invalidateGitHistoryOperation(
   affectedPaths: string[] = [],
 ) {
   const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  invalidateBlameForTarget(qc, owner, normalized);
   await Promise.all([
     qc.invalidateQueries({ queryKey: gitQueryKey("git-diff", normalized) }),
     qc.invalidateQueries({
@@ -373,6 +378,7 @@ export async function invalidateGitBranchOperation(
 ) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
+  invalidateBlameForTarget(qc, owner, normalized);
   await Promise.all([
     qc.invalidateQueries({ queryKey: gitQueryKey("branches", normalized) }),
     qc.invalidateQueries({
@@ -407,6 +413,7 @@ function invalidateGitProjectQueries(
 ) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
+  invalidateBlameForTarget(qc, owner, normalized);
   if (options?.includeBranches) {
     void qc.invalidateQueries({
       queryKey: gitQueryKey("branches", normalized),
