@@ -41,13 +41,22 @@ const PROJECT_TYPES = [
   "custom",
 ] as const;
 
-interface CommandRowIdState {
+export interface CommandRowIdState {
   ids: Record<string, string>;
   nextId: number;
 }
 
-export function createCommandRowIdState(): CommandRowIdState {
-  return { ids: {}, nextId: 0 };
+export function createCommandRowIdState(
+  commands?: Record<string, string>,
+): CommandRowIdState {
+  const ids: Record<string, string> = {};
+  let nextId = 0;
+  if (commands) {
+    for (const key of Object.keys(commands)) {
+      ids[key] = `command-row-${nextId++}`;
+    }
+  }
+  return { ids, nextId };
 }
 
 export function ensureCommandRowId(state: CommandRowIdState, key: string) {
@@ -82,6 +91,47 @@ export function removeCommandRowId(state: CommandRowIdState, key: string) {
   const nextIds = { ...state.ids };
   delete nextIds[key];
   return { ids: nextIds, nextId: state.nextId };
+}
+
+export interface ListRowIdState {
+  ids: string[];
+  nextId: number;
+}
+
+export function createListRowIdState(
+  count = 0,
+  prefix = "row",
+  startId = 0,
+): ListRowIdState {
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    ids.push(`${prefix}-${startId + i}`);
+  }
+  return { ids, nextId: startId + count };
+}
+
+export function addListRowId(
+  state: ListRowIdState,
+  prefix = "row",
+): { id: string; state: ListRowIdState } {
+  const newId = `${prefix}-${state.nextId}`;
+  return {
+    id: newId,
+    state: {
+      ids: [...state.ids, newId],
+      nextId: state.nextId + 1,
+    },
+  };
+}
+
+export function removeListRowId(
+  state: ListRowIdState,
+  index: number,
+): ListRowIdState {
+  return {
+    ids: state.ids.filter((_, idx) => idx !== index),
+    nextId: state.nextId,
+  };
 }
 
 // ── ServiceForm ──────────────────────────────────────────────────────────
@@ -168,7 +218,25 @@ export function CommandsForm({
   textDisabled?: boolean;
 }) {
   const entries = Object.entries(commands);
-  const [commandRowIds, setCommandRowIds] = useState(createCommandRowIdState);
+  const [commandRowIds, setCommandRowIds] = useState(() =>
+    createCommandRowIdState(commands),
+  );
+  const [prevCommands, setPrevCommands] = useState(commands);
+
+  if (commands !== prevCommands) {
+    setPrevCommands(commands);
+    let changed = false;
+    let nextState = commandRowIds;
+    for (const key of Object.keys(commands)) {
+      if (!nextState.ids[key]) {
+        nextState = ensureCommandRowId(nextState, key).state;
+        changed = true;
+      }
+    }
+    if (changed) {
+      setCommandRowIds(nextState);
+    }
+  }
 
   function getCommandRowId(key: string) {
     return commandRowIds.ids[key] ?? `command-row-key:${key}`;
@@ -252,6 +320,29 @@ function TerminalProfilesForm({
   disabled?: boolean;
   textDisabled?: boolean;
 }) {
+  const [profileRowIds, setProfileRowIds] = useState(() =>
+    createListRowIdState(profiles.length, "profile-row"),
+  );
+  const [prevLength, setPrevLength] = useState(profiles.length);
+
+  if (profiles.length !== prevLength) {
+    setPrevLength(profiles.length);
+    if (profileRowIds.ids.length < profiles.length) {
+      const addedCount = profiles.length - profileRowIds.ids.length;
+      const newIds = [...profileRowIds.ids];
+      let nextId = profileRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`profile-row-${nextId++}`);
+      }
+      setProfileRowIds({ ids: newIds, nextId });
+    } else if (profileRowIds.ids.length > profiles.length) {
+      setProfileRowIds({
+        ids: profileRowIds.ids.slice(0, profiles.length),
+        nextId: profileRowIds.nextId,
+      });
+    }
+  }
+
   function updateField(i: number, field: keyof TerminalProfile, value: string) {
     const next = profiles.map((p, idx) =>
       idx === i ? { ...p, [field]: value } : p,
@@ -260,10 +351,12 @@ function TerminalProfilesForm({
   }
 
   function remove(i: number) {
+    setProfileRowIds((prev) => removeListRowId(prev, i));
     onChange(profiles.filter((_, idx) => idx !== i));
   }
 
   function add() {
+    setProfileRowIds((prev) => addListRowId(prev, "profile-row").state);
     onChange([...profiles, { name: "", command: "bash", cwd: "." }]);
   }
 
@@ -271,7 +364,7 @@ function TerminalProfilesForm({
     <div className="space-y-2">
       {profiles.map((profile, i) => (
         <div
-          key={i}
+          key={profileRowIds.ids[i] ?? `profile-row-${i}`}
           className="rounded border border-[var(--color-border)] bg-[var(--color-background)] p-3 space-y-2"
         >
           <div className="flex items-center justify-between mb-1">
@@ -347,6 +440,31 @@ function ProjectForm({
   textDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(() => !project.name);
+  const [serviceRowIds, setServiceRowIds] = useState(() =>
+    createListRowIdState(project.services?.length ?? 0, "service-row"),
+  );
+  const [prevServiceCount, setPrevServiceCount] = useState(
+    project.services?.length ?? 0,
+  );
+  const currentServiceCount = project.services?.length ?? 0;
+
+  if (currentServiceCount !== prevServiceCount) {
+    setPrevServiceCount(currentServiceCount);
+    if (serviceRowIds.ids.length < currentServiceCount) {
+      const addedCount = currentServiceCount - serviceRowIds.ids.length;
+      const newIds = [...serviceRowIds.ids];
+      let nextId = serviceRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`service-row-${nextId++}`);
+      }
+      setServiceRowIds({ ids: newIds, nextId });
+    } else if (serviceRowIds.ids.length > currentServiceCount) {
+      setServiceRowIds({
+        ids: serviceRowIds.ids.slice(0, currentServiceCount),
+        nextId: serviceRowIds.nextId,
+      });
+    }
+  }
 
   function updateService(i: number, s: ServiceConfig) {
     const services = [...(project.services ?? [])];
@@ -355,6 +473,7 @@ function ProjectForm({
   }
 
   function removeService(i: number) {
+    setServiceRowIds((prev) => removeListRowId(prev, i));
     const services = (project.services ?? []).filter((_, idx) => idx !== i);
     onChange({
       ...project,
@@ -363,13 +482,13 @@ function ProjectForm({
   }
 
   function addService() {
+    setServiceRowIds((prev) => addListRowId(prev, "service-row").state);
     const services = [
       ...(project.services ?? []),
       { name: `service${(project.services?.length ?? 0) + 1}` },
     ];
     onChange({ ...project, services });
   }
-
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
       {/* Header */}
@@ -488,7 +607,7 @@ function ProjectForm({
             )}
             {(project.services ?? []).map((s, i) => (
               <ServiceForm
-                key={`${s.name}-${i}`}
+                key={serviceRowIds.ids[i] ?? `service-row-${i}`}
                 service={s}
                 onChange={(s) => updateService(i, s)}
                 onRemove={() => removeService(i)}
@@ -574,6 +693,30 @@ export function ConfigEditor({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [externalChange, setExternalChange] = useState(false);
+  const [projectRowIds, setProjectRowIds] = useState(() =>
+    createListRowIdState(draft.projects.length, "project-row"),
+  );
+  const [prevProjectCount, setPrevProjectCount] = useState(
+    draft.projects.length,
+  );
+
+  if (draft.projects.length !== prevProjectCount) {
+    setPrevProjectCount(draft.projects.length);
+    if (projectRowIds.ids.length < draft.projects.length) {
+      const addedCount = draft.projects.length - projectRowIds.ids.length;
+      const newIds = [...projectRowIds.ids];
+      let nextId = projectRowIds.nextId;
+      for (let j = 0; j < addedCount; j++) {
+        newIds.push(`project-row-${nextId++}`);
+      }
+      setProjectRowIds({ ids: newIds, nextId });
+    } else if (projectRowIds.ids.length > draft.projects.length) {
+      setProjectRowIds({
+        ids: projectRowIds.ids.slice(0, draft.projects.length),
+        nextId: projectRowIds.nextId,
+      });
+    }
+  }
 
   // Track whether draft has been modified from the current prop
   const isDirtyRef = useRef(false);
@@ -589,6 +732,14 @@ export function ConfigEditor({
       if (!isDirtyRef.current) {
         // No unsaved changes — silently update draft to match new config.
         setDraft(structuredClone(config));
+        setProjectRowIds((prev) =>
+          createListRowIdState(
+            config.projects.length,
+            "project-row",
+            prev.nextId,
+          ),
+        );
+        setPrevProjectCount(config.projects.length);
         setExternalChange(false);
       } else {
         // Has unsaved changes — warn user.
@@ -642,6 +793,10 @@ export function ConfigEditor({
 
   function handleReset() {
     setDraft(structuredClone(config));
+    setProjectRowIds((prev) =>
+      createListRowIdState(config.projects.length, "project-row", prev.nextId),
+    );
+    setPrevProjectCount(config.projects.length);
     setErrors({});
     setSaved(false);
     setExternalChange(false);
@@ -654,6 +809,7 @@ export function ConfigEditor({
   }
 
   function removeProject(i: number) {
+    setProjectRowIds((prev) => removeListRowId(prev, i));
     setDraft({
       ...draft,
       projects: draft.projects.filter((_, idx) => idx !== i),
@@ -661,6 +817,7 @@ export function ConfigEditor({
   }
 
   function addProject() {
+    setProjectRowIds((prev) => addListRowId(prev, "project-row").state);
     setDraft({
       ...draft,
       projects: [
@@ -735,7 +892,7 @@ export function ConfigEditor({
           <div className="space-y-2">
             {draft.projects.map((p, i) => (
               <ProjectForm
-                key={i}
+                key={projectRowIds.ids[i] ?? `project-row-${i}`}
                 project={p}
                 onChange={(p) => updateProject(i, p)}
                 onRemove={() => removeProject(i)}
