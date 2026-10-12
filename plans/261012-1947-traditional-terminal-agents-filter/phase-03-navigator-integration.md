@@ -1,7 +1,7 @@
 # Phase 03 — Navigator integration and persistence
 
 ## Overview
-- Priority P2; status pending; estimated effort 3.5h.
+- Priority P2; status completed; estimated effort 3.5h.
 - Sequential: begins only after both [Phase 01](./phase-01-filter-core.md) and [Phase 02](./phase-02-filter-ui.md) deliver complete terminal results and Main confirms contract compatibility.
 - [Master plan](./plan.md); [architecture baseline](../../docs/system-architecture.md#traditional-projects--agents-navigator); [delivery standards](../../docs/code-standards.md#testing-and-delivery).
 

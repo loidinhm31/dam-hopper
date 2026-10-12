@@ -46,7 +46,7 @@ test.describe("Traditional Projects + Agents — authenticated real application"
     await expect(navigator.getByRole("list", { name: "Observed agents in open terminals" })).toHaveCount(0);
     const firstTerminal = page.locator(".xterm:visible").first();
     await expect(firstTerminal).toBeVisible();
-    const retainedTerminal = await firstTerminal.elementHandle();
+    let retainedTerminal = await firstTerminal.elementHandle();
     await firstTerminal.locator(".xterm-helper-textarea").focus();
     await page.keyboard.type("printf 'traditional-shell-continuity\\n'");
     await page.keyboard.press("Enter");
@@ -72,6 +72,12 @@ test.describe("Traditional Projects + Agents — authenticated real application"
     await expect(navigator.getByRole("link", { name: "Agent Settings", exact: true })).toHaveAttribute("href", settingsHref);
     await captureApplicationCheckpoint(page, { caseDir: CASE_DIR });
 
+    const filterCombobox = navigator.getByRole("combobox", { name: "Filter agents by status", exact: true });
+    await expect(filterCombobox).toBeVisible();
+    await filterCombobox.click();
+    await expect(page.getByRole("option", { name: /^All statuses\b/ })).toBeVisible();
+    await captureApplicationCheckpoint(page, { caseDir: CASE_DIR, checkpointName: "status-filter-options" });
+    await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 390, height: 844 });
     const opener = page.getByRole("button", { name: "Projects + Agents", exact: true });
     const sheet = page.getByRole("dialog", { name: "Projects + Agents", exact: true });
@@ -87,6 +93,7 @@ test.describe("Traditional Projects + Agents — authenticated real application"
     for (const control of [sheet.getByRole("button", { name: "Close", exact: true }), sheet.getByRole("button", { name: "New terminal in selected project", exact: true }), sheet.getByRole("link", { name: "Agent Settings", exact: true })]) {
       await expectTouchTarget(control);
     }
+    await expectTouchTarget(sheet.getByRole("combobox", { name: "Filter agents by status", exact: true }));
     const tabs = sheet.getByRole("tab");
     for (let index = 0; index < await tabs.count(); index++) await expectTouchTarget(tabs.nth(index));
     for (const key of ["Tab", "Shift+Tab"]) {
@@ -121,7 +128,32 @@ test.describe("Traditional Projects + Agents — authenticated real application"
     expect(current.alive).toBe(true);
     expect(await retainedTerminal!.evaluate((element) => element.isConnected)).toBe(true);
     expect((await (await appServices.fetchApi(bufferPath)).json()).buffer).toContain("traditional-shell-continuity");
-    await navigator.getByRole("link", { name: "Agent Settings", exact: true }).click();
+    // Verify status filter selection and real page-reload persistence
+    const finalFilter = navigator.getByRole("combobox", { name: "Filter agents by status", exact: true });
+    await expect(finalFilter).toBeVisible();
+    await finalFilter.click();
+    await page.getByRole("option", { name: /^Working\b/ }).click();
+    await expect(finalFilter).toContainText("Working");
+
+    await page.reload();
+    const reloadedNav = page.getByRole("navigation", { name: "Terminal projects and agents", exact: true });
+    await expect(reloadedNav).toBeVisible();
+    const reloadedFilter = reloadedNav.getByRole("combobox", { name: "Filter agents by status", exact: true });
+    await expect(reloadedFilter).toBeVisible();
+    await expect(reloadedFilter).toContainText("Working");
+    await expect(reloadedNav.getByText(emptyRoster, { exact: true })).toBeVisible();
+
+    // Reset back to "All statuses" and verify reload persistence for "all"
+    await reloadedFilter.click();
+    await page.getByRole("option", { name: /^All statuses\b/ }).click();
+    await expect(reloadedFilter).toContainText("All statuses");
+    await page.reload();
+    const restoredNav = page.getByRole("navigation", { name: "Terminal projects and agents", exact: true });
+    await expect(restoredNav).toBeVisible();
+    const restoredFilter = restoredNav.getByRole("combobox", { name: "Filter agents by status", exact: true });
+    await expect(restoredFilter).toContainText("All statuses");
+    await expect(restoredNav.getByText(emptyRoster, { exact: true })).toBeVisible();
+    await restoredNav.getByRole("link", { name: "Agent Settings", exact: true }).click();
     await expect(page).toHaveURL(`${appServices.appOrigin}${settingsHref}`);
     await expect(page.getByLabel("Profile:", { exact: true })).toHaveValue(profileId!);
     await expect(page.getByRole("heading", { name: settingsHeading, exact: true })).toBeVisible();

@@ -1,13 +1,13 @@
 {
-  "run_id": "e2e-run-1791643813632-0ce851d2",
+  "run_id": "e2e-run-1791816157811-eb403860",
   "command": "pnpm --filter @dam-hopper/ui test:e2e",
-  "started_at": "2026-10-10T14:50:13.632Z",
-  "completed_at": "2026-10-10T14:50:21.299Z",
+  "started_at": "2026-10-12T14:42:37.811Z",
+  "completed_at": "2026-10-12T14:42:47.596Z",
   "case_name": "traditional-terminal-agents",
   "route": "/workspace",
-  "git_head": "3fbf6ecb91c8204c9aef9feeebfb18f4b232971e",
-  "source_fingerprint": "a5803226dbdad81fd2df34947dcf7b8ae33d6d956b3d7adfdfdda7d1c4d26b04",
-  "seed_digest": "3f0dac690337fb5c32a93fd23164320aa003e6d56290e8d4b817f9a1ddd08634",
+  "git_head": "50967e465792a3b11f64ffe1a9a6502f8ac4ad2d",
+  "source_fingerprint": "caac0a58268b03d6e1700269910b196c537e22d818f2dbdd43dc4cea3e2d56d5",
+  "seed_digest": "e3977cd9844540c90a1d239f3f165d0129674e8fb11dceaf4399463af20c79c5",
   "browser": "chromium",
   "browser_version": "151.0.7922.173",
   "os": "linux",
@@ -20,7 +20,16 @@
     {
       "checkpoint": "primary",
       "file_name": "screenshot.png",
-      "sha256": "55aef9844359bfc2479f494a91305018284f1210ff6ea850e71fac2f78d1b404",
+      "sha256": "b6f15c35691fd58eeafed0cde3bda42b5a3354ce978be33fa98f413bcab4e08c",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "status-filter-options",
+      "file_name": "status-filter-options.png",
+      "sha256": "de4db5d878a5eeaa32a3f4677ab98b77e6ce41117def08d695d8fb44aa6d6838",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -29,28 +38,10 @@
     {
       "checkpoint": "compact",
       "file_name": "compact.png",
-      "sha256": "3bdef30181e996d9274998a09ca044ac1a48daac7ee29df4c46f6c7661930e86",
+      "sha256": "61499b537d9bd780a03f7f50aed70c395a43e60cf0c397a08bfb26c3199da677",
       "dimensions": {
         "width": 390,
         "height": 844
-      }
-    },
-    {
-      "checkpoint": "agent-badges-grouped",
-      "file_name": "agent-badges-grouped.png",
-      "sha256": "900ff4fec51a0694a3dc6ca814c1e131686d7891ce5928bfb01393d5aeb6b18e",
-      "dimensions": {
-        "width": 1280,
-        "height": 700
-      }
-    },
-    {
-      "checkpoint": "agent-badges-split",
-      "file_name": "agent-badges-split.png",
-      "sha256": "890a12c41a8f5b67c5ff30a55d1dabfb781aa1b4f640b876c4dd00a918422102",
-      "dimensions": {
-        "width": 1280,
-        "height": 700
       }
     }
   ],

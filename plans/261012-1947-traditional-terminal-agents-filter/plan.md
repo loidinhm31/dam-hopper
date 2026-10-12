@@ -1,7 +1,7 @@
 ---
 title: "Traditional terminal agents status filter"
 description: "Add an accessible status filter to the Traditional agents sidebar and persist its selection across refreshes."
-status: pending
+status: completed
 priority: P2
 effort: 7h
 branch: feat/traditional-terminal-agent-status-filter
@@ -24,9 +24,9 @@ Frozen contract --+                                  +--> Phase 3: navigator + t
 ```
 | Phase | Status | Effort | Dependency | Success criterion |
 |---|---|---|---|---|
-| [1: Core](./phase-01-filter-core.md) | Pending | 1.5h | Existing row/status types only | Exact enum/key; safe load/save; immutable label filtering; full agent counts; edge-case tests |
-| [2: UI](./phase-02-filter-ui.md) | Pending | 2h | Existing status type + Radix only | Controlled accessible eight-option Select; counts/indicators; zero-count selection; keyboard/touch tests |
-| [3: Integration](./phase-03-navigator-integration.md) | Pending | 3.5h | Both 1 and 2 terminal deliverables | Header placement; unfiltered counts; filtered groups; distinct empties; unchanged selection/cycling; persistence tests |
+| [1: Core](./phase-01-filter-core.md) | Completed | 1.5h | Existing row/status types only | Exact enum/key; safe load/save; immutable label filtering; full agent counts; edge-case tests |
+| [2: UI](./phase-02-filter-ui.md) | Completed | 2h | Existing status type + Radix only | Controlled accessible eight-option Select; counts/indicators; zero-count selection; keyboard/touch tests |
+| [3: Integration](./phase-03-navigator-integration.md) | Completed | 3.5h | Both 1 and 2 terminal deliverables | Header placement; unfiltered counts; filtered groups; distinct empties; unchanged selection/cycling; persistence tests |
 
 ## Frozen parallel-work contract
 - `TraditionalAgentStatusFilter = "all" | "Working" | "Idle" | "Needs attention" | "Unknown" | "Unavailable" | "Platform unqualified" | "Unsupported"`; reuse existing `TraditionalAgentStatusLabel`.
@@ -55,13 +55,13 @@ Paths are repository-root-relative; each file has exactly one writer.
 - All other files read-only, notably display, roster builder, grouping helper, group-row molecule, Select primitive, settings/status stores and browser fixture. Plans themselves owned by planner; phase agents report results, do not edit plans.
 
 ## Side-effect review checklist
-- [ ] Filter never changes Projects count/order, roving tabs, active group/session, splits, PTY identity/lifetime, worktree target or Agent Settings route.
-- [ ] Group keys, row identities/member order, reason separation, coverage/Done hints and qualified-session cycling preserved.
-- [ ] Only preference string persisted; no private identifiers/status snapshots. Storage denied/missing/corrupt safely defaults; unrelated keys untouched.
-- [ ] Counts represent all observed agents, including unavailable/diagnostic states. Live status updates recompute; zero matches never reset chosen filter.
-- [ ] Filter outside disabled activation fieldset; remains usable without selection callback or observations; original no-observation explanation retained.
-- [ ] Radix owns combobox/listbox semantics, keyboard and focus. Compact selection does not dismiss dialog or select terminal; Escape dismisses dropdown first.
-- [ ] Existing broad combobox selectors scoped to worktrees; storage/portal/polyfill cleanup isolated in tests; React 19 Radix patch untouched.
+- [x] Filter never changes Projects count/order, roving tabs, active group/session, splits, PTY identity/lifetime, worktree target or Agent Settings route.
+- [x] Group keys, row identities/member order, reason separation, coverage/Done hints and qualified-session cycling preserved.
+- [x] Only preference string persisted; no private identifiers/status snapshots. Storage denied/missing/corrupt safely defaults; unrelated keys untouched.
+- [x] Counts represent all observed agents, including unavailable/diagnostic states. Live status updates recompute; zero matches never reset chosen filter.
+- [x] Filter outside disabled activation fieldset; remains usable without selection callback or observations; original no-observation explanation retained.
+- [x] Radix owns combobox/listbox semantics, keyboard and focus. Compact selection does not dismiss dialog or select terminal; Escape dismisses dropdown first.
+- [x] Existing broad combobox selectors scoped to worktrees; storage/portal/polyfill cleanup isolated in tests; React 19 Radix patch untouched.
 
 ## Delivery gates and evidence
 - Main: focused Vitest suite including new tests, navigator, roster/group/group-row and worktree regressions; UI TypeScript build; scoped ESLint. Commands and scenarios in Phase 3.
@@ -72,7 +72,13 @@ Paths are repository-root-relative; each file has exactly one writer.
 ## Unresolved questions
 None. Global browser-origin preference, raw string encoding and current-mount-only storage-failure fallback are explicit design decisions.
 
-## Review status (code-review 261012)
-- Implementation present for Phases 1-3 + browser/docs; focused unit 108/108, browser 37/37, tsc and eslint clean (reviewer-run).
-- Open before marking Done: fix architecture-doc sentence placement + unsupported "page refresh" claim; add compact/touch/keyboard/exclusion Chromium tests; verify real page reload; `role="status"` on filtered-empty message.
+## Review status (code-review 261012 - all items resolved)
+- Implementation complete for Phases 1-3 + browser/docs + E2E visual evidence.
+- All review findings resolved:
+  - Architecture documentation paragraph separation and persistence qualification updated.
+  - Real application page reload persistence for selected status and "all" verified in Playwright E2E journey (`traditional-terminal-agents.spec.ts`).
+  - Full-application E2E visual evidence captured and tracked (`screenshot.png`, `status-filter-options.png`, `compact.png`, `evidence.json`, `review.md`).
+  - Chromium browser tests expanded to 42 tests covering real keyboard navigation, typeahead, compact sheet Escape isolation, and multi-viewport touch target geometry at 320px, 375px, and 390px.
+  - Accessible `role="status"` added to filtered-empty message.
+- Verification: 218 unit tests passing across 8 files; 42 Chromium browser tests passing in Vitest browser mode; containerized Playwright E2E passing (2/2); TypeScript check and ESLint clean.
 - Report: [code-review-261012-1947-traditional-terminal-agents-filter.md](../reports/code-review-261012-1947-traditional-terminal-agents-filter.md)

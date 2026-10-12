@@ -1,7 +1,7 @@
 # Phase 02 — Controlled filter molecule
 
 ## Overview
-- Priority P2; status pending; estimated effort 2h.
+- Priority P2; status completed; estimated effort 2h.
 - Runs concurrently with Phase 01; independently implementable and testable against existing modules only.
 - [Master contract](./plan.md#frozen-parallel-work-contract); [core contract](./phase-01-filter-core.md); [integration](./phase-03-navigator-integration.md).
 

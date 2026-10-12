@@ -1893,6 +1893,78 @@ describe("Traditional terminal projects in Chromium", () => {
     ).toBe(initialSession);
   });
 
+  it("navigates status filter options via keyboard arrows and typeahead in Chromium", async () => {
+    await page.viewport(1280, 700);
+    await mountAgents();
+    const filterTrigger = page.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(filterTrigger).toBeVisible();
+
+    // Open via Enter key
+    await act(async () => filterTrigger.element().focus());
+    await userEvent.keyboard("{Enter}");
+    const allOption = page.getByRole("option", { name: /^All statuses\b/ });
+    await expect.element(allOption).toBeVisible();
+
+    // Navigate down with ArrowDown and commit with Enter
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Enter}");
+
+    // Option at index 2 is "Working"
+    await expect.element(filterTrigger).toHaveTextContent(/Working/);
+
+    // Test real typeahead typing: focus, open, type 'i' for Idle, commit
+    await act(async () => filterTrigger.element().focus());
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByRole("option", { name: /^Idle\b/ })).toBeVisible();
+    await userEvent.keyboard("i");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(filterTrigger).toHaveTextContent(/Idle/);
+  });
+
+  it.each([320, 375, 390])(
+    "verifies compact filter touch target sizing (>=48px) and layout geometry at %ipx",
+    async (width) => {
+      await page.viewport(width, 844);
+      container.style.width = `${width}px`;
+      compactState.value = true;
+      await mountAgents();
+      const opener = page.getByRole("button", { name: "Projects + Agents" });
+      await userEvent.click(opener);
+      const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+      await expect.element(dialog).toBeVisible();
+
+      const filterTrigger = dialog.getByRole("combobox", {
+        name: "Filter agents by status",
+      });
+      await expect.element(filterTrigger).toBeVisible();
+
+      // Trigger bounds
+      const triggerRect = filterTrigger.element().getBoundingClientRect();
+      expect(triggerRect.height).toBeGreaterThanOrEqual(48);
+      expect(triggerRect.width).toBeGreaterThanOrEqual(48);
+      expect(triggerRect.right).toBeLessThanOrEqual(width + 4);
+
+      // Open dropdown and check option touch targets
+      await userEvent.click(filterTrigger);
+      const options = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
+      expect(options).toHaveLength(8);
+
+      for (const option of options) {
+        const rect = option.getBoundingClientRect();
+        expect(rect.height).toBeGreaterThanOrEqual(48);
+        expect(rect.width).toBeGreaterThanOrEqual(48);
+        expect(rect.right).toBeLessThanOrEqual(width + 10);
+      }
+
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(dialog.getByRole("button", { name: "Close", exact: true }));
+      await waitForProjectsSheetDismissal(opener.element());
+    },
+  );
+
 
   it("selects a feature worktree target then returns to root, preserving running session tabs, active splits, and distinct project context", async () => {
     await page.viewport(1280, 700);

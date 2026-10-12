@@ -1,7 +1,7 @@
 # Phase 01 — Filter core and persistence
 
 ## Overview
-- Priority P2; status pending; estimated effort 1.5h.
+- Priority P2; status completed; estimated effort 1.5h.
 - Runs concurrently with Phase 02. No dependency on molecule or navigator changes.
 - Deliver one leaf helper and colocated Vitest tests; no React, hooks, stores, events, subscriptions or API calls.
 - [Master contract](./plan.md#frozen-parallel-work-contract); [Phase 02](./phase-02-filter-ui.md); [Phase 03 consumer](./phase-03-navigator-integration.md).
