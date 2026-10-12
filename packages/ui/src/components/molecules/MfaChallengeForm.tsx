@@ -1,4 +1,10 @@
-import { useState, useEffect, useRef, type FormEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  type FormEvent,
+} from "react";
 import QRCode from "react-qr-code";
 import { Check, Copy, KeyRound, QrCode as QrIcon } from "lucide-react";
 import type { MfaSetupResponse } from "@/api/auth-types.js";
@@ -31,15 +37,88 @@ export function MfaChallengeForm({
   const [copyFailed, setCopyFailed] = useState(false);
   const [showManualKey, setShowManualKey] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
+  const hasFocusedModeRef = useRef<"enrollment" | "verification" | null>(null);
 
-  // Focus input on mount or mode change
+  const ensureCodeAndActionsVisible = useCallback(() => {
+    const inputEl = inputRef.current;
+    const actionsEl = actionsRef.current;
+    const scrollBody = inputEl?.closest<HTMLElement>(
+      "[data-dialog-scroll-body='true']",
+    );
+    if (!scrollBody || !inputEl || !actionsEl) return;
+
+    const bodyRect = scrollBody.getBoundingClientRect();
+    const inputRect = inputEl.getBoundingClientRect();
+    const actionsRect = actionsEl.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportTop =
+      viewport && viewport.height > 0 ? viewport.offsetTop || 0 : -Infinity;
+    const viewportBottom =
+      viewport && viewport.height > 0
+        ? (viewport.offsetTop || 0) + viewport.height
+        : Infinity;
+    const visibleTop = Math.max(bodyRect.top, viewportTop);
+    const visibleBottom = Math.min(bodyRect.bottom, viewportBottom);
+    const visibleHeight = visibleBottom - visibleTop;
+    const inputHeight = inputRect.height || inputRect.bottom - inputRect.top;
+    const actionsHeight =
+      actionsRect.height || actionsRect.bottom - actionsRect.top;
+    if (visibleHeight <= 0 || inputHeight <= 0 || actionsHeight <= 0) return;
+    const top = Math.min(inputRect.top, actionsRect.top);
+    const bottom = Math.max(inputRect.bottom, actionsRect.bottom);
+    if (bottom - top <= visibleHeight) {
+      if (bottom > visibleBottom) {
+        scrollBody.scrollTop += bottom - visibleBottom;
+      } else if (top < visibleTop) {
+        scrollBody.scrollTop -= visibleTop - top;
+      }
+    } else if (actionsHeight <= visibleHeight && actionsRect.bottom > visibleBottom) {
+      scrollBody.scrollTop += actionsRect.bottom - visibleBottom;
+    }
+  }, []);
+
+  // Focus input once per mode when not loading without browser native scroll jump
   useEffect(() => {
-    inputRef.current?.focus();
+    if (loading) return;
+    if (hasFocusedModeRef.current !== mode) {
+      hasFocusedModeRef.current = mode;
+      const active = document.activeElement;
+      if (
+        !active ||
+        active === document.body ||
+        active === document.documentElement
+      ) {
+        inputRef.current?.focus({ preventScroll: true });
+      }
+    }
+  }, [mode, loading]);
+
+  useEffect(() => {
     return () => {
       clearTimeout(copyTimeoutRef.current ?? undefined);
+      copyTimeoutRef.current = null;
     };
-  }, [mode]);
+  }, []);
+  useEffect(() => {
+    if (!error && !(retryAfter !== undefined && retryAfter > 0)) return;
+    ensureCodeAndActionsVisible();
+  }, [error, retryAfter, ensureCodeAndActionsVisible]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const handleViewportResize = () => {
+      if (document.activeElement === inputRef.current) {
+        ensureCodeAndActionsVisible();
+      }
+    };
+    viewport.addEventListener("resize", handleViewportResize);
+    return () => {
+      viewport.removeEventListener("resize", handleViewportResize);
+    };
+  }, [ensureCodeAndActionsVisible]);
 
   // Reset code when setupData or mode changes
   useEffect(() => {
@@ -75,6 +154,7 @@ export function MfaChallengeForm({
     const digitsOnly = raw.replace(/\D/g, "");
     const maxDigits = setupData?.digits ?? 6;
     setCode(digitsOnly.slice(0, maxDigits));
+    ensureCodeAndActionsVisible();
   };
 
   const handleSubmit = (e: FormEvent) => {
@@ -221,11 +301,11 @@ export function MfaChallengeForm({
               maxLength={expectedDigits}
               value={code}
               onChange={(e) => handleCodeChange(e.target.value)}
+              onFocus={ensureCodeAndActionsVisible}
               placeholder="000000"
               disabled={submitting || loading}
               className="w-40 px-3 py-1.5 text-center font-mono text-base tracking-widest rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] focus:outline-hidden focus:border-[var(--color-primary)] transition-colors"
               data-auth-input="true"
-              autoFocus
             />
             <span className="text-[11px] text-[var(--color-text-muted)]">
               {expectedDigits} digits
@@ -250,7 +330,11 @@ export function MfaChallengeForm({
         )}
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-2 pt-2">
+        <div
+          ref={actionsRef}
+          data-testid="mfa-challenge-actions"
+          className="flex items-center justify-end gap-2 pt-2"
+        >
           {onCancel && (
             <button
               type="button"

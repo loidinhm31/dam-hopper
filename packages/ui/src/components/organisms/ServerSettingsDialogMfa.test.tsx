@@ -41,6 +41,7 @@ afterEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -339,5 +340,81 @@ describe("ServerSettingsDialog MFA & Enrollment Flow", () => {
     // MFA form should be closed, testState back to idle
     expect(container?.textContent).not.toContain("Two-Factor Authentication Required");
     expect(container?.textContent).not.toContain("Reachable");
+  });
+
+  it("renders a scrollable dialog body with shrink-0 header/footer and reveals the MFA section on challenge", async () => {
+    saveProfiles([profile]);
+    setActiveProfile(profile.id);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          state: "mfaRequired",
+          challengeToken: "mfa-chal-scroll",
+          challengeExpiresAt: "2026-09-27T12:00:00Z",
+          authProtocol: 2,
+        }),
+      }),
+    );
+
+    await act(async () => {
+      root?.render(
+        createElement(ServerSettingsDialog, {
+          open: true,
+          profile,
+          onClose: vi.fn(),
+        }),
+      );
+    });
+
+    const scrollBody = container?.querySelector<HTMLDivElement>(
+      '[data-testid="server-settings-dialog-body"]',
+    );
+    expect(scrollBody).not.toBeNull();
+    expect(scrollBody?.getAttribute("data-dialog-scroll-body")).toBe("true");
+    expect(scrollBody?.className).toContain("compact-scroll-region");
+    expect(scrollBody?.className).toContain("min-h-0");
+    expect(scrollBody?.className).toContain("flex-1");
+    expect(scrollBody?.className).toContain("overflow-y-auto");
+
+    const header = scrollBody?.previousElementSibling as HTMLElement | null;
+    const footer = scrollBody?.nextElementSibling as HTMLElement | null;
+    expect(header?.className).toContain("shrink-0");
+    expect(footer?.className).toContain("shrink-0");
+
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.getAttribute("data-testid") === "server-settings-dialog-body") {
+          return new DOMRect(0, 80, 350, 260);
+        }
+        if (this.getAttribute("data-testid") === "server-settings-mfa-section") {
+          return new DOMRect(0, 310, 350, 170);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      },
+    );
+
+    const passwordInput = container?.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    );
+    const testButton = Array.from(container?.querySelectorAll("button") ?? []).find(
+      (b) => b.textContent?.includes("Test connection"),
+    );
+
+    await act(async () => {
+      setInputValue(passwordInput!, "secretpass");
+      testButton!.click();
+      await Promise.resolve();
+    });
+
+    const mfaSection = container?.querySelector<HTMLDivElement>(
+      '[data-testid="server-settings-mfa-section"]',
+    );
+    expect(mfaSection).not.toBeNull();
+    // sectionRect.bottom (480) - bodyRect.bottom (340) = 140
+    expect(scrollBody?.scrollTop).toBe(140);
   });
 });

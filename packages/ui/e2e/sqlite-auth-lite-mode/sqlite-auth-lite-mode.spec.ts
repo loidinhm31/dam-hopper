@@ -1,8 +1,66 @@
+import { createHmac } from "node:crypto";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect } from "../fixtures/application-fixture.js";
 import { captureApplicationCheckpoint } from "../fixtures/capture-evidence.js";
 
+function decodeBase32(base32: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const cleaned = base32.replace(/[\s=-]/g, "").toUpperCase();
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+  for (const ch of cleaned) {
+    const idx = alphabet.indexOf(ch);
+    if (idx === -1) throw new Error(`Invalid Base32 char: ${ch}`);
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTotpCode(secretBase32: string, stepOffset = 0): string {
+  const key = decodeBase32(secretBase32);
+  const step = BigInt(Math.floor(Date.now() / 1000 / 30) + stepOffset);
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(step);
+  const digest = createHmac("sha1", key).update(buf).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary =
+    ((digest[offset] & 0x7f) << 24) |
+    ((digest[offset + 1] & 0xff) << 16) |
+    ((digest[offset + 2] & 0xff) << 8) |
+    (digest[offset + 3] & 0xff);
+  return String(binary % 1_000_000).padStart(6, "0");
+}
+
+function assertBoxInsideBodyAndViewport(
+  box: { x: number; y: number; width: number; height: number } | null,
+  bodyBox: { x: number; y: number; width: number; height: number } | null,
+  viewportWidth: number,
+  viewportHeight: number,
+): void {
+  expect(box).not.toBeNull();
+  expect(bodyBox).not.toBeNull();
+  expect(box!.width).toBeGreaterThan(0);
+  expect(box!.height).toBeGreaterThan(0);
+  expect(box!.x).toBeGreaterThanOrEqual(bodyBox!.x - 2);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(
+    bodyBox!.x + bodyBox!.width + 2,
+  );
+  expect(box!.y).toBeGreaterThanOrEqual(bodyBox!.y - 2);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(
+    bodyBox!.y + bodyBox!.height + 2,
+  );
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewportHeight);
+}
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const CASE_DIR = __dirname;
@@ -96,5 +154,102 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
     await captureApplicationCheckpoint(page, {
       caseDir: CASE_DIR,
     });
+
+    // 7. Mobile viewport (375x667) MFA enrollment & verification flow in ServerSettingsDialog
+    await page.setViewportSize({ width: 375, height: 667 });
+
+    const showMenuBtn = page.locator('button[title="Show menu"]').first();
+    if (await showMenuBtn.isVisible()) {
+      await showMenuBtn.click();
+    }
+
+    const connectionsBtn = page
+      .locator('button[title^="Server connections:"]')
+      .first();
+    await expect(connectionsBtn).toBeVisible({ timeout: 10_000 });
+    await connectionsBtn.click();
+
+    const editProfileBtn = page.locator('button[title="Edit profile"]').first();
+    await expect(editProfileBtn).toBeVisible({ timeout: 10_000 });
+    await editProfileBtn.click();
+
+    const dialogBody = page.getByTestId("server-settings-dialog-body");
+    await expect(dialogBody).toBeVisible({ timeout: 10_000 });
+
+    const passwordInput = dialogBody.locator('input[type="password"]');
+    await passwordInput.fill("StrongPassword123!");
+
+    const testConnBtn = dialogBody.getByRole("button", {
+      name: "Test connection",
+    });
+    await testConnBtn.click();
+
+    // Enrollment challenge opens with QR code, code input, and Confirm & Enroll button visible inside mobile scroll body
+    const qrCode = dialogBody.getByTestId("mfa-qr-code");
+    await expect(qrCode).toBeVisible({ timeout: 10_000 });
+    const codeInput = dialogBody.locator("#mfa-code-input");
+    const confirmEnrollBtn = dialogBody.getByRole("button", {
+      name: "Confirm & Enroll",
+    });
+    await expect(codeInput).toBeVisible();
+    await expect(confirmEnrollBtn).toBeVisible();
+
+    // Reveal manual setup key to compute valid TOTP confirmation code
+    const showManualKeyBtn = dialogBody.getByRole("button", {
+      name: /Show setup key/i,
+    });
+    await showManualKeyBtn.click();
+    const manualKeyInput = dialogBody.locator("#mfa-manual-key");
+    await expect(manualKeyInput).toBeVisible();
+    const base32Secret = await manualKeyInput.inputValue();
+    expect(base32Secret.length).toBeGreaterThanOrEqual(16);
+
+    // Focus code input and enter TOTP code (stepOffset = 0), verifying both input and Confirm & Enroll are within mobile scroll body bounds
+    await codeInput.focus();
+    await codeInput.fill(generateTotpCode(base32Secret, 0));
+
+    const bodyBoxEnroll = await dialogBody.boundingBox();
+    const inputBoxEnroll = await codeInput.boundingBox();
+    const confirmBoxEnroll = await confirmEnrollBtn.boundingBox();
+    assertBoxInsideBodyAndViewport(inputBoxEnroll, bodyBoxEnroll, 375, 667);
+    assertBoxInsideBodyAndViewport(confirmBoxEnroll, bodyBoxEnroll, 375, 667);
+
+    await captureApplicationCheckpoint(page, {
+      caseDir: CASE_DIR,
+      checkpointName: "mobile-mfa-enrollment",
+    });
+
+    await confirmEnrollBtn.click();
+    await expect(dialogBody.getByText("Reachable")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // 8. Re-run Test connection for the now-enrolled account to trigger mfaRequired verification flow on mobile (375x667)
+    await passwordInput.fill("StrongPassword123!");
+    await testConnBtn.click();
+
+    const verifyContinueBtn = dialogBody.getByRole("button", {
+      name: "Verify & Continue",
+    });
+    await expect(verifyContinueBtn).toBeVisible({ timeout: 10_000 });
+    await codeInput.fill(generateTotpCode(base32Secret, 1));
+
+    const bodyBoxVerify = await dialogBody.boundingBox();
+    const inputBoxVerify = await codeInput.boundingBox();
+    const verifyBox = await verifyContinueBtn.boundingBox();
+    assertBoxInsideBodyAndViewport(inputBoxVerify, bodyBoxVerify, 375, 667);
+    assertBoxInsideBodyAndViewport(verifyBox, bodyBoxVerify, 375, 667);
+
+    await captureApplicationCheckpoint(page, {
+      caseDir: CASE_DIR,
+      checkpointName: "mobile-mfa-verify",
+    });
+
+    await verifyContinueBtn.click();
+    await expect(dialogBody.getByText("Reachable")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 });

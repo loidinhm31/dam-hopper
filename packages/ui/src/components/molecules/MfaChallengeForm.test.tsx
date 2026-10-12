@@ -213,4 +213,220 @@ describe("MfaChallengeForm", () => {
 
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it("keeps code input and actions visible inside [data-dialog-scroll-body='true'] when error updates without stealing focus", async () => {
+    await act(async () => {
+      root?.render(
+        createElement(
+          "div",
+          {
+            "data-testid": "scroll-body",
+            "data-dialog-scroll-body": "true",
+          },
+          createElement("button", { type: "button", id: "other-focus-target" }, "Other"),
+          createElement(MfaChallengeForm, {
+            mode: "verification",
+            error: null,
+            onCodeSubmit: vi.fn(),
+            onCancel: vi.fn(),
+          }),
+        ),
+      );
+    });
+
+    const scrollBody = container?.querySelector<HTMLDivElement>(
+      '[data-testid="scroll-body"]',
+    );
+    const codeInput = container?.querySelector<HTMLInputElement>("#mfa-code-input");
+    const actions = container?.querySelector<HTMLDivElement>(
+      '[data-testid="mfa-challenge-actions"]',
+    );
+    const otherButton = container?.querySelector<HTMLButtonElement>(
+      "#other-focus-target",
+    );
+
+    expect(scrollBody).not.toBeNull();
+    expect(codeInput).not.toBeNull();
+    expect(codeInput?.hasAttribute("autofocus")).toBe(false);
+    expect(actions).not.toBeNull();
+    expect(otherButton).not.toBeNull();
+
+    // Move focus to another control before error arrives
+    otherButton!.focus();
+    expect(document.activeElement).toBe(otherButton);
+
+    vi.spyOn(scrollBody!, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 100, 340, 240), // bottom = 340
+    );
+    vi.spyOn(codeInput!, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 220, 160, 36), // top = 220, bottom = 256
+    );
+    vi.spyOn(actions!, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 355, 340, 40), // top = 355, bottom = 395 (55px below bodyRect.bottom)
+    );
+
+    await act(async () => {
+      root?.render(
+        createElement(
+          "div",
+          {
+            "data-testid": "scroll-body",
+            "data-dialog-scroll-body": "true",
+          },
+          createElement("button", { type: "button", id: "other-focus-target" }, "Other"),
+          createElement(MfaChallengeForm, {
+            mode: "verification",
+            error: "Invalid authentication code",
+            onCodeSubmit: vi.fn(),
+            onCancel: vi.fn(),
+          }),
+        ),
+      );
+    });
+
+    // Should scroll down by actionsRect.bottom (395) - bodyRect.bottom (340) = 55
+    expect(scrollBody!.scrollTop).toBe(55);
+    // Focus must remain on the other control and not be stolen by the error update
+    expect(document.activeElement).toBe(otherButton);
+  });
+
+  it("adjusts scroll body on visualViewport resize when #mfa-code-input is focused and cleans up on unmount", async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "visualViewport",
+    );
+    const fakeViewport = Object.assign(new EventTarget(), {
+      offsetTop: 0,
+      height: 240,
+    });
+    const addSpy = vi.spyOn(fakeViewport, "addEventListener");
+    const removeSpy = vi.spyOn(fakeViewport, "removeEventListener");
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: fakeViewport,
+    });
+
+    try {
+      await act(async () => {
+        root?.render(
+          createElement(
+            "div",
+            {
+              "data-testid": "scroll-body",
+              "data-dialog-scroll-body": "true",
+            },
+            createElement(MfaChallengeForm, {
+              mode: "verification",
+              onCodeSubmit: vi.fn(),
+              onCancel: vi.fn(),
+            }),
+          ),
+        );
+      });
+
+      const scrollBody = container?.querySelector<HTMLDivElement>(
+        '[data-testid="scroll-body"]',
+      )!;
+      const codeInput =
+        container?.querySelector<HTMLInputElement>("#mfa-code-input")!;
+      const actions = container?.querySelector<HTMLDivElement>(
+        '[data-testid="mfa-challenge-actions"]',
+      )!;
+
+      expect(document.activeElement).toBe(codeInput);
+
+      // Scroll body rect remains 340px tall (bottom = 420), while visualViewport height shrinks to 240px
+      vi.spyOn(scrollBody, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 80, 340, 340),
+      );
+      vi.spyOn(codeInput, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 170, 160, 36),
+      );
+      vi.spyOn(actions, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 250, 340, 40), // bottom = 290 (50px below visualViewport bottom 240)
+      );
+
+      await act(async () => {
+        fakeViewport.dispatchEvent(new Event("resize"));
+      });
+
+      expect(scrollBody.scrollTop).toBe(50);
+
+      expect(addSpy).toHaveBeenCalledWith("resize", expect.any(Function));
+      const registeredHandler = addSpy.mock.calls[0]?.[1];
+
+      // Unmount and verify the exact listener was removed
+      await act(async () => {
+        root?.render(null);
+      });
+      expect(removeSpy).toHaveBeenCalledWith("resize", registeredHandler);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, "visualViewport", originalDescriptor);
+      } else {
+        Reflect.deleteProperty(window, "visualViewport");
+      }
+    }
+  });
+
+  it("focuses #mfa-code-input when loading completes unless user focused another control", async () => {
+    await act(async () => {
+      root?.render(
+        createElement(MfaChallengeForm, {
+          mode: "verification",
+          loading: true,
+          onCodeSubmit: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+
+    const codeInput =
+      container?.querySelector<HTMLInputElement>("#mfa-code-input")!;
+    expect(codeInput.disabled).toBe(true);
+
+    // Unattended loading -> ready focuses #mfa-code-input
+    await act(async () => {
+      root?.render(
+        createElement(MfaChallengeForm, {
+          mode: "verification",
+          loading: false,
+          onCodeSubmit: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+    expect(document.activeElement).toBe(codeInput);
+
+    // Now test mode="enrollment" where user focuses Cancel while loading=true
+    await act(async () => {
+      root?.render(
+        createElement(MfaChallengeForm, {
+          mode: "enrollment",
+          loading: true,
+          onCodeSubmit: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+    const cancelBtn = Array.from(container?.querySelectorAll("button") ?? []).find(
+      (b) => b.textContent?.trim() === "Cancel",
+    )!;
+    cancelBtn.focus();
+    expect(document.activeElement).toBe(cancelBtn);
+
+    await act(async () => {
+      root?.render(
+        createElement(MfaChallengeForm, {
+          mode: "enrollment",
+          loading: false,
+          setupData: mockSetupData,
+          onCodeSubmit: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+    // Must preserve user's focus on Cancel
+    expect(document.activeElement).toBe(cancelBtn);
+  });
 });
