@@ -63,6 +63,14 @@ All source-level deletions and modifications across UI presentation (Phase 01), 
 - **Documentation LOC Limits:** All 66 markdown files under `docs/` verified strictly under 800 LOC.
 - **Dead Link Audit:** Zero broken links or references to excised documents (`advisor.md`, `native-advisor.md`, `advisor-and-workflow.md`).
 
+### Gate 9: File Plans progress.md Deprecation and Removal
+- **Server Plan Parser & Scanner Suite (`cargo test plans`):** PASSED in 1.19s (20 passed, 0 failed). Verified plan-derived status, dates, and completion fraction derivation, as well as `test_legacy_progress_file_completely_ignored_by_scanner_and_parser` proving that existing legacy `progress.md` files are completely ignored.
+- **Server HTTP API Suite (`cargo test --test plans_api`):** PASSED in 3.61s (16 passed, 0 failed). Verified `/api/plans` returns plan-only authority, document snapshot, and ignores legacy files.
+- **UI Plan Viewer & Dashboard Unit Tests:** PASSED (all plan component tests pass in Vitest 2,695-test run).
+- **UI Browser Tests (`vitest.browser.config.ts -- plans-dashboard`):** PASSED in 62.47s (287 passed, 4 skipped).
+- **E2E Tests & Typecheck:** PASSED (`tsc -p tsconfig.e2e.json` 0 errors).
+- **Full Workspace Check (`pnpm check`):** PASSED (SPA build, native desktop tauri build, ESLint, and 1,427 Rust server tests passed).
+
 ---
 
 ## 3. Deployment & Operator Gate Status

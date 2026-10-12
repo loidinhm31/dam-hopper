@@ -100,16 +100,10 @@ describe("Project Plans Dashboard in Chromium", () => {
         sizeBytes: 1200,
         modifiedAt: "2026-10-06T12:00:00Z",
       },
-      progress: {
-        path: "plans/261001-sample/progress.md",
-        state: "readable",
-        sizeBytes: 800,
-        modifiedAt: "2026-10-06T12:10:00Z",
-      },
     },
     reportedStatus: {
       value: "in-progress",
-      authority: "progress",
+      authority: "plan",
       raw: "in-progress",
       evidence: [dummyRef],
       captured: [],
@@ -122,7 +116,7 @@ describe("Project Plans Dashboard in Chromium", () => {
         path: "plans/261001-sample/phase-01.md",
         reportedStatus: {
           value: "completed",
-          authority: "progress",
+          authority: "plan",
           raw: "completed",
           evidence: [dummyRef],
           captured: [],
@@ -321,6 +315,7 @@ describe("Project Plans Dashboard in Chromium", () => {
 
     await vi.waitFor(() => {
       expect(container.textContent).toContain("Plan (plan.md)");
+      expect(container.textContent).not.toContain("Progress (progress.md)");
       expect(container.textContent).toContain("Read-Only Snapshot");
     });
   });

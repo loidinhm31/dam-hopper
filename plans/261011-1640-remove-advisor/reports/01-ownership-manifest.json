@@ -830,6 +830,108 @@
           "reason": "Final integration verification and evidence report."
         }
       ]
+    },
+    {
+      "id": "06",
+      "name": "File Plans progress.md Removal",
+      "dependsOn": [
+        "01",
+        "02",
+        "03",
+        "04"
+      ],
+      "files": [
+        {
+          "path": "server/src/plans/dto.rs",
+          "action": "modify",
+          "reason": "Remove progress field from PlanDocuments, remove PlanAuthority::Progress and obsolete diagnostics"
+        },
+        {
+          "path": "server/src/plans/scan.rs",
+          "action": "modify",
+          "reason": "Remove progress.md probing and reading"
+        },
+        {
+          "path": "server/src/plans/parser.rs",
+          "action": "modify",
+          "reason": "Remove progress document parser, reconciliation, and progress authority"
+        },
+        {
+          "path": "server/src/plans/tests.rs",
+          "action": "modify",
+          "reason": "Update unit tests to remove progress.md tests and add legacy ignore tests"
+        },
+        {
+          "path": "packages/ui/src/api/project-plans-types.ts",
+          "action": "modify",
+          "reason": "Remove progress from PlanDocuments and update PlanAuthority"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/ProjectPlanDocument.tsx",
+          "action": "modify",
+          "reason": "Remove Progress (progress.md) tab while preserving subdocument viewing"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/ProjectPlanDocument.test.tsx",
+          "action": "modify",
+          "reason": "Update unit tests for plan viewer"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/ProjectPlanOverview.test.tsx",
+          "action": "modify",
+          "reason": "Update test fixtures to remove progress document"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/ProjectPlanTimeline.test.tsx",
+          "action": "modify",
+          "reason": "Update test fixtures to remove progress document"
+        },
+        {
+          "path": "packages/ui/src/components/organisms/ProjectPlansDashboard.test.tsx",
+          "action": "modify",
+          "reason": "Update test fixtures to remove progress document"
+        },
+        {
+          "path": "packages/ui/src/api/project-plans-queries.test.ts",
+          "action": "modify",
+          "reason": "Update query fixtures to remove progress document"
+        },
+        {
+          "path": "packages/ui/src/hooks/use-project-plans.test.tsx",
+          "action": "modify",
+          "reason": "Update test fixtures and file watcher tests to plan.md"
+        },
+        {
+          "path": "packages/ui/browser-tests/plans-dashboard.browser.tsx",
+          "action": "modify",
+          "reason": "Update browser test fixtures"
+        },
+        {
+          "path": "packages/ui/e2e/fixtures/plan-fixtures.ts",
+          "action": "modify",
+          "reason": "Remove progress.md fixture creation"
+        },
+        {
+          "path": "packages/ui/e2e/project-plans-dashboard/project-plans-dashboard.spec.ts",
+          "action": "modify",
+          "reason": "Update E2E test assertions to plan.md updates"
+        },
+        {
+          "path": "docs/system-architecture.md",
+          "action": "modify",
+          "reason": "Remove progress.md opt-in descriptions"
+        },
+        {
+          "path": "docs/workflow-api.md",
+          "action": "modify",
+          "reason": "Remove progress.md description"
+        },
+        {
+          "path": "docs/api/filesystem-and-media.md",
+          "action": "modify",
+          "reason": "Remove progress.md description"
+        }
+      ]
     }
   ]
 }

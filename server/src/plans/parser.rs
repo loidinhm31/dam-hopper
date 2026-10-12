@@ -9,13 +9,11 @@ use super::dto::*;
 pub fn parse_plan(
     plan_id: &str,
     plan_doc: &DocumentSnapshot,
-    progress_doc: &DocumentSnapshot,
 ) -> FilePlan {
     let mut diagnostics = Vec::new();
 
-    // 1. Validate documents
+    // 1. Validate plan document
     let plan_text = validate_document_snapshot(plan_doc, &mut diagnostics);
-    let progress_text = validate_document_snapshot(progress_doc, &mut diagnostics);
 
     // 2. Parse plan.md metadata and raw sections
     let (mut metadata, plan_title, plan_desc, plan_frontmatter_status, plan_dates, plan_sections) =
@@ -36,82 +34,32 @@ pub fn parse_plan(
     let (phases_result, declared_inventory_valid) =
         extract_phase_inventory(plan_doc.path, &plan_sections, &mut diagnostics);
 
-    // 4. Parse progress.md if present
-    let (
-        progress_dates,
-        progress_current_scalar,
-        progress_summary,
-        progress_reconciliation,
-        progress_valid,
-    ) = if progress_doc.state == PlanDocumentState::Absent {
-        // If plan links to a missing progress file, emit warning
-        if plan_text
-            .as_deref()
-            .map(|t| t.contains("progress.md"))
-            .unwrap_or(false)
-        {
-            add_diagnostic(
-                &mut diagnostics,
-                DIAG_PROGRESS_MISSING,
-                Some(plan_doc.path),
-                None,
-                "Referenced progress.md does not exist in target",
-            );
-        }
-        (PlanDates::default(), None, None, Vec::new(), false)
-    } else if let Some(text) = progress_text.as_deref() {
-        parse_progress_document(progress_doc.path, text, &mut diagnostics)
-    } else {
-        // Unreadable or invalid decisive progress
-        add_diagnostic(
-            &mut diagnostics,
-            DIAG_PROGRESS_UNREADABLE,
-            Some(progress_doc.path),
-            None,
-            "Progress document is present but unreadable or invalid",
-        );
-        (PlanDates::default(), None, None, Vec::new(), false)
-    };
-
-    // 5. Reconcile Phase status and evidence
-    let (phases, overall_reported_status) = reconcile_statuses(
+    // 4. Derive Phase status and overall status from plan.md
+    let (phases, overall_reported_status) = derive_plan_statuses(
         plan_doc.path,
-        progress_doc.path,
-        progress_doc.state != PlanDocumentState::Absent,
-        progress_valid,
         phases_result,
         declared_inventory_valid,
         plan_frontmatter_status,
-        progress_current_scalar,
-        progress_summary,
-        progress_reconciliation,
         &mut diagnostics,
     );
 
-    // 6. Compute completion fraction and counts
+    // 5. Compute completion fraction and counts
     let completion = compute_completion(&phases, declared_inventory_valid);
 
-    // 7. Reconcile explicit dates
-    let dates = reconcile_dates(
+    // 6. Validate plan dates
+    let dates = validate_plan_dates(
         plan_doc.path,
-        progress_doc.path,
         plan_dates,
-        progress_dates,
         &mut diagnostics,
     );
 
-    // 8. Reconcile last document update (latest of valid modified_at)
-    let last_document_update = match (&plan_doc.modified_at, &progress_doc.modified_at) {
-        (Some(a), Some(b)) => Some(std::cmp::max(a, b).clone()),
-        (Some(a), None) => Some(a.clone()),
-        (None, Some(b)) => Some(b.clone()),
-        (None, None) => None,
-    };
+    // 7. Last document update from plan.md alone
+    let last_document_update = plan_doc.modified_at.clone();
 
-    // 9. Enforce metadata string bounds
+    // 8. Enforce metadata string bounds
     enforce_metadata_bounds(&mut metadata, plan_doc.path, &mut diagnostics);
 
-    // 10. Bound diagnostics to MAX_DIAGNOSTICS_PER_PLAN
+    // 9. Bound diagnostics to MAX_DIAGNOSTICS_PER_PLAN
     cap_diagnostics(&mut diagnostics);
 
     FilePlan {
@@ -121,7 +69,6 @@ pub fn parse_plan(
         metadata,
         documents: PlanDocuments {
             plan: plan_doc.to_plan_document(),
-            progress: progress_doc.to_plan_document(),
         },
         reported_status: overall_reported_status,
         phases,
@@ -144,7 +91,15 @@ fn validate_document_snapshot(
     let bytes = match doc.bytes {
         Some(b) => b,
         None => {
-            if doc.state != PlanDocumentState::Absent {
+            if doc.state == PlanDocumentState::Oversize {
+                add_diagnostic(
+                    diagnostics,
+                    DIAG_DOCUMENT_TOO_LARGE,
+                    Some(doc.path),
+                    None,
+                    format!("Document exceeds 64 KiB limit (size: {:?})", doc.size_bytes),
+                );
+            } else if doc.state != PlanDocumentState::Absent {
                 add_diagnostic(
                     diagnostics,
                     DIAG_INVALID_DOCUMENT,
@@ -1320,607 +1275,53 @@ fn parse_status_cell(cell: &str) -> PlanStatus {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ProgressRow {
-    phase_link: Option<String>,
-    phase_number: Option<u32>,
-    current_status: PlanStatus,
-    raw_current: String,
-    captured_status: Option<PlanStatus>,
-    raw_captured: Option<String>,
-    line: usize,
-}
-
-/// Parse progress.md: dates, current scalar status, summary prose, and reconciliation table.
-fn parse_progress_document(
-    path: &str,
-    text: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> (
-    PlanDates,
-    Option<(PlanStatus, String, usize)>,
-    Option<(PlanStatus, String, usize)>,
-    Vec<ProgressRow>,
-    bool,
-) {
-    let mut dates = PlanDates::default();
-    let mut current_scalar = None;
-    let mut summary = None;
-    let mut reconciliation_rows = Vec::new();
-
-    let lines: Vec<&str> = text.lines().collect();
-    let mut table_lines = Vec::new();
-    let mut in_reconciliation_section = false;
-    let mut in_metadata_region = true;
-
-    for (idx, line) in lines.iter().enumerate() {
-        let line_num = idx + 1;
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("## ") {
-            in_metadata_region = false;
-            let heading = trimmed.trim_start_matches("##").trim();
-            if heading.starts_with("Phase Reconciliation")
-                || heading.starts_with("Phase Summary")
-                || heading.starts_with("Phases")
-            {
-                in_reconciliation_section = true;
-            } else {
-                in_reconciliation_section = false;
-            }
-        } else if in_reconciliation_section {
-            if (table_lines.len() >= 2 && is_gfm_table_body_line(line))
-                || (table_lines.len() < 2 && trimmed.contains('|'))
-            {
-                table_lines.push((line_num, line.to_string()));
-            } else if !table_lines.is_empty() && (table_lines.len() >= 2 || !trimmed.is_empty()) {
-                in_reconciliation_section = false;
-            }
-        } else if in_metadata_region {
-            // Check standalone dates and Current status
-            let clean = trimmed.replace("**", "").replace("__", "");
-            let clean_line = clean.trim_start_matches('-').trim_start_matches('*').trim();
-            let parts: Vec<&str> = clean_line.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                let label = parts[0].trim().to_lowercase();
-                let val = parts[1].trim();
-                match label.as_str() {
-                    "current status" => {
-                        let parsed = parse_status_cell(val);
-                        if parsed != PlanStatus::Unknown {
-                            current_scalar = Some((parsed, val.to_string(), line_num));
-                        } else if let Some((st, raw)) = parse_completion_summary_sentence(val) {
-                            if st == PlanStatus::Unknown {
-                                add_diagnostic(
-                                    diagnostics,
-                                    DIAG_UNSUPPORTED_STATUS,
-                                    Some(path),
-                                    Some(line_num),
-                                    format!(
-                                        "Unsupported or negated completion summary prose: {raw}"
-                                    ),
-                                );
-                            }
-                            summary = Some((st, raw, line_num));
-                        } else {
-                            current_scalar = Some((parsed, val.to_string(), line_num));
-                        }
-                    }
-                    "published" => {
-                        try_set_date_evidence(
-                            path,
-                            line_num,
-                            val,
-                            &mut dates.published,
-                            diagnostics,
-                        );
-                    }
-                    "created" => {
-                        try_set_date_evidence(path, line_num, val, &mut dates.created, diagnostics);
-                    }
-                    "planned start" => {
-                        try_set_date_evidence(
-                            path,
-                            line_num,
-                            val,
-                            &mut dates.planned_start,
-                            diagnostics,
-                        );
-                    }
-                    "planned end" => {
-                        try_set_date_evidence(
-                            path,
-                            line_num,
-                            val,
-                            &mut dates.planned_end,
-                            diagnostics,
-                        );
-                    }
-                    "actual start" | "started" => {
-                        try_set_date_evidence(
-                            path,
-                            line_num,
-                            val,
-                            &mut dates.actual_start,
-                            diagnostics,
-                        );
-                    }
-                    "actual end" | "completed" => {
-                        try_set_date_evidence(
-                            path,
-                            line_num,
-                            val,
-                            &mut dates.actual_end,
-                            diagnostics,
-                        );
-                    }
-                    _ => {}
-                }
-            } else {
-                // Check if line contains complete summary grammar
-                if let Some((st, raw)) = parse_completion_summary_sentence(trimmed) {
-                    if st == PlanStatus::Unknown {
-                        add_diagnostic(
-                            diagnostics,
-                            DIAG_UNSUPPORTED_STATUS,
-                            Some(path),
-                            Some(line_num),
-                            format!("Unsupported or negated completion summary prose: {raw}"),
-                        );
-                    }
-                    summary = Some((st, raw, line_num));
-                }
-            }
-        }
-    }
-
-    // Parse reconciliation table
-    if !table_lines.is_empty() {
-        if let Ok(rows) = parse_reconciliation_table(&table_lines) {
-            reconciliation_rows = rows;
-        } else {
-            add_diagnostic(
-                diagnostics,
-                DIAG_PHASE_INVENTORY_INVALID,
-                Some(path),
-                None,
-                "Failed to parse Phase Reconciliation table in progress.md",
-            );
-        }
-    }
-
-    (dates, current_scalar, summary, reconciliation_rows, true)
-}
-
-/// Tokenize and parse progress reconciliation table.
-fn parse_reconciliation_table(table_lines: &[(usize, String)]) -> Result<Vec<ProgressRow>, ()> {
-    if table_lines.len() < 2 {
-        return Err(());
-    }
-
-    let header_cells = tokenize_table_row(&table_lines[0].1);
-    if header_cells.is_empty() {
-        return Err(());
-    }
-
-    let mut phase_col = None;
-    let mut current_col = None;
-    let mut status_col = None;
-    let mut captured_col = None;
-
-    for (idx, cell) in header_cells.iter().enumerate() {
-        let norm = cell.trim().to_lowercase();
-        if norm == "phase" || norm == "name" || norm == "#" {
-            phase_col = Some(idx);
-        } else if norm == "current status" {
-            current_col = Some(idx);
-        } else if norm == "status" {
-            status_col = Some(idx);
-        } else if norm == "captured status" {
-            captured_col = Some(idx);
-        }
-    }
-    let current_col = current_col.or(status_col);
-
-    let delimiter_cells = tokenize_table_row(&table_lines[1].1);
-    if delimiter_cells.len() != header_cells.len() {
-        return Err(());
-    }
-
-    let mut rows = Vec::new();
-    for (line_num, line_str) in &table_lines[2..] {
-        let mut cells = tokenize_table_row(line_str);
-        cells.resize(header_cells.len(), String::new());
-
-        let raw_phase = phase_col
-            .and_then(|idx| cells.get(idx))
-            .map(|s| s.trim())
-            .unwrap_or("");
-        let raw_current = current_col
-            .and_then(|idx| cells.get(idx))
-            .map(|s| s.trim())
-            .unwrap_or("");
-        let raw_captured = captured_col
-            .and_then(|idx| cells.get(idx))
-            .map(|s| s.trim());
-
-        let phase_link = extract_markdown_link(raw_phase).map(|l| normalize_local_link(&l));
-        let phase_number = extract_number_from_text(raw_phase);
-
-        let current_status = parse_status_cell(raw_current);
-        let captured_status = raw_captured.map(parse_status_cell);
-
-        rows.push(ProgressRow {
-            phase_link,
-            phase_number,
-            current_status,
-            raw_current: raw_current.to_string(),
-            captured_status,
-            raw_captured: raw_captured.map(|s| s.to_string()),
-            line: *line_num,
-        });
-    }
-
-    Ok(rows)
-}
-
-/// Parse corroborated All phases completion summary grammar.
-fn parse_completion_summary_sentence(s: &str) -> Option<(PlanStatus, String)> {
-    let lower = s.to_lowercase();
-    let normalized = lower.split_whitespace().collect::<Vec<_>>().join(" ");
-    if !normalized.contains("all phases") && !normalized.contains("plan execution") {
-        return None;
-    }
-
-    // Accept the entire supported claim, not completion substrings or an
-    // otherwise valid claim embedded in negated/conditional/extra prose.
-    let sentence = normalized.strip_suffix('.').unwrap_or(&normalized);
-    let valid = if sentence == "plan execution complete" {
-        true
-    } else {
-        let sentence = sentence
-            .strip_suffix(". plan execution complete")
-            .unwrap_or(sentence);
-        if let Some(rest) = sentence.strip_prefix("all phases ") {
-            let rest = if rest.starts_with('(') {
-                rest.find(')').and_then(|close| {
-                    extract_summary_phase_numbers(sentence).ok()?;
-                    rest[close + 1..].strip_prefix(' ')
-                })
-            } else {
-                Some(rest)
-            };
-            rest.is_some_and(|rest| {
-                let rest = rest.strip_prefix("are ").unwrap_or(rest);
-                matches!(
-                    rest,
-                    "complete"
-                        | "completed"
-                        | "complete with durable task sealing"
-                        | "completed with durable task sealing"
-                )
-            })
-        } else {
-            false
-        }
-    };
-    Some((
-        if valid {
-            PlanStatus::Completed
-        } else {
-            PlanStatus::Unknown
-        },
-        s.to_string(),
-    ))
-}
-
-/// Reconcile declared phases with progress rows and calculate overall status.
-fn reconcile_statuses(
+fn derive_plan_statuses(
     plan_path: &str,
-    progress_path: &str,
-    has_progress: bool,
-    progress_valid: bool,
     declared_phases: Vec<FilePlanPhase>,
     inventory_valid: bool,
     plan_frontmatter_status: Option<(PlanStatus, String, usize)>,
-    progress_current_scalar: Option<(PlanStatus, String, usize)>,
-    progress_summary: Option<(PlanStatus, String, usize)>,
-    progress_rows: Vec<ProgressRow>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<FilePlanPhase>, ReportedStatus) {
-    if !has_progress {
-        // Plan authority
-        let mut overall_status = plan_frontmatter_status
-            .as_ref()
-            .map(|(st, _, _)| *st)
-            .unwrap_or_else(|| derive_status_from_phases(&declared_phases));
+    let mut overall_status = plan_frontmatter_status
+        .as_ref()
+        .map(|(st, _, _)| *st)
+        .unwrap_or_else(|| derive_status_from_phases(&declared_phases));
 
-        // Check for contradiction between frontmatter status and inventory
-        if let Some((fm_st, _, line)) = plan_frontmatter_status.as_ref() {
-            if *fm_st == PlanStatus::Completed
-                && declared_phases
-                    .iter()
-                    .any(|p| p.reported_status.value == PlanStatus::Pending)
-            {
+    // Detect conflict between plan frontmatter and phase inventory
+    if let Some((fm_st, _, _)) = plan_frontmatter_status {
+        if inventory_valid && !declared_phases.is_empty() {
+            let derived = derive_status_from_phases(&declared_phases);
+            if fm_st != derived && derived != PlanStatus::Unknown {
                 add_diagnostic(
                     diagnostics,
                     DIAG_STATUS_CONFLICT,
                     Some(plan_path),
-                    Some(*line),
-                    "Plan status claims completed but declared phases are pending",
+                    None,
+                    "Plan frontmatter status conflicts with declared phase inventory status",
                 );
                 overall_status = PlanStatus::Conflict;
             }
         }
-
-        let evidence = plan_frontmatter_status
-            .as_ref()
-            .map(|(_, _, line)| {
-                vec![SourceRef {
-                    path: plan_path.to_string(),
-                    line_start: *line,
-                    line_end: *line,
-                }]
-            })
-            .unwrap_or_default();
-
-        let raw = plan_frontmatter_status.map(|(_, raw, _)| raw);
-
-        return (
-            declared_phases,
-            ReportedStatus {
-                value: overall_status,
-                authority: PlanAuthority::Plan,
-                raw,
-                evidence,
-                captured: Vec::new(),
-            },
-        );
     }
 
-    // Progress authority
-    if !progress_valid {
-        let mut phases = declared_phases;
-        for phase in &mut phases {
-            let status = &mut phase.reported_status;
-            for evidence in &status.evidence {
-                status.captured.push(StatusEvidence {
-                    value: status.value,
-                    raw: status.raw.clone().unwrap_or_default(),
-                    evidence: evidence.clone(),
-                });
-            }
-            status.value = PlanStatus::Unknown;
-            status.authority = PlanAuthority::Progress;
-            status.raw = None;
-            status.evidence.clear();
-        }
-        return (
-            phases,
-            ReportedStatus {
-                value: PlanStatus::Unknown,
-                authority: PlanAuthority::Progress,
-                raw: None,
-                evidence: vec![SourceRef {
-                    path: progress_path.to_string(),
-                    line_start: 1,
-                    line_end: 1,
-                }],
-                captured: Vec::new(),
-            },
-        );
-    }
-
-    // Match progress rows to declared phases
-    let mut updated_phases = declared_phases;
-    let mut phase_matches = vec![None; updated_phases.len()];
-    let mut phase_conflicts = vec![false; updated_phases.len()];
-    let mut matched_progress_indices = HashSet::new();
-
-    // Resolve all identity hints before projecting any row. A row has exactly one
-    // consumer; inconsistent hints and duplicate claims invalidate affected phases.
-    for (idx, row) in progress_rows.iter().enumerate() {
-        let by_link = row.phase_link.as_ref().and_then(|link| {
-            updated_phases
-                .iter()
-                .position(|phase| phase.path.as_ref() == Some(link))
-        });
-        let by_number = row.phase_number.and_then(|number| {
-            updated_phases
-                .iter()
-                .position(|phase| phase.number == Some(number))
-        });
-        let matched_phase = if row.phase_link.is_some() && row.phase_number.is_some() {
-            if by_link.is_none() || by_link != by_number {
-                for phase_idx in [by_link, by_number].into_iter().flatten() {
-                    phase_conflicts[phase_idx] = true;
-                }
-                add_diagnostic(
-                    diagnostics,
-                    DIAG_STATUS_CONFLICT,
-                    Some(progress_path),
-                    Some(row.line),
-                    "Progress row phase link and number do not identify the same declared phase",
-                );
-                continue;
-            }
-            by_link
-        } else if row.phase_link.is_some() {
-            by_link
-        } else {
-            by_number
-        };
-
-        if let Some(phase_idx) = matched_phase {
-            if phase_matches[phase_idx].is_some() {
-                phase_conflicts[phase_idx] = true;
-                add_diagnostic(
-                    diagnostics,
-                    DIAG_STATUS_CONFLICT,
-                    Some(progress_path),
-                    Some(row.line),
-                    "Multiple progress rows identify the same declared phase",
-                );
-            } else {
-                phase_matches[phase_idx] = Some(idx);
-                matched_progress_indices.insert(idx);
-            }
-        }
-    }
-
-    for (phase_idx, phase) in updated_phases.iter_mut().enumerate() {
-        if let Some(idx) = phase_matches[phase_idx] {
-            let p_row = &progress_rows[idx];
-
-            let mut captured = Vec::new();
-            if let Some(cap_st) = p_row.captured_status {
-                captured.push(StatusEvidence {
-                    value: cap_st,
-                    raw: p_row.raw_captured.clone().unwrap_or_default(),
-                    evidence: SourceRef {
-                        path: progress_path.to_string(),
-                        line_start: p_row.line,
-                        line_end: p_row.line,
-                    },
-                });
-            }
-
-            phase.reported_status = ReportedStatus {
-                value: if phase_conflicts[phase_idx] {
-                    PlanStatus::Conflict
-                } else {
-                    p_row.current_status
-                },
-                authority: PlanAuthority::Progress,
-                raw: Some(p_row.raw_current.clone()),
-                evidence: vec![SourceRef {
-                    path: progress_path.to_string(),
-                    line_start: p_row.line,
-                    line_end: p_row.line,
-                }],
-                captured,
-            };
-        } else {
-            // Unreported phase in progress.md
-            add_diagnostic(
-                diagnostics,
-                DIAG_PHASE_UNREPORTED,
-                Some(progress_path),
-                None,
-                format!("Declared phase '{}' unreported in progress.md", phase.id),
-            );
-            phase.reported_status = ReportedStatus {
-                value: if phase_conflicts[phase_idx] {
-                    PlanStatus::Conflict
-                } else {
-                    PlanStatus::Unknown
-                },
-                authority: PlanAuthority::Progress,
-                raw: None,
-                evidence: Vec::new(),
-                captured: Vec::new(),
-            };
-        }
-    }
-
-    // Check for unmatched progress rows
-    for (idx, p_row) in progress_rows.iter().enumerate() {
-        if !matched_progress_indices.contains(&idx) {
-            add_diagnostic(
-                diagnostics,
-                DIAG_PHASE_UNMATCHED,
-                Some(progress_path),
-                Some(p_row.line),
-                format!(
-                    "Progress row at line {} does not match any declared phase",
-                    p_row.line
-                ),
-            );
-        }
-    }
-
-    // Determine overall reported status
-    let mut overall_value = if let Some((sum_st, sum_raw, line)) = progress_summary.as_ref() {
-        if *sum_st == PlanStatus::Completed {
-            let range_matches = match extract_summary_phase_numbers(sum_raw) {
-                Ok(Some(sum_nums)) => {
-                    let declared_nums: HashSet<u32> =
-                        updated_phases.iter().filter_map(|p| p.number).collect();
-                    sum_nums == declared_nums && declared_nums.len() == updated_phases.len()
-                }
-                Ok(None) => true,
-                Err(()) => false,
-            };
-
-            // Corroborate: every declared current phase must independently report complete
-            if inventory_valid
-                && !updated_phases.is_empty()
-                && range_matches
-                && updated_phases
-                    .iter()
-                    .all(|p| p.reported_status.value == PlanStatus::Completed)
-            {
-                PlanStatus::Completed
-            } else {
-                add_diagnostic(
-                    diagnostics,
-                    DIAG_STATUS_CONFLICT,
-                    Some(progress_path),
-                    Some(*line),
-                    "Summary claims complete but declared current phases or range do not match",
-                );
-                PlanStatus::Conflict
-            }
-        } else {
-            *sum_st
-        }
-    } else if let Some((scal_st, _, _)) = progress_current_scalar.as_ref() {
-        *scal_st
+    let (raw, evidence) = if let Some((_, r, l)) = plan_frontmatter_status {
+        (
+            Some(r),
+            vec![SourceRef {
+                path: plan_path.to_string(),
+                line_start: l,
+                line_end: l,
+            }],
+        )
     } else {
-        derive_status_from_phases(&updated_phases)
+        (None, Vec::new())
     };
-
-    // If explicit scalar and summary disagree -> conflict
-    if let (Some((scal_st, _, scal_line)), Some((sum_st, _, _))) =
-        (progress_current_scalar.as_ref(), progress_summary.as_ref())
-    {
-        if *scal_st != *sum_st && *sum_st != PlanStatus::Unknown {
-            add_diagnostic(
-                diagnostics,
-                DIAG_STATUS_CONFLICT,
-                Some(progress_path),
-                Some(*scal_line),
-                "Current status scalar and summary sentence disagree",
-            );
-            overall_value = PlanStatus::Conflict;
-        }
-    }
-
-    let evidence = if let Some((_, _, line)) = progress_current_scalar {
-        vec![SourceRef {
-            path: progress_path.to_string(),
-            line_start: line,
-            line_end: line,
-        }]
-    } else if let Some((_, _, line)) = progress_summary {
-        vec![SourceRef {
-            path: progress_path.to_string(),
-            line_start: line,
-            line_end: line,
-        }]
-    } else {
-        Vec::new()
-    };
-
-    let raw = progress_current_scalar
-        .map(|(_, r, _)| r)
-        .or_else(|| progress_summary.map(|(_, r, _)| r));
 
     (
-        updated_phases,
+        declared_phases,
         ReportedStatus {
-            value: overall_value,
-            authority: PlanAuthority::Progress,
+            value: overall_status,
+            authority: PlanAuthority::Plan,
             raw,
             evidence,
             captured: Vec::new(),
@@ -2028,84 +1429,26 @@ fn compute_completion(phases: &[FilePlanPhase], inventory_valid: bool) -> PlanCo
     }
 }
 
-/// Reconcile explicit dates according to contracts section 6.
-fn reconcile_dates(
+fn validate_plan_dates(
     plan_path: &str,
-    progress_path: &str,
     plan_dates: PlanDates,
-    progress_dates: PlanDates,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> PlanDates {
-    let mut res = PlanDates::default();
-
-    // 1. Created: plan first, progress fills absent
-    res.created = plan_dates.created.or(progress_dates.created);
-
-    // 2. Planned: plan first, progress fills absent
-    res.planned_start = plan_dates.planned_start.or(progress_dates.planned_start);
-    res.planned_end = plan_dates.planned_end.or(progress_dates.planned_end);
-
-    // 3. Actual: explicit progress and plan evidence must agree when both claim values
-    res.actual_start = match (plan_dates.actual_start, progress_dates.actual_start) {
-        (Some(pl), Some(pr)) => {
-            if pl.value == pr.value && pl.precision == pr.precision {
-                Some(pl)
-            } else {
-                add_diagnostic(
-                    diagnostics,
-                    DIAG_DATE_CONFLICT,
-                    Some(progress_path),
-                    None,
-                    "Actual start date conflict between plan.md and progress.md",
-                );
-                None
-            }
-        }
-        (Some(pl), None) => Some(pl),
-        (None, Some(pr)) => Some(pr),
-        (None, None) => None,
-    };
-
-    res.actual_end = match (plan_dates.actual_end, progress_dates.actual_end) {
-        (Some(pl), Some(pr)) => {
-            if pl.value == pr.value && pl.precision == pr.precision {
-                Some(pl)
-            } else {
-                add_diagnostic(
-                    diagnostics,
-                    DIAG_DATE_CONFLICT,
-                    Some(progress_path),
-                    None,
-                    "Actual end date conflict between plan.md and progress.md",
-                );
-                None
-            }
-        }
-        (Some(pl), None) => Some(pl),
-        (None, Some(pr)) => Some(pr),
-        (None, None) => None,
-    };
-
-    // 4. Published: latest progress publication supersedes older plan publication
-    res.published = progress_dates.published.or(plan_dates.published);
-
-    // Validate ranges
     validate_date_range(
         plan_path,
-        &res.planned_start,
-        &res.planned_end,
+        &plan_dates.planned_start,
+        &plan_dates.planned_end,
         "planned",
         diagnostics,
     );
     validate_date_range(
         plan_path,
-        &res.actual_start,
-        &res.actual_end,
+        &plan_dates.actual_start,
+        &plan_dates.actual_end,
         "actual",
         diagnostics,
     );
-
-    res
+    plan_dates
 }
 
 fn validate_date_range(
@@ -2213,52 +1556,6 @@ fn has_duplicate_yaml_keys_or_aliases(content: &str) -> Option<&'static str> {
     None
 }
 
-fn extract_summary_phase_numbers(s: &str) -> Result<Option<HashSet<u32>>, ()> {
-    let Some(open) = s.find('(') else {
-        return if s.contains(')') { Err(()) } else { Ok(None) };
-    };
-    let close = s[open..].find(')').ok_or(())? + open;
-    let inner = s[open + 1..close].trim().to_lowercase();
-    if inner.is_empty() || inner.contains('(') || s[close + 1..].contains(['(', ')']) {
-        return Err(());
-    }
-
-    fn number(value: &str) -> Result<u32, ()> {
-        let value = value.trim();
-        let value = value.strip_prefix("phase ").unwrap_or(value).trim();
-        if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
-            return Err(());
-        }
-        let number = value.parse::<u32>().map_err(|_| ())?;
-        if number == 0 {
-            return Err(());
-        }
-        Ok(number)
-    }
-
-    let mut nums = HashSet::new();
-    if let Some((left, right)) = inner.split_once('–').or_else(|| inner.split_once('-')) {
-        let start = number(left)?;
-        let end = number(right)?;
-        if end
-            .checked_sub(start)
-            .and_then(|span| span.checked_add(1))
-            .map_or(true, |count| count > MAX_DECLARED_PHASE_ROWS as u32)
-        {
-            return Err(());
-        }
-        nums.extend(start..=end);
-    } else {
-        for part in inner.split(',') {
-            for sub in part.split(" and ") {
-                if !nums.insert(number(sub)?) || nums.len() > MAX_DECLARED_PHASE_ROWS {
-                    return Err(());
-                }
-            }
-        }
-    }
-    Ok(Some(nums))
-}
 
 fn add_diagnostic(
     diagnostics: &mut Vec<Diagnostic>,

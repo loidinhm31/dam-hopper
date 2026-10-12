@@ -89,7 +89,7 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
       .first();
     await expect(planDashboard).toBeVisible({ timeout: 15_000 });
 
-    // Verify reported status: "in-progress" (progress.md opts in over plan.md pending)
+    // Verify reported status: "in-progress" from plan.md
     const statusBadge = planDashboard
       .locator("span:has-text('in-progress')")
       .first();
@@ -171,11 +171,42 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
       .filter({ hasText: /^in-progress$/ })
       .first();
     await expect(selectedStatus).toBeVisible();
-    const updatedProgress = `# Current Progress — Sample Feature Plan\n\n**Plan:** [plan.md](./plan.md)\n**Published:** 2026-10-06\n**Current status:** Completed (All verified)\n\n## Phase Reconciliation\n\n| Phase | Current status |\n|---|---|\n${[1, 2, 3, 4, 5].map((number) => `| [0${number} — Phase ${number}](./phase-0${number}.md) | Completed |`).join("\n")}\n`;
-    await appServices.writeContainerFile(
-      "/e2e/workspace/fixture-project/plans/261001-sample/progress.md",
-      updatedProgress,
+    const updatedPlan = `---
+title: "Sample Feature Plan"
+description: "Sample feature plan with declared phase inventory"
+status: completed
+priority: P2
+effort: 40h
+branch: feat/sample
+tags: [feature, sample]
+created: 2026-10-01
+---
+
+# Sample Feature Plan
+
+## Phases — Initial Snapshot
+
+| # | Phase | Status | Progress | Effort | Detail |
+|---|---|---|---|---|---|
+| 01 | Phase 1 | Completed | 100% | 8h | [Phase 1](./phase-01.md) |
+| 02 | Phase 2 | Completed | 100% | 8h | [Phase 2](./phase-02.md) |
+| 03 | Phase 3 | Completed | 100% | 8h | [Phase 3](./phase-03.md) |
+| 04 | Phase 4 | Completed | 100% | 8h | [Phase 4](./phase-04.md) |
+| 05 | Phase 5 | Completed | 100% | 8h | [Phase 5](./phase-05.md) |
+`;
+    const preWriteStat = await appServices.statContainerFile(planFilePath);
+    expect(await appServices.readContainerFile(planFilePath)).toBe(
+      initialPlanBytes,
     );
+    expect(preWriteStat.size).toBe(initialPlanStat.size);
+    expect(preWriteStat.mtime).toBe(initialPlanStat.mtime);
+    await appServices.writeContainerFile(
+      planFilePath,
+      updatedPlan,
+    );
+    const postUpdatePlanBytes = await appServices.readContainerFile(planFilePath);
+    const postUpdatePlanStat = await appServices.statContainerFile(planFilePath);
+    expect(postUpdatePlanBytes).toBe(updatedPlan.trim());
     await expect(selectedStatus).toBeHidden();
     await expect(
       planDashboard
@@ -303,14 +334,14 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     // Restore desktop viewport
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    // 19. Final source file non-mutation verification:
+    // 19. Final source file non-mutation verification since step 13 update:
     // Placed strictly after all dashboard-read and responsive interactions have settled.
     // Asserts exact bytes equality, exact size, and full-resolution mtime string equality (%y).
     const finalPlanBytes = await appServices.readContainerFile(planFilePath);
     const finalPlanStat = await appServices.statContainerFile(planFilePath);
-    expect(finalPlanBytes).toBe(initialPlanBytes);
-    expect(finalPlanStat.size).toBe(initialPlanStat.size);
-    expect(finalPlanStat.mtime).toBe(initialPlanStat.mtime);
+    expect(finalPlanBytes).toBe(postUpdatePlanBytes);
+    expect(finalPlanStat.size).toBe(postUpdatePlanStat.size);
+    expect(finalPlanStat.mtime).toBe(postUpdatePlanStat.mtime);
     expect(finalPlanStat.mtime.length).toBeGreaterThan(15);
   });
 });

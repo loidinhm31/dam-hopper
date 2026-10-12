@@ -304,18 +304,24 @@ test.describe("Traditional Terminal Worktree Switching — real application PTY 
     await expect(secondaryWorktreeSelect).toContainText(/root/i);
 
     // Launch terminal in fixture-project under profile B and assert server-side PTY cwd is at root
-    const sessionCountBefore = (await sessions(appServices)).length;
+    const sessionsBefore = await sessions(appServices);
+    const beforeIds = new Set(sessionsBefore.map((s) => s.id));
     await secondaryNavigator
       .getByRole("button", {
         name: "New terminal in selected project",
         exact: true,
       })
       .click();
+    let freshSessions: SessionInfo[] = [];
     await expect
-      .poll(async () => (await sessions(appServices)).length)
-      .toBe(sessionCountBefore + 1);
-    const afterSecondarySessions = await sessions(appServices);
-    const secondaryTerminal = afterSecondarySessions[afterSecondarySessions.length - 1];
+      .poll(async () => {
+        freshSessions = (await sessions(appServices)).filter(
+          (s) => !beforeIds.has(s.id),
+        );
+        return freshSessions.length;
+      })
+      .toBe(1);
+    const secondaryTerminal = freshSessions[0];
     expect(secondaryTerminal).toBeDefined();
     expect(secondaryTerminal!.project).toBe("fixture-project");
     expect(secondaryTerminal!.cwd).toBe("/e2e/workspace/fixture-project");
