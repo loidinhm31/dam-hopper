@@ -5,7 +5,10 @@ use crate::idle_suspend::protocol::{
     read_frame_async, write_frame_async, HelperRequestFrame, HelperResponseFrame,
     HelperResponsePayload,
 };
-use crate::idle_suspend::protocol::{ProtocolError, SuspendOutcome, SuspendWithRtcWakeRequest};
+use crate::idle_suspend::protocol::{
+    CapabilityProbeOutcome, CapabilityProbeRequest, ProbeDiagnostics, ProbeFailure,
+    ProbeFailureReason, ProtocolError, SuspendOutcome, SuspendWithRtcWakeRequest,
+};
 
 /// Client used by the unprivileged server process to communicate with the privileged helper.
 #[derive(Debug, Clone)]
@@ -24,40 +27,215 @@ impl HelperClient {
         &self.socket_path
     }
 
-    /// Check if the helper socket exists on the filesystem.
-    pub fn is_socket_present(&self) -> bool {
-        self.socket_path.exists()
-    }
-
     /// Send a capability probe request to the helper over the Unix domain socket.
     #[cfg(unix)]
-    pub async fn check_capability(&self) -> Result<(bool, String), ProtocolError> {
-        let mut stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
-        let req = HelperRequestFrame::new_probe();
-        write_frame_async(&mut stream, &req).await?;
-        let resp: HelperResponseFrame = read_frame_async(&mut stream).await?;
-
-        match resp.payload {
-            HelperResponsePayload::Capability { supported, detail } => Ok((supported, detail)),
-            HelperResponsePayload::Error { code, message } => {
-                Err(ProtocolError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("{code}: {message}"),
-                )))
+    pub async fn check_capability(
+        &self,
+        request: CapabilityProbeRequest,
+    ) -> CapabilityProbeOutcome {
+        let mut stream = match tokio::net::UnixStream::connect(&self.socket_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                let reason = match e.kind() {
+                    std::io::ErrorKind::NotFound => ProbeFailureReason::SocketNotFound,
+                    std::io::ErrorKind::PermissionDenied => {
+                        ProbeFailureReason::SocketPermissionDenied
+                    }
+                    std::io::ErrorKind::ConnectionRefused => ProbeFailureReason::ConnectionRefused,
+                    _ => ProbeFailureReason::IpcIoError,
+                };
+                return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                    reason,
+                    diagnostics: ProbeDiagnostics {
+                        stage: Some("connect"),
+                        errno: e.raw_os_error(),
+                        socket_path: Some(self.socket_path.display().to_string()),
+                        actual_uid: None,
+                        expected_uid: None,
+                        actual_pid: None,
+                        expected_pid: None,
+                        bounded_detail: format!("Failed to connect to helper socket: {e}"),
+                    },
+                });
             }
-            _ => Err(ProtocolError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unexpected response payload for capability probe",
-            ))),
+        };
+
+        let req_frame = match HelperRequestFrame::new_probe(request.clone()) {
+            Ok(f) => f,
+            Err(e) => {
+                return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                    reason: ProbeFailureReason::IpcProtocolError,
+                    diagnostics: ProbeDiagnostics {
+                        stage: Some("encode"),
+                        errno: None,
+                        socket_path: Some(self.socket_path.display().to_string()),
+                        actual_uid: None,
+                        expected_uid: None,
+                        actual_pid: None,
+                        expected_pid: None,
+                        bounded_detail: format!("Failed to create probe request frame: {e}"),
+                    },
+                });
+            }
+        };
+
+        if let Err(e) = write_frame_async(&mut stream, &req_frame).await {
+            return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                reason: ProbeFailureReason::IpcIoError,
+                diagnostics: ProbeDiagnostics {
+                    stage: Some("write"),
+                    errno: None,
+                    socket_path: Some(self.socket_path.display().to_string()),
+                    actual_uid: None,
+                    expected_uid: None,
+                    actual_pid: None,
+                    expected_pid: None,
+                    bounded_detail: format!("Failed to write probe frame: {e}"),
+                },
+            });
+        }
+
+        let resp_frame: HelperResponseFrame = match read_frame_async(&mut stream).await {
+            Ok(f) => f,
+            Err(e) => {
+                let reason = match e {
+                    ProtocolError::UnsupportedVersion { .. } => {
+                        ProbeFailureReason::ProtocolVersionMismatch
+                    }
+                    _ => ProbeFailureReason::IpcProtocolError,
+                };
+                return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                    reason,
+                    diagnostics: ProbeDiagnostics {
+                        stage: Some("read"),
+                        errno: None,
+                        socket_path: Some(self.socket_path.display().to_string()),
+                        actual_uid: None,
+                        expected_uid: None,
+                        actual_pid: None,
+                        expected_pid: None,
+                        bounded_detail: format!("Failed to read probe response frame: {e}"),
+                    },
+                });
+            }
+        };
+
+        if let Err(e) = resp_frame.validate() {
+            return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                reason: ProbeFailureReason::ProtocolVersionMismatch,
+                diagnostics: ProbeDiagnostics {
+                    stage: Some("validate"),
+                    errno: None,
+                    socket_path: Some(self.socket_path.display().to_string()),
+                    actual_uid: None,
+                    expected_uid: None,
+                    actual_pid: None,
+                    expected_pid: None,
+                    bounded_detail: format!("Invalid helper response frame version: {e}"),
+                },
+            });
+        }
+
+        match resp_frame.payload {
+            HelperResponsePayload::Capability {
+                request_id: resp_req_id,
+                supported,
+                reason,
+                detail,
+            } => {
+                if resp_req_id != request.request_id {
+                    return CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                        reason: ProbeFailureReason::IpcProtocolError,
+                        diagnostics: ProbeDiagnostics {
+                            stage: Some("correlation"),
+                            errno: None,
+                            socket_path: Some(self.socket_path.display().to_string()),
+                            actual_uid: None,
+                            expected_uid: None,
+                            actual_pid: None,
+                            expected_pid: None,
+                            bounded_detail: format!(
+                                "Response request_id mismatch: expected {}, got {}",
+                                request.request_id, resp_req_id
+                            ),
+                        },
+                    });
+                }
+                if supported {
+                    CapabilityProbeOutcome::Supported
+                } else {
+                    let fail_reason = reason.unwrap_or(ProbeFailureReason::UnknownHelperFailure);
+                    CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                        reason: fail_reason,
+                        diagnostics: ProbeDiagnostics {
+                            stage: Some("preflight"),
+                            errno: None,
+                            socket_path: Some(self.socket_path.display().to_string()),
+                            actual_uid: None,
+                            expected_uid: None,
+                            actual_pid: None,
+                            expected_pid: None,
+                            bounded_detail: detail
+                                .unwrap_or_else(|| "Capability unsupported".into()),
+                        },
+                    })
+                }
+            }
+            HelperResponsePayload::Error { code, message } => {
+                let reason = if code == "permissionDenied" {
+                    ProbeFailureReason::PeerAuthFailed
+                } else {
+                    ProbeFailureReason::UnknownHelperFailure
+                };
+                CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                    reason,
+                    diagnostics: ProbeDiagnostics {
+                        stage: Some("auth"),
+                        errno: None,
+                        socket_path: Some(self.socket_path.display().to_string()),
+                        actual_uid: None,
+                        expected_uid: None,
+                        actual_pid: None,
+                        expected_pid: None,
+                        bounded_detail: format!("{code}: {message}"),
+                    },
+                })
+            }
+            _ => CapabilityProbeOutcome::Unavailable(ProbeFailure {
+                reason: ProbeFailureReason::IpcProtocolError,
+                diagnostics: ProbeDiagnostics {
+                    stage: Some("payload"),
+                    errno: None,
+                    socket_path: Some(self.socket_path.display().to_string()),
+                    actual_uid: None,
+                    expected_uid: None,
+                    actual_pid: None,
+                    expected_pid: None,
+                    bounded_detail: "Unexpected response payload variant for capability probe"
+                        .into(),
+                },
+            }),
         }
     }
 
     #[cfg(windows)]
-    pub async fn check_capability(&self) -> Result<(bool, String), ProtocolError> {
-        Err(ProtocolError::IoError(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Unix domain sockets are unavailable on Windows",
-        )))
+    pub async fn check_capability(
+        &self,
+        _request: CapabilityProbeRequest,
+    ) -> CapabilityProbeOutcome {
+        CapabilityProbeOutcome::Unavailable(ProbeFailure {
+            reason: ProbeFailureReason::ExecutorUnavailable,
+            diagnostics: ProbeDiagnostics {
+                stage: Some("platform"),
+                errno: None,
+                socket_path: None,
+                actual_uid: None,
+                expected_uid: None,
+                actual_pid: None,
+                expected_pid: None,
+                bounded_detail: "Unix domain sockets are unavailable on Windows".into(),
+            },
+        })
     }
 
     /// Send a fixed suspend-with-RTC-wake request to the helper and await resumption.
@@ -74,12 +252,10 @@ impl HelperClient {
 
         match resp.payload {
             HelperResponsePayload::SuspendOutcome(outcome) => Ok(outcome),
-            HelperResponsePayload::Error { code, message } => {
-                Ok(SuspendOutcome::ExecutionFailed {
-                    request_id: req_id,
-                    error: format!("{code}: {message}"),
-                })
-            }
+            HelperResponsePayload::Error { code, message } => Ok(SuspendOutcome::ExecutionFailed {
+                request_id: req_id,
+                error: format!("{code}: {message}"),
+            }),
             _ => Ok(SuspendOutcome::ExecutionFailed {
                 request_id: req_id,
                 error: "Unexpected response payload from helper".to_string(),

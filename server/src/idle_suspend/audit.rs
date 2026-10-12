@@ -310,11 +310,29 @@ impl HelperAuditRecord {
         reason_code: Option<HelperReasonCode>,
         detail: Option<String>,
     ) -> Self {
+        Self::new_capability_result_with_request_id(
+            None,
+            supported,
+            peer_pid,
+            peer_uid,
+            reason_code,
+            detail,
+        )
+    }
+
+    pub fn new_capability_result_with_request_id(
+        request_id: Option<String>,
+        supported: bool,
+        peer_pid: u32,
+        peer_uid: u32,
+        reason_code: Option<HelperReasonCode>,
+        detail: Option<String>,
+    ) -> Self {
         let now = current_epoch_ms();
         Self {
             audit_schema_version: HELPER_AUDIT_SCHEMA_VERSION,
             record_type: HelperAuditRecordType::CapabilityResult,
-            request_id: None,
+            request_id,
             protocol_version: HELPER_PROTOCOL_VERSION,
             wake_after_seconds: None,
             peer_pid,
@@ -465,7 +483,9 @@ pub enum HelperAuditError {
     Serialization(#[from] serde_json::Error),
     #[error("Producer identity error: {0}")]
     Identity(String),
-    #[error("Audit destination parent path rejected: must be an existing directory without symlinks")]
+    #[error(
+        "Audit destination parent path rejected: must be an existing directory without symlinks"
+    )]
     ParentPathRejected,
     #[error("Audit destination file rejected: must be a regular file without symlinks")]
     FileSecurityRejected,
@@ -502,8 +522,8 @@ impl std::fmt::Debug for HelperAudit {
 
 impl HelperAudit {
     pub fn new(path: impl AsRef<Path>, max_records: usize) -> Result<Self, HelperAuditError> {
-        let identity = ProducerIdentity::load()
-            .map_err(|e| HelperAuditError::Identity(e.to_string()))?;
+        let identity =
+            ProducerIdentity::load().map_err(|e| HelperAuditError::Identity(e.to_string()))?;
         Self::with_identity(path, max_records, identity)
     }
 
@@ -512,12 +532,7 @@ impl HelperAudit {
         max_records: usize,
         identity: ProducerIdentity,
     ) -> Result<Self, HelperAuditError> {
-        Self::with_identity_and_clock(
-            path,
-            max_records,
-            identity,
-            Arc::new(current_epoch_ms),
-        )
+        Self::with_identity_and_clock(path, max_records, identity, Arc::new(current_epoch_ms))
     }
 
     pub fn with_identity_and_clock(
@@ -532,10 +547,11 @@ impl HelperAudit {
         {
             if let Some(parent) = path.parent() {
                 if !parent.as_os_str().is_empty() && parent.exists() {
-                    let meta = std::fs::symlink_metadata(parent).map_err(|e| HelperAuditError::Io {
-                        path: parent.to_path_buf(),
-                        source: e,
-                    })?;
+                    let meta =
+                        std::fs::symlink_metadata(parent).map_err(|e| HelperAuditError::Io {
+                            path: parent.to_path_buf(),
+                            source: e,
+                        })?;
                     if !meta.is_dir() {
                         return Err(HelperAuditError::ParentPathRejected);
                     }
@@ -646,10 +662,12 @@ impl HelperAudit {
             open_options.custom_flags(libc::O_NOFOLLOW);
         }
 
-        let mut file = open_options.open(&self.path).map_err(|e| HelperAuditError::Io {
-            path: self.path.clone(),
-            source: e,
-        })?;
+        let mut file = open_options
+            .open(&self.path)
+            .map_err(|e| HelperAuditError::Io {
+                path: self.path.clone(),
+                source: e,
+            })?;
 
         writeln!(file, "{}", json_line).map_err(|e| HelperAuditError::Io {
             path: self.path.clone(),
@@ -735,10 +753,12 @@ impl HelperAudit {
         }
 
         let write_res = (|| -> Result<(), HelperAuditError> {
-            let mut tmp_file = open_options.open(&tmp_path).map_err(|e| HelperAuditError::Io {
-                path: tmp_path.clone(),
-                source: e,
-            })?;
+            let mut tmp_file = open_options
+                .open(&tmp_path)
+                .map_err(|e| HelperAuditError::Io {
+                    path: tmp_path.clone(),
+                    source: e,
+                })?;
 
             for line in retained {
                 writeln!(tmp_file, "{}", line).map_err(|e| HelperAuditError::Io {

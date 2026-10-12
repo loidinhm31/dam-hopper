@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION: u32 = 1;
 pub const IDLE_SUSPEND_EVENT_SCHEMA_VERSION: u32 = 1;
 pub const HELPER_AUDIT_SCHEMA_VERSION: u32 = 2;
-pub const HELPER_PROTOCOL_VERSION: u32 = 1;
+pub const HELPER_PROTOCOL_VERSION: u32 = 2;
 
 pub const MAX_ACCEPTED_RECORDS_PER_SOURCE: usize = 10_000;
 pub const MAX_FINAL_BUNDLE_BYTES: usize = 8_388_608; // 8 MiB
@@ -80,7 +80,11 @@ impl SourceCoverage {
         }
     }
 
-    pub fn with_unknown(requested_start_ms: u64, requested_end_ms: u64, reason: impl Into<String>) -> Self {
+    pub fn with_unknown(
+        requested_start_ms: u64,
+        requested_end_ms: u64,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             requested_start_ms,
             requested_end_ms,
@@ -100,7 +104,11 @@ pub struct TypedCollectionError {
 }
 
 impl TypedCollectionError {
-    pub fn new(source: impl Into<String>, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        source: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let mut msg = message.into();
         if msg.len() > MAX_REDACTED_STRING_BYTES {
             msg.truncate(MAX_REDACTED_STRING_BYTES);

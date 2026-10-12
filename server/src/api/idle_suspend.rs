@@ -16,9 +16,9 @@ use crate::{
         },
         policy::validate_timing_pair_for_policy,
         protocol::{
-            validate_suspend_wake_seconds, ConsentDecisionRequest,
-            ForceSuspendAcceptedResponse, ForceSuspendRequest, IdleSuspendConflictResponse,
-            IdleSuspendErrorCode, IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
+            validate_suspend_wake_seconds, ConsentDecisionRequest, ForceSuspendAcceptedResponse,
+            ForceSuspendRequest, IdleSuspendConflictResponse, IdleSuspendErrorCode,
+            IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse,
         },
         status::IdleSuspendStatusV1,
     },
@@ -447,12 +447,13 @@ pub async fn force_suspend(
             IdleSuspendErrorCode::HandoffInProgress.as_code_str(),
             "cannot initiate force sleep while helper handoff is in progress",
         ),
-        CoordinatorForceSuspendResult::CapabilityUnavailable(_detail) => {
+        CoordinatorForceSuspendResult::ProbeUnavailable { reason } => {
             // Requirement 48: Sanitized, do not leak internal/helper details
+            let (code, message) = reason.public_error();
             idle_suspend_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                IdleSuspendErrorCode::CapabilityUnavailable.as_code_str(),
-                "host lacks RTC alarm or suspend capability",
+                code.as_code_str(),
+                message,
             )
         }
         CoordinatorForceSuspendResult::AuditFailed(_err) => idle_suspend_error_response(
@@ -545,7 +546,9 @@ pub async fn submit_consent_decision(
             | crate::idle_suspend::CapabilityVerificationError::SubjectMismatch { .. }
             | crate::idle_suspend::CapabilityVerificationError::SessionMismatch { .. }
             | crate::idle_suspend::CapabilityVerificationError::AuthVersionMismatch { .. }
-            | crate::idle_suspend::CapabilityVerificationError::CredentialVersionMismatch { .. }
+            | crate::idle_suspend::CapabilityVerificationError::CredentialVersionMismatch {
+                ..
+            }
             | crate::idle_suspend::CapabilityVerificationError::DeadlineExpired => {
                 return idle_suspend_error_response(
                     StatusCode::FORBIDDEN,
@@ -581,10 +584,8 @@ pub async fn submit_consent_decision(
     match result {
         CoordinatorConsentDecisionResult::Success { response, .. } => {
             let mut resp = (StatusCode::OK, Json(response)).into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store"),
-            );
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             resp
         }
         CoordinatorConsentDecisionResult::DecisionAlreadySettled { .. } => {
@@ -594,54 +595,40 @@ pub async fn submit_consent_decision(
                 "consent decision already settled",
             )
         }
-        CoordinatorConsentDecisionResult::Expired => {
-            idle_suspend_error_response(
-                StatusCode::CONFLICT,
-                IdleSuspendErrorCode::ConsentExpired.as_code_str(),
-                "consent request has expired",
-            )
-        }
-        CoordinatorConsentDecisionResult::Cancelled => {
-            idle_suspend_error_response(
-                StatusCode::CONFLICT,
-                IdleSuspendErrorCode::ConsentCancelled.as_code_str(),
-                "consent request was cancelled",
-            )
-        }
-        CoordinatorConsentDecisionResult::Unavailable => {
-            idle_suspend_error_response(
-                StatusCode::CONFLICT,
-                IdleSuspendErrorCode::ConsentUnavailable.as_code_str(),
-                "no active consent request matching request identifier and revision",
-            )
-        }
-        CoordinatorConsentDecisionResult::HandoffInProgress => {
-            idle_suspend_error_response(
-                StatusCode::CONFLICT,
-                IdleSuspendErrorCode::HandoffInProgress.as_code_str(),
-                "machine suspend handoff is already in progress",
-            )
-        }
-        CoordinatorConsentDecisionResult::Disabled => {
-            idle_suspend_error_response(
-                StatusCode::FORBIDDEN,
-                IdleSuspendErrorCode::CoordinatorDisabled.as_code_str(),
-                "idle suspend coordinator is disabled",
-            )
-        }
-        CoordinatorConsentDecisionResult::ShuttingDown => {
-            idle_suspend_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                IdleSuspendErrorCode::CoordinatorShuttingDown.as_code_str(),
-                "idle suspend coordinator is shutting down",
-            )
-        }
-        CoordinatorConsentDecisionResult::AuditFailed(msg) => {
-            idle_suspend_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                IdleSuspendErrorCode::ForceSuspendAuditUnavailable.as_code_str(),
-                &msg,
-            )
-        }
+        CoordinatorConsentDecisionResult::Expired => idle_suspend_error_response(
+            StatusCode::CONFLICT,
+            IdleSuspendErrorCode::ConsentExpired.as_code_str(),
+            "consent request has expired",
+        ),
+        CoordinatorConsentDecisionResult::Cancelled => idle_suspend_error_response(
+            StatusCode::CONFLICT,
+            IdleSuspendErrorCode::ConsentCancelled.as_code_str(),
+            "consent request was cancelled",
+        ),
+        CoordinatorConsentDecisionResult::Unavailable => idle_suspend_error_response(
+            StatusCode::CONFLICT,
+            IdleSuspendErrorCode::ConsentUnavailable.as_code_str(),
+            "no active consent request matching request identifier and revision",
+        ),
+        CoordinatorConsentDecisionResult::HandoffInProgress => idle_suspend_error_response(
+            StatusCode::CONFLICT,
+            IdleSuspendErrorCode::HandoffInProgress.as_code_str(),
+            "machine suspend handoff is already in progress",
+        ),
+        CoordinatorConsentDecisionResult::Disabled => idle_suspend_error_response(
+            StatusCode::FORBIDDEN,
+            IdleSuspendErrorCode::CoordinatorDisabled.as_code_str(),
+            "idle suspend coordinator is disabled",
+        ),
+        CoordinatorConsentDecisionResult::ShuttingDown => idle_suspend_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            IdleSuspendErrorCode::CoordinatorShuttingDown.as_code_str(),
+            "idle suspend coordinator is shutting down",
+        ),
+        CoordinatorConsentDecisionResult::AuditFailed(msg) => idle_suspend_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            IdleSuspendErrorCode::ForceSuspendAuditUnavailable.as_code_str(),
+            &msg,
+        ),
     }
 }

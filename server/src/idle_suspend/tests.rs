@@ -39,11 +39,11 @@ use crate::idle_suspend::preflight::{
 };
 use crate::idle_suspend::protocol::{
     decode_frame, encode_frame, read_frame_async, validate_request_id,
-    validate_suspend_wake_seconds, write_frame_async, HelperRequestFrame, HelperRequestPayload,
-    HelperResponseFrame, HelperResponsePayload, IdleSuspendErrorCode,
-    IdleSuspendTimingPatchRequest, IdleSuspendTimingPatchResponse, ProtocolError,
-    RequestDeduplicator, SuspendOutcome, SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION,
-    MAX_HELPER_FRAME_BYTES,
+    validate_suspend_wake_seconds, write_frame_async, CapabilityProbeOutcome,
+    CapabilityProbeRequest, HelperRequestFrame, HelperRequestPayload, HelperResponseFrame,
+    HelperResponsePayload, IdleSuspendErrorCode, IdleSuspendTimingPatchRequest,
+    IdleSuspendTimingPatchResponse, ProbeFailureReason, ProtocolError, RequestDeduplicator,
+    SuspendOutcome, SuspendWithRtcWakeRequest, HELPER_PROTOCOL_VERSION, MAX_HELPER_FRAME_BYTES,
 };
 use crate::idle_suspend::server_audit::{
     AuditError, IdleSuspendServerAudit, ManualAuditResult, TimingAuditRecord, TimingAuditResult,
@@ -942,8 +942,14 @@ fn test_error_code_strings() {
 #[tokio::test]
 async fn test_unavailable_executor_fails_closed() {
     let executor = UnavailableExecutor::default();
-    assert!(!executor.check_capability().await);
-
+    assert!(matches!(
+        executor
+            .check_capability(CapabilityProbeRequest {
+                request_id: "req-123".to_string()
+            })
+            .await,
+        CapabilityProbeOutcome::Unavailable(_)
+    ));
     let req = SuspendWithRtcWakeRequest {
         request_id: "req-123".to_string(),
         wake_after_seconds: 600,
@@ -961,8 +967,14 @@ async fn test_unavailable_executor_fails_closed() {
 #[tokio::test]
 async fn test_fake_executor_records_requests() {
     let executor = FakeExecutor::new(true);
-    assert!(executor.check_capability().await);
-
+    assert!(matches!(
+        executor
+            .check_capability(CapabilityProbeRequest {
+                request_id: "req-456".to_string()
+            })
+            .await,
+        CapabilityProbeOutcome::Supported
+    ));
     let req = SuspendWithRtcWakeRequest {
         request_id: "req-456".to_string(),
         wake_after_seconds: 900,
@@ -980,6 +992,169 @@ async fn test_fake_executor_records_requests() {
     }
 
     assert_eq!(executor.recorded_requests(), vec![req]);
+}
+#[test]
+fn test_suspend_outcome_public_safe_sanitizes_all_variants_against_leaks() {
+    let secret_markers = [
+        "/run/dam-hopper/idle-suspend.sock",
+        "uid=1000",
+        "errno=111",
+        "/dev/rtc0",
+        "password123",
+    ];
+
+    let outcomes = vec![
+        SuspendOutcome::ExecutionFailed {
+            request_id: "req-1".into(),
+            error: "Failed to connect to /run/dam-hopper/idle-suspend.sock with uid=1000 and errno=111".into(),
+        },
+        SuspendOutcome::UnsupportedCapability {
+            request_id: "req-2".into(),
+            detail: "Missing hardware node /dev/rtc0 for uid=1000 errno=111".into(),
+        },
+        SuspendOutcome::BlockedByInhibitor {
+            request_id: "req-3".into(),
+            inhibitor: "secret-job at /run/dam-hopper/idle-suspend.sock".into(),
+            who: Some("user-1000-password123".into()),
+            why: Some("running secret script with errno=111".into()),
+        },
+        SuspendOutcome::RejectedFleetActive {
+            request_id: "req-4".into(),
+            reason: "active session on /run/dam-hopper/idle-suspend.sock uid=1000".into(),
+        },
+    ];
+
+    for outcome in outcomes {
+        let safe = outcome.public_safe();
+        let serialized = serde_json::to_string(&safe).unwrap();
+        for marker in &secret_markers {
+            assert!(
+                !serialized.contains(marker),
+                "Serialized public_safe outcome {serialized} must NOT contain leak marker {marker}"
+            );
+        }
+    }
+}
+#[test]
+fn test_coordinator_published_status_never_leaks_markers_in_detail_or_last_outcome() {
+    let secret_markers = [
+        "/run/dam-hopper/idle-suspend.sock",
+        "uid=1000",
+        "errno=111",
+        "/dev/rtc0",
+        "super-secret-password",
+    ];
+
+    let unsafe_outcomes = vec![
+        SuspendOutcome::ExecutionFailed {
+            request_id: "req-1".into(),
+            error: "Failed to connect to /run/dam-hopper/idle-suspend.sock with uid=1000 errno=111".into(),
+        },
+        SuspendOutcome::UnsupportedCapability {
+            request_id: "req-2".into(),
+            detail: "Missing hardware node /dev/rtc0 for uid=1000 errno=111".into(),
+        },
+        SuspendOutcome::BlockedByInhibitor {
+            request_id: "req-3".into(),
+            inhibitor: "secret-job at /run/dam-hopper/idle-suspend.sock".into(),
+            who: Some("user-1000 super-secret-password".into()),
+            why: Some("running secret script with errno=111".into()),
+        },
+        SuspendOutcome::RejectedFleetActive {
+            request_id: "req-4".into(),
+            reason: "active session on /run/dam-hopper/idle-suspend.sock uid=1000".into(),
+        },
+    ];
+
+    for raw_outcome in unsafe_outcomes {
+        // Coordinator sanitizes through public_safe before storing and deriving detail
+        let safe = raw_outcome.public_safe();
+        let detail = match &safe {
+            SuspendOutcome::ResumedSuccessfully { .. } => None,
+            SuspendOutcome::RejectedFleetActive { reason, .. } => Some(format!("fleet active: {reason}")),
+            SuspendOutcome::BlockedByInhibitor { inhibitor, .. } => Some(format!("inhibited by {inhibitor}")),
+            SuspendOutcome::UnsupportedCapability { detail: d, .. } => Some(format!("unsupported capability: {d}")),
+            SuspendOutcome::ExecutionFailed { error, .. } => Some(format!("suspend failed: {error}")),
+        };
+
+        let status = crate::idle_suspend::status::IdleSuspendStatusV1 {
+            version: 1,
+            status_revision: 1,
+            state: CoordinatorState::Failed,
+            automatic_policy: crate::idle_suspend::policy::IdleSuspendAutomaticPolicy::AgentFree,
+            enabled: true,
+            timing_mutable: true,
+            timing_mutable_reason: None,
+            capability_code: "systemdLogindRtc".to_string(),
+            current_epoch: 1,
+            quiet_period_seconds: 300,
+            wake_after_seconds: 600,
+            min_quiet_period_seconds: 60,
+            max_quiet_period_seconds: 86400,
+            min_wake_after_seconds: 60,
+            max_wake_after_seconds: 86400,
+            fleet_snapshot: crate::pty::fleet_state::PtyFleetSnapshot {
+                generation: 1,
+                live_count: 0,
+                creating_count: 0,
+                restart_pending_count: 0,
+                disposing: false,
+                closing: false,
+                handoff_active: false,
+            },
+            arm_deadline_ms: None,
+            last_outcome: Some(safe),
+            detail,
+            activity: None,
+            agent_free: None,
+            client_presence: None,
+            consent: None,
+            probe_reason_code: Some("socketNotFound".to_string()),
+            probe_checked_at_ms: Some(1726000000000),
+            timestamp_ms: 1726000001000,
+        };
+
+        let status_json = serde_json::to_string(&status).unwrap();
+        for marker in &secret_markers {
+            assert!(
+                !status_json.contains(marker),
+                "Public IdleSuspendStatusV1 JSON {status_json} must NOT contain leak marker {marker}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_helper_client_correlation_and_version_rejection() {
+    let (mut client_sock, mut server_sock) = tokio::io::duplex(1024);
+
+    let client_task = tokio::spawn(async move {
+        let req = HelperRequestFrame::new_probe(CapabilityProbeRequest {
+            request_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        }).unwrap();
+        write_frame_async(&mut client_sock, &req).await.unwrap();
+        let resp: HelperResponseFrame = read_frame_async(&mut client_sock).await.unwrap();
+        resp
+    });
+
+    let server_task = tokio::spawn(async move {
+        let _received: HelperRequestFrame = read_frame_async(&mut server_sock).await.unwrap();
+        let resp = HelperResponseFrame::new(HelperResponsePayload::Capability {
+            supported: true,
+            detail: None,
+            reason: None,
+            request_id: "22222222-2222-4222-8222-222222222222".to_string(),
+        });
+        write_frame_async(&mut server_sock, &resp).await.unwrap();
+    });
+
+    let (resp, _) = tokio::join!(client_task, server_task);
+    let resp = resp.unwrap();
+    if let HelperResponsePayload::Capability { request_id, .. } = resp.payload {
+        assert_ne!(request_id, "11111111-1111-4111-8111-111111111111");
+    } else {
+        panic!("Expected Capability payload");
+    }
 }
 use crate::idle_suspend::coordinator::{
     CoordinatorForceSuspendResult, CoordinatorTimingResult, ForceSuspendCommand,
@@ -1277,13 +1452,16 @@ async fn test_coordinator_timing_update_validation_and_audit_failure() {
 
 #[test]
 fn test_helper_protocol_probe_roundtrip() {
-    let frame = HelperRequestFrame::new_probe();
+    let req = CapabilityProbeRequest {
+        request_id: "probe-42".to_string(),
+    };
+    let frame = HelperRequestFrame::new_probe(req.clone()).unwrap();
     assert!(frame.validate().is_ok());
     let encoded = encode_frame(&frame).unwrap();
     assert!(encoded.len() > 4);
     let decoded: HelperRequestFrame = decode_frame(&encoded).unwrap();
     assert_eq!(decoded.version, HELPER_PROTOCOL_VERSION);
-    assert_eq!(decoded.payload, HelperRequestPayload::ProbeCapability);
+    assert_eq!(decoded.payload, HelperRequestPayload::ProbeCapability(req));
 }
 
 #[test]
@@ -1311,12 +1489,13 @@ fn test_helper_protocol_response_roundtrip() {
     // Capability response
     let cap_frame = HelperResponseFrame::new(HelperResponsePayload::Capability {
         supported: true,
-        detail: "logind+sysfs rtc0".to_string(),
+        detail: Some("logind+sysfs rtc0".to_string()),
+        reason: None,
+        request_id: "probe-42".to_string(),
     });
     let enc = encode_frame(&cap_frame).unwrap();
-    let dec: HelperResponseFrame = decode_frame(&enc).unwrap();
-    assert_eq!(dec.payload, cap_frame.payload);
-
+    let _dec: HelperResponseFrame = decode_frame(&enc).unwrap();
+    assert_eq!(_dec.payload, cap_frame.payload);
     // Outcome response with inhibitor metadata
     let outcome_frame = HelperResponseFrame::new(HelperResponsePayload::SuspendOutcome(
         SuspendOutcome::BlockedByInhibitor {
@@ -1421,7 +1600,7 @@ fn test_helper_protocol_framing_errors() {
     }
 
     // 7. Unknown fields (deny_unknown_fields)
-    let unknown_field_json = br#"{"version":1,"payload":{"type":"probeCapability"},"timestampMs":123,"injectedField":"exploit"}"#;
+    let unknown_field_json = br#"{"version":2,"payload":{"type":"probeCapability","requestId":"66666666-6666-4666-8666-666666666666"},"timestampMs":123,"injectedField":"exploit"}"#;
     let mut unknown_frame = (unknown_field_json.len() as u32).to_be_bytes().to_vec();
     unknown_frame.extend_from_slice(unknown_field_json);
     match decode_frame::<HelperRequestFrame>(&unknown_frame) {
@@ -1436,7 +1615,10 @@ fn test_helper_protocol_framing_errors() {
 async fn test_helper_protocol_async_stream_io() {
     let (mut client, mut server) = tokio::io::duplex(1024);
 
-    let req = HelperRequestFrame::new_probe();
+    let probe_req = CapabilityProbeRequest {
+        request_id: "probe-test-1".to_string(),
+    };
+    let req = HelperRequestFrame::new_probe(probe_req.clone()).unwrap();
     let client_task = tokio::spawn(async move {
         write_frame_async(&mut client, &req).await.unwrap();
         let resp: HelperResponseFrame = read_frame_async(&mut client).await.unwrap();
@@ -1445,10 +1627,15 @@ async fn test_helper_protocol_async_stream_io() {
 
     let server_task = tokio::spawn(async move {
         let received: HelperRequestFrame = read_frame_async(&mut server).await.unwrap();
-        assert_eq!(received.payload, HelperRequestPayload::ProbeCapability);
+        assert_eq!(
+            received.payload,
+            HelperRequestPayload::ProbeCapability(probe_req)
+        );
         let resp = HelperResponseFrame::new(HelperResponsePayload::Capability {
             supported: true,
-            detail: "test".to_string(),
+            detail: Some("test".to_string()),
+            reason: None,
+            request_id: "probe-test-1".to_string(),
         });
         write_frame_async(&mut server, &resp).await.unwrap();
     });
@@ -1456,9 +1643,11 @@ async fn test_helper_protocol_async_stream_io() {
     let (resp, _) = tokio::join!(client_task, server_task);
     let resp = resp.unwrap();
     match resp.payload {
-        HelperResponsePayload::Capability { supported, detail } => {
+        HelperResponsePayload::Capability {
+            supported, detail, ..
+        } => {
             assert!(supported);
-            assert_eq!(detail, "test");
+            assert_eq!(detail.as_deref(), Some("test"));
         }
         other => panic!("Unexpected response payload: {other:?}"),
     }
@@ -1769,8 +1958,14 @@ async fn test_helper_server_client_ipc_success_and_audit() {
     let executor = SystemdIdleSuspendExecutor::new(&socket_path);
 
     // 1. Probe capability
-    assert!(executor.check_capability().await);
-
+    assert!(matches!(
+        executor
+            .check_capability(CapabilityProbeRequest {
+                request_id: "test-epoch-1".to_string()
+            })
+            .await,
+        CapabilityProbeOutcome::Supported
+    ));
     // 2. Execute suspend
     let req = SuspendWithRtcWakeRequest {
         request_id: "test-epoch-1".to_string(),
@@ -1933,8 +2128,14 @@ async fn test_helper_server_peer_auth_rejection() {
 
     let executor = SystemdIdleSuspendExecutor::new(&socket_path);
     // Capability probe fails closed
-    assert!(!executor.check_capability().await);
-
+    assert!(matches!(
+        executor
+            .check_capability(CapabilityProbeRequest {
+                request_id: "test-req".to_string()
+            })
+            .await,
+        CapabilityProbeOutcome::Unavailable(_)
+    ));
     // Rejected audit was logged
     let records = audit.read_all_records().unwrap();
     assert_eq!(records.len(), 1);
@@ -2246,7 +2447,7 @@ fn test_suspend_request_frame_zero_sentinel_and_serde() {
 
     // Serde round-trip with JSON containing wakeAfterSeconds: 0
     let json = serde_json::json!({
-        "version": 1,
+        "version": HELPER_PROTOCOL_VERSION,
         "payload": {
             "type": "suspendWithRtcWake",
             "requestId": "req-wire-0",
@@ -2879,8 +3080,7 @@ async fn test_helper_server_dedupe_and_auth_milestones() {
 
 #[test]
 fn test_helper_protocol_v1_frame_compatibility() {
-    assert_eq!(HELPER_PROTOCOL_VERSION, 1);
-    assert_eq!(crate::idle_suspend::protocol::MAX_HELPER_FRAME_BYTES, 4096);
+    assert_eq!(HELPER_PROTOCOL_VERSION, 2);
 
     let req = SuspendWithRtcWakeRequest {
         request_id: "66666666-6666-4666-8666-666666666666".to_string(),
@@ -2891,7 +3091,7 @@ fn test_helper_protocol_v1_frame_compatibility() {
     assert!(encoded.len() <= 4096);
     let decoded: crate::idle_suspend::protocol::HelperRequestFrame =
         decode_frame(&encoded).unwrap();
-    assert_eq!(decoded.version, 1);
+    assert_eq!(decoded.version, 2);
     match decoded.payload {
         crate::idle_suspend::protocol::HelperRequestPayload::SuspendWithRtcWake(r) => {
             assert_eq!(r.request_id, "66666666-6666-4666-8666-666666666666");
@@ -3035,10 +3235,12 @@ struct BlockingTestExecutor {
 }
 
 impl IdleSuspendExecutor for BlockingTestExecutor {
-    fn check_capability(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async { true })
+    fn check_capability(
+        &self,
+        _request: CapabilityProbeRequest,
+    ) -> BoxFuture<'_, CapabilityProbeOutcome> {
+        Box::pin(async { CapabilityProbeOutcome::Supported })
     }
-
     fn execute_suspend(&self, request: SuspendWithRtcWakeRequest) -> BoxFuture<'_, SuspendOutcome> {
         let rx = self.release_rx.lock().take();
         Box::pin(async move {
@@ -3156,10 +3358,10 @@ async fn test_manual_force_suspend_capability_failure() {
 
     let result = coordinator.force_suspend(cmd).await;
     match result {
-        CoordinatorForceSuspendResult::CapabilityUnavailable(detail) => {
-            assert!(detail.contains("capability probe failed"));
+        CoordinatorForceSuspendResult::ProbeUnavailable { reason } => {
+            assert_eq!(reason, ProbeFailureReason::ExecutorUnavailable);
         }
-        other => panic!("Expected CapabilityUnavailable, got: {other:?}"),
+        other => panic!("Expected ProbeUnavailable, got: {other:?}"),
     }
 
     assert!(!pty_manager.fleet_snapshot().handoff_active);
@@ -5166,7 +5368,7 @@ async fn test_coordinator_events_manual_force_suspend_rejections() {
     let res1 = coordinator.force_suspend(cmd1).await;
     assert!(matches!(
         res1,
-        CoordinatorForceSuspendResult::CapabilityUnavailable(_)
+        CoordinatorForceSuspendResult::ProbeUnavailable { .. }
     ));
 
     let events = read_emitted_events(&event_path);

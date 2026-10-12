@@ -146,6 +146,10 @@ pub enum IdleSuspendErrorCode {
     InvalidForceSuspendPayload,
     ForceSuspendDisabledNoAuth,
     CapabilityUnavailable,
+    HelperUnavailable,
+    Inhibited,
+    ProbeTimeout,
+    RtcBusy,
     ForceSuspendAuditUnavailable,
     CoordinatorShuttingDown,
     CoordinatorDisabled,
@@ -180,6 +184,10 @@ impl IdleSuspendErrorCode {
             Self::InvalidForceSuspendPayload => "invalidForceSuspendPayload",
             Self::ForceSuspendDisabledNoAuth => "idleSuspendDisabledNoAuth",
             Self::CapabilityUnavailable => "idleSuspendCapabilityUnavailable",
+            Self::HelperUnavailable => "idleSuspendHelperUnavailable",
+            Self::Inhibited => "idleSuspendInhibited",
+            Self::ProbeTimeout => "idleSuspendProbeTimeout",
+            Self::RtcBusy => "idleSuspendRtcBusy",
             Self::ForceSuspendAuditUnavailable => "idleSuspendAuditUnavailable",
             Self::CoordinatorShuttingDown => "idleSuspendShuttingDown",
             Self::CoordinatorDisabled => "idleSuspendDisabled",
@@ -283,10 +291,7 @@ pub enum SuspendOutcome {
         elapsed_seconds: u64,
     },
     /// Suspend was rejected because the pre-handoff or helper check detected fleet activity.
-    RejectedFleetActive {
-        request_id: String,
-        reason: String,
-    },
+    RejectedFleetActive { request_id: String, reason: String },
     /// An active sleep inhibitor blocked or delayed suspend.
     BlockedByInhibitor {
         request_id: String,
@@ -297,19 +302,46 @@ pub enum SuspendOutcome {
         why: Option<String>,
     },
     /// The host lacks RTC alarm or suspend capability.
-    UnsupportedCapability {
-        request_id: String,
-        detail: String,
-    },
+    UnsupportedCapability { request_id: String, detail: String },
     /// Execution failed with a fatal error.
-    ExecutionFailed {
-        request_id: String,
-        error: String,
-    },
+    ExecutionFailed { request_id: String, error: String },
+}
+
+impl SuspendOutcome {
+    /// Project a public-safe outcome with sanitized error strings per Requirement 48.
+    pub fn public_safe(&self) -> Self {
+        match self {
+            Self::ResumedSuccessfully {
+                request_id,
+                elapsed_seconds,
+            } => Self::ResumedSuccessfully {
+                request_id: request_id.clone(),
+                elapsed_seconds: *elapsed_seconds,
+            },
+            Self::RejectedFleetActive { request_id, .. } => Self::RejectedFleetActive {
+                request_id: request_id.clone(),
+                reason: "fleet activity detected before suspend".into(),
+            },
+            Self::BlockedByInhibitor { request_id, .. } => Self::BlockedByInhibitor {
+                request_id: request_id.clone(),
+                inhibitor: "active sleep inhibitor".into(),
+                who: None,
+                why: None,
+            },
+            Self::UnsupportedCapability { request_id, .. } => Self::UnsupportedCapability {
+                request_id: request_id.clone(),
+                detail: "required sleep capability unavailable".into(),
+            },
+            Self::ExecutionFailed { request_id, .. } => Self::ExecutionFailed {
+                request_id: request_id.clone(),
+                error: "host sleep execution failed".into(),
+            },
+        }
+    }
 }
 
 /// Protocol version for privileged helper IPC.
-pub const HELPER_PROTOCOL_VERSION: u32 = 1;
+pub const HELPER_PROTOCOL_VERSION: u32 = 2;
 
 /// Maximum frame size in bytes (4 KiB) for helper IPC to bound memory and prevent DoS.
 pub const MAX_HELPER_FRAME_BYTES: usize = 4096;
@@ -341,6 +373,177 @@ pub enum ProtocolError {
     DuplicateRequestId(String),
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Invalid response payload: {0}")]
+    InvalidResponse(String),
+}
+
+/// Closed taxonomy of capability probe failure reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProbeFailureReason {
+    // Dimension 1: Transport & Connectivity
+    SocketNotFound,
+    SocketPermissionDenied,
+    ConnectionRefused,
+    PeerAuthFailed,
+    IpcIoError,
+    IpcProtocolError,
+    ProtocolVersionMismatch,
+    ProbeExecutionError,
+    ProbeTimeout,
+    ExecutorUnavailable,
+    UnknownHelperFailure,
+
+    // Dimension 2: Hardware Capability
+    SuspendStateUnsupported,
+    RtcAlarmMissing,
+
+    // Dimension 3: Transient Readiness
+    InhibitorPresent,
+    RtcAlarmBusy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeDimension {
+    TransportIpc,
+    Hardware,
+    TransientReadiness,
+}
+
+impl ProbeFailureReason {
+    pub fn dimension(&self) -> ProbeDimension {
+        match self {
+            Self::SocketNotFound
+            | Self::SocketPermissionDenied
+            | Self::ConnectionRefused
+            | Self::PeerAuthFailed
+            | Self::IpcIoError
+            | Self::IpcProtocolError
+            | Self::ProtocolVersionMismatch
+            | Self::ProbeExecutionError
+            | Self::ProbeTimeout
+            | Self::ExecutorUnavailable
+            | Self::UnknownHelperFailure => ProbeDimension::TransportIpc,
+
+            Self::SuspendStateUnsupported | Self::RtcAlarmMissing => ProbeDimension::Hardware,
+
+            Self::InhibitorPresent | Self::RtcAlarmBusy => ProbeDimension::TransientReadiness,
+        }
+    }
+
+    pub fn safe_code(&self) -> &'static str {
+        match self {
+            Self::SocketNotFound => "socketNotFound",
+            Self::SocketPermissionDenied => "socketPermissionDenied",
+            Self::ConnectionRefused => "connectionRefused",
+            Self::PeerAuthFailed => "peerAuthFailed",
+            Self::IpcIoError => "ipcIoError",
+            Self::IpcProtocolError => "ipcProtocolError",
+            Self::ProtocolVersionMismatch => "protocolVersionMismatch",
+            Self::ProbeExecutionError => "probeExecutionError",
+            Self::ProbeTimeout => "probeTimeout",
+            Self::ExecutorUnavailable => "executorUnavailable",
+            Self::UnknownHelperFailure => "unknownHelperFailure",
+            Self::SuspendStateUnsupported => "suspendStateUnsupported",
+            Self::RtcAlarmMissing => "rtcAlarmMissing",
+            Self::InhibitorPresent => "inhibitorPresent",
+            Self::RtcAlarmBusy => "rtcAlarmBusy",
+        }
+    }
+
+    pub fn public_error(&self) -> (IdleSuspendErrorCode, &'static str) {
+        match self {
+            Self::InhibitorPresent => (
+                IdleSuspendErrorCode::Inhibited,
+                "host sleep is blocked by an active system inhibitor",
+            ),
+            Self::RtcAlarmBusy => (
+                IdleSuspendErrorCode::RtcBusy,
+                "host wake timer is currently in use",
+            ),
+            Self::ProbeTimeout => (
+                IdleSuspendErrorCode::ProbeTimeout,
+                "idle-suspend capability probe timed out",
+            ),
+            Self::SuspendStateUnsupported | Self::RtcAlarmMissing | Self::ExecutorUnavailable => (
+                IdleSuspendErrorCode::CapabilityUnavailable,
+                "host lacks required sleep or timed-wake capability",
+            ),
+            _ => (
+                IdleSuspendErrorCode::HelperUnavailable,
+                "idle-suspend helper is unavailable or inaccessible",
+            ),
+        }
+    }
+
+    pub fn event_reason_code(&self) -> crate::idle_suspend::event::ServerIdleSuspendReasonCodeV1 {
+        match self {
+            Self::InhibitorPresent => {
+                crate::idle_suspend::event::ServerIdleSuspendReasonCodeV1::InhibitorPresent
+            }
+            Self::RtcAlarmBusy => {
+                crate::idle_suspend::event::ServerIdleSuspendReasonCodeV1::RtcBusy
+            }
+            Self::SuspendStateUnsupported | Self::RtcAlarmMissing | Self::ExecutorUnavailable => {
+                crate::idle_suspend::event::ServerIdleSuspendReasonCodeV1::CapabilityUnsupported
+            }
+            _ => crate::idle_suspend::event::ServerIdleSuspendReasonCodeV1::HelperUnavailable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProbeDiagnostics {
+    pub stage: Option<&'static str>,
+    pub errno: Option<i32>,
+    pub socket_path: Option<String>,
+    pub actual_uid: Option<u32>,
+    pub expected_uid: Option<u32>,
+    pub actual_pid: Option<u32>,
+    pub expected_pid: Option<u32>,
+    pub bounded_detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProbeFailure {
+    pub reason: ProbeFailureReason,
+    pub diagnostics: ProbeDiagnostics,
+}
+
+impl ProbeFailure {
+    pub fn timeout() -> Self {
+        Self {
+            reason: ProbeFailureReason::ProbeTimeout,
+            diagnostics: ProbeDiagnostics {
+                stage: Some("timeout"),
+                errno: None,
+                socket_path: None,
+                actual_uid: None,
+                expected_uid: None,
+                actual_pid: None,
+                expected_pid: None,
+                bounded_detail: "Capability probe timed out after 3 seconds".into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CapabilityProbeOutcome {
+    Supported,
+    Unavailable(ProbeFailure),
+}
+
+impl CapabilityProbeOutcome {
+    pub fn is_supported(&self) -> bool {
+        matches!(self, Self::Supported)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityProbeRequest {
+    pub request_id: String,
 }
 
 /// Validates request ID bounds: non-empty, max 64 chars, alphanumeric + '-' + '_'.
@@ -351,7 +554,10 @@ pub fn validate_request_id(id: &str) -> Result<(), ProtocolError> {
             id.len()
         )));
     }
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(ProtocolError::InvalidRequestId(
             "Only ASCII alphanumeric characters, hyphens, and underscores are allowed".to_string(),
         ));
@@ -409,7 +615,7 @@ impl RequestDeduplicator {
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
 pub enum HelperRequestPayload {
     /// Probe host capability for RTC wake and suspend.
-    ProbeCapability,
+    ProbeCapability(CapabilityProbeRequest),
     /// Execute a fixed RTC-timed suspend.
     SuspendWithRtcWake(SuspendWithRtcWakeRequest),
 }
@@ -424,16 +630,17 @@ pub struct HelperRequestFrame {
 }
 
 impl HelperRequestFrame {
-    pub fn new_probe() -> Self {
+    pub fn new_probe(req: CapabilityProbeRequest) -> Result<Self, ProtocolError> {
+        validate_request_id(&req.request_id)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        Self {
+        Ok(Self {
             version: HELPER_PROTOCOL_VERSION,
-            payload: HelperRequestPayload::ProbeCapability,
+            payload: HelperRequestPayload::ProbeCapability(req),
             timestamp_ms: now,
-        }
+        })
     }
 
     pub fn new_suspend(req: SuspendWithRtcWakeRequest) -> Result<Self, ProtocolError> {
@@ -458,7 +665,10 @@ impl HelperRequestFrame {
             });
         }
         match &self.payload {
-            HelperRequestPayload::ProbeCapability => Ok(()),
+            HelperRequestPayload::ProbeCapability(req) => {
+                validate_request_id(&req.request_id)?;
+                Ok(())
+            }
             HelperRequestPayload::SuspendWithRtcWake(req) => {
                 validate_request_id(&req.request_id)?;
                 validate_suspend_wake_seconds(req.wake_after_seconds)?;
@@ -474,16 +684,17 @@ impl HelperRequestFrame {
 pub enum HelperResponsePayload {
     /// Result of capability probe.
     Capability {
+        request_id: String,
         supported: bool,
-        detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<ProbeFailureReason>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// Result of suspend execution.
     SuspendOutcome(SuspendOutcome),
     /// Explicit rejection or error before execution.
-    Error {
-        code: String,
-        message: String,
-    },
+    Error { code: String, message: String },
 }
 
 /// Top-level frame for responses emitted by the privileged helper.
@@ -515,7 +726,13 @@ impl HelperResponseFrame {
                 got: self.version,
             });
         }
-        Ok(())
+        match &self.payload {
+            HelperResponsePayload::Capability { request_id, .. } => {
+                validate_request_id(request_id)?;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
