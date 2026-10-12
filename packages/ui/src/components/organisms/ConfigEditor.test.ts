@@ -14,6 +14,7 @@ import {
   createListRowIdState,
   addListRowId,
   removeListRowId,
+  reconcileProjectRowIds,
 } from "./ConfigEditor.js";
 
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
@@ -98,6 +99,36 @@ describe("list row id helpers", () => {
     const freshState = createListRowIdState(2, "project-row", 5);
     expect(freshState.ids).toEqual(["project-row-5", "project-row-6"]);
     expect(freshState.nextId).toBe(7);
+  });
+
+  it("reconciles project row IDs preserving unchanged identities and allocating fresh IDs for replacements", () => {
+    const initialIds = createListRowIdState(2, "project-row");
+    const projectsV1 = [
+      { name: "api", path: "./api", type: "custom" as const },
+      { name: "web", path: "./web", type: "custom" as const },
+    ];
+
+    // 1. Unchanged projects preserve exact same row IDs
+    const reconciledSame = reconcileProjectRowIds(
+      initialIds,
+      projectsV1,
+      projectsV1,
+    );
+    expect(reconciledSame.ids).toEqual(["project-row-0", "project-row-1"]);
+    expect(reconciledSame.nextId).toBe(2);
+
+    // 2. Replaced project gets fresh monotonic ID
+    const projectsV2 = [
+      { name: "api", path: "./api", type: "custom" as const },
+      { name: "mobile", path: "./mobile", type: "custom" as const },
+    ];
+    const reconciledReplaced = reconcileProjectRowIds(
+      initialIds,
+      projectsV1,
+      projectsV2,
+    );
+    expect(reconciledReplaced.ids).toEqual(["project-row-0", "project-row-2"]);
+    expect(reconciledReplaced.nextId).toBe(3);
   });
 });
 
@@ -486,16 +517,6 @@ describe("ConfigEditor terminal profiles and reset behavior", () => {
       await Promise.resolve();
     });
 
-    // When external config arrives, externalChange triggers "Reset to latest"
-    const resetButton = Array.from(
-      container.querySelectorAll("button"),
-    ).find((b) => b.textContent?.includes("Reset to latest"));
-    expect(resetButton).toBeDefined();
-
-    await act(async () => {
-      resetButton!.click();
-    });
-
     const projectButtonB = Array.from(
       container.querySelectorAll("button"),
     ).find((b) => b.textContent?.includes("proj-b"));
@@ -504,6 +525,91 @@ describe("ConfigEditor terminal profiles and reset behavior", () => {
 
     // Fresh identity allocated, not reusing DOM node of project A
     expect(projectContainerB).not.toBe(projectContainerA);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("preserves project input focus, DOM identity, and expanded state on external workspace-only update", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    const configV1: DamHopperConfig = {
+      workspace: { name: "workspace-v1", root: "/tmp/v1" },
+      projects: [
+        {
+          name: "my-service",
+          path: "./services/my-service",
+          type: "custom",
+        },
+      ],
+    };
+    const configV2: DamHopperConfig = {
+      workspace: { name: "workspace-v2", root: "/tmp/v1" },
+      projects: [
+        {
+          name: "my-service",
+          path: "./services/my-service",
+          type: "custom",
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(ConfigEditor, {
+          config: configV1,
+          onSave: vi.fn(async () => undefined),
+        }),
+      );
+    });
+
+    // Expand project accordion
+    const projectButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((b) => b.textContent?.includes("my-service"));
+    expect(projectButton).toBeDefined();
+    await act(async () => {
+      projectButton!.click();
+    });
+
+    // Locate project's Path input and focus it
+    const inputsBefore = Array.from(container.querySelectorAll("input"));
+    const pathInputBefore = inputsBefore.find(
+      (inp) => inp.value === "./services/my-service",
+    );
+    expect(pathInputBefore).toBeDefined();
+
+    pathInputBefore!.focus();
+    expect(document.activeElement).toBe(pathInputBefore);
+
+    // External config arrives where only workspace.name changed
+    await act(async () => {
+      root.render(
+        createElement(ConfigEditor, {
+          config: configV2,
+          onSave: vi.fn(async () => undefined),
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    // Workspace name is updated to workspace-v2
+    const workspaceInput = container.querySelector(
+      'input[placeholder="my-workspace"]',
+    ) as HTMLInputElement;
+    expect(workspaceInput.value).toBe("workspace-v2");
+
+    // The project's Path input DOM node is still the exact same node and still focused
+    const inputsAfter = Array.from(container.querySelectorAll("input"));
+    const pathInputAfter = inputsAfter.find(
+      (inp) => inp.value === "./services/my-service",
+    );
+    expect(pathInputAfter).toBe(pathInputBefore);
+    expect(document.activeElement).toBe(pathInputBefore);
 
     await act(async () => {
       root.unmount();

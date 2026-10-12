@@ -133,6 +133,59 @@ export function removeListRowId(
     nextId: state.nextId,
   };
 }
+export function reconcileProjectRowIds(
+  prevIds: ListRowIdState,
+  prevProjects: ProjectConfig[],
+  nextProjects: ProjectConfig[],
+  prefix = "project-row",
+): ListRowIdState {
+  let nextId = prevIds.nextId;
+  const newIds: string[] = [];
+  const usedIds = new Set<string>();
+
+  const idByProjectKey = new Map<string, string>();
+  prevProjects.forEach((p, idx) => {
+    const id = prevIds.ids[idx];
+    if (id) {
+      if (p.path) idByProjectKey.set(`path:${p.path}`, id);
+      if (p.name) idByProjectKey.set(`name:${p.name}`, id);
+    }
+  });
+
+  for (let i = 0; i < nextProjects.length; i++) {
+    const nextP = nextProjects[i]!;
+    const prevP = prevProjects[i];
+
+    if (
+      prevP &&
+      prevIds.ids[i] &&
+      !usedIds.has(prevIds.ids[i]!) &&
+      JSON.stringify(prevP) === JSON.stringify(nextP)
+    ) {
+      const id = prevIds.ids[i]!;
+      newIds.push(id);
+      usedIds.add(id);
+      continue;
+    }
+
+    const matchedId =
+      (nextP.path && idByProjectKey.get(`path:${nextP.path}`)) ||
+      (nextP.name && idByProjectKey.get(`name:${nextP.name}`));
+
+    if (matchedId && !usedIds.has(matchedId)) {
+      newIds.push(matchedId);
+      usedIds.add(matchedId);
+      continue;
+    }
+
+    const freshId = `${prefix}-${nextId++}`;
+    newIds.push(freshId);
+    usedIds.add(freshId);
+  }
+
+  return { ids: newIds, nextId };
+}
+
 
 // ── ServiceForm ──────────────────────────────────────────────────────────
 
@@ -718,9 +771,15 @@ export function ConfigEditor({
     }
   }
 
-  // Track whether draft has been modified from the current prop
+  // Baseline config against which local user edits are measured
+  const [baselineConfig, setBaselineConfig] = useState<DamHopperConfig>(() =>
+    structuredClone(config),
+  );
+  const prevConfigRef = useRef<DamHopperConfig>(config);
+
+  // Track whether draft has been modified by the user from baseline
   const isDirtyRef = useRef(false);
-  const isDirty = JSON.stringify(draft) !== JSON.stringify(config);
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(baselineConfig);
 
   useEffect(() => {
     isDirtyRef.current = isDirty;
@@ -728,16 +787,17 @@ export function ConfigEditor({
 
   // C1: Detect external config changes while editor is open
   useEffect(() => {
+    if (prevConfigRef.current === config) return;
+    prevConfigRef.current = config;
+
     queueMicrotask(() => {
       if (!isDirtyRef.current) {
-        // No unsaved changes — silently update draft to match new config.
+        // No unsaved changes — silently update draft and baseline to match new config.
+        const prevProjects = draft.projects;
+        setBaselineConfig(structuredClone(config));
         setDraft(structuredClone(config));
         setProjectRowIds((prev) =>
-          createListRowIdState(
-            config.projects.length,
-            "project-row",
-            prev.nextId,
-          ),
+          reconcileProjectRowIds(prev, prevProjects, config.projects),
         );
         setPrevProjectCount(config.projects.length);
         setExternalChange(false);
@@ -746,7 +806,7 @@ export function ConfigEditor({
         setExternalChange(true);
       }
     });
-  }, [config]);
+  }, [config, draft.projects]);
 
   function validate(): boolean {
     const errs: Record<string, string> = {};
@@ -783,6 +843,7 @@ export function ConfigEditor({
         projects: draft.projects,
       };
       await onSave(payload);
+      setBaselineConfig(structuredClone(payload));
       setSaved(true);
       setExternalChange(false);
       setTimeout(() => setSaved(false), 3000);
@@ -792,9 +853,11 @@ export function ConfigEditor({
   }
 
   function handleReset() {
+    const prevProjects = draft.projects;
+    setBaselineConfig(structuredClone(config));
     setDraft(structuredClone(config));
     setProjectRowIds((prev) =>
-      createListRowIdState(config.projects.length, "project-row", prev.nextId),
+      reconcileProjectRowIds(prev, prevProjects, config.projects),
     );
     setPrevProjectCount(config.projects.length);
     setErrors({});
