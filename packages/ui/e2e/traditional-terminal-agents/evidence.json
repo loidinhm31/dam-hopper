@@ -20,7 +20,7 @@
     {
       "checkpoint": "primary",
       "file_name": "screenshot.png",
-      "sha256": "b6f15c35691fd58eeafed0cde3bda42b5a3354ce978be33fa98f413bcab4e08c",
+      "sha256": "ca52ed4dd78c85ef407ecc2a0f6fbdd0f2721f0b8376f744106ddb496698c2e1",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -29,7 +29,7 @@
     {
       "checkpoint": "status-filter-options",
       "file_name": "status-filter-options.png",
-      "sha256": "de4db5d878a5eeaa32a3f4677ab98b77e6ce41117def08d695d8fb44aa6d6838",
+      "sha256": "8f48b2d607271cbbba0670d4d4a6582d9b2857aac608d60358d560bb6f611792",
       "dimensions": {
         "width": 1440,
         "height": 900
@@ -38,7 +38,7 @@
     {
       "checkpoint": "compact",
       "file_name": "compact.png",
-      "sha256": "61499b537d9bd780a03f7f50aed70c395a43e60cf0c397a08bfb26c3199da677",
+      "sha256": "6ec55cf322f9c80179a02f55efbc062d27556ab1c56c4999f2ee42a4d75b9d7b",
       "dimensions": {
         "width": 390,
         "height": 844
