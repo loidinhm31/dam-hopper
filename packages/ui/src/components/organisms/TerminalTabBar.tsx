@@ -199,7 +199,7 @@ export function TerminalTabBar({
               )}
             />
             {savePrompt.error && (
-              <p className="text-[10px] text-[var(--color-danger)] mt-0.5">
+              <p className="text-2xs text-[var(--color-danger)] mt-0.5">
                 {savePrompt.error}
               </p>
             )}

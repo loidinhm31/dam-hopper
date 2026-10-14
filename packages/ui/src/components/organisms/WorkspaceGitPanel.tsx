@@ -343,7 +343,7 @@ export function WorkspaceGitPanel({
           <div className="shrink-0 p-3 border-b border-[var(--color-border)]">
             <div className="mb-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <label className="min-w-0">
-                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
                   VCS Root
                 </span>
                 <select
@@ -352,7 +352,7 @@ export function WorkspaceGitPanel({
                     historyView.setRootId(event.target.value);
                     historyActions.resetScope();
                   }}
-                  className="h-8 w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-[11px] font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]/60"
+                  className="h-8 w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]/60"
                 >
                   {historyView.rootOptions.map((root) => (
                     <option key={root.rootId} value={root.rootId}>
@@ -362,7 +362,7 @@ export function WorkspaceGitPanel({
                 </select>
               </label>
               <div className="min-w-0">
-                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
                   History Branch
                 </span>
                 <GitBranchControl
@@ -379,12 +379,12 @@ export function WorkspaceGitPanel({
               </div>
             </div>
             {selectedRoot?.warnings.length ? (
-              <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+              <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-2xs text-amber-300">
                 {selectedRoot.warnings.join(" ")}
               </div>
             ) : null}
             {!historyView.isViewingActiveBranch && historyView.activeBranch ? (
-              <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300">
+              <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-2xs text-blue-300">
                 Viewing <strong>{historyView.branchLabel}</strong>. Cherry-pick
                 and revert apply to checked-out branch{" "}
                 <strong>{historyView.activeBranch}</strong>.

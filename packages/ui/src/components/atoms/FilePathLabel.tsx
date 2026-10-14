@@ -52,7 +52,7 @@ export function FilePathLabel({
         {dirPath && (
           <span
             className={cn(
-              "shrink truncate max-w-[45%] text-[10px] text-[var(--color-text-muted)]/70",
+              "shrink truncate max-w-[45%] text-2xs text-[var(--color-text-muted)]/70",
               dirMaxWidthClassName,
               dirClassName,
             )}

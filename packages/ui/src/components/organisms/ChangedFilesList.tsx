@@ -103,10 +103,10 @@ function GitSectionHeader({
         ) : (
           <ChevronRight className="h-3 w-3 shrink-0 text-[var(--color-text-muted)]" />
         )}
-        <span className="text-[10px] font-semibold text-[var(--color-text)] truncate">
+        <span className="text-2xs font-semibold text-[var(--color-text)] truncate">
           {label}
         </span>
-        <span className="text-[9px] text-[var(--color-text-muted)] ml-1 shrink-0">
+        <span className="text-2xs text-[var(--color-text-muted)] ml-1 shrink-0">
           {count} {count === 1 ? "file" : "files"}
         </span>
       </button>
@@ -153,8 +153,9 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
         role="row"
         className={cn(
           "flex items-center gap-1.5 px-2 py-[3px] cursor-pointer",
-          "hover:bg-[var(--color-surface-2)] transition-colors",
-          isSelected && "bg-[var(--color-primary)]/15",
+          isSelected
+            ? "workbench-selection"
+            : "hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors",
         )}
         onClick={onSelect}
       >
@@ -175,7 +176,7 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
         )}
         <span
           className={cn(
-            "text-[9px] font-bold w-3 shrink-0 text-center leading-none",
+            "text-2xs font-bold w-3 shrink-0 text-center leading-none",
             color,
           )}
         >
@@ -184,12 +185,15 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
         <FilePathLabel
           path={entry.path}
           className={cn(
-            "text-[11px]",
+            "text-xs",
             color,
-            isSelected && "!text-[var(--color-primary)]",
+            isSelected && "text-[var(--color-selection-text)]",
           )}
-          fileNameClassName="text-[11px] text-current font-normal"
-          dirClassName="text-[9px] text-[var(--color-text-muted)]/60"
+          fileNameClassName={cn("text-xs text-current font-normal", isSelected && "font-medium")}
+          dirClassName={cn(
+            "text-2xs",
+            isSelected ? "text-[var(--color-selection-text)]/75" : "text-[var(--color-text-muted)]/60",
+          )}
         />
       </div>
     );
@@ -600,7 +604,7 @@ export function ChangedFilesList({
         <span>Failed to load changes</span>
         <button
           onClick={() => void refetch()}
-          className="text-[10px] text-[var(--color-primary)] hover:underline"
+          className="text-2xs text-[var(--color-primary)] hover:underline"
         >
           Retry
         </button>
@@ -615,7 +619,7 @@ export function ChangedFilesList({
         <span className="font-medium text-[var(--color-text)]">
           Git is not initialized for this project
         </span>
-        <span className="text-[10px]">
+        <span className="text-2xs">
           Run <code className="font-mono">git init</code> in the terminal to
           start tracking changes.
         </span>
@@ -627,7 +631,7 @@ export function ChangedFilesList({
     <div className="flex flex-col flex-1 text-xs overflow-hidden min-h-0">
       {/* Panel header */}
       <div className="shrink-0 flex items-center justify-between px-2 py-1.5 border-b border-[var(--color-border)]">
-        <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
+        <span className="text-2xs font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
           Local Changes
         </span>
         <button
@@ -645,13 +649,13 @@ export function ChangedFilesList({
           role="alert"
           className="shrink-0 px-3 py-1.5 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 flex items-center justify-between gap-2"
         >
-          <span className="text-[var(--color-danger)] text-[10px] truncate">
+          <span className="text-[var(--color-danger)] text-2xs truncate">
             {mutationError}
           </span>
           <button
             onClick={() => setMutationError(null)}
             aria-label="Dismiss error"
-            className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-[10px] shrink-0"
+            className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-2xs shrink-0"
           >
             ✕
           </button>
@@ -660,7 +664,7 @@ export function ChangedFilesList({
 
       {/* Commit success flash */}
       {commitSuccess && (
-        <div className="shrink-0 px-3 py-1.5 bg-green-500/10 border-b border-green-500/20 text-[10px] text-green-400">
+        <div className="shrink-0 px-3 py-1.5 bg-green-500/10 border-b border-green-500/20 text-2xs text-green-400">
           Committed {commitSuccess}
         </div>
       )}
@@ -671,21 +675,21 @@ export function ChangedFilesList({
           role="alertdialog"
           className="shrink-0 px-3 py-2 bg-[var(--color-danger)]/10 border-b border-[var(--color-danger)]/20 text-[var(--color-danger)]"
         >
-          <p className="text-[10px] font-medium mb-1">Discard changes to:</p>
-          <p className="font-mono text-[9px] mb-2 truncate opacity-80">
+          <p className="text-2xs font-medium mb-1">Discard changes to:</p>
+          <p className="font-mono text-2xs mb-2 truncate opacity-80">
             {projectPathForEntry(discardConfirm)}
           </p>
           <div className="flex gap-1.5">
             <button
               onClick={() => void handleDiscard(discardConfirm)}
               disabled={mutatingPaths.has(projectPathForEntry(discardConfirm))}
-              className="px-2 py-0.5 text-[10px] bg-[var(--color-danger)] text-white rounded-sm hover:opacity-80 disabled:opacity-50"
+              className="px-2 py-0.5 text-2xs bg-[var(--color-danger)] text-white rounded-sm hover:opacity-80 disabled:opacity-50"
             >
               Discard
             </button>
             <button
               onClick={() => setDiscardConfirm(null)}
-              className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] rounded-sm border border-[var(--color-border)]"
+              className="px-2 py-0.5 text-2xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] rounded-sm border border-[var(--color-border)]"
             >
               Cancel
             </button>
@@ -698,7 +702,7 @@ export function ChangedFilesList({
         {entries.length === 0 && !untrackedTruncated ? (
           <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-[var(--color-text-muted)]">
             <span className="text-2xl opacity-20">✓</span>
-            <span className="text-[11px]">No local changes</span>
+            <span className="text-xs">No local changes</span>
           </div>
         ) : (
           <>
@@ -785,7 +789,7 @@ export function ChangedFilesList({
                 {unversionedOpen && (
                   <>
                     {untrackedTruncated && (
-                      <div className="px-2 py-1.5 text-[10px] text-[var(--color-text-muted)] bg-[var(--color-surface-2)]/50 border-b border-[var(--color-border)]/40">
+                      <div className="px-2 py-1.5 text-2xs text-[var(--color-text-muted)] bg-[var(--color-surface-2)]/50 border-b border-[var(--color-border)]/40">
                         Showing {unversionedFiles.length} of{" "}
                         {untrackedTotal.toLocaleString()} unversioned files
                       </div>
@@ -793,7 +797,7 @@ export function ChangedFilesList({
                     {unversionedFileGroups.map(([rootId, group]) => (
                       <div key={rootId}>
                         {hasMultipleUnversionedRoots && (
-                          <div className="px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)] bg-[var(--color-surface)]/70">
+                          <div className="px-2 py-1 text-2xs font-semibold text-[var(--color-text-muted)] bg-[var(--color-surface)]/70">
                             {group.label}
                           </div>
                         )}
@@ -827,7 +831,7 @@ export function ChangedFilesList({
                       <button
                         onClick={handleLoadMoreUntracked}
                         disabled={isLoadingMore}
-                        className="w-full flex items-center justify-center gap-1.5 px-2 py-2 text-[10px] text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] disabled:opacity-50 border-t border-[var(--color-border)]/40"
+                        className="w-full flex items-center justify-center gap-1.5 px-2 py-2 text-2xs text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] disabled:opacity-50 border-t border-[var(--color-border)]/40"
                       >
                         {isLoadingMore ? (
                           <>
@@ -863,9 +867,9 @@ export function ChangedFilesList({
           placeholder="Commit message…"
           disabled={isAndroidChromeNativeInputSuppressed}
           rows={2}
-          className="w-full resize-none rounded-sm border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[11px] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]/50 transition-colors"
+          className="w-full resize-none rounded-sm border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]/50 transition-colors"
         />
-        <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
+        <label className="flex items-center gap-2 text-2xs text-[var(--color-text-muted)]">
           <input
             type="checkbox"
             checked={amendCommit}
@@ -875,7 +879,7 @@ export function ChangedFilesList({
           Amend previous commit
         </label>
         {hasMixedStagedRoots && (
-          <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+          <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-2xs text-amber-300">
             Commit blocked: staged files span multiple VCS roots. Unstage files
             until one root remains.
           </div>
@@ -894,7 +898,7 @@ export function ChangedFilesList({
               ? "Unavailable on Android Chrome: text entry is disabled"
               : undefined
           }
-          className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-[11px] font-medium rounded-sm bg-[var(--color-primary)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+          className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-xs font-medium rounded-sm bg-[var(--color-primary)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
         >
           {isCommitting ? (
             <Loader2 className="h-3 w-3 animate-spin" />

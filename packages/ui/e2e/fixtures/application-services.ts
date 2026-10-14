@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "../../../..");
 import {
   copyToContainer,
   execInContainer,
@@ -156,6 +163,10 @@ export async function startApplicationServices(
 
     await execInContainer(appContainerId, ["mkdir", "-p", "/e2e"]);
     await copyToContainer(seedTree.hostStagingDir, appContainerId, "/e2e");
+    const hostWebDist = path.resolve(REPO_ROOT, "apps/web/dist");
+    if (existsSync(hostWebDist)) {
+      await copyToContainer(hostWebDist, appContainerId, "/opt/dam-hopper/web");
+    }
     await execInContainer(appContainerId, [
       "chmod",
       "0700",

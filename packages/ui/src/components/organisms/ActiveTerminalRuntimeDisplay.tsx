@@ -100,7 +100,7 @@ export function RuntimeActiveSessionTitle({
         )}
       </span>
       <div className="flex min-w-0 items-center gap-1.5">
-        <p className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        <p className="shrink-0 text-2xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
           Full-width terminal
         </p>
         {terminalCommitStatusEnabled ? (

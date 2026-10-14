@@ -83,7 +83,7 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
           <button
             type="button"
             className={cn(
-              "h-4 min-w-4 shrink-0 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
+              "h-4 min-w-4 shrink-0 rounded-[2px] border px-0.5 text-2xs font-black leading-none",
               gitStatusClassName(gitState),
             )}
             title={`Open diff: ${gitStateTitle(gitState)}`}
