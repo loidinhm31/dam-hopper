@@ -22,6 +22,7 @@ import {
   FilePlus,
   FolderPlus,
 } from "lucide-react";
+import { getFileTreeRowHeight } from "@/lib/workbench-typography.js";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
 import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
@@ -201,11 +202,10 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
           "flex items-center gap-1.5 px-1 py-0.5 cursor-pointer rounded-sm select-none",
           "hover:bg-[var(--color-surface-2)] text-xs",
           node.isSelected
-            ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+            ? "workbench-selection"
             : "text-[var(--color-text)]",
           node.isFocused &&
-            !node.isSelected &&
-            "outline outline-1 outline-[var(--color-primary)]/40",
+            "outline outline-1 outline-[var(--color-primary)]/70",
           isHidden && "opacity-50",
           node.isDragging && "opacity-40",
           node.willReceiveDrop &&
@@ -251,7 +251,7 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
             <button
               type="button"
               className={cn(
-                "h-4 min-w-4 rounded-[2px] border px-0.5 text-[9px] font-black leading-none",
+                "h-4 min-w-4 rounded-[2px] border px-0.5 text-2xs font-black leading-none",
                 gitStatusClassName(gitState),
               )}
               title={`Open diff: ${gitStateTitle(gitState)}`}
@@ -288,7 +288,7 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
             </button>
           )}
           {isLarge && (
-            <span className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+            <span className="text-2xs text-[var(--color-text-muted)] opacity-60">
               {(node.data.size / (1024 * 1024)).toFixed(0)}MB
             </span>
           )}
@@ -340,11 +340,16 @@ export function FileTree({
         : { project: targetProject, worktreePath }),
     [target, targetProject, worktreePath],
   );
-  const {
-    explorerShowHidden: showHidden,
-    explorerLanguageFilter: configuredLanguageFilter,
-    saveDebounced,
-  } = useSettingsStore();
+  const showHidden = useSettingsStore((s) => s.explorerShowHidden);
+  const configuredLanguageFilter = useSettingsStore(
+    (s) => s.explorerLanguageFilter,
+  );
+  const systemFontSize = useSettingsStore((s) => s.systemFontSize);
+  const saveDebounced = useSettingsStore((s) => s.saveDebounced);
+  const rowHeight = useMemo(
+    () => getFileTreeRowHeight(systemFontSize),
+    [systemFontSize],
+  );
   const languageFilter: ExplorerLanguageFilter = isExplorerLanguageFilter(
     configuredLanguageFilter,
   )
@@ -869,7 +874,7 @@ export function FileTree({
         {/* Header */}
         <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
+            <span className="shrink-0 text-2xs font-bold tracking-widest text-[var(--color-text-muted)] uppercase">
               Explorer
             </span>
           </div>
@@ -915,7 +920,7 @@ export function FileTree({
               onClick={() => saveDebounced({ explorerShowHidden: !showHidden })}
               title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
               className={cn(
-                "shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm transition-colors",
+                "shrink-0 text-2xs px-1.5 py-0.5 rounded-sm transition-colors",
                 showHidden
                   ? "text-[var(--color-primary)] bg-[var(--color-primary)]/10"
                   : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
@@ -928,7 +933,7 @@ export function FileTree({
 
         {/* Project label */}
         <div className="px-2 py-1 shrink-0 flex items-center justify-between gap-1">
-          <span className="text-[11px] font-semibold text-[var(--color-text-muted)] tracking-wide uppercase truncate">
+          <span className="text-xs font-semibold text-[var(--color-text-muted)] tracking-wide uppercase truncate">
             {project}
           </span>
           <div className="flex items-center gap-1 shrink-0">
@@ -954,7 +959,7 @@ export function FileTree({
         <div className="border-b border-[var(--color-border)] px-2 pb-2 shrink-0">
           <label
             htmlFor={languageFilterId}
-            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]"
+            className="mb-1 block text-2xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]"
           >
             Filter Explorer by language
           </label>
@@ -969,7 +974,7 @@ export function FileTree({
                 clearTreeSelection();
                 saveDebounced({ explorerLanguageFilter: next });
               }}
-              className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 text-[11px] text-[var(--color-text)] outline-none transition-colors focus-visible:border-[var(--color-primary)] focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+              className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 text-xs text-[var(--color-text)] outline-none transition-colors focus-visible:border-[var(--color-primary)] focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
             >
               {(
                 Object.keys(LANGUAGE_FILTER_LABELS) as ExplorerLanguageFilter[]
@@ -987,7 +992,7 @@ export function FileTree({
                   void scan.mutateAsync().catch(() => undefined);
                 }}
                 disabled={scan.isPending}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-sm bg-[var(--color-primary)]/10 px-2 text-[10px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)]/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50"
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-sm bg-[var(--color-primary)]/10 px-2 text-2xs font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)]/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50"
               >
                 {scan.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
                 {languageScanCache?.result ? "Rescan" : "Scan"}
@@ -995,31 +1000,31 @@ export function FileTree({
             )}
           </div>
           {isLanguageMode && languageScanCache?.scannedAt && (
-            <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+            <p className="mt-1 text-2xs text-[var(--color-text-muted)]">
               Last scanned {formatScanTime(languageScanCache.scannedAt)}
             </p>
           )}
           {isLanguageMode && languageScanCache?.stale && (
-            <p className="mt-1 text-[10px] text-amber-300" role="status">
+            <p className="mt-1 text-2xs text-amber-300" role="status">
               Results may be outdated. Rescan to refresh.
             </p>
           )}
           {isLanguageMode && scan.isPending && languageScanCache?.result && (
             <p
-              className="mt-1 text-[10px] text-[var(--color-primary)]"
+              className="mt-1 text-2xs text-[var(--color-primary)]"
               role="status"
             >
               Rescanning project… current results remain available.
             </p>
           )}
           {isLanguageMode && languageScanCache?.result?.truncated && (
-            <p className="mt-1 text-[10px] text-amber-300" role="status">
+            <p className="mt-1 text-2xs text-amber-300" role="status">
               Showing first {languageScanCache.result.limit.toLocaleString()}{" "}
               matching files.
             </p>
           )}
           {isLanguageMode && scan.isError && (
-            <p className="mt-1 text-[10px] text-red-400" role="alert">
+            <p className="mt-1 text-2xs text-red-400" role="alert">
               {scan.error instanceof Error ? scan.error.message : "Scan failed"}
             </p>
           )}
@@ -1044,7 +1049,7 @@ export function FileTree({
                 Scan project to show {LANGUAGE_FILTER_LABELS[languageFilter]}{" "}
                 files
               </span>
-              <span className="text-[10px]">
+              <span className="text-2xs">
                 Use Scan above to build a navigation-only view.
               </span>
             </div>
@@ -1108,7 +1113,7 @@ export function FileTree({
               }}
               disableEdit
               indent={16}
-              rowHeight={24}
+              rowHeight={rowHeight}
               overscanCount={8}
               height={treeBodyHeight || undefined}
               width={treeBodyWidth || undefined}
@@ -1172,7 +1177,7 @@ export function FileTree({
         {/* Op error toast */}
         {opError && (
           <div
-            className="absolute bottom-2 left-2 right-2 z-10 rounded px-2 py-1.5 text-[10px] text-[var(--color-danger)] bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/20 cursor-pointer"
+            className="absolute bottom-2 left-2 right-2 z-10 rounded px-2 py-1.5 text-2xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/20 cursor-pointer"
             onClick={() => setOpError(null)}
           >
             {opError}
@@ -1180,7 +1185,7 @@ export function FileTree({
         )}
 
         {copied && (
-          <div className="absolute bottom-2 left-2 right-2 z-10 rounded px-2 py-1.5 text-[10px] text-[var(--color-success)] bg-[var(--color-success)]/10 border border-[var(--color-success)]/20">
+          <div className="absolute bottom-2 left-2 right-2 z-10 rounded px-2 py-1.5 text-2xs text-[var(--color-success)] bg-[var(--color-success)]/10 border border-[var(--color-success)]/20">
             Copied to clipboard
           </div>
         )}

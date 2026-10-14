@@ -60,7 +60,7 @@ export function TraditionalTerminalAgentGroupRow({
       className={cn(
         "flex min-h-11 min-w-11 w-full flex-col gap-1 px-4 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-60",
         active
-          ? "bg-[var(--color-primary)]/12 text-[var(--color-text)]"
+          ? "workbench-selection"
           : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
         touchOptimized && "min-h-12",
       )}
@@ -93,18 +93,18 @@ export function TraditionalTerminalAgentGroupRow({
         <span
           data-testid="agent-count-badge"
           title={`${count} ${count === 1 ? "agent" : "agents"}`}
-          className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-[var(--color-text)]"
+          className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-text)]"
         >
           {count}
         </span>
         {reasonLabel ? <span>{reasonLabel}</span> : null}
       </span>
       {outcomeHint ? (
-        <span className="text-[11px] text-[var(--color-text-muted)]" title={outcomeExplanation}>
+        <span className={cn("text-xs", active ? "text-[var(--color-selection-text)]/85" : "text-[var(--color-text-muted)]")} title={outcomeExplanation}>
           {outcomeHint}
         </span>
       ) : null}
-      <span className="w-full truncate text-[11px] text-[var(--color-text-muted)]" title={sourceExplanation}>
+      <span className={cn("w-full truncate text-xs", active ? "text-[var(--color-selection-text)]/85" : "text-[var(--color-text-muted)]")} title={sourceExplanation}>
         {sourceLabel}
       </span>
       <span id={descriptionId} className="sr-only">

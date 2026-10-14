@@ -162,7 +162,7 @@ export function SearchPanel({
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-[11px] font-semibold tracking-widest text-[var(--color-text-muted)] uppercase">
+        <span className="text-xs font-semibold tracking-widest text-[var(--color-text-muted)] uppercase">
           {mode === "content" ? "Search Contents" : "Find File"}
         </span>
         {onClose && (
@@ -176,7 +176,7 @@ export function SearchPanel({
       </div>
 
       <div className="shrink-0 px-3 pt-2">
-        <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[11px] font-medium mr-2">
+        <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-xs font-medium mr-2">
           {(["content", "filename"] as const).map((nextMode) => (
             <button
               key={nextMode}
@@ -192,7 +192,7 @@ export function SearchPanel({
             </button>
           ))}
         </div>
-        <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-[11px] font-medium">
+        <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-xs font-medium">
           {(["project", "workspace"] as const).map((nextScope) => (
             <button
               key={nextScope}
@@ -260,7 +260,7 @@ export function SearchPanel({
               onClick={() => void replaceNext()}
               disabled={replaceDisabled}
               className={cn(
-                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
                 replaceDisabled
                   ? "cursor-not-allowed bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
                   : "bg-[var(--color-primary)] text-white hover:opacity-90",
@@ -278,7 +278,7 @@ export function SearchPanel({
               onClick={() => void replaceAll()}
               disabled={replaceDisabled}
               className={cn(
-                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                "shrink-0 inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
                 replaceDisabled
                   ? "cursor-not-allowed bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
                   : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-surface-3)]",
@@ -290,7 +290,7 @@ export function SearchPanel({
         )}
 
         {query.length >= 2 && (
-          <div className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1.5">
+          <div className="text-2xs text-[var(--color-text-muted)] flex items-center gap-1.5">
             {isLoading ? (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -320,19 +320,19 @@ export function SearchPanel({
         )}
 
         {warning && (
-          <div className="flex items-start gap-1.5 text-[10px] text-amber-400">
+          <div className="flex items-start gap-1.5 text-2xs text-amber-400">
             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
             <span>{warning}</span>
           </div>
         )}
         {error && (
-          <div className="flex items-start gap-1.5 text-[10px] text-[var(--color-danger)]">
+          <div className="flex items-start gap-1.5 text-2xs text-[var(--color-danger)]">
             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
             <span>{error}</span>
           </div>
         )}
         {truncated && (
-          <div className="flex items-center gap-1.5 text-[10px] text-amber-400">
+          <div className="flex items-center gap-1.5 text-2xs text-amber-400">
             <AlertTriangle className="h-3 w-3 shrink-0" />
             <span>Results capped at 500 matches. Search may be truncated.</span>
           </div>
@@ -343,7 +343,7 @@ export function SearchPanel({
               <span
                 key={st.profileId}
                 className={cn(
-                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-mono",
+                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-2xs font-mono",
                   st.status === "connected"
                     ? "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)]"
                     : st.status === "error" || st.status === "offline"
@@ -362,7 +362,7 @@ export function SearchPanel({
           </div>
         )}
         {query.length > 0 && query.length < 2 && (
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="text-2xs text-[var(--color-text-muted)]">
             Type at least 2 characters
           </p>
         )}

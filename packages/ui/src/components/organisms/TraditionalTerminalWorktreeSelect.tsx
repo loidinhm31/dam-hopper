@@ -286,13 +286,13 @@ export function TraditionalTerminalWorktreeSelect({
                           ({short})
                         </span>
                         {worktree.isLocked ? (
-                          <span className="ml-1 text-[10px] text-[var(--color-text-muted)]">
+                          <span className="ml-1 text-2xs text-[var(--color-text-muted)]">
                             · Locked
                           </span>
                         ) : null}
                       </span>
                       {!selectable ? (
-                        <span className="truncate text-[10px] text-[var(--color-warning)]">
+                        <span className="truncate text-2xs text-[var(--color-warning)]">
                           {status}
                         </span>
                       ) : null}
@@ -322,15 +322,15 @@ export function TraditionalTerminalWorktreeSelect({
             <SelectGroup>
               <SelectSeparator />
               {!isFetched || isFetching ? (
-                <SelectLabel className="text-[10px] font-normal text-[var(--color-text-muted)] italic">
+                <SelectLabel className="text-2xs font-normal text-[var(--color-text-muted)] italic">
                   Loading worktrees…
                 </SelectLabel>
               ) : isError ? (
-                <SelectLabel className="text-[10px] font-normal text-[var(--color-text-muted)] italic">
+                <SelectLabel className="text-2xs font-normal text-[var(--color-text-muted)] italic">
                   Worktrees unavailable
                 </SelectLabel>
               ) : (
-                <SelectLabel className="text-[10px] font-normal text-[var(--color-text-muted)] italic">
+                <SelectLabel className="text-2xs font-normal text-[var(--color-text-muted)] italic">
                   No secondary worktrees
                 </SelectLabel>
               )}

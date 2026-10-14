@@ -74,7 +74,7 @@ export function EditorStatusBar({
   if (!editor) return null;
 
   return (
-    <div className="shrink-0 h-[22px] flex items-center gap-3 px-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] text-[11px] text-[var(--color-text-muted)] select-none">
+    <div className="shrink-0 min-h-[22px] py-0.5 flex items-center gap-3 px-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] text-xs text-[var(--color-text-muted)] select-none">
       <span>
         Ln {position.line}, Col {position.col}
       </span>
@@ -93,7 +93,7 @@ export function EditorStatusBar({
             type="button"
             onClick={onGitIndicatorClick}
             className={cn(
-              "rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none hover:bg-[var(--color-surface)]",
+              "rounded border px-1.5 py-0.5 text-2xs font-semibold leading-none hover:bg-[var(--color-surface)]",
               gitStatusClassName(gitState),
             )}
             title={`Open diff: ${gitStateTitle(gitState)}`}

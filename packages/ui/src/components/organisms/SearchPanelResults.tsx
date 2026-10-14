@@ -45,7 +45,7 @@ export function SearchPanelResults({
               className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-2)] transition-colors"
             >
               {scope === "workspace" && (match.profileName || match.project) && (
-                <span className="shrink-0 flex items-center gap-1 font-mono text-[9px]">
+                <span className="shrink-0 flex items-center gap-1 font-mono text-2xs">
                   {match.profileName && (
                     <span className="px-1.5 py-0.5 rounded-sm bg-zinc-500/15 text-[var(--color-text-muted)]">
                       {match.profileName}
@@ -62,7 +62,7 @@ export function SearchPanelResults({
                 pathOrName={match.path}
                 className="h-3.5 w-3.5 shrink-0"
               />
-              <span className="min-w-0 truncate text-[11px] font-mono text-[var(--color-text)]">
+              <span className="min-w-0 truncate text-xs font-mono text-[var(--color-text)]">
                 {highlightMatch(match.path, query, caseSensitive)}
               </span>
             </button>
@@ -81,12 +81,12 @@ export function SearchPanelResults({
             className="border-b border-[var(--color-border)]/40 last:border-0"
           >
             <div
-              className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-[10px] font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
+              className="sticky top-0 px-2 py-1 bg-[var(--color-surface-2)] text-2xs font-semibold text-[var(--color-text-muted)] tracking-wide truncate cursor-pointer hover:text-[var(--color-text)] transition-colors flex items-center gap-1.5"
               title={group.path}
               onClick={() => onContentMatchClick(group.matches[0]!)}
             >
               {scope === "workspace" && (group.profileName || group.project) && (
-                <span className="shrink-0 flex items-center gap-1 font-mono text-[9px] tracking-normal">
+                <span className="shrink-0 flex items-center gap-1 font-mono text-2xs tracking-normal">
                   {group.profileName && (
                     <span className="px-1.5 py-0.5 rounded-sm bg-zinc-500/15 text-[var(--color-text-muted)]">
                       {group.profileName}
@@ -113,14 +113,16 @@ export function SearchPanelResults({
                   key={matchKey}
                   onClick={() => onContentMatchClick(match)}
                   className={cn(
-                    "w-full text-left flex items-start gap-2 px-3 py-1 transition-colors group hover:bg-[var(--color-surface-2)]",
-                    isSelected && "bg-[var(--color-primary)]/10",
+                    "w-full text-left flex items-start gap-2 px-3 py-1 transition-colors group",
+                    isSelected
+                      ? "workbench-selection"
+                      : "hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
                   )}
                 >
-                  <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
+                  <span className="shrink-0 text-2xs text-[var(--color-text-muted)] font-mono w-8 text-right mt-0.5">
                     {match.line}
                   </span>
-                  <span className="text-[11px] font-mono text-[var(--color-text)] truncate leading-5">
+                  <span className="text-xs font-mono text-[var(--color-text)] truncate leading-5">
                     {highlightMatch(
                       match.text.trimStart(),
                       query,

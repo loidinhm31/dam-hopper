@@ -97,7 +97,7 @@ function TraditionalProjectGitSummary({
   return (
     <span
       aria-label={accessibleLabel}
-      className="mt-1 flex min-w-0 flex-col gap-0.5 text-[11px] leading-4"
+      className="mt-1 flex min-w-0 flex-col gap-0.5 text-xs leading-snug"
       role="status"
       title={accessibleLabel}
     >
@@ -180,7 +180,7 @@ function TraditionalProjectRow({
       className={cn(
         "group/row relative flex flex-col gap-1 px-3 py-1 transition-colors",
         isActive
-          ? "bg-[var(--color-primary)]/10 text-[var(--color-text)]"
+          ? "workbench-selection"
           : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]/40",
       )}
     >
@@ -204,14 +204,26 @@ function TraditionalProjectRow({
         <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate font-mono">{group.label}</span>
+            <span
+              className={cn(
+                "min-w-0 truncate font-mono",
+                isActive ? "text-[var(--color-selection-text)] font-semibold" : "text-current",
+              )}
+            >
+              {group.label}
+            </span>
             {group.profileName && (
               <ProfileBadge
                 profileId={group.profileId}
                 name={group.profileName}
               />
             )}
-            <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-muted)]">
+            <span
+              className={cn(
+                "ml-auto shrink-0 text-2xs",
+                isActive ? "text-[var(--color-selection-text)]/80" : "text-[var(--color-text-muted)]",
+              )}
+            >
               {group.terminalTabs.length}
             </span>
           </span>
@@ -327,7 +339,7 @@ export function TraditionalTerminalProjectsNavigator({
     >
       <section aria-labelledby={projectsHeadingId} className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-          <h2 id={projectsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+          <h2 id={projectsHeadingId} className="text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
             projects
           </h2>
           {onNewTerminal ? (
@@ -372,7 +384,7 @@ export function TraditionalTerminalProjectsNavigator({
       </section>
       <section aria-labelledby={agentsHeadingId} className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-[var(--color-border)] px-4 py-2">
-          <h2 id={agentsHeadingId} className="text-xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+          <h2 id={agentsHeadingId} className="text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
             agents
           </h2>
           {agentSettingsHref ? (

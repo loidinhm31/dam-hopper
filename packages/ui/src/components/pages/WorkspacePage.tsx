@@ -1531,7 +1531,7 @@ export default function WorkspacePage() {
                   type="button"
                   onClick={() => setTerminalUsageMode(mode)}
                   className={cn(
-                    "rounded-[3px] px-2 py-1 text-[11px] font-medium capitalize transition-colors",
+                    "rounded-[3px] px-2 py-1 text-xs font-medium capitalize transition-colors",
                     terminalUsageMode === mode
                       ? "bg-[var(--color-primary)] text-white"
                       : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
@@ -1565,7 +1565,7 @@ export default function WorkspacePage() {
                 onClick={toggleEmbeddedBrowser}
                 aria-pressed={browserOpen}
                 className={cn(
-                  "rounded-sm px-2 py-1 text-[11px] font-medium transition-colors",
+                  "rounded-sm px-2 py-1 text-xs font-medium transition-colors",
                   browserOpen
                     ? "bg-[var(--color-primary)] text-white"
                     : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]",
@@ -1588,7 +1588,7 @@ export default function WorkspacePage() {
                     onClick={() => {
                       activateTerminalPanelShortcut(id as TerminalPanelToolId);
                     }}
-                    className="rounded-[3px] px-2 py-1 text-[11px] font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                    className="rounded-[3px] px-2 py-1 text-xs font-medium text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   >
                     {label}
                   </button>
@@ -1669,7 +1669,7 @@ export default function WorkspacePage() {
                   }
                 />
                 {freeTerminalSavePrompt.error && (
-                  <p className="text-[10px] text-[var(--color-danger)] mt-0.5">
+                  <p className="text-2xs text-[var(--color-danger)] mt-0.5">
                     {freeTerminalSavePrompt.error}
                   </p>
                 )}
@@ -1839,7 +1839,7 @@ export default function WorkspacePage() {
                 >
                   Open Terminal
                 </Button>
-                <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">
+                <kbd className="text-2xs text-[var(--color-text-muted)]/50 font-mono">
                   Ctrl+`
                 </kbd>
               </div>
@@ -1869,7 +1869,7 @@ export default function WorkspacePage() {
                     <Plus className="h-3.5 w-3.5" />
                     Open Terminal
                   </Button>
-                  <kbd className="text-[10px] text-[var(--color-text-muted)]/50 font-mono">
+                  <kbd className="text-2xs text-[var(--color-text-muted)]/50 font-mono">
                     Ctrl+`
                   </kbd>
                 </div>

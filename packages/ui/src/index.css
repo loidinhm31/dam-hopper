@@ -43,6 +43,28 @@
   --color-input: hsl(217, 33%, 9%);
   --color-ring: hsl(217, 91%, 60%);
 
+  /* ── Selection Tokens ── */
+  --color-selection: hsl(217, 91%, 60%, 0.28);
+  --color-selection-border: hsl(217, 91%, 65%);
+  --color-selection-text: hsl(210, 40%, 100%);
+  --color-selection-hover: hsl(217, 91%, 60%, 0.35);
+
+  /* ── Adaptive System Typography (driven by --app-font-size) ── */
+  --text-2xs: calc(var(--app-font-size, 14px) * 0.714);
+  --text-2xs--line-height: 1.4;
+  --text-xs: calc(var(--app-font-size, 14px) * 0.857);
+  --text-xs--line-height: calc(4 / 3);
+  --text-sm: var(--app-font-size, 14px);
+  --text-sm--line-height: calc(10 / 7);
+  --text-base: calc(var(--app-font-size, 14px) * 1.143);
+  --text-base--line-height: 1.5;
+  --text-lg: calc(var(--app-font-size, 14px) * 1.286);
+  --text-lg--line-height: calc(14 / 9);
+  --text-xl: calc(var(--app-font-size, 14px) * 1.429);
+  --text-xl--line-height: 1.4;
+  --text-2xl: calc(var(--app-font-size, 14px) * 1.714);
+  --text-2xl--line-height: calc(4 / 3);
+
   /* Syntax Highlighting Palette */
   --color-syntax-blue: hsl(217, 91%, 60%); /* keywords, functions */
   --color-syntax-cyan: hsl(189, 94%, 43%); /* variables, properties */
@@ -102,6 +124,28 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+  /* Native DOM text selection — distinct from xterm/monaco custom selection */
+  ::selection {
+    background-color: var(--color-selection-hover);
+    color: var(--color-selection-text);
+  }
+}
+
+/* ── Shared High-Contrast Workbench Selection ── */
+.workbench-selection {
+  background-color: var(--color-selection);
+  color: var(--color-selection-text);
+  box-shadow: inset 3px 0 0 var(--color-selection-border);
+}
+
+.workbench-selection:hover {
+  background-color: var(--color-selection-hover);
+  color: var(--color-selection-text);
+}
+
+.workbench-selection:focus-visible {
+  outline: 2px solid var(--color-selection-border);
+  outline-offset: -2px;
 }
 
 .app-screen-height {

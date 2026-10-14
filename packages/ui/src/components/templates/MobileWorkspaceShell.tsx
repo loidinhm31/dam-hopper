@@ -103,7 +103,7 @@ export function MobileWorkspaceShell({
             <p className="truncate text-xs font-semibold text-[var(--color-text)]">
               {activeSurface?.label}
             </p>
-            <span className="shrink-0 text-[9px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+            <span className="shrink-0 text-2xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
               {workspaceMode === "ide" ? "IDE" : "Terminal"}
             </span>
           </div>
@@ -172,7 +172,7 @@ export function MobileWorkspaceShell({
                 aria-hidden="true"
               />
               <span className="shrink-0 font-semibold">Panels</span>
-              <span className="max-w-16 truncate text-[9px] text-[var(--color-text-muted)]">
+              <span className="max-w-16 truncate text-2xs text-[var(--color-text-muted)]">
                 {activeSurface.label}
               </span>
             </span>

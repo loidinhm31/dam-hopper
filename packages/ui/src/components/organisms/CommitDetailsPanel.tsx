@@ -205,7 +205,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
       {props.mode === "inspect" && props.outsideViewNotice && (
         <div
           data-testid="outside-history-view-notice"
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-[11px] text-amber-400 font-medium"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-xs text-amber-400 font-medium"
         >
           <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
           <span>
@@ -216,7 +216,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
       {detailsError && (
         <div
           data-testid="commit-details-error"
-          className="flex items-center gap-1.5 px-3 py-2 bg-rose-500/10 border-b border-rose-500/20 text-[11px] text-rose-400"
+          className="flex items-center gap-1.5 px-3 py-2 bg-rose-500/10 border-b border-rose-500/20 text-xs text-rose-400"
         >
           <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
           <span>
@@ -228,12 +228,12 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
       <div className="shrink-0 flex items-start justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         <div className="flex flex-col min-w-0 pr-2">
           <span
-            className="text-[12px] font-semibold text-[var(--color-text)] truncate"
+            className="text-xs font-semibold text-[var(--color-text)] truncate"
             title={subject}
           >
             {subject}
           </span>
-          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-[var(--color-text-muted)]">
+          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-2xs text-[var(--color-text-muted)]">
             <span
               className="font-medium text-[var(--color-text)] truncate max-w-[150px]"
               title={
@@ -257,7 +257,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
               type="button"
               onClick={handleCopyHash}
               title={`Click to copy full commit hash: ${commitHash}`}
-              className="font-mono text-[10px] bg-[var(--color-background)] hover:bg-[var(--color-surface)] px-1.5 py-0.5 rounded border border-[var(--color-border)] flex items-center gap-1 transition-colors text-[var(--color-text-muted)] hover:text-[var(--color-text)] ml-1"
+              className="font-mono text-2xs bg-[var(--color-background)] hover:bg-[var(--color-surface)] px-1.5 py-0.5 rounded border border-[var(--color-border)] flex items-center gap-1 transition-colors text-[var(--color-text-muted)] hover:text-[var(--color-text)] ml-1"
             >
               <span>{commitHash.substring(0, 7)}</span>
               {copied ? (
@@ -270,7 +270,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
           {Boolean(committerName || committerEmail) && (
             <div
               data-testid="commit-details-committer"
-              className="flex flex-wrap items-center gap-1.5 mt-0.5 text-[10px] text-[var(--color-text-muted)]"
+              className="flex flex-wrap items-center gap-1.5 mt-0.5 text-2xs text-[var(--color-text-muted)]"
             >
               <span className="opacity-70">Committed by</span>
               <span
@@ -308,7 +308,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
 
       {fullMessage && (
         <div className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-background)]/30 max-h-36 overflow-y-auto">
-          <pre className="text-[11px] font-mono whitespace-pre-wrap break-words text-[var(--color-text)]/90 leading-relaxed select-text">
+          <pre className="text-xs font-mono whitespace-pre-wrap break-words text-[var(--color-text)]/90 leading-relaxed select-text">
             {fullMessage}
           </pre>
         </div>
@@ -322,7 +322,7 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
           </div>
         ) : (
           <div className="space-y-0.5">
-            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] opacity-60">
+            <div className="px-2 py-1 text-2xs font-bold uppercase tracking-wider text-[var(--color-text-muted)] opacity-60">
               Files ({files?.length ?? 0})
             </div>
             {files?.map((file, index) => {
@@ -335,20 +335,27 @@ export function CommitDetailsPanel(props: CommitDetailsPanelProps) {
                   onClick={(event) => selectFile(file, index, event)}
                   onDoubleClick={() => onFileDoubleClick(file)}
                   className={cn(
-                    "group flex items-center justify-between px-2 py-1 rounded cursor-default select-none transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/40",
+                    "group flex items-center justify-between px-2 py-1 rounded cursor-default select-none transition-colors focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]/60",
                     isSelected
-                      ? "bg-[var(--color-primary)]/10"
-                      : "hover:bg-[var(--color-primary)]/5",
+                      ? "workbench-selection"
+                      : "hover:bg-[var(--color-surface-2)] text-[var(--color-text)]",
                   )}
                   title="Double-click to see historical diff"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <StatusBadge status={file.status} />
-                    <span className="text-[11px] truncate text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">
+                    <span
+                      className={cn(
+                        "text-xs truncate transition-colors",
+                        isSelected
+                          ? "text-[var(--color-selection-text)] font-medium"
+                          : "text-[var(--color-text)] group-hover:text-[var(--color-text)]",
+                      )}
+                    >
                       {file.path}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0 opacity-80 group-hover:opacity-100">
+                  <div className="flex items-center gap-1.5 text-2xs font-mono shrink-0 opacity-80 group-hover:opacity-100">
                     {file.additions > 0 && (
                       <span className="text-emerald-500">
                         +{file.additions}
@@ -462,7 +469,7 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        "w-3.5 h-3.5 flex items-center justify-center text-[9px] font-black rounded-[2px] border border-current opacity-70",
+        "w-3.5 h-3.5 flex items-center justify-center text-2xs font-black rounded-[2px] border border-current opacity-70",
         color,
       )}
     >

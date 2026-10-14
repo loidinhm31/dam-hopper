@@ -42,6 +42,14 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Keep effects and listeners paired with deterministic cleanup. Browser APIs and terminal input must not bypass current mode/owner guards.
 - Present disconnected, unsupported, loading, unknown, and error states explicitly; do not fabricate success or silently select another profile.
 - **React 19 Radix UI Patch Invariant:** Maintain the pnpm patch `patches/@radix-ui__react-compose-refs@1.1.2.patch`. This patch stabilizes `useComposedRefs` via `useRef` to eliminate infinite ref callback loops under React 19. Do not assume or introduce unverified patches (such as react-slot).
+
+### UI Selection Contrast & Adaptive Typography Invariants
+
+- **Selection System (`.workbench-selection`):** Active row/list items must use the high-contrast semantic selection tokens (`--color-selection`, `--color-selection-border`, `--color-selection-text`, `--color-selection-hover`) via the shared `.workbench-selection` utility. Left indicators use inset box-shadow (`box-shadow: inset 3px 0 0 var(--color-selection-border)`) to prevent layout shifts. Keyboard focus (`:focus-visible`) uses an outline (`2px solid var(--color-selection-border)`) to coexist with the inset left indicator.
+- **Adaptive Typography (`--app-font-size`):** The "System font size" user setting (`systemFontSize`) updates `--app-font-size` on `:root`. All semantic typography tokens (`--text-2xs` through `--text-2xl`) in Tailwind `@theme` are derived from `--app-font-size` with unitless companion line heights.
+- **Root Font & Layout Invariance:** `html` font size is never dynamically altered; layout `rem` dimensions (spacing, padding, container widths, hit target heights) remain stable. App zoom (`--app-zoom`) operates independently.
+- **Editor & Terminal Font Independence:** Monaco code editor (`editorFontSize`) and xterm terminal (`terminalFontSize`) maintain independent font size configurations and must never be driven by `--app-font-size`.
+- **Virtualized Trees (`FileTree`):** Uniform item row heights in Arborist are computed dynamically using `getFileTreeRowHeight(systemFontSize)` from `@/lib/workbench-typography.js` to ensure content never clips across the supported 10–32px range without resetting scroll or unmounting trees.
 ## Domain-specific invariants
 
 ### Git history changes

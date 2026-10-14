@@ -65,7 +65,7 @@ function RuntimePortChip({
     port.tunnelStatus === "ready" ? port.tunnelUrl : undefined;
 
   return (
-    <div className="flex items-center gap-1 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)]">
+    <div className="flex items-center gap-1 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-2xs text-[var(--color-text-muted)]">
       <Radio className="h-3 w-3 shrink-0" />
       <span className="font-mono text-[var(--color-text)]">:{port.port}</span>
       <span>{port.tunnelStatus ?? (port.state === "unknown" ? "origin untracked" : port.state)}</span>
@@ -157,8 +157,8 @@ function RuntimeSessionLeaf({
         "focus-within:ring-1 focus-within:ring-[var(--color-primary)]/60",
         touchOptimized && "min-h-11 py-2 text-sm",
         active
-          ? "bg-[var(--color-primary)]/15 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-primary)]/45"
-          : "",
+          ? "workbench-selection"
+          : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-text-muted)]",
       )}
     >
       <div className="flex items-center gap-2">
