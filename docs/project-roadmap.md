@@ -1,11 +1,12 @@
 # DamHopper Project Roadmap
 
-**Updated:** 2026-10-05. This page tracks current delivery and qualification state. Historical delivery notices are in the [changelog](./CHANGELOG.md).
+**Updated:** 2026-10-14. This page tracks current delivery and qualification state. Historical delivery notices are in the [changelog](./CHANGELOG.md).
 
 ## Recently delivered
 
 | Area | Current status |
 | --- | --- |
+| Traditional terminal multi-select agent status filter | **In progress (Pending remediation verification).** Multi-select agent status filter (`TraditionalTerminalAgentFilter`) implemented in traditional terminal left sidebar (`TraditionalTerminalProjectsNavigator`). Supports union filtering across 7 canonical statuses, count badges, and backward-compatible `localStorage` persistence (`dam-hopper:traditional-terminal-agents-status-filter`). Code review identified compact sheet listbox viewport collision (H1); dynamic upward placement implemented, formal post-remediation verification across compact viewports (568/700/844px) pending. |
 | SQLite authentication lite mode | **Complete.** Environment-selected SQLite authentication (`DAM_HOPPER_LITE_MODE=true`, `DAM_HOPPER_AUTH_SQLITE_PATH`) with MongoDB remaining the default and no automatic backend fallback. Includes STRICT tables, WAL durability (one server process per local auth file, no network filesystems), mandatory production 32-byte `DAM_HOPPER_MFA_KEY_FILE`, disabled-by-default registration (`POST /api/auth/register` creates disabled `user` accounts with `auth_version = 0`; `401 ACCOUNT_DISABLED` until local operator approval and explicit `admin` promotion, with no automatic first-user admin rights), canonical local `sqlite3` operator runbooks, and application E2E qualification (`e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts` with `authBackend: "sqlite"` and no MongoDB container). See [Server Environment & Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook), [Authentication API](./api/authentication.md), and [Authentication State & Cryptography](./architecture/authentication-state-and-cryptography.md). |
 | Git commit rewrite and squash | **Complete.** Commit message rewrite and contiguous-chain squash use captured branch/HEAD CAS; publication remains a separate exact-OID leased operation. Extended in PR #47 to support inactive local branches and leased publication via `target_branch`. See [Git history architecture](./architecture/git-history-search.md). |
 | Quick tunnel isolation | **Complete (PR #46).** Ephemeral Cloudflared quick tunnels isolate host configuration (`--config ""`), rewrite dev server host headers (`--http-host-header localhost`), and enforce a single-authority supervisor exit lifecycle. |

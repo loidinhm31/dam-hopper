@@ -7,9 +7,10 @@ import { groupTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-ag
 import {
   countTraditionalTerminalAgentsByStatus,
   filterTraditionalTerminalAgentRows,
+  formatTraditionalAgentStatusFilter,
   loadTraditionalTerminalAgentFilter,
   saveTraditionalTerminalAgentFilter,
-  type TraditionalAgentStatusFilter,
+  type TraditionalAgentStatusSelection,
 } from "@/lib/traditional-terminal-agent-filter.js";
 import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
@@ -268,7 +269,7 @@ export function TraditionalTerminalProjectsNavigator({
   const projectsHeadingId = useId();
   const agentsHeadingId = useId();
   const [selectedFilter, setSelectedFilter] =
-    useState<TraditionalAgentStatusFilter>(() =>
+    useState<TraditionalAgentStatusSelection>(() =>
       loadTraditionalTerminalAgentFilter(),
     );
   const agentCounts = useMemo(
@@ -284,7 +285,7 @@ export function TraditionalTerminalProjectsNavigator({
     [filteredAgentRows],
   );
 
-  function handleFilterChange(next: TraditionalAgentStatusFilter) {
+  function handleFilterChange(next: TraditionalAgentStatusSelection) {
     setSelectedFilter(next);
     saveTraditionalTerminalAgentFilter(next);
   }
@@ -411,7 +412,7 @@ export function TraditionalTerminalProjectsNavigator({
             </p>
           ) : (
             <p role="status" className="px-4 py-3 text-xs leading-relaxed text-[var(--color-text-muted)]">
-              No observed agents match {selectedFilter}.
+              No observed agents match {formatTraditionalAgentStatusFilter(selectedFilter)}.
             </p>
           )}
         </fieldset>

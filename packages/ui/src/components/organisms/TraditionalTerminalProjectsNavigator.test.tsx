@@ -199,9 +199,11 @@ describe("TraditionalTerminalProjectsNavigator", () => {
 
   async function openFilterDropdown() {
     const trigger = getFilterTrigger();
-    await act(async () => {
-      trigger.click();
-    });
+    if (trigger.getAttribute("aria-expanded") !== "true") {
+      await act(async () => {
+        trigger.click();
+      });
+    }
     const options = Array.from(
       document.querySelectorAll<HTMLElement>('[role="option"]'),
     );
@@ -748,15 +750,16 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       expect(buttons).toHaveLength(1);
       expect(buttons[0]!.getAttribute("aria-label")).toContain("Working");
 
+      // Multi-select: toggle Idle as well -> shows both Working and Idle
       await selectFilterOption("Idle");
+      buttons = getAgentButtons();
+      expect(buttons).toHaveLength(2);
+
+      // Deselect Working -> only Idle remains
+      await selectFilterOption("Working");
       buttons = getAgentButtons();
       expect(buttons).toHaveLength(1);
       expect(buttons[0]!.getAttribute("aria-label")).toContain("Idle");
-
-      await selectFilterOption("Needs attention");
-      buttons = getAgentButtons();
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]!.getAttribute("aria-label")).toContain("Needs attention");
 
       await selectFilterOption("all");
       expect(getAgentButtons()).toHaveLength(3);
@@ -904,11 +907,13 @@ describe("TraditionalTerminalProjectsNavigator", () => {
         "Question",
       );
 
+      await selectFilterOption("all");
       await selectFilterOption("Idle");
       const idleButtons = getAgentButtons();
       expect(idleButtons).toHaveLength(1);
       expect(idleButtons[0]!.getAttribute("aria-label")).toContain("Idle");
       expect(idleButtons[0]!.textContent).toContain("Done (turn ended)");
+      await selectFilterOption("all");
       await selectFilterOption("Working");
       expect(getAgentButtons()).toHaveLength(0);
       expect(container.textContent).toContain(
@@ -1046,7 +1051,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
         onSelectAgent,
         onSelectGroup,
       });
-      await selectFilterOption("Working");
+      // Working is already active from previous step
       expect(getAgentButtons()).toHaveLength(2);
 
       await selectFilterOption("all");
@@ -1297,6 +1302,92 @@ describe("TraditionalTerminalProjectsNavigator", () => {
           Object.defineProperty(window, "localStorage", originalDesc);
         }
       }
+    });
+
+    it("filters across multiple selected statuses, shows combined agent roster, and sums count badge", async () => {
+      const working = makeAgentRow("server-a", "Working", {
+        id: "t-1",
+        label: "Working",
+      });
+      const idle = makeAgentRow("server-a", "Idle", {
+        id: "t-2",
+        label: "Idle",
+      });
+      const attention = makeAgentRow("server-a", "Attention", {
+        id: "t-3",
+        label: "Needs attention",
+      });
+
+      renderNavigator({ agentRows: [working, idle, attention] });
+      expect(getAgentButtons()).toHaveLength(3);
+
+      // Select Working
+      await selectFilterOption("Working");
+      expect(getAgentButtons()).toHaveLength(1);
+      let trigger = getFilterTrigger();
+      expect(trigger.textContent).toContain("Working");
+      expect(trigger.querySelector('[data-testid="agent-filter-count-badge"]')!.textContent).toBe("1");
+
+      // Select Idle -> now Working + Idle combined
+      await selectFilterOption("Idle");
+      expect(getAgentButtons()).toHaveLength(2);
+      trigger = getFilterTrigger();
+      expect(trigger.textContent).toContain("Working, Idle");
+      expect(trigger.querySelector('[data-testid="agent-filter-count-badge"]')!.textContent).toBe("2");
+      const agentNames = getAgentButtons().map((b) => b.textContent);
+      expect(agentNames.some((t) => t?.includes("Working"))).toBe(true);
+      expect(agentNames.some((t) => t?.includes("Idle"))).toBe(true);
+      expect(agentNames.some((t) => t?.includes("Attention"))).toBe(false);
+    });
+
+    it("displays comma-separated labels in empty roster message when multiple statuses match zero agents", async () => {
+      const attention = makeAgentRow("server-a", "Attention", {
+        id: "t-1",
+        label: "Needs attention",
+      });
+      renderNavigator({ agentRows: [attention] });
+
+      // Multi-select Working and Idle (neither matches the attention agent)
+      await selectFilterOption("Working");
+      await selectFilterOption("Idle");
+
+      expect(getAgentButtons()).toHaveLength(0);
+      expect(container.textContent).toContain("No observed agents match Working, Idle.");
+    });
+
+    it("persists multi-status JSON array to storage on user selection and restores combined filter across fresh remounts", async () => {
+      const working = makeAgentRow("server-a", "W", { id: "t-1", label: "Working" });
+      const idle = makeAgentRow("server-a", "I", { id: "t-2", label: "Idle" });
+      const attention = makeAgentRow("server-a", "A", { id: "t-3", label: "Needs attention" });
+
+      renderNavigator({ agentRows: [working, idle, attention] });
+
+      // User selects Working -> scalar string stored
+      await selectFilterOption("Working");
+      expect(
+        window.localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
+      ).toBe("Working");
+
+      // User selects Idle -> combined JSON array stored
+      await selectFilterOption("Idle");
+      expect(
+        window.localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
+      ).toBe(JSON.stringify(["Working", "Idle"]));
+      expect(getAgentButtons()).toHaveLength(2);
+
+      // Fresh remount
+      act(() => root.unmount());
+      root = createRoot(container);
+      renderNavigator({ agentRows: [working, idle, attention] });
+
+      const trigger = getFilterTrigger();
+      expect(trigger.textContent).toContain("Working");
+      expect(trigger.textContent).toContain("Idle");
+      expect(
+        trigger.querySelector('[data-testid="agent-filter-count-badge"]')!
+          .textContent,
+      ).toBe("2");
+      expect(getAgentButtons()).toHaveLength(2);
     });
   });
 });

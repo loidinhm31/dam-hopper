@@ -1207,8 +1207,6 @@ describe("Traditional terminal projects in Chromium", () => {
     const idleOption = page.getByRole("option", { name: /^Idle\b/ });
     await expect.element(idleOption).toBeVisible();
     await userEvent.click(idleOption);
-
-    // Filter trigger now reflects Idle
     await expect.element(filterTrigger).toHaveTextContent(/Idle/);
     expect(
       localStorage.getItem(TRADITIONAL_TERMINAL_AGENT_FILTER_STORAGE_KEY),
@@ -1237,10 +1235,16 @@ describe("Traditional terminal projects in Chromium", () => {
         .querySelectorAll("li"),
     ).toHaveLength(2);
 
-    // Switch filter to "Working" (which initially has 0 matching agents in fixture)
+    // Multi-select: clicking Working while Idle is selected adds Working (both Idle and Working active)
     await userEvent.click(reloadedTrigger);
     const workingOption = page.getByRole("option", { name: /^Working\b/ });
     await userEvent.click(workingOption);
+
+    // Both agent groups are Idle so both remain visible under combined filter
+    expect(roster.element().querySelectorAll("li")).toHaveLength(2);
+    // Uncheck Idle to isolate Working alone
+    const reloadedIdleOption = page.getByRole("option", { name: /^Idle\b/ });
+    await userEvent.click(reloadedIdleOption);
 
     await expect.element(reloadedTrigger).toHaveTextContent(/Working/);
     expect(
@@ -1249,9 +1253,7 @@ describe("Traditional terminal projects in Chromium", () => {
     await expect
       .element(page.getByText("No observed agents match Working."))
       .toBeVisible();
-
-    // Switch back to "All statuses"
-    await userEvent.click(reloadedTrigger);
+    // Switch back to "All statuses" while dropdown is open
     const allOption = page.getByRole("option", { name: /^All statuses\b/ });
     await userEvent.click(allOption);
     await expect.element(reloadedTrigger).toHaveTextContent(/All statuses/);
@@ -1264,7 +1266,8 @@ describe("Traditional terminal projects in Chromium", () => {
         .element()
         .querySelectorAll("li"),
     ).toHaveLength(2);
-
+    // Dismiss dropdown with Escape
+    await userEvent.keyboard("{Escape}");
     // Live update test: transition Claude to Working
     await act(async () => {
       updateTraditionalAgentFixtureStatus(agentFixtureRefs.claude, {
@@ -1870,7 +1873,6 @@ describe("Traditional terminal projects in Chromium", () => {
     const workingOption = page.getByRole("option", { name: /^Working\b/ });
     await expect.element(workingOption).toBeVisible();
     await userEvent.click(workingOption);
-
     // Sheet dialog remains open; selection was committed
     await expect.element(dialog).toBeVisible();
     await expect.element(filterTrigger).toHaveTextContent(/Working/);
@@ -1891,6 +1893,56 @@ describe("Traditional terminal projects in Chromium", () => {
     expect(
       page.getByTestId("fixture-active-session").element().textContent,
     ).toBe(initialSession);
+  });
+
+  it.each([
+    { width: 320, height: 568 },
+    { width: 375, height: 700 },
+    { width: 390, height: 844 },
+  ])("verifies compact listbox vertical containment and reachability of bottommost option at $width x $height", async ({ width, height }) => {
+    await page.viewport(width, height);
+    container.style.width = `${width}px`;
+    compactState.value = true;
+    await mountAgents();
+    const initialSession =
+      page.getByTestId("fixture-active-session").element().textContent;
+    const opener = page.getByRole("button", { name: "Projects + Agents" });
+    await userEvent.click(opener);
+    const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
+    await expect.element(dialog).toBeVisible();
+
+    const filterTrigger = dialog.getByRole("combobox", {
+      name: "Filter agents by status",
+    });
+    await expect.element(filterTrigger).toBeVisible();
+
+    // Open filter dropdown inside sheet
+    await userEvent.click(filterTrigger);
+    const listbox = page.getByRole("listbox", { name: "Filter agents by status" });
+    await expect.element(listbox).toBeVisible();
+
+    // Vertical containment assertion
+    const listboxRect = listbox.element().getBoundingClientRect();
+    expect(listboxRect.top).toBeGreaterThanOrEqual(0);
+    expect(listboxRect.bottom).toBeLessThanOrEqual(height);
+
+    // Scroll to and select the bottommost option ("Unsupported") with real pointer
+    const unsupportedOption = page.getByRole("option", { name: /^Unsupported\b/ });
+    await expect.element(unsupportedOption).toBeInTheDocument();
+    await userEvent.click(unsupportedOption);
+
+    // Sheet dialog remains open; selection committed; terminal session unchanged
+    await expect.element(dialog).toBeVisible();
+    await expect.element(filterTrigger).toHaveTextContent(/Unsupported/);
+    expect(
+      page.getByTestId("fixture-active-session").element().textContent,
+    ).toBe(initialSession);
+
+    // Close sheet
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Close", exact: true }),
+    );
+    await waitForProjectsSheetDismissal(opener.element());
   });
 
   it("navigates status filter options via keyboard arrows and typeahead in Chromium", async () => {
@@ -1915,13 +1967,17 @@ describe("Traditional terminal projects in Chromium", () => {
     // Option at index 2 is "Working"
     await expect.element(filterTrigger).toHaveTextContent(/Working/);
 
-    // Test real typeahead typing: focus, open, type 'i' for Idle, commit
-    await act(async () => filterTrigger.element().focus());
-    await userEvent.keyboard("{Enter}");
-    await expect.element(page.getByRole("option", { name: /^Idle\b/ })).toBeVisible();
+    // Dropdown remains open during multi-selection; test typeahead typing 'i' for Idle and commit
+    const idleOption = page.getByRole("option", { name: /^Idle\b/ });
+    await expect.element(idleOption).toBeVisible();
     await userEvent.keyboard("i");
     await userEvent.keyboard("{Enter}");
-    await expect.element(filterTrigger).toHaveTextContent(/Idle/);
+    // Both Working and Idle are now selected
+    await expect.element(filterTrigger).toHaveTextContent(/Working, Idle/);
+
+    // Dismiss via Escape and verify options close
+    await userEvent.keyboard("{Escape}");
+    await expect.element(idleOption).not.toBeInTheDocument();
   });
 
   it.each([320, 375, 390])(

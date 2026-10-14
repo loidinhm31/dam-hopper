@@ -1,15 +1,40 @@
 // @vitest-environment jsdom
 
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TraditionalAgentStatusLabel } from "@/lib/traditional-terminal-agents.js";
 import {
   TraditionalTerminalAgentFilter,
+  type TraditionalAgentStatusSelection,
   type TraditionalTerminalAgentFilterProps,
+  type TraditionalTerminalAgentStatusCounts,
 } from "./traditional-terminal-agent-filter.js";
 
-const DEFAULT_COUNTS: Readonly<Record<"all" | TraditionalAgentStatusLabel, number>> = {
+if (typeof window !== "undefined" && typeof window.PointerEvent === "undefined") {
+  class MockPointerEvent extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    constructor(
+      type: string,
+      params: MouseEventInit & { pointerId?: number; pointerType?: string } = {},
+    ) {
+      super(type, params);
+      this.pointerId = params.pointerId ?? 0;
+      this.pointerType = params.pointerType ?? "";
+    }
+  }
+  // @ts-expect-error polyfill for jsdom
+  window.PointerEvent = MockPointerEvent;
+  // @ts-expect-error polyfill for jsdom
+  globalThis.PointerEvent = MockPointerEvent;
+}
+
+const DEFAULT_COUNTS: TraditionalTerminalAgentStatusCounts = {
   all: 6,
   "Needs attention": 1,
   Working: 2,
@@ -20,7 +45,7 @@ const DEFAULT_COUNTS: Readonly<Record<"all" | TraditionalAgentStatusLabel, numbe
   Unsupported: 0,
 };
 
-const ZERO_COUNTS: Readonly<Record<"all" | TraditionalAgentStatusLabel, number>> = {
+const ZERO_COUNTS: TraditionalTerminalAgentStatusCounts = {
   all: 0,
   "Needs attention": 0,
   Working: 0,
@@ -149,6 +174,8 @@ describe("TraditionalTerminalAgentFilter", () => {
       const { trigger } = renderFilter();
       expect(trigger).not.toBeNull();
       expect(trigger.getAttribute("aria-label")).toBe("Filter agents by status");
+      expect(trigger.getAttribute("aria-haspopup")).toBe("listbox");
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
     });
 
     it("renders selected label and count badge for 'all'", () => {
@@ -168,6 +195,17 @@ describe("TraditionalTerminalAgentFilter", () => {
       }
     });
 
+    it("renders comma-separated labels and sum badge when multiple statuses are selected", () => {
+      const { trigger } = renderFilter({
+        value: ["Working", "Idle"],
+        counts: DEFAULT_COUNTS,
+      });
+      expect(trigger.textContent).toContain("Working, Idle");
+      // Working count (2) + Idle count (1) = 3
+      const badge = trigger.querySelector('[data-testid="agent-filter-count-badge"]');
+      expect(badge?.textContent).toBe("3");
+    });
+
     it("resolves aria-describedby to live description text with total observed count", () => {
       const { trigger } = renderFilter({
         value: "Working",
@@ -182,7 +220,7 @@ describe("TraditionalTerminalAgentFilter", () => {
     });
 
     it("uses singular 'agent' in description when total observed count is 1", () => {
-      const singleCounts: Record<"all" | TraditionalAgentStatusLabel, number> = {
+      const singleCounts: TraditionalTerminalAgentStatusCounts = {
         ...ZERO_COUNTS,
         all: 1,
         Working: 1,
@@ -196,18 +234,31 @@ describe("TraditionalTerminalAgentFilter", () => {
       expect(descEl?.textContent).toBe("Working: 1 of 1 observed agent.");
     });
 
-    it("marks status and chevron icons with aria-hidden='true'", () => {
-      const { trigger } = renderFilter({ value: "Working" });
-      const icons = trigger.querySelectorAll("svg");
-      expect(icons.length).toBeGreaterThan(0);
-      for (const icon of icons) {
-        expect(icon.getAttribute("aria-hidden")).toBe("true");
+    it("renders status icon for single status and only chevron for all or multi", () => {
+      // Single status has 2 SVGs: status icon + chevron
+      const { trigger: workingTrigger } = renderFilter({ value: "Working" });
+      const workingSvgs = workingTrigger.querySelectorAll("svg");
+      expect(workingSvgs).toHaveLength(2);
+      for (const svg of workingSvgs) {
+        expect(svg.getAttribute("aria-hidden")).toBe("true");
       }
+
+      // "all" has 1 SVG: chevron
+      const { trigger: allTrigger } = renderFilter({ value: "all" });
+      const allSvgs = allTrigger.querySelectorAll("svg");
+      expect(allSvgs).toHaveLength(1);
+      expect(allSvgs[0]?.getAttribute("aria-hidden")).toBe("true");
+
+      // Multiple statuses has 1 SVG: chevron
+      const { trigger: multiTrigger } = renderFilter({ value: ["Working", "Idle"] });
+      const multiSvgs = multiTrigger.querySelectorAll("svg");
+      expect(multiSvgs).toHaveLength(1);
+      expect(multiSvgs[0]?.getAttribute("aria-hidden")).toBe("true");
     });
   });
 
-  describe("Portal and options", () => {
-    it("opens menu in document portal with exactly eight options in frozen order", async () => {
+  describe("Portal / listbox and options", () => {
+    it("opens menu with exactly eight options in frozen canonical order", async () => {
       const { trigger } = renderFilter();
       const { options } = await openDropdown(trigger);
 
@@ -218,6 +269,15 @@ describe("TraditionalTerminalAgentFilter", () => {
         expect(option.textContent).toContain(expected.label);
         expect(option.textContent).toContain(String(expected.count));
       }
+    });
+
+    it("has role='listbox' with aria-multiselectable='true'", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox?.getAttribute("aria-multiselectable")).toBe("true");
     });
 
     it("assigns role='option' and contains no nested buttons or tab semantics", async () => {
@@ -253,38 +313,54 @@ describe("TraditionalTerminalAgentFilter", () => {
         expect(option.textContent).toContain(expected.label);
       }
     });
-  });
 
-  describe("Controlled selection", () => {
-    it("calls onValueChange once with exact value when selecting each non-active option", async () => {
-      for (const item of EXPECTED_OPTIONS) {
-        const onValueChange = vi.fn();
-        // Start from a distinct initial value so Radix fires on selection
-        const initialValue = item.value === "all" ? "Working" : "all";
-        const { trigger } = renderFilter({
-          value: initialValue,
-          onValueChange,
-        });
-        const { options } = await openDropdown(trigger);
+    it("shows check indicator only on 'All statuses' when selection is 'all'", async () => {
+      const { trigger } = renderFilter({ value: "all" });
+      const { options } = await openDropdown(trigger);
 
-        const targetOption = options.find((el) =>
-          el.textContent?.includes(item.label),
-        );
-        expect(targetOption).toBeDefined();
+      expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+      expect(options[0]?.querySelector("svg")).not.toBeNull();
 
-        await act(async () => {
-          targetOption?.click();
-        });
-
-        expect(onValueChange).toHaveBeenCalledTimes(1);
-        expect(onValueChange).toHaveBeenCalledWith(item.value);
+      for (let i = 1; i < options.length; i++) {
+        expect(options[i]?.getAttribute("aria-selected")).toBe("false");
       }
     });
 
-    it("does not call onValueChange when re-selecting the currently active value", async () => {
+    it("shows check indicators on active statuses when multiple statuses are selected", async () => {
+      const { trigger } = renderFilter({ value: ["Working", "Idle"] });
+      const { options } = await openDropdown(trigger);
+
+      expect(options[0]?.getAttribute("aria-selected")).toBe("false");
+      // Working is index 2, Idle is index 3
+      expect(options[2]?.getAttribute("aria-selected")).toBe("true");
+      expect(options[3]?.getAttribute("aria-selected")).toBe("true");
+      // Others are false
+      expect(options[1]?.getAttribute("aria-selected")).toBe("false");
+      expect(options[4]?.getAttribute("aria-selected")).toBe("false");
+    });
+  });
+
+  describe("Controlled multi-selection interaction", () => {
+    it("resets filter to 'all' when clicking 'All statuses'", async () => {
       const onValueChange = vi.fn();
       const { trigger } = renderFilter({
-        value: "Working",
+        value: ["Working", "Idle"],
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      await act(async () => {
+        options[0]?.click();
+      });
+
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith("all");
+    });
+
+    it("isolates filter to [status] when clicking a status option while 'all' is active", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: "all",
         onValueChange,
       });
       const { options } = await openDropdown(trigger);
@@ -296,12 +372,110 @@ describe("TraditionalTerminalAgentFilter", () => {
         workingOption?.click();
       });
 
-      expect(onValueChange).not.toHaveBeenCalled();
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith(["Working"]);
+    });
+
+    it("toggles an unselected status into the selection in canonical order", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: ["Working"],
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      const idleOption = options.find((el) => el.textContent?.includes("Idle"));
+      await act(async () => {
+        idleOption?.click();
+      });
+
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith(["Working", "Idle"]);
+    });
+
+    it("toggles an active status out of the selection", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: ["Working", "Idle"],
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      const workingOption = options.find((el) =>
+        el.textContent?.includes("Working"),
+      );
+      await act(async () => {
+        workingOption?.click();
+      });
+
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith(["Idle"]);
+    });
+
+    it("reverts to 'all' when the last active status is deselected", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: ["Working"],
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      const workingOption = options.find((el) =>
+        el.textContent?.includes("Working"),
+      );
+      await act(async () => {
+        workingOption?.click();
+      });
+
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith("all");
+    });
+
+    it("reverts to 'all' when all 7 statuses are selected", async () => {
+      const sixStatuses: readonly TraditionalAgentStatusLabel[] = [
+        "Needs attention",
+        "Working",
+        "Idle",
+        "Unknown",
+        "Unavailable",
+        "Platform unqualified",
+      ];
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: sixStatuses,
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      const unsupportedOption = options.find((el) =>
+        el.textContent?.includes("Unsupported"),
+      );
+      await act(async () => {
+        unsupportedOption?.click();
+      });
+
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith("all");
+    });
+
+    it("keeps dropdown open during option toggling", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: "all",
+        onValueChange,
+      });
+      const { options } = await openDropdown(trigger);
+
+      await act(async () => {
+        options[2]?.click(); // Working
+      });
+
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
     });
 
     it("updates selected label and count when parent updates value prop", async () => {
       function ControlledTestHarness() {
-        const [filter, setFilter] = useState<"all" | TraditionalAgentStatusLabel>("all");
+        const [filter, setFilter] = useState<TraditionalAgentStatusSelection>("all");
         return (
           <TraditionalTerminalAgentFilter
             value={filter}
@@ -329,6 +503,15 @@ describe("TraditionalTerminalAgentFilter", () => {
 
       expect(trigger.textContent).toContain("Working");
       expect(trigger.textContent).toContain("2");
+
+      // Now toggle Idle as well
+      const idleOption = options.find((el) => el.textContent?.includes("Idle"));
+      await act(async () => {
+        idleOption?.click();
+      });
+
+      expect(trigger.textContent).toContain("Working, Idle");
+      expect(trigger.textContent).toContain("3");
     });
 
     it("does not update internal selection if parent does not change value", async () => {
@@ -347,8 +530,8 @@ describe("TraditionalTerminalAgentFilter", () => {
         workingOption?.click();
       });
 
-      expect(onValueChange).toHaveBeenCalledWith("Working");
-      // Trigger stays "All statuses" because parent did not rerender with "Working"
+      expect(onValueChange).toHaveBeenCalledWith(["Working"]);
+      // Trigger stays "All statuses" because parent did not rerender with ["Working"]
       expect(trigger.textContent).toContain("All statuses");
     });
   });
@@ -365,7 +548,7 @@ describe("TraditionalTerminalAgentFilter", () => {
       }
     });
 
-    it("allows choosing a zero-count status and invokes onValueChange", async () => {
+    it("allows choosing a zero-count status and invokes onValueChange with singleton array", async () => {
       const onValueChange = vi.fn();
       const { trigger } = renderFilter({
         counts: ZERO_COUNTS,
@@ -380,7 +563,7 @@ describe("TraditionalTerminalAgentFilter", () => {
         unqualOption?.click();
       });
 
-      expect(onValueChange).toHaveBeenCalledWith("Platform unqualified");
+      expect(onValueChange).toHaveBeenCalledWith(["Platform unqualified"]);
     });
 
     it("preserves selected status when its count subsequently drops to zero", () => {
@@ -429,7 +612,11 @@ describe("TraditionalTerminalAgentFilter", () => {
       });
       const { options } = await openDropdown(trigger);
 
-      const modifiedCounts = { ...DEFAULT_COUNTS, Working: 7, all: 11 };
+      const modifiedCounts: TraditionalTerminalAgentStatusCounts = {
+        ...DEFAULT_COUNTS,
+        Working: 7,
+        all: 11,
+      };
       renderFilter({ value: "Working", counts: modifiedCounts });
 
       expect(trigger.textContent).toContain("7");
@@ -463,105 +650,419 @@ describe("TraditionalTerminalAgentFilter", () => {
   });
 
   describe("Keyboard navigation", () => {
-    it("opens dropdown when trigger receives Enter key", async () => {
+    it("opens dropdown when trigger receives Enter key with preventDefault", async () => {
       const { trigger } = renderFilter();
+      trigger.focus();
+
+      const enterEvent = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
       await act(async () => {
-        trigger.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-        );
+        trigger.dispatchEvent(enterEvent);
       });
 
+      expect(enterEvent.defaultPrevented).toBe(true);
       const listbox = document.querySelector('[role="listbox"]');
       expect(listbox).not.toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(trigger);
     });
 
-    it("opens dropdown when trigger receives Space key", async () => {
+    it("opens dropdown when trigger receives Space key with preventDefault", async () => {
       const { trigger } = renderFilter();
+      trigger.focus();
+
+      const spaceEvent = new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      });
       await act(async () => {
-        trigger.dispatchEvent(
-          new KeyboardEvent("keydown", { key: " ", bubbles: true }),
-        );
+        trigger.dispatchEvent(spaceEvent);
       });
 
+      expect(spaceEvent.defaultPrevented).toBe(true);
       const listbox = document.querySelector('[role="listbox"]');
       expect(listbox).not.toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(trigger);
     });
 
-    it("opens dropdown when trigger receives ArrowDown key", async () => {
+    it("opens dropdown when trigger receives ArrowDown key and sets active descendant", async () => {
       const { trigger } = renderFilter();
+      trigger.focus();
+
+      const downEvent = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      });
       await act(async () => {
-        trigger.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
-        );
+        trigger.dispatchEvent(downEvent);
       });
 
+      expect(downEvent.defaultPrevented).toBe(true);
       const listbox = document.querySelector('[role="listbox"]');
       expect(listbox).not.toBeNull();
+      expect(trigger.getAttribute("aria-activedescendant")).toBeTruthy();
+      expect(document.activeElement).toBe(trigger);
     });
 
-    it("navigates options via keyboard arrows and commits selection with Enter", async () => {
+    it("opens dropdown when trigger receives ArrowUp key and sets active descendant to last option", async () => {
+      const { trigger } = renderFilter();
+      trigger.focus();
+
+      const upEvent = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(upEvent);
+      });
+
+      expect(upEvent.defaultPrevented).toBe(true);
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      const options = document.querySelectorAll('[role="option"]');
+      const lastOption = options[options.length - 1];
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(lastOption?.id);
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    it("navigates options via keyboard arrows with both wrap-around directions", async () => {
+      const { trigger } = renderFilter();
+      trigger.focus();
+
+      // Open with ArrowDown -> activeIndex 0
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+      });
+      const options = document.querySelectorAll('[role="option"]');
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
+      // Down again -> activeIndex 1
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[1]?.id);
+
+      // Up -> activeIndex 0
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
+      // Up again -> wrap around upward to last option (index 7)
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[7]?.id);
+
+      // Down from index 7 -> wrap around downward to first option (index 0)
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    it("jumps to first/last option via Home and End keys", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+      trigger.focus();
+
+      const options = document.querySelectorAll('[role="option"]');
+
+      // Press End -> jump to last
+      const endEvent = new KeyboardEvent("keydown", {
+        key: "End",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(endEvent);
+      });
+      expect(endEvent.defaultPrevented).toBe(true);
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[7]?.id);
+
+      // Press Home -> jump to first
+      const homeEvent = new KeyboardEvent("keydown", {
+        key: "Home",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(homeEvent);
+      });
+      expect(homeEvent.defaultPrevented).toBe(true);
+      expect(trigger.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    it("toggles active option with Enter key on trigger and retains focus", async () => {
       const onValueChange = vi.fn();
       const { trigger } = renderFilter({
         value: "all",
         onValueChange,
       });
+      trigger.focus();
 
+      // Open with ArrowDown -> index 0 (all)
       await act(async () => {
         trigger.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
         );
       });
 
-      const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
-      expect(listbox).not.toBeNull();
-
-      const options = Array.from(
-        document.querySelectorAll<HTMLElement>('[role="option"]'),
-      );
-      expect(options.length).toBeGreaterThan(1);
-      const targetOption = options[2]!; // "Working"
-
+      // Move to index 2 (Working)
       await act(async () => {
-        targetOption.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
         );
       });
 
+      // Press Enter to toggle
+      const enterEvent = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(enterEvent);
+      });
+
+      expect(enterEvent.defaultPrevented).toBe(true);
       expect(onValueChange).toHaveBeenCalledTimes(1);
-      expect(onValueChange).toHaveBeenCalledWith("Working");
+      expect(onValueChange).toHaveBeenCalledWith(["Working"]);
+      // Listbox remains open
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+      expect(document.activeElement).toBe(trigger);
     });
 
-    it("supports status typeahead matching plain display labels", async () => {
-      const { trigger } = renderFilter({ value: "all" });
-      const { options } = await openDropdown(trigger);
+    it("toggles active option with Space key on trigger and retains focus", async () => {
+      const onValueChange = vi.fn();
+      const { trigger } = renderFilter({
+        value: ["Working"],
+        onValueChange,
+      });
+      trigger.focus();
 
-      for (const expected of EXPECTED_OPTIONS) {
-        const matchingOption = options.find((opt) =>
-          opt.textContent?.includes(expected.label),
+      // Open with Enter -> index 0
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
         );
-        expect(matchingOption).toBeDefined();
-        // The display label text is present cleanly in option text
-        expect(matchingOption?.textContent).toContain(expected.label);
-      }
+      });
+
+      // Move to index 3 (Idle)
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+        );
+      });
+
+      // Press Space to toggle
+      const spaceEvent = new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(spaceEvent);
+      });
+
+      expect(spaceEvent.defaultPrevented).toBe(true);
+      expect(onValueChange).toHaveBeenCalledTimes(1);
+      expect(onValueChange).toHaveBeenCalledWith(["Working", "Idle"]);
+      expect(document.activeElement).toBe(trigger);
     });
 
-    it("dismisses dropdown on Escape without invoking onValueChange and restores trigger focus", async () => {
+    it("dismisses dropdown on Escape, isolates ancestor listeners, and restores trigger focus", async () => {
+      const ancestorKeyDownSpy = vi.fn();
+      document.body.addEventListener("keydown", ancestorKeyDownSpy);
+
       const onValueChange = vi.fn();
       const { trigger } = renderFilter({ onValueChange });
       await openDropdown(trigger);
 
       expect(document.querySelector('[role="listbox"]')).not.toBeNull();
 
+      const escapeEvent = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+
       await act(async () => {
-        const active = document.activeElement ?? document.body;
-        active.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        trigger.dispatchEvent(escapeEvent);
+      });
+
+      expect(escapeEvent.defaultPrevented).toBe(true);
+      expect(ancestorKeyDownSpy).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="listbox"]')).toBeNull();
+      expect(onValueChange).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(trigger);
+
+      document.body.removeEventListener("keydown", ancestorKeyDownSpy);
+    });
+    it("does not intercept Escape or preventDefault when event target and focus are outside widget", async () => {
+      const ancestorKeyDownSpy = vi.fn();
+      document.body.addEventListener("keydown", ancestorKeyDownSpy);
+
+      const outsideButton = document.createElement("button");
+      document.body.appendChild(outsideButton);
+
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+
+      outsideButton.focus();
+
+      const escapeEvent = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+
+      await act(async () => {
+        outsideButton.dispatchEvent(escapeEvent);
+      });
+
+      expect(escapeEvent.defaultPrevented).toBe(false);
+      expect(ancestorKeyDownSpy).toHaveBeenCalled();
+      expect(document.querySelector('[role="listbox"]')).toBeNull();
+      expect(document.activeElement).toBe(outsideButton);
+
+      document.body.removeEventListener("keydown", ancestorKeyDownSpy);
+      outsideButton.remove();
+    });
+
+    it("closes dropdown on Tab and Shift+Tab without calling preventDefault", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+
+      const tabEvent = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(tabEvent);
+      });
+
+      expect(document.querySelector('[role="listbox"]')).toBeNull();
+      expect(tabEvent.defaultPrevented).toBe(false);
+
+      // Re-open and test Shift+Tab
+      await openDropdown(trigger);
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+
+      const shiftTabEvent = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        trigger.dispatchEvent(shiftTabEvent);
+      });
+
+      expect(document.querySelector('[role="listbox"]')).toBeNull();
+      expect(shiftTabEvent.defaultPrevented).toBe(false);
+    });
+
+    it("prevents focus loss on option mousedown", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+
+      const options = document.querySelectorAll<HTMLElement>('[role="option"]');
+      const targetOption = options[2]!;
+
+      const mousedownEvent = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        targetOption.dispatchEvent(mousedownEvent);
+      });
+      expect(mousedownEvent.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+    });
+    it("adjusts listbox scrollTop when navigating to options outside visible bounds", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+
+      const listbox = document.querySelector<HTMLDivElement>('[role="listbox"]')!;
+      expect(listbox).not.toBeNull();
+
+      Object.defineProperty(listbox, "clientHeight", { configurable: true, value: 200 });
+      let currentScrollTop = 0;
+      Object.defineProperty(listbox, "scrollTop", {
+        configurable: true,
+        get: () => currentScrollTop,
+        set: (v: number) => {
+          currentScrollTop = v;
+        },
+      });
+
+      const options = document.querySelectorAll<HTMLElement>('[role="option"]');
+      const lastOption = options[7]!;
+      Object.defineProperty(lastOption, "offsetTop", { configurable: true, value: 350 });
+      Object.defineProperty(lastOption, "offsetHeight", { configurable: true, value: 44 });
+
+      await act(async () => {
+        trigger.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }),
+        );
+      });
+
+      expect(currentScrollTop).toBe(350 + 44 - 200);
+    });
+
+    it("dismisses dropdown on outside pointerdown without refocusing trigger", async () => {
+      const { trigger } = renderFilter();
+      await openDropdown(trigger);
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+
+      const outsideButton = document.createElement("button");
+      document.body.append(outsideButton);
+      outsideButton.focus();
+
+      await act(async () => {
+        document.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true }),
         );
       });
 
       expect(document.querySelector('[role="listbox"]')).toBeNull();
-      expect(onValueChange).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(trigger);
+      // Outside button retains focus, trigger was not forced focused
+      expect(document.activeElement).toBe(outsideButton);
+      outsideButton.remove();
     });
   });
 
@@ -612,14 +1113,26 @@ describe("TraditionalTerminalAgentFilter", () => {
   });
 
   describe("Lifecycle and isolation", () => {
-    it("generates distinct description IDs for multiple component instances", () => {
+    it("generates distinct description IDs and listbox IDs for multiple component instances", () => {
       const container2 = document.createElement("div");
       document.body.append(container2);
       const root2 = createRoot(container2);
 
       act(() => {
-        root.render(<TraditionalTerminalAgentFilter value="all" onValueChange={vi.fn()} counts={DEFAULT_COUNTS} />);
-        root2.render(<TraditionalTerminalAgentFilter value="Working" onValueChange={vi.fn()} counts={DEFAULT_COUNTS} />);
+        root.render(
+          <TraditionalTerminalAgentFilter
+            value="all"
+            onValueChange={vi.fn()}
+            counts={DEFAULT_COUNTS}
+          />,
+        );
+        root2.render(
+          <TraditionalTerminalAgentFilter
+            value="Working"
+            onValueChange={vi.fn()}
+            counts={DEFAULT_COUNTS}
+          />,
+        );
       });
 
       const trigger1 = container.querySelector('[role="combobox"]');
@@ -632,13 +1145,20 @@ describe("TraditionalTerminalAgentFilter", () => {
       expect(descId2).toBeTruthy();
       expect(descId1).not.toBe(descId2);
 
+      const listboxId1 = trigger1?.getAttribute("aria-controls");
+      const listboxId2 = trigger2?.getAttribute("aria-controls");
+
+      expect(listboxId1).toBeTruthy();
+      expect(listboxId2).toBeTruthy();
+      expect(listboxId1).not.toBe(listboxId2);
+
       act(() => {
         root2.unmount();
       });
       container2.remove();
     });
 
-    it("removes portal listbox when component is unmounted", async () => {
+    it("removes listbox when component is unmounted", async () => {
       const { trigger } = renderFilter();
       await openDropdown(trigger);
 
