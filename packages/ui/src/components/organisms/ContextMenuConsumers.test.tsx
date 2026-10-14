@@ -142,12 +142,18 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
   useEncryptMode: () => ({ isEncryptEnabled: () => false }),
 }));
 
-vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: () => ({
+vi.mock("@/stores/settings.js", () => {
+  const settingsState = {
     explorerShowHidden: true,
+    systemFontSize: 14,
+    explorerLanguageFilter: "all",
     saveDebounced: vi.fn(),
-  }),
-}));
+  };
+  return {
+    useSettingsStore: (selector?: (state: typeof settingsState) => unknown) =>
+      selector ? selector(settingsState) : settingsState,
+  };
+});
 
 vi.mock("@/stores/editor.js", () => ({
   useEditorStore: (selector: (state: { openDiff: () => void }) => unknown) =>

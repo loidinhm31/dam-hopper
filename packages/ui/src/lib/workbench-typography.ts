@@ -17,7 +17,13 @@ export const FILE_TREE_MIN_ROW_HEIGHT = 24;
  * - floor of 24px to safely house 16px icons and compact hit targets
  */
 export function getFileTreeRowHeight(systemFontSize: number): number {
-  const safeFontSize = Math.max(10, Math.min(32, systemFontSize || 14));
+  const numericSize =
+    typeof systemFontSize === "number" &&
+    !Number.isNaN(systemFontSize) &&
+    systemFontSize > 0
+      ? systemFontSize
+      : 14;
+  const safeFontSize = Math.max(10, Math.min(32, numericSize));
   const textHeight = safeFontSize * 0.857 * (4 / 3);
   const totalHeight = Math.ceil(textHeight + 4);
   return Math.max(FILE_TREE_MIN_ROW_HEIGHT, totalHeight);

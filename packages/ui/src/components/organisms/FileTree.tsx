@@ -340,12 +340,12 @@ export function FileTree({
         : { project: targetProject, worktreePath }),
     [target, targetProject, worktreePath],
   );
-  const showHidden = useSettingsStore((s) => s.explorerShowHidden);
-  const configuredLanguageFilter = useSettingsStore(
-    (s) => s.explorerLanguageFilter,
-  );
-  const systemFontSize = useSettingsStore((s) => s.systemFontSize);
-  const saveDebounced = useSettingsStore((s) => s.saveDebounced);
+  const settings = useSettingsStore();
+  const showHidden = settings?.explorerShowHidden ?? false;
+  const configuredLanguageFilter = settings?.explorerLanguageFilter ?? "all";
+  const systemFontSize =
+    typeof settings?.systemFontSize === "number" ? settings.systemFontSize : 14;
+  const saveDebounced = settings?.saveDebounced;
   const rowHeight = useMemo(
     () => getFileTreeRowHeight(systemFontSize),
     [systemFontSize],

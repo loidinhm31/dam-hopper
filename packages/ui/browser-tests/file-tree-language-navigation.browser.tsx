@@ -87,11 +87,20 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
         : "test",
 }));
 vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: () => ({
-    explorerShowHidden: false,
-    explorerLanguageFilter: harness.filter,
-    saveDebounced: harness.saveSettings,
-  }),
+  useSettingsStore: (selector?: (state: {
+    explorerShowHidden: boolean;
+    explorerLanguageFilter: string;
+    systemFontSize: number;
+    saveDebounced: typeof harness.saveSettings;
+  }) => unknown) => {
+    const state = {
+      explorerShowHidden: false,
+      explorerLanguageFilter: harness.filter,
+      systemFontSize: 14,
+      saveDebounced: harness.saveSettings,
+    };
+    return selector ? selector(state) : state;
+  },
 }));
 vi.mock("@/stores/editor.js", () => ({
   useEditorStore: (selector: (state: { openDiff: () => void }) => unknown) =>
