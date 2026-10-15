@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -33,7 +33,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | completed (2026-10-15 21:44:52 +07:00) | 100% | 02 |
 | 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | completed (2026-10-15 22:45:00 +07:00) | 100% | 03 |
 | 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | completed (prototype-verified 2026-10-15 23:35:00 +07:00) | 100% prototype/contracts (runtime qualification open under Phase 18) | 04 |
-| 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending (unblocked) | 0% | 04 |
+| 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | completed (2026-10-16 00:50:00 +07:00) | 100% | 04 |
 | 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | pending | 0% | 05, 06 |
 | 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | pending | 0% | 06 |
 | 09 | [Native editor language services and safe saves](./phase-09-native-editor-language-services-and-safe-saves.md) | pending | 0% | 05, 08 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 unblocked; GATE-A dynamic device launch and full GATE-B hardware/LSP qualification pending Phase 18).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation & host tests completed 2026-10-16; Phase 07 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, and Phase 06 physical IME/device acceptance pending Phase 18).
 
 ## Phase 01 Completion Record
 
@@ -144,3 +144,20 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - Phase 07 (Terminal sessions replay input and agents) inherits `ConnectBot termlib 0.3.13` candidate and `TerminalSessionController`; must qualify physical ARM64 rendering, 16 KiB page size execution, and bounded buffer management.
   - Phase 09 (Native editor language services and safe saves) inherits `Sora Editor 0.23.4` candidate and `JsonLanguageService`; must address the TypeScript LSP/runtime decision and Sora differential undo/relinking compliance.
   - Phase 11 (Encrypted transfers media and Android storage) inherits `OpaqueClientBridge` and `crypto-bridge`; must qualify Android NDK cross-compilation (`arm64-v8a`, `x86_64`) and 16 KiB ELF alignment on physical devices.
+
+## Phase 06 Completion Record
+
+- **Completed:** 2026-10-16 00:50:00 +07:00
+- **Status:** 100% complete (runtime qualification deferred to Phase 18)
+- **Validation:** Review score 9.4/10 per `plans/reports/code-review-261016-0041-phase-06-remediation-cycle-2.md` (Cycle 2 approved). All 3 critical integrity risks verified resolved: cross-project worktree contamination prevented via reactive target binding and cache flushing; unselectable/prunable worktrees disabled in UI; workspace switch concurrency fenced at initiation with immediate revision bump and cache invalidation. Dead shim (`ui/components/PanelNavigationRow.kt`) cleanly cut over and deleted. Sibling path prefix matching corrected with path boundary `/` checks. 100% automated test pass rate across 152 host unit-test executions across 119 unique test methods (81 shared JVM tests across 16 test classes in `:shared:jvmTest`, 33 Android debug unit tests in `:androidApp:testDebugUnitTest`, 33 Android release unit tests in `:androidApp:testReleaseUnitTest`, and 5 Rust unit tests in `native-app/crypto-bridge`) and 282 static invariant assertions across 5 suites (64 Phase 06 assertions in `tests/test-phase-06-shell-workspace.sh`, 66 Phase 05 assertions in `tests/test-phase-05-proof-gates.sh`, 57 Phase 04 assertions in `tests/test-phase-04-profiles-auth.sh`, 48 Phase 03 assertions in `tests/test-phase-03-transport.sh`, and 47 Phase 02 assertions in `tests/test-phase-02-foundation.sh`). `:androidApp:assembleDebug` builds cleanly (116 Gradle tasks).
+- **Deliverables:**
+  - Solitary TERMINAL mode and Traditional shell presentation invariants enforced across models, layout, and manifests (`WorkbenchModel.kt`, `WorkbenchNavigation.kt`).
+  - Authoritative 12-panel registry (`terminal`, `files`, `editor`, `diff`, `merge`, `git`, `workflow`, `agents`, `resources`, `ports`, `ssh_host`, `settings`) in `PanelRegistry.kt`.
+  - Top single-line horizontally scrolling button row (`PanelNavigationRow.kt`) below server/project header with selected button reveal logic, visible across keyboard/IME states (`windowSoftInputMode="adjustResize"`). Zero FloatingActionButtons in entire shared UI.
+  - Unified `PanelHost.kt` presenting a single active content area across phones, foldables, and tablets while preserving background session/controller instances; no wide-screen docking.
+  - Monotonic back-dismissal navigation stack (`WorkbenchNavigation.kt`) with strict hierarchical unwinding: active dialogs -> workspace switcher modal -> target picker modal -> selected panel returning to TERMINAL -> app exit.
+  - Server-authoritative workspace & target management: `WorkspaceRepository.kt` integrating REST endpoints (`/api/workspace/status`, `/api/workspace`, `/api/projects`, `/api/git/{project}/worktrees`, `/api/workspace/switch`, `/api/workspace/known`).
+  - Revision-fenced `ProjectTargetStore.kt` with monotonic workspace revision tracking, preventing cross-project worktree contamination, invalidating caches synchronously upon workspace switches, and failing closed on unavailable/prunable targets.
+  - Modals and UI surfaces (`WorkspaceScreens.kt`, `WorkbenchHeader.kt`): `ProjectTargetPickerModal` with horizontally scrolling project chips and clickable state guards, `WorkspaceSwitcherModal` with known workspace directory listing, and `WorkspaceSwitchWarningDialog` with explicit destructive session termination warning.
+  - Lossless conflict-aware remote configuration editor: `RemoteConfigRepository.kt`, `RemoteConfigEditor.kt`, `RemoteConfigScreen.kt` with dirty state tracking, external version mismatch detection, and draft preservation across background refreshes.
+- **Handoff:** Phase 06 TERMINAL Traditional shell, projects, worktrees, and configuration complete and automated checks passed. Phase 07 (Terminal sessions replay input and agents) is unblocked and inherits `TerminalSessionController` and shell panel hosting to implement live PTY session attachment, input replay, and terminal agent integration. Note: Physical hardware runtime qualification, soft-keyboard IME display resize validation, and `BringIntoViewRequester` UI refinement remain deferred to Phase 18.

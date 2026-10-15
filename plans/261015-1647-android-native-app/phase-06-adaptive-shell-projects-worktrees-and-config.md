@@ -8,10 +8,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-16. Priority: P2. Implementation status: **completed (2026-10-16 00:50:00 +07:00)**. Review status: **approved (score: 9.4/10 per Cycle 2 review; all 3 critical issues resolved; hardware acceptance deferred to Phase 18)**. Progress: **100% (runtime qualification deferred to Phase 18)**.
 - Scope: C01–C02, NAV01; G02 navigation.
 - Goal: Implement the TERMINAL-only Traditional Android workspace with one button row for all panels and no floating buttons, preserving explicit owner/project/worktree routing.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Review status: Cycle 2 remediation review completed. All 3 critical issues verified resolved (cross-project target contamination fenced, unselectable worktree clickability disabled, workspace switch concurrency & initiation fencing enforced). Sibling prefix matching fixed, project chip horizontal scrolling added, and dead shim cleanly cut over. Automated JVM/Android unit tests passed on host; physical hardware runtime acceptance deferred to Phase 18.
 
 ## Key Insights
 
@@ -67,10 +67,10 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Deliver the TERMINAL/Traditional-only shell and complete single-row panel navigation with no floating controls.
-- [ ] Implement workspace/project/remote-config flows.
-- [ ] Exercise target isolation and destructive-switch confirmation.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Deliver the TERMINAL/Traditional-only shell and complete single-row panel navigation with no floating controls.
+- [x] Implement workspace/project/remote-config flows.
+- [x] Exercise target isolation and destructive-switch confirmation (unit/mock level).
+- [x] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations (deferred to physical hardware qualification under Phase 18).
 
 ## Success Criteria
 

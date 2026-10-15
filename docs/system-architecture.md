@@ -373,9 +373,9 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
-## Android Native Client Foundation (Phase 02)
+## Android Native Client Architecture
 
-**Foundation and security architecture established; runtime launch qualification pending.** The Android-first client is rooted under `native-app/`, completely isolated from the existing Tauri host (`apps/native/`). It is planned to connect to the existing remote Rust APIs via REST, WebSockets, and SSE (transport scheduled for Phase 03) with no WebView, embedded browser engine, local PTY, local Git, or local AI agent execution.
+**Client core and shell implementation established; physical hardware qualification deferred to Phase 18.** The Android-first client is rooted under `native-app/`, completely isolated from the existing Tauri host (`apps/native/`). It connects to the existing remote Rust APIs via REST, WebSockets, and SSE (transport implemented and unit/static-tested in Phase 03; live-server qualification pending) with no WebView, embedded browser engine, local PTY, local Git, or local AI agent execution.
 
 ### Two-Module Architecture
 - `:shared` — Kotlin Multiplatform module targeting Android and JVM (`jvmTarget` set to JVM 17, `minSdk = 29`). Contains common domain models (`dev.damhopper.nativeapp.model.WorkbenchModel`), state containers, theme definitions, and Compose Multiplatform UI components (`WorkbenchScreen`, `WorkbenchHeader`, `PanelNavigationRow`, `PanelPlaceholders`). Common code strictly excludes Android- or Swing-specific APIs.
@@ -392,9 +392,11 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Bytecode & SDK Target**: Java 17 across modules; minSdk 29 (Android 10+), targetSdk 35, compileSdk 35.
 
 ### 12-Panel Registry & Shell Invariants
-- **12-Panel Registry**: Modeled authoritatively in `dev/damhopper/nativeapp/model/WorkbenchModel.kt` as `WorkbenchPanel` enum (`TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), each with a display label and monospace short code (e.g. `RESOURCES` labeled "Resources" / `RES`, `SSH_HOST` labeled "Host Controls" / `HOST`).
-- **Single-Row Navigation**: Docked horizontal scrollable row (`PanelNavigationRow.kt`) directly beneath the server/project header. Monospace short codes and labels indicate active selection; zero floating action buttons (FABs) or secondary navigation surfaces.
-- **Shell Restrictions**: Strict TERMINAL mode only (`workspaceMode = "terminal"`), Traditional terminal presentation only (`terminalUsageMode = "traditional"`), and a single content area across all screen geometries. Selecting a panel replaces the visible content area with structured placeholders; live session controllers and transports remain scheduled for subsequent phases.
+- **12-Panel Registry**: Modeled authoritatively in `dev/damhopper/nativeapp/model/WorkbenchModel.kt` (`WorkbenchPanel` enum) and registered in `ui/navigation/PanelRegistry.kt` (`PanelDescriptor` map for all 12 entries: `TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), each with display label, monospace short code (e.g. `RESOURCES` / `RES`, `SSH_HOST` / `HOST`), icon glyph, and description. Fails closed on unmodeled panel identifiers.
+- **Single-Row Navigation**: Docked horizontal scrollable row (`ui/navigation/PanelNavigationRow.kt`) directly beneath the server/project header. Monospace short codes and labels indicate active selection; Compose `BringIntoViewRequester` automatically scrolls the selected button into viewport on activation. Zero floating action buttons (FABs) or secondary navigation drawers.
+- **Shell Restrictions**: Strict TERMINAL mode only (`workspaceMode = "terminal"`), Traditional terminal presentation only (`terminalUsageMode = "traditional"`), and a single content area across all screen geometries (`singleContentArea = true`). Selecting a panel replaces the visible content area without multi-panel or split docking.
+- **Single Content Area Host**: `ui/navigation/PanelHost.kt` renders exactly one visible panel content area across all screen geometries; selected panel replaces visible content without multi-panel or split docking.
+- **Back-Stack Precedence**: `ui/navigation/WorkbenchNavigation.kt` state machine coordinates navigation with deterministic back-press fixed precedence (auth -> workspace switch warning -> target picker -> workspace switcher -> profile list -> return to TERMINAL -> platform exit).
 - **Preview Exceptions**: Embedded interactive HTML previews and DOM-rendered Mermaid diagrams are explicitly excluded for this release; HTML and Markdown are edited as raw source with notices.
 
 ### Security Policies & Manifest Isolation
@@ -407,12 +409,28 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Component Isolation**: All components non-exported by default except `MainActivity` (`android:exported="true"` with `MAIN`/`LAUNCHER` intent filter).
 - **IME Window Management**: Configured with `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across third-party IMEs pending device testing).
 - **Web Engine Exclusion**: Zero occurrences of `WebView` or `tauri` detected in `native-app` source code by the static verification suite.
+### Workspaces, Target Fencing & Remote Configuration (Phase 06)
+- **Project Target Store & Revision Fencing (`features/workspace/`):**
+  - `ProjectTargetStore` manages active project target (root vs worktree) with monotonic workspace revisions (`invalidateWorkspace`) preventing race conditions and stale async worktree responses from contaminating cross-workspace or cross-project state.
+  - Fail-closed unavailable target handling: worktrees marked prunable or missing do not silently redirect to root; UI reflects unverified or unavailable state explicitly.
+  - `WorkspaceRepository` wires `/api/workspace/status`, `/api/workspace`, `/api/projects`, `/api/git/{project}/worktrees`, `/api/workspace/known`, `/api/workspace/discover`, and `/api/workspace/switch`.
+- **Destructive Workspace Switch Lifecycle & PTY Disposal:**
+  - Workspace switching via `WorkspaceRepository.switchWorkspace(path)` reinitializes server sandboxes and terminates all active remote PTY sessions.
+  - `WorkspaceSwitchWarningDialog` presents a mandatory two-phase confirmation dialog explicitly alerting users to terminal process termination.
+  - Fenced at initiation: `isSwitchingWorkspace` mutex prevents concurrent switches, target cache is invalidated and revision bumped before network dispatch, and stale project/worktree state is synchronously cleared.
+- **Lossless & Conflict-Aware Remote Config Editor (`features/settings/`):**
+  - `RemoteConfigRepository` interfaces with `/api/config`, `/api/config/projects/{name}`, `/api/global-config`, and `/api/global-config/ui`.
+  - `RemoteConfigEditor` preserves raw JSON documents (`baseConfigJson`, `draftConfigJson`) to avoid stripping unmodeled server fields during whole-document updates.
+  - Background server refreshes preserve dirty local drafts without clobbering, surfacing external server drift via `hasConflict = true` and `conflictingServerJson` for user resolution.
+  - Granular `UiPreferences` (system font size, editor font size, terminal font size, Cognito mode style/shortcut) supported via `/api/global-config/ui`.
+
 
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
 - `pnpm native-app:assembleDebug` — Assembles debug APK for ARM64 and x86_64 targets.
-- `bash tests/test-phase-02-foundation.sh` — Foundation and security static verification suite (41/41 assertions passing).
+- `bash tests/test-phase-02-foundation.sh` — Foundation and security static verification suite (47/47 assertions passing).
+- `bash tests/test-phase-06-shell-workspace.sh` — Phase 06 shell, navigation, workspace, and config static verification suite (64/64 assertions passing).
 - *Qualification Gate*: Static foundation checks pass. Runtime launch qualification on physical ARM64 device or x86_64 emulator remains pending device attachment under GATE-A2.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).

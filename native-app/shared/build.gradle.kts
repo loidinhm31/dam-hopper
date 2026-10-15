@@ -68,7 +68,7 @@ android {
     }
 }
 
-tasks.withType<Test> {
+tasks.withType<Test>().configureEach {
     testLogging {
         events("passed", "skipped", "failed")
     }

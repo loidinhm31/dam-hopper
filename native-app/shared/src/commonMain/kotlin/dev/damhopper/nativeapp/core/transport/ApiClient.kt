@@ -10,8 +10,10 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.patch
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
+import io.ktor.http.encodeURLPathPart
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -126,6 +128,50 @@ class ApiClient(
         }
 
         return handleResponse(response, "DELETE", fullUrl)
+    }
+
+    suspend fun patchJson(path: String, body: String): String {
+        assertActiveOwner("PATCH $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        val response = try {
+            httpClient.patch(fullUrl) {
+                contentType(ContentType.Application.Json)
+                if (!token.isNullOrBlank()) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                setBody(body)
+            }
+        } catch (e: Throwable) {
+            throw wrapNetworkError(e, "PATCH", fullUrl)
+        }
+
+        return handleResponse(response, "PATCH", fullUrl)
+    }
+
+    suspend fun deleteJson(path: String, body: String): String {
+        assertActiveOwner("DELETE $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        val response = try {
+            httpClient.delete(fullUrl) {
+                contentType(ContentType.Application.Json)
+                if (!token.isNullOrBlank()) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                setBody(body)
+            }
+        } catch (e: Throwable) {
+            throw wrapNetworkError(e, "DELETE", fullUrl)
+        }
+
+        return handleResponse(response, "DELETE", fullUrl)
+    }
+
+    companion object {
+        fun encodePathSegment(segment: String): String = segment.encodeURLPathPart()
     }
 
     suspend fun health(): HealthResponse {

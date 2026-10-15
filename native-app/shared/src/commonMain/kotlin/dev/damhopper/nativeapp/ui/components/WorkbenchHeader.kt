@@ -19,7 +19,10 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 @Composable
 fun WorkbenchHeader(
     state: WorkbenchState,
+    targetLabel: String? = null,
     onOpenProfiles: (() -> Unit)? = null,
+    onOpenTargetPicker: (() -> Unit)? = null,
+    onOpenWorkspaceSwitcher: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -40,11 +43,43 @@ fun WorkbenchHeader(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold
             )
-            Text(
-                text = state.activeProject,
-                color = DamHopperColors.TextSecondary,
-                fontSize = 11.sp
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = state.activeProject,
+                    color = if (onOpenTargetPicker != null) DamHopperColors.Accent else DamHopperColors.TextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = if (onOpenTargetPicker != null) Modifier.clickable { onOpenTargetPicker() } else Modifier
+                )
+                if (targetLabel != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .clickable(enabled = onOpenTargetPicker != null) { onOpenTargetPicker?.invoke() }
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = targetLabel,
+                            color = DamHopperColors.TextPrimary,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                if (onOpenWorkspaceSwitcher != null) {
+                    Text(
+                        text = "· [WS]",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.clickable { onOpenWorkspaceSwitcher() }
+                    )
+                }
+            }
         }
         Box(
             modifier = Modifier
