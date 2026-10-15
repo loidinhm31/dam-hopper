@@ -40,7 +40,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 | PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. See [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md). |
 | PR-026 | Agent Status and notification ownership | Implemented and Linux-qualified for the documented OMP/Codex/Claude versions; other versions/platforms remain unqualified. |
 | PR-028 | Cognito Mode in-app privacy mask | Delivered. Ephemeral activation, configurable shortcut/style, overlay, and input isolation; it is not authentication, redaction, or OS-wide privacy. |
-| PR-029 | Android Native Client (`native-app`) | Scope baseline and contract freeze completed (Phase 01); implementation pending Phase 02+. Kotlin Multiplatform + Jetpack Compose client connecting to existing Rust backend; strictly TERMINAL Traditional shell with top panel row; native Markdown, media, and binary files included, with embedded interactive HTML preview and rendered Mermaid diagrams as the sole deferred preview exceptions. See [Acceptance Ledger](./android-native-acceptance.md) and [Native Client Architecture](./architecture/android-native-client.md). |
+| PR-029 | Android Native Client (`native-app`) | Kotlin Multiplatform + Jetpack Compose client connecting to existing Rust backend; strictly TERMINAL Traditional shell with top panel row (12 panels) and zero floating buttons; native Markdown, media, and binary files included, with embedded interactive HTML preview and rendered Mermaid diagrams as sole deferred preview exceptions. Phases 01–04 delivered foundation, live transport, profiles, and Keystore vault. Phase 05 established GATE-B contract/host prototypes (Android runtime feasibility and hardware execution unproven): `native-app/crypto-bridge/` (Rust cdylib matching `DamHopperOpaqueSuite` on host), `native-app/androidApp/.../platform/terminal/` (`AndroidTerminalSurface` with input/replay fencing, ConnectBot termlib 0.3.13 pin), `native-app/androidApp/.../platform/editor/` (`AndroidEditorSurface` with dirty tracking, gutter decorations, Sora Editor 0.23.4 pin; LGPL compliance/relinking validation pending), `native-app/androidApp/.../platform/crypto/` (`OpaqueClientBridge` with fail-closed security), and `native-app/shared/.../features/editor/` (`JsonLanguageService` offline AST diagnostics, `TypeScriptLanguageServiceAudit` blocker). See [Acceptance Ledger](./android-native-acceptance.md) and [Native Client Architecture](./architecture/android-native-client.md). |
 
 ## Acceptance criteria for critical behavior
 
@@ -71,6 +71,13 @@ See [Git history architecture](./architecture/git-history-search.md) and [Git AP
 - Cognito activation is ephemeral. The app overlays the rendered UI and isolates input; content remains in the app and operating-system captures are outside this feature's guarantee.
 - Current Heavy Blur CSS is `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)` where supported; unsupported and reduced-transparency cases use opaque black. See `packages/ui/src/index.css` for the checked-in implementation.
 
+
+### Android native client invariants
+
+- **Terminal input isolation:** Active panel alone receives input. Hidden terminal surfaces and sessions undergoing UTF-8 replay drop/fence keystrokes and IME composition (`AndroidTerminalSurface`, `TerminalSessionController`).
+- **Editor safety:** Monotonic `modelVersion`, edit epochs, and server mtime checks reject stale saves. Sora Editor AAR LGPL-2.1 license obligations identified; compliance and user relinking validation pending (`AndroidEditorSurface`).
+- **Language services:** Offline JSON AST diagnostics and symbol hierarchy verified (`JsonLanguageService`). Non-browser TypeScript semantic analysis is hard-blocked pending architectural decision on embedded JS runtime vs server LSP (`TypeScriptLanguageServiceAudit`).
+- **Fail-closed crypto:** `OpaqueClientBridge` and `native-app/crypto-bridge/` strictly throw `OpaqueCryptoException` when native libraries are unavailable (no pseudo-crypto fallback). Exact suite parity with `server/src/crypto/opaque.rs` (`DamHopperOpaqueSuite`) verified in host Rust tests (live server interop pending).
 
 ### Testing architecture
 

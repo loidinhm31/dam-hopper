@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), and profiles, auth & credential vault (Phase 04) implemented and verified via unit/static test suites; terminal/editor/crypto proof gates (Phase 05+) and live device qualification (Phase 18) pending. Updated: 2026-10-15.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04) verified; Phase 05 contract/host prototype validated (Android runtime feasibility and hardware execution unproven); live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-15.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -48,9 +48,9 @@ flowchart LR
 | Proposed location | Responsibility |
 | --- | --- |
 | `native-app/` | Independent Gradle wrapper, settings, version catalog, dependency verification and build documentation |
-| `native-app/shared/` | Android/JVM targets; `commonMain` typed DTOs, ownership, repositories/reducers, ordinary Compose UI; `commonTest` and `jvmTest` for platform-neutral behavior |
-| `native-app/androidApp/` | Application/activity, Compose host, Android lifecycle, Ktor OkHttp engine, platform vault, terminal/editor/media/IME/storage/notification integrations |
-| `native-app/crypto-bridge/` | Narrow Rust client OPAQUE/JNI boundary, only if the native interop gate validates it; no server binary in APK |
+| `native-app/shared/` | Android/JVM targets; `commonMain` typed DTOs, ownership, connection registry, repositories/reducers, language services (`features/editor/LanguageService.kt`), ordinary Compose UI; `commonTest` and `jvmTest` for platform-neutral behavior |
+| `native-app/androidApp/` | Application/activity, Compose host, Android lifecycle, Ktor OkHttp engine, platform vault (`platform/vault/AndroidCredentialVault.kt`), profile storage (`platform/storage/AndroidProfileMetadataStore.kt`), terminal surface adapter (`platform/terminal/AndroidTerminalSurface.kt`), editor surface adapter (`platform/editor/AndroidEditorSurface.kt`), crypto bridge companion (`platform/crypto/OpaqueClientBridge.kt`), media/IME/storage/notification integrations |
+| `native-app/crypto-bridge/` | Rust cdylib generating `libdamhopper_crypto_bridge.so`. Narrow client OPAQUE/JNI boundary implementing exact `DamHopperOpaqueSuite`, SHA-256 HKDF AES-256-GCM derivation, monotonic atomic handles, zeroization, and fail-closed security; no server binary in APK |
 
 Avoid one Gradle module per screen. Organize shared code by feature and separate source files by responsibility. Platform classes never leak into `commonMain`. Kotlin/JVM-compatible dependencies are not automatically common-source dependencies. Do not copy Doggo's Hub, task sync, Room database or API-key model.
 
@@ -84,6 +84,14 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 - Android background suspension/process death can break transport. Foreground reconciliation must not spawn duplicate PTYs or replay keystrokes. No guaranteed always-on background socket or WorkManager keepalive.
 - Android-native terminal candidate is selected only after IME, Unicode, resize, TUI, replay, lifecycle and 16 KiB JNI acceptance. Upstream screenshots or published AARs are not qualification.
 
+### Phase 05 Terminal Surface Implementation & Candidate Pin
+- **Implementation:** `AndroidTerminalSurface.kt` and `TerminalSessionController` in `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/`.
+- **Selected Candidate:** ConnectBot termlib 0.3.13 (`org.connectbot:termlib:0.3.13`) with `libvterm.so` JNI core under Apache-2.0 / MIT licenses.
+- **Decoupled Architecture:** Remote Rust server owns PTY processes; terminal renderer is a decoupled display surface. `TerminalSessionController` outlives Composable recomposition and tab navigation.
+- **Input Isolation & Replay Fencing:** Input is strictly gated by `isPanelActive` and `isReplayCompleted`. When another panel is active, or while UTF-8 replay is underway, keystrokes and IME composition are dropped/fenced, preventing keystroke leakage into hidden sessions or out-of-order execution.
+- **Terminal Controls:** VT100/ANSI modifier translation for Ctrl, Alt, Arrow keys, Esc, Tab, Home, End; bounded search and clipboard selection hooks.
+- **Open Qualification Gate:** Physical ARM64 device attachment and 16 KiB kernel page size execution remain open under Phase 07/18.
+
 ## Editor and data safety
 
 - Retain current editing/language-service behavior, tabs/view state, mtime conflict safety, diff/revert, three-way merge, blame and commit reveal; only the explicit browser-preview exception is deferred.
@@ -93,6 +101,29 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 - Dirty tabs keep edits when remote content changes; unavailable/stale owners cannot save. Force overwrite remains explicit against the original target.
 - OPAQUE uses exact server suite and HKDF domain separation. Missing/failed crypto cannot downgrade encrypted save/upload to plaintext.
 - Media clients preserve ticket purpose, exact-origin paths and per-profile namespaced cookies; Android player/image loaders must use the same captured owner and revoke only their capabilities.
+
+### Phase 05 Editor Surface Implementation & Candidate Pin
+- **Implementation:** `AndroidEditorSurface.kt` and `EditorSession` in `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/`.
+- **Selected Candidate:** Sora Editor 0.23.4 (`io.github.rosemoe.sora-editor:editor:0.23.4`) under LGPL-2.1-or-later.
+- **Model Invariants & Dirty Tracking:** Incremental `modelVersion` counter on every buffer modification; `EditorSession` tracks `originalServerText`, `serverMtime`, `isDirty`, and monotonic `editEpoch`. Stale saves are rejected if connection generation is retired.
+- **Line Geometry & Gutter:** Line-based gutter decorations for Git blame annotations, diagnostics, and commit reveal.
+- **Undo / Redo:** Local snapshot stack with read-only guards.
+- **LGPL-2.1 Compliance Obligations:** Distributed as an AAR artifact. License obligations identified; compliance and user relinking validation pending (packaging configuration in `build.gradle.kts` sets `pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")`, ProGuard keeps `io.github.rosemoe.sora.**`, and user relinking verification runbook is tracked for Phase 09; DEX class merging mechanisms require separate compliance validation).
+
+### Language Services & TypeScript Blocker
+- **Offline JSON Language Service:** `JsonLanguageService` in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LanguageService.kt` delivers non-browser offline syntax validation, AST diagnostics, and symbol hierarchy.
+- **Stale Request Fencing:** `LanguageServiceCoordinator` enforces monotonic request watermarks (`fileWatermarks`), discarding outdated async diagnostics from prior buffer revisions.
+- **TypeScript Language Service Hard Blocker:** The remote DamHopper Rust server does not host or route a Language Server Protocol (LSP) daemon, and browser web-workers are prohibited by user mandate. Non-browser Kotlin/Java AST evaluation cannot run full TypeScript semantic analysis (diagnostics, type hover, definition navigation) without an embedded JS engine (QuickJS, Hermes, or V8 JNI). Formally audited in `TypeScriptLanguageServiceAudit` (`STATUS = "BLOCKED_PENDING_RUNTIME_DECISION"`). Dependent Phase 09 TS semantic features remain hard-gated.
+
+### OPAQUE Cryptographic Bridge & Fail-Closed Security
+- **Rust cdylib Bridge:** `native-app/crypto-bridge/` implements client-side OPAQUE PAKE and JNI entry points.
+- **Exact Cipher Suite Parity:** Implements `DamHopperOpaqueSuite` matching `server/src/crypto/opaque.rs`:
+  - `type OprfCs = opaque_ke::Ristretto255`
+  - `type KeyExchange = opaque_ke::TripleDh<opaque_ke::Ristretto255, sha2::Sha512>`
+  - `type Ksf = opaque_ke::ksf::Identity`
+- **HKDF Key Derivation:** SHA-256 with 32 zero-byte salt, info `b"dam-hopper-aes-256-gcm-v1"`, deriving 32-byte AES-256-GCM session keys; host-side Rust tests verify byte-for-byte session key derivation parity against simulated server output (live server end-to-end network interop remains an open qualification gate).
+- **Fail-Closed Security:** Insecure simulated fallback upon `UnsatisfiedLinkError` was eliminated during code review; `OpaqueClientBridge` strictly fails closed by throwing `OpaqueCryptoException`. Monotonic atomic handles (`AtomicI64`, capacity 64, zeroization on release, double-close safety).
+- **Packaging & 16 KiB Page Size:** Android NDK compilation requires `-C link-arg=-Wl,-z,max-page-size=16384` for 16 KiB ELF segment alignment; complete 16 KiB runtime qualification further requires APK zip alignment (`zipalign -p 16384`), prebuilt dependency `.so` validation, and physical execution on a 16 KiB page size kernel environment (tracked under Phase 11/18).
 
 ## Extended workbench
 
@@ -114,7 +145,7 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 
 ## Unresolved implementation gates
 
-1. Exact compatible Kotlin/Compose/AGP/JDK/Ktor/native-terminal/editor versions and license obligations; select by actual build/device evidence.
-2. Native terminal/IME/reflow/search behavior and native JSON/TS language-service equivalence.
-3. OPAQUE JNI interoperability and supported ABI/page-size combinations.
+1. Exact compatible Kotlin/Compose/AGP/JDK/Ktor/native-terminal/editor versions and license obligations; toolchain verified in Phase 02; ConnectBot 0.3.13 and Sora Editor 0.23.4 pinned in Phase 05; physical device execution and LGPL compliance/relinking validation remain open.
+2. Native terminal/IME/reflow/search behavior and native JSON/TS language-service equivalence: JSON lexer verified offline; TypeScript language service hard-blocked pending runtime engine/LSP architectural decision.
+3. OPAQUE JNI interoperability and supported ABI/page-size combinations: Suite parity and HKDF derivation verified in host Rust tests; Android NDK 16 KiB ELF cross-compilation and on-device JNI qualification open.
 4. Measured performance budgets on named reference hardware; no estimated percentages or deadlines inferred from Doggo.

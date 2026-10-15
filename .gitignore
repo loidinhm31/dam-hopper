@@ -5,6 +5,7 @@ apps/web/public/browser-debug-extension/
 *.local
 .idea
 server/target/
+native-app/crypto-bridge/target/
 /.claude/
 repomix-output.xml
 /.codex/

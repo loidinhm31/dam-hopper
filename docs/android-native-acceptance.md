@@ -1,7 +1,7 @@
 # Android Native Client — Scope Baseline and Acceptance Ledger
 
-**Document status:** Baseline updated for Phase 03 (Contracts ownership and live transport).  
-**GATE-A1 Scope Status:** Approved in Phase 01. **GATE-A2 Toolchain & Foundation:** Foundation and security verified in Phase 02 (47/47 static assertions). **Phase 03 Transport & Ownership Foundation:** Implemented and statically verified (Cycle 2 Review 8.8/10; 48/48 static assertions, 28/28 shared JVM tests; live backend lifecycle qualification and device runtime launch open). GATE-B (Runtime Feasibility) pending Phase 05.  
+**Document status:** Baseline updated for Phase 05 (Native Terminal, Editor & Crypto Proof Gates).  
+**GATE-A1 Scope Status:** Approved in Phase 01. **GATE-A2 Toolchain & Foundation:** Foundation and security verified in Phase 02 (47/47 static assertions). **Phase 03 Transport & Ownership Foundation:** Implemented and statically verified (Cycle 2 Review 8.8/10; 48/48 static assertions, 28/28 shared JVM tests). **Phase 04 Profiles, Auth & Vault:** Implemented and verified (57/57 static assertions, 60 unit tests). **GATE-B (Runtime Feasibility):** Contract/host prototype validated in Phase 05 (336 total automated checks passed: 118 unit test executions [92 unique tests + 26 release runs] + 218 static invariant assertions; Android runtime feasibility, physical hardware execution, and TS engine decision open).  
 **Baseline commit:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server v0.13.2, workbenchProtocol v2, authProtocol v2).  
 **Working tree provenance:** Branch `feat/android-native-app`. Preserves pre-existing planning files and architecture documents.  
 **Authority:** [User Decisions](../plans/261015-1647-android-native-app/research/decision-context.md), [Proposed Architecture](./architecture/android-native-client.md), [Validation Answers](../plans/261015-1647-android-native-app/validation-answers.md).
@@ -365,6 +365,41 @@ All measurements to be validated in Phase 18 on the reference target:
   - `AuthDialog`: Tabbed login/register dialog with obscured password input (`PasswordVisualTransformation`) and operator approval notice for newly registered accounts.
   - `MfaChallengeContent`: Interactive TOTP setup and challenge verification with explicit disclosure of transient secret lifecycle.
   - Workbench Integration: Profile management hosted under `WorkbenchScreen` SETTINGS panel and header profile indicator, maintaining strict TERMINAL Traditional mode and zero floating buttons (FABs).
+
+### 7.8 Phase 05 Native Terminal, Editor & Crypto Proof Gates Baseline
+- **Terminal Surface Contracts & Candidate Pin (`platform/terminal/`):**
+  - `AndroidTerminalSurface`: Decoupled terminal display surface. Remote Rust server owns PTY session lifecycle.
+  - `TerminalSessionController`: Outlives Compose recomposition and tab navigation.
+  - Input Isolation & Fencing: Input drops and IME isolation are enforced when `isPanelActive == false` or while `isReplayCompleted == false`, preventing keystroke leakage into hidden sessions or out-of-order execution during replay.
+  - Terminal candidate pinned to ConnectBot termlib 0.3.13 (`org.connectbot:termlib:0.3.13`, `libvterm.so` JNI core; Apache-2.0 / MIT licenses).
+  - VT100/ANSI modifier translation for Ctrl, Alt, Arrow keys, Esc, Tab, Home, End; bounded search and clipboard selection hooks.
+- **Editor Surface Contracts & Candidate Pin (`platform/editor/`):**
+  - `AndroidEditorSurface`: Code editor surface interface and Compose wrapper.
+  - `EditorSession`: Tracks monotonic `modelVersion` on edits, `editEpoch`, `originalServerText`, `serverMtime`, and `isDirty`. Stale saves are rejected if connection generation is retired.
+  - Line geometry & gutter decorations: Gutter decoration models for Git blame annotations, diagnostics, and commit reveal.
+  - Candidate pinned to Sora Editor 0.23.4 (`io.github.rosemoe.sora-editor:editor:0.23.4`, LGPL-2.1-or-later). License obligations identified; compliance/relinking validation pending (packaging configuration includes `pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")`, ProGuard keep rules configured for `io.github.rosemoe.sora.**`, and user relinking verification runbook tracked for Phase 09).
+- **Language Service & Stale Request Fencing (`features/editor/`):**
+  - `JsonLanguageService`: Non-browser offline JSON lexer delivering syntax validation, AST diagnostics, and symbol hierarchy.
+  - `LanguageServiceCoordinator`: Fences stale asynchronous diagnostics via monotonic request watermarks (`fileWatermarks`).
+  - `TypeScriptLanguageServiceAudit`: Documents the hard architectural blocker for TypeScript language services: remote server hosts no LSP daemon, WebView/browser workers prohibited, non-browser Kotlin/Java cannot run full TypeScript AST evaluation without an embedded JS engine (QuickJS, Hermes, or V8 JNI). Phase 09 TS semantic features remain hard-gated pending architectural decision.
+- **OPAQUE Cryptographic Bridge & Fail-Closed Security (`crypto-bridge/` & `platform/crypto/`):**
+  - Rust cdylib `native-app/crypto-bridge/`: Exact suite match with `server/src/crypto/opaque.rs` (`DamHopperOpaqueSuite`: `Ristretto255`, `TripleDh<Ristretto255, Sha512>`, `Identity`).
+  - HKDF key derivation: SHA-256 with 32 zero bytes salt and info `b"dam-hopper-aes-256-gcm-v1"`, deriving 32-byte AES-256-GCM session keys; host Rust integration tests verify byte-for-byte session key derivation parity with simulated server output (live server end-to-end network interop remains an open qualification gate).
+  - Fail-Closed Security: Elimination of simulated crypto fallback upon `UnsatisfiedLinkError`; operations strictly throw `OpaqueCryptoException`. Monotonic atomic handles (`AtomicI64`, capacity 64, zeroization on release, double-close safety).
+  - Android NDK 16 KiB ELF alignment requirement (`-C link-arg=-Wl,-z,max-page-size=16384`); complete 16 KiB runtime qualification (APK zip alignment, prebuilt dependency `.so` validation, and execution on 16 KiB page size kernel) tracked under Phase 11/18.
+- **Verification & Test Suite Results (per recorded QA report):**
+  - Total Automated Checks Passed: 336/336 checks passed (100% pass rate).
+    - 118 Unit Test Executions (92 unique test cases):
+      - 61 shared JVM unit tests in `:shared:jvmTest` (`pnpm native-app:test`)
+      - 26 Android debug unit tests in `:androidApp:testDebugUnitTest` (`pnpm native-app:test:android`)
+      - 26 Android release unit test executions in `:androidApp:testReleaseUnitTest` (supplementary release variant execution)
+      - 5 Rust crypto bridge integration tests in `cargo test --manifest-path native-app/crypto-bridge/Cargo.toml`
+    - 218 Invariant Assertions Passed across 4 shell regression scripts:
+      - 66 assertions in `tests/test-phase-05-proof-gates.sh` (5 suites)
+      - 57 assertions in `tests/test-phase-04-profiles-auth.sh` (5 suites)
+      - 48 assertions in `tests/test-phase-03-transport.sh` (6 suites)
+      - 47 assertions in `tests/test-phase-02-foundation.sh` (5 suites)
+  - Debug APK Assembly: `./gradlew assembleDebug` (`pnpm native-app:assembleDebug`) succeeded cleanly (65 actionable tasks).
 ---
 
 ## 8. Gate Approvals & Implementation Sequence
@@ -373,6 +408,6 @@ All measurements to be validated in Phase 18 on the reference target:
 - **GATE-A2 (Foundation & Toolchain):** **FOUNDATION & SECURITY VERIFIED (Launch Qualification Open)** in Phase 02. Two-module Gradle KMP architecture (`:shared`, `:androidApp`), pinned toolchain catalog, 12-panel registry enum, Compose entry with `statusBarsPadding()`, manifest/network security policies, and root scripts (`pnpm native-app:test`, `pnpm native-app:test:android`, `pnpm native-app:assembleDebug`) implemented. Automated static verification script `tests/test-phase-02-foundation.sh` passes 47/47 static assertions. Physical ARM64 device and x86_64 emulator runtime launch qualification remain pending device attachment.
 - **Phase 03 (Contracts Ownership & Live Transport Foundation):** **IMPLEMENTED (Qualification Open)** in Phase 03 (2026-10-15). Complete owner-bound networking layer implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/network/`. Verified by 48/48 static transport assertions in `tests/test-phase-03-transport.sh`, 28/28 shared JVM unit tests in `pnpm native-app:test`, and clean `pnpm native-app:assembleDebug`. Live Axum daemon lifecycle qualification and device runtime attachment remain open.
 - **Phase 04 (Profiles Authentication, MFA & Credential Vault):** **IMPLEMENTED (Live Qualification Pending)** in Phase 04 (2026-10-15). Multi-server profile lifecycle, Android Keystore-backed AES-256-GCM `AndroidCredentialVault`, monotonic `AuthAttemptTracker` fencing, `ProfileMetadataStore` persistence, and frozen protocol version 2 authentication stack implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/profiles/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/`. Verified by 57/57 static assertions in `tests/test-phase-04-profiles-auth.sh`, 53/53 shared JVM unit tests in `pnpm native-app:test`, 7/7 Android debug unit tests in `pnpm native-app:test:android`, and clean `pnpm native-app:assembleDebug`. Live Axum daemon qualification and physical device Keystore evidence remain tracked under open qualification gates and Phase 18.
-- **GATE-B (Native Terminal, Editor & Crypto Proof):** Pending Phase 05 (Real device proof of terminal input/replay, editor model, and OPAQUE JNI interop).
+- **GATE-B (Native Terminal, Editor & Crypto Proof):** **CONTRACT/HOST PROTOTYPE VALIDATED (Android Runtime Feasibility Unproven)** in Phase 05 (2026-10-15). Contract prototypes, candidate pin records (ConnectBot termlib 0.3.13 / libvterm.so, Sora Editor 0.23.4), offline JSON language service, and exact OPAQUE DamHopperOpaqueSuite cryptographic bridge implemented and verified on host. Recorded automated checks passed 100% (336 total checks: 118 unit test executions [92 unique tests] + 218 static invariant assertions). Subgates for physical ARM64 device qualification, 16 KiB kernel page size execution, Sora/ConnectBot AAR UI rendering/relinking, live server OPAQUE handshake, and TypeScript non-browser engine/LSP decision remain explicitly open and tracked for downstream phases (Phases 07, 09, 11, 18).
 - **GATE-C (Integrated Qualification):** Pending Phase 18 (Real server tests, end-to-end user journeys, visual review).
 - **GATE-D (Signed Release APK):** Pending Phase 19 (Production signed APK, upgrade testing, audit handoff).

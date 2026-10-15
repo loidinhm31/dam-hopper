@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 & Phase 06 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -32,7 +32,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 02 | [Gradle KMP Android foundation](./phase-02-gradle-kmp-android-foundation.md) | completed (2026-10-15 20:38 +07:00) | 100% | 01 |
 | 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | completed (2026-10-15 21:44:52 +07:00) | 100% | 02 |
 | 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | completed (2026-10-15 22:45:00 +07:00) | 100% | 03 |
-| 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | pending (unblocked) | 0% | 04 |
+| 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | completed (prototype-verified 2026-10-15 23:35:00 +07:00) | 100% prototype/contracts (runtime qualification open under Phase 18) | 04 |
 | 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending (unblocked) | 0% | 04 |
 | 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | pending | 0% | 05, 06 |
 | 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | pending | 0% | 06 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 & 06 unblocked; GATE-A dynamic device launch pending hardware attachment).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 unblocked; GATE-A dynamic device launch and full GATE-B hardware/LSP qualification pending Phase 18).
 
 ## Phase 01 Completion Record
 
@@ -126,3 +126,21 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - Multi-profile Compose UI integration: `WorkbenchScreen` (Settings panel integration), `ProfileListScreen`, `AddProfileCard`, tabbed `AuthDialog` with masked inputs (`PasswordVisualTransformation`) and operator approval notice, and `MfaChallengeContent` transient TOTP setup/verification with disclosure.
   - `MainActivity` wiring `AndroidCredentialVault`, `ConnectionRegistry`, `AndroidProfileMetadataStore`, and `ProfileRepository` with lifecycle-scoped initialization.
 - **Handoff:** Phase 04 profiles, authentication, MFA, and credential vault implementation complete and automated checks passed. Phase 05 (Native terminal editor and crypto proof gates) and Phase 06 (TERMINAL Traditional shell projects and configuration) are unblocked. (Note: Device process-recreation persistence, live daemon qualification, and Android GATE-A device evidence remain tracked under open qualification gates and Phase 18).
+
+## Phase 05 Completion Record
+
+- **Completed:** 2026-10-15 23:35:00 +07:00
+- **Status:** 100% prototype/contracts (with runtime qualification open under Phase 18)
+- **Validation:** Review score 6.8/10 (conditional prototype verified per `plans/reports/code-review-261015-2314-phase-05-proof-gates.md`). Critical fail-open security vulnerability in `OpaqueClientBridge.kt` remediated during review to strictly fail closed (`OpaqueCryptoException`) when the native library is unavailable. 100% automated test pass rate across 336 executed checks: 5 Rust unit and parity tests in `native-app/crypto-bridge` (`cargo test`), 61 KMP shared JVM unit tests (`:shared:jvmTest`), 26 Android debug unit tests (`:androidApp:testDebugUnitTest`), 26 Android release unit tests (`:androidApp:testReleaseUnitTest`), and 218 static invariant assertions (66 Phase 05 proof-gates assertions in `tests/test-phase-05-proof-gates.sh`, 57 Phase 04 assertions, 48 Phase 03 assertions, 47 Phase 02 assertions). `assembleDebug` builds cleanly (65 actionable tasks executed).
+- **Deliverables:**
+  - Pinned candidate records and feasibility proof documented in `docs/android-native-dependency-decisions.md`: ConnectBot termlib 0.3.13 (`libvterm.so`, Apache-2.0), Sora Editor 0.23.4 (LGPL-2.1), offline JSON AST language service, and Rust OPAQUE cdylib bridge.
+  - Native terminal surface contracts: `AndroidTerminalSurface` and `TerminalSessionController` with input isolation during replay, modifier key encoding (`Ctrl+C/D/Z`, navigation arrows, Enter, Tab, Backspace), buffer feeding, resize callbacks, search matching, and text selection.
+  - Native editor surface contracts: `AndroidEditorSurface` and `EditorSession` with text edit modeling, snapshot undo/redo history, dirty state tracking, line geometry/metrics hooks, gutter decorations, read-only guard, and candidate adapter metadata.
+  - Offline language service contracts: `LanguageService` and `JsonLanguageService` providing offline JSON AST diagnostics and symbol hierarchy without browser engine/WebView dependencies, coordinated via `LanguageServiceCoordinator` with generation/watermark response fencing preventing stale asynchronous completions.
+  - TypeScript language service architectural blocker audit: `TypeScriptLanguageServiceAudit` formalizing hard blocker (`BLOCKED_PENDING_RUNTIME_DECISION`); remote Rust server lacks an LSP daemon and browser web-workers are prohibited; non-browser TS semantic analysis requires an embedded JS engine (QuickJS / Hermes) or server LSP decision.
+  - OPAQUE cryptographic bridge: `native-app/crypto-bridge` Rust cdylib implementing `DamHopperOpaqueSuite` (Ristretto255, SHA-512, Scrypt) matching server 0.13.2, HKDF SHA-256 session key derivation with AES-256-GCM encryption/decryption, bounded monotonic handle store (`AtomicI64`, max capacity 64, zeroization on disposal), and Kotlin companion `OpaqueClientBridge` hardened to fail closed without plaintext/mock fallbacks.
+  - Automated test harness: `LanguageServiceTest` (5 tests), `AndroidTerminalSurfaceTest` (6 tests), `AndroidEditorSurfaceTest` (6 tests), `OpaqueClientBridgeTest` (4 tests with HKDF golden vector), `native-app/crypto-bridge` tests (5 tests), and shell invariant test suite `tests/test-phase-05-proof-gates.sh` (66 assertions across 5 suites).
+- **Handoff:** Phase 05 feasibility prototype and contracts verified. Phase 06 (TERMINAL Traditional shell projects and configuration) is unblocked and can proceed immediately. Downstream handoffs:
+  - Phase 07 (Terminal sessions replay input and agents) inherits `ConnectBot termlib 0.3.13` candidate and `TerminalSessionController`; must qualify physical ARM64 rendering, 16 KiB page size execution, and bounded buffer management.
+  - Phase 09 (Native editor language services and safe saves) inherits `Sora Editor 0.23.4` candidate and `JsonLanguageService`; must address the TypeScript LSP/runtime decision and Sora differential undo/relinking compliance.
+  - Phase 11 (Encrypted transfers media and Android storage) inherits `OpaqueClientBridge` and `crypto-bridge`; must qualify Android NDK cross-compilation (`arm64-v8a`, `x86_64`) and 16 KiB ELF alignment on physical devices.

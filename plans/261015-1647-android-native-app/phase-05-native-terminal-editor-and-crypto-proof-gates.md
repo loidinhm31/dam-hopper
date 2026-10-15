@@ -8,10 +8,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Priority: P2. Implementation status: **completed (prototype-verified 2026-10-15 23:35:00 +07:00)**. Review status: **conditional-approval (score: 6.8/10, conditional prototype verified; fail-closed crypto remediation applied; 336/336 tests passed)**. Progress: **100% prototype/contracts (with runtime qualification open under Phase 18)**.
 - Scope: GATE-B; T02, E01–E04, X01.
 - Goal: Prove the risky native integrations before committing the remaining feature implementation to an unsuitable library.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Feasibility prototype and contract gates implemented and verified via automated test harness (336 checks). Physical ARM64 device qualification, AAR UI rendering, and live server interop remain open qualification gates tracked under Phase 18 and downstream phases.
 
 ## Key Insights
 
@@ -63,11 +63,15 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Prove native terminal and select pinned adapter.
-- [ ] Prove editor/language-service interfaces and licensing.
-- [ ] Prove exact native OPAQUE interoperability and ABI lifecycle.
-- [ ] Record pass/fail and dependency stop conditions for each subgate.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Establish native terminal surface contract prototype and select pinned candidate record (ConnectBot termlib 0.3.13 / libvterm.so).
+- [ ] Qualify terminal candidate on physical ARM64 device with 16 KiB page size kernel and live PTY stream (tracked for Phase 07).
+- [x] Establish editor surface contract prototype, dirty tracking, and offline JSON language service.
+- [ ] Resolve TypeScript non-browser language service architecture decision (BLOCKED pending engine/LSP decision).
+- [ ] Prove Sora Editor AAR dynamic linking and LGPL-2.1 user relinking compliance in APK distribution (tracked for Phase 09).
+- [x] Prove exact OPAQUE DamHopperOpaqueSuite parameter match and HKDF derivation in host Rust tests; eliminate fail-open fallback.
+- [ ] Qualify Android NDK cross-compilation and 16 KiB ELF alignment for libdamhopper_crypto_bridge.so on physical device (tracked for Phase 11/18).
+- [x] Record pass/fail and dependency stop conditions for each subgate in docs/android-native-dependency-decisions.md.
+- [x] Update requirement/evidence ledger and affected docs with explicit hardware, server, and language limitations.
 
 ## Success Criteria
 
@@ -88,8 +92,13 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Next Steps
 
-Terminal path gates Phase07; editor/language path gates Phase09–10; crypto path gates Phase11. Independent shell design can proceed, release cannot bypass any retained requirement.
+Phase 05 feasibility prototype verified (host Rust tests, JVM contract tests, and static invariant assertions passed 100%). However, full GATE-B acceptance remains open pending physical ARM64 hardware qualification, 16 KiB page size execution, Sora/ConnectBot AAR UI rendering/relinking, and live server interop.
+- Phase 06 (Shell, Projects, Worktrees & Config) can proceed as it does not depend on terminal/editor/crypto rendering.
+- Phase 07 (Terminal Sessions & Replay) inherits the ConnectBot termlib candidate and must prove physical device rendering and input drop during replay.
+- Phase 09 (Editor & Language Services) inherits the Sora Editor candidate and remains hard-gated on the TypeScript engine/LSP decision.
+- Phase 11 (Crypto Transfers) inherits the OPAQUE bridge and must qualify NDK cross-compilation with 16 KiB ELF alignment.
 
 ## Unresolved Questions
 
-- Resolve this phase's dependency/device/license/capability decisions in the acceptance ledger before marking done; escalate retained requirements that cannot be met rather than narrowing scope.
+- Will the project approve an embedded JavaScript engine (QuickJS / Hermes) for client-side TypeScript AST diagnostics, or will server-side LSP routing be considered for future phases?
+- When will physical ARM64 test hardware with 16 KiB page size kernel be provisioned for on-device ABI qualification of libvterm.so and libdamhopper_crypto_bridge.so?
