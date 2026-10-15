@@ -59,6 +59,9 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - **Presentation Invariants:** Strict TERMINAL mode (`workspaceMode = "terminal"`) and Traditional terminal presentation (`terminalUsageMode = "traditional"`). Single top horizontally scrollable panel-navigation row; zero floating action buttons (FABs) or draggable triggers.
 - **Module Separation:** Kotlin Multiplatform `commonMain` (`native-app/shared/`) owns domain models, networking, DTOs, and Compose UI; platform adapters in `androidApp/`. Never leak Android platform types into `commonMain`.
 - **Wire Projection:** Wire requests omit client-only `profileId`; backend authenticates and authorizes project/worktree paths.
+- **Filesystem Wire Invariants:** File, directory, stat, read, and mutation operations pass the explicit `ProjectTargetRef`; write operations use chunked streaming with expected mtime compare-and-swap (CAS).
+- **Watcher Registration & Invalidation:** Directory watcher subscriptions must register event listeners before dispatching subscription requests to prevent race windows, and reconcile snapshot/event ordering cleanly without relying on unbounded buffering.
+- **Search & Replace Constraints:** Enforce literal non-regex replacement without wildcard interpolation; cap federated search at 500 aggregate matches; batch replace must re-verify match presence and use read-to-write CAS; require explicit dirty buffer checks before writing.
 ## Domain-specific invariants
 
 ### Git history changes

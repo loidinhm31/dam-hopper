@@ -424,6 +424,30 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - Background server refreshes preserve dirty local drafts without clobbering, surfacing external server drift via `hasConflict = true` and `conflictingServerJson` for user resolution.
   - Granular `UiPreferences` (system font size, editor font size, terminal font size, Cognito mode style/shortcut) supported via `/api/global-config/ui`.
 
+### Terminal Sessions, Stream Replay & Agent Status (Phase 07)
+- **Retained Session Controller (`features/terminal/`):** `TerminalSessionController` manages PTY incarnation, input isolation, modifier translations, and ANSI escape sequences, decoupled from Compose recomposition lifecycles.
+- **Stream Replay Gate & Output Reconciliation:** `TerminalReplayGate` queues live WebSocket output during attach buffer replay; `reconcileTerminalOutput` performs duplicate chunk discard, gap detection, and overlap slicing; outbound terminal queries are suppressed during replay to prevent echo loops.
+- **Agent Status Reducer:** `AgentStatusReducer` applies `serverEpoch` and monotonic `revision` ordering with snapshot reloads hoisted outside non-reentrant mutex locks to avoid deadlocks; unread attention alerts deduplicated with a bounded 1,000-entry LRU cache.
+
+### Filesystem Watchers, Search & Replace Architecture (Phase 08)
+- **Target-Qualified Filesystem Repository (`features/files/`):**
+  - `FileRepository` provides target-qualified operations (`listDirectory`, `stat`, `readFile`, `writeFile`, `executeFsOp`). Requests forward the specified `ProjectTargetRef` through `ApiClient` and `WsConnection` without independent in-client `target.profileId` validation against captured generation.
+  - `FsWriteCoordinator` serializes chunked writes (`fs:write_begin` with `expected_mtime` CAS, chunk frames, `fs:write_commit`) under coroutine `Mutex` with monotonic `reqId` allocated by `WsConnection`.
+  - `TreeSubscriptionManager` buffers incoming `fs:event` and `fs:overflow` messages via an in-memory channel before the subscribe request completes, filtering events by `subId` and protecting unsubscriptions with generation fencing (unbounded buffering carries memory risk under high event volume).
+- **File Tree State & Virtualized Explorer:**
+  - `FileTreeState` manages lazy directory expansion, virtualized node flattening (`FileTreeItemView`), selection highlight, and hidden file visibility toggle.
+  - Handles server `fs:event` path mapping (including root `.` relative paths) and `fs:overflow` by re-subscribing and reloading loaded folders. Live directory watching is currently bounded to the root directory without automatic per-subfolder subscription.
+  - Destructive mutations (`create_file`, `create_dir`, `rename`, `delete`) execute via `FileMutationCoordinator` with inline Compose dialogs (`FileModalsHost`), preserving input on error with zero FABs.
+- **Search & Federated Search:**
+  - `SearchRepository` executes REST content search (`/api/fs/search`) and filename path search (`/api/fs/search-paths`).
+  - `FederatedSearchCoordinator` launches parallel searches across provided connected profile bindings via coroutine `async` (without desktop 4-request concurrency throttling), enforcing an aggregate 500-match cap, isolating partial profile errors, and projecting workspace-scope matches to their originating project target.
+- **Replace Coordinator & Data Safety Boundaries:**
+  - `ReplaceCoordinator` generates previews retaining match counts per enumerated file, not exact match positions.
+  - `applyBatch` executes sequential replacements using the frozen search spec; it checks only that some occurrence remains in current content, then replaces all occurrences literally.
+  - Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against changes between preview and apply.
+  - Dirty-state checking is evaluated before the async read; an authoritative dirty-buffer provider interface remains unwired pending the Phase 09 editor implementation.
+- **Recorded Limitations & Open Gates:**
+  - Permissive UTF-8 decode in fallback path, timeout treated as generic cancellation aborting batches, root-only directory watcher without subfolder re-subscription, secondary-profile display-name target resolution, dirty-buffer provider unwired pending Phase 09, and partial failure/outcome UI detail. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
 
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
@@ -431,7 +455,10 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `pnpm native-app:assembleDebug` — Assembles debug APK for ARM64 and x86_64 targets.
 - `bash tests/test-phase-02-foundation.sh` — Foundation and security static verification suite (47/47 assertions passing).
 - `bash tests/test-phase-06-shell-workspace.sh` — Phase 06 shell, navigation, workspace, and config static verification suite (64/64 assertions passing).
-- *Qualification Gate*: Static foundation checks pass. Runtime launch qualification on physical ARM64 device or x86_64 emulator remains pending device attachment under GATE-A2.
+- `bash tests/test-phase-07-terminal-agents.sh` — Phase 07 terminal sessions, replay gate, input, and agent status static assertions (45/45 passing).
+- `bash tests/test-phase-08-filesystem-watchers.sh` — Phase 08 filesystem models, watchers, search, and replace static assertions (57/57 passing).
+- *Automated Verification Evidence (dated QA report `plans/reports/qa-261016-0613-reverify-phase-08-filesystem-watchers.md`)*: 194 automated unit test executions passed across JVM (116) and Android debug/release suites (39 debug + 39 release executions covering 39 unique test methods); 384 cumulative static assertions passing (including 57 Phase 08 static source assertions); `:androidApp:assembleDebug` builds cleanly (65 actionable tasks). Reviewer recorded 6/10 (CHANGES REQUESTED) in Cycle 2 review (`plans/reports/code-reviewer-261016-0617-phase-08-cycle-2-filesystem-watchers.md`), baseline accepted via user approval with recorded open limitations.
+- *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, and real server-backed WebSocket integration remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
 ## Qualification Boundary

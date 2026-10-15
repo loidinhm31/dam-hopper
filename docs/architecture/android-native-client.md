@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04) verified; Phase 05 contract/host prototype validated (Android runtime feasibility and hardware execution unproven); live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-15.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), and terminal sessions/replay/agents (Phase 07) verified; Phase 08 filesystem watchers/search/replace baseline recorded with open limitations; Phase 05 contract/host prototype validated (Android runtime feasibility and hardware execution unproven); live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -124,6 +124,39 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 - **HKDF Key Derivation:** SHA-256 with 32 zero-byte salt, info `b"dam-hopper-aes-256-gcm-v1"`, deriving 32-byte AES-256-GCM session keys; host-side Rust tests verify byte-for-byte session key derivation parity against simulated server output (live server end-to-end network interop remains an open qualification gate).
 - **Fail-Closed Security:** Insecure simulated fallback upon `UnsatisfiedLinkError` was eliminated during code review; `OpaqueClientBridge` strictly fails closed by throwing `OpaqueCryptoException`. Monotonic atomic handles (`AtomicI64`, capacity 64, zeroization on release, double-close safety).
 - **Packaging & 16 KiB Page Size:** Android NDK compilation requires `-C link-arg=-Wl,-z,max-page-size=16384` for 16 KiB ELF segment alignment; complete 16 KiB runtime qualification further requires APK zip alignment (`zipalign -p 16384`), prebuilt dependency `.so` validation, and physical execution on a 16 KiB page size kernel environment (tracked under Phase 11/18).
+
+## Filesystem, watchers, search and replace (Phase 08)
+
+The native Android client introduces filesystem navigation, live directory events, search federation, and bulk replacement within the solitary TERMINAL shell, adhering to the single top navigation row (`FILES` panel) and zero FABs:
+
+### Target-Qualified File Operations & Mutex Writes
+- **Repository Wire Contracts (`FileRepository.kt`):** Interfaces with REST `/api/fs/list` (`DirEntryDto`), `/api/fs/stat` (`FileStatDto`), and WebSocket messages (`ClientMsg.FsRead`, `ClientMsg.FsOp`). Operations forward the supplied `ProjectTargetRef` through `ApiClient` and `WsConnection`; independent in-client `target.profileId` validation against captured generation is not enforced in commonMain.
+- **Serialized Write Coordinator (`FsWriteCoordinator.kt`):** Mutex-guarded chunked file writes (`fs:write_begin` with `expected_mtime` CAS, binary/text frames, `fs:write_commit`) using monotonic `reqId` allocated by `WsConnection`.
+- **Mutation Coordinator & Modals (`FileMutationCoordinator.kt`, `FileModalsHost.kt`):** Coordinates `create_file`, `create_dir`, `rename`, and `delete` operations. Compose modals preserve user input upon failure with zero floating action buttons.
+
+### Live Watcher Lifecycle & Subscription Management
+- **Early-Buffered Tree Subscriptions (`TreeSubscriptionManager` in `FileTreeSubscription.kt`):** Subscribes via `ClientMsg.FsSubscribeTree` (`watchOnly = true`). Buffers incoming `fs:event` and `fs:overflow` messages through an in-memory channel before the subscribe request completes, filtering events by `subId` and protecting unsubscriptions with generation fencing (the current unbounded channel carries memory risk under high event volume).
+- **Observable Tree State (`FileTreeState.kt`):** Manages lazy directory expansion, virtualized rows (`FileTreeItemView`), selection highlight, and hidden file visibility toggle. Server `fs:event` path mapping handles root `.` and project-relative paths. `fs:overflow` triggers re-subscription and refetches loaded directories.
+- **Watcher Scope Boundary:** Live directory watching is currently bounded to the root directory without automatic per-subfolder subscriptions. Rebind on reconnect triggers only when `activeSubscription == null`.
+
+### Search & Federated Multi-Profile Queries
+- **Search Repository (`SearchRepository.kt`):** Executes REST content search (`/api/fs/search`) and path search (`/api/fs/search-paths`).
+- **Federated Coordinator (`FederatedSearchCoordinator.kt`):** Queries connected profiles in parallel via coroutine `async` (without desktop 4-request concurrency throttling), enforcing an aggregate 500-match cap, isolating partial profile failures, and projecting workspace-scope matches to their originating project targets (`QualifiedSearchMatch`).
+
+### Replace Coordinator & Data Safety Boundaries
+- **Literal Replacement (`ReplaceCoordinator.kt`):** Replaces occurrences literally without regex expansion.
+- **Preview Semantics:** Preview retains aggregate match counts per enumerated file, not exact match positions.
+- **Batch Application:** `applyBatch` executes sequential replacements using the frozen search spec; it checks only that some occurrence remains in current content, then replaces all occurrences in each enumerated file.
+- **CAS Safety Boundary:** Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against external changes occurring between preview and apply.
+- **Dirty-State Provider Gate:** Dirty state is checked before the asynchronous read; an authoritative dirty-buffer provider interface remains an open data-safety gate pending Phase 09 editor implementation.
+
+### Recorded Open Limitations (Cycle 2 Review 6/10)
+1. **Lossy UTF-8 Replace Fallback:** Permissive `decodeToString()` in fallback paths can corrupt files with invalid sequences past the server binary probe boundary.
+2. **Timeout as Cancellation:** Timeout in read/write aborts the entire batch and can report indeterminate writes as generic cancellation.
+3. **Root-Only Directory Watcher:** Expanded subdirectories do not receive live watcher events; rebind on reconnect does not trigger on socket instance replacement when a stale subscription reference remains.
+4. **Secondary Profile Target Resolution:** Workbench federation effect defaults non-active profiles to profile display names rather than authoritative project targets.
+5. **Dirty Gate Unwired:** `ReplaceCoordinator.isDirtyFile` defaults to `{ false }`; Replace All is not gated by active editor buffers until Phase 09 delivers the buffer provider.
+6. **Outcome UI Detail:** Partial failures and per-file conflict/failure details are not rendered in the search/replace UI.
 
 ## Extended workbench
 

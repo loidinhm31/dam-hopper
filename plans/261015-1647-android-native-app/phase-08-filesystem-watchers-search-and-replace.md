@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Completion date: 2026-10-16. Priority: P2. Implementation status: **completed (2026-10-16)**. Review status: **Cycle 2 user approved (6/10) with documented open limitations** (see `plans/reports/code-reviewer-261016-0617-phase-08-cycle-2-filesystem-watchers.md`; open limitations: H1 lossy UTF-8 replace, H2 root-only watch & reconnect rebind, H3 timeout-as-cancellation, H4 secondary-profile target, H5 dirty gate pending Phase 09, H6 outcome UI, H7 behavioral tests). Progress: **100%** (implementation & automated test gates complete; runtime device qualification deferred to Phase 18).
 - Scope: F01–F02.
 - Goal: Deliver native file navigation/mutation and qualified search over current filesystem contracts.
 - No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
@@ -59,10 +59,27 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Implement native tree/CRUD and watch lifecycle.
-- [ ] Implement qualified search/federation/replace.
-- [ ] Prove stale-owner and concurrent-mutation safety.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Implement native tree/CRUD and watch lifecycle (`FileRepository.kt`, `FileTreeState.kt`, `FileTreeSubscription.kt`, `FileMutationCoordinator.kt`, `FsWriteCoordinator.kt`).
+- [x] Implement qualified search/federation/replace (`SearchRepository.kt`, `FederatedSearchCoordinator.kt`, `ReplaceCoordinator.kt`, `FileScreens.kt`).
+- [x] Prove stale-owner and concurrent-mutation safety on host (mutex-serialized mutations, generation-fenced subscription manager, fail-closed truncation checks; behavioral WS mock & runtime device proof open under Phase 18).
+- [x] Update requirement/evidence ledger and affected docs after automated proof; record device/server/version limitations (H1–H7 open limitations recorded in ledger; physical device runtime proof deferred to Phase 18).
+
+## Completion Summary (2026-10-16)
+
+- **Status:** Host implementation completed and verified by automated test suites (100% pass); user authorized marking Phase 08 DONE with documented open limitations (technical review: CHANGES REQUESTED 6/10); Phase 09 unblocked.
+- **Automated Validation:**
+  - Unit tests: 194 executions passed (116 in `:shared:jvmTest`, 39 in `:androidApp:testDebugUnitTest`, 39 in `:androidApp:testReleaseUnitTest`).
+  - Static assertions: 384 passed across 7 suites (`tests/test-phase-08-filesystem-watchers.sh` [57], `test-phase-07-terminal-agents.sh` [45], `test-phase-06-shell-workspace.sh` [64], `test-phase-05-proof-gates.sh` [66], `test-phase-04-profiles-auth.sh` [57], `test-phase-03-transport.sh` [48], `test-phase-02-foundation.sh` [47]).
+  - Build: `:androidApp:assembleDebug` completed successfully (65 tasks).
+- **Documented Open Limitations:**
+  - H1: Lossy UTF-8 decode in `FileRepository.readFile` for invalid UTF-8 sequences past 8 KiB boundary; needs strict decode / binary classification to avoid silent replacement corruption.
+  - H2: Server watcher is non-recursive; live events only cover root directory (`path=""`). Expanded subfolder updates rely on client re-fetch upon expand. Socket reconnect rebind requires identity trigger on `Connected(socketRef)`.
+  - H3: `TimeoutCancellationException` from `withTimeout` treated as `CancellationException`, which can abort entire batch replace and hide per-file outcomes; requires distinguishing timeout failure from parent scope cancellation.
+  - H4: Multi-profile federated search target resolution for non-active profiles uses profile display name instead of active project/workspace target.
+  - H5: Authoritative dirty-buffer provider interface pending Phase 09 native editor implementation; Replace All currently defaults to `isDirtyFile = { false }`.
+  - H6: Partial failures and per-file replace outcomes not surfaced in UI detail cards (currently counts only); file preview cards lack profile/project qualifier when matching identical relative paths across servers.
+  - H7: Behavioral tests with mocked WebSocket events (early buffering, reconnection rebind, batch CAS conflicts) to be expanded in downstream qualification.
+- **Downstream Impact:** Phase 09 (Native editor language services and safe saves) is unblocked and consumes `FileRepository`, `ReplaceCoordinator`, and qualified file paths. Editor buffer dirty checking will be wired into `ReplaceCoordinator` during Phase 09.
 
 ## Success Criteria
 

@@ -49,6 +49,15 @@ import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
 import dev.damhopper.nativeapp.features.workspace.WorkspaceStatus
 import dev.damhopper.nativeapp.features.workspace.WorkspaceSwitcherModal
 import dev.damhopper.nativeapp.features.workspace.WorkspaceSwitchWarningDialog
+import dev.damhopper.nativeapp.core.transport.ApiClient
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
+import dev.damhopper.nativeapp.features.files.FileRepository
+import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.files.FilesPanelScreen
+import dev.damhopper.nativeapp.features.files.ProfileTargetBinding
+import dev.damhopper.nativeapp.features.files.ReplaceCoordinator
+import dev.damhopper.nativeapp.features.files.SearchRepository
 import dev.damhopper.nativeapp.model.WorkbenchPanel
 import dev.damhopper.nativeapp.model.WorkbenchState
 import dev.damhopper.nativeapp.ui.components.WorkbenchHeader
@@ -92,6 +101,20 @@ fun WorkbenchScreen(
     var activeTerminalSessionId by remember { mutableStateOf<String?>(null) }
     var sessionCounter by remember { mutableStateOf(1) }
     var settingsTab by remember { mutableStateOf(0) } // 0: Profiles, 1: Remote Config
+    var activeApiClient by remember { mutableStateOf<ApiClient?>(null) }
+    var fileRepo by remember { mutableStateOf<FileRepository?>(null) }
+    var fileTreeState by remember { mutableStateOf<FileTreeState?>(null) }
+    var fileMutationCoordinator by remember { mutableStateOf<FileMutationCoordinator?>(null) }
+    var federatedBindings by remember { mutableStateOf<List<ProfileTargetBinding>>(emptyList()) }
+    var federatedRepos by remember { mutableStateOf<Map<String, FileRepository>>(emptyMap()) }
+    val searchRepo = remember { SearchRepository() }
+    val replaceCoordinator = remember(fileRepo, federatedRepos) {
+        ReplaceCoordinator(
+            repositoryProvider = { profId ->
+                federatedRepos[profId] ?: if (profId == activeProfileId) fileRepo else null
+            }
+        )
+    }
     // Initialize or re-create repositories when active profile changes
     LaunchedEffect(activeProfileId, activeProfile?.baseUrl) {
         terminalControllers.values.forEach { it.close() }
@@ -111,7 +134,10 @@ fun WorkbenchScreen(
                 workspaceRepo = wRepo
                 configEditor = cEditor
                 terminalRepo = tRepo
+                activeApiClient = client
                 agentReducer = aReducer
+                val fRepo = if (ws != null) FileRepository(client, ws, coroutineScope) else null
+                fileRepo = fRepo
 
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
@@ -143,6 +169,12 @@ fun WorkbenchScreen(
             activeTerminalSessionId = null
             terminalControllers.values.forEach { it.close() }
             terminalControllers.clear()
+            fileTreeState?.dispose()
+            fileRepo?.dispose()
+            fileTreeState = null
+            fileMutationCoordinator = null
+            fileRepo = null
+            activeApiClient = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -305,6 +337,39 @@ fun WorkbenchScreen(
         workspaceConfigPath = workspaceStatus?.configPath,
         project = navState.activeProject
     )
+
+    LaunchedEffect(fileRepo, snapshot.target) {
+        val repo = fileRepo ?: return@LaunchedEffect
+        fileTreeState?.dispose()
+        val newState = FileTreeState(snapshot.target, repo, coroutineScope)
+        fileTreeState = newState
+        fileMutationCoordinator = FileMutationCoordinator(repo, newState)
+    }
+    LaunchedEffect(profiles, activeProfileId, activeApiClient, snapshot.target) {
+        val list = mutableListOf<ProfileTargetBinding>()
+        val repos = mutableMapOf<String, FileRepository>()
+        if (activeProfileId != null && activeApiClient != null) {
+            list.add(ProfileTargetBinding(activeProfileId!!, activeApiClient!!, snapshot.target))
+            fileRepo?.let { repos[activeProfileId!!] = it }
+        }
+        if (profileRepository != null) {
+            for (p in profiles) {
+                if (p.id != activeProfileId) {
+                    try {
+                        val c = profileRepository.getOrCreateApiClient(p.id)
+                        val t = targetStore.getSnapshot(p.id, null, p.name).target
+                        list.add(ProfileTargetBinding(p.id, c, t))
+                        val ws = try { profileRepository.getOrCreateWsConnection(p.id) } catch (_: Throwable) { null }
+                        if (ws != null) {
+                            repos[p.id] = FileRepository(c, ws, coroutineScope)
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+        federatedBindings = list
+        federatedRepos = repos
+    }
 
     Column(
         modifier = modifier
@@ -480,6 +545,20 @@ fun WorkbenchScreen(
                                     }
                                 }
                             )
+                        },
+                        filesContent = {
+                            if (fileTreeState != null && fileMutationCoordinator != null) {
+                                FilesPanelScreen(
+                                    treeState = fileTreeState!!,
+                                    mutationCoordinator = fileMutationCoordinator!!,
+                                    searchRepo = searchRepo,
+                                    replaceCoordinator = replaceCoordinator,
+                                    bindings = federatedBindings,
+                                    onOpenFile = { _, _ ->
+                                        navigation.navigateTo(WorkbenchPanel.EDITOR)
+                                    }
+                                )
+                            }
                         },
                         agentsContent = {
                             if (agentReducer != null) {

@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 completed 2026-10-16 02:20:00 +07:00; Phase 08 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 completed 2026-10-16 02:20:00 +07:00; Phase 08 completed 2026-10-16 (Cycle 2 user approved 6/10 with documented open limitations); Phase 09 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -35,7 +35,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | completed (prototype-verified 2026-10-15 23:35:00 +07:00) | 100% prototype/contracts (runtime qualification open under Phase 18) | 04 |
 | 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | completed (2026-10-16 00:50:00 +07:00) | 100% | 04 |
 | 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | completed (2026-10-16 02:20:00 +07:00) | 100% | 05, 06 |
-| 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | pending | 0% | 06 |
+| 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | completed (2026-10-16) | 100% | 06 |
 | 09 | [Native editor language services and safe saves](./phase-09-native-editor-language-services-and-safe-saves.md) | pending | 0% | 05, 08 |
 | 10 | [Native diff merge and blame](./phase-10-native-diff-merge-and-blame.md) | pending | 0% | 09 |
 | 11 | [Encrypted transfers media and Android storage](./phase-11-encrypted-transfers-media-and-storage.md) | pending | 0% | 05, 09 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation verified; Phase 07 host contracts & remediations verified 2026-10-16; Phase 08 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, Phase 06 physical IME/device acceptance, and Phase 07 physical terminal rendering/device acceptance pending Phase 18).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation verified; Phase 07 host contracts & remediations verified 2026-10-16; Phase 08 filesystem watchers and search/replace verified and user-approved 2026-10-16; Phase 09 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, Phase 06 physical IME/device acceptance, and Phase 07 physical terminal rendering/device acceptance pending Phase 18).
 
 ## Phase 01 Completion Record
 
@@ -177,4 +177,28 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - WARN-05: `worktreePath` included in `CreateSessionRequest`.
   - SUGG-02: Bracketed paste added to `AndroidTerminalSurface.pasteText`.
   - SUGG-03: Key release `ACTION_UP` modifier unlatching and supplementary Unicode character preservation in `TerminalInputController`.
-- **Handoff:** Phase 08 (Filesystem watchers search and replace) is unblocked.
+- **Handoff:** Phase 08 (Filesystem watchers search and replace) completed with Cycle 2 user approval (6/10) and documented open limitations; Phase 09 (Native editor language services and safe saves) is unblocked.
+
+## Phase 08 Completion Record
+
+- **Completed:** 2026-10-16
+- **Status:** 100% complete (with user approval of Cycle 2 review and documented open limitations; Phase 09 unblocked)
+- **Validation:** Cycle 2 review score 6/10 per `plans/reports/code-reviewer-261016-0617-phase-08-cycle-2-filesystem-watchers.md` (Reviewer: CHANGES REQUESTED; accepted via user approval with explicit open limitations recorded). Automated testing: 100% pass across 194 unit test executions (116 in `:shared:jvmTest`, 39 in `:androidApp:testDebugUnitTest`, 39 in `:androidApp:testReleaseUnitTest`), 384 static assertions across 7 test suites (`tests/test-phase-08-filesystem-watchers.sh` [57], `test-phase-07-terminal-agents.sh` [45], `test-phase-06-shell-workspace.sh` [64], `test-phase-05-proof-gates.sh` [66], `test-phase-04-profiles-auth.sh` [57], `test-phase-03-transport.sh` [48], `test-phase-02-foundation.sh` [47]), and `:androidApp:assembleDebug` clean build (65 actionable tasks).
+- **Deliverables:**
+  - Filesystem Models & Contracts (`FileModels.kt`): `FileEntry`, `FileStat`, `FsOpRequest`, `FsOpBatchRequest`, `FsOpResult`, binary detection, and path isolation.
+  - File Repository (`FileRepository.kt`): REST file operations (`/api/fs/list`, `stat`, `read`, `write`, `op`), binary chunk reading/writing, fallback handling.
+  - File Tree State & Watcher Lifecycle (`FileTreeState.kt`, `FileTreeSubscription.kt`, `FileTreeHelpers.kt`): reactive lazy file tree state, `watchOnly=true` subscription to root, generation-fenced subscription manager (`TreeSubscriptionManager`), unhandled overflow recovery, tree expansion/collapse caching.
+  - Mutating Operations & Concurrency (`FileMutationCoordinator.kt`, `FsWriteCoordinator.kt`): mutex-serialized CAS file operations (`create_file`, `create_dir`, `rename`, `delete`), bounded write queue, sanitization against path traversal.
+  - Search Repository & Multi-Profile Federation (`SearchModels.kt`, `SearchRepository.kt`, `FederatedSearchCoordinator.kt`): content and path search (`/api/fs/search`), case sensitivity, regex/literal, max results cap (500), multi-profile federated search aggregation with owner profile attribution.
+  - Replace Coordinator (`ReplaceModels.kt`, `ReplaceCoordinator.kt`): frozen search spec validation (`res.query`, `res.caseSensitive`), batch preview generation, CAS replacement (`applyBatch`) with `require(!isSearchTruncated)`, per-file outcome accounting (`changed`, `conflicted`, `failed`).
+  - UI & Presentation (`FileScreens.kt`, `FilesTopBar.kt`, `FileTreeItemView.kt`, `SearchReplaceView.kt`, `ReplacePreviewCard.kt`, `FileActionDialogs.kt`, `FileModalsHost.kt`): Files panel top bar with search/replace toggle, show-hidden toggle, refresh action; flattened virtualized `LazyColumn` file tree with directory expand/collapse; search & replace drawer with query input, case-sensitive toggle, scope selector, preview card list with match snippets; create file/dir, rename, and delete confirmation dialogs with error presentation.
+  - WorkbenchScreen Integration (`WorkbenchScreen.kt`): wired Files panel into authoritative 12-panel registry, lifecycle-scoped `FileTreeState` and `FederatedSearchCoordinator` bindings, back-dismissal integration.
+- **Documented Open Limitations & Residuals (from Cycle 2 Review):**
+  - **H1 (Lossy UTF-8 decode in replace):** `FileRepository.readFile` uses permissive UTF-8 decode; server only probes first 8192 bytes for binary check. Invalid UTF-8 sequences past 8 KiB can be replaced lossily. Strict decode / binary classification required.
+  - **H2 (Watcher coverage & reconnect rebind):** Server watcher is non-recursive; live events only cover root directory (`path=""`). Expanded subfolder updates rely on client re-fetch upon expand. Socket reconnect rebind requires identity trigger on `Connected(socketRef)`.
+  - **H3 (Timeout handling vs cancellation):** `TimeoutCancellationException` from `withTimeout` treated as `CancellationException`, which can abort entire batch replace and hide per-file outcomes; requires distinguishing timeout failure from parent scope cancellation.
+  - **H4 (Federation target resolution):** Multi-profile federated search target resolution for non-active profiles uses profile display name instead of active project/workspace target.
+  - **H5 (Dirty buffer protection gate):** Authoritative dirty-buffer provider interface pending Phase 09 native editor implementation; Replace All currently defaults to `isDirtyFile = { false }`.
+  - **H6 (Outcome visibility & qualified preview):** Partial failures and per-file replace outcomes not surfaced in UI detail cards (currently counts only); file preview cards lack profile/project qualifier when matching identical relative paths across servers.
+  - **H7 (Behavioral test coverage):** Mocked WebSocket tests for early buffering, reconnection rebind, and batch CAS conflicts to be expanded during qualification.
+- **Handoff:** Phase 08 completed with user approval. Phase 09 (Native editor language services and safe saves) is unblocked and inherits `FileRepository`, `ReplaceCoordinator`, and qualified file navigation routes. Physical device runtime qualification remains under Phase 18.

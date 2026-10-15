@@ -67,6 +67,12 @@ class WsConnection(
     private var activeWriter: SerializedWsWriter? = null
     private var readerJob: Job? = null
 
+    private var reqIdCounter: ULong = 1000uL
+    private val reqIdLock = Any()
+
+    fun nextReqId(): ULong = synchronized(reqIdLock) {
+        ++reqIdCounter
+    }
     /**
      * Connects to /ws with origin-less handshake and token admission.
      */

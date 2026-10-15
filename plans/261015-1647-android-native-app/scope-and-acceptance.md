@@ -72,3 +72,20 @@ Record per row: requirement ID, source baseline, tested app/server versions, dev
 - Freeze named hardware and latency/memory thresholds in Phase01 before performance results; no invented schedule.
 - Server baseline starts at0.13.2/protocol2; older/newer builds need explicit compatibility proof.
 - Private APK app version is independent (initial proposal0.1.0/versionCode1); existing13-file server/web/Tauri alignment remains intact. If release ownership later unifies versions, deliberately update the checker/invariant rather than silently adding an untracked version source.
+
+## Phase 08 Acceptance Ledger Status (2026-10-16)
+
+- **F01 (Lazy file tree, CRUD/move/rename, exact-owner subscriptions/overflow/invalidation):**
+  - **Status:** Host implementation delivered; automated test suites passed (100%); user authorized proceeding to Phase 09 with recorded limitations. Technical code review: CHANGES REQUESTED (6/10). Physical device runtime acceptance pending Phase 18.
+  - **Automated Verification:** 194 unit test executions passed (`:shared:jvmTest`, `:androidApp:testDebugUnitTest`, `:androidApp:testReleaseUnitTest`), 57 Phase 08 static assertions in `tests/test-phase-08-filesystem-watchers.sh`, 327 regression checks passed, `:androidApp:assembleDebug` clean.
+  - **Documented Limitations:** Server watcher is non-recursive; live events cover root directory (`path=""`). Expanded subfolders rely on client re-fetch upon expand. Socket reconnect rebind requires identity trigger on `Connected(socketRef)`.
+- **F02 (Filename/content search, federated results, current replace semantics and navigation):**
+  - **Status:** Host implementation delivered; automated test suites passed (100%); user authorized proceeding to Phase 09 with recorded limitations. Technical code review: CHANGES REQUESTED (6/10). Downstream editor integration in Phase 09; full runtime acceptance pending Phase 18.
+  - **Automated Verification:** Federated search coordinator, case/literal options, 500-result cap truncation, preview generation, and batch CAS replacement tested and passed.
+  - **Documented Limitations:**
+    - H1: Permissive UTF-8 decode in `FileRepository.readFile` past 8 KiB boundary risks lossy replace on non-UTF8 files; strict decode / binary handling required.
+    - H3: `TimeoutCancellationException` treated as `CancellationException` in batch operations; requires isolating timeout failure from parent job cancellation.
+    - H4: Multi-profile federated search resolves secondary profile targets by display name instead of active project/workspace target.
+    - H5: Authoritative dirty-buffer provider interface pending Phase 09 native editor implementation; Replace All currently defaults to `isDirtyFile = { false }`.
+    - H6: Outcome UI displays counts only; per-file failure/conflict breakdown and multi-server project badges to be surfaced.
+    - H7: Mocked WebSocket event integration tests to be expanded in Phase 18 qualification.
