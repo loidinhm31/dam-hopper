@@ -38,7 +38,7 @@ import kotlinx.coroutines.withTimeout
 class WsConnection(
     val connection: ConnectionRef,
     val baseUrl: String,
-    val authTokenProvider: () -> String? = { null },
+    val authTokenProvider: suspend () -> String? = { null },
     val registry: ConnectionRegistry? = null,
     private val httpClient: HttpClient = HttpClient(createDefaultHttpEngine()) {
         install(WebSockets)

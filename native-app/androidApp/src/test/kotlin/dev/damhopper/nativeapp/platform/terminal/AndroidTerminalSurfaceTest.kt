@@ -141,10 +141,10 @@ class AndroidTerminalSurfaceTest {
         val controller = TerminalSessionController("sess-1", 1L, connRef)
 
         controller.handleOutputChunk("Chunk 1".toByteArray(StandardCharsets.UTF_8), 0L)
-        assertEquals(7L, controller.lastSeenOffset)
+        assertEquals(7uL, controller.lastSeenOffset)
 
         controller.handleOutputChunk("Chunk 2".toByteArray(StandardCharsets.UTF_8), 7L)
-        assertEquals(14L, controller.lastSeenOffset)
+        assertEquals(14uL, controller.lastSeenOffset)
 
         controller.close()
     }

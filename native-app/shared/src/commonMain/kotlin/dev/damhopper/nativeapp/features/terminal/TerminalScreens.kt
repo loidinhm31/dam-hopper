@@ -1,0 +1,739 @@
+package dev.damhopper.nativeapp.features.terminal
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+
+/**
+ * Terminal panel presenting interactive remote shell sessions.
+ *
+ * Invariants:
+ * 1. Strictly Traditional terminal mode only. No Runtime mode or IDE switches.
+ * 2. In-panel session tabs docked below workbench navigation row.
+ * 3. Inline keyboard accessory bar (Ctrl, Alt, Esc, Tab, Arrows, Search) above IME.
+ *    ZERO floating action buttons or floating launchers!
+ * 4. Disconnect, kill, remove, and rename operations explicitly confirmed.
+ */
+@Composable
+fun TerminalPanelScreen(
+    sessions: List<TerminalSessionDetailed>,
+    activeSessionId: String?,
+    controller: TerminalSessionController?,
+    onSelectSession: (String) -> Unit,
+    onCreateSession: (command: String, name: String?) -> Unit,
+    onRenameSession: (id: String, newName: String) -> Unit,
+    onKillSession: (id: String) -> Unit,
+    onRemoveSession: (id: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var renameTargetId by remember { mutableStateOf<String?>(null) }
+    var killTargetId by remember { mutableStateOf<String?>(null) }
+    var removeTargetId by remember { mutableStateOf<String?>(null) }
+    var isSearchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchMatchCase by remember { mutableStateOf(false) }
+
+    val activeSession = sessions.find { it.id == activeSessionId }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(DamHopperColors.Background)
+    ) {
+        // 1. Session Tab Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DamHopperColors.SurfaceVariant)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            sessions.forEach { session ->
+                val isSelected = session.id == activeSessionId
+                val statusColor = when {
+                    !session.alive -> DamHopperColors.Error
+                    session.restartCount > 0u -> DamHopperColors.Warning
+                    else -> DamHopperColors.Success
+                }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.Surface)
+                        .clickable { onSelectSession(session.id) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(8.dp)
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(statusColor)
+                    )
+                    Text(
+                        text = session.displayName,
+                        color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+
+                    if (isSelected) {
+                        Text(
+                            text = "✎",
+                            color = DamHopperColors.TextSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.clickable { renameTargetId = session.id }
+                        )
+                        Text(
+                            text = "✕",
+                            color = DamHopperColors.TextSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.clickable { killTargetId = session.id }
+                        )
+                    }
+                }
+            }
+
+            // New session (+) button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.Surface)
+                    .clickable { showCreateDialog = true }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "+ New",
+                    color = DamHopperColors.Primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        // 2. Search Bar Overlay (when active)
+        if (isSearchOpen && controller != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = {
+                        searchQuery = it
+                        if (it.isNotEmpty()) {
+                            controller.search(it, searchMatchCase)
+                        } else {
+                            controller.clearSearch()
+                        }
+                    },
+                    placeholder = { Text("Find in terminal...", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (searchMatchCase) DamHopperColors.Accent else DamHopperColors.SurfaceVariant)
+                        .clickable {
+                            searchMatchCase = !searchMatchCase
+                            if (searchQuery.isNotEmpty()) {
+                                controller.search(searchQuery, searchMatchCase)
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text("Aa", color = DamHopperColors.TextPrimary, fontSize = 11.sp)
+                }
+
+                Text(
+                    text = "Close",
+                    color = DamHopperColors.Primary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable {
+                        isSearchOpen = false
+                        searchQuery = ""
+                        controller.clearSearch()
+                    }
+                )
+            }
+        }
+
+        // 3. Status Banner (Exit code or Lagged notification)
+        if (controller?.isExited == true) {
+            val exitCode = controller.exitCode
+            val willRestart = controller.willRestart
+            val bannerColor = if (exitCode == 0) DamHopperColors.SurfaceVariant else DamHopperColors.Error
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bannerColor)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Process exited with code ${exitCode ?: "unknown"}${if (willRestart) " (restarting...)" else ""}",
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = "Remove Session",
+                    color = DamHopperColors.Primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        activeSessionId?.let { removeTargetId = it }
+                    }
+                )
+            }
+        }
+
+        controller?.lastLaggedDropped?.let { dropped ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Warning)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "Stream lagged: $dropped bytes dropped. Re-attaching...",
+                    color = DamHopperColors.Background,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        // 4. Main Terminal Screen Area
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(DamHopperColors.Background)
+                .padding(4.dp)
+        ) {
+            if (activeSession == null) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("No active terminal session", color = DamHopperColors.TextSecondary, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { showCreateDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                    ) {
+                        Text("Create Session")
+                    }
+                }
+            } else {
+                // Terminal output rendering
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Text(
+                        text = "[Session: ${activeSession.displayName} | PTY: ${activeSession.id} | Incarnation: ${controller?.incarnation ?: 0u}]",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Text(
+                        text = "$ ${activeSession.command}",
+                        color = DamHopperColors.Success,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (controller?.isReplayCompleted == true) {
+                            "Terminal connected. Interactive session ready."
+                        } else {
+                            "Replaying stream buffer..."
+                        },
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+
+        // 5. Inline Accessory Control Bar (Ctrl, Alt, Esc, Tab, Arrows, Search)
+        // Strictly inline at bottom of terminal panel, NO floating buttons!
+        if (controller != null && activeSession != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                AccessoryKeyButton(
+                    label = "CTRL",
+                    isActive = controller.isModifierActive(TerminalModifier.CTRL),
+                    onClick = { controller.toggleModifier(TerminalModifier.CTRL) }
+                )
+                AccessoryKeyButton(
+                    label = "ALT",
+                    isActive = controller.isModifierActive(TerminalModifier.ALT),
+                    onClick = { controller.toggleModifier(TerminalModifier.ALT) }
+                )
+                AccessoryKeyButton(
+                    label = "ESC",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("ESC")) }
+                )
+                AccessoryKeyButton(
+                    label = "TAB",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("TAB")) }
+                )
+                AccessoryKeyButton(
+                    label = "▲",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("UP")) }
+                )
+                AccessoryKeyButton(
+                    label = "▼",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("DOWN")) }
+                )
+                AccessoryKeyButton(
+                    label = "◀",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("LEFT")) }
+                )
+                AccessoryKeyButton(
+                    label = "▶",
+                    isActive = false,
+                    onClick = { controller.sendInput(controller.encodeSpecialKey("RIGHT")) }
+                )
+                AccessoryKeyButton(
+                    label = "FIND",
+                    isActive = isSearchOpen,
+                    onClick = { isSearchOpen = !isSearchOpen }
+                )
+            }
+        }
+    }
+
+    // Dialogs: Create, Rename, Kill, Remove
+    if (showCreateDialog) {
+        var commandText by remember { mutableStateOf("bash") }
+        var nameText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("New Terminal Session") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = commandText,
+                        onValueChange = { commandText = it },
+                        label = { Text("Command") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = nameText,
+                        onValueChange = { nameText = it },
+                        label = { Text("Session Name (optional)") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCreateDialog = false
+                        onCreateSession(commandText, nameText.ifBlank { null })
+                    }
+                ) {
+                    Text("Spawn")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    renameTargetId?.let { targetId ->
+        var newName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { renameTargetId = null },
+            title = { Text("Rename Terminal Session") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("New Name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        renameTargetId = null
+                        if (newName.isNotBlank()) {
+                            onRenameSession(targetId, newName.trim())
+                        }
+                    }
+                ) {
+                    Text("Rename")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTargetId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    killTargetId?.let { targetId ->
+        AlertDialog(
+            onDismissRequest = { killTargetId = null },
+            title = { Text("Kill Terminal Session") },
+            text = { Text("Are you sure you want to terminate process for session $targetId? Tombstone will be kept.") },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error),
+                    onClick = {
+                        killTargetId = null
+                        onKillSession(targetId)
+                    }
+                ) {
+                    Text("Kill")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { killTargetId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    removeTargetId?.let { targetId ->
+        AlertDialog(
+            onDismissRequest = { removeTargetId = null },
+            title = { Text("Remove Terminal Session") },
+            text = { Text("Are you sure you want to permanently delete session $targetId and evict all metadata?") },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error),
+                    onClick = {
+                        removeTargetId = null
+                        onRemoveSession(targetId)
+                    }
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { removeTargetId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AccessoryKeyButton(
+    label: String,
+    isActive: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (isActive) DamHopperColors.Accent else DamHopperColors.SurfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (isActive) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Agents panel presenting server-authoritative multi-agent status and integrations.
+ */
+@Composable
+fun AgentsPanelScreen(
+    reducer: AgentStatusReducer,
+    onJumpToTerminalSession: (terminalId: String, incarnation: ULong) -> Unit,
+    onRefresh: () -> Unit,
+    onInstallOmp: () -> Unit,
+    onUninstallOmp: () -> Unit,
+    onInstallNative: (AgentKind) -> Unit,
+    onUninstallNative: (AgentKind) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state by reducer.state.collectAsState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(DamHopperColors.Background)
+            .padding(8.dp)
+    ) {
+        // 1. Header with availability & refresh
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Agent Observation Engine", color = DamHopperColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "Subsystem: ${state.availability.name.lowercase()} | Epoch: ${state.serverEpoch} | Rev: ${state.revision}",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+            Button(
+                onClick = onRefresh,
+                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant)
+            ) {
+                Text("Refresh", fontSize = 12.sp)
+            }
+        }
+
+        // 2. Filter Chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            AgentFilter.entries.forEach { filter ->
+                val isSelected = state.activeFilter == filter
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (isSelected) DamHopperColors.Accent else DamHopperColors.Surface)
+                        .clickable { reducer.setFilter(filter) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = filter.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() },
+                        color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 3. Agent Roster List
+        val filtered = state.filteredAgents
+        if (filtered.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No active agents matching filter",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filtered, key = { it.id }) { agent ->
+                    AgentRowCard(
+                        row = agent,
+                        hasAttention = state.unreadAttentions.any { it.terminalId == agent.id && it.incarnation == agent.incarnation },
+                        onJump = { onJumpToTerminalSession(agent.id, agent.incarnation) }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 4. Integrations Quick Bar
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(DamHopperColors.Surface)
+                .padding(8.dp)
+        ) {
+            Text("Agent Integrations", color = DamHopperColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onInstallOmp,
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("OMP Hook", fontSize = 11.sp)
+                }
+                Button(
+                    onClick = { onInstallNative(AgentKind.CODEX) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Codex Hook", fontSize = 11.sp)
+                }
+                Button(
+                    onClick = { onInstallNative(AgentKind.CLAUDE) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Claude Hook", fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentRowCard(
+    row: TerminalAgentStatusRow,
+    hasAttention: Boolean,
+    onJump: () -> Unit,
+) {
+    val stateColor = when (row.state) {
+        AgentState.WORKING -> DamHopperColors.Warning
+        AgentState.BLOCKED -> DamHopperColors.Error
+        AgentState.IDLE -> DamHopperColors.Success
+        AgentState.UNKNOWN -> DamHopperColors.TextSecondary
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(DamHopperColors.Surface)
+            .border(
+                width = if (hasAttention) 1.dp else 0.dp,
+                color = if (hasAttention) DamHopperColors.Error else DamHopperColors.Border,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .padding(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.PrimaryVariant)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(row.agentKind.name, color = DamHopperColors.TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+                Text("Session: ${row.id}", color = DamHopperColors.TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(stateColor.copy(alpha = 0.2f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = row.state.name + (row.reason?.let { " ($it)" } ?: ""),
+                    color = stateColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Epoch: ${row.reporterEpoch} | Incarnation: ${row.incarnation} | Source: ${row.source.name.lowercase()}",
+            color = DamHopperColors.TextSecondary,
+            fontSize = 11.sp
+        )
+
+        row.lastOutcome?.let { outcome ->
+            Text(
+                text = "Last turn: ${outcome.name.lowercase()}",
+                color = DamHopperColors.TextSecondary,
+                fontSize = 11.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Button(
+                onClick = onJump,
+                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+            ) {
+                Text("Jump to Session", fontSize = 11.sp)
+            }
+        }
+    }
+}

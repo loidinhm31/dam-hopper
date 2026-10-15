@@ -21,7 +21,7 @@ The initial scan counted **2,046 eligible text files and 411,852 physical lines 
 | `deploy/` | Release packaging, systemd units, and installers | 4 | 877 | 22 | 5,224 |
 | `scripts/` | Test runners, qualification harnesses, and tooling | 9 | 2,154 | 9 | 2,154 |
 | `.github/workflows/` | CI/CD pipelines, release publishing, quality gates | 4 | 950 | 4 | 950 |
-| `native-app/` | Android native client (Kotlin Multiplatform + Compose; Phase 02 foundation through Phase 06 shell/workspaces/config; Kotlin/Rust source metrics) | 5 | 240 | 91 | 11,462 |
+| `native-app/` | Android native client (Kotlin Multiplatform + Compose; Phase 02 foundation through Phase 07 terminal sessions/replay/agents; Kotlin/Rust source metrics) | 5 | 240 | 104 | 14,784 |
 
 ## Backend Map
 
@@ -57,7 +57,9 @@ The native Android client connects to the existing remote Rust backend, adhering
 | Subsystem / Module | Path | Role / Responsibilities |
 | --- | --- | --- |
 | **Crypto Bridge** | `native-app/crypto-bridge/` | Rust cdylib (`libdamhopper_crypto_bridge.so`) implementing client-side OPAQUE PAKE (`DamHopperOpaqueSuite`), SHA-256 HKDF AES-256-GCM derivation, monotonic atomic handles (`AtomicI64`), memory zeroization, and fail-closed JNI boundary. |
-| **Terminal Platform Surface** | `native-app/androidApp/.../platform/terminal/` | `AndroidTerminalSurface` and `TerminalSessionController`; candidate pin ConnectBot termlib 0.3.13 (`libvterm.so`); input isolation and UTF-8 replay fencing; VT100/ANSI key translation; bounded search. |
+| **Terminal Platform Surface & Input** | `native-app/androidApp/.../platform/terminal/` | `AndroidTerminalSurface` and `TerminalInputController`; candidate pin ConnectBot termlib 0.3.13 (`libvterm.so`); IME input bridging; hardware modifier unlatching; supplementary Unicode; bracketed paste wrapping (`\u001b[200~`); bounded search. |
+| **Terminal Sessions & Replay Gate** | `native-app/shared/.../features/terminal/` | `TerminalSessionController` (retained session state, PTY input isolation, ANSI escape key encoding), `TerminalReplayGate` (stream replay gating, echo loop query suppression, bounded live queuing), and `reconcileTerminalOutput` (duplicate discard, gap detection, overlap slicing). |
+| **Agent Status Observation** | `native-app/shared/.../features/terminal/` | `AgentStatusReducer`; authoritative `serverEpoch` and monotonic `revision` fencing; snapshot reload hoisting outside mutex to prevent non-reentrant deadlocks; unread attention deduplication with 1,000-entry LRU cache; `TerminalScreens` Compose UI. |
 | **Editor Platform Surface** | `native-app/androidApp/.../platform/editor/` | `AndroidEditorSurface` and `EditorSession`; candidate pin Sora Editor 0.23.4 (LGPL-2.1 obligations identified; compliance/relinking validation pending); monotonic `modelVersion`, edit epochs, dirty tracking, line gutter decorations, and undo/redo snapshot stack. |
 | **Crypto Platform Companion** | `native-app/androidApp/.../platform/crypto/` | `OpaqueClientBridge`; JNI bindings to `libdamhopper_crypto_bridge.so`; strict fail-closed error handling throwing `OpaqueCryptoException` (no simulated fallback). |
 | **Editor Language Services** | `native-app/shared/.../features/editor/` | `LanguageService`, `JsonLanguageService` (offline JSON AST diagnostics/symbols), `LanguageServiceCoordinator` (request watermarking/fencing), and `TypeScriptLanguageServiceAudit` (hard blocker audit). |

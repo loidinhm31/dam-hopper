@@ -32,6 +32,14 @@ import dev.damhopper.nativeapp.features.profiles.ProfileRepository
 import dev.damhopper.nativeapp.features.settings.RemoteConfigEditor
 import dev.damhopper.nativeapp.features.settings.RemoteConfigRepository
 import dev.damhopper.nativeapp.features.settings.RemoteConfigScreen
+import dev.damhopper.nativeapp.features.terminal.AgentKind
+import dev.damhopper.nativeapp.features.terminal.AgentStatusReducer
+import dev.damhopper.nativeapp.features.terminal.AgentsPanelScreen
+import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
+import dev.damhopper.nativeapp.features.terminal.TerminalPanelScreen
+import dev.damhopper.nativeapp.features.terminal.TerminalRepository
+import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
+import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
 import dev.damhopper.nativeapp.features.workspace.KnownWorkspace
 import dev.damhopper.nativeapp.features.workspace.ProjectSummary
 import dev.damhopper.nativeapp.features.workspace.ProjectTargetPickerModal
@@ -77,19 +85,37 @@ fun WorkbenchScreen(
     var isSwitchingWorkspace by remember { mutableStateOf(false) }
     var workspaceRepo by remember { mutableStateOf<WorkspaceRepository?>(null) }
     var configEditor by remember { mutableStateOf<RemoteConfigEditor?>(null) }
+    var terminalRepo by remember { mutableStateOf<TerminalRepository?>(null) }
+    var agentReducer by remember { mutableStateOf<AgentStatusReducer?>(null) }
+    val terminalControllers = remember { mutableMapOf<String, TerminalSessionController>() }
+    var terminalSessions by remember { mutableStateOf<List<TerminalSessionDetailed>>(emptyList()) }
+    var activeTerminalSessionId by remember { mutableStateOf<String?>(null) }
+    var sessionCounter by remember { mutableStateOf(1) }
     var settingsTab by remember { mutableStateOf(0) } // 0: Profiles, 1: Remote Config
-
     // Initialize or re-create repositories when active profile changes
     LaunchedEffect(activeProfileId, activeProfile?.baseUrl) {
+        terminalControllers.values.forEach { it.close() }
+        terminalControllers.clear()
+        terminalSessions = emptyList()
+        activeTerminalSessionId = null
+
         if (profileRepository != null && activeProfileId != null) {
             try {
                 val client = profileRepository.getOrCreateApiClient(activeProfileId!!)
                 val wRepo = WorkspaceRepository(client, targetStore)
                 val cRepo = RemoteConfigRepository(client)
                 val cEditor = RemoteConfigEditor(cRepo)
+                val ws = try { profileRepository.getOrCreateWsConnection(activeProfileId!!) } catch (_: Exception) { null }
+                val tRepo = TerminalRepository(client, ws)
+                val aReducer = AgentStatusReducer(tRepo)
                 workspaceRepo = wRepo
                 configEditor = cEditor
+                terminalRepo = tRepo
+                agentReducer = aReducer
 
+                coroutineScope.launch {
+                    try { ws?.connect() } catch (_: Exception) {}
+                }
                 val status = try { wRepo.getWorkspaceStatus() } catch (_: Exception) { null }
                 workspaceStatus = status
                 val projs = try { wRepo.listProjects() } catch (_: Exception) { emptyList() }
@@ -107,13 +133,18 @@ fun WorkbenchScreen(
         } else {
             workspaceRepo = null
             configEditor = null
+            terminalRepo = null
+            agentReducer = null
             workspaceStatus = null
             projects = emptyList()
             currentWorktrees = emptyList()
             knownWorkspaces = emptyList()
+            terminalSessions = emptyList()
+            activeTerminalSessionId = null
+            terminalControllers.values.forEach { it.close() }
+            terminalControllers.clear()
         }
     }
-
     // Refresh worktrees when active project changes or workspace revision bumps
     val currentWorkspaceRev = targetStore.getWorkspaceRevision(activeProfileId)
     val currentActiveProj = navState.activeProject
@@ -143,6 +174,126 @@ fun WorkbenchScreen(
         } else {
             currentWorktrees = emptyList()
             isWorktreesLoading = false
+        }
+    }
+    // Refresh terminal sessions and agent status when active project changes or targetStore updates
+    // Retain or create controller helper ensuring controller exists before attaching
+    fun getOrCreateController(id: String, incarnation: Long = 0L): TerminalSessionController {
+        return terminalControllers.getOrPut(id) {
+            val session = terminalSessions.find { it.id == id }
+            val effectiveIncarnation = if (incarnation != 0L) incarnation else (session?.incarnation?.toLong() ?: 0L)
+            val connRef = terminalRepo?.apiClient?.connection
+                ?: dev.damhopper.nativeapp.core.model.ConnectionRef(activeProfileId ?: "default", 1L)
+            val ctrl = TerminalSessionController(
+                sessionId = id,
+                initialIncarnation = effectiveIncarnation,
+                connectionRef = connRef,
+                terminalRepository = terminalRepo
+            )
+            ctrl.setRawInputSink { bytes ->
+                coroutineScope.launch {
+                    terminalRepo?.writeTerminal(id, bytes.decodeToString())
+                }
+            }
+            ctrl.onRequestReattach = { sId, offset ->
+                coroutineScope.launch {
+                    terminalRepo?.attachTerminal(sId, offset)
+                }
+            }
+            ctrl.isPanelActive = (id == activeTerminalSessionId && navState.activePanel == WorkbenchPanel.TERMINAL)
+            ctrl
+        }
+    }
+
+    // Refresh terminal sessions and agent status when active project changes or targetStore updates
+    LaunchedEffect(currentActiveProj, terminalRepo) {
+        val repo = terminalRepo ?: return@LaunchedEffect
+        try {
+            val detailed = repo.listDetailed()
+            terminalSessions = detailed
+            if (detailed.isNotEmpty() && (activeTerminalSessionId == null || detailed.none { it.id == activeTerminalSessionId })) {
+                val first = detailed.first().id
+                activeTerminalSessionId = first
+                getOrCreateController(first, detailed.first().incarnation.toLong())
+                try { repo.attachTerminal(first) } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        try {
+            agentReducer?.reloadSnapshot()
+        } catch (_: Exception) {}
+    }
+
+    // Listen to WebSocket events from TerminalRepository
+    LaunchedEffect(terminalRepo) {
+        val repo = terminalRepo ?: return@LaunchedEffect
+        launch {
+            repo.terminalOutput.collect { msg ->
+                getOrCreateController(msg.id, msg.incarnation.toLong()).handleLiveChunk(
+                    msg.data.encodeToByteArray(),
+                    msg.offset,
+                    msg.incarnation
+                )
+            }
+        }
+        launch {
+            repo.terminalBuffer.collect { msg ->
+                getOrCreateController(msg.id, msg.incarnation.toLong()).handleBufferReplay(
+                    msg.data.encodeToByteArray(),
+                    msg.offset,
+                    msg.reset,
+                    msg.truncated,
+                    msg.incarnation
+                )
+            }
+        }
+        launch {
+            repo.terminalExit.collect { msg ->
+                getOrCreateController(msg.id, msg.incarnation?.toLong() ?: 0L).handleExit(
+                    msg.exitCode,
+                    msg.willRestart,
+                    msg.restartCount,
+                    msg.incarnation
+                )
+            }
+        }
+        launch {
+            repo.terminalLagged.collect { msg ->
+                activeTerminalSessionId?.let { id ->
+                    terminalControllers[id]?.handleLagged(msg.dropped)
+                }
+            }
+        }
+        launch {
+            repo.processRestarted.collect { msg ->
+                getOrCreateController(msg.id).handleProcessRestarted(
+                    msg.restartCount,
+                    msg.previousExitCode
+                )
+            }
+        }
+        launch {
+            repo.agentStatusChanged.collect { msg ->
+                agentReducer?.applyStatusChanged(msg)
+            }
+        }
+        launch {
+            repo.agentStatusRemoved.collect { msg ->
+                agentReducer?.applyStatusRemoved(msg)
+            }
+        }
+        launch {
+            repo.agentStatusInvalidated.collect { msg ->
+                agentReducer?.applyStatusInvalidated(msg)
+            }
+        }
+    }
+
+    val activeTerminalController = activeTerminalSessionId?.let { id ->
+        getOrCreateController(id)
+    }
+    LaunchedEffect(navState.activePanel, activeTerminalSessionId) {
+        terminalControllers.forEach { (id, ctrl) ->
+            ctrl.isPanelActive = (id == activeTerminalSessionId && navState.activePanel == WorkbenchPanel.TERMINAL)
         }
     }
 
@@ -256,6 +407,121 @@ fun WorkbenchScreen(
                 else -> {
                     PanelHost(
                         activePanel = navState.activePanel,
+                        terminalContent = {
+                            TerminalPanelScreen(
+                                sessions = terminalSessions,
+                                activeSessionId = activeTerminalSessionId,
+                                controller = activeTerminalController,
+                                onSelectSession = { id ->
+                                    activeTerminalSessionId = id
+                                    val session = terminalSessions.find { it.id == id }
+                                    getOrCreateController(id, session?.incarnation?.toLong() ?: 0L)
+                                    coroutineScope.launch {
+                                        try { terminalRepo?.attachTerminal(id) } catch (_: Exception) {}
+                                    }
+                                },
+                                onCreateSession = { cmd, name ->
+                                    coroutineScope.launch {
+                                        val newId = "term-${sessionCounter++}"
+                                        try {
+                                            terminalRepo?.createSession(
+                                                CreateSessionRequest(
+                                                    id = newId,
+                                                    command = cmd,
+                                                    name = name,
+                                                    project = navState.activeProject.takeIf { it != "Default Workspace" },
+                                                    worktreePath = snapshot.target.worktreePath
+                                                )
+                                            )
+                                            val detailed = terminalRepo?.listDetailed() ?: emptyList()
+                                            terminalSessions = detailed
+                                            activeTerminalSessionId = newId
+                                            getOrCreateController(newId, 0L)
+                                            terminalRepo?.attachTerminal(newId)
+                                        } catch (_: Exception) {}
+                                    }
+                                },
+                                onRenameSession = { id, newName ->
+                                    coroutineScope.launch {
+                                        try {
+                                            terminalRepo?.renameSession(id, newName)
+                                            terminalSessions = terminalRepo?.listDetailed() ?: emptyList()
+                                        } catch (_: Exception) {}
+                                    }
+                                },
+                                onKillSession = { id ->
+                                    coroutineScope.launch {
+                                        try {
+                                            terminalRepo?.killSession(id)
+                                            terminalSessions = terminalRepo?.listDetailed() ?: emptyList()
+                                        } catch (_: Exception) {}
+                                    }
+                                },
+                                onRemoveSession = { id ->
+                                    coroutineScope.launch {
+                                        try {
+                                            terminalRepo?.removeSession(id)
+                                            terminalControllers.remove(id)?.close()
+                                            val detailed = terminalRepo?.listDetailed() ?: emptyList()
+                                            terminalSessions = detailed
+                                            if (activeTerminalSessionId == id) {
+                                                val next = detailed.firstOrNull()?.id
+                                                activeTerminalSessionId = next
+                                                if (next != null) {
+                                                    val s = detailed.firstOrNull()
+                                                    getOrCreateController(next, s?.incarnation?.toLong() ?: 0L)
+                                                    terminalRepo?.attachTerminal(next)
+                                                }
+                                            }
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            )
+                        },
+                        agentsContent = {
+                            if (agentReducer != null) {
+                                AgentsPanelScreen(
+                                    reducer = agentReducer!!,
+                                    onJumpToTerminalSession = { termId, incarnation ->
+                                        activeTerminalSessionId = termId
+                                        getOrCreateController(termId, incarnation.toLong())
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.attachTerminal(termId) } catch (_: Exception) {}
+                                        }
+                                        navigation.navigateTo(WorkbenchPanel.TERMINAL)
+                                    },
+                                    onRefresh = {
+                                        coroutineScope.launch {
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onInstallOmp = {
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.installOmpExtension() } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onUninstallOmp = {
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.uninstallOmpExtension() } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onInstallNative = { agent ->
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.installNativeIntegration(agent) } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onUninstallNative = { agent ->
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.uninstallNativeIntegration(agent) } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    }
+                                )
+                            }
+                        },
                         settingsContent = {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 // Settings subtabs

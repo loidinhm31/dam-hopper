@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 completed 2026-10-16 02:20:00 +07:00; Phase 08 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -34,7 +34,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | completed (2026-10-15 22:45:00 +07:00) | 100% | 03 |
 | 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | completed (prototype-verified 2026-10-15 23:35:00 +07:00) | 100% prototype/contracts (runtime qualification open under Phase 18) | 04 |
 | 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | completed (2026-10-16 00:50:00 +07:00) | 100% | 04 |
-| 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | pending | 0% | 05, 06 |
+| 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | completed (2026-10-16 02:20:00 +07:00) | 100% | 05, 06 |
 | 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | pending | 0% | 06 |
 | 09 | [Native editor language services and safe saves](./phase-09-native-editor-language-services-and-safe-saves.md) | pending | 0% | 05, 08 |
 | 10 | [Native diff merge and blame](./phase-10-native-diff-merge-and-blame.md) | pending | 0% | 09 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation & host tests completed 2026-10-16; Phase 07 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, and Phase 06 physical IME/device acceptance pending Phase 18).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation verified; Phase 07 host contracts & remediations verified 2026-10-16; Phase 08 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, Phase 06 physical IME/device acceptance, and Phase 07 physical terminal rendering/device acceptance pending Phase 18).
 
 ## Phase 01 Completion Record
 
@@ -161,3 +161,20 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - Modals and UI surfaces (`WorkspaceScreens.kt`, `WorkbenchHeader.kt`): `ProjectTargetPickerModal` with horizontally scrolling project chips and clickable state guards, `WorkspaceSwitcherModal` with known workspace directory listing, and `WorkspaceSwitchWarningDialog` with explicit destructive session termination warning.
   - Lossless conflict-aware remote configuration editor: `RemoteConfigRepository.kt`, `RemoteConfigEditor.kt`, `RemoteConfigScreen.kt` with dirty state tracking, external version mismatch detection, and draft preservation across background refreshes.
 - **Handoff:** Phase 06 TERMINAL Traditional shell, projects, worktrees, and configuration complete and automated checks passed. Phase 07 (Terminal sessions replay input and agents) is unblocked and inherits `TerminalSessionController` and shell panel hosting to implement live PTY session attachment, input replay, and terminal agent integration. Note: Physical hardware runtime qualification, soft-keyboard IME display resize validation, and `BringIntoViewRequester` UI refinement remain deferred to Phase 18.
+
+## Phase 07 Completion Record
+
+- **Completed:** 2026-10-16 02:20:00 +07:00
+- **Status:** 100% complete
+- **Validation:** Review score 8.8/10 (Cycle 2 approved). 100% automated pass rate: 212 runtime unit tests across 143 unique test definitions, 327 static invariant assertions across 6 suites, clean assembleDebug.
+- **Deliverables:** TerminalModels (DTOs, agent enums), TerminalReplayGate (UTF-8 byte stream reconciliation, duplicate chunk discard, overlap slicing, bounded queue), TerminalRepository (REST CRUD and WebSocket flows), AgentStatusReducer (serverEpoch and revision monotonic fencing, deduplicated attention events), TerminalSessionController (input isolation, modifier and ANSI special key encoding, bracketed paste), TerminalInputController (hardware key events, Unicode codepoints, IME text), TerminalScreens (in-panel session tabs, inline accessory keys without FABs, search overlay), and WorkbenchScreen wiring.
+- **Remediations Verified:**
+  - CRIT-01: Non-reentrant Mutex deadlock in `AgentStatusReducer.kt` resolved. `reloadSnapshotAsync` hoisted outside `mutex.withLock`. Bounded `seenAttentionIds` (max 1000 with LRU eviction).
+  - WARN-01: Profile switch in `WorkbenchScreen.kt` closes all controllers and clears cache.
+  - WARN-02: `getOrCreateController` ensures controller exists before `attachTerminal`.
+  - WARN-03: `isPanelActive` set correctly for all controllers on session/panel switch.
+  - WARN-04: Stream attachment added on session jump and session removal.
+  - WARN-05: `worktreePath` included in `CreateSessionRequest`.
+  - SUGG-02: Bracketed paste added to `AndroidTerminalSurface.pasteText`.
+  - SUGG-03: Key release `ACTION_UP` modifier unlatching and supplementary Unicode character preservation in `TerminalInputController`.
+- **Handoff:** Phase 08 (Filesystem watchers search and replace) is unblocked.

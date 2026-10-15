@@ -112,6 +112,20 @@ class ProfileRepository(
         }
     }
 
+    suspend fun getOrCreateWsConnection(profileId: String): dev.damhopper.nativeapp.core.transport.WsConnection {
+        val profile = _profiles.value.find { it.id == profileId }
+            ?: throw IllegalArgumentException("Profile not found: $profileId")
+        val conn = registry.getOrCreateConnection(profileId)
+        return dev.damhopper.nativeapp.core.transport.WsConnection(
+            connection = conn,
+            baseUrl = profile.baseUrl,
+            authTokenProvider = {
+                vault.getToken(profileId, profile.baseUrl)
+            },
+            registry = registry
+        )
+    }
+
     suspend fun applyAuthenticatedSession(
         profileId: String,
         session: AuthSession,

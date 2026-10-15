@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** Foundation, live transport, and profile/auth/vault architecture implemented and statically/unit verified (Phases 02, 03, and 04). Live backend lifecycle qualification and physical/emulator runtime launch pending device attachment.  
+**Status:** Foundation, live transport, profile/auth/vault, native proof gates, Traditional shell/workspaces/config, and terminal sessions/replay/agents host contracts implemented and verified (Phases 02–07). Native surface integration and live backend/device runtime launch qualification remain open.  
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
@@ -81,12 +81,17 @@ native-app/
 │       │       │                    # HostResourceSseClient, WireMessages (ClientMsg, ServerMsg),
 │       │       │                    # WsHandshakeUrl, WsTypes, ApiErrors, PlatformHttpEngine
 │       │       ├── features/
-│       │       │   └── profiles/    # ProfileRepository, AuthRepository, ServerProfile, AuthState,
-│       │       │                    # CredentialVault, AuthAttemptTracker, AuthAttemptRef,
-│       │       │                    # ProfileMetadataStore, ProfileScreens, AuthDialog, MfaChallenge
+│       │       │   ├── profiles/    # ProfileRepository, AuthRepository, ServerProfile, AuthState,
+│       │       │   │                # CredentialVault, AuthAttemptTracker, AuthAttemptRef,
+│       │       │   │                # ProfileMetadataStore, ProfileScreens, AuthDialog, MfaChallenge
+│       │       │   ├── terminal/    # TerminalSessionController, TerminalReplayGate, TerminalRepository,
+│       │       │   │                # AgentStatusReducer, TerminalScreens, TerminalModels, TerminalSurface
+│       │       │   ├── workspace/   # WorkspaceRepository, ProjectTargetStore, WorkspaceScreens
+│       │       │   └── settings/    # RemoteConfigRepository, RemoteConfigEditor, RemoteConfigScreen
 │       │       ├── model/       # WorkbenchModel.kt (WorkbenchPanel, WorkbenchState, shell invariants)
 │       │       └── ui/
 │       │           ├── components/ # WorkbenchHeader, PanelNavigationRow, PanelPlaceholders
+│       │           ├── navigation/ # PanelRegistry, PanelNavigationRow, PanelHost, WorkbenchNavigation
 │       │           ├── screens/    # WorkbenchScreen
 │       │           └── theme/      # Color.kt, Type.kt, NativeTheme.kt
 │       ├── commonTest/kotlin/   # Unit tests for models, ownership, serialization, shell invariants
@@ -104,8 +109,10 @@ native-app/
 │       │   ├── kotlin/dev/damhopper/nativeapp/
 │       │   │   ├── MainActivity.kt # Compose entry point with NativeTheme and WorkbenchScreen
 │       │   │   ├── platform/
+│       │   │   │   ├── crypto/      # OpaqueClientBridge (JNI companion for Rust crypto-bridge)
 │       │   │   │   ├── network/     # AndroidHttpClientFactory
 │       │   │   │   ├── storage/     # AndroidProfileMetadataStore (SharedPreferences)
+│       │   │   │   ├── terminal/    # TerminalInputController, AndroidTerminalSurface
 │       │   │   │   └── vault/       # AndroidCredentialVault (Keystore AES-256-GCM)
 │       │   └── res/
 │       │       ├── values/      # strings.xml, colors.xml, themes.xml
@@ -116,7 +123,7 @@ native-app/
 │       │   └── network_security_config.xml # Debug loopback cleartext overrides (10.0.2.2, 127.0.0.1)
 │       └── test/kotlin/dev/damhopper/nativeapp/
 │           └── ManifestSecurityTest.kt # Unit tests verifying manifest security invariants
-└── crypto-bridge/               # Planned for Phase 05: Rust client JNI boundary for OPAQUE
+└── crypto-bridge/               # Rust cdylib (libdamhopper_crypto_bridge.so): OPAQUE PAKE, AES-256-GCM HKDF
 ```
 
 ### Security Policies & Manifest Isolation
@@ -189,6 +196,31 @@ Phase 04 implements multi-server profile management, protocol version 2 authenti
 5. **Generation Retirement & Profile Isolation:**
    - Endpoint edits, token rotation, and logouts invoke `ConnectionRegistry.retireConnection()`, terminating active REST, WebSocket, and SSE instances for that generation.
    - Profiles remain strictly isolated: operations on one profile never impact other profiles.
+
+### Terminal Sessions, Stream Replay & Agent Status Architecture (Phase 07)
+
+Phase 07 implements host-contract foundations for remote PTY lifecycle management, byte-for-byte stream replay, input isolation, and server-authoritative agent status observation (live emulator canvas integration, physical ConnectBot `libvterm.so` JNI binding, and live server-backed streaming remain open qualification gates):
+
+1. **Traditional PTY Session Lifecycle (`TerminalRepository` & `TerminalSessionController`):**
+   - Implements full CRUD operations for remote PTY sessions over REST (`/api/terminal/sessions`), supporting list, create, detailed metrics, rename, kill, remove, restart, and buffer fetching.
+   - PTY state is retained across Compose recompositions and panel navigation transitions within `TerminalSessionController`. Sessions are displayed via inline tabs in `TerminalPanelScreen`; no floating action buttons are used.
+   - Profile transitions in `WorkbenchScreen` dispose and clear all registered session controllers, preventing cross-profile PTY or socket leakage.
+
+2. **Stream Replay Gate & Byte Reconciliation (`TerminalReplayGate`):**
+   - Coordinates historical replay buffer writes and live PTY streaming. Outbound terminal queries are suppressed (`shouldForwardTerminalData() == false`) while active replay writes are in flight (`activeReplayWrites > 0`) to prevent terminal echo loops.
+   - Real-time chunk reconciliation via `reconcileTerminalOutput` performs duplicate chunk discard (`endOffset <= currentOffset`), gap detection (`startOffset > currentOffset`), and partial overlap slicing (`startOffset < currentOffset < endOffset`).
+   - Bounded live queue (default 1024 chunks / 4 MiB) protects memory during slow replay processing, invoking `onQueueOverflow` to trigger stream re-attachment if bounds are exceeded.
+
+3. **Server-Authoritative Agent Status Observation (`AgentStatusReducer`):**
+   - Maintains an authoritative `AgentStatusState` coordinating live WebSocket events (`ServerMsg.AgentStatusChanged`, `ServerMsg.AgentStatusRemoved`, `ServerMsg.AgentStatusInvalidated`) with REST snapshots (`/api/agent-status/snapshot`).
+   - Fences stale updates using `serverEpoch` and monotonic `revision` ordering. Epoch mismatches trigger a full snapshot reload hoisted outside non-reentrant mutex locks to prevent coroutine deadlocks.
+   - Tracks unread attention events with an in-memory LRU cache (`seenAttentionIds`, max 1,000 entries) to prevent duplicate alerts from replayed history.
+
+4. **Platform Input Bridging & Bracketed Paste (`TerminalInputController`):**
+   - Bridges hardware keyboard events (`KeyEvent`), IME text commits, and clipboard paste to `TerminalSessionController`.
+   - Gated execution: keystrokes and text commits are rejected when `isPanelActive == false` or `isReplayCompleted == false`.
+   - Modifiers (Ctrl, Alt, Shift) unlatch on `ACTION_UP` events. Supplementary Unicode characters (> 0xFFFF) are handled via surrogate pairs.
+   - Clipboard text is wrapped in standard bracketed paste escape sequences (`\u001b[200~` and `\u001b[201~`) before dispatch.
 ---
 
 ## 4. Verification & Build Commands
@@ -213,6 +245,12 @@ bash tests/test-phase-03-transport.sh
 
 # Run Phase 04 profiles, auth, and vault static assertion suite (57/57 static assertions):
 bash tests/test-phase-04-profiles-auth.sh
+
+# Run Phase 06 shell and workspace static assertion suite (64/64 static assertions):
+bash tests/test-phase-06-shell-workspace.sh
+
+# Run Phase 07 terminal sessions, replay, input, and agents static assertion suite (45/45 static assertions):
+bash tests/test-phase-07-terminal-agents.sh
 # Run combined test suites (foundation + transport):
 bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 ```
@@ -245,9 +283,9 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 02:** Gradle KMP Android foundation *(Foundation & security statically verified; runtime launch pending device attachment)*
 - **Phase 03:** Contracts ownership and live transport *(Implemented and statically verified; 48/48 static transport assertions, 28/28 shared JVM tests; live backend qualification open)*
 - **Phase 04:** Profiles authentication, MFA, and credential vault *(Implemented and verified; 57/57 static assertions, 53 shared JVM unit tests; live daemon and device qualification open)*
-- **Phase 05:** Native terminal, editor, and crypto proof gates
-- **Phase 06:** TERMINAL Traditional shell, projects, and configuration
-- **Phase 07:** Terminal sessions, replay, input, and agent status
+- **Phase 05:** Native terminal, editor, and crypto proof gates *(Contract and host prototype validated; candidate pins recorded; device qualification open)*
+- **Phase 06:** TERMINAL Traditional shell, projects, and configuration *(Implemented and verified; 64/64 static assertions, 25 unit tests; device qualification open)*
+- **Phase 07:** Terminal sessions, replay, input, and agent status *(Host contracts implemented and verified; 45/45 static assertions; recorded QA report notes 155 unit tests passing; live emulator canvas integration, physical terminal rendering, IME behavior, and server-backed replay remain open qualification gates deferred to Phase 18)*
 - **Phase 08:** Filesystem watchers, search, and replace
 - **Phase 09:** Native editor, language services, and safe saves
 - **Phase 10:** Native diff, merge, and blame

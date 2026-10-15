@@ -55,6 +55,9 @@ android {
             pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")
         }
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

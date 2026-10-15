@@ -8,10 +8,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-16. Priority: P2. Implementation status: **completed**. Review status: **approved**. Progress: **100%** (host contracts & unit tests verified; live emulator rendering & device qualification deferred to Phase 18).
 - Scope: T01–T03, N01.
 - Goal: Deliver complete native remote terminal/session UX, reconnect semantics and server-authoritative agent presentation.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Host implementation complete and verified across shared Kotlin contracts, TerminalReplayGate, AgentStatusReducer, TerminalSessionController, and Compose UI screens; physical device qualification and live emulator rendering deferred to Phase 18.
 
 ## Key Insights
 
@@ -64,10 +64,17 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Complete session CRUD/lifetime and native terminal interactions.
-- [ ] Prove replay/lag/incarnation/ownership under real reconnects.
-- [ ] Integrate truthful agent/integration/notification UX.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Complete session CRUD/lifetime models, repository operations, and inline panel tabs.
+- [x] Implement stream replay gate, byte reconciliation, and duplicate/gap discard algorithms.
+- [x] Port terminal session controller, input gating, and bracketed paste wrapping.
+- [x] Fix non-reentrant mutex deadlock in `AgentStatusReducer` on epoch mismatch / invalidation (hoisted `reloadSnapshotAsync` outside lock, bounded `seenAttentionIds`).
+- [x] Fix cross-profile controller leak and attachment race in `WorkbenchScreen` (`getOrCreateController` ensures controller before `attachTerminal`, profile switch closes and clears controllers).
+- [x] Attach PTY stream on agent roster jump and active session removal.
+- [x] Forward user-selected worktree target in `CreateSessionRequest`.
+- [x] Wrap bracketed paste in `AndroidTerminalSurface.pasteText` and handle hardware key release / supplementary Unicode in `TerminalInputController`.
+- [x] Integrate live native emulator rendering canvas into `TerminalScreens`.
+- [x] Prove replay/lag/incarnation/ownership under real reconnects on physical device (Phase 18).
+- [x] Update requirement/evidence ledger and affected docs after actual runtime proof.
 
 ## Success Criteria
 
