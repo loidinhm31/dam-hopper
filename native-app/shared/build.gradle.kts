@@ -27,6 +27,12 @@ kotlin {
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)
+
+            // Ktor HTTP & WebSockets
+            api(libs.ktor.client.core)
+            api(libs.ktor.client.content.negotiation)
+            api(libs.ktor.client.websockets)
+            api(libs.ktor.serialization.kotlinx.json)
         }
 
         commonTest.dependencies {

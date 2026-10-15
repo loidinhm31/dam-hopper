@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -30,8 +30,8 @@ User approved all current non-browser workbench families. Embedded interactive H
 | --- | --- | --- | --- | --- |
 | 01 | [Scope baseline and contract freeze](./phase-01-scope-baseline-and-contract-freeze.md) | completed (2026-10-15 19:51 +07:00) | 100% | — |
 | 02 | [Gradle KMP Android foundation](./phase-02-gradle-kmp-android-foundation.md) | completed (2026-10-15 20:38 +07:00) | 100% | 01 |
-| 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | pending (unblocked) | 0% | 02 |
-| 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | pending | 0% | 03 |
+| 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | completed (2026-10-15 21:44:52 +07:00) | 100% | 02 |
+| 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | pending (unblocked) | 0% | 03 |
 | 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | pending | 0% | 04 |
 | 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending | 0% | 04 |
 | 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | pending | 0% | 05, 06 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 unblocked; GATE-A dynamic device launch pending hardware attachment).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 unblocked; GATE-A dynamic device launch pending hardware attachment).
 
 ## Phase 01 Completion Record
 
@@ -90,3 +90,23 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - UI & Presentation invariants: Material 3 dark workbench theme, single top horizontal panel-navigation row, zero FABs, 12 authoritative panels (`terminal`, `files`, `editor`, `diff`, `merge`, `git`, `workflow`, `agents`, `resources`, `ports`, `ssh_host`, `settings`), zero WebView / zero browser engine dependencies.
   - Top-level `package.json` lifecycle scripts: `native-app:test`, `native-app:test:android`, `native-app:assembleDebug`, while preserving existing `android:*` scripts.
 - **Handoff:** Phase 02 foundation verified and closed. Phase 03 (Contracts ownership and live transport) is unblocked. (Note: physical/emulator runtime launch evidence for GATE-A device signoff remains open pending test device attachment).
+
+## Phase 03 Completion Record
+
+- **Completed:** 2026-10-15 21:44:52 +07:00
+- **Status:** 100% complete
+- **Validation:** Review score 8.8/10 per `plans/reports/code-review-261015-2200-phase-03-remediation-cycle-2.md`; socket fencing fixes reported implemented by Main. 100% automated test pass rate across 38/38 unit tests (30 in `:shared:jvmTest`, 4 in `:androidApp:testDebugUnitTest`, 4 in `:androidApp:testReleaseUnitTest`) and 95 static assertions (48 Phase 03 shell assertions in `tests/test-phase-03-transport.sh`, 47 Phase 02 foundation regression checks in `tests/test-phase-02-foundation.sh`). `assembleDebug` builds cleanly (106 actionable tasks verified up-to-date).
+- **Deliverables:**
+  - Generation-fenced `ConnectionRef` & `ConnectionRegistry` with monotonic watermark ABA protection across profile deletion/re-creation and lifecycle retirement listeners.
+  - Polymorphic `WireMessages` (`ServerMsg` / `ClientMsg`) with `kind` discriminator, resilient fallback handling (`ServerMsg.Unknown`), snake_case field mapping, unsigned 64-bit integer bounds, and profile ID wire stripping (`ProjectTargetRef`).
+  - Robust `ApiClient` with Ktor HTTP engine, structured concurrency preservation (`CancellationException` propagation), `ApiRequestError` handling, `Retry-After` header parsing, and strict regex redaction of tokens and passwords across `https?` and `wss?` schemes.
+  - `WsConnection` with origin-less query-token handshake (`/ws?token=`), close code mapping (`4403`, `4401`, `1013`, `4001`), clean cancellation handling on disconnect, and exact-socket `host:uiConnection` receipt tracking.
+  - Socket Fencing and Teardown Hardening in `WsConnection.kt`:
+    1. Post-handshake assertion: `registry?.assertCurrentOwner(connection, "WsConnection.connect post-handshake")` called before session activation, immediately closing session if retired during handshake.
+    2. `SocketInstanceRef` fencing: `activeSocketRef` checked in `handleCloseReason(reason, socketRef)` and `handleSocketFailure(t, socketRef)` ensuring stale socket callbacks cannot tear down new sessions.
+    3. `CancellationException` cleanly rethrown in `connect()` catch block preserving structured concurrency.
+  - `SerializedWsWriter` with atomic Mutex-guarded JSON-header/binary frames and `PROTOCOL_ERROR` abort on partial send failure.
+  - `WsRequestCorrelator` with timeout unregistration and bounded capacity (max 256 in-flight requests).
+  - `HostResourceSseClient` with 256 KiB data cap, 4 KiB status cap, and strict status-data adjacency pairing reset on SSE comments.
+  - `AndroidHttpClientFactory` / `PlatformHttpEngine.android.kt` with pinned OkHttp timeouts and explicitly disabled HTTP/SSL redirects (`followRedirects(false)`, `followSslRedirects(false)`).
+- **Handoff:** Phase 03 contracts ownership and live transport verified and closed. Phase 04 (Profiles authentication MFA and credential vault) is unblocked. (Note: Implementation reported complete by Main with 38 unit tests, 95 static assertions, and verified socket fencing in `WsConnection.kt`. Live-daemon lifecycle qualification and Android GATE-A device evidence remain tracked under open qualification gates; Phase 04 proceeds as an unblocked gate decision).

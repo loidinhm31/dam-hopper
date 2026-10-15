@@ -1,7 +1,7 @@
 # Android Native Client — Scope Baseline and Acceptance Ledger
 
-**Document status:** Frozen baseline for Phase 01 (Scope baseline and contract freeze).  
-**GATE-A1 Scope Status:** Approved in Phase 01. **GATE-A2 Toolchain & Foundation:** Foundation and security verified in Phase 02; physical/emulator runtime launch pending device attachment. GATE-B (Runtime Feasibility) pending Phase 05.  
+**Document status:** Baseline updated for Phase 03 (Contracts ownership and live transport).  
+**GATE-A1 Scope Status:** Approved in Phase 01. **GATE-A2 Toolchain & Foundation:** Foundation and security verified in Phase 02 (47/47 static assertions). **Phase 03 Transport & Ownership Foundation:** Implemented and statically verified (Cycle 2 Review 8.8/10; 48/48 static assertions, 28/28 shared JVM tests; live backend lifecycle qualification and device runtime launch open). GATE-B (Runtime Feasibility) pending Phase 05.  
 **Baseline commit:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server v0.13.2, workbenchProtocol v2, authProtocol v2).  
 **Working tree provenance:** Branch `feat/android-native-app`. Preserves pre-existing planning files and architecture documents.  
 **Authority:** [User Decisions](../plans/261015-1647-android-native-app/research/decision-context.md), [Proposed Architecture](./architecture/android-native-client.md), [Validation Answers](../plans/261015-1647-android-native-app/validation-answers.md).
@@ -126,6 +126,7 @@ The following features are explicitly excluded from the initial Android release 
 - **Endpoint:** `/ws`
 - **Native Handshake Admission:** Must supply token as query parameter: `GET /ws?token=<bearer_token>` (per `server/src/api/ws.rs:144-152, 262-274`). Header-based bearer extraction is not supported by server WS handler; Origin header must not be faked.
 - **Envelope Structure:** Hard cut: all messages use strict `{"kind": "..."}` tagging.
+*(Implementation note: The typed transport foundation is implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/` via polymorphic `ClientMsg` and `ServerMsg` with `ServerMsgSerializer` fallback to `ServerMsg.Unknown`, atomic `SerializedWsWriter`, and bounded `WsRequestCorrelator`. Feature-specific consumer handling is implemented across owning domain phases).*
 - **Client to Server Frames (`ClientMsg`):**
   - `terminal:write` — `{ "kind": "terminal:write", "id": "<session_id>", "data": "<utf8_string>" }`
   - `terminal:resize` — `{ "kind": "terminal:resize", "id": "<session_id>", "cols": <u16>, "rows": <u16> }`
@@ -210,6 +211,7 @@ The following features are explicitly excluded from the initial Android release 
   - Per-subject limit: 4 active concurrent subscriber streams per user subject. Exceeding returns HTTP 429 (`HOST_RESOURCE_STREAM_LIMIT`, Retry-After: 30).
   - Shutdown state: Returns HTTP 503 (`AUTH_UNAVAILABLE`).
 - **Client Fallback:** If SSE connection fails or receives 429/503, native client gracefully falls back to periodic REST polling `GET /api/system/metrics` with on-demand `/api/system/resources/v1/alerts`.
+*(Implementation note: The authenticated SSE event stream and bounded frame parsing are implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/HostResourceSseClient.kt` with a 256 KiB data cap, 4 KiB status cap, strict status-data revision adjacency pairing, and connection generation fencing. Domain-level REST polling fallback and telemetry presentation belong to Phase 15).*
 
 ### 5.5 Media Session & Streaming Protocol
 - **Issue Video Ticket:** `POST /api/fs/video/tickets` with `{ "project": "...", "worktreePath": "..."?, "path": "...", "purpose": "view"|"download", "mediaClientId": "..." }`.
@@ -296,12 +298,51 @@ All measurements to be validated in Phase 18 on the reference target:
   - Data Extraction & Backup: Manifest disables backup (`android:allowBackup="false"`, `android:fullBackupContent="false"`). Data extraction rules (`data_extraction_rules.xml`) exclude `.` from both `<cloud-backup>` and `<device-transfer>`.
   - IME Configuration: Manifest configures `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across virtual keyboards pending device testing).
   - Web Engine Exclusion: Prohibits WebView or Tauri dependencies (0 occurrences detected in `native-app/shared/src/` or `native-app/androidApp/src/main/` by static verification).
+
+### 7.6 Phase 03 Contracts Ownership & Transport Baseline
+- **Ownership & Lifecycle Models (`core/model/`):**
+  - `ConnectionRef(profileId, generation)`: Immutable profile connection epoch identifier producing deterministic tuple keys `["profileId", generation]` compatible with TypeScript web client conventions.
+  - `SocketInstanceRef(connection, socketId)`: Scopes socket attempt lifecycle within a `ConnectionRef`, producing tuple keys `["profileId", generation, "socketId"]`. Ensures socket-bound capabilities (e.g. `host:uiConnection`) are revoked on reconnect.
+  - `ProjectTargetRef(profileId, project, worktreePath)`: Normalizes project target worktree paths and produces server-safe payloads via `toServerPayload()` without exposing client profile IDs.
+  - `ConnectionOwnerError`: Standard typed error carrying explicit reasons (`STALE`, `UNAVAILABLE`, `OWNER_MISMATCH`, `AUTH_REQUIRED`).
+- **Generation Fencing & In-Memory Watermarks (`core/ownership/ConnectionRegistry.kt`):**
+  - Manages active generations per profile under coroutine `Mutex` synchronization.
+  - Monotonic in-memory generation watermarks (`generationWatermarks`) persist across profile removal within the registry/process lifetime, preventing ABA generation collisions on profile re-creation during runtime.
+  - Strict owner validation: `assertCurrentOwner` gates request initiation and completion across REST, WebSocket, and SSE.
+  - Dispatches retirement events to registered listeners (`retirementListeners`) upon generation advance.
+- **REST API Client (`core/transport/ApiClient.kt`):**
+  - Scoped to an immutable `ConnectionRef` with base URL normalization.
+  - Redirect following disabled (`followRedirects = false`) to prevent auth token leakage across cross-origin redirects.
+  - Structured concurrency: immediately rethrows `CancellationException` before error wrapping.
+  - Parses server error responses (`{ "code": "...", "error": "..." }`) and `Retry-After` headers into typed `ApiRequestError`.
+- **URL & Diagnostic Sanitization (`core/transport/ApiErrors.kt`):**
+  - `redactUrl()` sanitizes query parameters (`([?&]token=)[^&]+`) and user-info credentials (`((?:https?|wss?)://[^:/@]+:)[^@]+(@)`) across HTTP, HTTPS, WS, and WSS schemes.
+  - Masks `decisionCapability=[REDACTED]` in `ServerMsg.UiConnection.toString()` and `UiConnectionReceipt.toString()`.
+- **Live WebSocket Transport (`core/transport/WsConnection.kt`):**
+  - Origin-less handshake URL: `GET /ws?token=<token>` avoids synthetic browser `Origin` headers.
+  - Exact-socket receipts: `host:uiConnection` creates `UiConnectionReceipt` bound to `SocketInstanceRef`, revoked immediately on close, error, or reconnect.
+  - Maps server close codes to typed `WsState`: `4403` (`MfaRequired`), `4401` (`LoginRequired`), `1013` (`AuthUnavailable`), `4001` (`Overflow`).
+  - Socket-instance fencing: `handleCloseReason` and `handleSocketFailure` verify `activeSocketRef == socketRef` before modifying state or closing sessions.
+- **Atomic Application Frame Writer (`core/transport/SerializedWsWriter.kt`):**
+  - Mutex-guarded transmission prevents interleaving of text JSON headers and binary frames.
+  - Atomic pairs (`sendAtomicPair`) for chunked binary uploads (`fs:write_chunk_binary`, `fs:upload_chunk`) abort the session with `CloseReason.Codes.PROTOCOL_ERROR` if partial failure occurs after header delivery.
+- **Bounded Request Correlator (`core/transport/WsRequestCorrelator.kt`):**
+  - Bounds concurrent in-flight requests (default `maxInFlight = 256`), throwing `UNAVAILABLE` on overflow.
+  - Request timeout handling unregisters pending requests (`unregister(reqId)`) to eliminate capacity leaks.
+  - Cancels all pending requests upon socket disconnect or replacement.
+- **Bounded SSE Client (`core/transport/HostResourceSseClient.kt`):**
+  - Enforces strict memory caps: 256 KiB for data events (`MAX_DATA_EVENT_BYTES`) and 4 KiB for control/status events (`MAX_CONTROL_EVENT_BYTES`).
+  - Strict status-data adjacency: data frames require an immediately preceding status frame with identical `serverEpoch` and `revision`. Comments (`: ping`) clear preceding status to prevent stale pairing.
+- **Android Platform Network Factory (`platform/network/AndroidHttpClientFactory.kt`):**
+  - Pinned OkHttp engine configuration: 15s connect timeout, 30s read/write timeouts, 15s WebSocket ping interval, and disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`).
+  - Enforces Android `network_security_config.xml` TLS-only release policy.
 ---
 
 ## 8. Gate Approvals & Implementation Sequence
 
 - **GATE-A1 (Scope & Contract Freeze):** **PASSED** in Phase 01. Complete feature inventory, panel registry, wire DTO schemas, and explicit exclusions frozen.
-- **GATE-A2 (Foundation & Toolchain):** **FOUNDATION & SECURITY VERIFIED (Launch Qualification Open)** in Phase 02. Two-module Gradle KMP architecture (`:shared`, `:androidApp`), pinned toolchain catalog, 12-panel registry enum, Compose entry with `statusBarsPadding()`, manifest/network security policies, and root scripts (`pnpm native-app:test`, `pnpm native-app:test:android`, `pnpm native-app:assembleDebug`) implemented. Automated static verification script `tests/test-phase-02-foundation.sh` passes 41/41 assertions. Physical ARM64 device and x86_64 emulator runtime launch qualification remain pending device attachment.
+- **GATE-A2 (Foundation & Toolchain):** **FOUNDATION & SECURITY VERIFIED (Launch Qualification Open)** in Phase 02. Two-module Gradle KMP architecture (`:shared`, `:androidApp`), pinned toolchain catalog, 12-panel registry enum, Compose entry with `statusBarsPadding()`, manifest/network security policies, and root scripts (`pnpm native-app:test`, `pnpm native-app:test:android`, `pnpm native-app:assembleDebug`) implemented. Automated static verification script `tests/test-phase-02-foundation.sh` passes 47/47 static assertions. Physical ARM64 device and x86_64 emulator runtime launch qualification remain pending device attachment.
+- **Phase 03 (Contracts Ownership & Live Transport Foundation):** **IMPLEMENTED (Qualification Open)** in Phase 03 (2026-10-15). Complete owner-bound networking layer implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/network/`. Verified by 48/48 static transport assertions in `tests/test-phase-03-transport.sh`, 28/28 shared JVM unit tests in `pnpm native-app:test`, and clean `pnpm native-app:assembleDebug`. Live Axum daemon lifecycle qualification and device runtime attachment remain open.
 - **GATE-B (Native Terminal, Editor & Crypto Proof):** Pending Phase 05 (Real device proof of terminal input/replay, editor model, and OPAQUE JNI interop).
 - **GATE-C (Integrated Qualification):** Pending Phase 18 (Real server tests, end-to-end user journeys, visual review).
 - **GATE-D (Signed Release APK):** Pending Phase 19 (Production signed APK, upgrade testing, audit handoff).

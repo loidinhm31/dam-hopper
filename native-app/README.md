@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** Foundation and security architecture verified (Phase 02). Physical/emulator runtime launch pending device attachment.  
+**Status:** Foundation and live transport architecture implemented and statically verified (Phase 02 & Phase 03). Live backend lifecycle qualification and physical/emulator runtime launch pending device attachment.  
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
@@ -74,22 +74,33 @@ native-app/
 │   └── src/
 │       ├── commonMain/kotlin/   # Domain models, Compose UI, theme (excludes Android/Swing classes)
 │       │   └── dev/damhopper/nativeapp/
+│       │       ├── core/        # Core models, ownership, and live transport (Phase 03)
+│       │       │   ├── model/       # ConnectionRef, ProjectTargetRef, ConnectionOwnerError
+│       │       │   ├── ownership/   # ConnectionRegistry (monotonic watermark ABA protection)
+│       │       │   └── transport/   # ApiClient, WsConnection, SerializedWsWriter, WsRequestCorrelator,
+│       │       │                    # HostResourceSseClient, WireMessages (ClientMsg, ServerMsg),
+│       │       │                    # WsHandshakeUrl, WsTypes, ApiErrors, PlatformHttpEngine
 │       │       ├── model/       # WorkbenchModel.kt (WorkbenchPanel, WorkbenchState, shell invariants)
 │       │       └── ui/
 │       │           ├── components/ # WorkbenchHeader, PanelNavigationRow, PanelPlaceholders
 │       │           ├── screens/    # WorkbenchScreen
 │       │           └── theme/      # Color.kt, Type.kt, NativeTheme.kt
-│       ├── commonTest/kotlin/   # Unit tests for domain models and shell invariants
-│       ├── androidMain/         # Android platform dependencies (Ktor OkHttp, Security Crypto)
-│       └── jvmMain/             # JVM platform dependencies (Ktor Java)
-├── androidApp/                  # Android application module
+│       ├── commonTest/kotlin/   # Unit tests for models, ownership, serialization, shell invariants
+│       │   └── dev/damhopper/nativeapp/
+│       │       ├── core/        # ConnectionRegistryTest, WireSerializationTest
+│       │       └── model/       # WorkbenchSerializationTest, WorkbenchStateTest
+│       ├── jvmTest/kotlin/      # Transport integration tests (ApiClientTest, WsConnectionTest, HostResourceSseTest)
+│       ├── androidMain/         # Android platform dependencies (PlatformHttpEngine with OkHttp)
+│       └── jvmMain/             # JVM platform dependencies (PlatformHttpEngine with Java engine)
 │   ├── build.gradle.kts         # Android config (minSdk 29, compileSdk 35, ABI filters, Compose)
 │   ├── proguard-rules.pro       # R8 / ProGuard optimization rules
 │   └── src/
 │       ├── main/
 │       │   ├── AndroidManifest.xml # Backup disabled, adjustResize, network security config
 │       │   ├── kotlin/dev/damhopper/nativeapp/
-│       │   │   └── MainActivity.kt # Compose entry point with NativeTheme and WorkbenchScreen
+│       │   │   ├── MainActivity.kt # Compose entry point with NativeTheme and WorkbenchScreen
+│       │   │   └── platform/network/
+│       │   │       └── AndroidHttpClientFactory.kt # OkHttp client factory (timeouts, ping, redirect disabled)
 │       │   └── res/
 │       │       ├── values/      # strings.xml, colors.xml, themes.xml
 │       │       └── xml/
@@ -109,6 +120,39 @@ native-app/
 - **IME Window Management**: Manifest sets `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across virtual keyboards pending device testing).
 - **Prohibited Dependency Exclusion**: Zero occurrences of `WebView` or `tauri` detected in `native-app/shared/src/` or `native-app/androidApp/src/main/` by the static test suite.
 
+### Live Transport & Ownership Architecture (Phase 03)
+
+Phase 03 establishes the typed networking foundation used across all remote workbench domains:
+
+1. **Generation-Fenced Connection Scoping (`ConnectionRef` & `ConnectionRegistry`):**
+   - Profiles are addressed by `ProfileId`; runtime lifetimes are identified by a monotonically increasing `generation` counter (`["profileId", generation]`).
+   - `ConnectionRegistry` guards against ABA generation reuse via an in-memory `generationWatermarks` table retained across profile removals within the registry process lifetime.
+   - Stale background callbacks, in-flight REST responses, and old WebSocket frames are rejected via `assertCurrentOwner`.
+
+2. **Origin-less WebSocket Handshake & Typed Protocol (`WsConnection`):**
+   - Handshake builds target URL `GET /ws?token=<token>` per server admission requirements (`server/src/api/ws.rs`), avoiding synthetic browser `Origin` headers.
+   - Inbound and outbound frames are strictly typed: polymorphic `ClientMsg` and `ServerMsg` with class discriminator `"kind"` and fallback `ServerMsg.Unknown` for unknown future events.
+   - Mapped close codes to explicit `WsState` branches: `4403` (MFA required), `4401` (login required), `1013` (auth unavailable / 503), `4001` (overflow).
+   - Receipts (`host:uiConnection`) are bound to an exact `SocketInstanceRef` and revoked immediately upon socket termination or reconnect.
+
+3. **Atomic Frame Writer (`SerializedWsWriter`):**
+   - Mutex-guarded queue ensures text JSON headers and binary payloads never interleave.
+   - Atomic header/binary pairs (e.g. for `fs:write_chunk_binary` and `fs:upload_chunk`) abort the connection with `PROTOCOL_ERROR` if partial delivery occurs.
+
+4. **Bounded Request Correlation (`WsRequestCorrelator`):**
+   - In-flight request capacity is strictly bounded (max 256).
+   - Request timeouts invoke `unregister(reqId)` to eliminate capacity slot leaks.
+   - Disconnects and reconnects invoke bulk cancellation `cancelAll()` with `ConnectionOwnerError.UNAVAILABLE`.
+
+5. **Bounded Server-Sent Events (`HostResourceSseClient`):**
+   - Incremental streaming parser with strict memory caps (256 KiB data events, 4 KiB status/error events).
+   - Status-data adjacency enforcement: data frames are accepted only when immediately preceded by a matching status frame having identical `serverEpoch` and `revision`.
+
+6. **Diagnostic Redaction & Security Policies:**
+   - URL sanitizer (`redactUrl`) strips sensitive query tokens and user:password credentials across `http`, `https`, `ws`, and `wss` protocols.
+   - `UiConnectionReceipt` and `ServerMsg.UiConnection` redact `decisionCapability` in `toString()` output.
+   - Structured concurrency: `ApiClient` immediately rethrows `CancellationException` before error wrapping.
+   - Android platform OkHttp engine configures pinned timeouts (15s connect, 30s read/write), 15s ping interval, disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`), and release TLS-only network security config.
 ---
 
 ## 4. Verification & Build Commands
@@ -125,8 +169,13 @@ pnpm native-app:test:android
 # Assemble debug APK:
 pnpm native-app:assembleDebug
 
-# Run foundation and security assertion test suite (41/41 assertions):
+# Run foundation and security static assertion suite (47/47 static assertions):
 bash tests/test-phase-02-foundation.sh
+
+# Run Phase 03 transport and ownership static assertion suite (48/48 static assertions):
+bash tests/test-phase-03-transport.sh
+# Run combined test suites (foundation + transport):
+bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 ```
 *(Note: Root scripts provide sensible fallbacks for `JAVA_HOME` and `ANDROID_HOME`, which can be overridden in your local shell environment).*
 
@@ -154,9 +203,9 @@ bash tests/test-phase-02-foundation.sh
 ## 5. Implementation Roadmap
 
 - **Phase 01:** Scope baseline and contract freeze *(Completed)*
-- **Phase 02:** Gradle KMP Android foundation *(Foundation & security verified; runtime launch pending device attachment)*
-- **Phase 03:** Contracts ownership and live transport *(Next)*
-- **Phase 04:** Profiles authentication, MFA, and credential vault
+- **Phase 02:** Gradle KMP Android foundation *(Foundation & security statically verified; runtime launch pending device attachment)*
+- **Phase 03:** Contracts ownership and live transport *(Implemented and statically verified; 48/48 static transport assertions, 28/28 shared JVM tests; live backend qualification open)*
+- **Phase 04:** Profiles authentication, MFA, and credential vault *(Pending)*
 - **Phase 05:** Native terminal, editor, and crypto proof gates
 - **Phase 06:** TERMINAL Traditional shell, projects, and configuration
 - **Phase 07:** Terminal sessions, replay, input, and agent status

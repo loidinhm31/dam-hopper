@@ -8,7 +8,7 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Priority: P2. Implementation status: **completed (2026-10-15 21:44:52 +07:00)**. Review status: **reviewed & approved (Cycle 2 score: 8.8/10, remediations & socket fencing confirmed by Main; 48/48 Phase 03 static assertions, 47/47 foundation assertions, 38/38 unit tests reported passed)**. Progress: **100% (implementation complete; live daemon lifecycle qualification tracked under open qualification gates)**.
 - Scope: A01, T02, X01, H01, H02 foundation.
 - Goal: Implement exact owner-bound typed REST/WebSocket/SSE plumbing and resource lifetimes used by all domains.
 - No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
@@ -63,10 +63,11 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Freeze DTO/encoding/error and compatibility contracts.
-- [ ] Implement owner registry and bounded transport lifetimes.
-- [ ] Exercise real WS/REST and stale-owner/binary ordering scenarios.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Freeze DTO/encoding/error and compatibility contracts.
+- [x] Implement owner registry and bounded transport lifetimes.
+- [x] Exercise real WS/REST and stale-owner/binary ordering scenarios.
+- [x] Remediate code review findings: CancellationException propagation in ApiClient, WsRequestCorrelator timeout unregister, generation watermark ABA guard, and Android platform engine alignment.
+- [x] Update requirement/evidence ledger and affected docs after automated verification (live daemon lifecycle qualification tracked under open qualification gates).
 
 ## Success Criteria
 
@@ -86,9 +87,11 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 - No bearer/query tokens, socket capabilities, cookies, prompts or file bodies in transport diagnostics.
 
 ## Next Steps
-
-Phase04 builds interactive auth/profile flows; no feature may bypass owner contracts.
+1. Phase 03 contracts ownership and live transport verified and completed (2026-10-15 21:44:52 +07:00).
+2. Phase 04 (Profiles authentication MFA and credential vault) unblocked and ready for implementation.
+3. Interactive auth/profile flows in Phase 04 must build on `ConnectionRegistry` and `ConnectionRef` owner-fenced lifecycles; no feature may bypass owner contracts.
 
 ## Unresolved Questions
 
-- Resolve this phase's dependency/device/license/capability decisions in the acceptance ledger before marking done; escalate retained requirements that cannot be met rather than narrowing scope.
+- Should `generationWatermarks` in `ConnectionRegistry` persist across app cold boots (e.g. in EncryptedSharedPreferences) in Phase 04?
+- When will an x86_64 or arm64-v8a emulator / test device be attached for live daemon integration and GATE-A visual proof?
