@@ -67,6 +67,7 @@ dependencies {
     implementation(compose.foundation)
     implementation(compose.material3)
 
+    implementation(libs.androidx.security.crypto)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlin.test.junit)
 

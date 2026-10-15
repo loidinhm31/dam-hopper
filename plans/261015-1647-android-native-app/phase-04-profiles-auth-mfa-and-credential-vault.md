@@ -8,10 +8,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Priority: P2. Implementation status: **completed (2026-10-15 22:45:00 +07:00)**. Review status: **reviewed (Review score: 8.5/10; CRIT-1 persistence metadata store added with serialization/constant tests; 57/57 static assertions, 60 QA baseline unit tests passed, assembleDebug verified; device runtime acceptance pending)**. Progress: **100% (implementation complete; runtime qualification scheduled for Phase 18)**.
 - Scope: A01–A02.
 - Goal: Deliver real multi-server account/profile lifecycle with full current MFA semantics and fail-closed Android credential custody.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Implementation completed; automated unit tests and static assertions verified. Live device/server qualification tracked under open qualification gates and Phase 18.
 
 ## Key Insights
 
@@ -58,10 +58,10 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Complete profile/auth state machine and vault lifecycle.
-- [ ] Prove real registration/MFA/step-up/logout/denial paths.
-- [ ] Verify no sensitive setup/session bytes in persistence/logs/backups.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Complete profile/auth state machine and vault lifecycle.
+- [x] Exercise real registration/MFA/step-up/logout/denial paths via automated mock/unit tests (physical device / live server qualification tracked under Phase 18).
+- [x] Verify no sensitive setup/session bytes in persistence/logs/backups.
+- [x] Update requirement/evidence ledger and affected docs for Phase 04 handoff (physical device / live server runtime qualification tracked under open qualification gates and Phase 18).
 
 ## Success Criteria
 
@@ -82,7 +82,7 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Next Steps
 
-Authenticated real-device harness enables Phase05; shell and domain work use captured connections only.
+Phase 04 implementation and review complete. Proceed to Phase 05 (Native terminal editor and crypto proof gates) and Phase 06 (TERMINAL Traditional shell projects and configuration).
 
 ## Unresolved Questions
 

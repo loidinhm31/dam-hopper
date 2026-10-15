@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** design only; implementation pending. Decision date: 2026-10-15.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), and profiles, auth & credential vault (Phase 04) implemented and verified via unit/static test suites; terminal/editor/crypto proof gates (Phase 05+) and live device qualification (Phase 18) pending. Updated: 2026-10-15.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 

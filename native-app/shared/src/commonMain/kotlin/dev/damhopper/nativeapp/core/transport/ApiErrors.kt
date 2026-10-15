@@ -11,6 +11,7 @@ class ApiRequestError(
     val code: String? = null,
     val retryAfterSeconds: Long? = null,
     val details: String? = null,
+    val rawBody: String? = null,
     cause: Throwable? = null,
 ) : RuntimeException(message, cause) {
     override fun toString(): String =

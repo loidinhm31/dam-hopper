@@ -336,6 +336,35 @@ All measurements to be validated in Phase 18 on the reference target:
 - **Android Platform Network Factory (`platform/network/AndroidHttpClientFactory.kt`):**
   - Pinned OkHttp engine configuration: 15s connect timeout, 30s read/write timeouts, 15s WebSocket ping interval, and disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`).
   - Enforces Android `network_security_config.xml` TLS-only release policy.
+
+### 7.7 Phase 04 Profiles, Authentication, MFA & Credential Vault Baseline
+- **Multi-Server Profile Lifecycle (`features/profiles/`):**
+  - `ProfileRepository`: Manages multi-server profile instances (`ServerProfile`), active selection (`activeProfileId`), and status projection (`authStatuses`).
+  - `ServerProfile`: Strict URL validation via `validateServerUrl` enforces HTTP/HTTPS scheme, rejects user credentials in URL authority, query parameters, and fragments, and maps Android emulator loopback addresses (`10.0.2.2`).
+  - `ProfileMetadataStore` & `AndroidProfileMetadataStore`: Persists non-secret profile metadata in Android `SharedPreferences` under key `damhopper_server_profiles`.
+- **Android Keystore Credential Custody (`platform/vault/AndroidCredentialVault.kt`):**
+  - `CredentialVault` contract: Keyed by `token:${profileId}:${baseUrl}`. Restricts storage strictly to Bearer session tokens; passwords, challenge tokens, and TOTP setup secrets are never persisted.
+  - Keystore-backed `EncryptedSharedPreferences`: Employs `MasterKey` (`AES256_GCM`) with `AES256_SIV` key encryption and `AES256_GCM` value encryption.
+  - Fail-Closed Key Handling: Throws `VaultKeyInvalidatedException` on key invalidation or corruption; never falls back to unencrypted plaintext storage.
+  - Data Extraction & Backup Exclusion: `data_extraction_rules.xml` excludes `sharedpref` domain from both `<cloud-backup>` and `<device-transfer>`, and manifest enforces `android:allowBackup="false"`.
+- **Attempt Watermark Fencing (`features/profiles/AuthAttemptTracker.kt`):**
+  - Fences asynchronous authentication calls against concurrent lifecycle modifications.
+  - `AuthAttemptTracker.startAttempt(profileId)` generates monotonically increasing `AuthAttemptRef(profileId, attemptId)`.
+  - `assertActive(attempt)` gates session token installation; late or outdated callbacks throw `AuthAttemptStaleException`.
+  - Profile endpoint updates, deletions, and logouts call `attemptTracker.invalidate(profileId)` to retire pending attempt watermarks immediately.
+- **Frozen Protocol v2 Authentication & TOTP MFA (`features/profiles/AuthRepository.kt`):**
+  - Protocol Version Gates: `AuthResponseParser` and `AuthStatusParser` enforce frozen protocol constants (`authProtocol = 2`, `workbenchProtocol = 2`), rejecting mismatches with `INCOMPATIBLE_PROTOCOL`.
+  - REST Authentication Stack: Connects to `/api/auth/register` (new accounts disabled pending operator approval), `/api/auth/login` (yields 5-minute login challenge or dev session), `/api/auth/mfa/setup` (transient TOTP secrets, never persisted), `/api/auth/mfa/confirm`, `/api/auth/mfa/verify`, `/api/auth/mfa/challenge` (step-up rotation), `/api/auth/status`, and `/api/auth/logout`.
+  - Typed Error Mapping: Maps server codes for `ACCOUNT_DISABLED`, `MFA_REQUIRED`, `SESSION_EXPIRED`, `SESSION_REVOKED`, `INCOMPATIBLE_PROTOCOL`, and `ATTEMPT_STALE`.
+  - Sensitive Data Redaction: `AuthSession`, `LoginChallenge`, and `MfaSetupData` sanitize tokens and secrets in `toString()` diagnostics (`[REDACTED]`).
+- **ConnectionRegistry Session Lifecycle Integration:**
+  - Endpoint changes, credential rotation, and logouts call `retireProfileConnection()` which executes `ConnectionRegistry.retireConnection()`, invalidating active REST, WebSocket, and SSE instances for that generation.
+  - Profiles are strictly isolated: invalidating or logging out one profile does not affect other registered profiles.
+  - Monotonic generation watermarks (`generationWatermarks`) persist across profile deletion, preventing ABA generation reuse if the profile ID is recreated within the process lifetime.
+- **UI & Presentation Invariants:**
+  - `AuthDialog`: Tabbed login/register dialog with obscured password input (`PasswordVisualTransformation`) and operator approval notice for newly registered accounts.
+  - `MfaChallengeContent`: Interactive TOTP setup and challenge verification with explicit disclosure of transient secret lifecycle.
+  - Workbench Integration: Profile management hosted under `WorkbenchScreen` SETTINGS panel and header profile indicator, maintaining strict TERMINAL Traditional mode and zero floating buttons (FABs).
 ---
 
 ## 8. Gate Approvals & Implementation Sequence
@@ -343,6 +372,7 @@ All measurements to be validated in Phase 18 on the reference target:
 - **GATE-A1 (Scope & Contract Freeze):** **PASSED** in Phase 01. Complete feature inventory, panel registry, wire DTO schemas, and explicit exclusions frozen.
 - **GATE-A2 (Foundation & Toolchain):** **FOUNDATION & SECURITY VERIFIED (Launch Qualification Open)** in Phase 02. Two-module Gradle KMP architecture (`:shared`, `:androidApp`), pinned toolchain catalog, 12-panel registry enum, Compose entry with `statusBarsPadding()`, manifest/network security policies, and root scripts (`pnpm native-app:test`, `pnpm native-app:test:android`, `pnpm native-app:assembleDebug`) implemented. Automated static verification script `tests/test-phase-02-foundation.sh` passes 47/47 static assertions. Physical ARM64 device and x86_64 emulator runtime launch qualification remain pending device attachment.
 - **Phase 03 (Contracts Ownership & Live Transport Foundation):** **IMPLEMENTED (Qualification Open)** in Phase 03 (2026-10-15). Complete owner-bound networking layer implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/network/`. Verified by 48/48 static transport assertions in `tests/test-phase-03-transport.sh`, 28/28 shared JVM unit tests in `pnpm native-app:test`, and clean `pnpm native-app:assembleDebug`. Live Axum daemon lifecycle qualification and device runtime attachment remain open.
+- **Phase 04 (Profiles Authentication, MFA & Credential Vault):** **IMPLEMENTED (Live Qualification Pending)** in Phase 04 (2026-10-15). Multi-server profile lifecycle, Android Keystore-backed AES-256-GCM `AndroidCredentialVault`, monotonic `AuthAttemptTracker` fencing, `ProfileMetadataStore` persistence, and frozen protocol version 2 authentication stack implemented in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/profiles/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/`. Verified by 57/57 static assertions in `tests/test-phase-04-profiles-auth.sh`, 53/53 shared JVM unit tests in `pnpm native-app:test`, 7/7 Android debug unit tests in `pnpm native-app:test:android`, and clean `pnpm native-app:assembleDebug`. Live Axum daemon qualification and physical device Keystore evidence remain tracked under open qualification gates and Phase 18.
 - **GATE-B (Native Terminal, Editor & Crypto Proof):** Pending Phase 05 (Real device proof of terminal input/replay, editor model, and OPAQUE JNI interop).
 - **GATE-C (Integrated Qualification):** Pending Phase 18 (Real server tests, end-to-end user journeys, visual review).
 - **GATE-D (Signed Release APK):** Pending Phase 19 (Production signed APK, upgrade testing, audit handoff).

@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -16,7 +17,10 @@ import dev.damhopper.nativeapp.model.WorkbenchState
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 
 @Composable
-fun WorkbenchHeader(state: WorkbenchState) {
+fun WorkbenchHeader(
+    state: WorkbenchState,
+    onOpenProfiles: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -25,7 +29,11 @@ fun WorkbenchHeader(state: WorkbenchState) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(
+            modifier = if (onOpenProfiles != null) {
+                Modifier.clickable { onOpenProfiles() }
+            } else Modifier
+        ) {
             Text(
                 text = "DamHopper — ${state.serverName}",
                 color = DamHopperColors.TextPrimary,
@@ -38,7 +46,6 @@ fun WorkbenchHeader(state: WorkbenchState) {
                 fontSize = 11.sp
             )
         }
-
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))

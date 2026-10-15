@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 & Phase 06 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -31,9 +31,9 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 01 | [Scope baseline and contract freeze](./phase-01-scope-baseline-and-contract-freeze.md) | completed (2026-10-15 19:51 +07:00) | 100% | — |
 | 02 | [Gradle KMP Android foundation](./phase-02-gradle-kmp-android-foundation.md) | completed (2026-10-15 20:38 +07:00) | 100% | 01 |
 | 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | completed (2026-10-15 21:44:52 +07:00) | 100% | 02 |
-| 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | pending (unblocked) | 0% | 03 |
-| 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | pending | 0% | 04 |
-| 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending | 0% | 04 |
+| 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | completed (2026-10-15 22:45:00 +07:00) | 100% | 03 |
+| 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | pending (unblocked) | 0% | 04 |
+| 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending (unblocked) | 0% | 04 |
 | 07 | [Terminal sessions replay input and agents](./phase-07-terminal-sessions-replay-input-and-agents.md) | pending | 0% | 05, 06 |
 | 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | pending | 0% | 06 |
 | 09 | [Native editor language services and safe saves](./phase-09-native-editor-language-services-and-safe-saves.md) | pending | 0% | 05, 08 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 unblocked; GATE-A dynamic device launch pending hardware attachment).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 & 06 unblocked; GATE-A dynamic device launch pending hardware attachment).
 
 ## Phase 01 Completion Record
 
@@ -110,3 +110,19 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   - `HostResourceSseClient` with 256 KiB data cap, 4 KiB status cap, and strict status-data adjacency pairing reset on SSE comments.
   - `AndroidHttpClientFactory` / `PlatformHttpEngine.android.kt` with pinned OkHttp timeouts and explicitly disabled HTTP/SSL redirects (`followRedirects(false)`, `followSslRedirects(false)`).
 - **Handoff:** Phase 03 contracts ownership and live transport verified and closed. Phase 04 (Profiles authentication MFA and credential vault) is unblocked. (Note: Implementation reported complete by Main with 38 unit tests, 95 static assertions, and verified socket fencing in `WsConnection.kt`. Live-daemon lifecycle qualification and Android GATE-A device evidence remain tracked under open qualification gates; Phase 04 proceeds as an unblocked gate decision).
+
+## Phase 04 Completion Record
+
+- **Completed:** 2026-10-15 22:45:00 +07:00
+- **Status:** 100% complete
+- **Validation:** Review score 8.5/10 per `plans/reports/code-review-261015-2226-phase-04-profiles-auth.md`. Critical finding CRIT-1 addressed via `AndroidProfileMetadataStore` storing profile metadata in Android SharedPreferences (`damhopper_server_profiles`), with constant/serialization/source checks in `AndroidProfileMetadataStoreTest`. 100% automated test pass rate across 60 unique QA baseline unit tests (53 in `:shared:jvmTest`, 7 in `:androidApp:testDebugUnitTest`; 67 total executions including `:androidApp:testReleaseUnitTest`) and 149 static assertions (54 Phase 04 assertions in `tests/test-phase-04-profiles-auth.sh`, 48 Phase 03 assertions in `tests/test-phase-03-transport.sh`, 47 Phase 02 assertions in `tests/test-phase-02-foundation.sh`; 216 total automated checks). `assembleDebug` builds cleanly (55 actionable tasks executed).
+- **Deliverables:**
+  - Multi-server profile lifecycle management via `ProfileRepository`, `ServerProfile`, `ProfileMetadataStore`, and `AndroidProfileMetadataStore` persisting profiles across app restarts.
+  - Strict URL normalization and validation preventing authority credentials, query parameters, and fragments, with explicit debug loopback host recognition (`localhost`, `127.0.0.1`, `::1`, `10.0.2.2`).
+  - Frozen protocol versioning (`authProtocol: 2`, `workbenchProtocol: 2`), standard `AuthErrorCodes` (`ACCOUNT_DISABLED`, `MFA_REQUIRED`, `INCOMPATIBLE_PROTOCOL`), and complete `[REDACTED]` string masking for secrets/tokens.
+  - `AuthAttemptRef` and `AuthAttemptTracker` monotonic attempt fencing preventing late asynchronous HTTP/MFA callbacks from corrupting rotated or logged-out profile states.
+  - Fail-closed `CredentialVault` interface, `InMemoryCredentialVault` (unit tests), and Android Keystore-backed `AndroidCredentialVault` utilizing `MasterKey` AES256-GCM and `EncryptedSharedPreferences`, with backup exclusions in `data_extraction_rules.xml`.
+  - `AuthRepository`, `AuthWireDto`, `AuthResponseParser`, and `AuthStatusParser` implementing REST auth flows (`/api/auth/login`, `/api/auth/register`, `/api/auth/mfa/setup`, `/api/auth/mfa/confirm`, `/api/auth/status`, `/api/auth/logout`).
+  - Multi-profile Compose UI integration: `WorkbenchScreen` (Settings panel integration), `ProfileListScreen`, `AddProfileCard`, tabbed `AuthDialog` with masked inputs (`PasswordVisualTransformation`) and operator approval notice, and `MfaChallengeContent` transient TOTP setup/verification with disclosure.
+  - `MainActivity` wiring `AndroidCredentialVault`, `ConnectionRegistry`, `AndroidProfileMetadataStore`, and `ProfileRepository` with lifecycle-scoped initialization.
+- **Handoff:** Phase 04 profiles, authentication, MFA, and credential vault implementation complete and automated checks passed. Phase 05 (Native terminal editor and crypto proof gates) and Phase 06 (TERMINAL Traditional shell projects and configuration) are unblocked. (Note: Device process-recreation persistence, live daemon qualification, and Android GATE-A device evidence remain tracked under open qualification gates and Phase 18).

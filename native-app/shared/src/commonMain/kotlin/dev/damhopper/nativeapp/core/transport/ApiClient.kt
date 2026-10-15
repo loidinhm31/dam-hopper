@@ -33,7 +33,7 @@ import kotlinx.serialization.json.jsonPrimitive
 class ApiClient(
     val connection: ConnectionRef,
     baseUrl: String,
-    val authTokenProvider: () -> String? = { null },
+    val authTokenProvider: suspend () -> String? = { null },
     val registry: ConnectionRegistry? = null,
     private val httpClient: HttpClient = HttpClient(createDefaultHttpEngine()) {
         install(HttpTimeout) {
@@ -147,6 +147,7 @@ class ApiClient(
 
         val status = response.status.value
         val responseText = response.bodyAsText()
+        assertActiveOwner("$method $url post-body completion")
 
         if (response.status.isSuccess()) {
             return responseText
@@ -164,6 +165,7 @@ class ApiClient(
             code = parsedError.code,
             retryAfterSeconds = retryAfterSeconds,
             details = parsedError.details,
+            rawBody = responseText,
         )
     }
 

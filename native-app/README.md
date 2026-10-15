@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** Foundation and live transport architecture implemented and statically verified (Phase 02 & Phase 03). Live backend lifecycle qualification and physical/emulator runtime launch pending device attachment.  
+**Status:** Foundation, live transport, and profile/auth/vault architecture implemented and statically/unit verified (Phases 02, 03, and 04). Live backend lifecycle qualification and physical/emulator runtime launch pending device attachment.  
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
@@ -80,6 +80,10 @@ native-app/
 │       │       │   └── transport/   # ApiClient, WsConnection, SerializedWsWriter, WsRequestCorrelator,
 │       │       │                    # HostResourceSseClient, WireMessages (ClientMsg, ServerMsg),
 │       │       │                    # WsHandshakeUrl, WsTypes, ApiErrors, PlatformHttpEngine
+│       │       ├── features/
+│       │       │   └── profiles/    # ProfileRepository, AuthRepository, ServerProfile, AuthState,
+│       │       │                    # CredentialVault, AuthAttemptTracker, AuthAttemptRef,
+│       │       │                    # ProfileMetadataStore, ProfileScreens, AuthDialog, MfaChallenge
 │       │       ├── model/       # WorkbenchModel.kt (WorkbenchPanel, WorkbenchState, shell invariants)
 │       │       └── ui/
 │       │           ├── components/ # WorkbenchHeader, PanelNavigationRow, PanelPlaceholders
@@ -99,8 +103,10 @@ native-app/
 │       │   ├── AndroidManifest.xml # Backup disabled, adjustResize, network security config
 │       │   ├── kotlin/dev/damhopper/nativeapp/
 │       │   │   ├── MainActivity.kt # Compose entry point with NativeTheme and WorkbenchScreen
-│       │   │   └── platform/network/
-│       │   │       └── AndroidHttpClientFactory.kt # OkHttp client factory (timeouts, ping, redirect disabled)
+│       │   │   ├── platform/
+│       │   │   │   ├── network/     # AndroidHttpClientFactory
+│       │   │   │   ├── storage/     # AndroidProfileMetadataStore (SharedPreferences)
+│       │   │   │   └── vault/       # AndroidCredentialVault (Keystore AES-256-GCM)
 │       │   └── res/
 │       │       ├── values/      # strings.xml, colors.xml, themes.xml
 │       │       └── xml/
@@ -153,6 +159,36 @@ Phase 03 establishes the typed networking foundation used across all remote work
    - `UiConnectionReceipt` and `ServerMsg.UiConnection` redact `decisionCapability` in `toString()` output.
    - Structured concurrency: `ApiClient` immediately rethrows `CancellationException` before error wrapping.
    - Android platform OkHttp engine configures pinned timeouts (15s connect, 30s read/write), 15s ping interval, disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`), and release TLS-only network security config.
+
+### Profiles, Authentication, MFA & Credential Vault Architecture (Phase 04)
+
+Phase 04 implements multi-server profile management, protocol version 2 authentication, and credential custody:
+
+1. **Multi-Server Profile Lifecycle (`ProfileRepository`):**
+   - Coordinates profile instances (`ServerProfile`), active selection, and auth statuses across independent servers.
+   - Enforces strict URL validation: scheme check (`http`/`https`), user-info credentials rejection, query/fragment rejection, and loopback remapping (`10.0.2.2`).
+   - Persists non-secret profile metadata via `AndroidProfileMetadataStore` in Android `SharedPreferences` (`damhopper_server_profiles`).
+
+2. **Android Keystore Credential Custody (`AndroidCredentialVault`):**
+   - Implements `CredentialVault` contract bound to `(profileId, baseUrl)` pairs. Never persists passwords, challenges, or TOTP secrets.
+   - Uses Android Keystore `MasterKey` (`AES256_GCM`) and `EncryptedSharedPreferences` (`AES256_SIV` key encryption, `AES256_GCM` value encryption).
+   - Fail-closed error handling: throws `VaultKeyInvalidatedException` on key invalidation or corruption; never falls back to plaintext.
+   - Excluded from cloud backup and device transfer via `data_extraction_rules.xml`.
+
+3. **Asynchronous Attempt Watermark Fencing (`AuthAttemptTracker`):**
+   - Fences async auth callbacks against concurrent lifecycle changes using monotonic `AuthAttemptRef(profileId, attemptId)` watermarks.
+   - `assertActive(attempt)` gates credential storage; late or stale callbacks throw `AuthAttemptStaleException`.
+   - Profile updates, deletions, and logouts invalidate active attempt watermarks immediately.
+
+4. **Frozen Protocol v2 Authentication & TOTP MFA (`AuthRepository`):**
+   - Validates frozen protocol version 2 across status, login, and MFA operations via `AuthResponseParser` and `AuthStatusParser`.
+   - Handles multi-step login challenges, transient TOTP enrollment/verification, and step-up credential rotation.
+   - Maps typed error codes (`ACCOUNT_DISABLED`, `MFA_REQUIRED`, `SESSION_EXPIRED`, `SESSION_REVOKED`, `INCOMPATIBLE_PROTOCOL`, `ATTEMPT_STALE`).
+   - Redacts tokens and secrets in `toString()` diagnostics (`[REDACTED]`).
+
+5. **Generation Retirement & Profile Isolation:**
+   - Endpoint edits, token rotation, and logouts invoke `ConnectionRegistry.retireConnection()`, terminating active REST, WebSocket, and SSE instances for that generation.
+   - Profiles remain strictly isolated: operations on one profile never impact other profiles.
 ---
 
 ## 4. Verification & Build Commands
@@ -174,6 +210,9 @@ bash tests/test-phase-02-foundation.sh
 
 # Run Phase 03 transport and ownership static assertion suite (48/48 static assertions):
 bash tests/test-phase-03-transport.sh
+
+# Run Phase 04 profiles, auth, and vault static assertion suite (57/57 static assertions):
+bash tests/test-phase-04-profiles-auth.sh
 # Run combined test suites (foundation + transport):
 bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 ```
@@ -205,7 +244,7 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 01:** Scope baseline and contract freeze *(Completed)*
 - **Phase 02:** Gradle KMP Android foundation *(Foundation & security statically verified; runtime launch pending device attachment)*
 - **Phase 03:** Contracts ownership and live transport *(Implemented and statically verified; 48/48 static transport assertions, 28/28 shared JVM tests; live backend qualification open)*
-- **Phase 04:** Profiles authentication, MFA, and credential vault *(Pending)*
+- **Phase 04:** Profiles authentication, MFA, and credential vault *(Implemented and verified; 57/57 static assertions, 53 shared JVM unit tests; live daemon and device qualification open)*
 - **Phase 05:** Native terminal, editor, and crypto proof gates
 - **Phase 06:** TERMINAL Traditional shell, projects, and configuration
 - **Phase 07:** Terminal sessions, replay, input, and agent status
