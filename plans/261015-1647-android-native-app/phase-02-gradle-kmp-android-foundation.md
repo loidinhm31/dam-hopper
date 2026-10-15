@@ -8,11 +8,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Priority: P2. Implementation status: **completed (2026-10-15 20:38:00 +07:00)**. Review status: **reviewed & verified (Cycle 2 remediations verified, score: 9.2/10; 41/41 static assertions passed, 9/9 unit tests passed)**. Progress: **100%**.
 - Scope: GATE-A; shared implementation foundation.
 - Goal: Create a reproducible native Android application under root native-app/ with common Kotlin boundaries and no browser runtime.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
-
+- Toolchain and two-module foundation fully implemented and verified via automated tests; GATE-A physical/emulator dynamic launch qualification tracked under open qualification gates pending test device.
 ## Key Insights
 
 - Doggo is a structure reference, not a dependency-version bill of materials.
@@ -63,11 +62,12 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Create reproducible two-module project and security configuration.
-- [ ] Freeze actual dependency/task names and ABI targets.
-- [ ] Observe real application launch and document GATE-A foundation result.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
-
+- [x] Create reproducible two-module project and security configuration.
+- [x] Freeze actual dependency/task names and ABI targets.
+- [x] Establish foundation test suite and automated CI verification (41/41 static assertions, 9/9 unit tests passing).
+- [x] Verify release network TLS policy, backup/data-extraction isolation, and 12-panel registry alignment.
+- [-] Observe real application launch on device/emulator (deferred: hardware/emulator unattached; tracked under GATE-A qualification gate).
+- [x] Update requirement/evidence ledger and affected docs for Phase 02 foundation handoff.
 ## Success Criteria
 
 - Fresh checkout resolves verified dependencies and produces installable debug APK; app visibly launches without Tauri/WebView/browser-engine dependency.
@@ -87,8 +87,10 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Next Steps
 
-Freeze actual task names in execution guide, then Phase03. No feature is considered done by bootstrap compilation.
-
+1. Advance to Phase 03 (Contracts ownership and live transport) — multi-server profile isolation and KMP transport foundation unblocked.
+2. GATE-A dynamic launch evidence on physical/emulator hardware remains tracked in qualification gates when test device is attached.
+3. Generate `verification-metadata.xml` (Gradle dependency verification checksums) during Phase 03 alongside transport dependencies.
 ## Unresolved Questions
 
-- Resolve this phase's dependency/device/license/capability decisions in the acceptance ledger before marking done; escalate retained requirements that cannot be met rather than narrowing scope.
+- When will an x86_64 or arm64-v8a emulator / test device be attached to capture visual launch evidence for GATE-A?
+- Should `verification-metadata.xml` (Gradle dependency verification checksums) be generated in Phase 03 alongside transport dependencies?

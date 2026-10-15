@@ -1,7 +1,7 @@
 # Android Native Client — Scope Baseline and Acceptance Ledger
 
 **Document status:** Frozen baseline for Phase 01 (Scope baseline and contract freeze).  
-**GATE-A1 Scope Status:** Approved in Phase 01; build/toolchain foundation (GATE-A2) pending Phase 02; runtime feasibility gates (GATE-B) pending Phase 05.  
+**GATE-A1 Scope Status:** Approved in Phase 01. **GATE-A2 Toolchain & Foundation:** Foundation and security verified in Phase 02; physical/emulator runtime launch pending device attachment. GATE-B (Runtime Feasibility) pending Phase 05.  
 **Baseline commit:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server v0.13.2, workbenchProtocol v2, authProtocol v2).  
 **Working tree provenance:** Branch `feat/android-native-app`. Preserves pre-existing planning files and architecture documents.  
 **Authority:** [User Decisions](../plans/261015-1647-android-native-app/research/decision-context.md), [Proposed Architecture](./architecture/android-native-client.md), [Validation Answers](../plans/261015-1647-android-native-app/validation-answers.md).
@@ -48,6 +48,7 @@ All included remote workbench functions are accessed as panel destinations from 
 | `ssh_host` | Host | `Server` | Remote SSH key listing/loading, agent status, idle-suspend consent dialog, server cache reset. | 16 |
 | `settings` | Settings | `Settings` | Multi-server profile configuration, local appearance preferences, Cognito privacy mode toggle. | 04, 17 |
 
+*Code Realization:* Modeled authoritatively in `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/model/WorkbenchModel.kt` as `enum class WorkbenchPanel(val label: String, val shortCode: String)` with exact 12 entries: `TERMINAL("Terminal", "TERM")`, `FILES("Files", "FS")`, `EDITOR("Editor", "EDIT")`, `DIFF("Diff", "DIFF")`, `MERGE("Merge", "MRG")`, `GIT("Git", "GIT")`, `WORKFLOW("Workflow", "FLOW")`, `AGENTS("Agents", "AGNT")`, `RESOURCES("Resources", "RES")`, `PORTS("Ports", "PORT")`, `SSH_HOST("Host Controls", "HOST")`, and `SETTINGS("Settings", "SET")`. (Note: In the Phase 02 foundation, `WorkbenchPanel` adapts button labels and short codes for compact button row rendering: `RESOURCES` is labeled "Resources" with code `RES`, and `SSH_HOST` is labeled "Host Controls" with code `HOST`). Bound directly to `PanelNavigationRow.kt` horizontal scrollable button row with active-panel highlight and structured placeholders until owning phases connect live transports and native widgets.
 ---
 
 ## 3. Complete Consumer & Feature Inventory
@@ -280,12 +281,27 @@ All measurements to be validated in Phase 18 on the reference target:
 - LGPL 2.1 dependencies (e.g. Sora Editor): Consuming an AAR via Gradle embeds bytecode directly into APK DEX files and does not automatically satisfy LGPL 2.1 relinking/replacement obligations. A version-specific licensing audit covering copyright notices, corresponding source, and compliant relinking/replacement mechanisms is mandatory prior to approving any LGPL dependency in Phase 05.
 - GPLv3 libraries are strictly prohibited from native client distribution binaries.
 
+### 7.5 Phase 02 Toolchain & Security Baseline
+- **Toolchain Pins (`native-app/gradle/libs.versions.toml`, `gradle-wrapper.properties`):**
+  - Gradle: 8.11.1 (distribution SHA-256 `f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`).
+  - Android Gradle Plugin (AGP): 8.7.3.
+  - Kotlin: 2.1.10 (`multiplatform`, `serialization`, `compose`).
+  - Compose Multiplatform: 1.7.3 (`org.jetbrains.compose`).
+  - Kotlinx: Coroutines 1.10.1, Serialization 1.8.0, Datetime 0.6.1.
+  - Ktor Client: 3.1.0 (OkHttp & Java engines staged).
+  - SDK / Bytecode: minSdk 29, targetSdk 35, compileSdk 35, Java 17 target.
+  - ABI targets: `arm64-v8a` and `x86_64`.
+- **Security & Isolation Policies:**
+  - Network Security: Release base config enforces `cleartextTrafficPermitted="false"` with system CA trust anchors. Debug config permits cleartext strictly for local loopback development (`10.0.2.2`, `127.0.0.1`, `localhost`) with user certificates.
+  - Data Extraction & Backup: Manifest disables backup (`android:allowBackup="false"`, `android:fullBackupContent="false"`). Data extraction rules (`data_extraction_rules.xml`) exclude `.` from both `<cloud-backup>` and `<device-transfer>`.
+  - IME Configuration: Manifest configures `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across virtual keyboards pending device testing).
+  - Web Engine Exclusion: Prohibits WebView or Tauri dependencies (0 occurrences detected in `native-app/shared/src/` or `native-app/androidApp/src/main/` by static verification).
 ---
 
 ## 8. Gate Approvals & Implementation Sequence
 
 - **GATE-A1 (Scope & Contract Freeze):** **PASSED** in Phase 01. Complete feature inventory, panel registry, wire DTO schemas, and explicit exclusions frozen.
-- **GATE-A2 (Foundation & Toolchain):** Pending Phase 02 (Gradle multiplatform setup, version catalog, reproducible build).
+- **GATE-A2 (Foundation & Toolchain):** **FOUNDATION & SECURITY VERIFIED (Launch Qualification Open)** in Phase 02. Two-module Gradle KMP architecture (`:shared`, `:androidApp`), pinned toolchain catalog, 12-panel registry enum, Compose entry with `statusBarsPadding()`, manifest/network security policies, and root scripts (`pnpm native-app:test`, `pnpm native-app:test:android`, `pnpm native-app:assembleDebug`) implemented. Automated static verification script `tests/test-phase-02-foundation.sh` passes 41/41 assertions. Physical ARM64 device and x86_64 emulator runtime launch qualification remain pending device attachment.
 - **GATE-B (Native Terminal, Editor & Crypto Proof):** Pending Phase 05 (Real device proof of terminal input/replay, editor model, and OPAQUE JNI interop).
 - **GATE-C (Integrated Qualification):** Pending Phase 18 (Real server tests, end-to-end user journeys, visual review).
 - **GATE-D (Signed Release APK):** Pending Phase 19 (Production signed APK, upgrade testing, audit handoff).

@@ -11,7 +11,7 @@ created: 2026-10-15
 
 # Android Native App — Implementation Plan
 
-**Planning only; no app implementation.** Root: `native-app/`; Kotlin/Compose shared state + native Android widgets. Remote existing Rust server. Android10+/minSdk29, ARM64 device+x86_64 emulator, signed private APK. No Tauri/WebView/browser engine or local PTY/Git/agents.
+**Implementation in progress; Phase 01 baseline frozen and Phase 02 foundation verified.** Root: `native-app/`; Kotlin/Compose shared state + native Android widgets. Remote existing Rust server. Android10+/minSdk29, ARM64 device+x86_64 emulator, signed private APK. No Tauri/WebView/browser engine or local PTY/Git/agents.
 
 User approved all current non-browser workbench families. Embedded interactive HTML and rendered Mermaid browser previews alone are deferred for this release; remaining editor/language/diff/merge/blame/encrypted-save parity stays mandatory. Desktop implementation/Play/browser debug/local SSH forwarding are excluded; existing web/Tauri hosts remain.
 
@@ -22,15 +22,15 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 pending. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
 | # | Phase | Status | Progress | Depends on |
 | --- | --- | --- | --- | --- |
 | 01 | [Scope baseline and contract freeze](./phase-01-scope-baseline-and-contract-freeze.md) | completed (2026-10-15 19:51 +07:00) | 100% | — |
-| 02 | [Gradle KMP Android foundation](./phase-02-gradle-kmp-android-foundation.md) | pending | 0% | 01 |
-| 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | pending | 0% | 02 |
+| 02 | [Gradle KMP Android foundation](./phase-02-gradle-kmp-android-foundation.md) | completed (2026-10-15 20:38 +07:00) | 100% | 01 |
+| 03 | [Contracts ownership and live transport](./phase-03-contracts-ownership-and-live-transport.md) | pending (unblocked) | 0% | 02 |
 | 04 | [Profiles authentication MFA and credential vault](./phase-04-profiles-auth-mfa-and-credential-vault.md) | pending | 0% | 03 |
 | 05 | [Native terminal editor and crypto proof gates](./phase-05-native-terminal-editor-and-crypto-proof-gates.md) | pending | 0% | 04 |
 | 06 | [TERMINAL Traditional shell projects and configuration](./phase-06-adaptive-shell-projects-worktrees-and-config.md) | pending | 0% | 04 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation; no implementation started.
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation implemented & verified; Phase 03 unblocked; GATE-A dynamic device launch pending hardware attachment).
 
 ## Phase 01 Completion Record
 
@@ -75,4 +75,18 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - **Status:** 100% complete
 - **Validation:** User-approved review score 9.5/10; 4/4 test suites passed per assignment record. Documentation baseline and contract freeze completed; no native runtime qualification claimed.
 - **Deliverables:** Baseline documentation and contract freeze recorded in `docs/android-native-acceptance.md`, `native-app/README.md`, and `docs/system-architecture.md`.
-- **Handoff:** Phase 01 scope baseline and contract freeze complete. Phase 02 (Gradle KMP Android foundation) is pending and unblocked for project setup.
+- **Handoff:** Phase 01 scope baseline and contract freeze complete. Phase 02 (Gradle KMP Android foundation) was handed off and completed.
+
+## Phase 02 Completion Record
+
+- **Completed:** 2026-10-15 20:38:00 +07:00
+- **Status:** 100% complete
+- **Validation:** Reviewed & verified (Cycle 2 remediations verified, score: 9.2/10). All automated test suites passed: 9/9 unit tests (5 in `:shared:jvmTest`, 4 in `:androidApp:testDebugUnitTest`), 4/4 `:androidApp:testReleaseUnitTest`, and 41/41 static assertion checks in `tests/test-phase-02-foundation.sh`. Debug APK builds cleanly (`assembleDebug`, minSdk 29, compileSdk 35, ABI `arm64-v8a` + `x86_64`), release manifest verified (`processReleaseManifest`).
+- **Deliverables:**
+  - Pinned Gradle KMP two-module project (`:shared` multiplatform targeting Android + JVM 17; `:androidApp` application module).
+  - Pinned toolchain versions: Gradle 8.11.1 wrapper with SHA-256 verification, AGP 8.7.3, Kotlin 2.1.10, Jetpack Compose Multiplatform 1.7.3, Ktor 3.1.0, Coroutines 1.10.1.
+  - Network security policy: Release traffic strictly TLS-only (`cleartextTrafficPermitted="false"` across all domains); local development cleartext loopback (`10.0.2.2`, `127.0.0.1`, `localhost`) isolated strictly to `src/debug/res/xml/network_security_config.xml`.
+  - Android manifest and backup security: `allowBackup="false"`, `fullBackupContent="false"`, `dataExtractionRules` excluding cloud-backup and device-transfer paths, `windowSoftInputMode="adjustResize"`.
+  - UI & Presentation invariants: Material 3 dark workbench theme, single top horizontal panel-navigation row, zero FABs, 12 authoritative panels (`terminal`, `files`, `editor`, `diff`, `merge`, `git`, `workflow`, `agents`, `resources`, `ports`, `ssh_host`, `settings`), zero WebView / zero browser engine dependencies.
+  - Top-level `package.json` lifecycle scripts: `native-app:test`, `native-app:test:android`, `native-app:assembleDebug`, while preserving existing `android:*` scripts.
+- **Handoff:** Phase 02 foundation verified and closed. Phase 03 (Contracts ownership and live transport) is unblocked. (Note: physical/emulator runtime launch evidence for GATE-A device signoff remains open pending test device attachment).

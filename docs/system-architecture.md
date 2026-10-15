@@ -318,26 +318,49 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
-## Proposed Android Native Client
+## Android Native Client Foundation (Phase 02)
 
-**Design only; not implemented.** The Android-first client is planned under root
-`native-app/`, separate from the existing Tauri host. It uses shared Kotlin/Compose
-application state with Android-native terminal/editor integrations and the existing
-remote Rust APIs; no WebView, embedded browser engine, local PTY, or Tauri runtime.
-The initial target is Android 10+ with ARM64 device and x86_64 emulator acceptance.
-The user explicitly defers embedded interactive HTML and rendered Mermaid browser
-previews for this first release; other non-browser workbench feature families remain
-in scope. Existing web/Tauri hosts remain unchanged.
-The proposed workspace is TERMINAL mode with Traditional terminal presentation only.
-One single-line in-layout button row reaches all included panels; no floating
-buttons, IDE/Runtime mode switchers or secondary panel-navigation surface.
+**Foundation and security architecture established; runtime launch qualification pending.** The Android-first client is rooted under `native-app/`, completely isolated from the existing Tauri host (`apps/native/`). It is planned to connect to the existing remote Rust APIs via REST, WebSockets, and SSE (transport scheduled for Phase 03) with no WebView, embedded browser engine, local PTY, local Git, or local AI agent execution.
 
-See [proposed native client architecture](./architecture/android-native-client.md),
-[frozen acceptance ledger](./android-native-acceptance.md),
-and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
-Native library, language-service, crypto interoperability, and actual-device
-qualification are release gates, not capabilities established by this design.
+### Two-Module Architecture
+- `:shared` — Kotlin Multiplatform module targeting Android and JVM (`jvmTarget` set to JVM 17, `minSdk = 29`). Contains common domain models (`dev.damhopper.nativeapp.model.WorkbenchModel`), state containers, theme definitions, and Compose Multiplatform UI components (`WorkbenchScreen`, `WorkbenchHeader`, `PanelNavigationRow`, `PanelPlaceholders`). Common code strictly excludes Android- or Swing-specific APIs.
+- `:androidApp` — Android application module (`compileSdk = 35`, `minSdk = 29`, `targetSdk = 35`, ABI filters `arm64-v8a` and `x86_64`). Hosts `MainActivity.kt` providing Compose entry point with `statusBarsPadding()` top status bar inset handling, Android application manifest, and security configurations.
 
+### Toolchain Pins
+Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
+- **Gradle**: 8.11.1 wrapper with verified SHA-256 checksum (`f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`).
+- **Android Gradle Plugin (AGP)**: 8.7.3.
+- **Kotlin**: 2.1.10 (`org.jetbrains.kotlin.multiplatform`, `org.jetbrains.kotlin.plugin.serialization`, `org.jetbrains.kotlin.plugin.compose`).
+- **Compose Multiplatform**: 1.7.3 (`org.jetbrains.compose`).
+- **Kotlinx Libraries**: Coroutines 1.10.1, Serialization 1.8.0, Datetime 0.6.1.
+- **Ktor Client**: 3.1.0 (`ktor-client-okhttp`, `ktor-client-java` staged for Phase 03 transport).
+- **Bytecode & SDK Target**: Java 17 across modules; minSdk 29 (Android 10+), targetSdk 35, compileSdk 35.
+
+### 12-Panel Registry & Shell Invariants
+- **12-Panel Registry**: Modeled authoritatively in `dev/damhopper/nativeapp/model/WorkbenchModel.kt` as `WorkbenchPanel` enum (`TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), each with a display label and monospace short code (e.g. `RESOURCES` labeled "Resources" / `RES`, `SSH_HOST` labeled "Host Controls" / `HOST`).
+- **Single-Row Navigation**: Docked horizontal scrollable row (`PanelNavigationRow.kt`) directly beneath the server/project header. Monospace short codes and labels indicate active selection; zero floating action buttons (FABs) or secondary navigation surfaces.
+- **Shell Restrictions**: Strict TERMINAL mode only (`workspaceMode = "terminal"`), Traditional terminal presentation only (`terminalUsageMode = "traditional"`), and a single content area across all screen geometries. Selecting a panel replaces the visible content area with structured placeholders; live session controllers and transports remain scheduled for subsequent phases.
+- **Preview Exceptions**: Embedded interactive HTML previews and DOM-rendered Mermaid diagrams are explicitly excluded for this release; HTML and Markdown are edited as raw source with notices.
+
+### Security Policies & Manifest Isolation
+- **Network Security Configuration**:
+  - Release base config (`src/main/res/xml/network_security_config.xml`) sets `cleartextTrafficPermitted="false"` with system trust anchors.
+  - Debug overrides (`src/debug/res/xml/network_security_config.xml`) permit cleartext traffic strictly for local development loopback domains (`10.0.2.2`, `127.0.0.1`, `localhost`) and user trust anchors.
+- **Data Extraction & Backup**:
+  - Application manifest explicitly sets `android:allowBackup="false"` and `android:fullBackupContent="false"`.
+  - Data extraction rules (`src/main/res/xml/data_extraction_rules.xml`) exclude root path (`.`) from both `<cloud-backup>` and `<device-transfer>`.
+- **Component Isolation**: All components non-exported by default except `MainActivity` (`android:exported="true"` with `MAIN`/`LAUNCHER` intent filter).
+- **IME Window Management**: Configured with `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across third-party IMEs pending device testing).
+- **Web Engine Exclusion**: Zero occurrences of `WebView` or `tauri` detected in `native-app` source code by the static verification suite.
+
+### Test Commands & Foundation Verification
+- `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
+- `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
+- `pnpm native-app:assembleDebug` — Assembles debug APK for ARM64 and x86_64 targets.
+- `bash tests/test-phase-02-foundation.sh` — Foundation and security static verification suite (41/41 assertions passing).
+- *Qualification Gate*: Static foundation checks pass. Runtime launch qualification on physical ARM64 device or x86_64 emulator remains pending device attachment under GATE-A2.
+
+See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.
