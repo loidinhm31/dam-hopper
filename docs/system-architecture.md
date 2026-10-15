@@ -318,6 +318,26 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
+## Proposed Android Native Client
+
+**Design only; not implemented.** The Android-first client is planned under root
+`native-app/`, separate from the existing Tauri host. It uses shared Kotlin/Compose
+application state with Android-native terminal/editor integrations and the existing
+remote Rust APIs; no WebView, embedded browser engine, local PTY, or Tauri runtime.
+The initial target is Android 10+ with ARM64 device and x86_64 emulator acceptance.
+The user explicitly defers embedded interactive HTML and rendered Mermaid browser
+previews for this first release; other non-browser workbench feature families remain
+in scope. Existing web/Tauri hosts remain unchanged.
+The proposed workspace is TERMINAL mode with Traditional terminal presentation only.
+One single-line in-layout button row reaches all included panels; no floating
+buttons, IDE/Runtime mode switchers or secondary panel-navigation surface.
+
+See [proposed native client architecture](./architecture/android-native-client.md),
+[frozen acceptance ledger](./android-native-acceptance.md),
+and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
+Native library, language-service, crypto interoperability, and actual-device
+qualification are release gates, not capabilities established by this design.
+
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

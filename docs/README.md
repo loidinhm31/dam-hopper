@@ -33,6 +33,8 @@ Use this index to find maintained product, architecture, API, development, and o
 | [Media isolation and encryption](./architecture/media-isolation-and-encryption.md) | Owner-bound media tickets and encrypted writes |
 | [Native SSH forwarding](./architecture/native-ssh-forwarding.md) | Windows-native concurrent desktop forwarding scopes |
 | [Idle-suspend security](./terminal-idle-suspend-security.md) | Linux helper IPC, admission, and fail-closed behavior |
+| [Android native client](./architecture/android-native-client.md) | Proposed KMP and Jetpack Compose native Android client architecture |
+| [Android native acceptance ledger](./android-native-acceptance.md) | Frozen scope baseline, panel registry, and verification matrix for native-app |
 
 ## Operations and release
 

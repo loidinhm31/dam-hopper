@@ -4,7 +4,7 @@
 
 ## Product vision
 
-DamHopper is a multi-profile development workbench for developers operating projects and development services across one or more servers. A shared React 19 workspace runs in a Vite web host and a Tauri 2 desktop host; a Rust Axum/Tokio server owns remote project, filesystem, Git, PTY, workflow, and host operations.
+DamHopper is a multi-profile development workbench for developers operating projects and development services across one or more servers. A shared React 19 workspace runs in a Vite web host and a Tauri 2 desktop host; a Rust Axum/Tokio server owns remote project, filesystem, Git, PTY, workflow, and host operations. An Android-native client (`native-app/`) using Kotlin Multiplatform and Jetpack Compose is planned to connect to the same remote Rust server.
 
 The workbench must make ownership explicit: a browser profile and its current connection generation determine which remote server owns requests, query state, event handlers, media capabilities, and terminal state. A failure or reconnect of one profile must not silently route work through another profile.
 
@@ -40,6 +40,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 | PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. See [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md). |
 | PR-026 | Agent Status and notification ownership | Implemented and Linux-qualified for the documented OMP/Codex/Claude versions; other versions/platforms remain unqualified. |
 | PR-028 | Cognito Mode in-app privacy mask | Delivered. Ephemeral activation, configurable shortcut/style, overlay, and input isolation; it is not authentication, redaction, or OS-wide privacy. |
+| PR-029 | Android Native Client (`native-app`) | Scope baseline and contract freeze completed (Phase 01); implementation pending Phase 02+. Kotlin Multiplatform + Jetpack Compose client connecting to existing Rust backend; strictly TERMINAL Traditional shell with top panel row; native Markdown, media, and binary files included, with embedded interactive HTML preview and rendered Mermaid diagrams as the sole deferred preview exceptions. See [Acceptance Ledger](./android-native-acceptance.md) and [Native Client Architecture](./architecture/android-native-client.md). |
 
 ## Acceptance criteria for critical behavior
 

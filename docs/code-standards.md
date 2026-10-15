@@ -13,6 +13,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
 | `apps/web/`, `apps/native/` | Vite browser and Tauri desktop hosts |
 | `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
+| `native-app/` | Android native client root (KMP + Jetpack Compose, Phase 01 baseline, planned Phase 02+ implementation) |
 
 ## Cross-cutting rules
 
@@ -50,6 +51,14 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - **Root Font & Layout Invariance:** `html` font size is never dynamically altered; layout `rem` dimensions (spacing, padding, container widths, hit target heights) remain stable. App zoom (`--app-zoom`) operates independently.
 - **Editor & Terminal Font Independence:** Monaco code editor (`editorFontSize`) and xterm terminal (`terminalFontSize`) maintain independent font size configurations and must never be driven by `--app-font-size`.
 - **Virtualized Trees (`FileTree`):** Uniform item row heights in Arborist are computed dynamically using `getFileTreeRowHeight(systemFontSize)` from `@/lib/workbench-typography.js` to ensure content never clips across the supported 10–32px range without resetting scroll or unmounting trees.
+
+### Kotlin Multiplatform and Android Native Client (`native-app`)
+
+- **Ownership & Connection Scoping:** Mirror React/web invariants; asynchronous operations must capture `ConnectionRef = { profileId, generation }` and recheck upon resume. Never route through ambient fallback.
+- **Strict Boundary Constraints:** No WebView, embedded browser engine, local PTY, local Git, or local AI execution in `native-app/`. Remote Rust backend owns PTY, Git, agent, and remote workbench operations, while UI rendering, Android Keystore credential storage, and client cryptography execute locally. Embedded interactive HTML preview and rendered Mermaid diagrams are the sole deferred preview exceptions; native Markdown, media, and large binary file viewing remain in scope.
+- **Presentation Invariants:** Strict TERMINAL mode (`workspaceMode = "terminal"`) and Traditional terminal presentation (`terminalUsageMode = "traditional"`). Single top horizontally scrollable panel-navigation row; zero floating action buttons (FABs) or draggable triggers.
+- **Module Separation:** Kotlin Multiplatform `commonMain` (`native-app/shared/`) owns domain models, networking, DTOs, and Compose UI; platform adapters in `androidApp/`. Never leak Android platform types into `commonMain`.
+- **Wire Projection:** Wire requests omit client-only `profileId`; backend authenticates and authorizes project/worktree paths.
 ## Domain-specific invariants
 
 ### Git history changes

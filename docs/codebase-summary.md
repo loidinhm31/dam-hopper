@@ -21,6 +21,7 @@ The initial scan counted **2,046 eligible text files and 411,852 physical lines 
 | `deploy/` | Release packaging, systemd units, and installers | 4 | 877 | 22 | 5,224 |
 | `scripts/` | Test runners, qualification harnesses, and tooling | 9 | 2,154 | 9 | 2,154 |
 | `.github/workflows/` | CI/CD pipelines, release publishing, quality gates | 4 | 950 | 4 | 950 |
+| `native-app/` | Android native client root (KMP + Compose; planned root added after scan snapshot; Phase 01 baseline, implementation pending) | 1 | 117 | 1 | 117 |
 
 ## Backend Map
 
@@ -80,6 +81,7 @@ The workflow tracking subsystem (`server/src/workflow/` and `docs/workflow-api.m
 - **Idle Suspend:** Server coordinator uses a privileged Unix-socket helper (`dam-hopper-idle-suspend-helper`), systemd integration, bounded policies (`empty-fleet`, `agent-activity`), and sysfs RTC wakealarm checks. See [Terminal Idle-Suspend Security](./terminal-idle-suspend-security.md).
 - **Encrypted Uploads:** OPAQUE PAKE password exchange and chunked AES-256-GCM writes over WebSocket transport.
 - **Git Blame Caching & Commit Reveal:** Native libgit2 blame attribution (`/api/git/{project}/blame`) mapped to Monaco gutter annotations with dual-layer caching (bounded 128-entry / 64 MiB server baseline LRU cache with zero-context in-memory projection and shallow bypass, paired with bounded 64-entry / 32 MiB client TanStack Query cache), plus typed `GitCommitRevealRequest` routing to `WorkspaceGitPanel` across IDE, terminal, and compact surfaces, displaying exact commit bodies and changed files via `CommitDetailsPanel` in read-only inspect mode.
+- **Planned Android Native Client Baseline (`native-app/`):** Kotlin Multiplatform shared core + Jetpack Compose UI planned for Android 10+ (`minSdk 29`, `targetSdk 35`) with ARM64 device and x86_64 emulator qualification targets. Planned to operate strictly in TERMINAL mode with Traditional terminal presentation, a single top panel-navigation row (12 panel destinations), and zero floating action buttons. The remote Rust server owns PTY, Git, workflow, and host operations, while client rendering, Keystore vault, and client cryptography run locally; native Markdown, media, and large binary file viewing remain included, with embedded interactive HTML preview and rendered Mermaid diagrams as the sole deferred first-release exceptions. See [Android Native Acceptance Ledger](./android-native-acceptance.md) and [Android Native Client Architecture](./architecture/android-native-client.md).
 
 ## Test and Deployment Boundaries
 

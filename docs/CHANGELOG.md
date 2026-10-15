@@ -1,3 +1,10 @@
+# 2026-10-15
+
+- **Android native app: Phase 01 scope baseline and contract freeze.** Frozen baseline contracts, scope boundaries, and acceptance criteria for Android native workbench (`plans/261015-1647-android-native-app/`):
+  - **Presentation & scope boundaries:** Constrained strictly to TERMINAL mode with Traditional terminal shell; single horizontal scrollable panel-navigation row; no floating buttons or secondary navigation surfaces; explicit waiver for embedded HTML and Mermaid browser previews with editor/diff/merge/blame/encrypted-save parity retained.
+  - **Contracts & Acceptance Ledger (`docs/android-native-acceptance.md`, `native-app/README.md`, `docs/system-architecture.md`):** Authoritative documented contract baseline against server 0.13.2 / protocol 2 baseline, minSdk 29, arm64-v8a and x86_64 ABI targets, hardware reference profiles, and documented REST/WS/SSE protocol schemas; no native runtime qualification claimed.
+  - **Phase status:** Phase 01 completed 100% (user-approved review score 9.5/10; 4/4 test suites passed per assignment record). Phase 02 (Gradle KMP Android foundation) pending.
+
 # 2026-10-14
 
 - **Traditional terminal: agents sidebar multi-select status filter.** Enhanced status filtering in the `agents` section of Traditional terminal navigation (`TraditionalTerminalProjectsNavigator` and `TraditionalTerminalAgentFilter`) to support selecting multiple statuses simultaneously:
