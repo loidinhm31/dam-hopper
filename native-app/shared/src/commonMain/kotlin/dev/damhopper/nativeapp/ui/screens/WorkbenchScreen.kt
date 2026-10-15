@@ -179,7 +179,9 @@ fun WorkbenchScreen(
     // Refresh terminal sessions and agent status when active project changes or targetStore updates
     // Retain or create controller helper ensuring controller exists before attaching
     fun getOrCreateController(id: String, incarnation: Long = 0L): TerminalSessionController {
-        return terminalControllers.getOrPut(id) {
+        val profileKey = activeProfileId ?: "none"
+        val compositeKey = "$profileKey:$id"
+        return terminalControllers.getOrPut(compositeKey) {
             val session = terminalSessions.find { it.id == id }
             val effectiveIncarnation = if (incarnation != 0L) incarnation else (session?.incarnation?.toLong() ?: 0L)
             val connRef = terminalRepo?.apiClient?.connection
@@ -291,9 +293,10 @@ fun WorkbenchScreen(
     val activeTerminalController = activeTerminalSessionId?.let { id ->
         getOrCreateController(id)
     }
-    LaunchedEffect(navState.activePanel, activeTerminalSessionId) {
-        terminalControllers.forEach { (id, ctrl) ->
-            ctrl.isPanelActive = (id == activeTerminalSessionId && navState.activePanel == WorkbenchPanel.TERMINAL)
+    LaunchedEffect(navState.activePanel, activeTerminalSessionId, activeProfileId) {
+        val activeKey = "${activeProfileId ?: "none"}:$activeTerminalSessionId"
+        terminalControllers.forEach { (key, ctrl) ->
+            ctrl.isPanelActive = (key == activeKey && navState.activePanel == WorkbenchPanel.TERMINAL)
         }
     }
 
@@ -461,7 +464,7 @@ fun WorkbenchScreen(
                                     coroutineScope.launch {
                                         try {
                                             terminalRepo?.removeSession(id)
-                                            terminalControllers.remove(id)?.close()
+                                            terminalControllers.remove("${activeProfileId ?: "none"}:$id")?.close()
                                             val detailed = terminalRepo?.listDetailed() ?: emptyList()
                                             terminalSessions = detailed
                                             if (activeTerminalSessionId == id) {

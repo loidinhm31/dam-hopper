@@ -249,6 +249,21 @@ fun TerminalPanelScreen(
                 )
             }
         }
+        if (controller?.isTruncated == true) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.SurfaceVariant)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Earlier scrollback truncated by server buffer limits",
+                    color = DamHopperColors.Warning,
+                    fontSize = 11.sp
+                )
+            }
+        }
 
         // 4. Main Terminal Screen Area
         Box(
