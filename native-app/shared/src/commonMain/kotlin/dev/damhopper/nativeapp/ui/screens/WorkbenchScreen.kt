@@ -51,6 +51,14 @@ import dev.damhopper.nativeapp.features.workspace.WorkspaceStatus
 import dev.damhopper.nativeapp.features.workspace.WorkspaceSwitcherModal
 import dev.damhopper.nativeapp.features.workspace.WorkspaceSwitchWarningDialog
 import dev.damhopper.nativeapp.core.transport.ApiClient
+import dev.damhopper.nativeapp.features.agents.AgentImportController
+import dev.damhopper.nativeapp.features.agents.AgentImportRepository
+import dev.damhopper.nativeapp.features.agents.AgentMemoryController
+import dev.damhopper.nativeapp.features.agents.AgentMemoryRepository
+import dev.damhopper.nativeapp.features.agents.AgentStoreController
+import dev.damhopper.nativeapp.features.agents.AgentStoreRepository
+import dev.damhopper.nativeapp.features.agents.AgentsSubProduct
+import dev.damhopper.nativeapp.features.agents.AgentsUnifiedPanelScreen
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileRepository
@@ -156,6 +164,13 @@ fun WorkbenchScreen(
     var projectPlansRepo by remember { mutableStateOf<ProjectPlansRepository?>(null) }
     var projectPlansController by remember { mutableStateOf<ProjectPlansController?>(null) }
     var workflowActiveSubProduct by remember { mutableStateOf(WorkflowSubProduct.TRACKING) }
+    var agentStoreRepo by remember { mutableStateOf<AgentStoreRepository?>(null) }
+    var agentStoreController by remember { mutableStateOf<AgentStoreController?>(null) }
+    var agentMemoryRepo by remember { mutableStateOf<AgentMemoryRepository?>(null) }
+    var agentMemoryController by remember { mutableStateOf<AgentMemoryController?>(null) }
+    var agentImportRepo by remember { mutableStateOf<AgentImportRepository?>(null) }
+    var agentImportController by remember { mutableStateOf<AgentImportController?>(null) }
+    var agentsActiveSubProduct by remember { mutableStateOf(AgentsSubProduct.STORE) }
     val searchRepo = remember { SearchRepository() }
     val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
@@ -278,6 +293,21 @@ fun WorkbenchScreen(
                 workflowController = wfCtrl
                 projectPlansRepo = ppRepo
                 projectPlansController = ppCtrl
+                agentStoreController?.retire()
+                agentMemoryController?.retire()
+                agentImportController?.retire()
+                val asRepo = AgentStoreRepository(client)
+                val amRepo = AgentMemoryRepository(client)
+                val aiRepo = AgentImportRepository(client)
+                agentStoreRepo = asRepo
+                agentMemoryRepo = amRepo
+                agentImportRepo = aiRepo
+                val asCtrl = AgentStoreController(asRepo, coroutineScope, activeProfileId ?: "default", client.connection.generation)
+                val amCtrl = AgentMemoryController(amRepo, coroutineScope, activeProfileId ?: "default", client.connection.generation)
+                val aiCtrl = AgentImportController(aiRepo, coroutineScope, activeProfileId ?: "default", client.connection.generation)
+                agentStoreController = asCtrl
+                agentMemoryController = amCtrl
+                agentImportController = aiCtrl
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -285,6 +315,7 @@ fun WorkbenchScreen(
                 workspaceStatus = status
                 val projs = try { wRepo.listProjects() } catch (_: Exception) { emptyList() }
                 projects = projs
+                // Projects will be dispatched to amCtrl via LaunchedEffect(projects)
 
                 if (projs.isNotEmpty() && (navState.activeProject == "Default Workspace" || projs.none { it.name == navState.activeProject })) {
                     navigation.selectProject(projs.first().name)
@@ -333,6 +364,15 @@ fun WorkbenchScreen(
             workflowController = null
             projectPlansRepo = null
             projectPlansController = null
+            agentStoreController?.retire()
+            agentStoreController = null
+            agentStoreRepo = null
+            agentMemoryController?.retire()
+            agentMemoryController = null
+            agentMemoryRepo = null
+            agentImportController?.retire()
+            agentImportController = null
+            agentImportRepo = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -536,10 +576,18 @@ fun WorkbenchScreen(
             newGeneration = gen
         )
     }
-    DisposableEffect(navState.activePanel, projectPlansController, workflowActiveSubProduct) {
+    LaunchedEffect(projects, agentMemoryController) {
+        agentMemoryController?.setProjects(projects.map { it.name })
+    }
+    DisposableEffect(navState.activePanel, projectPlansController, workflowActiveSubProduct, agentsActiveSubProduct) {
         if (navState.activePanel == WorkbenchPanel.WORKFLOW && workflowActiveSubProduct == WorkflowSubProduct.PROJECT_PLANS) {
             navigation.panelBackHandler = {
                 projectPlansController?.handleBack() ?: false
+            }
+        } else if (navState.activePanel == WorkbenchPanel.AGENTS && agentsActiveSubProduct != AgentsSubProduct.STORE) {
+            navigation.panelBackHandler = {
+                agentsActiveSubProduct = AgentsSubProduct.STORE
+                true
             }
         } else {
             navigation.panelBackHandler = null
@@ -859,7 +907,56 @@ fun WorkbenchScreen(
                             }
                         },
                         agentsContent = {
-                            if (agentReducer != null) {
+                            val sCtrl = agentStoreController
+                            val mCtrl = agentMemoryController
+                            val iCtrl = agentImportController
+                            if (sCtrl != null && mCtrl != null && iCtrl != null) {
+                                AgentsUnifiedPanelScreen(
+                                    storeController = sCtrl,
+                                    memoryController = mCtrl,
+                                    importController = iCtrl,
+                                    agentReducer = agentReducer,
+                                    availableProjects = projects.map { it.name },
+                                    onJumpToTerminalSession = { termId, incarnation ->
+                                        activeTerminalSessionId = termId
+                                        getOrCreateController(termId, incarnation.toLong())
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.attachTerminal(termId) } catch (_: Exception) {}
+                                        }
+                                        navigation.navigateTo(WorkbenchPanel.TERMINAL)
+                                    },
+                                    onRefreshObservation = {
+                                        coroutineScope.launch {
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onInstallOmp = {
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.installOmpExtension() } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onUninstallOmp = {
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.uninstallOmpExtension() } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onInstallNative = { agent ->
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.installNativeIntegration(agent) } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onUninstallNative = { agent ->
+                                        coroutineScope.launch {
+                                            try { terminalRepo?.uninstallNativeIntegration(agent) } catch (_: Exception) {}
+                                            agentReducer?.reloadSnapshot()
+                                        }
+                                    },
+                                    onActiveSubProductChanged = { agentsActiveSubProduct = it }
+                                )
+                            } else if (agentReducer != null) {
                                 AgentsPanelScreen(
                                     reducer = agentReducer!!,
                                     onJumpToTerminalSession = { termId, incarnation ->
@@ -900,6 +997,8 @@ fun WorkbenchScreen(
                                         }
                                     }
                                 )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.AGENTS)
                             }
                         },
                         gitContent = {

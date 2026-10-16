@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), and Git/safe history workflows (Phase 12) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), and Agent Store, memory & imports (Phase 14) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -203,6 +203,77 @@ The native Android client introduces filesystem navigation, live directory event
 4. **Premature Discard Invalidation (H4):** Discard invalidation hook executes immediately before async request completes and fires on failure.
 5. **Query Parameter Encoding (H5):** Default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
 6. **Live Disposable Repo Verification:** Live multi-root/worktree repository qualification deferred to Phase 18.
+
+## Workflow tracking and project plans (Phase 13)
+
+### Architecture & Invariants
+- Authoritative single panel host `WorkflowPanelScreen` under `WorkbenchPanel.WORKFLOW` with top segmented switcher between manual workflow tracking (`WorkflowSubProduct.TRACKING`) and read-only project plans (`WorkflowSubProduct.PROJECT_PLANS`).
+- Workflow domain contracts (W01): `WorkflowModels.kt` declaring typed enums (`ItemKind`, `ItemStatus`, `SessionStatus`, `ResourceLinkType`, `ResourceObservedState`, `WorkflowSource`), DTOs (`ItemDto`, `SessionDto`, `LinkDto`, `NoteDto`, `EventDto`, `WorkflowOverviewDto`, `WorkflowEventsDto`, `PurgeDto`), mutation requests with custom `PatchItemRequestSerializer`, and `WorkflowDomainHelpers`.
+- Repository & controller: `WorkflowRepository` executing protected REST operations (`/api/workflow/overview`, `/events`, items, sessions, notes, purge); RFC4122 v4 UUID request identity generation; HTTP 404 detection for profiles without workflow tracking enabled (`WorkflowOverviewResult.Unavailable`). `WorkflowController` enforcing multi-server profile and generation fencing via `updateContext`, optimistic CAS conflict preservation (`conflictWarning`), and manual non-blocking lifecycle (terminal exit never auto-completes tasks).
+- Project plans & bounded reads (W02): `ProjectPlansRepository` querying `/api/plans/folders` and `/api/plans` (camelCase `planPath` parameter); strict path traversal guards; 64 KiB document read ceiling (`MAX_DOCUMENT_BYTES = 64 * 1024`) via `FileRepository` with `maxBytes + 1` range requests, mapping excess sizes to `PlanDocumentReadResult.Oversize`.
+- UI invariants: Zero FABs, zero WebViews, conditional back handler in `WorkbenchScreen`, native Markdown document rendering via `MarkdownPreviewView` with B02 Mermaid notice (`⚠ Mermaid rendering deferred for this release`).
+
+## Agent Store, imports and memory (Phase 14)
+
+### Domain Models & Wire DTOs (S01, S02)
+- **Typed Enums (`AgentStoreModels.kt`):**
+  - `AgentType`: `CLAUDE` ("claude"), `GEMINI` ("gemini").
+  - `AgentItemCategory`: `SKILL` ("skill"), `COMMAND` ("command"), `HOOK` ("hook"), `MCP_SERVER` ("mcp-server"), `SUBAGENT` ("subagent"), `MEMORY_TEMPLATE` ("memory-template").
+  - `DistributionMethod`: `SYMLINK` ("symlink"), `COPY` ("copy").
+- **Store Catalog & Health DTOs:**
+  - `AgentStoreItem`: Catalog entry with category, relative path, description, compatible agents, and size.
+  - `DistributionStatus`: Project distribution state (`shipped`, `method`).
+  - `ShipResult`: Per-item distribution outcome (`success`, `method`, `targetPath`, `error`).
+  - `HealthCheckResult`: Detects `BrokenSymlink` and `OrphanedItem` across workspace projects.
+  - `ProjectAgentScanResult` / `AgentPresence`: Scans projects for existing agent configurations and memory files.
+- **Action Requests:** `ShipRequest`, `UnshipRequest`, `AbsorbRequest`, `BulkShipRequest`.
+- **Agent Memory DTOs:** `MemoryTemplateInfo`, `ProjectMemoryAgentEntry`, `ProjectMemoryDetailResponse`, `UpdateMemoryRequest`, `ApplyTemplateRequest`, `ApplyTemplateResponse`.
+- **Import DTOs:** `RepoScanItem`, `ScanRepoRequest`, `ScanRepoResponse` (with server-created `tmpDir`), `ScanLocalRequest`, `ScanLocalResponse`, `ImportConfirmRequest` (with `cleanup` flag), `ImportResult`.
+
+### Repositories & REST Contracts
+- **`AgentStoreRepository`:**
+  - Endpoints: GET `/api/agent-store` (404 maps to `AgentStoreCatalogResult.Unavailable`), GET `/api/agent-store/{category}/{name}` (404 returns null), GET `/api/agent-store/{category}/{name}/content`, DELETE `/api/agent-store/{category}/{name}`, POST `/api/agent-store/ship`, POST `/api/agent-store/unship`, POST `/api/agent-store/absorb`, POST `/api/agent-store/bulk-ship`, GET `/api/agent-store/matrix`, GET `/api/agent-store/scan`, GET `/api/agent-store/health`.
+  - Path segment encoding: Uses `ApiClient.encodePathSegment` for category, item name, and project name.
+- **`AgentMemoryRepository`:**
+  - Endpoints: GET `/api/agent-memory/templates`, GET `/api/agent-memory/{project}` (`listProjectMemory`), GET `/api/agent-memory/{project}/{agent}` (404 returns null), PUT `/api/agent-memory/{project}/{agent}` (`updateProjectMemory`), POST `/api/agent-memory/apply` (`applyTemplate`).
+- **`AgentImportRepository`:**
+  - Endpoints: POST `/api/agent-import/scan` (Git repository clone scan), POST `/api/agent-import/scan-local` (server directory scan), POST `/api/agent-import/confirm` (import selected items).
+
+### Controllers, Lifecycle Isolation & Fencing
+- **Lifecycle Isolation Model:**
+  - Controllers hold `profileId` and `generation` parameters; isolation is enforced through controller-instance ownership and explicit `retire()` on profile disconnect or reconnect.
+  - `retire()` sets `isRetired = true`, resets UI state, and invalidates all in-flight asynchronous completions.
+- **`AgentStoreController`:**
+  - Monotonic `requestSequence` guards catalog/matrix refreshes against ABA race conditions; `contentRequestSequence` protects item markdown content loads.
+  - Partial bulk ship results are surfaced in state rather than failing completely.
+- **`AgentMemoryController`:**
+  - Monotonic revision counters: `readOpRevision`, `templateOpRevision`, and `saveOpRevision`.
+  - Dirty draft protection: `isDirty` (`content != initialSavedContent`); switching projects with dirty drafts sets `pendingTargetSwitch` for user confirmation rather than discarding edits silently.
+  - Safe saves: `saveMemory` captures text snapshot and updates `initialSavedContent` on success; template preview requires explicit confirmation before overwriting dirty drafts.
+- **`AgentImportController`:**
+  - Monotonic `scanRevision` tracking: `setSource` and `resetScan` increment revision and purge prior captured scans and selected keys.
+  - Safe cleanup derivation: `cleanup` flag sent to server is derived from captured source (`cleanup = source == ImportSource.REPO`), ensuring local directory imports never request deletion.
+  - Deduplication key: Items keyed by `"${category.wireName}:${name}:${relativePath}"`.
+
+### Unified UI Architecture & Shell Invariants (NAV01, B01, B02)
+- **Authoritative Panel Host:** `AgentsUnifiedPanelScreen` docked under `WorkbenchPanel.AGENTS` in `WorkbenchScreen.kt`.
+- **Top Segmented Switcher (`AgentsSubProduct`):**
+  - `STORE`: Catalog grid, search, category chips, item detail modal, distribution matrix (`AgentDistributionMatrixView`), health check, and ship/unship dialogs (`AgentStoreModals.kt`).
+  - `MEMORY`: Project and agent target selector, memory editor, template picker with side-by-side/stacked preview, and overwrite draft confirmation.
+  - `IMPORT`: Git repo URL and server directory scanning, multi-select list, confirm dialog, and cleanup toggle.
+  - `OBSERVATION`: Hosts the Phase 07 Observation Engine (`TerminalAgentsScreen`), wire status reducer, and OMP/native agent lifecycle controls.
+- **Shell Invariants:** Zero floating action buttons (`FloatingActionButton`, `ExtendedFloatingActionButton`), zero WebViews (`WebView`), single content area `PanelHost`, native markdown rendering via `MarkdownPreviewView`.
+
+### Documented Open Limitations & Review Findings (Cycle 2 Review 7/10)
+- **Status:** Implementation baseline recorded; review remediations and live server qualification deferred to Phase 18.
+- **Save Retry Lockout (H1):** Shared `error` field in `AgentMemoryState` locks out save retries after a transient failure until target switch.
+- **Controller Reconnect Initialization (H2):** Reconnection effect replacing controller without project list change can miss initial `setProjects` call.
+- **Stale Import Confirm Race (H3):** `confirmImport` lacks scan-revision fencing on late response application.
+- **Empty Project List Draft Loss (M5):** Switching workspace to an empty project list drops dirty memory drafts without a prompt.
+- **REPO Partial-Import Cleanup (M3):** Retaining captured scan on partial failure risks retry hitting deleted temp directory.
+- **Absorb Action Semantics (M2):** Server absorb moves project-local non-symlink items to the store; offering absorb on shipped matrix cells contradicts server distributor semantics.
+- **Unused Repository Methods:** `getItem` and `listProjectMemory` lack UI callers.
+- **Live Qualification (L1/L2):** Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
 
 ## Extended workbench
 

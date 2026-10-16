@@ -106,3 +106,20 @@ Record per row: requirement ID, source baseline, tested app/server versions, dev
   - **Documented Limitations (Deferred to Phase 18):**
     - Implementation gap: Direct navigation from plan evidence chips to editor/viewer not yet wired; deferred to Phase 18 qualification.
     - Qualification task: Reconnection rebind lifecycle across project targets and live server watcher installation against dynamic files deferred to Phase 18 qualification.
+
+## Phase 14 Acceptance Ledger Status (2026-10-16)
+
+- **S01 (Agent Store catalog/content/matrix/health/scan/ship/unship/absorb/bulk operations):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 2 review (score 7/10 per `plans/reports/code-reviewer-261016-1730-phase-14-cycle-2.md`) with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 252 shared JVM unit tests passed (`:shared:jvmTest`), 51 Android unit tests passed (`:androidApp:testDebugUnitTest :androidApp:testReleaseUnitTest`), 99 Phase 14 static invariant assertions passed (`tests/test-phase-14-agent-store-memory.sh`), 953 total regression assertions passed across 13 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Agent Store catalog, category filtering, search, markdown item detail viewing, cross-project distribution matrix with per-cell state representation (shipped symlink/copy, unmanaged, uninstalled), project health check, project scan dialog, reviewed mutation actions (`CellActionDialog`) for ship symlink/copy, unship, force-unship, absorb, bulk distribution, and item deletion. Fenced mutations with `AgentStoreController` preventing cross-server distribution fallback. Single content area in unified `AGENTS` panel, zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Absorb action currently presented from matrix cell modal rather than project scan results; `getItem` repo method unused; deferred to Phase 18 qualification.
+    - Qualification task: Live remote server filesystem symlink creation, removal, and conflict validation across real filesystems deferred to Phase 18.
+- **S02 (Agent import remote/local scans and confirmation; memory templates/read/write/apply):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 2 review with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 252 shared JVM unit tests passed, 51 Android unit tests passed, 99 Phase 14 static invariant assertions passed, 953 total regression assertions passed across 13 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Import scanning for remote Git repositories and server-local paths (explicitly documented as server-local paths, not Android device storage), candidate review with deduplicated keys (`category:name:relativePath`), selection toggles, import confirmation with cleanup flag derivation (`cleanup = source == REPO`); Agent memory template listing, content preview with diff modal, template application, safe memory editing with snapshot saves, dirty draft preservation across target navigation (`setProjects`), and connection owner fencing (`{profileId, generation}`). Zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Unused `listProjectMemory` repo method; memory editor save re-enablement on action error (H1) and revision fencing on in-flight confirm results (H3) deferred to Phase 18 qualification.
+    - Qualification task: Live server temporary directory cleanup after remote git clone and live memory file persistence deferred to Phase 18.

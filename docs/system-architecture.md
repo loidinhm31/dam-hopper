@@ -525,6 +525,30 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - Purge history is workspace-wide across all projects (server scope).
   - Terminal/agent link is free-text ID entry, not live terminal picker.
   - Full live device qualification and WebSocket chunked integration deferred to Phase 18.
+
+### Native Android Agent Store, Imports & Memory (Phase 14)
+- **Domain Models & Repositories (`features/agents/`):**
+  - Strict enum typing: `AgentType` (`claude`, `gemini`), `AgentItemCategory` (`skill`, `command`, `hook`, `mcp-server`, `subagent`, `memory-template`), `DistributionMethod` (`symlink`, `copy`).
+  - Wire DTO contracts: `AgentStoreItem`, `DistributionStatus`, `ShipResult`, `HealthCheckResult`, `ProjectAgentScanResult`, `MemoryTemplateInfo`, `ProjectMemoryDetailResponse`, `RepoScanItem`, `ScanRepoResponse`, `ScanLocalResponse`, `ImportConfirmRequest`, `ImportResult`.
+  - Repositories: `AgentStoreRepository` (catalog, item content, delete, ship, unship, absorb, bulk-ship, matrix, scan, health; HTTP 404 detection for unavailable store feature), `AgentMemoryRepository` (templates, project memory CRUD, template application), `AgentImportRepository` (Git repository clone scan, server directory scan, confirm import).
+- **Controllers & Lifecycle Fencing:**
+  - Isolation model: Controller-instance ownership with explicit `retire()` clearing state on profile disconnect or reconnect.
+  - `AgentStoreController`: Monotonic `requestSequence` and `contentRequestSequence` fencing in-flight catalog loads; surfaces partial bulk ship results.
+  - `AgentMemoryController`: Monotonic `readOpRevision`, `templateOpRevision`, and `saveOpRevision`. Dirty draft protection (`isDirty = content != initialSavedContent`); preserves dirty draft on project switch via `pendingTargetSwitch` dialog; safe saves update `initialSavedContent`.
+  - `AgentImportController`: Monotonic `scanRevision` tracking; switching source or resetting increments revision and purges prior captured scan and selection; safe cleanup derivation (`cleanup = source == ImportSource.REPO`, never true for local scans).
+- **Unified UI Architecture & Shell Invariants (NAV01, B01, B02):**
+  - Authoritative single panel host `AgentsUnifiedPanelScreen` docked under `WorkbenchPanel.AGENTS` in `WorkbenchScreen.kt`.
+  - Top segmented switcher across 4 sub-products: `STORE` (`AgentStoreView`, `AgentDistributionMatrixView`), `MEMORY` (`AgentMemoryView`), `IMPORT` (`AgentImportView`), and `OBSERVATION` (`TerminalAgentsScreen` hosting the Phase 07 Observation Engine with OMP and native Claude/Codex integration).
+  - Shell invariants: Zero floating action buttons (`FloatingActionButton`, `ExtendedFloatingActionButton`), zero WebViews (`WebView`), single content host in `PanelHost`, native markdown preview via `MarkdownPreviewView`.
+- **Documented Open Limitations & Review Findings (Cycle 2 Review 7/10):**
+  - Save retry lockout (H1): Shared `error` field in `AgentMemoryState` locks out save retries after transient failure until target switch.
+  - Controller reconnect initialization (H2): Reconnect effect replacing controller without project list change can miss initial `setProjects` call.
+  - Stale import confirm race (H3): `confirmImport` lacks scan-revision fencing on late response application.
+  - Empty project list draft loss (M5): Switching to empty project list drops dirty memory drafts without a prompt.
+  - REPO partial-import cleanup (M3): Retaining captured scan on partial failure risks retry hitting deleted temp directory.
+  - Absorb action semantics (M2): Server absorb moves project-local non-symlink items to the store; offering absorb on shipped matrix cells contradicts server distributor semantics.
+  - Unused repository methods: `getItem` and `listProjectMemory` lack UI callers.
+  - Live qualification (L1/L2): Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -538,7 +562,8 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-11-encrypted-transfers-media.sh` — Phase 11 encrypted transfers, media streaming, and SAF storage static assertions (84/84 passing).
 - `bash tests/test-phase-12-git-history.sh` — Phase 12 Git models, repositories, controllers, leased push, and zero-FAB presentation static verification suite (139/139 assertions passing).
 - `bash tests/test-phase-13-workflow-plans.sh` — Phase 13 workflow models, repositories, controllers, 64 KiB bounded reads, and UI invariants verification suite (100/100 assertions passing).
-- *Automated Verification Evidence:* 854 cumulative static assertions passing across 12 phase test scripts (Phases 02–13, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 274 automated unit test executions across jvmTest (224 tests) and testDebugUnitTest (50 tests); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 13 implementation baseline recorded with documented limitations; live device and server qualification deferred to Phase 18.
+- `bash tests/test-phase-14-agent-store-memory.sh` — Phase 14 Agent Store, imports, memory models, repositories, controllers, unified switcher, and zero-FAB invariants verification suite (99/99 assertions passing).
+- *Automated Verification Evidence:* 953 cumulative static assertions passing across 13 phase test scripts (Phases 02–14, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 303 reported automated unit test executions across `:shared:jvmTest` (252 tests) and `:androidApp:testDebugUnitTest`/`:androidApp:testReleaseUnitTest` (51 tests); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 14 implementation baseline recorded with documented limitations; live device and server qualification deferred to Phase 18.
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
