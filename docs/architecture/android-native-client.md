@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), and encrypted transfers/media/storage scaffolding (Phase 11) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), and Git/safe history workflows (Phase 12) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -183,6 +183,27 @@ The native Android client introduces filesystem navigation, live directory event
 3. **Unbounded Range Read:** `response.body.bytes()` in `readRangeSync` buffers full response bodies for 200 or oversized 206 responses.
 4. **Generation Fencing:** Initial owner assertion is enforced, but revalidation across all subsequent asynchronous boundaries is incomplete.
 5. **Envelope Implementation Duplication:** Parallel implementations in Rust JNI exports and Kotlin `CryptoEnvelope`.
+## Git and safe history workflows (Phase 12)
+
+### Architecture & Repository Split
+- Unified `GitRepository` facade aggregating `GitQueryRepository`, `GitMutationRepository`, `GitBranchWorktreeRepository`, `GitHistoryMutationRepository`, and `GitPublishRepository`.
+- All operations capture `GitOperationScope(profileId, generation, project, worktreePath)` ensuring target isolation and generation fencing.
+- Worktree removal precheck (`validateRemovalPrecheck`) verifies no active terminals and no dirty in-memory editor buffers (`EditorTabsState.isDirtyTarget`).
+
+### Safe History Rewrites & Leased Publication Gate
+- Local branch rewrites (`isViewingLocalBranch` = `refs/heads/*`) allow commit message editing (`CommitMessageSnapshot` CAS) and contiguous squash with receipts (`SquashReceipt`).
+- Destructive mutations (`reset`, `drop`, `undoLastCommit`) and working-tree mutations (`cherryPick`, `revert`) require checked-out active branch (`isViewingActiveBranch`).
+- Leased push publication (`LeasedPublishController`) is a separate user-confirmed action using exact expected remote OID (`PrepareLeasedPushRequest`, `PublishLeasedPushRequest`); stale remote aborts; explicit exact-OID leased publication with zero blind `--force` push fallback.
+- Zero-FAB UI presentation: `GitPanelScreen` (Changes, History, Branches/Worktrees sections) and inline `GitModalsHost` dialogs.
+
+### Recorded Open Limitations (Cycle 3 Review 6/10, NOT Accepted)
+1. **Branch Checkout Scope Sync (H1):** Branch controller `refreshBranches()` cancels in-flight reload; history entries not reloaded on checkout.
+2. **Repeat Identical Failure Suppression (H2):** Action error dialog does not redisplay for repeated identical failure due to un-reset `modalState.actionErrorResult`.
+3. **Details Dialog Mutation Invalidation (H3):** File-variant mutations in commit details dialog bypass invalidation hooks and error handling.
+4. **Premature Discard Invalidation (H4):** Discard invalidation hook executes immediately before async request completes and fires on failure.
+5. **Query Parameter Encoding (H5):** Default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
+6. **Live Disposable Repo Verification:** Live multi-root/worktree repository qualification deferred to Phase 18.
+
 ## Extended workbench
 
 - Workflow uses server CAS/request identities; manual tracking stays distinct from read-only project plan documents and administrative reported status.

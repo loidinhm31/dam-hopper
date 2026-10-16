@@ -234,6 +234,42 @@ The native Android client (`native-app/`) integrates review workflows directly i
 
 ### UI Integration and Zero FABs
 All diff review, merge conflict, and blame gutter controls are docked inline within their respective Compose panel surfaces (`DiffReviewScreen`, `MergeConflictScreen`, `EditorPanelScreen`). The workbench provides zero floating action buttons (FABs); navigation is driven exclusively via the single horizontally scrolling top navigation row (`PanelNavigationRow`). Platform metadata and review surface candidate records are documented in `NativeReviewSurfaces`.
+### Native Android Git Workflows & Leased Publication Architecture (Phase 12)
+
+The native Android client (`native-app/`) completes non-browser Git operations within the single-content Traditional terminal shell:
+
+- **Target-Bound Facade & Repositories (`features/git/`):**
+  - `GitRepository` aggregates domain repositories: `GitQueryRepository`, `GitMutationRepository`, `GitBranchWorktreeRepository`, `GitHistoryMutationRepository`, and `GitPublishRepository`.
+  - Operations execute against `GitOperationScope(profileId, generation, project, worktreePath)` to ensure target isolation and generation fencing across all asynchronous requests.
+- **Working Tree Changes, Staging & Commits:**
+  - `GitChangesController` drives working tree status (`GET /api/git/{project}/diff`), staging (`POST /stage`), unstaging (`POST /unstage`), file discard (`POST /discard`), and commits (`POST /commit`).
+  - Gated by `isCommitting` and `isRefreshing` states. Undo last commit is gated by user confirmation dialog and server ref checks.
+- **Branch and Worktree Mutation Prechecks:**
+  - `GitBranchController` provides branch creation, checkout, deletion, and tracking branch updates (`/api/git/{project}/branches`).
+  - `WorktreeMutationController` prechecks worktree removal via `validateRemovalPrecheck(target)`:
+    1. Rejects removal if target has active PTY terminal sessions (`hasActiveTerminal(target)`).
+    2. Rejects removal if target has dirty in-memory editor buffers (`isTargetDirty(target)` wired from `EditorTabsState.isDirtyTarget`).
+- **Safe History Rewrites & Action Controllers:**
+  - `GitHistoryController` manages commit log pagination, branch selection, and commit inspection.
+  - Eligibility invariants:
+    1. Inactive local branches (`isViewingLocalBranch` = `refs/heads/*` and `!isRemote`): allows commit message editing (`GitCommitMessageEditDialog` with `CommitMessageSnapshot` CAS) and contiguous squash (`GitSquashDialog` requiring unbroken parent chain and producing `SquashReceipt`).
+    2. Checked-out active branch (`isViewingActiveBranch`): required for working-tree mutations (`cherryPick`, `revert`) and destructive actions (`reset`, `drop`, `undoLastCommit`) via `GitHistoryActionController`.
+- **Leased Push Publication Safety Gate:**
+  - Local rewrites never publish automatically. `LeasedPublishController` executes leased push as a separate user-confirmed step (`LeasedPushDialog`).
+  - `prepareWithReceipt` or `prepare` captures `PrepareLeasedPushRequest` with exact `expectedRemoteOid` and `sourceOid`.
+  - Publication enforces `snap.branch == branch && snap.sourceOid == sourceOid`; stale remote tips abort with blocked status (`isStaleRemote`); explicit exact-OID leased publication with zero blind `--force` push fallback.
+- **Zero-FAB Presentation Invariants:**
+  - `GitPanelScreen` hosts docked `Changes`, `History`, and `Branches & Worktrees` sections with inline top action bars.
+  - Dialogs are rendered inline via `GitModalsHost` (`GitCommitMessageEditDialog`, `GitSquashDialog`, `LeasedPushDialog`, `AddWorktreeDialog`, `RemoveWorktreeDialog`, `GitCommitDetailsDialog`, `GitConfirmSimpleDialog`, `GitErrorDialog`).
+  - No `FloatingActionButton` or `ExtendedFloatingActionButton` components are permitted.
+- **Documented Limitations & Defect Ledger (Cycle 3 Review 6/10, NOT Accepted):**
+  - H1: Branch checkout scope sync defect (`refreshBranches()` cancels in-flight reload; history entries not reloaded on checkout).
+  - H2: Repeated identical action failures are suppressed after first dismissal due to un-reset `modalState.actionErrorResult`.
+  - H3: File-variant mutations in commit details dialog (cherry-pick-files, revert-files, drop-files) bypass invalidation hooks and error handling.
+  - H4: Discard invalidation hook executes immediately before async request completes and fires on failure.
+  - H5: Query parameter encoding via default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
+  - Real disposable multi-root/worktree repository verification deferred to Phase 18.
+
 
 ## Federated Search
 
@@ -317,5 +353,9 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 | Android native Git blame cache & SHA-256 digest | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/BlameCache.kt`, `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/crypto/Sha256Digest.kt`, `native-app/shared/src/jvmMain/.../Sha256Digest.jvm.kt`, `native-app/shared/src/androidMain/.../Sha256Digest.android.kt` |
 | Android native commit reveal & blame gutter UI | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/CommitRevealRequest.kt`, `EditorBlameGutter.kt`, `EditorScreens.kt`, `EditorTopBar.kt` |
 | Android native review surfaces bridge & workbench integration | `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/NativeReviewSurfaces.kt`, `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt` |
+| Android native Git repository facade & domain clients | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitRepository.kt`, `GitQueryRepository.kt`, `GitMutationRepository.kt`, `GitBranchWorktreeRepository.kt`, `GitHistoryMutationRepository.kt`, `GitPublishRepository.kt` |
+| Android native Git controllers & operation scope | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitChangesController.kt`, `GitBranchController.kt`, `GitHistoryController.kt`, `GitHistoryActionController.kt`, `GitRewriteActionController.kt`, `WorktreeMutationController.kt`, `LeasedPublishController.kt`, `GitSyncController.kt`, `GitOperationScope.kt` |
+| Android native Git panel UI & zero-FAB modals | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitPanelScreen.kt`, `GitChangesView.kt`, `GitHistoryView.kt`, `GitBranchesWorktreesView.kt`, `GitCommitRow.kt`, `GitModalsHost.kt`, `GitModalState.kt`, `GitCommitDetailsDialog.kt`, `GitErrorDialog.kt`, `LeasedPushDialog.kt` |
+| Android native editor dirty target provider | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

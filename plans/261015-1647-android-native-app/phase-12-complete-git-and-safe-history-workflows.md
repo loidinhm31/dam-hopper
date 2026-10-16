@@ -1,3 +1,14 @@
+---
+title: "Phase 12 — Complete Git and safe history workflows"
+description: "All current non-browser Git operations, history rewrites, and leased publication safety through server APIs."
+status: completed
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, git]
+created: 2026-10-15
+---
+
 # Phase 12 — Complete Git and safe history workflows
 
 ## Context Links
@@ -8,10 +19,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Completion date: 2026-10-16. Priority: P2. Implementation status: **completed (2026-10-16)**. Review status: **User approved Cycle 3 review (score 6/10; open limitations documented and deferred to Phase 18)**. Progress: **100%**.
 - Scope: G01–G03, G02 worktree mutations.
 - Goal: Implement all current non-browser Git operations and publication safety through server APIs.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Deliverables: Git models and wire DTOs (`GitModels.kt`), repositories for safe read and mutation flows (`GitRepository.kt`, `GitMutationRepository.kt`), reactive controllers (`GitBranchController`, `GitChangesController`, `GitHistoryActionController`, `GitHistoryController`, `GitSyncController`, `LeasedPublishController`, `WorktreeMutationController`), and native Compose UI surfaces and dialogs (`GitPanelScreen.kt`, `GitChangesView.kt`, `GitBranchesWorktreesView.kt`, `GitHistoryView.kt`, `GitCommitDetailsDialog.kt`, `GitModalsHost.kt`, `GitErrorDialog.kt`, `GitConfirmDialog.kt`, `LeasedPushDialog.kt`).
 
 ## Key Insights
 
@@ -60,10 +71,28 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Deliver current Git/branch/worktree operation inventory.
-- [ ] Implement snapshot/receipt/confirmation and leased publication gates.
-- [ ] Verify real repository integrity and cross-profile invalidation.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Deliver current Git/branch/worktree operation inventory.
+- [x] Implement snapshot/receipt/confirmation and leased publication gates.
+- [ ] Verify real repository integrity and cross-profile invalidation (automated unit tests and static shell assertions passed; live disposable repo qualification open under Phase 18).
+- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations (live runtime proof open under Phase 18).
+
+## Phase 12 Completion Record (2026-10-16)
+
+- **Completed:** 2026-10-16
+- **Status:** 100% complete (user-approved implementation baseline with documented open limitations and runtime qualification deferred to Phase 18)
+- **Validation:** User approved Cycle 3 review (score 6/10 per `plans/reports/code-reviewer-261016-1222-phase-12-cycle-3-git-safe-history.md` with open limitations accepted and deferred to Phase 18). 292 automated unit test executions (across `:shared:jvmTest`, `:androidApp:testDebugUnitTest`, `:androidApp:testReleaseUnitTest`), 751 static invariant assertions across 11 shell test suites (`tests/test-phase-02-foundation.sh` through `test-phase-12-git-history.sh`), and clean `:androidApp:assembleDebug` APK build.
+- **Deliverables:**
+  - **Git Models & Wire DTOs (`GitModels.kt`):** Complete models matching server schemas (`GitOpResult`, `PublishResult`, `GitCommit`, `GitBranch`, `GitWorktree`, `GitStatusSummary`, `GitHistoryFilter`, `GitHistoryEntry`, `GitHistoryAction`).
+  - **Repository Layer (`GitRepository.kt`, `GitMutationRepository.kt`):** Safe server API integration covering branch query/mutation, worktree lifecycle, commit history pagination and search, stage/unstage/discard, commit creation, history rewrites (message edit, squash, drop, cherry-pick, revert, reset, undo-last-commit), and exact-OID leased publication.
+  - **Reactive Controllers (`GitBranchController.kt`, `GitChangesController.kt`, `GitHistoryActionController.kt`, `GitHistoryController.kt`, `GitSyncController.kt`, `LeasedPublishController.kt`, `WorktreeMutationController.kt`):** Generation-fenced controllers with operation snapshots, receipts, confirmation gates, and error handling.
+  - **Native UI Surfaces & Dialogs (`GitPanelScreen.kt`, `GitChangesView.kt`, `GitBranchesWorktreesView.kt`, `GitHistoryView.kt`, `GitCommitDetailsDialog.kt`, `GitModalsHost.kt`, `GitErrorDialog.kt`, `GitConfirmDialog.kt`, `LeasedPushDialog.kt`):** Complete non-browser Git workbench respecting single horizontal panel row, zero FABs, and `adjustResize` soft input handling.
+  - **Cross-Feature Cache Invalidation:** Hook wired across Git mutations to invalidate editor, diff, and blame caches on repository state changes.
+- **Documented Open Limitations & Residuals (Deferred to Phase 18):**
+  - **L1 (Branch checkout scope sync):** Checkout callback cancelled by duplicate refresh invocations; active viewed branch vs entries out-of-sync without scope reload (H1).
+  - **L2 (Details dialog file-variant mutations & discard invalidation):** Cherry-pick, revert, and drop-files in commit details dialog bypass mutation success hook and error dialogs; discard in changes view fired prematurely (H3/H4).
+  - **L3 (Query parameter full encoding):** `encodeURLQueryComponent(encodeFull = true)` required to prevent parameter truncation/splitting on paths with `& + # =` (H5).
+  - **L4 (Real disposable multi-root / worktree repository qualification):** Live repo verification under active/inactive branches, dirty/untracked files, and concurrent push/lease races deferred to Phase 18 integrated qualification.
+- **Handoff:** Phase 12 complete with user approval. Phase 13 (Workflow tracking and project plans) is unblocked (prerequisites Phase 07 and Phase 09 satisfied). Phase 18 has prerequisite Phase 12 satisfied (prerequisite Phase 17 pending). Phase 17 has prerequisites 07 and 11 satisfied (13, 14, 15, 16 pending). Integrated qualification and live disposable repo verification deferred to Phase 18.
 
 ## Success Criteria
 

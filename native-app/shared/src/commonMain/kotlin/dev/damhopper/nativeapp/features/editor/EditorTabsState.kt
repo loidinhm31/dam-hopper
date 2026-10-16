@@ -42,6 +42,20 @@ class EditorTabsState(
         val session = sessions.values.find { it.target.project == target.project && it.target.worktreePath == target.worktreePath && it.path == path }
         return session?.isDirty ?: false
     }
+    fun isDirtyTarget(target: ProjectTargetRef): Boolean {
+        val hasDirtyTab = _tabs.value.any {
+            it.target.project == target.project &&
+            it.target.worktreePath == target.worktreePath &&
+            it.isDirty
+        }
+        if (hasDirtyTab) return true
+        return sessions.values.any {
+            it.target.project == target.project &&
+            it.target.worktreePath == target.worktreePath &&
+            it.isDirty
+        }
+    }
+
 
     suspend fun openTab(target: ProjectTargetRef, path: String, selection: TextRange? = null) {
         val key = buildEditorTabKey("file", profileId, target.project, target.worktreePath, path)

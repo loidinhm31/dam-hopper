@@ -477,6 +477,31 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - `AndroidVideoSurface` utilizes `SurfaceView` and `MediaPlayer` backed by `LeaseMediaDataSource`; `MediaPreviewCard` renders metadata and optional SAF download button with zero FABs.
 - **Blocking Integration Gaps & Open Qualification:**
   - Scaffolding delivered; documented critical defects from code review (score 5/10) prevent production enablement: unwired production paths for crypto session and SAF picker, permissive non-fail-closed cookie capture (`contains` matching, nullable `cookieHeader`), unbounded `readRangeSync` memory allocation, incomplete asynchronous generation fencing, and duplicate Rust/Kotlin envelope implementations. End-to-end device/server qualification is deferred to Phase 18.
+### Native Android Git & Safe History Workflows (Phase 12)
+- **Domain Repositories & Facade (`features/git/`):**
+  - Unified `GitRepository` facade aggregates target-qualified domain repositories: `GitQueryRepository` (roots, branches, logs with literal `messageQuery`, diff summaries, commit details/files/diffs), `GitMutationRepository` (stage, unstage, discard, commit, fetch, pull, push), `GitBranchWorktreeRepository` (branch CRUD/checkout, worktree list/add/remove/prune), `GitHistoryMutationRepository` (cherry-pick, revert, reset, drop, undo-last-commit, message edit, squash), and `GitPublishRepository` (leased push prepare/publish).
+  - Operations capture `GitOperationScope(profileId, generation, project, worktreePath)` to prevent cross-profile collisions and enforce generation fencing.
+- **Changes, Staging, Commit & Worktree Guarding:**
+  - `GitChangesController` coordinates working tree diff summaries, individual/batch staging (`stage`/`unstage`), discard, and commits with optional amend.
+  - `WorktreeMutationController` enforces prechecks (`validateRemovalPrecheck`) before worktree deletion, checking `isTargetDirty` via `EditorTabsState.isDirtyTarget` (preventing deletion with unsaved in-memory editor tabs) and `hasActiveTerminal`.
+- **Safe History Rewrites & Action Controllers:**
+  - `GitHistoryController` manages paginated commit history, branch selection, and commit inspection.
+  - Distinguishes inactive local branch rewrites (`isViewingLocalBranch`) from active-only destructive mutations (`isViewingActiveBranch`). Commit message editing and contiguous-chain squashing with receipts (`GitRewriteActionController`) are permitted on inactive local branches.
+  - Destructive operations (`reset`, `drop`, `undoLastCommit`) and working-tree mutations (`cherryPick`, `revert`) are strictly restricted to checked-out active branches via `GitHistoryActionController`.
+- **Leased Push Publication Safety Gate (`LeasedPublishController`):**
+  - Local history rewrites never publish automatically. Publication is an explicit, separate user action.
+  - `LeasedPublishController` prepares leased push with exact expected remote OID (`PrepareLeasedPushRequest`), verifies target branch and `sourceOid`, and publishes via `PublishLeasedPushRequest`.
+  - Aborts on stale remote with blocked status; zero blind `--force` push fallback.
+- **UI Architecture & Zero FABs:**
+  - Integrated into `GitPanelScreen` (docked Changes, History, and Branches/Worktrees sections in single content area) and `GitModalsHost` (inline dialogs for message edit, squash, leased push, worktree add/remove, commit details, confirmations, and errors); zero floating action buttons.
+- **Documented Limitations & Defect Ledger (Cycle 3 Review 6/10, NOT Accepted):**
+  - H1: Branch checkout scope sync defect (branch controller `refreshBranches()` cancels in-flight reload; history entries not reloaded on checkout).
+  - H2: Repeated identical action failures are suppressed after first dismissal due to un-reset `modalState.actionErrorResult`.
+  - H3: File-variant mutations in commit details dialog (cherry-pick-files, revert-files, drop-files) bypass invalidation hooks and error handling.
+  - H4: Discard invalidation hook executes immediately before async request completes and fires on failure.
+  - H5: Query parameter encoding via default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
+  - Real disposable multi-root/worktree repository verification deferred to Phase 18.
+
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -488,7 +513,8 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-09-editor-saves.sh` — Phase 09 native editor, safe saves, and language services static assertions (70/70 passing).
 - `bash tests/test-phase-10-diff-merge-blame.sh` — Phase 10 native diff, merge conflict, and blame static assertions (77/77 passing).
 - `bash tests/test-phase-11-encrypted-transfers-media.sh` — Phase 11 encrypted transfers, media streaming, and SAF storage static assertions (84/84 passing).
-- *Automated Verification Evidence:* 615 cumulative static assertions passing across 10 phase test scripts (Phases 02–11, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 246 unit tests passing across `:shared:jvmTest` and `:androidApp:testDebugUnitTest`. Cycle 2 code review for Phase 11 recorded score 5/10 (CHANGES REQUIRED) with documented open limitations: unwired production paths, cookie capture fail-closed robustness, range read buffer bounds, and live device/server qualification deferred to Phase 18.
+- `bash tests/test-phase-12-git-history.sh` — Phase 12 Git models, repositories, controllers, leased push, and zero-FAB presentation static verification suite (139/139 assertions passing).
+- *Automated Verification Evidence:* 754 cumulative static assertions passing across 11 phase test scripts (Phases 02–12, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 292 automated unit test executions across jvmTest, testDebugUnitTest, and testReleaseUnitTest. Cycle 3 code review for Phase 12 recorded score 6/10 (CHANGES REQUIRED, not accepted; user approved baseline with documented open implementation limitations: branch checkout scope sync, details dialog file-action invalidation, query param full encoding, and real disposable repo evidence deferred to Phase 18).
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
