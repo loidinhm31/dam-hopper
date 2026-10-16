@@ -21,6 +21,7 @@ class FileRepository(
     coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
 ) {
     private val writeCoordinator = FsWriteCoordinator(wsConnection) { wsConnection.nextReqId() }
+    private val transferCoordinator = TransferCoordinator(wsConnection, { wsConnection.nextReqId() })
     private val subscriptionManager = TreeSubscriptionManager(wsConnection, coroutineScope) { wsConnection.nextReqId() }
 
     suspend fun listDirectory(target: ProjectTargetRef, relativePath: String = ""): List<DirEntryDto> {
@@ -105,6 +106,32 @@ class FileRepository(
         expectedMtime: Long,
     ): ServerMsg.FsWriteResult {
         return writeCoordinator.writeFile(target, relativePath, content, expectedMtime)
+    }
+
+    suspend fun uploadPlain(
+        target: ProjectTargetRef,
+        dir: String,
+        filename: String,
+        content: ByteArray,
+        overwrite: Boolean = true,
+        timeoutMillis: Long = 60_000,
+        onProgress: ((bytesSent: Long, totalBytes: Long) -> Unit)? = null,
+    ): TransferResult {
+        return transferCoordinator.uploadPlain(target, dir, filename, content, overwrite, timeoutMillis, expectedOwner = wsConnection.connection, onProgress = onProgress)
+    }
+
+    suspend fun uploadEncrypted(
+        target: ProjectTargetRef,
+        dir: String,
+        filename: String,
+        content: ByteArray,
+        cryptoSession: dev.damhopper.nativeapp.core.security.CryptoSession,
+        expectedMtime: Long? = null,
+        mimeType: String = "application/octet-stream",
+        timeoutMillis: Long = 60_000,
+        onProgress: ((bytesSent: Long, totalBytes: Long) -> Unit)? = null,
+    ): TransferResult {
+        return transferCoordinator.uploadEncrypted(target, dir, filename, content, cryptoSession, expectedMtime, mimeType, timeoutMillis, expectedOwner = wsConnection.connection, onProgress = onProgress)
     }
 
     suspend fun executeFsOp(

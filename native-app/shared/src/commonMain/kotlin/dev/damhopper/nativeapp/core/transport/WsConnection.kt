@@ -35,7 +35,7 @@ import kotlinx.coroutines.withTimeout
 /**
  * Live WebSocket client bound to a single ConnectionRef and socket instance lifecycle.
  */
-class WsConnection(
+open class WsConnection(
     val connection: ConnectionRef,
     val baseUrl: String,
     val authTokenProvider: suspend () -> String? = { null },
@@ -59,7 +59,7 @@ class WsConnection(
     val currentReceipt: StateFlow<UiConnectionReceipt?> = _currentReceipt.asStateFlow()
 
     private val _incomingMessages = MutableSharedFlow<ServerMsg>(extraBufferCapacity = 64)
-    val incomingMessages: SharedFlow<ServerMsg> = _incomingMessages.asSharedFlow()
+    open val incomingMessages: SharedFlow<ServerMsg> = _incomingMessages.asSharedFlow()
 
     private val correlator = WsRequestCorrelator()
     private var activeSocketRef: SocketInstanceRef? = null
@@ -70,13 +70,13 @@ class WsConnection(
     private var reqIdCounter: ULong = 1000uL
     private val reqIdLock = Any()
 
-    fun nextReqId(): ULong = synchronized(reqIdLock) {
+    open fun nextReqId(): ULong = synchronized(reqIdLock) {
         ++reqIdCounter
     }
     /**
      * Connects to /ws with origin-less handshake and token admission.
      */
-    suspend fun connect() = lifecycleMutex.withLock {
+    open suspend fun connect() = lifecycleMutex.withLock {
         registry?.assertCurrentOwner(connection, "WsConnection.connect")
 
         if (_state.value is WsState.Connected || _state.value is WsState.Connecting) {
@@ -125,7 +125,7 @@ class WsConnection(
     /**
      * Transmits a single text ClientMsg.
      */
-    suspend fun send(msg: ClientMsg) {
+    open suspend fun send(msg: ClientMsg) {
         val writer = activeWriter
             ?: throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
         registry?.assertCurrentOwner(connection, "WsConnection.send")
@@ -135,7 +135,7 @@ class WsConnection(
     /**
      * Atomically transmits a JSON header and a binary frame.
      */
-    suspend fun sendAtomicPair(header: ClientMsg, binary: ByteArray) {
+    open suspend fun sendAtomicPair(header: ClientMsg, binary: ByteArray) {
         val writer = activeWriter
             ?: throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
         registry?.assertCurrentOwner(connection, "WsConnection.sendAtomicPair")
@@ -145,7 +145,7 @@ class WsConnection(
     /**
      * Sends a correlated request and awaits the matching response.
      */
-    suspend fun request(
+    open suspend fun request(
         reqId: ULong,
         msg: ClientMsg,
         timeoutMillis: Long = 30_000,

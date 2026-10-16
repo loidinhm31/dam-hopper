@@ -31,6 +31,7 @@ fun EditorTopBar(
     onToggleMarkdownPreview: () -> Unit,
     onToggleBlame: () -> Unit = {},
     showBlame: Boolean = false,
+    onToggleEncrypted: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val activeTab = tabs.find { it.key == activeTabKey }
@@ -80,6 +81,18 @@ fun EditorTopBar(
                 colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.NavButtonActive)
             ) {
                 Text(if (activeTab?.isSaving == true) "Saving..." else "Save", fontSize = 12.sp)
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+            Button(
+                onClick = onToggleEncrypted,
+                enabled = activeTab != null,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (activeTab?.encryptedSessionRequired == true) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+                )
+            ) {
+                Text(if (activeTab?.encryptedSessionRequired == true) "🔒 Encrypted" else "🔓 Plain", fontSize = 12.sp)
             }
 
             Spacer(modifier = Modifier.width(6.dp))

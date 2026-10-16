@@ -449,6 +449,34 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Recorded Limitations & Open Gates:**
   - Permissive UTF-8 decode in fallback path, timeout treated as generic cancellation aborting batches, root-only directory watcher without subfolder re-subscription, secondary-profile display-name target resolution, dirty-buffer provider unwired pending Phase 09, and partial failure/outcome UI detail. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
 
+
+### Native Editor Language Services & Safe Saves (Phase 09)
+- **File Tier Policy (`FileTierPolicy`):** Enforces exact size boundaries: normal (< 1 MiB editable), degraded (≥ 1 MiB and < 5 MiB editable), large (≥ 5 MiB read-only 64 KiB range pager), binary (raw hex view), and media (preview-only card). `decodeUtf8Safe` safely drops incomplete trailing multi-byte sequences at 64 KiB chunk boundaries.
+- **Editor Session & Baseline Tracking (`EditorSession`):** Retains text buffer, monotonic `modelVersion`, `editEpoch`, and bounded undo/redo. `beginSave()` captures submitted snapshot and epoch; `completeSave()` updates `serverMtime` and recalculates `isDirty = (getText() != savedContent)` so edits typed while saving in flight are preserved.
+- **Atomic Transforms & Safe Saves (`EditorTabSaveCoordinator`, `EditorRepository`):** Applies functional state transforms to latest tab state; CAS mtime protection; `UnknownOutcome` on in-flight commit timeout; clean auto-reload vs dirty tab stale flag; `discardAndReloadTab`. Authoritative `isDirtyFile` wired into `ReplaceCoordinator` to skip dirty buffers.
+- **Language Services:** Offline `JsonLanguageService` (AST diagnostics & symbols) and `TsJsLanguageService` (delimiter scanner with quote-before-comment precedence). Formal `TypeScriptLanguageServiceAudit` records TS semantic analysis blocker pending QuickJS/Hermes engine or server LSP decision.
+
+### Native Diff, 3-Way Merge & Git Blame (Phase 10)
+- **Native Diff Review (`DiffReviewController`, `DiffCalculator`, `LcsDiffEngine`):** Side-by-side and inline layouts with 10,000 line computation cap. Server hunk index mapping, hunk discard mapping with dirty buffer / modified / read-only guards, CAS baseline mtime saves, and commit diff inspection.
+- **3-Way Merge Conflict Resolution (`MergeConflictController`, `ConflictParser`):** 2-way and 3-way/diff3 marker parsing, ours/theirs/ancestor/both resolution, malformed marker detection, and server resolution submission.
+- **Git Blame Attribution & Caching (`BlameRepository`, `BlameValidator`, `BlameCache`):** 5 MiB buffer threshold, 250 ms keystroke debounce with per-file coroutine cancellation, contiguous partition validation, bounded 64-entry / 32 MiB LRU cache with SHA-256 buffer fingerprinting (`Sha256Digest`), editor gutter annotations (`EditorBlameGutter`), and commit reveal routing (`CommitRevealRequest`).
+
+### Encrypted Transfers, Media Streaming & Android Storage Scaffolding (Phase 11)
+- **Cryptographic Envelopes & Sessions (`core/security/`):**
+  - `CryptoEnvelope` implements exact wire parity with server `decrypt_blob` (`iv(12) || ciphertext + tag(16)`), packing metadata JSON (`FileBlobMetadata`/`TextBlobMetadata`), 0x00 delimiter, and content bytes with max 4096-byte metadata JSON.
+  - `CryptoSession` manages derived 32-byte AES-256-GCM key, generation validation via `assertValid(expectedOwner)`, and explicit `close()` zeroization (`keyBytes.fill(0)`), subject to JVM GC zeroization limitations.
+  - `PlatformCrypto` expect/actual and `OpaqueClientBridge` JNI bindings to `libdamhopper_crypto_bridge.so` (7 Rust unit/parity tests).
+- **Chunked Binary Transfer State Machine (`features/files/TransferCoordinator.kt`):**
+  - `TransferCoordinator` coordinates chunked binary and encrypted uploads over WebSocket using atomic frame pairs (`sendAtomicPair`), default 64 KiB chunks, and 100 MiB enforced envelope/document cap where applicable. Pre-registers ack listeners before chunk dispatch; handles timeouts on in-flight commits as `UnknownOutcome`.
+- **Encrypted Saves & Conflict Protection (`features/editor/EncryptedSaveCoordinator.kt`):**
+  - `EncryptedSaveCoordinator` provides conflict-aware `saveEncrypted` (using expected mtime CAS) and explicit single-blob `forceOverwriteEncrypted` (`fs:put_save` atomic pair). `EditorRepository` strictly fails closed without plaintext downgrade if crypto session is unavailable or fails.
+- **Android SAF Document Storage (`platform/storage/AndroidDocumentStorage.kt`):**
+  - `AndroidDocumentStorage` implements `DocumentStorage` over scoped content URIs without broad storage permissions; enforces 100 MiB document size cap (`MAX_DOCUMENT_BYTES`), filename sanitization (`sanitizeFilename`), and bounded chunk streaming (`streamFromUri`, `streamToUri`).
+- **Origin-Bound Media Client & Cookie Isolation (`platform/media/`):**
+  - `AndroidMediaClient` enforces UUIDv4 `mediaClientId`, namespaced session cookie (`damhopper-media-session-<uuidv4>`), strict same-origin checks (`assertSameOrigin`), redirect rejection (`followRedirects(false)`, `followSslRedirects(false)`), and purpose-scoped capabilities (`PLAYBACK` vs `DOWNLOAD`).
+  - `AndroidVideoSurface` utilizes `SurfaceView` and `MediaPlayer` backed by `LeaseMediaDataSource`; `MediaPreviewCard` renders metadata and optional SAF download button with zero FABs.
+- **Blocking Integration Gaps & Open Qualification:**
+  - Scaffolding delivered; documented critical defects from code review (score 5/10) prevent production enablement: unwired production paths for crypto session and SAF picker, permissive non-fail-closed cookie capture (`contains` matching, nullable `cookieHeader`), unbounded `readRangeSync` memory allocation, incomplete asynchronous generation fencing, and duplicate Rust/Kotlin envelope implementations. End-to-end device/server qualification is deferred to Phase 18.
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -457,8 +485,11 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-06-shell-workspace.sh` — Phase 06 shell, navigation, workspace, and config static verification suite (64/64 assertions passing).
 - `bash tests/test-phase-07-terminal-agents.sh` — Phase 07 terminal sessions, replay gate, input, and agent status static assertions (45/45 passing).
 - `bash tests/test-phase-08-filesystem-watchers.sh` — Phase 08 filesystem models, watchers, search, and replace static assertions (57/57 passing).
-- *Automated Verification Evidence (dated QA report `plans/reports/qa-261016-0613-reverify-phase-08-filesystem-watchers.md`)*: 194 automated unit test executions passed across JVM (116) and Android debug/release suites (39 debug + 39 release executions covering 39 unique test methods); 384 cumulative static assertions passing (including 57 Phase 08 static source assertions); `:androidApp:assembleDebug` builds cleanly (65 actionable tasks). Reviewer recorded 6/10 (CHANGES REQUESTED) in Cycle 2 review (`plans/reports/code-reviewer-261016-0617-phase-08-cycle-2-filesystem-watchers.md`), baseline accepted via user approval with recorded open limitations.
-- *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, and real server-backed WebSocket integration remain open under GATE-B / Phase 18.
+- `bash tests/test-phase-09-editor-saves.sh` — Phase 09 native editor, safe saves, and language services static assertions (70/70 passing).
+- `bash tests/test-phase-10-diff-merge-blame.sh` — Phase 10 native diff, merge conflict, and blame static assertions (77/77 passing).
+- `bash tests/test-phase-11-encrypted-transfers-media.sh` — Phase 11 encrypted transfers, media streaming, and SAF storage static assertions (84/84 passing).
+- *Automated Verification Evidence:* 615 cumulative static assertions passing across 10 phase test scripts (Phases 02–11, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 246 unit tests passing across `:shared:jvmTest` and `:androidApp:testDebugUnitTest`. Cycle 2 code review for Phase 11 recorded score 5/10 (CHANGES REQUIRED) with documented open limitations: unwired production paths, cookie capture fail-closed robustness, range read buffer bounds, and live device/server qualification deferred to Phase 18.
+- *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
 ## Qualification Boundary

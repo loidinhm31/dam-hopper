@@ -134,7 +134,6 @@ class EditorTabsState(
             session = sessions[key], transformTab = { transform -> _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it } }
         )
     }
-
     suspend fun reloadTab(key: String, forceDiscardLocal: Boolean = false) {
         val tab = _tabs.value.find { it.key == key } ?: return
         val session = sessions[key] ?: return

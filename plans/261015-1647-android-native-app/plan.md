@@ -22,7 +22,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-android-native-app`; branch above. Base: `d897a91f76a07ec819a50ffc2756cb69327b2fe3` (server0.13.2/protocol2 baseline). Original checkout changes untouched.
 - [User decisions](./research/decision-context.md) · [proposed architecture](../../docs/architecture/android-native-client.md) · [scope/acceptance ledger](./scope-and-acceptance.md).
 - [Contracts/modules](./contracts-and-modules.md) · [execution guide and dependency graph](./execution-guide.md) · [Android research](./research/android-platform-research.md) · [extended contracts](./research/extended-workbench-contracts.md).
-- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 completed 2026-10-16 02:20:00 +07:00; Phase 08 completed 2026-10-16 (Cycle 2 user approved 6/10 with documented open limitations); Phase 09 completed 2026-10-16 07:24:21 +07:00 (user approved with documented open limitations); Phase 10 completed 2026-10-16 09:48:17 +07:00 (user approved score 9/10, all 246 unit tests and 531 assertions passed); Phase 11 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
+- Phase 01 completed 2026-10-15 19:51:53 +07:00; Phase 02 completed 2026-10-15 20:38:00 +07:00; Phase 03 completed 2026-10-15 21:44:52 +07:00; Phase 04 completed 2026-10-15 22:45:00 +07:00; Phase 05 prototype-verified 2026-10-15 23:35:00 +07:00; Phase 06 completed 2026-10-16 00:50:00 +07:00; Phase 07 completed 2026-10-16 02:20:00 +07:00; Phase 08 completed 2026-10-16 (Cycle 2 user approved 6/10 with documented open limitations); Phase 09 completed 2026-10-16 07:24:21 +07:00 (user approved with documented open limitations); Phase 10 completed 2026-10-16 09:48:17 +07:00 (user approved score 9/10, all 246 unit tests and 531 assertions passed); Phase 11 completed 2026-10-16 (user approved Cycle 2 review, 282 automated test executions, 615 static assertions, clean assembleDebug APK); Phase 12 and Phase 17 unblocked. Native dependency/editor-service/crypto gates precede dependent implementation. Pass this explicit plan path to later agents; active-plan helper could not persist without EVCRATE_SESSION_ID.
 
 ## Phases
 
@@ -38,7 +38,7 @@ User approved all current non-browser workbench families. Embedded interactive H
 | 08 | [Filesystem watchers search and replace](./phase-08-filesystem-watchers-search-and-replace.md) | completed (2026-10-16) | 100% | 06 |
 | 09 | [Native editor language services and safe saves](./phase-09-native-editor-language-services-and-safe-saves.md) | completed (2026-10-16 07:24:21 +07:00) | 100% | 05, 08 |
 | 10 | [Native diff merge and blame](./phase-10-native-diff-merge-and-blame.md) | completed (2026-10-16 09:48:17 +07:00) | 100% | 09 |
-| 11 | [Encrypted transfers media and Android storage](./phase-11-encrypted-transfers-media-and-storage.md) | pending | 0% | 05, 09 |
+| 11 | [Encrypted transfers media and Android storage](./phase-11-encrypted-transfers-media-and-storage.md) | completed (2026-10-16) | 100% | 05, 09 |
 | 12 | [Complete Git and safe history workflows](./phase-12-complete-git-and-safe-history-workflows.md) | pending | 0% | 06, 10 |
 | 13 | [Workflow tracking and project plans](./phase-13-workflow-tracking-and-project-plans.md) | pending | 0% | 07, 09 |
 | 14 | [Agent Store imports and memory](./phase-14-agent-store-imports-and-memory.md) | pending | 0% | 09 |
@@ -67,7 +67,7 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
 - Row stays visible while software keyboard is open.
 - One content area on phones, tablets and foldables; selected panel replaces terminal visually while controllers/sessions stay alive. No wide-screen terminal/panel docking.
 - [x] Record scope restriction and presentation decisions in plan/design/acceptance artifacts.
-- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation verified; Phase 07 host contracts & remediations verified 2026-10-16; Phase 08 filesystem watchers and search/replace verified and user-approved 2026-10-16; Phase 09 native editor language services and safe saves verified and user-approved 2026-10-16 07:24:21 +07:00; Phase 10 native diff merge and blame verified and completed 2026-10-16 09:48:17 +07:00 [user approved score 9/10, 246 unit tests and 531 assertions passed]; Phase 11 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, Phase 06 physical IME/device acceptance, and Phase 07 physical terminal rendering/device acceptance pending Phase 18).
+- [ ] Resolve Phase01–05 dependency/language-service/crypto/device gates before dependent implementation (Phase 01 baseline frozen; Phase 02 foundation verified; Phase 03 contracts & transport verified; Phase 04 profiles, auth & vault verified; Phase 05 prototype & crypto gates verified; Phase 06 implementation verified; Phase 07 host contracts & remediations verified 2026-10-16; Phase 08 filesystem watchers and search/replace verified and user-approved 2026-10-16; Phase 09 native editor language services and safe saves verified and user-approved 2026-10-16 07:24:21 +07:00; Phase 10 native diff merge and blame verified and completed 2026-10-16 09:48:17 +07:00 [user approved score 9/10, 246 unit tests and 531 assertions passed]; Phase 11 completed 2026-10-16 [user approved Cycle 2 review, 282 automated test executions, 615 static assertions, clean assembleDebug APK]; Phase 12 and Phase 17 unblocked; GATE-A dynamic device launch, GATE-B hardware/LSP qualification, Phase 06 physical IME/device acceptance, Phase 07 physical terminal rendering/device acceptance, and Phase 11 device/live server qualification pending Phase 18).
 
 ## Phase 01 Completion Record
 
@@ -230,3 +230,32 @@ Exact dependency pins/licenses, native JSON/TS realization, crypto ABI proof and
   2. **Non-default Root Save:** Diff saves currently operate on the target worktree root; non-default sub-repository roots require explicit target scoping.
   3. **Hunk Visual Highlighting:** Hunk navigation steps through the hunk counter index; visual scroll-into-view and animated highlight deferred to Phase 18 device qualification.
 - **Handoff:** Phase 10 completed with user approval (Score 9/10). Phase 11 (Encrypted transfers media and Android storage) unblocked for next sequence progression and Phase 12 (Complete Git and safe history workflows) unblocked on diff/merge/blame dependency. Physical hardware and live server qualification deferred to Phase 18.
+
+## Phase 11 Completion Record
+
+- **Completed:** 2026-10-16
+- **Status:** 100% complete (with user approval of Cycle 2 review and documented open limitations deferred to Phase 18; Phase 12 and Phase 17 unblocked)
+- **Validation:** User approved Cycle 2 review (accepted via user approval with documented open limitations; Reviewer Cycle 2 score 5/10 CHANGES REQUESTED per `plans/reports/code-reviewer-261016-1050-phase-11-cycle-2-encrypted-transfers-media-storage.md`). 100% automated pass rate across 282 automated test executions (7 Rust unit tests in `native-app/crypto-bridge`, 183 KMP shared JVM unit tests in `:shared:jvmTest`, 46 Android debug unit tests in `:androidApp:testDebugUnitTest`, 46 Android release unit tests in `:androidApp:testReleaseUnitTest`), 615 static invariant assertions across 10 shell test suites (`tests/test-phase-11-encrypted-transfers-media.sh` [84], `test-phase-10-diff-merge-blame.sh` [77], `test-phase-09-editor-saves.sh` [70], `test-phase-08-filesystem-watchers.sh` [57], `test-phase-07-terminal-agents.sh` [45], `test-phase-06-shell-workspace.sh` [64], `test-phase-05-proof-gates.sh` [66], `test-phase-04-profiles-auth.sh` [57], `test-phase-03-transport.sh` [48], `test-phase-02-foundation.sh` [47]), and clean `assembleDebug` APK build.
+- **Deliverables:**
+  - **Cryptographic & Transfer Coordination (`CryptoSession.kt`, `CryptoSessionManager.kt`, `TransferCoordinator.kt`, `EncryptedSaveCoordinator.kt`, `native-app/crypto-bridge/src/lib.rs`):**
+    - OPAQUE session key derivation and envelope encryption (AES-256-GCM, HKDF-SHA256, 16-byte IV, 16-byte tag, server wire format compatibility).
+    - Generation-fenced transfers (`ConnectionRef` / `ProfileId`) with monotonic watermarks, atomic JSON-header and binary frame groups, 64 KiB chunking, and backpressure handling.
+    - Encrypted file upload and safe save flows with expected mtime CAS conflict detection, fail-closed handling without plaintext fallback, and 100 MiB envelope size enforcement.
+    - Rust cdylib cryptographic bridge (`native-app/crypto-bridge/src/lib.rs`) with zeroization and 7 unit tests.
+  - **Native Android Storage & SAF (`AndroidDocumentStorage.kt`):**
+    - Android Storage Access Framework (SAF) integration via `OpenDocument` and `CreateDocument` contracts.
+    - Streaming chunked I/O (`streamFromUri`, `streamToUri`) avoiding whole-file heap buffering.
+    - URI metadata query and filename sanitization against path traversal.
+  - **Protected Media & Streaming Client (`AndroidMediaClient.kt`, `AndroidVideoSurface.kt`, `MediaModels.kt`):**
+    - Media ticket issuance and session cookie capture (`/api/media/ticket`, `dhs_media_session`).
+    - Purpose-scoped leases (`PLAYBACK`, `DOWNLOAD`, `THUMBNAIL`) with origin verification and automatic disposal.
+    - Resumable video playback via custom `MediaDataSource` supporting HTTP 206 range requests with bounded buffer streaming.
+    - Native Android MediaPlayer surface integration in Compose without Floating Action Buttons (zero FABs invariant held).
+  - **Workbench & Editor Integration (`WorkbenchScreen.kt`, `EditorScreens.kt`, `MediaPreviewCard.kt`, `EditorTopBar.kt`, `EditorTabsState.kt`):**
+    - Protected media preview cards with streaming ticket integration.
+    - Safe encrypted save coordination hooked into editor tabs.
+- **Documented Open Limitations & Residuals (Deferred to Phase 18):**
+  - **L1 (Live Device & Authenticated Server Qualification):** Real Android device verification, end-to-end encrypted transfer roundtrips against live authenticated Rust server daemon, and live media playback/seeking over remote network deferred to Phase 18 (`phase-18-integrated-device-security-and-performance-qualification.md`).
+  - **L2 (End-to-end CryptoSession Wiring):** OPAQUE login hook for automatic `CryptoSession` activation on profile session establishment and UI toggle exposure for explicit encrypted save mode tracked for Phase 18 qualification.
+  - **L3 (SAF & OEM Media Edge Cases):** Real device Storage Access Framework intent resolution across diverse OEM Android distributions and edge cases (200-OK on Range requests, fail-closed cookie capture hardening) tracked under Phase 18 qualification.
+- **Handoff:** Phase 11 (Encrypted transfers media and Android storage) completed with user approval. Phase 12 (Complete Git and safe history workflows) unblocked (dependencies Phase 06 and Phase 10 satisfied); Phase 17 (Preferences privacy notifications and lifecycle) has its Phase 11 dependency satisfied (remaining prerequisites: Phases 07 [completed], 13, 14, 15, 16 [pending]). Physical hardware and live server qualification deferred to Phase 18.

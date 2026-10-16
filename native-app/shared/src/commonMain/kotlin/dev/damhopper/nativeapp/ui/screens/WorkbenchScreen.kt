@@ -106,6 +106,7 @@ fun WorkbenchScreen(
     var configEditor by remember { mutableStateOf<RemoteConfigEditor?>(null) }
     var terminalRepo by remember { mutableStateOf<TerminalRepository?>(null) }
     var agentReducer by remember { mutableStateOf<AgentStatusReducer?>(null) }
+    val cryptoSessionManager = remember { dev.damhopper.nativeapp.core.security.CryptoSessionManager() }
     val terminalControllers = remember { mutableMapOf<String, TerminalSessionController>() }
     var terminalSessions by remember { mutableStateOf<List<TerminalSessionDetailed>>(emptyList()) }
     var activeTerminalSessionId by remember { mutableStateOf<String?>(null) }
@@ -140,6 +141,7 @@ fun WorkbenchScreen(
         terminalControllers.clear()
         terminalSessions = emptyList()
         activeTerminalSessionId = null
+        cryptoSessionManager.closeAll()
 
         if (profileRepository != null && activeProfileId != null) {
             try {
@@ -159,7 +161,17 @@ fun WorkbenchScreen(
                 fileRepo = fRepo
                 editorTabsState?.closeAll()
                 if (fRepo != null) {
-                    val eRepo = EditorRepository(fRepo, profileId = activeProfileId!!)
+                    val eRepo = EditorRepository(
+                        fileRepository = fRepo,
+                        connectionRegistry = profileRepository?.registry,
+                        profileId = activeProfileId!!,
+                        cryptoSessionProvider = {
+                            kotlinx.coroutines.runBlocking {
+                                val currentConn = profileRepository?.registry?.getCurrentConnection(activeProfileId!!)
+                                cryptoSessionManager.getActiveSession(currentConn)
+                            }
+                        }
+                    )
                     val eTabs = EditorTabsState(activeProfileId!!, eRepo)
                     editorRepo = eRepo
                     editorTabsState = eTabs

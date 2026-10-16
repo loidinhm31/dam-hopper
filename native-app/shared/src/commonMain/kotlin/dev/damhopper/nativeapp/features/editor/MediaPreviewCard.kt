@@ -17,6 +17,7 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
 fun MediaPreviewCard(
     tab: EditorTab,
     modifier: Modifier = Modifier,
+    onDownloadClicked: (() -> Unit)? = null,
 ) {
     Box(
         modifier = modifier.fillMaxSize().background(DamHopperColors.Background).padding(24.dp),
@@ -44,10 +45,21 @@ fun MediaPreviewCard(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Media files are previewed via ticketed sessions (Phase 11). Direct editing disabled.",
+                    text = "Origin-bound media session (Phase 11). Protected ticket streaming.",
                     style = DamHopperTypography.labelSmall,
                     color = DamHopperColors.TextSecondary
                 )
+                if (onDownloadClicked != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = onDownloadClicked,
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            contentColor = DamHopperColors.Primary
+                        )
+                    ) {
+                        Text("⬇ Download via SAF")
+                    }
+                }
             }
         }
     }

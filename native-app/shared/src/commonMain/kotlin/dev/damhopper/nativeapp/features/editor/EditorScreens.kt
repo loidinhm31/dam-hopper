@@ -18,6 +18,7 @@ fun EditorPanelScreen(
     tabsState: EditorTabsState,
     blameRepo: BlameRepository? = null,
     onInspectCommit: (String) -> Unit = {},
+    onDownloadMedia: ((EditorTab) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -72,7 +73,8 @@ fun EditorPanelScreen(
             },
             onToggleMarkdownPreview = { activeTabKey?.let { tabsState.toggleMarkdownPreview(it) } },
             onToggleBlame = { showBlame = !showBlame },
-            showBlame = showBlame
+            showBlame = showBlame,
+            onToggleEncrypted = { activeTabKey?.let { tabsState.toggleEncryptedSession(it) } }
         )
         // Find/Replace Bar
         if (session != null && findState.isOpen) {
@@ -148,7 +150,10 @@ fun EditorPanelScreen(
             }
         } else when {
             activeTab.tier == FileTier.IMAGE || activeTab.tier == FileTier.VIDEO -> {
-                MediaPreviewCard(tab = activeTab)
+                MediaPreviewCard(
+                    tab = activeTab,
+                    onDownloadClicked = onDownloadMedia?.let { cb -> { cb(activeTab) } }
+                )
             }
             activeTab.markdownPreviewMode && FileTierPolicy.isMarkdownFile(activeTab.path) -> {
                 MarkdownPreviewView(markdownContent = activeTab.content)

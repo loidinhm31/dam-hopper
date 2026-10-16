@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use hkdf::Hkdf;
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jboolean, jbyteArray, jlong};
+use jni::sys::{jboolean, jbyteArray, jlong, jobjectArray};
 use jni::JNIEnv;
 use opaque_ke::{
     CipherSuite, ClientLogin, ClientLoginFinishParameters, ClientRegistration,
@@ -128,6 +128,87 @@ pub fn derive_aes_key(session_key: &[u8]) -> Result<Zeroizing<[u8; AES_KEY_LEN]>
     hkdf.expand(HKDF_INFO, &mut *aes_key)
         .map_err(|_| OpaqueBridgeError::HkdfFailed)?;
     Ok(aes_key)
+}
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+
+pub const IV_LEN: usize = 12;
+pub const TAG_LEN: usize = 16;
+pub const METADATA_MAX: usize = 4096;
+
+pub fn encrypt_envelope(
+    aes_key: &[u8],
+    metadata_json: &str,
+    content: &[u8],
+) -> Result<Vec<u8>, OpaqueBridgeError> {
+    if aes_key.len() != AES_KEY_LEN {
+        return Err(OpaqueBridgeError::Crypto(format!("Invalid key length: {}", aes_key.len())));
+    }
+    let mut rng = OsRng;
+    let mut iv = [0u8; IV_LEN];
+    rand::RngCore::fill_bytes(&mut rng, &mut iv);
+
+    let cipher = Aes256Gcm::new_from_slice(aes_key)
+        .map_err(|e| OpaqueBridgeError::Crypto(format!("Invalid AES key: {e}")))?;
+    let nonce = Nonce::from_slice(&iv);
+
+    let meta_bytes = metadata_json.as_bytes();
+    let mut plaintext = Vec::with_capacity(meta_bytes.len() + 1 + content.len());
+    plaintext.extend_from_slice(meta_bytes);
+    plaintext.push(0x00);
+    plaintext.extend_from_slice(content);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_slice())
+        .map_err(|e| OpaqueBridgeError::Crypto(format!("AES-GCM encryption failed: {e}")))?;
+
+    let mut envelope = Vec::with_capacity(IV_LEN + ciphertext.len());
+    envelope.extend_from_slice(&iv);
+    envelope.extend_from_slice(&ciphertext);
+
+    Ok(envelope)
+}
+
+pub fn decrypt_envelope(
+    aes_key: &[u8],
+    envelope: &[u8],
+) -> Result<(String, Vec<u8>), OpaqueBridgeError> {
+    if envelope.len() < IV_LEN + TAG_LEN {
+        return Err(OpaqueBridgeError::Serialization("Encrypted blob too short".into()));
+    }
+    if aes_key.len() != AES_KEY_LEN {
+        return Err(OpaqueBridgeError::Crypto(format!("Invalid key length: {}", aes_key.len())));
+    }
+
+    let iv = &envelope[..IV_LEN];
+    let ciphertext = &envelope[IV_LEN..];
+
+    let cipher = Aes256Gcm::new_from_slice(aes_key)
+        .map_err(|e| OpaqueBridgeError::Crypto(format!("Invalid AES key: {e}")))?;
+    let nonce = Nonce::from_slice(iv);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| OpaqueBridgeError::Crypto("AES-GCM decryption failed — wrong key or corrupted data".into()))?;
+
+    let sep_idx = plaintext
+        .iter()
+        .position(|&b| b == 0x00)
+        .ok_or_else(|| OpaqueBridgeError::Serialization("Plaintext missing metadata separator (0x00)".into()))?;
+
+    if sep_idx > METADATA_MAX {
+        return Err(OpaqueBridgeError::Serialization(format!(
+            "Metadata section too large: {sep_idx} bytes (max {METADATA_MAX})"
+        )));
+    }
+
+    let meta_json = std::str::from_utf8(&plaintext[..sep_idx])
+        .map_err(|e| OpaqueBridgeError::Serialization(format!("Metadata is not valid UTF-8: {e}")))?
+        .to_string();
+
+    let content = plaintext[sep_idx + 1..].to_vec();
+
+    Ok((meta_json, content))
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +474,114 @@ pub extern "system" fn Java_dev_damhopper_nativeapp_platform_crypto_OpaqueClient
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_damhopper_nativeapp_platform_crypto_OpaqueClientBridge_nativeEncryptEnvelope(
+    mut env: JNIEnv,
+    _class: JClass,
+    aes_key: JByteArray,
+    metadata_json: JString,
+    content: JByteArray,
+) -> jbyteArray {
+    let key_vec = match env.convert_byte_array(aes_key) {
+        Ok(v) => v,
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Failed to read key bytes: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let meta_str: String = match env.get_string(&metadata_json) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Failed to read metadata string: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let content_vec = match env.convert_byte_array(content) {
+        Ok(v) => v,
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Failed to read content bytes: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+
+    match encrypt_envelope(&key_vec, &meta_str, &content_vec) {
+        Ok(envelope) => match env.byte_array_from_slice(&envelope) {
+            Ok(arr) => arr.into_raw(),
+            Err(e) => {
+                throw_jni_error(&mut env, &format!("Failed to allocate envelope byte array: {e}"));
+                std::ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Encryption failed: {e}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_damhopper_nativeapp_platform_crypto_OpaqueClientBridge_nativeDecryptEnvelope(
+    mut env: JNIEnv,
+    _class: JClass,
+    aes_key: JByteArray,
+    envelope: JByteArray,
+) -> jobjectArray {
+    let key_vec = match env.convert_byte_array(aes_key) {
+        Ok(v) => v,
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Failed to read key bytes: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let env_vec = match env.convert_byte_array(envelope) {
+        Ok(v) => v,
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Failed to read envelope bytes: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+
+    match decrypt_envelope(&key_vec, &env_vec) {
+        Ok((meta, content)) => {
+            let meta_jstr = match env.new_string(meta) {
+                Ok(s) => s,
+                Err(e) => {
+                    throw_jni_error(&mut env, &format!("Failed to create metadata string: {e}"));
+                    return std::ptr::null_mut();
+                }
+            };
+            let content_jbarr = match env.byte_array_from_slice(&content) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    throw_jni_error(&mut env, &format!("Failed to create content byte array: {e}"));
+                    return std::ptr::null_mut();
+                }
+            };
+            let obj_class = match env.find_class("java/lang/Object") {
+                Ok(c) => c,
+                Err(e) => {
+                    throw_jni_error(&mut env, &format!("Failed to find Object class: {e}"));
+                    return std::ptr::null_mut();
+                }
+            };
+            let arr = match env.new_object_array(2, obj_class, &meta_jstr) {
+                Ok(a) => a,
+                Err(e) => {
+                    throw_jni_error(&mut env, &format!("Failed to allocate object array: {e}"));
+                    return std::ptr::null_mut();
+                }
+            };
+            let _ = env.set_object_array_element(&arr, 0, meta_jstr);
+            let _ = env.set_object_array_element(&arr, 1, content_jbarr);
+            arr.into_raw()
+        }
+        Err(e) => {
+            throw_jni_error(&mut env, &format!("Decryption failed: {e}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
 fn bytemuck_cast(bytes: &[u8]) -> &[i8] {
     // Safety: u8 and i8 have the same size and layout
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const i8, bytes.len()) }
@@ -598,5 +787,62 @@ mod tests {
         assert!(store.contains(h4));
         assert_eq!(store.remove(h2).unwrap(), 200);
         assert_eq!(store.remove(h4).unwrap(), 400);
+    }
+
+    #[test]
+    fn test_envelope_roundtrip_and_tamper_rejection() {
+        let aes_key = [77u8; 32];
+        let meta_json = r#"{"name":"test-file.txt","size":18,"type":"text/plain"}"#;
+        let content = b"Secret payload 123";
+
+        let envelope = encrypt_envelope(&aes_key, meta_json, content).unwrap();
+        assert!(envelope.len() >= IV_LEN + TAG_LEN + meta_json.len() + 1 + content.len());
+
+        // Successful roundtrip
+        let (dec_meta, dec_content) = decrypt_envelope(&aes_key, &envelope).unwrap();
+        assert_eq!(dec_meta, meta_json);
+        assert_eq!(dec_content, content);
+
+        // Tamper with envelope ciphertext
+        let mut tampered = envelope.clone();
+        let last_idx = tampered.len() - 1;
+        tampered[last_idx] ^= 0x42;
+        assert!(decrypt_envelope(&aes_key, &tampered).is_err());
+
+        // Wrong key
+        let wrong_key = [99u8; 32];
+        assert!(decrypt_envelope(&wrong_key, &envelope).is_err());
+
+        // Truncated envelope
+        let truncated = &envelope[..20];
+        assert!(decrypt_envelope(&aes_key, truncated).is_err());
+    }
+
+    #[test]
+    fn test_envelope_metadata_max_and_separator_enforcement() {
+        let aes_key = [88u8; 32];
+        let content = b"Sample content";
+
+        // Plaintext without 0x00 separator
+        let cipher = Aes256Gcm::new_from_slice(&aes_key).unwrap();
+        let nonce = Nonce::from_slice(b"123456789012");
+        let invalid_plain = b"NoSeparatorHereAtAll";
+        let ct = cipher.encrypt(nonce, invalid_plain.as_ref()).unwrap();
+        let mut bad_env = Vec::new();
+        bad_env.extend_from_slice(b"123456789012");
+        bad_env.extend_from_slice(&ct);
+        assert!(decrypt_envelope(&aes_key, &bad_env).is_err());
+
+        // Huge metadata (> 4096 bytes)
+        let huge_meta = "x".repeat(5000);
+        let mut plain_huge = Vec::new();
+        plain_huge.extend_from_slice(huge_meta.as_bytes());
+        plain_huge.push(0x00);
+        plain_huge.extend_from_slice(content);
+        let ct_huge = cipher.encrypt(nonce, plain_huge.as_slice()).unwrap();
+        let mut env_huge = Vec::new();
+        env_huge.extend_from_slice(b"123456789012");
+        env_huge.extend_from_slice(&ct_huge);
+        assert!(decrypt_envelope(&aes_key, &env_huge).is_err());
     }
 }

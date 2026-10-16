@@ -201,6 +201,26 @@ object OpaqueClientBridge {
         return true
     }
 
+    fun encryptEnvelope(key: ByteArray, metadataJson: String, content: ByteArray): ByteArray {
+        if (isNativeLibraryLoaded) {
+            val res = nativeEncryptEnvelope(key, metadataJson, content)
+            if (res != null) return res
+        }
+        return dev.damhopper.nativeapp.core.security.CryptoEnvelope.encrypt(key, metadataJson, content)
+    }
+
+    fun decryptEnvelope(key: ByteArray, envelopeBytes: ByteArray): Pair<String, ByteArray> {
+        if (isNativeLibraryLoaded) {
+            val res = nativeDecryptEnvelope(key, envelopeBytes)
+            if (res != null && res.size == 2) {
+                val meta = res[0] as String
+                val content = res[1] as ByteArray
+                return Pair(meta, content)
+            }
+        }
+        return dev.damhopper.nativeapp.core.security.CryptoEnvelope.decrypt(key, envelopeBytes)
+    }
+
     // ---------------------------------------------------------------------------
     // Native JNI Declarations
     // ---------------------------------------------------------------------------
@@ -228,4 +248,10 @@ object OpaqueClientBridge {
 
     @JvmStatic
     private external fun nativeCloseHandle(handle: Long, isLogin: Boolean): Boolean
+
+    @JvmStatic
+    private external fun nativeEncryptEnvelope(key: ByteArray, metadataJson: String, content: ByteArray): ByteArray?
+
+    @JvmStatic
+    private external fun nativeDecryptEnvelope(key: ByteArray, envelope: ByteArray): Array<Any>?
 }

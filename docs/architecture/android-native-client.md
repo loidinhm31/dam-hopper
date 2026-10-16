@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), and terminal sessions/replay/agents (Phase 07) verified; Phase 08 filesystem watchers/search/replace baseline recorded with open limitations; Phase 05 contract/host prototype validated (Android runtime feasibility and hardware execution unproven); live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), and encrypted transfers/media/storage scaffolding (Phase 11) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -148,16 +148,41 @@ The native Android client introduces filesystem navigation, live directory event
 - **Preview Semantics:** Preview retains aggregate match counts per enumerated file, not exact match positions.
 - **Batch Application:** `applyBatch` executes sequential replacements using the frozen search spec; it checks only that some occurrence remains in current content, then replaces all occurrences in each enumerated file.
 - **CAS Safety Boundary:** Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against external changes occurring between preview and apply.
-- **Dirty-State Provider Gate:** Dirty state is checked before the asynchronous read; an authoritative dirty-buffer provider interface remains an open data-safety gate pending Phase 09 editor implementation.
+- **Dirty-State Provider Gate:** Dirty state is checked before the asynchronous read; the authoritative dirty-buffer provider interface (`ReplaceCoordinator.isDirtyFile`) was wired in Phase 09 via `EditorTabsState` to skip in-memory dirty buffers.
 
 ### Recorded Open Limitations (Cycle 2 Review 6/10)
 1. **Lossy UTF-8 Replace Fallback:** Permissive `decodeToString()` in fallback paths can corrupt files with invalid sequences past the server binary probe boundary.
 2. **Timeout as Cancellation:** Timeout in read/write aborts the entire batch and can report indeterminate writes as generic cancellation.
 3. **Root-Only Directory Watcher:** Expanded subdirectories do not receive live watcher events; rebind on reconnect does not trigger on socket instance replacement when a stale subscription reference remains.
 4. **Secondary Profile Target Resolution:** Workbench federation effect defaults non-active profiles to profile display names rather than authoritative project targets.
-5. **Dirty Gate Unwired:** `ReplaceCoordinator.isDirtyFile` defaults to `{ false }`; Replace All is not gated by active editor buffers until Phase 09 delivers the buffer provider.
+5. **Dirty Gate (Historical Phase 08 limitation):** `ReplaceCoordinator.isDirtyFile` initially defaulted to `{ false }` in Phase 08; resolved in Phase 09 by injecting `EditorTabsState.isDirtyFile`.
 6. **Outcome UI Detail:** Partial failures and per-file conflict/failure details are not rendered in the search/replace UI.
 
+
+## Encrypted transfers, media streaming and Android storage (Phase 11)
+
+### Cryptographic Envelopes & Sessions
+- **Envelope Format & Wire Parity (`CryptoEnvelope.kt`):** Implements exact server wire parity (`decrypt_blob` in `server/src/crypto/decrypt.rs`): `iv(12) || ciphertext + tag(16)`. Packs metadata JSON (`FileBlobMetadata`/`TextBlobMetadata`), single `0x00` delimiter byte, and content bytes. Max metadata length is 4,096 bytes.
+- **Session Lifecycle & Zeroization (`CryptoSession.kt`):** Holds derived 32-byte AES-256-GCM key with generation validation via `assertValid(expectedOwner)`. Implements `AutoCloseable` with explicit in-memory zeroization (`keyBytes.fill(0)`), subject to documented JVM garbage collection copy limitations.
+- **Crypto Primitives & JNI Exports:** `PlatformCrypto` expect/actual provides AES-256-GCM and HKDF-SHA256. `libdamhopper_crypto_bridge.so` exports `nativeEncryptEnvelope` and `nativeDecryptEnvelope` via `OpaqueClientBridge`.
+
+### WebSocket Chunked Transfers & Encrypted Saves
+- **Transfer Coordinator (`TransferCoordinator.kt`):** Manages chunked binary and encrypted uploads over WebSocket using atomic frame pairs (`sendAtomicPair`), default 64 KiB chunks, and 100 MiB enforced envelope/document cap where applicable. Pre-registers ack listeners before chunk dispatch; handles timeouts on in-flight commits as `UnknownOutcome`.
+- **Encrypted Save Coordinator (`EncryptedSaveCoordinator.kt`):** Orchestrates conflict-aware `saveEncrypted` (using expected mtime CAS) and explicit single-blob `forceOverwriteEncrypted` (`fs:put_save` atomic pair). `EditorRepository` strictly fails closed without plaintext downgrade if crypto session is unavailable or fails.
+
+### Android SAF Document Storage
+- **Scoped Document Storage (`AndroidDocumentStorage.kt`):** Implements `DocumentStorage` over scoped Storage Access Framework (SAF) content URIs without broad storage permissions; enforces 100 MiB document size cap (`MAX_DOCUMENT_BYTES`), filename sanitization (`sanitizeFilename`), and bounded chunk streaming (`streamFromUri`, `streamToUri`).
+
+### Origin-Bound Media Client & Video Surface
+- **Media Client Security (`AndroidMediaClient.kt`):** Adapts [Media Isolation and Encryption Architecture](./media-isolation-and-encryption.md) to native Android networking. Enforces UUIDv4 `mediaClientId`, namespaced session cookie (`damhopper-media-session-<uuidv4>`), strict same-origin checks (`assertSameOrigin`), redirect rejection (`followRedirects(false)`, `followSslRedirects(false)`), and purpose-scoped capabilities (`PLAYBACK` vs `DOWNLOAD`).
+- **Native Video Presentation (`AndroidVideoSurface.kt`, `MediaPreviewCard.kt`):** Utilizes `SurfaceView` and `MediaPlayer` backed by `LeaseMediaDataSource`; `MediaPreviewCard` renders metadata and optional SAF download button with zero FABs.
+
+### Recorded Open Limitations (Cycle 2 Review 5/10)
+1. **Production Wiring Gaps:** `CryptoSession` from OPAQUE login and SAF document picker/download flows are not connected to production user actions.
+2. **Permissive Cookie Capture:** `cookie.contains(name)` matching allows nullable cookie header rather than fail-closed rejection at issue time.
+3. **Unbounded Range Read:** `response.body.bytes()` in `readRangeSync` buffers full response bodies for 200 or oversized 206 responses.
+4. **Generation Fencing:** Initial owner assertion is enforced, but revalidation across all subsequent asynchronous boundaries is incomplete.
+5. **Envelope Implementation Duplication:** Parallel implementations in Rust JNI exports and Kotlin `CryptoEnvelope`.
 ## Extended workbench
 
 - Workflow uses server CAS/request identities; manual tracking stays distinct from read-only project plan documents and administrative reported status.

@@ -14,8 +14,14 @@ class EditorRepository(
     val fileRepository: FileRepository,
     val connectionRegistry: ConnectionRegistry? = null,
     val profileId: String = "",
+    val cryptoSessionProvider: (() -> dev.damhopper.nativeapp.core.security.CryptoSession?)? = null,
 ) {
     private val contentLoader = EditorContentLoader(fileRepository)
+    val encryptedSaveCoordinator: EncryptedSaveCoordinator = EncryptedSaveCoordinator(
+        fileRepository.wsConnection,
+        dev.damhopper.nativeapp.features.files.TransferCoordinator(fileRepository.wsConnection, { fileRepository.wsConnection.nextReqId() }),
+        { fileRepository.wsConnection.nextReqId() },
+    )
 
     suspend fun loadFile(
         target: ProjectTargetRef,
@@ -57,7 +63,10 @@ class EditorRepository(
         encryptedRequested: Boolean = false,
     ): EditorSaveResult {
         if (encryptedRequested) {
-            return EditorSaveResult.Error("Encrypted save requires Phase 11 owner-bound crypto session")
+            val session = cryptoSessionProvider?.invoke()
+                ?: return EditorSaveResult.Error("Encrypted save requires Phase 11 owner-bound crypto session (none available)")
+            val expectedOwner = connectionRegistry?.getCurrentConnection(profileId)
+            return encryptedSaveCoordinator.saveEncrypted(target, path, submittedContent, expectedMtime, session, expectedOwner = expectedOwner)
         }
 
         try {
@@ -99,6 +108,12 @@ class EditorRepository(
         submittedContent: String,
         encryptedRequested: Boolean = false,
     ): EditorSaveResult {
+        if (encryptedRequested) {
+            val session = cryptoSessionProvider?.invoke()
+                ?: return EditorSaveResult.Error("Encrypted overwrite requires Phase 11 owner-bound crypto session (none available)")
+            val expectedOwner = connectionRegistry?.getCurrentConnection(profileId)
+            return encryptedSaveCoordinator.forceOverwriteEncrypted(target, path, submittedContent, session, expectedOwner = expectedOwner)
+        }
         return try {
             val freshStat = fileRepository.stat(target, path)
             saveFile(
