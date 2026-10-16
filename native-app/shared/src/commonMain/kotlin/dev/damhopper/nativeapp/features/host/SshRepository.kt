@@ -49,6 +49,13 @@ class SshRepository(
     suspend fun forgetCredential(keyPath: String? = null): Result<ForgetCredentialResult> = runCatching {
         val queryParams = if (keyPath != null) mapOf("keyPath" to keyPath) else emptyMap()
         val responseText = apiClient.delete("/api/ssh/credentials", queryParams)
-        ProtocolJson.decodeFromString(ForgetCredentialResult.serializer(), responseText)
+        val result = ProtocolJson.decodeFromString(ForgetCredentialResult.serializer(), responseText)
+        if (!result.success) {
+            throw dev.damhopper.nativeapp.core.transport.ApiRequestError(
+                message = result.error ?: "Server failed to forget SSH credential",
+                status = 400
+            )
+        }
+        result
     }
 }

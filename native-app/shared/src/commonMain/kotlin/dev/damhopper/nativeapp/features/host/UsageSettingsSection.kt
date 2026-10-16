@@ -19,6 +19,7 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 fun UsageSettingsSection(
     uiState: UsageUiState,
     onTogglePause: () -> Unit,
+    onUpdateSettings: (SettingsPatchRequest) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val s = uiState.settings
@@ -55,14 +56,52 @@ fun UsageSettingsSection(
             }
         }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Collector: ${s?.collectorEnabled?.let { if (it) "Active" else "Inactive" } ?: "--"}", fontSize = 11.sp, color = Color.White)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            val isCollectorActive = s?.collectorEnabled ?: false
+            Text("Collector: ${if (isCollectorActive) "Active" else "Inactive"}", fontSize = 11.sp, color = Color.White)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .clickable { onUpdateSettings(SettingsPatchRequest(enabled = !isCollectorActive)) }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(if (isCollectorActive) "Disable" else "Enable", fontSize = 10.sp, color = DamHopperColors.Primary)
+            }
             Text("Exporter: ${s?.collectorSetup?.codexExporter?.name ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
         }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Retention Detail: ${s?.detailRetentionDays?.let { "${it}d" } ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
-            Text("Dropped Events: ${h?.collector?.dropped?.toString() ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Retention: ${s?.detailRetentionDays?.let { "${it}d" } ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(7, 30, 90, 180).forEach { days ->
+                    val isCur = s?.detailRetentionDays == days
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(if (isCur) DamHopperColors.Primary.copy(alpha = 0.3f) else DamHopperColors.SurfaceVariant)
+                            .clickable { onUpdateSettings(SettingsPatchRequest(detailRetentionDays = days)) }
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Text("${days}d", fontSize = 9.sp, color = if (isCur) DamHopperColors.Primary else Color.White)
+                    }
+                }
+            }
+            Text("Dropped: ${h?.collector?.dropped?.toString() ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
+        }
+
+        if ((h?.collector?.dropped ?: 0uL) > 0uL) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFFF59E0B).copy(alpha = 0.2f))
+                        .clickable { onUpdateSettings(SettingsPatchRequest(retryCollector = true)) }
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("Retry Collector", fontSize = 10.sp, color = Color(0xFFF59E0B))
+                }
+            }
         }
     }
 }

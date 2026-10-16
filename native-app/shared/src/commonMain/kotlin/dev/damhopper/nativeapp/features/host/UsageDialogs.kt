@@ -66,7 +66,8 @@ fun UsageDeleteDialog(
             if (isRangeDelete && !isDaysValid) {
                 Text("Range must be between 1 and 1825 days (up to 5 years)", fontSize = 10.sp, color = Color(0xFFEF4444))
             } else if (isRangeDelete) {
-                Text("Aligned UTC bounds: $fromUtc .. $todayUtc", fontSize = 10.sp, color = DamHopperColors.Primary)
+                Text("Completed UTC days [from, to): ${UsageBoundsHelper.formatUtcDate(fromUtc)} to ${UsageBoundsHelper.formatUtcDate(todayUtc)}", fontSize = 10.sp, color = DamHopperColors.Primary)
+                Text("Excludes partial current day (floored to UTC midnight; epoch ms $fromUtc..$todayUtc).", fontSize = 10.sp, color = DamHopperColors.TextSecondary)
             }
 
             OutlinedTextField(

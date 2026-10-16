@@ -113,8 +113,11 @@ class UsageController(
                         is UsageResult.Available -> {
                             _uiState.update { current ->
                                 val combined = if (initial) res.data.sessions else current.sessions + res.data.sessions
+                                val newModels = res.data.sessions.mapNotNull { it.model }.filter { it.isNotBlank() }
+                                val updatedKnown = (current.knownModels + newModels).distinct()
                                 current.copy(
                                     sessions = combined,
+                                    knownModels = updatedKnown,
                                     nextCursor = res.data.nextCursor,
                                     isLoadingSessions = false,
                                 )

@@ -44,10 +44,12 @@ class IdleConsentController(
 
     private var isRetired = false
 
-    suspend fun refreshStatus(): Result<IdleSuspendStatusV1> {
+    suspend fun refreshStatus(preserveActionError: Boolean = false): Result<IdleSuspendStatusV1> {
         if (isRetired) return Result.failure(IllegalStateException("Controller is retired"))
         _isLoading.value = true
-        _actionError.value = null
+        if (!preserveActionError) {
+            _actionError.value = null
+        }
         val result = repository.getStatus()
         result.onSuccess { s ->
             if (!isRetired) {
@@ -143,7 +145,7 @@ class IdleConsentController(
                     _actionError.value = err.message ?: "Force suspend request failed"
                 }
             }
-            refreshStatus()
+            refreshStatus(preserveActionError = true)
         }
 
         _isSubmittingForceSuspend.value = false
@@ -190,7 +192,7 @@ class IdleConsentController(
             refreshStatus()
         }.onFailure { err ->
             _actionError.value = err.message ?: "Failed to submit sleep consent decision"
-            refreshStatus()
+            refreshStatus(preserveActionError = true)
         }
 
         _isSubmittingDecision.value = false

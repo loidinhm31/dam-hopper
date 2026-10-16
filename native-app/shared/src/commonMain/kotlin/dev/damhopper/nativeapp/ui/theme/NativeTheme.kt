@@ -3,6 +3,8 @@ package dev.damhopper.nativeapp.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import dev.damhopper.nativeapp.features.settings.WorkbenchTheme
 
 private val DarkColorScheme = darkColorScheme(
     primary = DamHopperColors.Primary,
@@ -18,14 +20,32 @@ private val DarkColorScheme = darkColorScheme(
     error = DamHopperColors.Error,
     onError = DamHopperColors.TextPrimary
 )
+private val HighContrastColorScheme = darkColorScheme(
+    primary = Color(0xFF00FF66),
+    onPrimary = Color.Black,
+    secondary = Color(0xFF00E5FF),
+    onSecondary = Color.Black,
+    background = Color.Black,
+    onBackground = Color.White,
+    surface = Color(0xFF111111),
+    onSurface = Color.White,
+    surfaceVariant = Color(0xFF222222),
+    onSurfaceVariant = Color.White,
+    error = Color(0xFFFF3333),
+    onError = Color.Black
+)
 
 @Composable
 fun NativeTheme(
+    theme: WorkbenchTheme = WorkbenchTheme.DARK,
     content: @Composable () -> Unit
 ) {
-    // DamHopper workbench adheres to a consistent dark terminal aesthetic
+    val scheme = when (theme) {
+        WorkbenchTheme.HIGH_CONTRAST -> HighContrastColorScheme
+        else -> DarkColorScheme
+    }
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = scheme,
         typography = DamHopperTypography,
         content = content
     )

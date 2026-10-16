@@ -47,6 +47,11 @@ fun UsageScreens(
         )
     }
 
+    val dynamicModels = remember(uiState.knownModels, uiState.sessions) {
+        val models = (uiState.knownModels + uiState.sessions.mapNotNull { it.model }).filter { it.isNotBlank() }.distinct()
+        listOf(null to "All Models") + models.map { it to it }
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -89,7 +94,7 @@ fun UsageScreens(
                     }
                 }
 
-                listOf(null to "All Models", "gpt-4" to "GPT-4").forEach { (mVal, mLabel) ->
+                dynamicModels.forEach { (mVal, mLabel) ->
                     val isSel = uiState.modelFilter == mVal
                     Box(
                         modifier = Modifier
@@ -142,6 +147,9 @@ fun UsageScreens(
                 onTogglePause = {
                     val curPaused = uiState.settings?.paused ?: false
                     controller.updateSettings(SettingsPatchRequest(paused = !curPaused))
+                },
+                onUpdateSettings = { patch ->
+                    controller.updateSettings(patch)
                 }
             )
         }

@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), Agent Store, memory & imports (Phase 14), and host resources fleet streaming & aggregate usage insights (Phase 15) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), Agent Store, memory & imports (Phase 14), host resources fleet streaming & aggregate usage insights (Phase 15), ports, tunnels, idle consent & host controls (Phase 16), preferences, privacy, notifications & lifecycle (Phase 17), and integrated device security and performance qualification tooling (Phase 18) baselines recorded; contract/host prototypes validated with documented open limitations; GATE-C physical device/visual qualification and TypeScript language engine decision pending. Updated: 2026-10-17.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -354,6 +354,29 @@ The native Android client introduces filesystem navigation, live directory event
   - Partial Lifecycle Demand-Pausing: Only `HostResourceController` implements demand pause on background; SSE, usage, watchers, and media remain active or unwired; endpoint change does not trigger full owner retirement.
   - Storage & Deep Linking: TOML import/export uses clipboard/paste instead of Android SAF file picker; deep link extras are not consumed once and lack server-side target terminal validation.
   - Live Qualification: Physical Android hardware, native IME suppression, lockscreen notification redaction, and process death recovery deferred to Phase 18.
+
+## Integrated device security and performance qualification (Phase 18)
+
+### Core Qualification Suites & Ownership Isolation
+- `OwnershipAndReplayTests.kt` (`commonTest`): Multi-server profile isolation, generation watermark rejection, UTF-8 chunk boundary splitting across multi-byte characters, monotonic terminal replay ordering/gap/overlap/duplicate handling, clean SSE stream EOF completion, 5s REST fallback interval verification, UTC date interval calculation and formatting, and fail-closed crypto envelope tamper rejection.
+- `WorkbenchJourneysUnitTest.kt` (`androidApp/src/test/`): Validates in-memory 12-panel navigation journey (`TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), solitary top navigation row, zero FABs, zero WebViews, back-stack hierarchical unwinding, and Cognito privacy overlay input gating.
+- `WorkbenchJourneys.kt` (`androidApp/src/androidTest/`): Android JUnit4 instrumentation journey suite validating package identity, device workbench state invariants, 12-panel navigation on device runtime, and Cognito overlay touch/keyboard dismissal.
+
+### Security Audit & Automation Tooling
+- `run-device-journeys.sh`: Automated device test runner configuring reverse port forwarding (4801); cleanly exits with code 2 and `BLOCKED_PENDING_DEVICE` status when ADB or physical/emulator hardware is absent without faking evidence.
+- `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to verify manifest backup exclusions (`allowBackup="false"`, `fullBackupContent="false"`), `windowSoftInputMode="adjustResize"`, release TLS-only network security (`cleartextTrafficPermitted="false"`), debug loopback scoping, secret leak scanning, ABI filters (`arm64-v8a`, `x86_64`), and real 16 KiB ELF segment alignment checks on packaged libraries via `readelf -W -l`.
+
+### Cross-Phase Remediations Delivered
+- Phase 15: Clean EOF handling in `ResourceStreamCoordinator`; 5s REST fallback and `LifecycleAware` in `HostResourceController` registered in `WorkbenchScreen`; dynamic model filter derivation with `knownModels` accumulation in `UsageController`/`UsageScreens`; explicit UTC date bounds and completed-days interval labeling in `UsageDialogs`.
+- Phase 16: Action error preservation across refresh in `IdleConsentController`; explicit failure validation on SSH credential forget in `SshRepository`.
+- Phase 17: Runtime `WorkbenchTheme` application in `NativeTheme`; font sizes wired into `TerminalPanelScreen` (header label), `EditorPanelScreen`, and `NativeTextEditorView`.
+
+### Documented Open Limitations & Review Findings (Cycle 2 Review 6/10)
+- L1 (Device Hardware & Runtime): Physical ARM64 device attachment, physical 16 KiB page size execution, and human visual review tracked for physical device testbed (GATE-C BLOCKED_PENDING_DEVICE).
+- L2 (Native Library Packaging): Native crypto bridge packaging: `libdamhopper_crypto_bridge.so` is built in `crypto-bridge` host crate but not yet packaged into Android APK `jniLibs` (tracked for Phase 19 release packaging).
+- L3 (Phase 15 Residuals): Live SSE proxy buffering, 32 global / 4 per-subject server admission limits, background dispatcher payload decoding, exporter toggle, and end-of-day boundary option open.
+- L4 (Phase 17 Residuals): Terminal scrollback preference consumption, runtime `POST_NOTIFICATIONS` permission launcher, and Android SAF file picker open.
+- L5 (Live Journeys, Performance & Licensing): Real-server UI/IME/PTY journeys, performance/soak profiling, and third-party license audit open.
 ## Extended workbench
 
 - Workflow uses server CAS/request identities; manual tracking stays distinct from read-only project plan documents and administrative reported status.

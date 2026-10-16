@@ -1,6 +1,8 @@
 package dev.damhopper.nativeapp.features.host
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.lifecycle.LifecycleAware
+import dev.damhopper.nativeapp.core.lifecycle.LifecycleState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,7 +35,10 @@ class HostResourceController(
     val coordinator: ResourceStreamCoordinator,
     val repository: HostResourceRepository,
     val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
-) {
+) : LifecycleAware {
+    companion object {
+        const val REST_FALLBACK_INTERVAL_MS = 5_000L
+    }
     private val _uiState = MutableStateFlow(HostResourceUiState())
     val uiState: StateFlow<HostResourceUiState> = _uiState.asStateFlow()
 
@@ -65,6 +70,24 @@ class HostResourceController(
         coordinator.setForeground(foreground)
     }
 
+    override fun onForeground() {
+        setForeground(true)
+    }
+
+    override fun onBackground() {
+        setForeground(false)
+    }
+
+    override fun onOwnerRetired(profileId: String) {
+        if (owner.profileId == profileId) {
+            dispose()
+        }
+    }
+
+    override fun onDestroy() {
+        dispose()
+    }
+
     fun selectDetailHost(hostName: String?) {
         _uiState.value = _uiState.value.copy(selectedDetailHost = hostName)
     }
@@ -77,7 +100,7 @@ class HostResourceController(
         restPollingJob?.cancel()
         restPollingJob = coroutineScope.launch {
             while (isActive && !disposed) {
-                delay(15_000L)
+                delay(REST_FALLBACK_INTERVAL_MS)
                 if (coordinator.canUseResourceRest()) {
                     pollRestData()
                 }

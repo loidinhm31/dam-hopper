@@ -30,6 +30,7 @@ fun NativeTextEditorView(
     lineAttributions: Map<Int, BlameLineAttribution>? = null,
     showBlameGutter: Boolean = false,
     onInspectCommit: (String) -> Unit = {},
+    fontSize: Int = 14,
     modifier: Modifier = Modifier,
 ) {
     val lines = content.lines()
@@ -81,9 +82,9 @@ fun NativeTextEditorView(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 textStyle = TextStyle(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
+                    fontSize = fontSize.sp,
                     color = DamHopperColors.TextPrimary,
-                    lineHeight = 18.sp
+                    lineHeight = (fontSize * 1.35f).sp
                 ),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,

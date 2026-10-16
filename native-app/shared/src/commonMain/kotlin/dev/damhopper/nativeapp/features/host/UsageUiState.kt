@@ -22,4 +22,5 @@ data class UsageUiState(
     val health: UsageHealth? = null,
     val isDeleting: Boolean = false,
     val deleteError: String? = null,
+    val knownModels: List<String> = emptyList(),
 )

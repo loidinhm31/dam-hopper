@@ -16,6 +16,8 @@ enum class WorkbenchTheme {
     LIGHT,
     @SerialName("system")
     SYSTEM,
+    @SerialName("high-contrast")
+    HIGH_CONTRAST,
 }
 
 @Serializable

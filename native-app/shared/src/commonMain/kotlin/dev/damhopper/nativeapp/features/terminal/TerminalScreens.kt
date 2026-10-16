@@ -59,6 +59,7 @@ fun TerminalPanelScreen(
     onRenameSession: (id: String, newName: String) -> Unit,
     onKillSession: (id: String) -> Unit,
     onRemoveSession: (id: String) -> Unit,
+    fontSize: Int = 13,
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -301,7 +302,7 @@ fun TerminalPanelScreen(
                     Text(
                         text = "$ ${activeSession.command}",
                         color = DamHopperColors.Success,
-                        fontSize = 13.sp,
+                        fontSize = fontSize.sp,
                         fontFamily = FontFamily.Monospace
                     )
                     Spacer(modifier = Modifier.height(4.dp))

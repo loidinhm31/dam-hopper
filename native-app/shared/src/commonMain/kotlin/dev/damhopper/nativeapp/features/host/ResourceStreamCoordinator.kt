@@ -121,6 +121,8 @@ class ResourceStreamCoordinator(
                 sseClient.openEventStream(
                     onByteProgress = { timers.armByteIdleDeadline(attempt) }
                 ).collect { frame -> handleFrame(attempt, frame) }
+                // Stream reached clean EOF (connection closed by server without error)
+                handleStreamFailure(attempt, ApiRequestError(message = "SSE stream completed (EOF)", status = 200))
             } catch (t: Throwable) {
                 handleStreamFailure(attempt, t)
             }

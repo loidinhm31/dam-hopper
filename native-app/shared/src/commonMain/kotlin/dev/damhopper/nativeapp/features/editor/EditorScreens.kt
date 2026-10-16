@@ -19,6 +19,7 @@ fun EditorPanelScreen(
     blameRepo: BlameRepository? = null,
     onInspectCommit: (String) -> Unit = {},
     onDownloadMedia: ((EditorTab) -> Unit)? = null,
+    fontSize: Int = 14,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -185,7 +186,8 @@ fun EditorPanelScreen(
                     onContentChange = { newText -> session?.setText(newText) },
                     lineAttributions = lineAttributions,
                     showBlameGutter = showBlame,
-                    onInspectCommit = onInspectCommit
+                    onInspectCommit = onInspectCommit,
+                    fontSize = fontSize
                 )
             }
         }

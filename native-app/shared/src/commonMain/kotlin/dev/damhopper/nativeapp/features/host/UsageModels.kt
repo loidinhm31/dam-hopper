@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.host
 
 import kotlinx.serialization.Serializable
+import kotlinx.datetime.Instant
 
 @Serializable
 data class UsageRange(
@@ -114,5 +115,14 @@ object UsageBoundsHelper {
         val todayUtc = (nowMs / DAY_MS) * DAY_MS
         val fromUtc = todayUtc - (daysBack * DAY_MS)
         return Pair(fromUtc, todayUtc)
+    }
+
+    fun formatUtcDate(epochMs: Long): String {
+        return try {
+            val instant = Instant.fromEpochMilliseconds(epochMs)
+            instant.toString().substringBefore('T') + " UTC"
+        } catch (_: Throwable) {
+            "${epochMs}ms"
+        }
     }
 }

@@ -833,7 +833,11 @@ fun WorkbenchScreen(
         }
     }
 
-    DisposableEffect(lifecycleCoordinator) {
+    DisposableEffect(lifecycleCoordinator, hostResourceController) {
+        val hrc = hostResourceController
+        if (hrc != null) {
+            lifecycleCoordinator.register(hrc)
+        }
         val listener = object : LifecycleAware {
             override fun onForeground() {
                 hostResourceController?.coordinator?.setForeground(true)
@@ -856,6 +860,9 @@ fun WorkbenchScreen(
         }
         lifecycleCoordinator.register(listener)
         onDispose {
+            if (hrc != null) {
+                lifecycleCoordinator.unregister(hrc)
+            }
             lifecycleCoordinator.unregister(listener)
         }
     }
@@ -907,7 +914,8 @@ fun WorkbenchScreen(
                 }
             },
     ) {
-        Column(
+        dev.damhopper.nativeapp.ui.theme.NativeTheme(theme = workbenchPreferences.theme) {
+            Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(DamHopperColors.Background)
@@ -1086,7 +1094,8 @@ fun WorkbenchScreen(
                                             }
                                         } catch (_: Exception) {}
                                     }
-                                }
+                                },
+                                fontSize = workbenchPreferences.terminalFontSize
                             )
                         },
                         filesContent = {
@@ -1124,7 +1133,8 @@ fun WorkbenchScreen(
                                             )
                                             navigation.navigateTo(WorkbenchPanel.DIFF)
                                         }
-                                    }
+                                    },
+                                    fontSize = workbenchPreferences.editorFontSize
                                 )
                             } else {
                                 GenericPanelPlaceholder(WorkbenchPanel.EDITOR)
@@ -1370,6 +1380,7 @@ fun WorkbenchScreen(
                 }
             }
         }
+    }
     }
     }
 
