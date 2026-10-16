@@ -573,6 +573,33 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - Incomplete settings controls: Only pause/resume is wired in settings; enable, exporter, retention, and retry controls remain read-only.
   - Hardcoded model filter chip: Hardcoded `"gpt-4"` filter chip instead of deriving model options dynamically from session summaries.
   - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
+
+### Native Android Ports, Tunnels, Idle Consent & Host Controls (Phase 16)
+- **Host Ports & Cloudflared Tunnels (P01):**
+  - Models & Repositories: `PortModels.kt`, `PortRepository.kt`, `TunnelModels.kt`, `TunnelRepository.kt` (`features/host/`).
+  - REST endpoints: `GET /api/ports`, `GET /api/tunnels`, `POST /api/tunnels`, `DELETE /api/tunnels/{id}`, `GET /api/tunnels/install`, `POST /api/tunnels/install`.
+  - WebSocket framing: `PortDiscovered`, `PortLost` with monotonic incarnation sequence checking (`msg.incarnation >= existing.incarnation`); `TunnelReady`, `TunnelFailed`, `TunnelStopped`, `TunnelReminder` (`reminderDue = true`).
+  - Presentation: `PortsPanelScreen` docked under `WorkbenchPanel.PORTS` with `PortsDialogs` (quick tunnel creation, URL copy, service installation confirmation; zero FABs, single content host).
+- **Idle Suspend & Live Socket Capability Consent (H02):**
+  - Models & Repositories: `IdleSuspendModels.kt`, `IdleSuspendRepository.kt`, `IdleConsentController.kt`, `IdleSuspendDialogs.kt` (`features/host/`).
+  - REST operations: `GET /api/system/idle-suspend/v1/status`, `PATCH /timing`, `POST /force-suspend`, `POST /consent/decision`.
+  - Fallback normalization: `decodeIdleSuspendStatusV1` fallback normalization for old/unsupported server responses.
+  - Fail-closed capability gating: `IdleConsentController` requires live WebSocket capability receipt (`receiptProvider: () -> UiConnectionReceipt?`), rejecting consent decisions when absent (`live WebSocket capability receipt not available`).
+  - Typed conflict handling: Maps 409 responses to `IdleSuspendActiveFleetConflictException`, `IdleSuspendFleetChangedConflictException`, `IdleSuspendHandoffConflictException` (conflict test currently exercises success branch).
+  - Countdown presentation: `WorkbenchSleepConsentBanner` with 1-second ticking countdown, disabling decision buttons at 0s remaining.
+- **Remote SSH Keys, Host Controls & Diagnostics (C03):**
+  - Models & Repositories: `SshModels.kt`, `SshRepository.kt`, `HostActionModels.kt`, `HostControlRepository.kt`, `DiagnosticsModels.kt`, `DiagnosticsRepository.kt` (`features/host/`).
+  - Remote SSH: `GET /api/ssh/keys`, `GET /api/ssh/agent`, `POST /api/ssh/keys/load` with `passphrase=[REDACTED]` masking; per-key credentials and forget/load operations mapped by key basename.
+  - Host remediation actions: `GET /capabilities`, `POST /intents`, `POST /intents/{id}/approve`, `POST /executions`, `GET /audit` (repository scaffolding; action execution flows lack UI callers in Phase 16).
+  - Diagnostics export: `POST /api/diagnostics/export` defaulting `includeTerminalOutput = false` and acknowledging server-daemon memory storage (no direct device save/share in Phase 16).
+  - Presentation: `HostControlScreens` docked under `WorkbenchPanel.SSH_HOST` with zero FABs, zero WebViews.
+- **Documented Open Limitations & Review Findings (Cycle 2 Review 7/10 — Changes Required / Qualification Open):**
+  - High-1 (Action error clearing): `refreshStatus()` clears `_actionError` before render; mutation failures in `submitConsent` / `requestForceSuspend` remain unrendered in banner and force dialog.
+  - High-2 (Reconnect reconciliation): Missing status reconciliation on WebSocket reconnect or new receipt; consent becoming pending while WS is down is not pushed until subsequent hint or tab switch.
+  - High-3 (Default forget check): Default credential forget ignores `success=false` / `forgotten=false` / `error`; silent agent/capabilities query failures.
+  - Warnings W-A through W-I: WS handler coroutine launch on every message; mixed-owner profile window during initialization; tunnel/port snapshot replacement races vs live WS updates; device clock skew vs server `expiresAtMs`.
+  - Static structural assertions (194/194) assert AST/source invariants (models, routes, wire mappings, 0 FABs, 0 WebViews, redactions) without establishing dynamic Compose interaction or behavioral execution.
+  - Live qualification: Physical Android hardware, live server WebSocket integration, and credential keystore binding deferred to Phase 18.
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -588,7 +615,8 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-13-workflow-plans.sh` — Phase 13 workflow models, repositories, controllers, 64 KiB bounded reads, and UI invariants verification suite (100/100 assertions passing).
 - `bash tests/test-phase-14-agent-store-memory.sh` — Phase 14 Agent Store, imports, memory models, repositories, controllers, unified switcher, and zero-FAB invariants verification suite (99/99 assertions passing).
 - `bash tests/test-phase-15-host-resources-usage.sh` — Phase 15 host resources fleet streaming, coordination, usage models, and zero-FAB invariants verification suite (81/81 assertions passing).
-- *Automated Verification Evidence:* 1034 cumulative static assertions passing across 14 phase test scripts (Phases 02–15, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 398 reported automated unit test executions across `:shared:jvmTest` and `:androidApp:testDebugUnitTest`/`:androidApp:testReleaseUnitTest`; clean debug APK assembly (`:androidApp:assembleDebug`). Phase 15 implementation baseline recorded with documented limitations; live device, SSE proxy buffering, and server admission qualification deferred to Phase 18.
+- `bash tests/test-phase-16-ports-tunnels-host-controls.sh` — Phase 16 ports, tunnels, idle consent, and host controls static assertion suite (194/194 assertions passing).
+- *Automated Verification Evidence:* 1228 cumulative static assertions passing across 15 phase test scripts (Phases 02–16, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); dated QA report recording 417 unit test executions (including 281 `:shared:jvmTest`, 68 debug, and 68 release unit tests; Cycle 2 review noted 350 unique tests: 282 shared + 68 debug); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 16 implementation baseline recorded with changes required / qualification open and documented limitations; live device, server capability receipts, and credential storage qualification deferred to Phase 18.
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).

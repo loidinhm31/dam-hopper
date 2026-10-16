@@ -390,6 +390,18 @@ sealed class ServerMsg {
         override fun toString(): String =
             "UiConnection(version=$version, connectionId='$connectionId', decisionCapability=[REDACTED])"
     }
+    @Serializable
+    data class IdleSuspendChangedPayload(
+        val version: Int,
+        val revision: Long,
+    )
+
+    // Terminal Idle Suspend revision hint
+    @Serializable
+    @SerialName("host:idleSuspendChanged")
+    data class IdleSuspendChanged(
+        val payload: IdleSuspendChangedPayload,
+    ) : ServerMsg()
 
     // Fallback for unknown kinds to ensure forward compatibility
     @Serializable
@@ -443,6 +455,7 @@ object ServerMsgSerializer : JsonContentPolymorphicSerializer<ServerMsg>(ServerM
             "port:discovered" -> ServerMsg.PortDiscovered.serializer()
             "port:lost" -> ServerMsg.PortLost.serializer()
             "host:uiConnection" -> ServerMsg.UiConnection.serializer()
+            "host:idleSuspendChanged" -> ServerMsg.IdleSuspendChanged.serializer()
             else -> ServerMsg.Unknown.serializer()
         }
     }

@@ -110,6 +110,16 @@ import dev.damhopper.nativeapp.features.host.ResourcesSubProduct
 import dev.damhopper.nativeapp.features.host.ResourcesUnifiedPanelScreen
 import dev.damhopper.nativeapp.features.host.UsageController
 import dev.damhopper.nativeapp.features.host.UsageRepository
+import dev.damhopper.nativeapp.features.host.PortRepository
+import dev.damhopper.nativeapp.features.host.TunnelRepository
+import dev.damhopper.nativeapp.features.host.IdleSuspendRepository
+import dev.damhopper.nativeapp.features.host.IdleConsentController
+import dev.damhopper.nativeapp.features.host.SshRepository
+import dev.damhopper.nativeapp.features.host.HostControlRepository
+import dev.damhopper.nativeapp.features.host.DiagnosticsRepository
+import dev.damhopper.nativeapp.features.host.PortsPanelScreen
+import dev.damhopper.nativeapp.features.host.HostControlScreens
+import dev.damhopper.nativeapp.features.host.WorkbenchSleepConsentBanner
 
 @Composable
 fun WorkbenchScreen(
@@ -184,6 +194,14 @@ fun WorkbenchScreen(
     var usageRepo by remember { mutableStateOf<UsageRepository?>(null) }
     var usageController by remember { mutableStateOf<UsageController?>(null) }
     var resourcesActiveSubProduct by remember { mutableStateOf(ResourcesSubProduct.FLEET) }
+    var portRepo by remember { mutableStateOf<PortRepository?>(null) }
+    var tunnelRepo by remember { mutableStateOf<TunnelRepository?>(null) }
+    var idleSuspendRepo by remember { mutableStateOf<IdleSuspendRepository?>(null) }
+    var idleConsentController by remember { mutableStateOf<IdleConsentController?>(null) }
+    var sshRepo by remember { mutableStateOf<SshRepository?>(null) }
+    var hostControlRepo by remember { mutableStateOf<HostControlRepository?>(null) }
+    var diagnosticsRepo by remember { mutableStateOf<DiagnosticsRepository?>(null) }
+    var activeWsConnection by remember { mutableStateOf<dev.damhopper.nativeapp.core.transport.WsConnection?>(null) }
     val searchRepo = remember { SearchRepository() }
     val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
@@ -210,6 +228,7 @@ fun WorkbenchScreen(
                 val cRepo = RemoteConfigRepository(client)
                 val cEditor = RemoteConfigEditor(cRepo)
                 val ws = try { profileRepository.getOrCreateWsConnection(activeProfileId!!) } catch (_: Exception) { null }
+                activeWsConnection = ws
                 val tRepo = TerminalRepository(client, ws)
                 val aReducer = AgentStatusReducer(tRepo)
                 workspaceRepo = wRepo
@@ -343,6 +362,30 @@ fun WorkbenchScreen(
                 usageRepo = uRepo
                 hostResourceController = hCtrl
                 usageController = uCtrl
+                idleConsentController?.retire()
+                portRepo?.clear()
+                tunnelRepo?.clear()
+                val pRepo = PortRepository(client)
+                val tunRepo = TunnelRepository(client)
+                val iRepo = IdleSuspendRepository(client)
+                val iCtrl = IdleConsentController(
+                    connection = client.connection,
+                    repository = iRepo,
+                    receiptProvider = { ws?.currentReceipt?.value }
+                )
+                val sRepo = SshRepository(client)
+                val hcRepo = HostControlRepository(client)
+                val dRepo = DiagnosticsRepository(client)
+                portRepo = pRepo
+                tunnelRepo = tunRepo
+                idleSuspendRepo = iRepo
+                idleConsentController = iCtrl
+                sshRepo = sRepo
+                hostControlRepo = hcRepo
+                diagnosticsRepo = dRepo
+                coroutineScope.launch {
+                    try { iCtrl.refreshStatus() } catch (_: Exception) {}
+                }
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -413,7 +456,18 @@ fun WorkbenchScreen(
             hostResourceRepo = null
             usageController?.dispose()
             usageController = null
+            activeWsConnection = null
             usageRepo = null
+            portRepo?.clear()
+            portRepo = null
+            tunnelRepo?.clear()
+            tunnelRepo = null
+            idleConsentController?.retire()
+            idleConsentController = null
+            idleSuspendRepo = null
+            sshRepo = null
+            hostControlRepo = null
+            diagnosticsRepo = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -712,6 +766,22 @@ fun WorkbenchScreen(
         federatedBindings = list
         federatedRepos = repos
     }
+    LaunchedEffect(activeProfileId, portRepo, tunnelRepo, idleConsentController) {
+        val p = portRepo ?: return@LaunchedEffect
+        val t = tunnelRepo ?: return@LaunchedEffect
+        val ic = idleConsentController ?: return@LaunchedEffect
+        val wsConn = try { profileRepository?.getOrCreateWsConnection(activeProfileId ?: return@LaunchedEffect) } catch (_: Throwable) { null }
+            ?: return@LaunchedEffect
+
+        wsConn.incomingMessages.collect { msg ->
+            p.handleServerMsg(msg)
+            t.handleServerMsg(msg)
+            coroutineScope.launch {
+                ic.handleServerMsg(msg)
+            }
+        }
+    }
+
 
     Column(
         modifier = modifier
@@ -731,6 +801,12 @@ fun WorkbenchScreen(
             onOpenTargetPicker = { navigation.openTargetPicker() },
             onOpenWorkspaceSwitcher = { navigation.openWorkspaceSwitcher() }
         )
+        SleepConsentBannerHost(
+            controller = idleConsentController,
+            wsConnection = activeWsConnection,
+            coroutineScope = coroutineScope
+        )
+
 
         // 2. Single Top Panel-Navigation Row (Docked, horizontally scrollable, auto-revealing)
         PanelNavigationRow(
@@ -1122,6 +1198,34 @@ fun WorkbenchScreen(
                                 GenericPanelPlaceholder(WorkbenchPanel.RESOURCES)
                             }
                         },
+                        portsContent = {
+                            val p = portRepo
+                            val t = tunnelRepo
+                            if (p != null && t != null) {
+                                PortsPanelScreen(
+                                    portRepository = p,
+                                    tunnelRepository = t
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.PORTS)
+                            }
+                        },
+                        sshHostContent = {
+                            val ic = idleConsentController
+                            val s = sshRepo
+                            val hc = hostControlRepo
+                            val d = diagnosticsRepo
+                            if (ic != null && s != null && hc != null && d != null) {
+                                HostControlScreens(
+                                    idleConsentController = ic,
+                                    sshRepository = s,
+                                    hostControlRepository = hc,
+                                    diagnosticsRepository = d
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.SSH_HOST)
+                            }
+                        },
                         settingsContent = {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 // Settings subtabs
@@ -1234,5 +1338,30 @@ fun WorkbenchScreen(
                 onDismiss = { navigation.closeAuth() }
             )
         }
+    }
+}
+
+@Composable
+private fun SleepConsentBannerHost(
+    controller: IdleConsentController?,
+    wsConnection: dev.damhopper.nativeapp.core.transport.WsConnection?,
+    coroutineScope: kotlinx.coroutines.CoroutineScope
+) {
+    if (controller == null) return
+    val pendingConsent by controller.pendingConsent.collectAsState()
+    val liveReceipt by (wsConnection?.currentReceipt?.collectAsState() ?: remember { mutableStateOf(null) })
+    val isSubmittingConsent by controller.isSubmittingDecision.collectAsState()
+
+    pendingConsent?.let { consent ->
+        WorkbenchSleepConsentBanner(
+            consent = consent,
+            hasLiveReceipt = liveReceipt != null,
+            isSubmitting = isSubmittingConsent,
+            onDecision = { decision ->
+                coroutineScope.launch {
+                    controller.submitConsent(decision)
+                }
+            }
+        )
     }
 }

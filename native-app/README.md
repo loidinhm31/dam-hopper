@@ -87,7 +87,16 @@ native-app/
 │       │       │   ├── terminal/    # TerminalSessionController, TerminalReplayGate, TerminalRepository,
 │       │       │   │                # AgentStatusReducer, TerminalScreens, TerminalModels, TerminalSurface
 │       │       │   ├── workspace/   # WorkspaceRepository, ProjectTargetStore, WorkspaceScreens
-│       │       │   └── settings/    # RemoteConfigRepository, RemoteConfigEditor, RemoteConfigScreen
+│       │       │   ├── settings/    # RemoteConfigRepository, RemoteConfigEditor, RemoteConfigScreen
+│       │       │   ├── files/       # FileRepository, FileTreeState, TreeSubscriptionManager, SearchRepository, ReplaceCoordinator
+│       │       │   ├── editor/      # EditorSession, EditorRepository, EditorTabSaveCoordinator, EditorTabsState, BlameRepository
+│       │       │   ├── git/         # GitRepository, GitChangesController, GitBranchController, GitHistoryController, DiffReviewController
+│       │       │   ├── workflow/    # WorkflowRepository, WorkflowController, ProjectPlansRepository, ProjectPlansController
+│       │       │   ├── agents/      # AgentStoreRepository, AgentMemoryRepository, AgentImportRepository, Controllers & Screens
+│       │       │   └── host/        # PortRepository, TunnelRepository, IdleSuspendRepository, IdleConsentController,
+│       │       │                    # SshRepository, HostControlRepository, DiagnosticsRepository, PortsPanelScreen,
+│       │       │                    # PortsDialogs, IdleSuspendDialogs, HostControlScreens, WorkbenchSleepConsentBanner,
+│       │       │                    # HostResourceRepository, UsageRepository, ResourceStreamCoordinator, UsageController
 │       │       ├── model/       # WorkbenchModel.kt (WorkbenchPanel, WorkbenchState, shell invariants)
 │       │       └── ui/
 │       │           ├── components/ # WorkbenchHeader, PanelNavigationRow, PanelPlaceholders
@@ -221,6 +230,29 @@ Phase 07 implements host-contract foundations for remote PTY lifecycle managemen
    - Gated execution: keystrokes and text commits are rejected when `isPanelActive == false` or `isReplayCompleted == false`.
    - Modifiers (Ctrl, Alt, Shift) unlatch on `ACTION_UP` events. Supplementary Unicode characters (> 0xFFFF) are handled via surrogate pairs.
    - Clipboard text is wrapped in standard bracketed paste escape sequences (`\u001b[200~` and `\u001b[201~`) before dispatch.
+
+### Ports, Tunnels, Idle Consent & Host Controls Architecture (Phase 16)
+
+Phase 16 implements remote network port discovery, Cloudflared tunnel management, idle suspend consent coordination with live capability receipts, remote SSH key custody, host remediation action scaffolding, and diagnostics export:
+
+1. **Ports & Cloudflared Tunnels (`PortRepository`, `TunnelRepository`, `PortsPanelScreen`):**
+   - REST endpoints `/api/ports`, `/api/tunnels`, `/api/tunnels/install`.
+   - Dynamic port updates over WebSocket (`PortDiscovered`, `PortLost`) with monotonic incarnation sequence checking (`msg.incarnation >= existing.incarnation`).
+   - Cloudflared quick tunnel lifecycle (`STARTING`, `READY`, `STOPPED`, `FAILED`), URL copy integration, and 3-hour remote public exposure reminders (`reminderDue = true`).
+   - Single content area docking under `WorkbenchPanel.PORTS` with zero FABs.
+
+2. **Idle Suspend & Live Socket Capability Consent (`IdleSuspendRepository`, `IdleConsentController`, `WorkbenchSleepConsentBanner`):**
+   - REST endpoints for status (`GET /api/system/idle-suspend/v1/status`), timing patch (`PATCH /timing`), force-suspend (`POST /force-suspend`), and consent decisions (`POST /consent/decision`).
+   - Fallback normalization (`decodeIdleSuspendStatusV1`) mapping old/unsupported server responses.
+   - Enforces fail-closed WebSocket receipt capability gating (`receiptProvider: () -> UiConnectionReceipt?`), rejecting consent decisions when live capability receipt is absent.
+   - Ticking countdown banner (`WorkbenchSleepConsentBanner`) disabling decision actions at zero remaining seconds.
+   - Maps server 409 conflict responses (`IdleSuspendActiveFleetConflictException`, `IdleSuspendFleetChangedConflictException`, `IdleSuspendHandoffConflictException`).
+
+3. **Remote SSH Keys, Host Controls & Diagnostics (`SshRepository`, `HostControlRepository`, `DiagnosticsRepository`, `HostControlScreens`):**
+   - Remote SSH key listing, agent status, and key loading with `passphrase=[REDACTED]` masking; per-key credentials and forget/load operations mapped by key basename.
+   - Host remediation action scaffolding (`GET /capabilities`, `POST /intents`, `POST /intents/{id}/approve`, `POST /executions`, `GET /audit`; action execution flows lack UI callers in Phase 16).
+   - Diagnostics export (`POST /api/diagnostics/export`) defaulting to `includeTerminalOutput = false` and acknowledging server-daemon memory storage.
+   - Single content area docking under `WorkbenchPanel.SSH_HOST` with zero FABs.
 ---
 
 ## 4. Verification & Build Commands
@@ -251,6 +283,9 @@ bash tests/test-phase-06-shell-workspace.sh
 
 # Run Phase 07 terminal sessions, replay, input, and agents static assertion suite (45/45 static assertions):
 bash tests/test-phase-07-terminal-agents.sh
+# Run Phase 16 ports, tunnels, idle consent, and host controls static assertion suite (194/194 static assertions):
+bash tests/test-phase-16-ports-tunnels-host-controls.sh
+
 # Run combined test suites (foundation + transport):
 bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 ```
@@ -286,15 +321,15 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 05:** Native terminal, editor, and crypto proof gates *(Contract and host prototype validated; candidate pins recorded; device qualification open)*
 - **Phase 06:** TERMINAL Traditional shell, projects, and configuration *(Implemented and verified; 64/64 static assertions, 25 unit tests; device qualification open)*
 - **Phase 07:** Terminal sessions, replay, input, and agent status *(Host contracts implemented and verified; 45/45 static assertions; recorded QA report notes 155 unit tests passing; live emulator canvas integration, physical terminal rendering, IME behavior, and server-backed replay remain open qualification gates deferred to Phase 18)*
-- **Phase 08:** Filesystem watchers, search, and replace
-- **Phase 09:** Native editor, language services, and safe saves
-- **Phase 10:** Native diff, merge, and blame
-- **Phase 11:** Encrypted transfers, media, and Android storage
-- **Phase 12:** Complete Git and safe history workflows
-- **Phase 13:** Workflow tracking and project plans
-- **Phase 14:** Agent Store imports and memory
-- **Phase 15:** Host resources, fleet, and usage
-- **Phase 16:** Ports, tunnels, idle consent, and host controls
+- **Phase 08:** Filesystem watchers, search, and replace *(Implementation baseline recorded; 57/57 static assertions; qualification open)*
+- **Phase 09:** Native editor, language services, and safe saves *(Implementation baseline recorded; 70/70 static assertions; candidate adapter and open limitations recorded)*
+- **Phase 10:** Native diff, merge, and blame *(Implementation baseline recorded; 77/77 static assertions; qualification open)*
+- **Phase 11:** Encrypted transfers, media, and Android storage *(Scaffolding baseline recorded; 84/84 static assertions; open security and integration limitations)*
+- **Phase 12:** Complete Git and safe history workflows *(Implementation baseline recorded; 139/139 static assertions; open limitations recorded)*
+- **Phase 13:** Workflow tracking and project plans *(Implementation baseline recorded; 100/100 static assertions; qualification open)*
+- **Phase 14:** Agent Store imports and memory *(Implementation baseline recorded; 99/99 static assertions; open limitations recorded)*
+- **Phase 15:** Host resources, fleet, and usage *(Implementation baseline recorded; 81/81 static assertions; qualification open)*
+- **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
 - **Phase 17:** Preferences, privacy, notifications, and lifecycle
 - **Phase 18:** Integrated device security and performance qualification
 - **Phase 19:** Signed APK release and operational handoff

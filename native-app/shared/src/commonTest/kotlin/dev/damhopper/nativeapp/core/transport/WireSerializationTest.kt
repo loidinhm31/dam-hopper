@@ -139,4 +139,22 @@ class WireSerializationTest {
         assertEquals("dev-profile", parsed.profileId)
         assertEquals(7L, parsed.generation)
     }
+
+    @Test
+    fun testIdleSuspendChangedWireSerialization() {
+        val json = """
+            {
+                "kind": "host:idleSuspendChanged",
+                "payload": {
+                    "version": 1,
+                    "revision": 42
+                }
+            }
+        """.trimIndent()
+
+        val parsed = ProtocolJson.decodeFromString(ServerMsgSerializer, json)
+        assertIs<ServerMsg.IdleSuspendChanged>(parsed)
+        assertEquals(1, parsed.payload.version)
+        assertEquals(42L, parsed.payload.revision)
+    }
 }

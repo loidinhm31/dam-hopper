@@ -1,7 +1,7 @@
 ---
 title: "Phase 16 — Ports tunnels idle consent and host controls"
 description: "Expose current remote host/port/tunnel/maintenance capabilities without pretending Android is the execution host."
-status: pending
+status: completed
 priority: P2
 effort: unestimated
 branch: feat/android-native-app
@@ -19,10 +19,10 @@ created: 2026-10-15
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Completion date: 2026-10-16. Priority: P2. Implementation status: **completed (2026-10-16)**. Review status: **User approved Cycle 2 review (score 7/10, zero critical issues, documented open limitations deferred to Phase 18 qualification)** (see `plans/reports/code-reviewer-261016-2345-phase-16-cycle-2.md` and `plans/reports/tester-261016-2245-phase-16-ports-tunnels-host-controls.md`). Progress: **100%**.
 - Scope: P01, H02, C03 remote host actions.
 - Goal: Expose current remote host/port/tunnel/maintenance capabilities without pretending Android is the execution host.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Implementation completed under `feat/android-native-app` with 417 automated unit test executions, 1228 static assertions, and clean `assembleDebug` APK build. Physical device/emulator runtime qualification deferred to Phase 18.
 
 ## Key Insights
 
@@ -49,13 +49,31 @@ Existing references (read/reuse contracts; no server/web modification by default
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/server/src/api/ws.rs`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/docs/system-architecture.md`
 
-Proposed implementation files (create unless introduced earlier; modify thereafter):
+Implemented files:
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostActionModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsModels.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortRepository.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelRepository.kt`
-- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostControlRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendRepository.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostControlRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortsDialogs.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortsPanelScreen.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendDialogs.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostControlScreens.kt`
-- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/RemoteSshCredentialsScreen.kt`
-
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/ServerMsg.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/tests/test-phase-16-ports-tunnels-host-controls.sh`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentControllerTest.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/features/host/PortsAndTunnelsRepositoryTest.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/features/host/SshAndDiagnosticsRepositoryTest.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/PortsAndHostControlsPhase16Test.kt`
 No deletion of existing web/Tauri hosts or unrelated files. Any necessary backend contract change requires a documented design/compatibility review before code.
 
 ## Implementation Steps
@@ -71,10 +89,37 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Deliver remote ports/tunnels and exposure/reminder semantics.
-- [ ] Deliver exact-capability idle controls and truthful host state.
-- [ ] Deliver existing SSH/maintenance/capability UI without invented execution paths.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Deliver remote ports/tunnels and exposure/reminder semantics.
+- [x] Deliver exact-capability idle controls and truthful host state.
+- [x] Deliver existing SSH/maintenance/capability UI without invented execution paths.
+- [x] Update requirement/evidence ledger and affected docs (completed in scope-and-acceptance.md, plan.md, docs/project-roadmap.md).
+- [x] Cycle 2 remediations verified: pending consent cleared when non-pending, lag hint handling with hit counter, per-key credential SSH status/load/forget by basename, sleep consent banner countdown and receipt gating, atomic updates, and redactions.
+- [x] User approved Cycle 2 review (score 7/10, zero critical issues, 417 automated test executions, 1228 static assertions across 15 suites, clean assembleDebug APK build; open limitations deferred to Phase 18).
+- [ ] Observe real server host suspend and Cloudflared execution under physical device execution (live device qualification deferred to Phase 18).
+
+## Phase 16 Completion Record (2026-10-16)
+
+- **Completed:** 2026-10-16
+- **Status:** 100% complete (user approved Cycle 2 review score 7/10, open limitations deferred to Phase 18)
+- **Validation:** User approved Cycle 2 review (score 7/10, zero critical issues per `plans/reports/code-reviewer-261016-2345-phase-16-cycle-2.md`; open limitations accepted and deferred to Phase 18 qualification). 100% automated pass rate across:
+  - 417 automated unit test executions across shared JVM and Android variants:
+    - 281 shared JVM unit tests passed (`:shared:jvmTest`, 52 test classes including `IdleConsentControllerTest`, `PortsAndTunnelsRepositoryTest`, `SshAndDiagnosticsRepositoryTest`)
+    - 68 Android debug unit tests passed (`:androidApp:testDebugUnitTest`, 15 test classes including `PortsAndHostControlsPhase16Test`)
+    - 68 Android release unit tests passed (`:androidApp:testReleaseUnitTest`, 15 test classes including `PortsAndHostControlsPhase16Test`)
+  - 1228 static invariant assertions passed across 15 suites (`tests/test-phase-02-foundation.sh` through `tests/test-phase-16-ports-tunnels-host-controls.sh` with 194 Phase 16 assertions)
+  - Clean `:androidApp:assembleDebug` APK build (65 tasks, 37.7 MB)
+- **Deliverables:**
+  - **Port & Tunnel Models & Repositories (`PortModels.kt`, `TunnelModels.kt`, `PortRepository.kt`, `TunnelRepository.kt`):** Port and tunnel state enums (`DetectedVia`, `PortState`, `TunnelStatus`), typed REST contracts (`PortListResponse`, `DetectedPort`, `TunnelSession`, `CreateTunnelRequest`, `InstallStatusResponse`), REST endpoints (`/api/ports`, `/api/tunnels`, `/api/tunnels/install`), WebSocket wire events (`ServerMsg.PortDiscovered`, `ServerMsg.PortLost` with incarnation fencing, `ServerMsg.TunnelReady`, `ServerMsg.TunnelFailed`, `ServerMsg.TunnelStopped`, `ServerMsg.TunnelReminder` marking `reminderDue = true`), tunnel creation/stop flows, and public exposure URL copy.
+  - **Idle Suspend Models, Repository & Consent Controller (`IdleSuspendModels.kt`, `IdleSuspendRepository.kt`, `IdleConsentController.kt`, `ServerMsg.IdleSuspendChanged`):** Typed contracts (`IdleSuspendStatusV1`, `IdleSuspendTimingPatchRequest`, `ForceSuspendRequest`, `ForceSuspendAcceptedResponse`, `ConsentDecisionRequest`, `ConsentDecisionResponse`, `IdleSuspendConflictResponse`), wire normalization fallback for unsupported server responses, fail-closed live WebSocket capability receipt gating (`val receiptProvider: () -> UiConnectionReceipt?`), lag reconciliation (`rev == 0L || rev > _lastRevision.value`), non-retrying force suspend with conflict handling (`IdleSuspendActiveFleetConflictException`, `IdleSuspendFleetChangedConflictException`, `IdleSuspendHandoffConflictException`), and `decisionCapability=[REDACTED]` security string masking.
+  - **SSH, Host Control & Diagnostics Repositories (`SshModels.kt`, `HostActionModels.kt`, `DiagnosticsModels.kt`, `SshRepository.kt`, `HostControlRepository.kt`, `DiagnosticsRepository.kt`):** SSH agent status (`SshAgentStatus`), per-key credential lifecycle (`GET /api/ssh/keys`, `GET /api/ssh/agent`, `POST /api/ssh/keys/load`, `/api/ssh/credentials`), passphrase redaction (`passphrase=[REDACTED]`); routed host action capabilities and intents (`GET /api/system/actions/v1/capabilities`, `POST /api/system/actions/v1/intents`, approve intent with masked password, executions with redacted approval token, audit events); diagnostics export (`POST /api/diagnostics/export`) with `includeTerminalOutput` flag and honest in-memory server daemon acknowledgement.
+  - **Native UI Surfaces, Dialogs & Workbench Wiring (`PortsPanelScreen.kt`, `PortsDialogs.kt`, `IdleSuspendDialogs.kt`, `HostControlScreens.kt`, `WorkbenchScreen.kt`):** Compose workbench integration under `PanelType.PORTS` (`PortsPanelScreen`) and `PanelType.SSH_HOST` (`HostControlScreens`); top `WorkbenchSleepConsentBanner` with ticking countdown and live receipt gating; install Cloudflared dialog, create tunnel dialog, QR code dialog, force suspend dialog, SSH key load and per-key forget dialogs; strict zero FABs and zero WebViews invariants preserved.
+- **Documented Open Limitations & Residuals (Deferred to Phase 18):**
+  - **L1 (Action Error Clearing & Banner Surfacing):** `_actionError` cleared at start of `refreshStatus()` and banner/force dialog unrendered error surfacing (High-1); split mutation vs refresh errors and render failure banner deferred to Phase 18 qualification.
+  - **L2 (Reconnect Reconciliation):** Lack of auto-refresh on new WebSocket receipt / reconnect without server initial push (High-2); coalesced receipt-triggered refresh deferred to Phase 18 qualification.
+  - **L3 (Default Key Forget Verification):** Default credential forget UI handling HTTP 200 `success:false` keyring errors and `checkAgent`/`getCapabilities` silent failures (High-3) deferred to Phase 18 qualification.
+  - **L4 (WebSocket Conflation & Single-Flight Refresh):** Unconflated WS message launching and single-flight revision fencing in `refreshStatus` (W-A), mixed-owner window on profile init failure (W-B), and port/tunnel create/stop error visibility (W-C) deferred to Phase 18 qualification.
+  - **L5 (Physical Device & Live Server Host Qualification):** Real Android device lifecycle, physical suspend/resume triggers, real Cloudflared daemon installation, and live daemon credential caching deferred to Phase 18 (`phase-18-integrated-device-security-and-performance-qualification.md`).
+- **Handoff:** Phase 16 (Ports tunnels idle consent and host controls) completed with user approval. Phase 17 (Preferences privacy notifications and lifecycle) is now fully unblocked (prerequisites 07, 11, 13, 14, 15, and 16 all satisfied). Physical hardware and live server qualification deferred to Phase 18.
 
 ## Success Criteria
 
