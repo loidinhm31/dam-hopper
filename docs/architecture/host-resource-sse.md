@@ -168,4 +168,4 @@ Current timeline hooks SHA-256 hash auth targets, admission subjects, and cleanu
 ## Unresolved questions
 
 - Which reference/weak Linux hosts and production proxy/LB/CDN are in scope, and are route buffering/compression disabled with idle timeout ≥45 s? Identify and qualify each deployment before rollout.
-- Which native targets actually expose a cancellable owner-bound authenticated streaming fetch? Unsupported targets retain REST without guessing.
+- Which native targets actually expose a cancellable owner-bound authenticated streaming fetch? Android native client implements this via `HostResourceSseClient` (`native-app/shared/.../core/transport/HostResourceSseClient.kt`) using Ktor/OkHttp with `Accept: text/event-stream`, `Cache-Control: private, no-store, no-transform`, 256 KiB event cap, and owner-bound `ResourceStreamCoordinator` (`native-app/shared/.../features/host/ResourceStreamCoordinator.kt`) with 5s REST fallback. Unsupported targets retain REST without guessing. Physical device execution, proxy buffering, and 32/4 admission limit qualification under load remain open gates deferred to Phase 18.

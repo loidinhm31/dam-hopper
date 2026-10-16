@@ -1,3 +1,14 @@
+---
+title: "Phase 16 — Ports tunnels idle consent and host controls"
+description: "Expose current remote host/port/tunnel/maintenance capabilities without pretending Android is the execution host."
+status: pending
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, ports, tunnels, cloudflared, host]
+created: 2026-10-15
+---
+
 # Phase 16 — Ports tunnels idle consent and host controls
 
 ## Context Links

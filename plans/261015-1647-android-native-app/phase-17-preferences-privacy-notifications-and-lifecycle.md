@@ -1,3 +1,14 @@
+---
+title: "Phase 17 — Preferences privacy notifications and lifecycle"
+description: "Integrate complete settings/privacy/accessibility and lifecycle behavior across all included native surfaces."
+status: pending
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, preferences, settings, lifecycle]
+created: 2026-10-15
+---
+
 # Phase 17 — Preferences privacy notifications and lifecycle
 
 ## Context Links
@@ -8,7 +19,7 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending** (prerequisites 07, 11, 13, 14, 15 satisfied; Phase 16 pending). Progress: **0%**.
 - Scope: C02–C03, N01, V01.
 - Goal: Integrate complete settings/privacy/accessibility and lifecycle behavior across all included native surfaces.
 - No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.

@@ -102,6 +102,14 @@ import dev.damhopper.nativeapp.features.workflow.ProjectPlansController
 import dev.damhopper.nativeapp.features.workflow.WorkflowPanelScreen
 import dev.damhopper.nativeapp.features.workflow.WorkflowSubProduct
 import dev.damhopper.nativeapp.ui.components.GenericPanelPlaceholder
+import dev.damhopper.nativeapp.core.transport.HostResourceSseClient
+import dev.damhopper.nativeapp.features.host.HostResourceController
+import dev.damhopper.nativeapp.features.host.HostResourceRepository
+import dev.damhopper.nativeapp.features.host.ResourceStreamCoordinator
+import dev.damhopper.nativeapp.features.host.ResourcesSubProduct
+import dev.damhopper.nativeapp.features.host.ResourcesUnifiedPanelScreen
+import dev.damhopper.nativeapp.features.host.UsageController
+import dev.damhopper.nativeapp.features.host.UsageRepository
 
 @Composable
 fun WorkbenchScreen(
@@ -171,6 +179,11 @@ fun WorkbenchScreen(
     var agentImportRepo by remember { mutableStateOf<AgentImportRepository?>(null) }
     var agentImportController by remember { mutableStateOf<AgentImportController?>(null) }
     var agentsActiveSubProduct by remember { mutableStateOf(AgentsSubProduct.STORE) }
+    var hostResourceRepo by remember { mutableStateOf<HostResourceRepository?>(null) }
+    var hostResourceController by remember { mutableStateOf<HostResourceController?>(null) }
+    var usageRepo by remember { mutableStateOf<UsageRepository?>(null) }
+    var usageController by remember { mutableStateOf<UsageController?>(null) }
+    var resourcesActiveSubProduct by remember { mutableStateOf(ResourcesSubProduct.FLEET) }
     val searchRepo = remember { SearchRepository() }
     val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
@@ -308,6 +321,28 @@ fun WorkbenchScreen(
                 agentStoreController = asCtrl
                 agentMemoryController = amCtrl
                 agentImportController = aiCtrl
+                hostResourceController?.dispose()
+                usageController?.dispose()
+                val hRepo = HostResourceRepository(client)
+                val uRepo = UsageRepository(client)
+                val sseClient = HostResourceSseClient(
+                    connection = client.connection,
+                    baseUrl = client.normalizedBaseUrl,
+                    authTokenProvider = client.authTokenProvider,
+                    registry = client.registry,
+                )
+                val sCoord = ResourceStreamCoordinator(
+                    owner = client.connection,
+                    sseClient = sseClient,
+                    registry = client.registry,
+                    coroutineScope = coroutineScope,
+                )
+                val hCtrl = HostResourceController(client.connection, sCoord, hRepo, coroutineScope)
+                val uCtrl = UsageController(client.connection, uRepo, coroutineScope)
+                hostResourceRepo = hRepo
+                usageRepo = uRepo
+                hostResourceController = hCtrl
+                usageController = uCtrl
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -373,6 +408,12 @@ fun WorkbenchScreen(
             agentImportController?.retire()
             agentImportController = null
             agentImportRepo = null
+            hostResourceController?.dispose()
+            hostResourceController = null
+            hostResourceRepo = null
+            usageController?.dispose()
+            usageController = null
+            usageRepo = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -579,7 +620,7 @@ fun WorkbenchScreen(
     LaunchedEffect(projects, agentMemoryController) {
         agentMemoryController?.setProjects(projects.map { it.name })
     }
-    DisposableEffect(navState.activePanel, projectPlansController, workflowActiveSubProduct, agentsActiveSubProduct) {
+    DisposableEffect(navState.activePanel, projectPlansController, workflowActiveSubProduct, agentsActiveSubProduct, resourcesActiveSubProduct) {
         if (navState.activePanel == WorkbenchPanel.WORKFLOW && workflowActiveSubProduct == WorkflowSubProduct.PROJECT_PLANS) {
             navigation.panelBackHandler = {
                 projectPlansController?.handleBack() ?: false
@@ -589,12 +630,22 @@ fun WorkbenchScreen(
                 agentsActiveSubProduct = AgentsSubProduct.STORE
                 true
             }
+        } else if (navState.activePanel == WorkbenchPanel.RESOURCES && resourcesActiveSubProduct != ResourcesSubProduct.FLEET) {
+            navigation.panelBackHandler = {
+                resourcesActiveSubProduct = ResourcesSubProduct.FLEET
+                true
+            }
         } else {
             navigation.panelBackHandler = null
         }
         onDispose {
             navigation.panelBackHandler = null
         }
+    }
+    LaunchedEffect(navState.activePanel, hostResourceController, usageController) {
+        val isResActive = navState.activePanel == WorkbenchPanel.RESOURCES
+        hostResourceController?.setForeground(isResActive)
+        usageController?.setForeground(isResActive)
     }
     // Automatically trigger diff / merge queries on panel navigation
     LaunchedEffect(navState.activePanel, navState.activeProject, snapshot.target) {
@@ -1056,6 +1107,19 @@ fun WorkbenchScreen(
                                 )
                             } else {
                                 GenericPanelPlaceholder(WorkbenchPanel.WORKFLOW)
+                            }
+                        },
+                        resourcesContent = {
+                            val hCtrl = hostResourceController
+                            val uCtrl = usageController
+                            if (hCtrl != null && uCtrl != null) {
+                                ResourcesUnifiedPanelScreen(
+                                    hostController = hCtrl,
+                                    usageController = uCtrl,
+                                    onActiveSubProductChanged = { resourcesActiveSubProduct = it }
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.RESOURCES)
                             }
                         },
                         settingsContent = {

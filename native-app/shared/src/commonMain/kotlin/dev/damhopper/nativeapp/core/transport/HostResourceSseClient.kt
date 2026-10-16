@@ -29,10 +29,10 @@ import kotlin.coroutines.coroutineContext
  * - Finite error handling before headers (e.g. 503 FRAME_TOO_LARGE / AUTH_UNAVAILABLE).
  * - ConnectionRef generation fencing to prevent stale readers from emitting.
  */
-class HostResourceSseClient(
+open class HostResourceSseClient(
     val connection: ConnectionRef,
     baseUrl: String,
-    val authTokenProvider: () -> String? = { null },
+    val authTokenProvider: suspend () -> String? = { null },
     val registry: ConnectionRegistry? = null,
     private val httpClient: HttpClient = HttpClient(createDefaultHttpEngine()) {
         install(HttpTimeout) {
@@ -52,7 +52,9 @@ class HostResourceSseClient(
     /**
      * Opens an authenticated SSE stream and emits paired frames.
      */
-    fun openEventStream(): Flow<HostResourceSseFrame> = flow {
+    open fun openEventStream(
+        onByteProgress: (bytesReceived: Long) -> Unit = {},
+    ): Flow<HostResourceSseFrame> = flow {
         registry?.assertCurrentOwner(connection, "HostResourceSseClient.openEventStream")
         val fullUrl = "$normalizedBaseUrl/api/system/resources/v1/events"
         val token = authTokenProvider()
@@ -69,7 +71,15 @@ class HostResourceSseClient(
             registry?.assertCurrentOwner(connection, "HostResourceSseClient response headers")
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText().take(4096)
+                val errorChannel: ByteReadChannel = response.body()
+                val errorLines = mutableListOf<String>()
+                var errorBytes = 0
+                while (errorBytes < 4096 && !errorChannel.isClosedForRead) {
+                    val line = errorChannel.readUTF8Line(4096 - errorBytes) ?: break
+                    errorLines.add(line)
+                    errorBytes += line.length + 1
+                }
+                val errorBody = errorLines.joinToString("\n")
                 val code = parseErrorCode(errorBody)
                 val retryAfter = response.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
                 throw ApiRequestError(
@@ -84,13 +94,24 @@ class HostResourceSseClient(
             val channel: ByteReadChannel = response.body()
             var currentEventName: String? = null
             val currentDataLines = mutableListOf<String>()
+            var currentEventBytes = 0
+            var eventOverflow = false
             var lastStatus: HostResourceStatusEvent? = null
 
             while (coroutineContext.isActive && !channel.isClosedForRead) {
                 registry?.assertCurrentOwner(connection, "HostResourceSseClient read line")
                 val line = channel.readUTF8Line(MAX_DATA_EVENT_BYTES) ?: break
+                onByteProgress(line.length.toLong() + 1)
 
                 if (line.isEmpty()) {
+                    if (eventOverflow) {
+                        eventOverflow = false
+                        currentEventName = null
+                        currentDataLines.clear()
+                        currentEventBytes = 0
+                        lastStatus = null
+                        continue
+                    }
                     // Dispatch current buffered event on blank line
                     if (currentEventName != null && currentDataLines.isNotEmpty()) {
                         val eventData = currentDataLines.joinToString("\n")
@@ -111,6 +132,7 @@ class HostResourceSseClient(
                     }
                     currentEventName = null
                     currentDataLines.clear()
+                    currentEventBytes = 0
                     continue
                 }
 
@@ -123,8 +145,25 @@ class HostResourceSseClient(
                 if (line.startsWith("event:")) {
                     currentEventName = line.substring(6).trim()
                 } else if (line.startsWith("data:")) {
-                    val dataPart = line.substring(5).trimStart()
-                    currentDataLines.add(dataPart)
+                    if (!eventOverflow) {
+                        val dataPart = line.substring(5).trimStart()
+                        val partBytes = dataPart.encodeToByteArray().size
+                        val limit = if (currentEventName == "host-resources") {
+                            MAX_DATA_EVENT_BYTES
+                        } else {
+                            MAX_CONTROL_EVENT_BYTES
+                        }
+                        if (currentEventBytes + partBytes > limit) {
+                            // Overflow: discard buffered lines and fail-safe break pairing
+                            eventOverflow = true
+                            currentDataLines.clear()
+                            currentEventBytes = 0
+                            lastStatus = null
+                        } else {
+                            currentDataLines.add(dataPart)
+                            currentEventBytes += partBytes
+                        }
+                    }
                 }
             }
         }

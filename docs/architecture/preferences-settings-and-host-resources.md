@@ -68,4 +68,7 @@ Fleet mode is documented in [System Architecture](../system-architecture.md#mult
 | Settings composition and import/export | `components/pages/SettingsPage.tsx`, `components/pages/settings-page/*`, `components/organisms/{GlobalConfigEditor,ConfigEditor}.tsx` |
 | Usage UI and deep links | `components/pages/UsagePage.tsx`, `components/usage/*` |
 | Host status, incidents, and manual action | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` |
+| Android native Resources panel & zero-FAB UI | `native-app/shared/.../features/host/ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `UsageScreens.kt` |
+| Android native SSE streaming & coordinator | `native-app/shared/.../core/transport/HostResourceSseClient.kt`, `features/host/ResourceStreamCoordinator.kt` |
+| Android native repositories & controllers | `native-app/shared/.../features/host/HostResourceRepository.kt`, `UsageRepository.kt`, `HostResourceController.kt`, `UsageController.kt` |
 | Related contracts | [API Reference](../api-reference.md), [Protected Idle-Suspend Status](../idle-suspend-status-ui.md), [Frontend Components](../frontend-components.md) |

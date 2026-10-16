@@ -1,3 +1,14 @@
+---
+title: "Phase 18 — Integrated device security and performance qualification"
+description: "Prove end-to-end native behavior and retained feature parity on real supported Android/device/server combinations."
+status: pending
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, qualification, security, e2e]
+created: 2026-10-15
+---
+
 # Phase 18 — Integrated device security and performance qualification
 
 ## Context Links
@@ -64,6 +75,7 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 - [ ] Audit binary/security/license and measured performance/soak.
 - [ ] Record human-reviewed evidence and GATE-C pass/block decision.
 - [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [ ] Remediate and qualify Phase 15 residuals: L1 (physical device & proxy SSE streaming, 32/4 admission denial, proxy buffering), L2 (implement full settings enable/exporter/retention/retry controls and dynamic model filter derivation), L3 (UTC date formatting and end-of-day boundary options for range deletion), L4 (background dispatcher payload decoding and explicit Activity foreground lifecycle bindings).
 
 ## Success Criteria
 

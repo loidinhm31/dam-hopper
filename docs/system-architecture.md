@@ -549,6 +549,30 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - Absorb action semantics (M2): Server absorb moves project-local non-symlink items to the store; offering absorb on shipped matrix cells contradicts server distributor semantics.
   - Unused repository methods: `getItem` and `listProjectMemory` lack UI callers.
   - Live qualification (L1/L2): Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
+### Native Android Host Resources Fleet & Usage Insights (Phase 15)
+- **Host Resource & Alert Models (H01):**
+  - Strict enum typing: `AvailabilityState` (`NORMAL`, `DEGRADED`, `UNKNOWN`), `AlertState` (`ACTIVE`, `RESOLVED`, `UNKNOWN`), `AlertSeverity` (`INFO`, `WARNING`, `CRITICAL`).
+  - Wire DTO contracts: `HostResourceSnapshotV1`, `HostIdentity`, `Availability`, `MemorySnapshot`, `PressureInfo`, `MemoryPressure`, `CgroupMemory`, `ProcessMemory`, `ProcessInventory`, `MountContext`, `BatterySnapshot`, `HostMetrics`, `CpuMetrics`, `MemoryMetrics`, `DiskMetrics`, `AlertSummary`, `AlertIncident`.
+  - Repositories: `HostResourceRepository` (REST accessors for `/api/system/resources/v1/snapshot`, `/api/system/metrics`, and `/api/system/resources/v1/alerts`).
+- **Resource Streaming, Coordination & Pairing (H01):**
+  - Authenticated SSE transport: `HostResourceSseClient` uses Ktor/OkHttp engine with `Accept: text/event-stream`, `Cache-Control: private, no-store, no-transform`, and bearer token authorization. Bounded control reads (< 4 KiB) and 256 KiB data event overflow limit (`MAX_DATA_EVENT_BYTES = 262_144`); progressive read tracking via `onByteProgress`.
+  - Centralized coordinator: `ResourceStreamCoordinator` provides single-owner stream coordination, demand-driven visible streaming, 5-second REST fallback cadence via `canUseResourceRest()`, subscriber interest tracking (`registerInterest`), and foreground/background awareness (`setForeground`).
+  - Atomic frame committer: `ResourceFrameCommitter` verifies monotonic decimal-string revisions (`newRev <= currentRev`), tracks server epoch restart (`currentEpoch == data.serverEpoch`), and commits paired snapshot/metrics atomically.
+  - Failure handler & timers: `ResourceFailureHandler` latches `AUTH_UNAVAILABLE` to `AuthBlocked` and `FRAME_TOO_LARGE` to `RestOnly`; `ResourceStreamTimers` manages 10s initial data deadline, 45s byte idle timeout, 5-attempt retry limit with exponential backoff, and 60s stable live window.
+- **Aggregate Usage Analytics & Safe Deletion (U01):**
+  - Domain models: `UsageRange`, `TokenAggregate`, `UsageTimeBucket`, `CollectorHealthSnapshot`, `UsageHealth`, `UsageSummaryResponse`, `SessionRange`, `SessionTokens`, `SessionSummaryDto`, `SessionListResponse`, `SessionDetailResponse`, `DeleteUsageRequest` (default confirmation token `"delete-usage-data"`), `CodexExporterStatus`, `UsageSettingsResponse`, `SettingsPatchRequest`, `UsageSetupStatusResponse`.
+  - Usage repository: `UsageRepository` provides typed operations for `/api/usage/summary`, `/api/usage/health`, `/api/usage/settings`, `/api/usage/setup`, `/api/usage/sessions`, and `/api/usage` deletion.
+  - Controller & safety invariants: `UsageController` isolates aggregate summaries from raw prompt telemetry; manages opaque cursor pagination (omitting `from/to` on continuation pages when `cursor != null`); enforces UTC midnight floored date-range calculations (`calculateUtcDayRange`); protects against race conditions with re-entrancy and disposed guards; and bumps `summaryGeneration` and `sessionsGeneration` after deletion to fence stale loads.
+- **Unified UI Architecture & Shell Invariants (NAV01, B01, B02):**
+  - Authoritative panel host `ResourcesUnifiedPanelScreen` docked under `WorkbenchPanel.RESOURCES` in `WorkbenchScreen.kt`.
+  - Top segmented switcher across 2 sub-products: `FLEET` (`FleetScreens`, `FleetDetailComponents`) and `USAGE` (`UsageScreens`, `UsageDialogs`, `UsageSettingsSection`).
+  - Shell invariants: Zero floating action buttons (`FloatingActionButton`, `ExtendedFloatingActionButton`), zero WebViews (`WebView`), single content host in `PanelHost`, honest null rendering (`--` for missing/unsupported values without fabricating zero metrics).
+- **Documented Open Limitations & Review Findings (Cycle 3 Review 7/10):**
+  - Range-delete today exclusion: Range deletion floors to UTC midnight with `to = todayUtc`, excluding today's events from day-count deletion (deferred semantics clarification/relabeling).
+  - Dialog epoch-ms display: Range delete dialog displays raw epoch-ms bounds instead of formatted UTC date strings.
+  - Incomplete settings controls: Only pause/resume is wired in settings; enable, exporter, retention, and retry controls remain read-only.
+  - Hardcoded model filter chip: Hardcoded `"gpt-4"` filter chip instead of deriving model options dynamically from session summaries.
+  - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -563,7 +587,8 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-12-git-history.sh` — Phase 12 Git models, repositories, controllers, leased push, and zero-FAB presentation static verification suite (139/139 assertions passing).
 - `bash tests/test-phase-13-workflow-plans.sh` — Phase 13 workflow models, repositories, controllers, 64 KiB bounded reads, and UI invariants verification suite (100/100 assertions passing).
 - `bash tests/test-phase-14-agent-store-memory.sh` — Phase 14 Agent Store, imports, memory models, repositories, controllers, unified switcher, and zero-FAB invariants verification suite (99/99 assertions passing).
-- *Automated Verification Evidence:* 953 cumulative static assertions passing across 13 phase test scripts (Phases 02–14, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 303 reported automated unit test executions across `:shared:jvmTest` (252 tests) and `:androidApp:testDebugUnitTest`/`:androidApp:testReleaseUnitTest` (51 tests); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 14 implementation baseline recorded with documented limitations; live device and server qualification deferred to Phase 18.
+- `bash tests/test-phase-15-host-resources-usage.sh` — Phase 15 host resources fleet streaming, coordination, usage models, and zero-FAB invariants verification suite (81/81 assertions passing).
+- *Automated Verification Evidence:* 1034 cumulative static assertions passing across 14 phase test scripts (Phases 02–15, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 398 reported automated unit test executions across `:shared:jvmTest` and `:androidApp:testDebugUnitTest`/`:androidApp:testReleaseUnitTest`; clean debug APK assembly (`:androidApp:assembleDebug`). Phase 15 implementation baseline recorded with documented limitations; live device, SSE proxy buffering, and server admission qualification deferred to Phase 18.
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).

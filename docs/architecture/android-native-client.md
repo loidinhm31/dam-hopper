@@ -1,6 +1,6 @@
 # Android Native Client — Proposed Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), and Agent Store, memory & imports (Phase 14) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
+**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), Agent Store, memory & imports (Phase 14), and host resources fleet streaming & aggregate usage insights (Phase 15) baselines recorded; contract/host prototypes validated with documented open limitations; live device qualification (Phase 18) and TypeScript language engine decision pending. Updated: 2026-10-16.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -274,6 +274,30 @@ The native Android client introduces filesystem navigation, live directory event
 - **Absorb Action Semantics (M2):** Server absorb moves project-local non-symlink items to the store; offering absorb on shipped matrix cells contradicts server distributor semantics.
 - **Unused Repository Methods:** `getItem` and `listProjectMemory` lack UI callers.
 - **Live Qualification (L1/L2):** Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
+
+## Host resources fleet and usage (Phase 15)
+
+- **Domain Models & DTOs (H01, U01):**
+  - Host resources & alerts: `HostResourceSnapshotV1`, `HostIdentity`, `Availability`, `MemorySnapshot`, `PressureInfo`, `MemoryPressure`, `CgroupMemory`, `ProcessMemory`, `ProcessInventory`, `MountContext`, `BatterySnapshot`, `HostMetrics`, `CpuMetrics`, `MemoryMetrics`, `DiskMetrics`, `AlertSummary`, `AlertIncident`.
+  - Usage & sessions: `UsageRange`, `TokenAggregate`, `UsageTimeBucket`, `CollectorHealthSnapshot`, `UsageHealth`, `UsageSummaryResponse`, `SessionRange`, `SessionTokens`, `SessionSummaryDto`, `SessionListResponse`, `SessionDetailResponse`, `DeleteUsageRequest` (default confirmation `"delete-usage-data"`), `CodexExporterStatus`, `UsageSettingsResponse`, `SettingsPatchRequest`, `UsageSetupStatusResponse`.
+- **Resource Streaming, Coordination & Pairing (H01):**
+  - Authenticated SSE: `HostResourceSseClient` (`Accept: text/event-stream`, `Cache-Control: private, no-store, no-transform`, bearer token) with bounded control reads (< 4 KiB), 256 KiB data event limit (`MAX_DATA_EVENT_BYTES`), and progress callbacks (`onByteProgress`).
+  - Owner-scoped coordinator: `ResourceStreamCoordinator` manages active interest registration (`registerInterest`), visibility and lifecycle (`setForeground`), 5s REST fallback cadence (`canUseResourceRest()`), and error latching (`AUTH_UNAVAILABLE` to AuthBlocked, `FRAME_TOO_LARGE` to RestOnly via `ResourceFailureHandler`).
+  - Monotonic revision & epoch pairing: `ResourceFrameCommitter` verifies monotonic decimal-string revisions (`newRev <= currentRev`), tracks server epoch restart (`currentEpoch == data.serverEpoch`), and commits paired snapshot/metrics atomically.
+  - Stream timers: `ResourceStreamTimers` enforces 10s initial data deadline, 45s byte idle timeout, 5-attempt retry limit with exponential backoff, and 60s stable live window.
+- **Aggregate Usage Analytics & Safe Deletion (U01):**
+  - Aggregate isolation: Server telemetry is aggregate-only; `UsageRepository` queries summaries, health, setup, settings, session pagination, and deletion without exposing raw prompts or commands.
+  - Controller & safe pagination: `UsageController` implements cursor-based session pagination, omitting `from`/`to` on continuation pages when `cursor != null`; floors deletion bounds to UTC midnight (`calculateUtcDayRange`); protects against race conditions with re-entrancy and disposed guards; and increments `summaryGeneration` and `sessionsGeneration` on deletion to fence stale loads.
+- **Unified UI Architecture & Shell Invariants (NAV01, B01, B02):**
+  - Panel host: Single content area `ResourcesUnifiedPanelScreen` docked under `WorkbenchPanel.RESOURCES` in `WorkbenchScreen.kt`.
+  - Segmented switcher: Top switcher between `ResourcesSubProduct.FLEET` (`FleetScreens`, `FleetDetailComponents`) and `ResourcesSubProduct.USAGE` (`UsageScreens`, `UsageDialogs`, `UsageSettingsSection`).
+  - Invariants: Zero FABs (`FloatingActionButton`), zero WebViews (`WebView`), honest null indicators (`--`) without fabricating zero metrics.
+- **Documented Open Limitations & Review Findings (Cycle 3 Review 7/10):**
+  - Range-delete today exclusion: Range deletion floors to UTC midnight with `to = todayUtc`, excluding today's events from day-count deletion (deferred semantics clarification/relabeling).
+  - Dialog epoch-ms display: Range delete dialog displays raw epoch-ms bounds instead of formatted UTC date strings.
+  - Incomplete settings controls: Only pause/resume is wired; enable, exporter, retention, and retry controls remain read-only.
+  - Hardcoded model filter chip: Hardcoded `"gpt-4"` filter chip instead of deriving model options dynamically from session summaries.
+  - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
 
 ## Extended workbench
 
