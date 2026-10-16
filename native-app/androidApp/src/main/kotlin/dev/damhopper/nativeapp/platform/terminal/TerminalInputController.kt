@@ -43,7 +43,7 @@ class TerminalInputController(
         isShift: Boolean = false,
         unicode: Int = 0
     ): Boolean {
-        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted) {
+        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted || !sessionController.isInputAllowed()) {
             return false
         }
 
@@ -117,7 +117,7 @@ class TerminalInputController(
      * Dispatches committed text from software keyboard / IME.
      */
     fun onImeCommitText(text: CharSequence) {
-        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted) {
+        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted || !sessionController.isInputAllowed()) {
             return
         }
         if (text.isEmpty()) return
@@ -129,7 +129,7 @@ class TerminalInputController(
      * Handles software keyboard backspace.
      */
     fun onImeDeleteBackward() {
-        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted) {
+        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted || !sessionController.isInputAllowed()) {
             return
         }
         val bytes = sessionController.encodeSpecialKey("BACKSPACE")
@@ -140,7 +140,7 @@ class TerminalInputController(
      * Reads text from system clipboard and sends it with bracketed paste escaping.
      */
     fun pasteFromClipboard(clipboardManager: ClipboardManager?): Boolean {
-        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted) {
+        if (!sessionController.isPanelActive || !sessionController.isReplayCompleted || !sessionController.isInputAllowed()) {
             return false
         }
         val manager = clipboardManager ?: return false
@@ -158,6 +158,7 @@ class TerminalInputController(
      * Copies selected text from terminal buffer to system clipboard.
      */
     fun copySelectionToClipboard(clipboardManager: ClipboardManager?): Boolean {
+        if (!sessionController.isInputAllowed()) return false
         val manager = clipboardManager ?: return false
         val selected = sessionController.getSelectedText() ?: return false
         if (selected.isEmpty()) return false

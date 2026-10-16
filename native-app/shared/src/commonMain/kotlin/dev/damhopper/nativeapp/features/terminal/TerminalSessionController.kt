@@ -52,6 +52,8 @@ open class TerminalSessionController(
         private set
 
 
+    var isInputAllowed: () -> Boolean = { true }
+
     val gate = TerminalReplayGate()
 
     private val activeModifiers = mutableSetOf<TerminalModifier>()
@@ -304,6 +306,7 @@ open class TerminalSessionController(
         if (!isPanelActive) return
         if (!isReplayCompleted) return
         if (!gate.shouldForwardTerminalData()) return
+        if (!isInputAllowed()) return
         rawInputSink?.invoke(bytes)
     }
 
@@ -323,11 +326,18 @@ open class TerminalSessionController(
         surface?.clearSearch()
     }
 
-    fun getSelectedText(): String? = surface?.getSelectedText()
+    fun getSelectedText(): String? {
+        if (!isInputAllowed()) return null
+        return surface?.getSelectedText()
+    }
 
-    fun copySelection(): String? = surface?.copySelection()
+    fun copySelection(): String? {
+        if (!isInputAllowed()) return null
+        return surface?.copySelection()
+    }
 
     fun pasteText(text: String) {
+        if (!isInputAllowed()) return
         val bytes = encodeBracketedPaste(text)
         sendInput(bytes)
     }

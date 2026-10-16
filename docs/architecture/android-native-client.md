@@ -299,6 +299,61 @@ The native Android client introduces filesystem navigation, live directory event
   - Hardcoded model filter chip: Hardcoded `"gpt-4"` filter chip instead of deriving model options dynamically from session summaries.
   - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
 
+## Ports, tunnels, idle consent, and host controls (Phase 16)
+
+- **Host Ports & Cloudflared Tunnels (P01):**
+  - Models & Repositories: `PortModels.kt`, `PortRepository.kt`, `TunnelModels.kt`, `TunnelRepository.kt` (`features/host/`).
+  - REST Endpoints: `GET /api/ports`, `GET /api/tunnels`, `POST /api/tunnels`, `DELETE /api/tunnels/{id}`, `GET /api/tunnels/install`, `POST /api/tunnels/install`.
+  - WebSocket Events: `PortDiscovered`, `PortLost` with monotonic incarnation sequence checking (`msg.incarnation >= existing.incarnation`); `TunnelReady`, `TunnelFailed`, `TunnelStopped`, `TunnelReminder` (`reminderDue = true`).
+  - UI Presentation: `PortsPanelScreen` docked under `WorkbenchPanel.PORTS` with `PortsDialogs` (quick tunnel creation, URL copy, service installation confirmation; zero FABs, single content host).
+- **Idle Suspend & Live Socket Capability Consent (H02):**
+  - Models & Controller: `IdleSuspendModels.kt`, `IdleSuspendRepository.kt`, `IdleConsentController.kt`, `IdleSuspendDialogs.kt` (`features/host/`).
+  - REST & Normalization: `GET /api/system/idle-suspend/v1/status`, `PATCH /timing`, `POST /force-suspend`, `POST /consent/decision`; fallback normalization `decodeIdleSuspendStatusV1`.
+  - Fail-Closed Capability Gating: `IdleConsentController` requires live WebSocket capability receipt (`receiptProvider: () -> UiConnectionReceipt?`), rejecting consent decisions when absent.
+  - Conflict Handling & Countdown: 409 conflict exception mappings; `WorkbenchSleepConsentBanner` ticking countdown with 0s decision button lockout.
+- **Remote SSH Keys, Host Controls & Diagnostics (C03):**
+  - Repositories: `SshRepository.kt` (`/api/ssh/keys`, `/api/ssh/agent`, `/api/ssh/keys/load` with `passphrase=[REDACTED]`), `HostControlRepository.kt` (action intents/capabilities scaffolding), `DiagnosticsRepository.kt` (`/api/diagnostics/export` defaulting `includeTerminalOutput = false`).
+  - UI Presentation: `HostControlScreens` docked under `WorkbenchPanel.SSH_HOST` with zero FABs, zero WebViews.
+- **Documented Open Limitations & Review Findings (Cycle 2 Review 7/10):**
+  - Mutation action error cleared before render in `refreshStatus()`.
+  - Missing status reconciliation on WebSocket reconnect.
+  - Credential forget ignores failure outcomes; action execution flows lack UI callers.
+  - Live hardware qualification and keystore credential binding deferred to Phase 18.
+
+## Preferences, privacy, notifications, and lifecycle (Phase 17)
+
+- **Domain Models & Settings Repository (C02, C03):**
+  - Models: `SettingsModels.kt` declaring `WorkbenchPreferences`, `SettingsSourceTargetState`, `WorkbenchTheme`, `CognitoModeStyle`, `ExplorerLanguageFilter`, `PreferenceSourceStatus`, `TerminalAgentNotifications`.
+  - Clamping Bounds: Font sizes clamped to 10..32 (`clampFont`), terminal scroll step clamped to 1..20 (`clampScrollStep`).
+  - Repository & Persistence: `SettingsRepository` coordinates local `PreferencesStore` (`AndroidPreferencesStore` backed by EncryptedSharedPreferences/SharedPreferences) with debounced (500ms) remote saving to the active preference source (`RemoteConfigRepository.updateGlobalUi`). Client-side stale-owner fencing captures profile, connection generation, and edit revision, rejecting out-of-order updates when ownership changes or the edit is superseded.
+  - Settings Target & Operations: Explicit `settingsProfileId` target selection; 1 MiB TOML import (`MAX_CONFIG_IMPORT_BYTES = 1024L * 1024L`) with generation verification (`expectedGeneration`); TOML export (`/api/settings/export/workspace.toml`), server cache clear (`/api/settings/cache-clear`), and nuclear reset (`/api/settings/reset`).
+- **Ephemeral Privacy Controller & Three-Layer Input Gating (N01):**
+  - Ephemeral Isolation: The configured keyboard shortcut preference (`cognitoModeShortcut`) persists and syncs remotely, while runtime mask activation (`isMaskActive`) and the captured dismissal chord (`activationChord`) remain strictly in memory; reset on background, activity destruction, and profile switch; never persisted across process restarts.
+  - 3-Tier Input Gating:
+    1. Overlay Boundary: `CognitoOverlay` consumes all pointer events via `pointerInput` and marks underlying content `semantics { invisibleToUser() }`.
+    2. Session Controller Boundary: `TerminalSessionController` gates `sendInput`, `getSelectedText`, `copySelection`, `pasteText`; `EditorSession` gates `setText`, `applyEdit`, `undo`, `redo`, `saveEdit`; `EditorTabsState` propagates `isInputAllowed` to active sessions.
+    3. Platform Surface Boundary: `TerminalInputController` intercepts hardware keys, IME text commits, IME delete backward, and clipboard paste; `AndroidEditorSurface` gates edits and undo/redo.
+  - Interaction Suppression: Mask activation triggers `keyboardController.hide()` and `focusManager.clearFocus(force = true)`.
+  - Chord & Emergency Dismissal: Dismissal requires matching the exact activation chord; mobile touch emergency dismissal fallback; trailing release consumption (`consumeTrailingRelease()`). Note: modal dialogs outside `CognitoOverlay` are not covered by the overlay boundary; physical key chord recognition is limited to supported letter keys (P, L, K, C, D, Z, Esc) and numeric keyCodes.
+- **Notification Sink, Channels & Target-Routing Scaffolding (N01):**
+  - Platform Sink: `NotificationSink` and `AndroidNotificationSink` managing notification channels: `channel_terminal_attention` (high importance), `channel_transfers` (low importance), and `channel_idle_suspend` (high importance).
+  - Lock-Screen Redaction: Channels configure `Notification.VISIBILITY_PRIVATE` and attach a sanitized generic public version (`publicTitle = "DamHopper"`, `publicBody = "Attention required"`) intended to redact confidential terminal or file content on lock screens (on-device presentation unqualified).
+  - Target-Routing Scaffolding & Deep Links: Notifications launch `MainActivity` with `EXTRA_TARGET_PROFILE_ID`, `EXTRA_TARGET_GENERATION`, `EXTRA_TARGET_SERVER_EPOCH`, `EXTRA_TARGET_TERMINAL_ID`, `EXTRA_TARGET_INCARNATION`, and `EXTRA_TARGET_ATTENTION_REVISION` wrapped in `FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE`. `MainActivity.handleDeepLink` verifies matching profile and generation; carrying epoch/incarnation/revision extras does not establish server-side validation or single-consumption semantics.
+  - Profile Retirement: `cancelNotificationsForProfile(profileId)` clears notifications registered for a retired profile.
+- **Lifecycle Coordination & Demand-Pausing (V01):**
+  - State Machine & Adapter: `LifecycleCoordinator` (`LifecycleState`: `INITIALIZED`, `FOREGROUND`, `BACKGROUND`, `DESTROYED`) mapped via `AndroidLifecycleCoordinator` (`DefaultLifecycleObserver`).
+  - Demand-Driven Stream Pausing: Backgrounding pauses host resource streaming (`hostResourceController?.coordinator?.setForeground(false)`) and resets ephemeral privacy state (`privacyController.reset()`); foregrounding re-evaluates visible streaming demand (`setForeground(true)`). Note: other features (SSE, usage polling, filesystem watchers) do not yet implement `LifecycleAware`.
+  - Profile Retirement Teardown: `onProfileRetired(profileId)` cleans up profile-scoped notifications, resets settings source/target states, and closes profile-bound terminal session controllers.
+- **Settings Screen Presentation & UI Invariants (NAV01, B01, B02):**
+  - Panel Host: Authoritative screen host `SettingsScreens` docked under `WorkbenchPanel.SETTINGS` in `PanelHost`.
+  - Top Horizontal Sub-Section Switcher: Segmented switcher across 5 sub-sections: `PREFERENCES` (`PreferencesPrivacyView`), `MAINTENANCE` (`MaintenanceView`), `NOTIFICATIONS` (`NotificationsView`), `REMOTE_CONFIG` (`RemoteConfigScreen`), `PROFILES` (`ProfileListScreen`).
+  - Invariants: Zero FABs (`FloatingActionButton`, `ExtendedFloatingActionButton`), zero WebViews (`WebView`), single content host, dark workbench theme.
+- **Documented Open Limitations & Review Findings (Cycle 2 Review 6/10):**
+  - Inert Preferences: Theme, font sizes (system, editor, terminal), sound, haptics, and explorer filters persist and sync with remote server, but downstream native rendering components (editor, terminal surface, file tree) have not yet wired reactive consumers.
+  - Test-Only Notification Producer: Notifications are only posted via manual test alert button; background agents, transfers, and idle suspend do not post notifications; runtime `POST_NOTIFICATIONS` permission launcher is not wired in UI.
+  - Partial Lifecycle Demand-Pausing: Only `HostResourceController` implements demand pause on background; SSE, usage, watchers, and media remain active or unwired; endpoint change does not trigger full owner retirement.
+  - Storage & Deep Linking: TOML import/export uses clipboard/paste instead of Android SAF file picker; deep link extras are not consumed once and lack server-side target terminal validation.
+  - Live Qualification: Physical Android hardware, native IME suppression, lockscreen notification redaction, and process death recovery deferred to Phase 18.
 ## Extended workbench
 
 - Workflow uses server CAS/request identities; manual tracking stays distinct from read-only project plan documents and administrative reported status.

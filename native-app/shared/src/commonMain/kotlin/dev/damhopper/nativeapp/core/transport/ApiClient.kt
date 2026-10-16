@@ -91,6 +91,26 @@ class ApiClient(
         return handleResponse(response, "POST", fullUrl)
     }
 
+    suspend fun postToml(path: String, body: String): String {
+        assertActiveOwner("POST $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        val response = try {
+            httpClient.post(fullUrl) {
+                contentType(ContentType.parse("application/toml; charset=utf-8"))
+                if (!token.isNullOrBlank()) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                setBody(body)
+            }
+        } catch (e: Throwable) {
+            throw wrapNetworkError(e, "POST", fullUrl)
+        }
+
+        return handleResponse(response, "POST", fullUrl)
+    }
+
     suspend fun putJson(path: String, body: String): String {
         assertActiveOwner("PUT $path")
         val fullUrl = buildFullUrl(path)

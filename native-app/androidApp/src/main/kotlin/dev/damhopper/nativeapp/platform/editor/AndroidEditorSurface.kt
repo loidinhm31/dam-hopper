@@ -57,6 +57,7 @@ interface NativeEditorSurface : AutoCloseable {
     val isDisposed: Boolean
     val modelVersion: Long
 
+    var isInputAllowed: () -> Boolean
     fun attachView(hostView: Any?)
     fun detachView()
     fun setText(text: String, modelVersion: Long = 1L)
@@ -85,6 +86,7 @@ interface NativeEditorSurface : AutoCloseable {
 class AndroidEditorSurface(
     val candidateAdapter: CandidateEditorAdapter = CandidateEditorAdapter()
 ) : NativeEditorSurface {
+    override var isInputAllowed: () -> Boolean = { true }
     companion object {
         const val MAX_UNDO_DEPTH = 50
     }
@@ -119,6 +121,7 @@ class AndroidEditorSurface(
 
     override fun setText(text: String, modelVersion: Long) {
         check(!_isDisposed) { "Cannot set text on disposed AndroidEditorSurface" }
+        if (!isInputAllowed()) return
         undoStack.clear()
         redoStack.clear()
         content = StringBuilder(text)
@@ -131,7 +134,7 @@ class AndroidEditorSurface(
     override fun applyEdit(edit: EditorTextEdit) {
         check(!_isDisposed) { "Cannot apply edit to disposed AndroidEditorSurface" }
         check(!_isReadOnly) { "Cannot edit read-only AndroidEditorSurface" }
-
+        if (!isInputAllowed()) return
         // Save current snapshot to undo stack with bounded depth
         if (undoStack.size >= MAX_UNDO_DEPTH) {
             undoStack.removeFirst()
@@ -154,7 +157,7 @@ class AndroidEditorSurface(
     }
 
     override fun undo(): Boolean {
-        if (!canUndo() || _isReadOnly || _isDisposed) return false
+        if (!canUndo() || _isReadOnly || _isDisposed || !isInputAllowed()) return false
         val previous = undoStack.removeLast()
         redoStack.addLast(content.toString())
         content = StringBuilder(previous)
@@ -164,7 +167,7 @@ class AndroidEditorSurface(
     }
 
     override fun redo(): Boolean {
-        if (!canRedo() || _isReadOnly || _isDisposed) return false
+        if (!canRedo() || _isReadOnly || _isDisposed || !isInputAllowed()) return false
         val next = redoStack.removeLast()
         undoStack.addLast(content.toString())
         content = StringBuilder(next)

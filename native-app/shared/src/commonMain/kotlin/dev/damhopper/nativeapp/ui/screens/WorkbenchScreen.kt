@@ -22,7 +22,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.key.*
+import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
+import dev.damhopper.nativeapp.core.lifecycle.LifecycleAware
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +39,13 @@ import dev.damhopper.nativeapp.features.profiles.ProfileRepository
 import dev.damhopper.nativeapp.features.settings.RemoteConfigEditor
 import dev.damhopper.nativeapp.features.settings.RemoteConfigRepository
 import dev.damhopper.nativeapp.features.settings.RemoteConfigScreen
+import dev.damhopper.nativeapp.core.security.PrivacyController
+import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
+import dev.damhopper.nativeapp.features.settings.SettingsRepository
+import dev.damhopper.nativeapp.features.settings.SettingsScreens
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.core.notifications.NotificationSink
+import dev.damhopper.nativeapp.ui.components.CognitoOverlay
 import dev.damhopper.nativeapp.features.terminal.AgentKind
 import dev.damhopper.nativeapp.features.terminal.AgentStatusReducer
 import dev.damhopper.nativeapp.features.terminal.AgentsPanelScreen
@@ -127,6 +140,9 @@ fun WorkbenchScreen(
     profileRepository: ProfileRepository? = null,
     targetStore: ProjectTargetStore = remember { ProjectTargetStore() },
     navigation: WorkbenchNavigation = remember { WorkbenchNavigation() },
+    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+    notificationSink: NotificationSink? = null,
+    lifecycleCoordinator: LifecycleCoordinator = remember { LifecycleCoordinator() },
     modifier: Modifier = Modifier,
 ) {
     val navState by navigation.state.collectAsState()
@@ -156,12 +172,33 @@ fun WorkbenchScreen(
     var activeTerminalSessionId by remember { mutableStateOf<String?>(null) }
     var sessionCounter by remember { mutableStateOf(1) }
     var settingsTab by remember { mutableStateOf(0) } // 0: Profiles, 1: Remote Config
+    val privacyController = remember { PrivacyController() }
     var activeApiClient by remember { mutableStateOf<ApiClient?>(null) }
     var fileRepo by remember { mutableStateOf<FileRepository?>(null) }
     var fileTreeState by remember { mutableStateOf<FileTreeState?>(null) }
     var fileMutationCoordinator by remember { mutableStateOf<FileMutationCoordinator?>(null) }
     var federatedBindings by remember { mutableStateOf<List<ProfileTargetBinding>>(emptyList()) }
     var federatedRepos by remember { mutableStateOf<Map<String, FileRepository>>(emptyMap()) }
+    val currentClientMap by rememberUpdatedState(
+        remember(activeApiClient, activeProfileId, federatedBindings) {
+            val map = mutableMapOf<String, ApiClient>()
+            federatedBindings.forEach { binding ->
+                map[binding.profileId] = binding.apiClient
+            }
+            val active = activeApiClient
+            val activeId = activeProfileId
+            if (activeId != null && active != null && active.connection.profileId == activeId) {
+                map[activeId] = active
+            }
+            map
+        }
+    )
+    val settingsRepository = remember(preferencesStore) {
+        SettingsRepository(
+            preferencesStore = preferencesStore,
+            clientProvider = { profileId -> currentClientMap[profileId] }
+        )
+    }
     var editorTabsState by remember { mutableStateOf<EditorTabsState?>(null) }
     var editorRepo by remember { mutableStateOf<EditorRepository?>(null) }
     var diffController by remember { mutableStateOf<DiffReviewController?>(null) }
@@ -252,6 +289,7 @@ fun WorkbenchScreen(
                         }
                     )
                     val eTabs = EditorTabsState(activeProfileId!!, eRepo)
+                    eTabs.isInputAllowed = { privacyController.isInputAllowed() }
                     editorRepo = eRepo
                     editorTabsState = eTabs
                 } else {
@@ -527,6 +565,7 @@ fun WorkbenchScreen(
                     terminalRepo?.attachTerminal(sId, offset)
                 }
             }
+            ctrl.isInputAllowed = { privacyController.isInputAllowed() }
             ctrl.isPanelActive = (id == activeTerminalSessionId && navState.activePanel == WorkbenchPanel.TERMINAL)
             ctrl
         }
@@ -782,13 +821,98 @@ fun WorkbenchScreen(
         }
     }
 
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val isMaskActive by privacyController.isMaskActive.collectAsState()
+    val workbenchPreferences by settingsRepository.preferences.collectAsState()
 
-    Column(
+    LaunchedEffect(isMaskActive) {
+        if (isMaskActive) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+    }
+
+    DisposableEffect(lifecycleCoordinator) {
+        val listener = object : LifecycleAware {
+            override fun onForeground() {
+                hostResourceController?.coordinator?.setForeground(true)
+            }
+            override fun onBackground() {
+                hostResourceController?.coordinator?.setForeground(false)
+                privacyController.reset()
+            }
+            override fun onOwnerRetired(profileId: String) {
+                notificationSink?.cancelNotificationsForProfile(profileId)
+                settingsRepository.onProfileRemoved(profileId)
+                val toRemove = terminalControllers.keys.filter { it.startsWith("$profileId:") }
+                toRemove.forEach { key ->
+                    terminalControllers.remove(key)?.close()
+                }
+            }
+            override fun onDestroy() {
+                privacyController.reset()
+            }
+        }
+        lifecycleCoordinator.register(listener)
+        onDispose {
+            lifecycleCoordinator.unregister(listener)
+        }
+    }
+
+    CognitoOverlay(
+        privacyController = privacyController,
         modifier = modifier
             .fillMaxSize()
-            .background(DamHopperColors.Background)
-            .safeDrawingPadding()
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    val isCtrl = keyEvent.isCtrlPressed
+                    val isAlt = keyEvent.isAltPressed
+                    val isShift = keyEvent.isShiftPressed
+                    val chord = buildString {
+                        if (isCtrl) append("ctrl+")
+                        if (isAlt) append("alt+")
+                        if (isShift) append("shift+")
+                        when (keyEvent.key) {
+                            Key.P -> append("p")
+                            Key.L -> append("l")
+                            Key.K -> append("k")
+                            Key.C -> append("c")
+                            Key.D -> append("d")
+                            Key.Z -> append("z")
+                            Key.Escape -> append("esc")
+                            else -> append(keyEvent.key.keyCode.toString())
+                        }
+                    }
+                    if (isMaskActive) {
+                        if (privacyController.dismissWithChord(chord)) {
+                            keyboardController?.hide()
+                            true
+                        } else {
+                            true
+                        }
+                    } else {
+                        val configured = workbenchPreferences.cognitoModeShortcut.trim().lowercase()
+                        if (chord == configured) {
+                            privacyController.activate(chord, workbenchPreferences.cognitoModeStyle)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                } else if (isMaskActive) {
+                    true
+                } else {
+                    false
+                }
+            },
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DamHopperColors.Background)
+                .safeDrawingPadding()
+        ) {
         // 1. Top Header: Server & Project info with interactive target picker and workspace switcher
         WorkbenchHeader(
             state = initialState.copy(
@@ -841,6 +965,7 @@ fun WorkbenchScreen(
                         onDeleteProfile = { id ->
                             coroutineScope.launch {
                                 profileRepository.deleteProfile(id)
+                                lifecycleCoordinator.onProfileRetired(id)
                             }
                         },
                         onOpenAuth = { id -> navigation.openAuth(id) },
@@ -1227,64 +1352,25 @@ fun WorkbenchScreen(
                             }
                         },
                         settingsContent = {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                // Settings subtabs
-                                val tabs = listOf("Server Profiles", "Remote Configuration")
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(DamHopperColors.SurfaceVariant)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    tabs.forEachIndexed { index, title ->
-                                        val isSelected = settingsTab == index
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(if (isSelected) DamHopperColors.Accent else DamHopperColors.Surface)
-                                                .clickable { settingsTab = index }
-                                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                                        ) {
-                                            Text(
-                                                text = title,
-                                                color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
-                                }
-                                // Invariant: state.activePanel == WorkbenchPanel.SETTINGS provides ProfileListScreen under SETTINGS
-
-                                if (settingsTab == 0 && profileRepository != null) {
-                                    ProfileListScreen(
-                                        profiles = profiles,
-                                        activeProfileId = activeProfileId,
-                                        authStatuses = authStatuses,
-                                        onSelectProfile = { id -> profileRepository.selectProfile(id) },
-                                        onAddProfile = { name, url, username ->
-                                            coroutineScope.launch {
-                                                profileRepository.addProfile(name, url, username)
-                                            }
-                                        },
-                                        onDeleteProfile = { id ->
-                                            coroutineScope.launch {
-                                                profileRepository.deleteProfile(id)
-                                            }
-                                        },
-                                        onOpenAuth = { id -> navigation.openAuth(id) },
-                                        onClose = { navigation.navigateTo(WorkbenchPanel.TERMINAL) }
-                                    )
-                                } else if (settingsTab == 1 && configEditor != null) {
-                                    RemoteConfigScreen(editor = configEditor!!)
-                                }
-                            }
+                            // Invariant: state.activePanel == WorkbenchPanel.SETTINGS provides ProfileListScreen under SETTINGS
+                            SettingsScreens(
+                                settingsRepository = settingsRepository,
+                                privacyController = privacyController,
+                                availableProfiles = profiles,
+                                activeProfileId = activeProfileId,
+                                profileRepository = profileRepository,
+                                authStatuses = authStatuses,
+                                remoteConfigEditor = configEditor,
+                                notificationSink = notificationSink,
+                                onNavigateBack = { navigation.navigateTo(WorkbenchPanel.TERMINAL) },
+                                onOpenAuth = { id -> navigation.openAuth(id) },
+                            )
                         }
                     )
                 }
             }
         }
+    }
     }
 
     // Modal dialogs and flows

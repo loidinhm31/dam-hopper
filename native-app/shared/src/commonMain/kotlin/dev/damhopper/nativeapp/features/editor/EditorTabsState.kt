@@ -33,6 +33,11 @@ class EditorTabsState(
     private val saveCoordinator = EditorTabSaveCoordinator(editorRepository)
     private val saveMutex = Mutex()
 
+    var isInputAllowed: () -> Boolean = { true }
+        set(value) {
+            field = value
+            sessions.values.forEach { it.isInputAllowed = value }
+        }
     val activeTab: EditorTab? get() = _tabs.value.find { it.key == _activeTabKey.value }
     fun getSession(key: String): EditorSession? = sessions[key]
 
@@ -85,6 +90,7 @@ class EditorTabsState(
                     sessionIncarnation = incarnation, initialContent = result.content,
                     initialMtime = result.mtime, isReadOnly = result.tier.isReadOnly
                 )
+                session.isInputAllowed = { isInputAllowed() }
                 sessions[key] = session
                 attachSessionListeners(session)
 

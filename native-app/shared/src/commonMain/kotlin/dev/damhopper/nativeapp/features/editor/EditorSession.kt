@@ -35,6 +35,7 @@ class EditorSession(
     var gutterDecorations: List<GutterDecoration> = emptyList(); private set
     var findReplaceState: FindReplaceState = FindReplaceState(); private set
 
+    var isInputAllowed: () -> Boolean = { true }
     private var onContentChangeListener: ((text: String, modelVersion: Long, editEpoch: Long) -> Unit)? = null
 
     init { updateCursorPositionFromOffset(0) }
@@ -46,7 +47,7 @@ class EditorSession(
     fun canRedo(): Boolean = !isDisposed && !isReadOnly && undoManager.canRedo
 
     fun setText(newText: String, newModelVersion: Long = modelVersion + 1L) {
-        checkNotDisposed(); if (isReadOnly) return
+        checkNotDisposed(); if (isReadOnly || !isInputAllowed()) return
         undoManager.recordSnapshot(content.toString())
         content.clear(); content.append(newText)
         modelVersion = newModelVersion; editEpoch++
@@ -68,7 +69,7 @@ class EditorSession(
     }
 
     fun beginSave(): Pair<String, Long>? {
-        checkNotDisposed(); if (isReadOnly || !isDirty) return null
+        checkNotDisposed(); if (isReadOnly || !isDirty || !isInputAllowed()) return null
         val snapshot = getText()
         submittedContent = snapshot; submittedEpoch = editEpoch
         return Pair(snapshot, editEpoch)
@@ -85,7 +86,7 @@ class EditorSession(
     fun abortSave() { submittedContent = null; submittedEpoch = null }
 
     fun undo(): Boolean {
-        checkNotDisposed(); if (!canUndo()) return false
+        checkNotDisposed(); if (!canUndo() || !isInputAllowed()) return false
         val prev = undoManager.undo(content.toString()) ?: return false
         content.clear(); content.append(prev)
         modelVersion++; editEpoch++; isDirty = (content.toString() != savedContent)
@@ -94,7 +95,7 @@ class EditorSession(
     }
 
     fun redo(): Boolean {
-        checkNotDisposed(); if (!canRedo()) return false
+        checkNotDisposed(); if (!canRedo() || !isInputAllowed()) return false
         val next = undoManager.redo(content.toString()) ?: return false
         content.clear(); content.append(next)
         modelVersion++; editEpoch++; isDirty = (content.toString() != savedContent)
@@ -103,7 +104,7 @@ class EditorSession(
     }
 
     fun applyEdit(edit: TextEdit) {
-        checkNotDisposed(); if (isReadOnly) return
+        checkNotDisposed(); if (isReadOnly || !isInputAllowed()) return
         val start = EditorPositionHelper.positionToOffset(content, edit.range.start)
         val end = EditorPositionHelper.positionToOffset(content, edit.range.end)
         if (start > end || start < 0 || end > content.length) return

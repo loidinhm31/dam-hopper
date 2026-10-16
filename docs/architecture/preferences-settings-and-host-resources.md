@@ -58,6 +58,14 @@ Fleet mode is documented in [System Architecture](../system-architecture.md#mult
 `use-sse.ts` installs one transport bridge per `ConnectionRef`. It validates `host:alertChanged` payloads, patches only the matching profile's snapshot incident, and invalidates that owner's snapshot/history queries. It similarly validates `host:idleSuspendChanged` revision hints and invalidates only the owner's status query. Invalid evidence is ignored; REST snapshots remain the repair authority after reconnect or missed events.
 
 `HostIdleSuspendStatus` displays server state, fleet counts, timing, capability, measurement state, bounded warning identities, and the `agent-activity` heuristic notice. Null measurement values remain unknown, not zero or quiet. `ForceSleepDialog` captures owner, connection generation, endpoint label, status revision, fleet snapshot, and request ID when opened. It blocks stale connections, requires confirmation for active managed sessions, rechecks fleet conflicts, and uses `retry: false`; an ambiguous POST is never replayed. Existing actor, origin, no-auth, inhibitor, helper, and server revision guards remain authoritative.
+## Android Native Preferences and Settings Synchronization
+
+In the Android native client (`native-app/`):
+- `PreferencesStore` defines the storage contract for `WorkbenchPreferences` and `SettingsSourceTargetState`; `AndroidPreferencesStore` persists JSON to Android `SharedPreferences` (or `EncryptedSharedPreferences`).
+- User settings are strictly clamped at domain boundaries: font sizes to 10..32 (`FONT_MIN`..`FONT_MAX`) and terminal scroll step to 1..20 (`SCROLL_STEP_MIN`..`SCROLL_STEP_MAX`).
+- `SettingsRepository` syncs allowlisted UI preferences (`systemFontSize`, `editorFontSize`, `terminalFontSize`, `cognitoModeShortcut`, `cognitoModeStyle`) with the active `preferencesProfileId` using debounced (500ms) remote updates via `RemoteConfigRepository.updateGlobalUi`. Client-side stale-owner fencing captures profile, connection generation, and edit revision, rejecting out-of-order writes when ownership changes or the edit is superseded.
+- Switching preference source (`switchPreferenceSource`) hydrations load remote preferences from the target server without overwriting unrelated local fields.
+- TOML import and export (`exportWorkspaceToml`, `importWorkspaceToml`) enforce the 1 MiB boundary (`MAX_CONFIG_IMPORT_BYTES = 1024L * 1024L`) and verify the active connection generation before dispatching to the target profile (`settingsProfileId`).
 
 ## Source Map
 
@@ -71,4 +79,7 @@ Fleet mode is documented in [System Architecture](../system-architecture.md#mult
 | Android native Resources panel & zero-FAB UI | `native-app/shared/.../features/host/ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `UsageScreens.kt` |
 | Android native SSE streaming & coordinator | `native-app/shared/.../core/transport/HostResourceSseClient.kt`, `features/host/ResourceStreamCoordinator.kt` |
 | Android native repositories & controllers | `native-app/shared/.../features/host/HostResourceRepository.kt`, `UsageRepository.kt`, `HostResourceController.kt`, `UsageController.kt` |
+| Android native settings & preferences repository | `native-app/shared/.../features/settings/SettingsRepository.kt`, `SettingsModels.kt`, `PreferencesStore.kt` |
+| Android native preferences storage | `native-app/androidApp/.../platform/storage/AndroidPreferencesStore.kt` |
+| Android native Settings panel UI | `native-app/shared/.../features/settings/SettingsScreens.kt`, `PreferencesPrivacyView.kt`, `MaintenanceView.kt`, `NotificationsView.kt` |
 | Related contracts | [API Reference](../api-reference.md), [Protected Idle-Suspend Status](../idle-suspend-status-ui.md), [Frontend Components](../frontend-components.md) |
