@@ -27,6 +27,9 @@ fun NativeTextEditorView(
     session: EditorSession?,
     content: String,
     onContentChange: (String) -> Unit,
+    lineAttributions: Map<Int, BlameLineAttribution>? = null,
+    showBlameGutter: Boolean = false,
+    onInspectCommit: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val lines = content.lines()
@@ -62,8 +65,16 @@ fun NativeTextEditorView(
                 }
             }
 
-            VerticalDivider(modifier = Modifier.width(1.dp), color = DamHopperColors.Border)
+            if (showBlameGutter && lineAttributions != null) {
+                VerticalDivider(modifier = Modifier.width(1.dp), color = DamHopperColors.Border)
+                EditorBlameGutter(
+                    lineAttributions = lineAttributions,
+                    totalLines = lines.size,
+                    onInspectCommit = onInspectCommit
+                )
+            }
 
+            VerticalDivider(modifier = Modifier.width(1.dp), color = DamHopperColors.Border)
             TextField(
                 value = content,
                 onValueChange = onContentChange,

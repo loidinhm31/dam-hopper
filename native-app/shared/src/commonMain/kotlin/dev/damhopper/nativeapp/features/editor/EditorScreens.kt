@@ -16,6 +16,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun EditorPanelScreen(
     tabsState: EditorTabsState,
+    blameRepo: BlameRepository? = null,
+    onInspectCommit: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -23,9 +25,34 @@ fun EditorPanelScreen(
     val activeTabKey by tabsState.activeTabKey.collectAsState()
     val activeTab = tabs.find { it.key == activeTabKey }
     val session = activeTabKey?.let { tabsState.getSession(it) }
-
     var findState by remember(activeTabKey) { mutableStateOf(session?.findReplaceState ?: FindReplaceState()) }
+    var showBlame by remember { mutableStateOf(false) }
+    var lineAttributions by remember(activeTabKey, showBlame) { mutableStateOf<Map<Int, BlameLineAttribution>?>(null) }
 
+    LaunchedEffect(activeTabKey, showBlame, activeTab?.content) {
+        if (!showBlame || activeTab == null || blameRepo == null) {
+            lineAttributions = null
+            return@LaunchedEffect
+        }
+        lineAttributions = null
+        val expectedKey = activeTab.key
+        val expectedVersion = activeTab.modelVersion
+        blameRepo.requestBlameDebounced(
+            target = activeTab.target,
+            path = activeTab.path,
+            content = activeTab.content,
+            snapshotId = "editor-${activeTab.key}",
+            modelVersion = activeTab.modelVersion
+        ) { res ->
+            if (res is BlameValidator.ValidationResult.Valid &&
+                showBlame &&
+                activeTabKey == expectedKey &&
+                tabsState.activeTab?.modelVersion == expectedVersion
+            ) {
+                lineAttributions = blameRepo.deriveLineAttributions(res.response)
+            }
+        }
+    }
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         EditorTopBar(
             tabs = tabs,
@@ -43,9 +70,10 @@ fun EditorPanelScreen(
                     findState = it.findReplaceState
                 }
             },
-            onToggleMarkdownPreview = { activeTabKey?.let { tabsState.toggleMarkdownPreview(it) } }
+            onToggleMarkdownPreview = { activeTabKey?.let { tabsState.toggleMarkdownPreview(it) } },
+            onToggleBlame = { showBlame = !showBlame },
+            showBlame = showBlame
         )
-
         // Find/Replace Bar
         if (session != null && findState.isOpen) {
             Column(modifier = Modifier.fillMaxWidth().background(DamHopperColors.SurfaceVariant).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -78,13 +106,9 @@ fun EditorPanelScreen(
                         textStyle = TextStyle(fontSize = 12.sp, color = DamHopperColors.TextPrimary)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Button(onClick = { session.replaceCurrent(); findState = session.findReplaceState }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text("Replace", fontSize = 11.sp)
-                    }
+                    Button(onClick = { session.replaceCurrent(); findState = session.findReplaceState }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Replace", fontSize = 11.sp) }
                     Spacer(modifier = Modifier.width(4.dp))
-                    Button(onClick = { session.replaceAll(); findState = session.findReplaceState }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text("Replace All", fontSize = 11.sp)
-                    }
+                    Button(onClick = { session.replaceAll(); findState = session.findReplaceState }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Replace All", fontSize = 11.sp) }
                 }
             }
         }
@@ -153,7 +177,10 @@ fun EditorPanelScreen(
                 NativeTextEditorView(
                     session = session,
                     content = activeTab.content,
-                    onContentChange = { newText -> session?.setText(newText) }
+                    onContentChange = { newText -> session?.setText(newText) },
+                    lineAttributions = lineAttributions,
+                    showBlameGutter = showBlame,
+                    onInspectCommit = onInspectCommit
                 )
             }
         }

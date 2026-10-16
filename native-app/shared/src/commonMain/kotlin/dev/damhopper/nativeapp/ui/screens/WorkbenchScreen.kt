@@ -69,6 +69,12 @@ import kotlinx.coroutines.launch
 import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.editor.EditorTabsState
+import dev.damhopper.nativeapp.features.editor.BlameCache
+import dev.damhopper.nativeapp.features.editor.BlameRepository
+import dev.damhopper.nativeapp.features.git.DiffReviewController
+import dev.damhopper.nativeapp.features.git.DiffReviewScreen
+import dev.damhopper.nativeapp.features.git.MergeConflictController
+import dev.damhopper.nativeapp.features.git.MergeConflictScreen
 import dev.damhopper.nativeapp.ui.components.GenericPanelPlaceholder
 
 @Composable
@@ -113,6 +119,10 @@ fun WorkbenchScreen(
     var federatedRepos by remember { mutableStateOf<Map<String, FileRepository>>(emptyMap()) }
     var editorTabsState by remember { mutableStateOf<EditorTabsState?>(null) }
     var editorRepo by remember { mutableStateOf<EditorRepository?>(null) }
+    var diffController by remember { mutableStateOf<DiffReviewController?>(null) }
+    var mergeController by remember { mutableStateOf<MergeConflictController?>(null) }
+    val blameCache = remember { BlameCache() }
+    var blameRepo by remember { mutableStateOf<BlameRepository?>(null) }
     val searchRepo = remember { SearchRepository() }
     val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
@@ -157,6 +167,25 @@ fun WorkbenchScreen(
                     editorTabsState = null
                     editorRepo = null
                 }
+                val dCtrl = DiffReviewController(
+                    apiClient = client,
+                    targetStore = targetStore,
+                    isDirtyBufferProvider = { target, path -> editorTabsState?.isDirtyFile(target, path) ?: false },
+                    coroutineScope = coroutineScope
+                )
+                val mCtrl = MergeConflictController(
+                    apiClient = client,
+                    targetStore = targetStore,
+                    coroutineScope = coroutineScope
+                )
+                val bRepo = BlameRepository(
+                    apiClient = client,
+                    cache = blameCache,
+                    coroutineScope = coroutineScope
+                )
+                diffController = dCtrl
+                mergeController = mCtrl
+                blameRepo = bRepo
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -196,6 +225,9 @@ fun WorkbenchScreen(
             editorRepo = null
             fileRepo = null
             activeApiClient = null
+            diffController = null
+            mergeController = null
+            blameRepo = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -358,6 +390,23 @@ fun WorkbenchScreen(
         workspaceConfigPath = workspaceStatus?.configPath,
         project = navState.activeProject
     )
+    // Automatically trigger diff / merge queries on panel navigation
+    LaunchedEffect(navState.activePanel, navState.activeProject, snapshot.target) {
+        val proj = navState.activeProject.takeIf { it != "Default Workspace" }
+        if (proj != null) {
+            if (navState.activePanel == WorkbenchPanel.DIFF) {
+                val current = diffController?.activeQuery?.value
+                if (current?.commitHash == null) {
+                    val openPath = editorTabsState?.activeTab?.path ?: ""
+                    if (openPath.isNotBlank() && current?.path != openPath) {
+                        diffController?.loadDiff(proj, snapshot.target, openPath)
+                    }
+                }
+            } else if (navState.activePanel == WorkbenchPanel.MERGE) {
+                mergeController?.loadConflicts(proj, snapshot.target)
+            }
+        }
+    }
 
     LaunchedEffect(fileRepo, snapshot.target) {
         val repo = fileRepo ?: return@LaunchedEffect
@@ -601,9 +650,54 @@ fun WorkbenchScreen(
                         },
                         editorContent = {
                             if (editorTabsState != null) {
-                                EditorPanelScreen(tabsState = editorTabsState!!)
+                                // EditorPanelScreen(tabsState = editorTabsState!!)
+                                EditorPanelScreen(
+                                    tabsState = editorTabsState!!,
+                                    blameRepo = blameRepo,
+                                    onInspectCommit = { hash ->
+                                        val proj = navState.activeProject.takeIf { it != "Default Workspace" } ?: ""
+                                        val activePath = editorTabsState?.activeTab?.path
+                                        if (proj.isNotBlank() && !activePath.isNullOrBlank()) {
+                                            diffController?.loadDiff(
+                                                project = proj,
+                                                target = snapshot.target,
+                                                path = activePath,
+                                                commitHash = hash
+                                            )
+                                            navigation.navigateTo(WorkbenchPanel.DIFF)
+                                        }
+                                    }
+                                )
                             } else {
                                 GenericPanelPlaceholder(WorkbenchPanel.EDITOR)
+                            }
+                        },
+                        diffContent = {
+                            if (diffController != null) {
+                                // DiffReviewScreen(controller = diffController!!)
+                                DiffReviewScreen(
+                                    controller = diffController!!,
+                                    onSaveModified = {
+                                        fileRepo?.let { repo -> coroutineScope.launch { diffController?.saveModified(repo) } }
+                                    }
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.DIFF)
+                            }
+                        },
+                        mergeContent = {
+                            if (mergeController != null) {
+                                MergeConflictScreen(
+                                    controller = mergeController!!,
+                                    onResolved = {
+                                        val rem = mergeController?.conflictFiles?.value ?: emptyList()
+                                        if (rem.size <= 1) {
+                                            navigation.navigateTo(WorkbenchPanel.TERMINAL)
+                                        }
+                                    }
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.MERGE)
                             }
                         },
                         agentsContent = {

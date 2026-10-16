@@ -29,6 +29,8 @@ fun EditorTopBar(
     canRedo: Boolean,
     onToggleFind: () -> Unit,
     onToggleMarkdownPreview: () -> Unit,
+    onToggleBlame: () -> Unit = {},
+    showBlame: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val activeTab = tabs.find { it.key == activeTabKey }
@@ -117,6 +119,17 @@ fun EditorTopBar(
                     colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant)
                 ) {
                     Text(if (activeTab.markdownPreviewMode) "Source" else "Preview", fontSize = 12.sp, color = DamHopperColors.Secondary)
+                }
+            }
+
+            if (activeTab != null && activeTab.tier != FileTier.BINARY && activeTab.tier != FileTier.IMAGE && activeTab.tier != FileTier.LARGE) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Button(
+                    onClick = onToggleBlame,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (showBlame) DamHopperColors.Primary else DamHopperColors.SurfaceVariant)
+                ) {
+                    Text("Blame", fontSize = 12.sp, color = if (showBlame) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary)
                 }
             }
 
