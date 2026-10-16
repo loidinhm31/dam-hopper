@@ -134,5 +134,32 @@ continues to calculate `terminalOrder` as the tab's global 1-based `openTabs`
 position. `sessionId` remains the identity for keys, selection, close/pin/
 diagnostics, PTY attachment, notifications, and browser artifacts. No title or
 fallback exposes opaque session IDs or PTY incarnations.
+## Android Native Privacy Mode & Notification Sink
 
+**Locations:**
+- `native-app/shared/.../core/security/PrivacyController.kt`
+- `native-app/shared/.../ui/components/CognitoOverlay.kt`
+- `native-app/shared/.../core/notifications/NotificationSink.kt`
+- `native-app/androidApp/.../platform/notifications/AndroidNotificationSink.kt`
+- `native-app/androidApp/.../platform/terminal/TerminalInputController.kt`
+- `native-app/androidApp/.../platform/editor/AndroidEditorSurface.kt`
+- `native-app/shared/.../features/settings/NotificationsView.kt`
+
+### Native Cognito Mode
+- **Controller & State:** The user's configured shortcut preference (`cognitoModeShortcut`) persists and syncs remotely, while runtime mask activation (`isMaskActive`) and the captured dismissal chord (`activationChord`) remain strictly in memory and are never persisted across process restarts or app backgrounding.
+- **Three-Layer Input Defense:**
+  1. *Overlay Boundary:* `CognitoOverlay` wraps the workbench, paints the full viewport with opaque black or heavy slate tint (`Color(0xF20D1117)` fallback for blur), consumes all pointer events via `pointerInput`, and marks underlying content `invisibleToUser()` for accessibility. Note: modal dialogs declared outside `CognitoOverlay` are not covered by the overlay boundary.
+  2. *Session Controller Boundary:* `TerminalSessionController` gates `sendInput`, `getSelectedText`, `copySelection`, and `pasteText` when `!isInputAllowed()`. `EditorSession` gates `setText`, `applyEdit`, `undo`, `redo`, and `saveEdit`. `EditorTabsState` sets `isInputAllowed` across active editor sessions.
+  3. *Platform Surface Boundary:* `TerminalInputController` intercepts hardware keys, IME text commits, IME delete backward, and clipboard paste. `AndroidEditorSurface` blocks mutation methods and undo/redo.
+- **Interaction Suppression & Dismissal:** Activation triggers `keyboardController.hide()` and `focusManager.clearFocus(force = true)`. Dismissal requires the exact matching activation chord or emergency touch dismissal; trailing release events are consumed (`consumeTrailingRelease()`). Supported hardware chord keys are limited to letter keys (P, L, K, C, D, Z, Esc) and numeric keyCodes.
+
+### Native Notification Sink
+- **Notification Channels:** `AndroidNotificationSink` initializes three private channels:
+  1. `channel_terminal_attention` ("Terminal Attention", `IMPORTANCE_HIGH`): alerts for agent turns requiring attention.
+  2. `channel_transfers` ("File Transfers", `IMPORTANCE_LOW`): progress for background encrypted file transfers.
+  3. `channel_idle_suspend` ("Idle Suspend", `IMPORTANCE_HIGH`): warnings and consent prompts for idle suspend handoffs.
+- **Lock-Screen Privacy:** All channels configure `Notification.VISIBILITY_PRIVATE` and attach a public notification (`setPublicVersion`) with non-sensitive placeholder text (`publicTitle = "DamHopper"`, `publicBody = "Attention required"`) intended to redact confidential terminal and file data on lock screens (on-device presentation unqualified).
+- **Target-Routing Scaffolding & Deep Linking:** Notifications launch `MainActivity` with `EXTRA_TARGET_PROFILE_ID`, `EXTRA_TARGET_GENERATION`, `EXTRA_TARGET_SERVER_EPOCH`, `EXTRA_TARGET_TERMINAL_ID`, `EXTRA_TARGET_INCARNATION`, and `EXTRA_TARGET_ATTENTION_REVISION` wrapped in `FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE`. `MainActivity.handleDeepLink` verifies matching profile and generation; carrying epoch/incarnation/revision extras does not establish server-side validation or single-consumption semantics.
+- **Profile Cancellation:** `cancelNotificationsForProfile(profileId)` cancels active notifications when a profile is retired or deleted.
+- **Open Review Limitations:** Current implementation features a test-only notification trigger without runtime `POST_NOTIFICATIONS` permission launcher in UI; agent attention, background transfers, and idle suspend do not yet emit native system notifications.
 

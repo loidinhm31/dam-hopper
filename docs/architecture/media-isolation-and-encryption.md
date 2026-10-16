@@ -125,5 +125,8 @@ If a fence fails, mutable key material from a stale result is zeroed and the wri
 | Client media identifiers and cleanup | `packages/ui/src/api/connections.ts`, `packages/ui/src/api/media-session.ts`, `packages/ui/src/api/image-tickets.ts`, `packages/ui/src/api/video-tickets.ts` |
 | Native preview lifecycle | `packages/ui/src/components/organisms/ImagePreview.tsx`, `packages/ui/src/components/organisms/VideoPreview.tsx` |
 | Owned encryption and writes | `packages/ui/src/contexts/EncryptContext.tsx`, `packages/ui/src/hooks/use-encrypted-write.ts`, `packages/ui/src/lib/opaque-session.ts` |
+| Android native media client & video surface | `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaClient.kt`, `AndroidVideoSurface.kt`, `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/media/MediaModels.kt` |
+| Android native encrypted transfers & saves | `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/CryptoEnvelope.kt`, `CryptoSession.kt`, `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/TransferCoordinator.kt`, `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EncryptedSaveCoordinator.kt` |
+| Android SAF document storage | `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/storage/AndroidDocumentStorage.kt` |
 
 Related contracts: [API Reference](../api-reference.md), [Filesystem & Media API](../api/filesystem-and-media.md), [System Architecture](../system-architecture.md), and [Code Standards](../code-standards.md).

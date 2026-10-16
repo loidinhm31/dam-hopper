@@ -302,4 +302,20 @@ Shift+Arrow keys in 32-pixel steps, and Home/End for the minimum/maximum width.
 Compact layouts expose the same navigator in a bottom sheet without the desktop rail
 resize handle.
 
+## Android Native Resources and Usage Panel
+
+**Locations:** `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/` (`ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `FleetDetailComponents.kt`, `UsageScreens.kt`, `UsageDialogs.kt`, `UsageSettingsSection.kt`).
+
+`ResourcesUnifiedPanelScreen` serves as the authoritative panel host for `WorkbenchPanel.RESOURCES` docked in `WorkbenchScreen.kt`. It implements the single-content-area shell pattern with zero floating action buttons (FABs) and zero embedded WebViews:
+
+- **Segmented Sub-Product Switcher:** A top horizontal segmented control switches between `ResourcesSubProduct.FLEET` ("Host Resources") and `ResourcesSubProduct.USAGE` ("Usage Insights"), updating the active subproduct and notifying `WorkbenchScreen` to support hierarchical back-stack navigation.
+- **Fleet Resources Presentation (`FleetScreens`, `FleetDetailComponents`):**
+  - Displays host availability, OS/hostname, kernel, uptime, load averages, memory snapshot (cgroup, RSS, cache, pressure), and CPU/disk metrics.
+  - Stream status header renders active mode (`STREAM`, `REST_FALLBACK`, `AUTH_BLOCKED`, `REST_ONLY`), fresh vs stale status, sample age, and manual refresh action.
+  - Honest null presentation: missing, degraded, or unsupported values render explicitly as `--` rather than fabricating zero metrics.
+- **Usage Insights Presentation (`UsageScreens`, `UsageDialogs`, `UsageSettingsSection`):**
+  - Aggregate analytics cards: Total input/output/cached tokens, aggregate cost, and active collector health indicators.
+  - Session list & pagination: Opaque cursor pagination omitting `from`/`to` on page-2+ continuation requests; session details dialog showing model, token distribution, duration, and session timestamps.
+  - Safe deletion dialogs (`UsageDialogs`): Confirm UTC midnight floored date-range deletion (`calculateUtcDayRange`) and nuclear delete-all; re-entrancy and disposed guards prevent duplicate dispatches; generation fences (`summaryGeneration++`, `sessionsGeneration++`) prevent stale query callbacks from overwriting fresh state.
+  - Settings section (`UsageSettingsSection`): Pause/resume telemetry collection toggle; displays collector setup status and exporter configuration.
 

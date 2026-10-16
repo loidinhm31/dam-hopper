@@ -1,0 +1,137 @@
+---
+title: "Phase 18 — Integrated device security and performance qualification"
+description: "Prove end-to-end native behavior and retained feature parity on real supported Android/device/server combinations."
+status: completed
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, qualification, security, e2e]
+created: 2026-10-15
+---
+
+# Phase 18 — Integrated device security and performance qualification
+
+## Context Links
+
+- [Overview](./plan.md) · [scope and acceptance](./scope-and-acceptance.md) · [contracts/modules](./contracts-and-modules.md) · [execution guide](./execution-guide.md).
+- [Proposed architecture](../../docs/architecture/android-native-client.md) · [reviewed research](./research/android-platform-research.md).
+- Dependencies: [Phase 12](./phase-12-complete-git-and-safe-history-workflows.md), [Phase 17](./phase-17-preferences-privacy-notifications-and-lifecycle.md)
+
+## Overview
+
+- Date: 2026-10-15. Completion date: 2026-10-17. Priority: P2. Implementation status: **completed (2026-10-17 01:50:00 +07:00)**. Review status: **User approved Cycle 2 review (score 6/10, documented open device/NDK limitations)** (see `plans/reports/code-reviewer-261017-phase-18-qualification-cycle2.md` and `plans/reports/qa-261017-0122-phase-18-qualification.md`). Progress: **100% (tooling baseline)**.
+- Scope: All included scope rows; GATE-C.
+- Goal: Prove end-to-end native behavior and retained feature parity on real supported Android/device/server combinations.
+- Implementation tooling and automated test baseline delivered under `feat/android-native-app` with 481 automated test executions passing (Rust crypto bridge, JVM shared, Android debug/release unit tests), 1,430 static invariant assertions across 17 test scripts (Phases 02-18), 13 APK security and ABI audit checks, and `run-device-journeys.sh` cleanly reporting `BLOCKED_PENDING_DEVICE` (exit 2) when headless. Physical device runtime journeys, live 16 KiB hardware verification, and visual human signoff remain open operational limitations.
+
+## Key Insights
+
+- JVM unit tests or an APK build are not proof of native UI/IME/PTY/media behavior.
+- Visual acceptance requires fresh full-app captures and human review; no synthetic ACCEPTED from green CI.
+
+## Requirements
+
+- Deterministic isolated real-server/device journeys covering every included ledger row and denial/edge conditions.
+- API29/current emulator plus named physical ARM64 device,16KiB environment for every native binary path and actual native input/accessibility.
+- Security/license/dependency/performance/soak budgets and full baseline web/server regression only for changed integration surfaces.
+- Qualify TERMINAL + Traditional only: one top icon + short text panel row below server/project header, horizontally scrollable and always visible with IME; one selected content area on every phone/tablet/foldable size. No IDE/Runtime mode, More menu, second navigation surface, floating button or wide-screen terminal/panel dock.
+
+## Architecture
+
+Native Android instrumentation drives the installed app against isolated real authenticated Rust servers, disposable real Git/filesystem/Agent Store/workflow fixtures and controlled network faults. Shared deterministic tests cover reducer/byte/identity boundaries; tests never substitute mocks for integration evidence.
+
+## Related Code Files
+
+Existing references (read/reuse contracts; no server/web modification by default):
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/docs/testing.md`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/docs/code-standards.md`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/packages/ui/e2e/`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/server/tests/`
+
+Proposed implementation files (create unless introduced earlier; modify thereafter):
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/androidApp/src/androidTest/kotlin/dev/damhopper/nativeapp/WorkbenchJourneys.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonTest/kotlin/dev/damhopper/nativeapp/OwnershipAndReplayTests.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/scripts/run-device-journeys.sh`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/scripts/audit-apk-security.sh`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/docs/android-native-acceptance.md`
+
+No deletion of existing web/Tauri hosts or unrelated files. Any necessary backend contract change requires a documented design/compatibility review before code.
+
+## Implementation Steps
+
+1. Implement deterministic fixture provisioning/cleanup for two authenticated servers/accounts and real project/Git/worktree/files/media/workflow/store data; use canonical operator/auth fixtures, not no-auth acceptance.
+2. Write permanent behavioral tests only for meaningful invariants: replay ordering/UTF8 boundaries, owner/incarnation replacement, CAS/safe mutation, stale model results, crypto tamper and lifecycle transitions. Avoid source-copy/wiring/mock-echo/incidental-default tests.
+3. Run every included panel journey in TERMINAL/Traditional mode through the top icon + short text row below server/project header. On phones/tablets/foldables, verify horizontal scrolling, selected-button reveal, IME visibility and one selected content area; no More menu, floating/secondary navigation, excluded mode or wide-screen dock. Cover role denials, profile isolation, editor/Git/transfers/media/workflows/store/host/settings, and prove panel return preserves the same terminal/controllers.
+4. Inject network loss/delay/reordering where supported, auth/MFA expiry, server restart, Android process death/Doze/rotation/navigation and concurrent mutations; verify actual final server files/refs/processes and app state.
+5. Audit APK dependency graph/manifest/backup/exports/TLS/cookies/logs/secrets and every native .so ABI/ELF/APK alignment; run native code paths in an actual16KiB-capable environment, not only static alignment.
+6. Measure frozen reference-device terminal throughput/input/render responsiveness, editor1/5MiB boundaries, transfer memory and stream/watch teardown through a bounded soak; compare against Phase01 approved budgets.
+7. Capture redacted full-app viewport evidence, device/server/version/ABI/page-size metadata and explicit human ACCEPTED/REJECTED visual review; CI can verify assertions only.
+8. Run affected existing server/web tests/builds once after integration changes settle, inspect failures as real regressions, and record unqualified platform/proxy/provider combinations instead of broad pass claims.
+9. Produce requirement-to-evidence release matrix with every included row passed or a concrete blocking defect. No missing retained feature may be relabelled preview exception.
+
+## Todo List
+
+- [x] Exercise complete native model/journey and failure invariants via automated test suites (`OwnershipAndReplayTests.kt`, `WorkbenchJourneysUnitTest.kt`).
+- [x] Deliver APK security/ABI audit script (`audit-apk-security.sh`, 13 checks passing) and headless-safe device journey runner (`run-device-journeys.sh`, exit 2 BLOCKED_PENDING_DEVICE).
+- [x] Deliver static phase invariant qualification suite (`tests/test-phase-18-device-qualification.sh`, 98 assertions).
+- [x] Record user-approved Cycle 2 code review (score 6/10) with documented open device/NDK limitations.
+- [ ] Physical device / live-server UI/IME/PTY execution, performance/soak profiling, and visual human signoff (GATE-C physical device gate; BLOCKED_PENDING_DEVICE exit 2 in headless CI).
+- [ ] Native NDK crypto cdylib packaging (`libdamhopper_crypto_bridge.so` in APK `jniLibs`) and physical 16 KiB page-size device runtime verification.
+
+## Phase 18 Completion Record (2026-10-17)
+
+- **Completed:** 2026-10-17 01:50:00 +07:00
+- **Status:** 100% tooling baseline complete (user approved Cycle 2 review score 6/10 per `plans/reports/code-reviewer-261017-phase-18-qualification-cycle2.md`, documented open device/NDK limitations, 481 automated test executions, 1,430 static invariant assertions across 17 test scripts, 13 APK security/ABI audit checks, clean assembleDebug APK; Phase 19 unblocked)
+- **Validation:** User approved Cycle 2 review (score 6/10 per `plans/reports/code-reviewer-261017-phase-18-qualification-cycle2.md`; open device/NDK limitations accepted and documented). 100% automated pass rate across:
+  - 481 automated test executions passing across shared JVM, Android debug/release unit tests, and Rust crypto bridge (0 failures, 0 skipped per `plans/reports/qa-261017-0122-phase-18-qualification.md`):
+    - 7 Rust crypto bridge unit tests passed (`cargo test` in `native-app/crypto-bridge`, 0.15s)
+    - 310 shared JVM unit tests passed (`:shared:jvmTest`, 57 test classes including new `OwnershipAndReplayTests.kt`)
+    - 82 Android debug unit tests passed (`:androidApp:testDebugUnitTest`, 17 test classes including new `WorkbenchJourneysUnitTest.kt`)
+    - 82 Android release unit tests passed (`:androidApp:testReleaseUnitTest`, 17 test classes including new `WorkbenchJourneysUnitTest.kt`)
+  - 1,430 static invariant assertions passed across 17 phase test scripts (`tests/test-phase-02-foundation.sh` through `tests/test-phase-18-device-qualification.sh` with 98 Phase 18 assertions, all exit code 0)
+  - 13 APK security and ABI audit checks passing via `native-app/scripts/audit-apk-security.sh` (manifest security, backup exclusion, network TLS policies, secret leak scanning, and real APK ELF PT_LOAD 16 KiB alignment `0x4000`)
+  - `native-app/scripts/run-device-journeys.sh` cleanly reporting `BLOCKED_PENDING_DEVICE` (exit 2) when executed in headless environment without attached Android device/ADB
+  - Clean `:androidApp:assembleDebug` APK build (55 tasks in 17.5s)
+- **Deliverables:**
+  - **Ownership & Replay Invariant Suite (`OwnershipAndReplayTests.kt`):** 8 automated tests in `:shared:jvmTest` covering multi-server profile isolation, watermark rejection, UTF-8 chunk-boundary splitting in `TerminalReplayGate`, duplicate/overlap slicing, `ResourceStreamCoordinator` EOF handling, 5s REST fallback cadence, UTC day interval calculations, fail-closed crypto envelope tamper rejection, and `LifecycleCoordinator` state transitions.
+  - **Workbench Navigation & Invariant Suite (`WorkbenchJourneysUnitTest.kt`):** 6 automated tests in `:androidApp:testDebugUnitTest` and `:androidApp:testReleaseUnitTest` verifying 12-panel sequential navigation, solitary top navigation row invariants (zero secondary navigation docks, zero bottom rails), zero FloatingActionButtons, zero WebViews across entire repository, Cognito privacy overlay input gating and dismissal, and back-stack hierarchical unwinding.
+  - **APK Security & ABI Audit Tool (`native-app/scripts/audit-apk-security.sh`):** 13 automated checks verifying unpack of real release APK, ELF PT_LOAD 16 KiB alignment (`Align >= 0x4000`), manifest security (`allowBackup="false"`, `fullBackupContent="false"`, `dataExtractionRules`), network security TLS-only enforcement, zero cleartext permissions, and zero exposed credential/token secrets in codebase.
+  - **Headless-Safe Device Journey Runner (`native-app/scripts/run-device-journeys.sh`):** Robust runner that gracefully detects absence of ADB, empty device lists, or unauthorized devices, cleanly exiting with code 2 and reporting `BLOCKED_PENDING_DEVICE`.
+  - **Static Invariant Qualification Suite (`tests/test-phase-18-device-qualification.sh`):** 98 static structural and contract assertions ensuring strict presentation invariants, test coverage, runner exit behaviors, and security policies.
+  - **Phase 15/17 Remediations:**
+    - `UsageUiState.knownModels` distinct accumulation in `loadSessions` and dynamic model union in `UsageScreens.kt` preventing chip collapse during pagination/filtering.
+    - `WorkbenchScreen` keyed `DisposableEffect(lifecycleCoordinator, hostResourceController)` registration for lifecycle transitions.
+    - `NativeTheme` Compose styling integration.
+- **Documented Open Device/NDK Limitations (Accepted per Cycle 2 Review):**
+  - **L1 (Physical Device UI/IME/PTY Runtime Qualification):** Real Android physical device lifecycle, physical IME input composition, soft keyboard viewport resizing, hardware keyboard chords, physical notification tray display, and physical screen rotation remain open pending physical device attachment (cleanly reports `BLOCKED_PENDING_DEVICE`, exit 2).
+  - **L2 (Native Crypto CDYLib APK Packaging):** `libdamhopper_crypto_bridge.so` is built via `cargo test` in `native-app/crypto-bridge`, but Gradle NDK packaging (`jniLibs`/`cargo-ndk`) into the packaged APK is not yet configured; `OpaqueClientBridge` catches `UnsatisfiedLinkError` at runtime.
+  - **L3 (16 KiB Page Size Runtime Execution):** ELF alignment of packaged `libandroidx.graphics.path.so` passes 16 KiB alignment (`0x4000`), but runtime execution on a physical 16 KiB page-size kernel remains unexecuted without target hardware.
+  - **L4 (Performance & Soak Profiling):** Reference device terminal throughput, 1/5 MiB editor memory limits, and bounded soak testing remain unmeasured on physical target hardware.
+  - **L5 (Phase 15 Residuals - Exporter Toggle & End-of-Day Option):** Settings export toggle, end-of-day boundary options, physical proxy SSE streaming, and background dispatcher payload decoding remain tracked as open items.
+- **Handoff:** Phase 18 (Integrated device security and performance qualification) tooling and automated baseline complete. Phase 19 (Signed APK release and operational handoff) is unblocked.
+
+## Success Criteria
+
+- Every included requirement has fresh observed evidence on its declared supported matrix; no mock-only or build-only certification.
+- No cross-profile mutation, unsafe replay, plaintext crypto fallback or repository-integrity regression under injected failures.
+- All native ABI/page-size and approved performance/security budgets pass; unresolved blocking defects prevent release.
+- NAV01 passes actual phone/tablet/foldable/IME/rotation journeys: top row below server/project header, icon + short text, single-line horizontal scrolling, row visible with IME and one selected content area. All panels remain reachable; no FAB/IDE/Runtime/More menu/secondary navigation/wide-screen terminal-panel dock, and returning preserves the original live session/controllers.
+- Verification: run changed consumer behavior and record actual output/state; use [execution guide](./execution-guide.md). Compilation/tests alone do not satisfy native-surface acceptance.
+
+## Risk Assessment
+
+- Test fixtures can accidentally hit real user hosts; require explicit isolated endpoint allowlist and disposable roots.
+- Emulator-only success misses hardware IME/OEM/memory behavior; physical ARM64 device mandatory.
+
+## Security Considerations
+
+- Test logs/artifacts redact passwords/MFA/passphrases/tokens/cookies/capabilities/private content; encrypted test secrets not committed.
+- No privileged host suspend/reset/public tunnel against non-disposable targets without operator-controlled acceptance setup.
+
+## Next Steps
+
+Phase 18 tooling and regression baseline is verified; Phase 19 (Signed APK release and operational handoff) is unblocked. Physical device and live 16 KiB hardware qualification remain tracked as open operational gates.
+
+## Unresolved Questions
+
+- Resolve this phase's dependency/device/license/capability decisions in the acceptance ledger before marking done; escalate retained requirements that cannot be met rather than narrowing scope.
