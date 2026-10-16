@@ -66,6 +66,10 @@ import dev.damhopper.nativeapp.ui.navigation.PanelNavigationRow
 import dev.damhopper.nativeapp.ui.navigation.WorkbenchNavigation
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import kotlinx.coroutines.launch
+import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
+import dev.damhopper.nativeapp.features.editor.EditorRepository
+import dev.damhopper.nativeapp.features.editor.EditorTabsState
+import dev.damhopper.nativeapp.ui.components.GenericPanelPlaceholder
 
 @Composable
 fun WorkbenchScreen(
@@ -107,11 +111,16 @@ fun WorkbenchScreen(
     var fileMutationCoordinator by remember { mutableStateOf<FileMutationCoordinator?>(null) }
     var federatedBindings by remember { mutableStateOf<List<ProfileTargetBinding>>(emptyList()) }
     var federatedRepos by remember { mutableStateOf<Map<String, FileRepository>>(emptyMap()) }
+    var editorTabsState by remember { mutableStateOf<EditorTabsState?>(null) }
+    var editorRepo by remember { mutableStateOf<EditorRepository?>(null) }
     val searchRepo = remember { SearchRepository() }
-    val replaceCoordinator = remember(fileRepo, federatedRepos) {
+    val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
             repositoryProvider = { profId ->
                 federatedRepos[profId] ?: if (profId == activeProfileId) fileRepo else null
+            },
+            isDirtyFile = { target, path ->
+                editorTabsState?.isDirtyFile(target, path) ?: false
             }
         )
     }
@@ -138,7 +147,16 @@ fun WorkbenchScreen(
                 agentReducer = aReducer
                 val fRepo = if (ws != null) FileRepository(client, ws, coroutineScope) else null
                 fileRepo = fRepo
-
+                editorTabsState?.closeAll()
+                if (fRepo != null) {
+                    val eRepo = EditorRepository(fRepo, profileId = activeProfileId!!)
+                    val eTabs = EditorTabsState(activeProfileId!!, eRepo)
+                    editorRepo = eRepo
+                    editorTabsState = eTabs
+                } else {
+                    editorTabsState = null
+                    editorRepo = null
+                }
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -173,6 +191,9 @@ fun WorkbenchScreen(
             fileRepo?.dispose()
             fileTreeState = null
             fileMutationCoordinator = null
+            editorTabsState?.closeAll()
+            editorTabsState = null
+            editorRepo = null
             fileRepo = null
             activeApiClient = null
         }
@@ -344,6 +365,21 @@ fun WorkbenchScreen(
         val newState = FileTreeState(snapshot.target, repo, coroutineScope)
         fileTreeState = newState
         fileMutationCoordinator = FileMutationCoordinator(repo, newState)
+    }
+    LaunchedEffect(fileRepo, snapshot.target, editorTabsState) {
+        val repo = fileRepo ?: return@LaunchedEffect
+        val tabs = editorTabsState ?: return@LaunchedEffect
+        val target = snapshot.target
+        repo.wsConnection.incomingMessages.collect { msg ->
+            if (msg is dev.damhopper.nativeapp.core.transport.ServerMsg.FsEventMsg) {
+                val rawPath = msg.event.targetRelativePath ?: msg.event.path
+                val cleanPath = rawPath.trimStart('/')
+                val kind = msg.event.kind.lowercase()
+                if (kind == "modified" || kind == "created" || kind == "modify" || kind == "change") {
+                    tabs.handleRemoteFileModified(target, cleanPath)
+                }
+            }
+        }
     }
     LaunchedEffect(profiles, activeProfileId, activeApiClient, snapshot.target) {
         val list = mutableListOf<ProfileTargetBinding>()
@@ -554,10 +590,20 @@ fun WorkbenchScreen(
                                     searchRepo = searchRepo,
                                     replaceCoordinator = replaceCoordinator,
                                     bindings = federatedBindings,
-                                    onOpenFile = { _, _ ->
+                                    onOpenFile = { target, path ->
+                                        coroutineScope.launch {
+                                            editorTabsState?.openTab(target, path)
+                                        }
                                         navigation.navigateTo(WorkbenchPanel.EDITOR)
                                     }
                                 )
+                            }
+                        },
+                        editorContent = {
+                            if (editorTabsState != null) {
+                                EditorPanelScreen(tabsState = editorTabsState!!)
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.EDITOR)
                             }
                         },
                         agentsContent = {

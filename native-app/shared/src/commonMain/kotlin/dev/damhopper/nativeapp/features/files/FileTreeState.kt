@@ -168,8 +168,8 @@ class FileTreeState(
 
     fun handleFsOverflow(message: String) {
         if (isDisposed) return
+        _error.value = "Watcher overflow recovered"
         coroutineScope.launch {
-            _error.value = "Watcher overflow recovered"
             resubscribeLocked()
             refreshLoadedDirectories(_root.value)
         }
