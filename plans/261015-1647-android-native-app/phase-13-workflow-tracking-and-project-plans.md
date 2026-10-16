@@ -1,3 +1,14 @@
+---
+title: "Phase 13 — Workflow tracking and project plans"
+description: "Deliver native manual workflow tracking and read-only project-plan overview, timeline, and documents as distinct products."
+status: completed
+priority: P2
+effort: unestimated
+branch: feat/android-native-app
+tags: [feature, frontend, android, kotlin, compose, workflow, plans]
+created: 2026-10-15
+---
+
 # Phase 13 — Workflow tracking and project plans
 
 ## Context Links
@@ -8,10 +19,10 @@
 
 ## Overview
 
-- Date: 2026-10-15. Priority: P2. Implementation status: **pending**. Review status: **pending**. Progress: **0%**.
+- Date: 2026-10-15. Completion date: 2026-10-16. Priority: P2. Implementation status: **completed (2026-10-16)**. Review status: **User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification**. Progress: **100%**.
 - Scope: W01–W02.
 - Goal: Deliver native manual workflow tracking and read-only project-plan overview/timeline/documents as distinct products.
-- No implementation performed by this plan. Paths and commands below are future work; evidence must be observed, not inferred.
+- Deliverables: Workflow models and REST DTOs (`WorkflowModels.kt` including `WorkflowDomainHelpers`), repositories for workflow and project plan operations (`WorkflowRepository.kt`, `ProjectPlansRepository.kt`), reactive controllers (`WorkflowController.kt`, `ProjectPlansController.kt`), and native Compose UI surfaces and dialogs (`WorkflowPanelScreen.kt`, `WorkflowScreens.kt`, `WorkflowModals.kt`, `WorkflowSessionsAndEventsView.kt`, `ProjectPlanScreens.kt`, `ProjectPlanModels.kt`).
 
 ## Key Insights
 
@@ -39,10 +50,18 @@ Existing references (read/reuse contracts; no server/web modification by default
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/docs/system-architecture.md`
 
 Proposed implementation files (create unless introduced earlier; modify thereafter):
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowModels.kt` (includes `WorkflowDomainHelpers`)
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowController.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowPanelScreen.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowScreens.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowModals.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/WorkflowSessionsAndEventsView.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/ProjectPlanModels.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/ProjectPlansRepository.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/ProjectPlansController.kt`
 - `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workflow/ProjectPlanScreens.kt`
+- `/home/loidinh/WS/worktrees/dam-hopper-android-native-app/tests/test-phase-13-workflow-plans.sh`
 
 No deletion of existing web/Tauri hosts or unrelated files. Any necessary backend contract change requires a documented design/compatibility review before code.
 
@@ -58,10 +77,27 @@ No deletion of existing web/Tauri hosts or unrelated files. Any necessary backen
 
 ## Todo List
 
-- [ ] Deliver manual workflow CRUD/sessions/notes/events.
-- [ ] Deliver folder-first read-only project-plan views/watch lifecycle.
-- [ ] Verify CAS/identity/read-only/reporting semantics.
-- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations.
+- [x] Deliver manual workflow CRUD/sessions/notes/events.
+- [x] Deliver folder-first read-only project-plan views/watch lifecycle.
+- [ ] Verify CAS/identity/read-only/reporting semantics (automated unit tests and static shell assertions passed; live qualification open under Phase 18).
+- [ ] Update requirement/evidence ledger and affected docs after actual runtime proof; record device/server/version limitations (live runtime proof open under Phase 18).
+
+## Phase 13 Completion Record (2026-10-16)
+
+- **Completed:** 2026-10-16
+- **Status:** 100% complete (user-approved implementation baseline with documented open limitations and runtime qualification deferred to Phase 18)
+- **Validation:** User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification (per `plans/reports/qa-261016-1534-phase-13-cycle-3.md` and `plans/reports/code-reviewer-261016-1440-phase-13-workflow-plans-cycle2.md`). 274 unit tests passed (100% pass rate: 224 `:shared:jvmTest` + 50 `:androidApp:testDebugUnitTest`), 854 static invariant assertions across 12 suites passed (100% pass rate: 100 in `tests/test-phase-13-workflow-plans.sh` + 754 across 11 regression suites), and clean `:androidApp:assembleDebug` APK build (65 tasks).
+- **Deliverables:**
+  - **Workflow Models & REST DTO Contracts (`WorkflowModels.kt` including `WorkflowDomainHelpers`):** Full typed contracts matching server SQLite-backed workflow API (`ItemDto`, `SessionDto`, `LinkDto`, `NoteDto`, `EventDto` with nullable target, `WorkflowOverviewDto`, `WorkflowEventsDto`, `PurgeDto`, `MutationDto`, `TombstoneDto`). Status and item kind enums (`ItemKind`, `ItemStatus`, `SessionStatus`, `ResourceLinkType`, `ResourceObservedState`, `WorkflowSource`) with wire-compatible serialization (`in_progress`, `canceled`), hierarchy validation, and status transitions.
+  - **Workflow Repository (`WorkflowRepository.kt`):** Complete REST API integration covering overview retrieval, item lifecycle (create, patch, delete with optimistic concurrency / CAS token support and UUIDv4 client mutation IDs), session management (create, end, abandon, link, unlink), note management (create, delete), event log retrieval with pagination, and workspace history purge. 404 detection for unavailable feature detection.
+  - **Project Plans Models & Repository (`ProjectPlanModels.kt`, `ProjectPlansRepository.kt`):** Data structures for plan folders (`PlanFolderState`, `PlanFolderKind`, `PlanFoldersResponse`), file-declared plan metadata (`FilePlan`, `FilePlanPhase`, `ReportedStatus`, `PlanCompletion`, `SelectedPlanResponse`), bounded read enforcement at 64 KiB ceiling (`MAX_DOCUMENT_BYTES`), and strict path containment rejecting `..` traversal, absolute paths (`/`), and external URLs.
+  - **Reactive Controllers (`WorkflowController.kt`, `ProjectPlansController.kt`):** Generation-fenced controllers with `ConnectionRef` tracking, CAS conflict warning preservation, auto-open on `PLAN` folder selection without re-entry loops, hierarchical back-navigation stack (`handleBack`), and filter states (project, status).
+  - **Native UI Surfaces & Modals (`WorkflowPanelScreen.kt`, `WorkflowScreens.kt`, `WorkflowModals.kt`, `WorkflowSessionsAndEventsView.kt`, `ProjectPlanScreens.kt`):** Complete non-browser workflow tracking and project plans workbench. Sub-product switching between "Workflow Tracking" and "Project Plans", single horizontal panel navigation row, zero FABs, zero WebViews. Markdown/GFM preview (`MarkdownPreviewView`) with explicit unsupported Mermaid fallback exception. Explicit workspace-wide destructive purge confirmation dialog ("Purge All Workspace History") with RFC3339 timestamp validation.
+- **Documented Open Limitations & Residuals (Deferred to Phase 18):**
+  - **L1 (Device & Emulator Runtime Proof):** Verification completed in JVM unit test and Gradle build environments. Physical device/emulator validation for Compose recomposition performance, hardware gesture back handling, and long sessions deferred to Phase 18 (`phase-18-integrated-device-security-and-performance-qualification.md`).
+  - **L2 (Watcher & Live Rebind Lifecycle):** Server watcher installation, filesystem change re-reading, and live socket rebind lifecycle validation across active project plan targets deferred to Phase 18 qualification.
+  - **L3 (Cross-Feature Navigation & Evidence Links):** Terminal/agent link picker currently implemented as manual identifier input rather than session picker; direct navigation from plan evidence chips to editor/viewer not yet wired; deferred to Phase 18 qualification.
+- **Handoff:** Phase 13 (Workflow tracking and project plans) completed with user approval. Phase 17 (Preferences privacy notifications and lifecycle) has prerequisite Phase 13 satisfied (prerequisites 07, 11, 13 satisfied; remaining prerequisites: Phases 14, 15, 16 pending). Phase 18 has prerequisite Phase 12 satisfied (Phase 17 pending). Physical hardware and live server qualification deferred to Phase 18.
 
 ## Success Criteria
 

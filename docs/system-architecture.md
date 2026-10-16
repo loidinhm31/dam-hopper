@@ -502,6 +502,29 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - H5: Query parameter encoding via default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
   - Real disposable multi-root/worktree repository verification deferred to Phase 18.
 
+### Native Android Workflow Tracking & Project Plans (Phase 13)
+- **Workflow Domain Models & DTO Contracts (W01):**
+  - Strict enum typing: `ItemKind` (`PLAN`, `PHASE`, `TASK`), `ItemStatus` (`todo`, `in_progress`, `blocked`, `done`, `canceled`), `SessionStatus` (`active`, `ended`, `abandoned`), `ResourceLinkType` (`terminal`, `agent`), `ResourceObservedState`, `WorkflowSource`.
+  - Request DTOs: `CreateItemRequest`, `PatchItemRequest` with custom `PatchItemRequestSerializer`, `DeleteItemRequest`, `CreateSessionRequest`, `EndSessionRequest`, `AbandonSessionRequest`, `LinkResourceRequest`, `UnlinkResourceRequest`, `CreateNoteRequest`, `DeleteNoteRequest`, `PurgeHistoryRequest`.
+  - Domain helpers: `WorkflowDomainHelpers` (hierarchy validation `isValidParentKind`, valid status transitions `isValidStatusTransition`, progress formatting `formatTrackedTasksProgress`).
+- **Workflow Repository & Manual Tracking Controller (`features/workflow/`):**
+  - `WorkflowRepository`: Protected REST operations (`/api/workflow/overview`, `/events`, items, sessions, notes, purge); HTTP 404 detection for profiles without workflow tracking enabled (`WorkflowOverviewResult.Unavailable`); RFC4122 v4 UUID request identity generation.
+  - `WorkflowController`: Multi-server profile and generation fencing via `updateContext`; optimistic concurrency control preserving remote edits and user drafts on 409 conflict (`conflictWarning = "Item was modified remotely. Your draft was preserved."`); manual session lifecycle (terminal exits never automatically complete tasks).
+  - Explicit confirmation for history purge labelled workspace-wide ("Purge All Workspace History", deleting events across all workspace projects).
+- **Project Plans Repository & Bounded Document Reads (W02):**
+  - `ProjectPlansRepository`: Read-only queries `/api/plans/folders` and `/api/plans` (with camelCase `planPath` parameter); strict path traversal guards rejecting absolute paths, leading slashes, parent segments (`..`, `.`), and external URLs (`http://`, `https://`).
+  - 64 KiB document read ceiling (`MAX_DOCUMENT_BYTES = 64 * 1024`) via `FileRepository` with `maxBytes + 1` range requests, mapping excess sizes to `PlanDocumentReadResult.Oversize`.
+  - `ProjectPlansController`: Folder browsing, auto-opening plan file on `PLAN` kind folder (`selectPlan(response.path)`), hierarchical back-stack navigation (`handleBack()`), target switching via `updateTarget`.
+- **Workflow Panel UI & Shell Invariants (NAV01, B01, B02):**
+  - `WorkflowPanelScreen` acts as single content host for `WorkbenchPanel.WORKFLOW`, providing a top segmented switcher between `WorkflowSubProduct.TRACKING` and `WorkflowSubProduct.PROJECT_PLANS`.
+  - Shell invariants: Zero floating action buttons (`FloatingActionButton`), zero WebViews (`WebView`), single content host in `PanelHost`.
+  - Conditional back handler in `WorkbenchScreen`: intercepts system back when active panel is `WORKFLOW` and sub-product is `PROJECT_PLANS`, delegating to `projectPlansController.handleBack()`.
+  - Native Markdown document rendering with GFM support via `MarkdownPreviewView`. Mermaid diagrams display an explicit rendering-unavailable warning notice (`⚠ Mermaid rendering deferred for this release`) adhering to approved exception B02.
+- **Documented Open Limitations & Review Findings:**
+  - Session links exist client-side only (server overview has no link list endpoint; links clear on context update).
+  - Purge history is workspace-wide across all projects (server scope).
+  - Terminal/agent link is free-text ID entry, not live terminal picker.
+  - Full live device qualification and WebSocket chunked integration deferred to Phase 18.
 ### Test Commands & Foundation Verification
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
@@ -514,7 +537,8 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - `bash tests/test-phase-10-diff-merge-blame.sh` — Phase 10 native diff, merge conflict, and blame static assertions (77/77 passing).
 - `bash tests/test-phase-11-encrypted-transfers-media.sh` — Phase 11 encrypted transfers, media streaming, and SAF storage static assertions (84/84 passing).
 - `bash tests/test-phase-12-git-history.sh` — Phase 12 Git models, repositories, controllers, leased push, and zero-FAB presentation static verification suite (139/139 assertions passing).
-- *Automated Verification Evidence:* 754 cumulative static assertions passing across 11 phase test scripts (Phases 02–12, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 292 automated unit test executions across jvmTest, testDebugUnitTest, and testReleaseUnitTest. Cycle 3 code review for Phase 12 recorded score 6/10 (CHANGES REQUIRED, not accepted; user approved baseline with documented open implementation limitations: branch checkout scope sync, details dialog file-action invalidation, query param full encoding, and real disposable repo evidence deferred to Phase 18).
+- `bash tests/test-phase-13-workflow-plans.sh` — Phase 13 workflow models, repositories, controllers, 64 KiB bounded reads, and UI invariants verification suite (100/100 assertions passing).
+- *Automated Verification Evidence:* 854 cumulative static assertions passing across 12 phase test scripts (Phases 02–13, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 274 automated unit test executions across jvmTest (224 tests) and testDebugUnitTest (50 tests); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 13 implementation baseline recorded with documented limitations; live device and server qualification deferred to Phase 18.
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18.
 
 See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).

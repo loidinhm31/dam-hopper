@@ -89,3 +89,20 @@ Record per row: requirement ID, source baseline, tested app/server versions, dev
     - H5: Authoritative dirty-buffer provider interface pending Phase 09 native editor implementation; Replace All currently defaults to `isDirtyFile = { false }`.
     - H6: Outcome UI displays counts only; per-file failure/conflict breakdown and multi-server project badges to be surfaced.
     - H7: Mocked WebSocket event integration tests to be expanded in Phase 18 qualification.
+
+## Phase 13 Acceptance Ledger Status (2026-10-16)
+
+- **W01 (Manual plan/phase/task workflow, sessions/links/notes/events/history purge):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification (per `plans/reports/qa-261016-1534-phase-13-cycle-3.md` and `plans/reports/code-reviewer-261016-1440-phase-13-workflow-plans-cycle2.md`). Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 274 unit tests passed (224 in `:shared:jvmTest`, 50 in `:androidApp:testDebugUnitTest`), 854 static invariant assertions across 12 suites passed (including 100 assertions in `tests/test-phase-13-workflow-plans.sh`), clean `:androidApp:assembleDebug` APK build (65 tasks).
+  - **Deliverables & Verification:** Manual workflow item lifecycle (create, patch, delete with optimistic concurrency / CAS token support and UUIDv4 client mutation IDs), session management (create, end, abandon, link, unlink), note management, paginated event log, and explicit workspace-wide history purge with RFC3339 timestamp validation and descriptive destructive warnings ("Purge All Workspace History"). Zero FABs and zero WebViews verified.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Live terminal/agent session picker currently implemented as manual identifier input rather than dynamic session picker dialog; deferred to Phase 18 qualification.
+    - Qualification task: Physical device runtime gestures and Compose recomposition behavior under long sessions pending Phase 18.
+- **W02 (Folder-first project plans, overview/timeline and read-only linked documents/watch state):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 274 unit tests passed, 854 static invariant assertions passed across 12 suites, clean `:androidApp:assembleDebug` build.
+  - **Deliverables & Verification:** Folder-first browsing of plan directories, file-declared plan metadata parsing (`ProjectPlanModels.kt` phases, tasks, completion percentage, reported status), timeline visualization, bounded document reads strictly enforced at 64 KiB ceiling (`MAX_DOCUMENT_BYTES`), path containment rejecting `..` traversal and absolute/external paths, auto-open on `PLAN` folders without re-entry loops, Markdown preview via `MarkdownPreviewView` with explicit unsupported Mermaid render exception.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Direct navigation from plan evidence chips to editor/viewer not yet wired; deferred to Phase 18 qualification.
+    - Qualification task: Reconnection rebind lifecycle across project targets and live server watcher installation against dynamic files deferred to Phase 18 qualification.

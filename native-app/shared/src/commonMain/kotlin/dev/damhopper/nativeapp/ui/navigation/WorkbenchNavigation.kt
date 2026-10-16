@@ -42,6 +42,7 @@ class WorkbenchNavigation(
             activeProject = initialProject
         )
     )
+    var panelBackHandler: (() -> Boolean)? = null
     val state: StateFlow<State> = _state.asStateFlow()
 
     fun navigateTo(panel: WorkbenchPanel) {
@@ -125,6 +126,9 @@ class WorkbenchNavigation(
             }
             current.showProfileList -> {
                 closeProfileList()
+                return true
+            }
+            panelBackHandler?.invoke() == true -> {
                 return true
             }
             current.activePanel != WorkbenchPanel.TERMINAL -> {

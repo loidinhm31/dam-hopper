@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -86,6 +87,12 @@ import dev.damhopper.nativeapp.features.git.LeasedPublishController
 import dev.damhopper.nativeapp.features.git.GitPanelScreen
 import dev.damhopper.nativeapp.features.git.GitSyncController
 import dev.damhopper.nativeapp.features.git.GitOperationScope
+import dev.damhopper.nativeapp.features.workflow.WorkflowRepository
+import dev.damhopper.nativeapp.features.workflow.WorkflowController
+import dev.damhopper.nativeapp.features.workflow.ProjectPlansRepository
+import dev.damhopper.nativeapp.features.workflow.ProjectPlansController
+import dev.damhopper.nativeapp.features.workflow.WorkflowPanelScreen
+import dev.damhopper.nativeapp.features.workflow.WorkflowSubProduct
 import dev.damhopper.nativeapp.ui.components.GenericPanelPlaceholder
 
 @Composable
@@ -144,6 +151,11 @@ fun WorkbenchScreen(
     var gitActionController by remember { mutableStateOf<GitHistoryActionController?>(null) }
     var leasedPublishController by remember { mutableStateOf<LeasedPublishController?>(null) }
     var gitSyncController by remember { mutableStateOf<GitSyncController?>(null) }
+    var workflowRepo by remember { mutableStateOf<WorkflowRepository?>(null) }
+    var workflowController by remember { mutableStateOf<WorkflowController?>(null) }
+    var projectPlansRepo by remember { mutableStateOf<ProjectPlansRepository?>(null) }
+    var projectPlansController by remember { mutableStateOf<ProjectPlansController?>(null) }
+    var workflowActiveSubProduct by remember { mutableStateOf(WorkflowSubProduct.TRACKING) }
     val searchRepo = remember { SearchRepository() }
     val replaceCoordinator = remember(fileRepo, federatedRepos, editorTabsState) {
         ReplaceCoordinator(
@@ -246,6 +258,26 @@ fun WorkbenchScreen(
                 gitActionController = gAction
                 leasedPublishController = lPublish
                 gitSyncController = gSync
+                val wfRepo = WorkflowRepository(client)
+                val wfCtrl = WorkflowController(
+                    repository = wfRepo,
+                    scope = coroutineScope,
+                    profileId = activeProfileId ?: "default",
+                    generation = client.connection.generation
+                )
+                val ppRepo = ProjectPlansRepository(apiClient = client, fileRepository = fRepo)
+                val ppCtrl = ProjectPlansController(
+                    repository = ppRepo,
+                    scope = coroutineScope,
+                    initialProject = navState.activeProject.takeIf { it != "Default Workspace" } ?: "",
+                    initialWorktreePath = null,
+                    profileId = activeProfileId ?: "default",
+                    generation = client.connection.generation
+                )
+                workflowRepo = wfRepo
+                workflowController = wfCtrl
+                projectPlansRepo = ppRepo
+                projectPlansController = ppCtrl
                 coroutineScope.launch {
                     try { ws?.connect() } catch (_: Exception) {}
                 }
@@ -297,6 +329,10 @@ fun WorkbenchScreen(
             gitActionController = null
             leasedPublishController = null
             gitSyncController = null
+            workflowRepo = null
+            workflowController = null
+            projectPlansRepo = null
+            projectPlansController = null
         }
     }
     // Refresh worktrees when active project changes or workspace revision bumps
@@ -482,6 +518,34 @@ fun WorkbenchScreen(
         gitBranchController?.refreshBranches { branches ->
             val active = branches.firstOrNull { it.isCurrent }
             gitHistoryController?.updateScope(scope, active, active)
+        }
+    }
+    LaunchedEffect(currentActiveProj, snapshot.target.worktreePath, activeProfileId, activeApiClient) {
+        val proj = currentActiveProj.takeIf { it.isNotBlank() && it != "Default Workspace" } ?: ""
+        val client = activeApiClient
+        val profId = activeProfileId ?: "default"
+        val gen = client?.connection?.generation ?: 0L
+        projectPlansController?.updateTarget(
+            newProject = proj,
+            newWorktreePath = snapshot.target.worktreePath,
+            newProfileId = profId,
+            newGeneration = gen
+        )
+        workflowController?.updateContext(
+            newProfileId = profId,
+            newGeneration = gen
+        )
+    }
+    DisposableEffect(navState.activePanel, projectPlansController, workflowActiveSubProduct) {
+        if (navState.activePanel == WorkbenchPanel.WORKFLOW && workflowActiveSubProduct == WorkflowSubProduct.PROJECT_PLANS) {
+            navigation.panelBackHandler = {
+                projectPlansController?.handleBack() ?: false
+            }
+        } else {
+            navigation.panelBackHandler = null
+        }
+        onDispose {
+            navigation.panelBackHandler = null
         }
     }
     // Automatically trigger diff / merge queries on panel navigation
@@ -882,6 +946,17 @@ fun WorkbenchScreen(
                                 )
                             } else {
                                 GenericPanelPlaceholder(WorkbenchPanel.GIT)
+                            }
+                        },
+                        workflowContent = {
+                            if (workflowController != null && projectPlansController != null) {
+                                WorkflowPanelScreen(
+                                    workflowController = workflowController!!,
+                                    projectPlansController = projectPlansController!!,
+                                    onActiveProductChanged = { workflowActiveSubProduct = it }
+                                )
+                            } else {
+                                GenericPanelPlaceholder(WorkbenchPanel.WORKFLOW)
                             }
                         },
                         settingsContent = {
