@@ -1,3 +1,10 @@
+# 2026-10-18
+
+- **Traditional terminal: worktree selection persistence across page refresh.** Added narrow, resilient Zustand persistence for active worktree selections (`packages/ui/src/stores/project-target.ts`):
+  - **Scoped persistence (`dam-hopper:project-target-state`, version 1):** Persists only `activeTargetByProject` via a synchronous `localStorage` adapter. Preserves profile isolation using `projectScopeKey` (`[profileId, project]` tuples or legacy bare keys). Root selection (`null`) removes the stored entry so absence cleanly defaults to root. Failure maps (`unavailableTargetByProject`, `unavailableTargetsByProject`) remain memory-only.
+  - **Graceful reconciliation & storage resilience:** Validates envelope structure and entry types on every hydration. Stale or pruned worktrees are automatically demoted to root with notifications after successful, authoritative discovery confirms the selected worktree is unavailable. Storage denials, corrupted payloads, or quota limits fail safely without throwing. Fresh-state reset preserves the versioned store.
+  - **Verification:** 68 unit tests in `project-target.test.ts` and `use-project-target.test.tsx` passing 100%; 115 total worktree suite tests passing.
+
 # 2026-10-14
 
 - **Traditional terminal: agents sidebar multi-select status filter.** Enhanced status filtering in the `agents` section of Traditional terminal navigation (`TraditionalTerminalProjectsNavigator` and `TraditionalTerminalAgentFilter`) to support selecting multiple statuses simultaneously:

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist, type StorageValue } from "zustand/middleware";
 import {
   normalizeProjectTarget,
   projectKey,
@@ -9,7 +10,174 @@ import {
 } from "@/api/client.js";
 import { normalizeProjectTargetPath } from "@/lib/project-target-path.js";
 
+export const PROJECT_TARGET_STORAGE_KEY = "dam-hopper:project-target-state";
+export const PROJECT_TARGET_PERSIST_VERSION = 1;
+
 export const ROOT_TARGET_KEY = "root";
+
+export interface PersistedProjectTargetState {
+  activeTargetByProject: Record<string, string>;
+}
+
+function createEmptyTargetMap<T = string>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function copyTargetMap<T = string>(
+  source?: Record<string, T>,
+): Record<string, T> {
+  const next = createEmptyTargetMap<T>();
+  if (source) {
+    Object.assign(next, source);
+  }
+  return next;
+}
+
+function isPlainObject(
+  value: unknown,
+): value is Record<string | symbol, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
+}
+
+/**
+ * Validates and merges persisted project target state on every hydration.
+ *
+ * Enforces:
+ * - Current live state / actions are preserved, not replaced by an untrusted spread.
+ * - Missing or unreadable persisted state leaves current state unchanged.
+ * - Accepted state validates `activeTargetByProject` as a plain object; missing or
+ *   invalid shapes yield an empty null-prototype selection map.
+ * - Entries are filtered individually: non-empty strings only. Whitespace-only values
+ *   are rejected. Valid strings (including internal spaces and Windows/UNC paths)
+ *   are preserved verbatim without trimming or normalization.
+ * - Symbol keys in runtime payloads are rejected.
+ * - Built on a null-prototype map to prevent prototype pollution or inherited method resolution.
+ * - Transient failure maps, live action references, and unknown fields are excluded.
+ * - Hydrated selections replace, rather than overlay, current selections.
+ */
+function validateAndMergeProjectTargetState(
+  persistedState: unknown,
+  currentState: ProjectTargetState,
+): ProjectTargetState {
+  if (!isPlainObject(persistedState)) {
+    return currentState;
+  }
+
+  const rawMap = Object.prototype.hasOwnProperty.call(
+    persistedState,
+    "activeTargetByProject",
+  )
+    ? persistedState["activeTargetByProject"]
+    : undefined;
+
+  const sanitizedMap = createEmptyTargetMap();
+  if (isPlainObject(rawMap)) {
+    for (const key of Reflect.ownKeys(rawMap)) {
+      if (typeof key !== "string" || key.trim().length === 0) {
+        continue;
+      }
+      if (!Object.prototype.hasOwnProperty.call(rawMap, key)) {
+        continue;
+      }
+      const val = rawMap[key];
+      if (typeof val !== "string" || val.trim().length === 0) {
+        continue;
+      }
+      sanitizedMap[key] = val;
+    }
+  }
+
+  return {
+    ...currentState,
+    activeTargetByProject: sanitizedMap,
+  };
+}
+
+/**
+ * Safe synchronous storage adapter wrapping localStorage with error catching,
+ * strict envelope validation, and graceful fallback for disabled storage or SSR.
+ */
+function createSafeProjectTargetStorage() {
+  return {
+    getItem: (
+      name: string,
+    ): StorageValue<PersistedProjectTargetState> | null => {
+      try {
+        if (typeof window === "undefined") {
+          return null;
+        }
+        const storage = window.localStorage;
+        if (!storage) {
+          return null;
+        }
+        const raw = storage.getItem(name);
+        if (raw === null) {
+          return null;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          // Corrupt JSON: return null without writing or deleting records on read
+          return null;
+        }
+        if (!isPlainObject(parsed)) {
+          return null;
+        }
+        if (
+          !Object.prototype.hasOwnProperty.call(parsed, "version") ||
+          parsed["version"] !== PROJECT_TARGET_PERSIST_VERSION ||
+          !Object.prototype.hasOwnProperty.call(parsed, "state")
+        ) {
+          return null;
+        }
+        const state = parsed["state"];
+        if (!isPlainObject(state)) {
+          return null;
+        }
+        return parsed as StorageValue<PersistedProjectTargetState>;
+      } catch {
+        // Storage access denied or unavailable
+        return null;
+      }
+    },
+    setItem: (
+      name: string,
+      value: StorageValue<PersistedProjectTargetState>,
+    ): void => {
+      try {
+        if (typeof window === "undefined") {
+          return;
+        }
+        const storage = window.localStorage;
+        if (!storage) {
+          return;
+        }
+        storage.setItem(name, JSON.stringify(value));
+      } catch {
+        // Storage denied, quota exceeded, or disabled. In-memory state remains usable.
+      }
+    },
+    removeItem: (name: string): void => {
+      try {
+        if (typeof window === "undefined") {
+          return;
+        }
+        const storage = window.localStorage;
+        if (!storage) {
+          return;
+        }
+        storage.removeItem(name);
+      } catch {
+        // Storage access denied
+      }
+    },
+  };
+}
 
 export interface ProjectTargetSnapshot {
   project: string;
@@ -129,102 +297,142 @@ export function createProjectTargetSnapshot(
   };
 }
 
-export const useProjectTargetStore = create<ProjectTargetState>((set) => ({
-  activeTargetByProject: {},
-  unavailableTargetByProject: {},
-  unavailableTargetsByProject: {},
-  selectTarget: (project, worktreePath) =>
-    set((state) => {
-      const key = projectScopeKey(project);
-      if (worktreePath == null) {
-        const next = { ...state.activeTargetByProject };
-        delete next[key];
-        return {
-          activeTargetByProject: next,
-        };
-      }
-      return {
-        activeTargetByProject: {
-          ...state.activeTargetByProject,
-          [key]: worktreePath,
-        },
-      };
-    }),
-  resetTarget: (project) =>
-    set((state) => {
-      const key = projectScopeKey(project);
-      const next = { ...state.activeTargetByProject };
-      delete next[key];
-      const nextUnavailable = { ...state.unavailableTargetByProject };
-      delete nextUnavailable[key];
-      const nextUnavailableTargets = { ...state.unavailableTargetsByProject };
-      delete nextUnavailableTargets[key];
-      return {
-        activeTargetByProject: next,
-        unavailableTargetByProject: nextUnavailable,
-        unavailableTargetsByProject: nextUnavailableTargets,
-      };
-    }),
-  markTargetUnavailable: (project, worktreePath) =>
-    set((state) => {
-      const key = projectScopeKey(project);
-      const next = { ...state.activeTargetByProject };
-      if (next[key] && sameWorktreePath(next[key], worktreePath)) {
-        delete next[key];
-      }
-      const existing = state.unavailableTargetsByProject[key] ?? [];
-      const targets = existing.some((path) =>
-        sameWorktreePath(path, worktreePath),
-      )
-        ? existing
-        : [...existing, worktreePath];
-      return {
-        activeTargetByProject: next,
-        unavailableTargetByProject: {
-          ...state.unavailableTargetByProject,
-          [key]: worktreePath,
-        },
-        unavailableTargetsByProject: {
-          ...state.unavailableTargetsByProject,
-          [key]: targets,
-        },
-      };
-    }),
-  clearUnavailableTarget: (project, worktreePath) =>
-    set((state) => {
-      const key = projectScopeKey(project);
-      if (!(key in state.unavailableTargetByProject)) return state;
-      if (worktreePath == null) {
-        const next = { ...state.unavailableTargetByProject };
-        const nextTargets = { ...state.unavailableTargetsByProject };
-        delete next[key];
-        delete nextTargets[key];
-        return {
-          unavailableTargetByProject: next,
-          unavailableTargetsByProject: nextTargets,
-        };
-      }
+export const useProjectTargetStore = create<ProjectTargetState>()(
+  persist(
+    (set) => ({
+      activeTargetByProject: createEmptyTargetMap<string>(),
+      unavailableTargetByProject: createEmptyTargetMap<string>(),
+      unavailableTargetsByProject: createEmptyTargetMap<string[]>(),
+      selectTarget: (project, worktreePath) =>
+        set((state) => {
+          const key = projectScopeKey(project);
+          const next = copyTargetMap(state.activeTargetByProject);
+          if (worktreePath == null) {
+            delete next[key];
+            return {
+              activeTargetByProject: next,
+            };
+          }
+          next[key] = worktreePath;
+          return {
+            activeTargetByProject: next,
+          };
+        }),
+      resetTarget: (project) =>
+        set((state) => {
+          const key = projectScopeKey(project);
+          const next = copyTargetMap(state.activeTargetByProject);
+          delete next[key];
+          const nextUnavailable = copyTargetMap(state.unavailableTargetByProject);
+          delete nextUnavailable[key];
+          const nextUnavailableTargets = copyTargetMap(
+            state.unavailableTargetsByProject,
+          );
+          delete nextUnavailableTargets[key];
+          return {
+            activeTargetByProject: next,
+            unavailableTargetByProject: nextUnavailable,
+            unavailableTargetsByProject: nextUnavailableTargets,
+          };
+        }),
+      markTargetUnavailable: (project, worktreePath) =>
+        set((state) => {
+          const key = projectScopeKey(project);
+          const next = copyTargetMap(state.activeTargetByProject);
+          if (
+            Object.prototype.hasOwnProperty.call(next, key) &&
+            next[key] &&
+            sameWorktreePath(next[key], worktreePath)
+          ) {
+            delete next[key];
+          }
+          const existing = Object.prototype.hasOwnProperty.call(
+            state.unavailableTargetsByProject,
+            key,
+          )
+            ? state.unavailableTargetsByProject[key] ?? []
+            : [];
+          const targets = existing.some((path) =>
+            sameWorktreePath(path, worktreePath),
+          )
+            ? existing
+            : [...existing, worktreePath];
+          const nextUnavailable = copyTargetMap(state.unavailableTargetByProject);
+          nextUnavailable[key] = worktreePath;
+          const nextUnavailableTargets = copyTargetMap(
+            state.unavailableTargetsByProject,
+          );
+          nextUnavailableTargets[key] = targets;
+          return {
+            activeTargetByProject: next,
+            unavailableTargetByProject: nextUnavailable,
+            unavailableTargetsByProject: nextUnavailableTargets,
+          };
+        }),
+      clearUnavailableTarget: (project, worktreePath) =>
+        set((state) => {
+          const key = projectScopeKey(project);
+          if (
+            !Object.prototype.hasOwnProperty.call(
+              state.unavailableTargetByProject,
+              key,
+            )
+          ) {
+            return state;
+          }
+          if (worktreePath == null) {
+            const next = copyTargetMap(state.unavailableTargetByProject);
+            const nextTargets = copyTargetMap(state.unavailableTargetsByProject);
+            delete next[key];
+            delete nextTargets[key];
+            return {
+              unavailableTargetByProject: next,
+              unavailableTargetsByProject: nextTargets,
+            };
+          }
 
-      const remaining = (
-        state.unavailableTargetsByProject[key] ?? []
-      ).filter((path) => !sameWorktreePath(path, worktreePath));
-      const next = { ...state.unavailableTargetByProject };
-      const nextTargets = { ...state.unavailableTargetsByProject };
-      if (remaining.length === 0) {
-        delete next[key];
-        delete nextTargets[key];
-      } else {
-        nextTargets[key] = remaining;
-        if (next[key] && sameWorktreePath(next[key], worktreePath)) {
-          next[key] = remaining[remaining.length - 1]!;
-        }
-      }
-      return {
-        unavailableTargetByProject: next,
-        unavailableTargetsByProject: nextTargets,
-      };
+          const existingTargets = Object.prototype.hasOwnProperty.call(
+            state.unavailableTargetsByProject,
+            key,
+          )
+            ? state.unavailableTargetsByProject[key] ?? []
+            : [];
+          const remaining = existingTargets.filter(
+            (path) => !sameWorktreePath(path, worktreePath),
+          );
+          const next = copyTargetMap(state.unavailableTargetByProject);
+          const nextTargets = copyTargetMap(state.unavailableTargetsByProject);
+          if (remaining.length === 0) {
+            delete next[key];
+            delete nextTargets[key];
+          } else {
+            nextTargets[key] = remaining;
+            if (
+              Object.prototype.hasOwnProperty.call(next, key) &&
+              next[key] &&
+              sameWorktreePath(next[key], worktreePath)
+            ) {
+              next[key] = remaining[remaining.length - 1]!;
+            }
+          }
+          return {
+            unavailableTargetByProject: next,
+            unavailableTargetsByProject: nextTargets,
+          };
+        }),
     }),
-}));
+    {
+      name: PROJECT_TARGET_STORAGE_KEY,
+      version: PROJECT_TARGET_PERSIST_VERSION,
+      storage: createSafeProjectTargetStorage(),
+      partialize: (state) => ({
+        activeTargetByProject: state.activeTargetByProject,
+      }),
+      merge: (persistedState, currentState) =>
+        validateAndMergeProjectTargetState(persistedState, currentState),
+    },
+  ),
+);
 
 /** Persist target loss even when the worktree panel is not mounted. */
 export function markProjectTargetUnavailable(target: ProjectTargetInput): void {

@@ -4,7 +4,8 @@
  * Discards legacy browser resource records (selected-project, editor, tree, search,
  * terminal layout, pin, history, browser-history) and associated old quarantine backups.
  * Preserves saved profiles, endpoint-bound auth v2 records, native scope aliases,
- * presentation-only settings, and server data.
+ * presentation-only settings, durable owner-scoped project-target selections,
+ * and server data.
  *
  * Never calls localStorage.clear(). Idempotent per store.
  */
@@ -21,6 +22,10 @@ export interface FreshResetResult {
 
 /**
  * Validates whether a key should be discarded during fresh-state reset.
+ *
+ * Note: Durable owner-scoped project-target selections (`dam-hopper:project-target-state`)
+ * are intentionally preserved across reset regardless of payload validity;
+ * validation and error handling are delegated entirely to the store's persistence layer.
  */
 export function isLegacyResourceKey(key: string): boolean {
   if (key === "dam-hopper:active-project") return true;
