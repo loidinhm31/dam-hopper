@@ -4123,12 +4123,12 @@ async fn terminal_list_detailed_returns_array() {
 #[tokio::test]
 async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(".env"), "MONGODB_DATABASE=gleanOak\n").unwrap();
+    std::fs::write(tmp.path().join(".env"), "TEST_ENV_VAR=projectEnvValue\n").unwrap();
     let state = make_state_with_project_env_file(&tmp, Some(".env"));
 
     let body = serde_json::json!({
         "id": "env-file-session",
-        "command": print_env_and_hold_command("MONGODB_DATABASE", 2),
+        "command": print_env_and_hold_command("TEST_ENV_VAR", 2),
         "cwd": tmp.path().to_str().unwrap(),
         "project": "test-project"
     });
@@ -4139,7 +4139,7 @@ async fn terminal_create_loads_project_env_file_for_terminal_sessions() {
         state
             .pty_manager
             .get_buffer("env-file-session")
-            .map(|buf| buf.contains("gleanOak"))
+            .map(|buf| buf.contains("projectEnvValue"))
             .unwrap_or(false)
     });
     assert!(ok, "terminal should receive project env_file values");
@@ -4268,16 +4268,16 @@ async fn terminal_create_rejects_project_cwd_escape() {
 #[tokio::test]
 async fn terminal_create_request_env_overrides_project_env_file() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(".env"), "MONGODB_DATABASE=gleanOak\n").unwrap();
+    std::fs::write(tmp.path().join(".env"), "TEST_ENV_VAR=projectEnvValue\n").unwrap();
     let state = make_state_with_project_env_file(&tmp, Some(".env"));
 
     let body = serde_json::json!({
         "id": "env-override-session",
-        "command": print_env_and_hold_command("MONGODB_DATABASE", 2),
+        "command": print_env_and_hold_command("TEST_ENV_VAR", 2),
         "cwd": tmp.path().to_str().unwrap(),
         "project": "test-project",
         "env": {
-            "MONGODB_DATABASE": "overrideDb"
+            "TEST_ENV_VAR": "overrideDb"
         }
     });
     let resp = post_json(state.clone(), "/api/terminal", body).await;
