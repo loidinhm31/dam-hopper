@@ -593,6 +593,7 @@ vi.mock("@/components/atoms/Button.js", () => ({
 }));
 vi.mock("@/components/ui/Select.js", () => ({
   Select: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectGroup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   SelectContent: ({ children }: { children?: ReactNode }) => (
     <div>{children}</div>
   ),
@@ -603,6 +604,10 @@ vi.mock("@/components/ui/Select.js", () => ({
   SelectValue: ({ children }: { children?: ReactNode }) => (
     <div>{children}</div>
   ),
+  SelectLabel: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectSeparator: () => <div />,
+  SelectScrollUpButton: () => <div />,
+  SelectScrollDownButton: () => <div />,
 }));
 
 vi.mock("@/components/templates/IdeShell.js", () => ({
@@ -655,6 +660,7 @@ vi.mock("@/components/molecules/DiagnosticsTimeWindowSelect.js", () => ({
 }));
 vi.mock("@/components/organisms/TerminalDiagnosticsContextMenu.js", () => ({
   TerminalDiagnosticsContextMenu: () => null,
+  openTerminalDiagnosticsContextMenu: vi.fn(),
 }));
 vi.mock("@/components/organisms/PassphraseDialog.js", () => ({
   PassphraseDialog: () => null,
@@ -822,5 +828,86 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
     await expect
       .element(page.getByTestId("workspace-project-info-panel"))
       .toBeVisible();
+  });
+
+  it("persists selected worktree across full page reload and reconciles after discovery", async () => {
+    await expect
+      .element(page.getByTestId("workspace-project-info-panel"))
+      .toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^▶ Worktrees$/ }));
+
+    const featureRadio = page.getByRole("radio", {
+      name: /feature\/switching/,
+    });
+    await expect.element(featureRadio).toBeVisible();
+    await userEvent.click(featureRadio);
+
+    // Verify persisted in store and localStorage
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[PROJECT],
+    ).toBe(FEATURE_PATH);
+    const persistedRaw = window.localStorage.getItem(
+      "dam-hopper:project-target-state",
+    );
+    expect(persistedRaw).toContain(FEATURE_PATH);
+
+    // Capture persisted bytes before unmounting and resetting memory
+    const capturedBytes = persistedRaw!;
+
+    // Simulate full page reload: unmount, clear in-memory state
+    await act(async () => root.unmount());
+    container.innerHTML = "";
+    useProjectTargetStore.setState({
+      activeTargetByProject: Object.create(null),
+    });
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[PROJECT],
+    ).toBeUndefined();
+
+    // Reinstall the on-disk state as a freshly loaded tab would have
+    window.localStorage.setItem("dam-hopper:project-target-state", capturedBytes);
+
+    // Rehydrate store from localStorage on startup
+    await useProjectTargetStore.persist.rehydrate();
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[PROJECT],
+    ).toBe(FEATURE_PATH);
+
+    // Re-mount WorkspacePage
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <>
+          <WorkspacePage />
+          <TargetPreviewSurfaces />
+        </>,
+      ),
+    );
+
+    // Verify workspace mounts with restored worktree
+    await expect
+      .element(page.getByTestId("workspace-project-info-panel"))
+      .toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^▶ Worktrees$/ }));
+
+    const restoredFeatureRadio = page.getByRole("radio", {
+      name: /feature\/switching/,
+    });
+    await expect.element(restoredFeatureRadio).toBeVisible();
+    await expect.element(restoredFeatureRadio).toBeChecked();
+
+    // Verify terminal launch uses restored worktree target
+    testState.api.terminal.create.mockClear();
+    await userEvent.click(
+      page
+        .getByTestId("workspace-project-info-panel")
+        .getByRole("button", { name: "Launch build" }),
+    );
+    expect(testState.api.terminal.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: PROJECT,
+        worktreePath: FEATURE_PATH,
+      }),
+    );
   });
 });

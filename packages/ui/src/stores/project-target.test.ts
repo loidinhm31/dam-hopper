@@ -9,6 +9,7 @@ import {
 import {
   PROJECT_TARGET_STORAGE_KEY,
   createProjectTargetSnapshot,
+  initProjectTargetStorageSync,
   isSelectableWorktree,
   markProjectTargetUnavailable,
   normalizeWorktreePath,
@@ -1167,20 +1168,24 @@ describe("project target store persistence", () => {
   });
 
   it("initializes safely without window global", async () => {
-    vi.stubGlobal("window", undefined);
+    try {
+      vi.stubGlobal("window", undefined);
 
-    // Exception to ts-no-dynamic-import: test case intentionally exercises module loading boundary and fresh singleton initialization
-    vi.resetModules();
-    const freshModule = await import("./project-target.js");
-    const store = freshModule.useProjectTargetStore;
+      // Exception to ts-no-dynamic-import: test case intentionally exercises module loading boundary and fresh singleton initialization
+      vi.resetModules();
+      const freshModule = await import("./project-target.js");
+      const store = freshModule.useProjectTargetStore;
 
-    expect(store.getState().activeTargetByProject).toEqual({});
-    store.getState().selectTarget("alpha", "/worktrees/alpha");
-    expect(store.getState().activeTargetByProject["alpha"]).toBe(
-      "/worktrees/alpha",
-    );
+      expect(store.getState().activeTargetByProject).toEqual({});
+      store.getState().selectTarget("alpha", "/worktrees/alpha");
+      expect(store.getState().activeTargetByProject["alpha"]).toBe(
+        "/worktrees/alpha",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
-
   it("integrates with fresh-state reset: isLegacyResourceKey is false and reset preserves the target key", () => {
     expect(isLegacyResourceKey(PROJECT_TARGET_STORAGE_KEY)).toBe(false);
 
@@ -1252,6 +1257,101 @@ describe("project target store persistence", () => {
       expect(window.localStorage.getItem("dam-hopper:active-project")).toBeNull();
     },
   );
+
+  it("merges concurrent selections from another tab without overwriting them", () => {
+    useProjectTargetStore.getState().selectTarget("project-1", "/worktrees/tab-a-wt");
+
+    // Simulate Tab B writing to localStorage concurrently for a distinct project
+    const concurrentDiskBytes = JSON.stringify({
+      version: 1,
+      state: {
+        activeTargetByProject: {
+          "project-1": "/worktrees/tab-a-wt",
+          "project-2": "/worktrees/tab-b-wt",
+        },
+      },
+    });
+    window.localStorage.setItem(PROJECT_TARGET_STORAGE_KEY, concurrentDiskBytes);
+
+    // Tab A now selects a third project
+    useProjectTargetStore.getState().selectTarget("project-3", "/worktrees/tab-a-wt-3");
+
+    const storedRaw = window.localStorage.getItem(PROJECT_TARGET_STORAGE_KEY);
+    expect(storedRaw).not.toBeNull();
+    const stored = JSON.parse(storedRaw!);
+    // Both Tab B's project-2 and Tab A's project-1 and project-3 are preserved
+    expect(stored.state.activeTargetByProject).toEqual({
+      "project-1": "/worktrees/tab-a-wt",
+      "project-2": "/worktrees/tab-b-wt",
+      "project-3": "/worktrees/tab-a-wt-3",
+    });
+    // Tab A's local store is updated with the merged map
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-2"]).toBe(
+      "/worktrees/tab-b-wt",
+    );
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-3"]).toBe(
+      "/worktrees/tab-a-wt-3",
+    );
+  });
+
+  it("does not write to localStorage when only transient failure maps are mutated", () => {
+    useProjectTargetStore.getState().selectTarget("project-stable", "/worktrees/stable");
+
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
+    setItemSpy.mockClear();
+
+    // Mutating transient failure maps does not change activeTargetByProject
+    useProjectTargetStore
+      .getState()
+      .markTargetUnavailable("unrelated-project", "/worktrees/failed");
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    useProjectTargetStore.getState().clearUnavailableTarget("unrelated-project");
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    setItemSpy.mockRestore();
+  });
+
+  it("synchronizes activeTargetByProject in real-time when receiving a storage event from another tab", () => {
+    const unsubscribe = initProjectTargetStorageSync();
+    try {
+      expect(
+        useProjectTargetStore.getState().activeTargetByProject["external-tab-proj"],
+      ).toBeUndefined();
+
+      // Simulate another tab persisting a new selection
+      const externalTabBytes = JSON.stringify({
+        version: 1,
+        state: {
+          activeTargetByProject: {
+            "external-tab-proj": "/worktrees/remote-tab-wt",
+          },
+        },
+      });
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: PROJECT_TARGET_STORAGE_KEY,
+          newValue: externalTabBytes,
+        }),
+      );
+
+      expect(
+        useProjectTargetStore.getState().activeTargetByProject["external-tab-proj"],
+      ).toBe("/worktrees/remote-tab-wt");
+
+      // Simulate another tab clearing storage
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: PROJECT_TARGET_STORAGE_KEY,
+          newValue: null,
+        }),
+      );
+
+      expect(useProjectTargetStore.getState().activeTargetByProject).toEqual({});
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("restores selection when reset occurs before store initialization", async () => {
     const seedBytes = JSON.stringify({

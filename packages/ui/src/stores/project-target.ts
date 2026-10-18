@@ -97,9 +97,49 @@ function validateAndMergeProjectTargetState(
   };
 }
 
+export function areTargetMapsEqual(
+  a?: Record<string, string>,
+  b?: Record<string, string>,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+export function mergeTargetMapChanges(
+  diskMap: Record<string, string>,
+  localMap: Record<string, string>,
+  baseMap: Record<string, string>,
+): Record<string, string> {
+  const merged = copyTargetMap(diskMap);
+  for (const key of Object.keys(localMap)) {
+    merged[key] = localMap[key]!;
+  }
+  for (const key of Object.keys(baseMap)) {
+    if (!Object.prototype.hasOwnProperty.call(localMap, key)) {
+      delete merged[key];
+    }
+  }
+  return merged;
+}
+
+let lastSerializedPersistedValue: string | null = null;
+let lastKnownPersistedMap: Record<string, string> = createEmptyTargetMap();
+
+export function resetProjectTargetStorageTracker(): void {
+  lastSerializedPersistedValue = null;
+  lastKnownPersistedMap = createEmptyTargetMap();
+}
+
 /**
  * Safe synchronous storage adapter wrapping localStorage with error catching,
- * strict envelope validation, and graceful fallback for disabled storage or SSR.
+ * strict envelope validation, conflict-aware multi-tab merging, and redundant-write suppression.
  */
 function createSafeProjectTargetStorage() {
   return {
@@ -116,6 +156,8 @@ function createSafeProjectTargetStorage() {
         }
         const raw = storage.getItem(name);
         if (raw === null) {
+          lastSerializedPersistedValue = null;
+          lastKnownPersistedMap = createEmptyTargetMap();
           return null;
         }
         let parsed: unknown;
@@ -139,6 +181,12 @@ function createSafeProjectTargetStorage() {
         if (!isPlainObject(state)) {
           return null;
         }
+        if (isPlainObject(state["activeTargetByProject"])) {
+          lastKnownPersistedMap = copyTargetMap(
+            state["activeTargetByProject"] as Record<string, string>,
+          );
+          lastSerializedPersistedValue = raw;
+        }
         return parsed as StorageValue<PersistedProjectTargetState>;
       } catch {
         // Storage access denied or unavailable
@@ -157,7 +205,54 @@ function createSafeProjectTargetStorage() {
         if (!storage) {
           return;
         }
-        storage.setItem(name, JSON.stringify(value));
+        const incomingMap = value?.state?.activeTargetByProject;
+        if (!isPlainObject(incomingMap)) {
+          return;
+        }
+
+        // Skip writing when activeTargetByProject is identical to tracked state (e.g. transient failure map updates)
+        if (areTargetMapsEqual(incomingMap, lastKnownPersistedMap)) {
+          return;
+        }
+
+        // Conflict-aware merge: preserve concurrent project targets written by another tab
+        let finalMap = copyTargetMap(incomingMap as Record<string, string>);
+        const rawDisk = storage.getItem(name);
+        if (rawDisk !== null && rawDisk !== lastSerializedPersistedValue) {
+          try {
+            const diskParsed = JSON.parse(rawDisk);
+            if (
+              isPlainObject(diskParsed) &&
+              diskParsed["version"] === PROJECT_TARGET_PERSIST_VERSION &&
+              isPlainObject(diskParsed["state"])
+            ) {
+              const diskState = diskParsed["state"] as Record<string, unknown>;
+              if (isPlainObject(diskState["activeTargetByProject"])) {
+                finalMap = mergeTargetMapChanges(
+                  diskState["activeTargetByProject"] as Record<string, string>,
+                  incomingMap as Record<string, string>,
+                  lastKnownPersistedMap,
+                );
+              }
+            }
+          } catch {
+            // Disk state corrupted, proceed with local incoming map
+          }
+        }
+
+        const serialized = JSON.stringify({
+          version: PROJECT_TARGET_PERSIST_VERSION,
+          state: {
+            activeTargetByProject: finalMap,
+          },
+        });
+        storage.setItem(name, serialized);
+        lastSerializedPersistedValue = serialized;
+        lastKnownPersistedMap = copyTargetMap(finalMap);
+
+        if (!areTargetMapsEqual(finalMap, incomingMap as Record<string, string>)) {
+          useProjectTargetStore.setState({ activeTargetByProject: finalMap });
+        }
       } catch {
         // Storage denied, quota exceeded, or disabled. In-memory state remains usable.
       }
@@ -172,6 +267,8 @@ function createSafeProjectTargetStorage() {
           return;
         }
         storage.removeItem(name);
+        lastSerializedPersistedValue = null;
+        lastKnownPersistedMap = createEmptyTargetMap();
       } catch {
         // Storage access denied
       }
@@ -444,4 +541,60 @@ export function markProjectTargetUnavailable(target: ProjectTargetInput): void {
   useProjectTargetStore
     .getState()
     .markTargetUnavailable(projectInput, normalized.worktreePath);
+}
+
+/**
+ * Subscribes to cross-tab storage events and synchronizes activeTargetByProject in real-time.
+ */
+export function initProjectTargetStorageSync(): () => void {
+  if (typeof window === "undefined" || !window.addEventListener) {
+    return () => {};
+  }
+  const handleStorageEvent = (event: StorageEvent) => {
+    if (event.key !== PROJECT_TARGET_STORAGE_KEY) {
+      return;
+    }
+    if (event.newValue === null) {
+      resetProjectTargetStorageTracker();
+      useProjectTargetStore.setState({
+        activeTargetByProject: createEmptyTargetMap(),
+      });
+      return;
+    }
+    try {
+      const parsed = JSON.parse(event.newValue);
+      if (
+        !isPlainObject(parsed) ||
+        parsed["version"] !== PROJECT_TARGET_PERSIST_VERSION ||
+        !isPlainObject(parsed["state"])
+      ) {
+        return;
+      }
+      const current = useProjectTargetStore.getState();
+      const updated = validateAndMergeProjectTargetState(parsed["state"], current);
+      lastSerializedPersistedValue = event.newValue;
+      lastKnownPersistedMap = copyTargetMap(updated.activeTargetByProject);
+      if (
+        !areTargetMapsEqual(
+          current.activeTargetByProject,
+          updated.activeTargetByProject,
+        )
+      ) {
+        useProjectTargetStore.setState({
+          activeTargetByProject: updated.activeTargetByProject,
+        });
+      }
+    } catch {
+      // Malformed payload from another tab; safely ignore
+    }
+  };
+
+  window.addEventListener("storage", handleStorageEvent);
+  return () => {
+    window.removeEventListener("storage", handleStorageEvent);
+  };
+}
+
+if (typeof window !== "undefined") {
+  initProjectTargetStorageSync();
 }
