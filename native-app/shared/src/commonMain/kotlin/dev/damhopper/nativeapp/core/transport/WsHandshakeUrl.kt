@@ -10,16 +10,18 @@ import io.ktor.http.encodedPath
  */
 fun buildWsHandshakeUrl(baseUrl: String, token: String?): String {
     val builder = URLBuilder(baseUrl.trim().trimEnd('/'))
-    builder.protocol = when (builder.protocol) {
-        URLProtocol.HTTPS -> URLProtocol.WSS
-        URLProtocol.HTTP -> URLProtocol.WS
-        URLProtocol.WSS -> URLProtocol.WSS
-        URLProtocol.WS -> URLProtocol.WS
-        else -> URLProtocol.WSS
+    val isSecure = when (builder.protocol) {
+        URLProtocol.HTTPS, URLProtocol.WSS -> true
+        else -> false
     }
+    builder.protocol = if (isSecure) URLProtocol.WSS else URLProtocol.WS
     builder.encodedPath = "/ws"
-    if (!token.isNullOrBlank()) {
+    val host = builder.host
+    val allowToken = isSecure || dev.damhopper.nativeapp.features.profiles.ServerProfile.isLoopbackHost(host)
+    if (allowToken && !token.isNullOrBlank()) {
         builder.parameters["token"] = token
+    } else {
+        builder.parameters.remove("token")
     }
     return builder.buildString()
 }

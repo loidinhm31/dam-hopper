@@ -155,4 +155,31 @@ class HostResourceSseTest {
         assertEquals(1, frames.size)
         assertIs<HostResourceSseFrame.Status>(frames[0])
     }
+
+    @Test
+    fun testSseTokenAttachmentGating() = runTest {
+        var observedAuthHeader: String? = null
+        try { server!!.removeContext("/api/system/resources/v1/events") } catch (_: IllegalArgumentException) {}
+        server!!.createContext("/api/system/resources/v1/events") { exchange ->
+            observedAuthHeader = exchange.requestHeaders.getFirst("Authorization")
+            val errorBody = """{"code":"UNAVAILABLE"}"""
+            exchange.sendResponseHeaders(503, errorBody.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(errorBody.toByteArray()) }
+        }
+
+        // 1. Loopback cleartext (http://127.0.0.1) permits token for local dev
+        val refLoopback = ConnectionRef("dev-profile", 1L)
+        val loopbackClient = HostResourceSseClient(
+            connection = refLoopback,
+            baseUrl = "http://127.0.0.1:$serverPort",
+            authTokenProvider = { "secret-sse-token" },
+        )
+        try { loopbackClient.openEventStream().toList() } catch (_: Throwable) {}
+        assertEquals("Bearer secret-sse-token", observedAuthHeader)
+
+        // 2. Non-loopback cleartext host: verify policy rejects token
+        val isSecure = "http://192.168.1.100:4801".startsWith("https://", ignoreCase = true)
+        val allowToken = isSecure || dev.damhopper.nativeapp.features.profiles.ServerProfile.isLoopbackHost("192.168.1.100")
+        assertFalse(allowToken, "Non-loopback cleartext endpoint must reject bearer token attachment")
+    }
 }

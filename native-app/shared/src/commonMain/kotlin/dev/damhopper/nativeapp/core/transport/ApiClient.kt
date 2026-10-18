@@ -59,7 +59,7 @@ class ApiClient(
 
         val response = try {
             httpClient.get(fullUrl) {
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 queryParams.forEach { (k, v) -> parameter(k, v) }
@@ -79,7 +79,7 @@ class ApiClient(
         val response = try {
             httpClient.post(fullUrl) {
                 contentType(ContentType.Application.Json)
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 setBody(body)
@@ -99,7 +99,7 @@ class ApiClient(
         val response = try {
             httpClient.post(fullUrl) {
                 contentType(ContentType.parse("application/toml; charset=utf-8"))
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 setBody(body)
@@ -119,7 +119,7 @@ class ApiClient(
         val response = try {
             httpClient.put(fullUrl) {
                 contentType(ContentType.Application.Json)
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 setBody(body)
@@ -138,7 +138,7 @@ class ApiClient(
 
         val response = try {
             httpClient.delete(fullUrl) {
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 queryParams.forEach { (k, v) -> parameter(k, v) }
@@ -158,7 +158,7 @@ class ApiClient(
         val response = try {
             httpClient.patch(fullUrl) {
                 contentType(ContentType.Application.Json)
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 setBody(body)
@@ -178,7 +178,7 @@ class ApiClient(
         val response = try {
             httpClient.delete(fullUrl) {
                 contentType(ContentType.Application.Json)
-                if (!token.isNullOrBlank()) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }
                 setBody(body)
@@ -188,6 +188,16 @@ class ApiClient(
         }
 
         return handleResponse(response, "DELETE", fullUrl)
+    }
+    internal fun shouldAttachBearerToken(token: String?, fullUrl: String): Boolean {
+        if (token.isNullOrBlank()) return false
+        if (fullUrl.startsWith("https://", ignoreCase = true)) return true
+        val host = try {
+            io.ktor.http.Url(fullUrl).host
+        } catch (_: Exception) {
+            ""
+        }
+        return dev.damhopper.nativeapp.features.profiles.ServerProfile.isLoopbackHost(host)
     }
 
     companion object {

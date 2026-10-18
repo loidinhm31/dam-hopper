@@ -219,13 +219,19 @@ class UsageRepositoryAndControllerTest {
     fun testDeleteUsageFailurePreservesStateAndResetsDeleting() {
         var attemptCount = 0
         server!!.createContext("/api/usage") { exchange ->
-            attemptCount++
-            if (attemptCount == 1) {
-                exchange.sendResponseHeaders(500, -1)
-                exchange.close()
+            if (exchange.requestMethod == "DELETE") {
+                attemptCount++
+                if (attemptCount == 1) {
+                    exchange.sendResponseHeaders(500, -1)
+                    exchange.close()
+                } else {
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
             } else {
-                exchange.sendResponseHeaders(204, -1)
-                exchange.close()
+                val json = """{"available":true,"paused":false,"writerErrors":0,"rejectedEvents":0,"sampledAt":0,"collector":{"dropped":0}}"""
+                exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(json.toByteArray()) }
             }
         }
         server!!.createContext("/api/usage/summary") { exchange ->

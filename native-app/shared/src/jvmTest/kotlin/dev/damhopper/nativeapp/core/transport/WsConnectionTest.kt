@@ -40,6 +40,23 @@ class WsConnectionTest {
     }
 
     @Test
+    fun testBuildWsHandshakeUrlStripsInheritedTokenOnNonLoopbackCleartext() {
+        // Base URL already has an inherited token parameter in cleartext non-loopback
+        val remoteWithInheritedToken = "http://192.168.1.50:4801/ws?token=leakedSecret"
+        val wsUrl = buildWsHandshakeUrl(remoteWithInheritedToken, null)
+        assertFalse(wsUrl.contains("token="), "Inherited token parameter must be stripped on non-loopback cleartext")
+
+        // Even if non-null token argument is provided to non-loopback cleartext, no token is attached
+        val wsUrlWithArg = buildWsHandshakeUrl(remoteWithInheritedToken, "newToken")
+        assertFalse(wsUrlWithArg.contains("token="), "Non-loopback cleartext must not have token parameter")
+
+        // But loopback cleartext permits token
+        val loopbackWithInheritedToken = "http://127.0.0.1:4801/ws"
+        val loopbackWs = buildWsHandshakeUrl(loopbackWithInheritedToken, "validDevToken")
+        assertTrue(loopbackWs.contains("token=validDevToken"))
+    }
+
+    @Test
     fun testWsRequestCorrelator() = runTest {
         val correlator = WsRequestCorrelator(maxInFlight = 2)
         val conn = ConnectionRef("test-profile", 1L)

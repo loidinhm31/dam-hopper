@@ -14,6 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +31,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,9 +43,227 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+
+/**
+ * Strips ANSI CSI sequences (colors, formatting, cursor movement), OSC sequences,
+ * and character set designators for clean mobile console text rendering.
+ */
+fun cleanAnsiCodes(text: String): String {
+    return text
+        .replace(Regex("\u001B\\][^\u0007\u001B]*(\u0007|\u001B\\\\|\u001B|$)"), "")
+        .replace(Regex("\u001B[P^_][^\u0007\u001B]*(\u0007|\u001B\\\\|\u001B|$)"), "")
+        .replace(Regex("\u001B\\[[0-9;?><= :!\"$']*[@-~]"), "")
+        .replace(Regex("\u001B[()#%*+][0-9a-zA-Z]"), "")
+        .replace(Regex("\u001B[=@><78cEFHMNPn]"), "")
+        .replace("\u001B", "")
+        .replace(Regex("[\u0000-\u0006\u0007\u000B\u000C\u000E-\u001F\u007F-\u009F]"), "")
+}
+
+/**
+ * Bounded in-memory console output surface implementing [NativeTerminalSurface].
+ *
+ * Scoped as a mobile console viewer for Compose rendering (not a full ANSI terminal emulator).
+ * Receives reconciled byte chunks from [TerminalSessionController] via [feedOutput].
+ * Maintains a thread-safe / Compose-observable bounded line buffer for scrollable display.
+ * Client-side "Clear" actions clear only the local display buffer without resetting
+ * the controller's server stream offsets or replay gate state.
+ */
+class ConsoleBufferTerminalSurface(
+    initialCols: Int = 80,
+    initialRows: Int = 24,
+    val maxLines: Int = 2000,
+) : NativeTerminalSurface {
+    private var _dimensions = TerminalDimensions(initialCols, initialRows)
+    override val dimensions: TerminalDimensions get() = _dimensions
+
+    private var _isAttached: Boolean = true
+    override val isAttached: Boolean get() = _isAttached
+
+    private var _isDisposed: Boolean = false
+    override val isDisposed: Boolean get() = _isDisposed
+
+    val lines = mutableStateListOf<AnnotatedString>()
+    var updateRevision by mutableStateOf(0L)
+        private set
+
+    private val currentRawLine = StringBuilder()
+    private var cursorCol = 0
+    private var onInputListener: ((ByteArray) -> Unit)? = null
+    private var onResizeListener: ((Int, Int) -> Unit)? = null
+    private val bufferLock = Any()
+
+    override fun attachView(hostView: Any?) {
+        check(!_isDisposed) { "Cannot attach disposed ConsoleBufferTerminalSurface" }
+        _isAttached = true
+    }
+
+    override fun detachView() {
+        _isAttached = false
+    }
+
+    override fun feedOutput(data: ByteArray, offset: Long, reset: Boolean) {
+        if (_isDisposed) return
+        val text = data.decodeToString()
+        synchronized(bufferLock) {
+            if (reset) {
+                lines.clear()
+                currentRawLine.clear()
+                cursorCol = 0
+            }
+            appendDecodedText(text)
+        }
+    }
+
+    private fun appendDecodedText(rawText: String) {
+        var i = 0
+        while (i < rawText.length) {
+            val c = rawText[i]
+            when (c) {
+                '\r' -> {
+                    if (i + 1 < rawText.length && rawText[i + 1] == '\n') {
+                        commitCurrentLine()
+                        i++
+                    } else {
+                        cursorCol = 0
+                    }
+                }
+                '\n' -> {
+                    commitCurrentLine()
+                }
+                '\b' -> {
+                    if (cursorCol > 0) {
+                        cursorCol--
+                    }
+                }
+                '\t' -> {
+                    val spacesToAdd = 4 - (cursorCol % 4)
+                    writeChars(" ".repeat(spacesToAdd))
+                }
+                else -> {
+                    writeChar(c)
+                }
+            }
+            i++
+        }
+        updateActiveDisplayLine()
+        while (lines.size > maxLines) {
+            lines.removeAt(0)
+        }
+        updateRevision++
+    }
+
+    private fun writeChar(c: Char) {
+        if (cursorCol < currentRawLine.length) {
+            currentRawLine.setCharAt(cursorCol, c)
+        } else {
+            while (currentRawLine.length < cursorCol) {
+                currentRawLine.append(' ')
+            }
+            currentRawLine.append(c)
+        }
+        cursorCol++
+    }
+
+    private fun writeChars(str: String) {
+        for (ch in str) {
+            writeChar(ch)
+        }
+    }
+
+    private fun commitCurrentLine() {
+        val parsed = AnsiTerminalParser.parseAnsiToAnnotatedString(currentRawLine.toString())
+        if (lines.isNotEmpty()) {
+            lines[lines.lastIndex] = parsed
+        } else {
+            lines.add(parsed)
+        }
+        lines.add(AnnotatedString(""))
+        currentRawLine.clear()
+        cursorCol = 0
+    }
+
+    private fun updateActiveDisplayLine() {
+        val parsed = AnsiTerminalParser.parseAnsiToAnnotatedString(currentRawLine.toString())
+        if (lines.isNotEmpty()) {
+            lines[lines.lastIndex] = parsed
+        } else {
+            lines.add(parsed)
+        }
+    }
+
+    /**
+     * Clears only the client-side view lines without modifying server stream offsets or replay gate.
+     */
+    fun clearDisplayBuffer() {
+        synchronized(bufferLock) {
+            lines.clear()
+            currentRawLine.clear()
+            cursorCol = 0
+            updateRevision++
+        }
+    }
+
+    override fun resize(cols: Int, rows: Int) {
+        if (_isDisposed) return
+        _dimensions = TerminalDimensions(cols, rows)
+        onResizeListener?.invoke(cols, rows)
+    }
+
+    override fun setOnInputListener(listener: (ByteArray) -> Unit) {
+        this.onInputListener = listener
+    }
+
+    override fun setOnResizeListener(listener: (cols: Int, rows: Int) -> Unit) {
+        this.onResizeListener = listener
+    }
+
+    fun dispatchInput(bytes: ByteArray) {
+        if (_isDisposed) return
+        onInputListener?.invoke(bytes)
+    }
+
+    override fun search(query: String, matchCase: Boolean): TerminalSearchResult {
+        if (_isDisposed || query.isEmpty()) return TerminalSearchResult(query, 0, -1)
+        val fullText = lines.joinToString("\n")
+        val source = if (matchCase) fullText else fullText.lowercase()
+        val target = if (matchCase) query else query.lowercase()
+        var occurrences = 0
+        var idx = 0
+        while (true) {
+            val found = source.indexOf(target, idx)
+            if (found < 0) break
+            occurrences++
+            idx = found + target.length
+        }
+        return TerminalSearchResult(query, occurrences, if (occurrences > 0) 0 else -1)
+    }
+
+    override fun clearSearch() {}
+
+    override fun getSelectedText(): String? = null
+
+    override fun copySelection(): String? = null
+
+    override fun pasteText(text: String) {
+        if (_isDisposed) return
+        onInputListener?.invoke(text.encodeToByteArray())
+    }
+
+    override fun close() {
+        _isDisposed = true
+        _isAttached = false
+        lines.clear()
+        currentRawLine.clear()
+        cursorCol = 0
+        onInputListener = null
+        onResizeListener = null
+    }
+}
 
 /**
  * Terminal panel presenting interactive remote shell sessions.
@@ -60,6 +286,7 @@ fun TerminalPanelScreen(
     onKillSession: (id: String) -> Unit,
     onRemoveSession: (id: String) -> Unit,
     fontSize: Int = 13,
+    outputBuffer: String? = null,
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -290,32 +517,87 @@ fun TerminalPanelScreen(
                     }
                 }
             } else {
-                // Terminal output rendering
+                val surfaceLines = (controller?.surface as? VtTerminalSurface)?.lines ?: (controller?.surface as? ConsoleBufferTerminalSurface)?.lines
+                val displayLines: List<AnnotatedString> = surfaceLines ?: remember(outputBuffer) {
+                    outputBuffer?.let { AnsiTerminalParser.parseAnsiToAnnotatedString(it).text.lines().map { l -> AnnotatedString(l) } } ?: emptyList()
+                }
+                val listState = rememberLazyListState()
+
+                LaunchedEffect(displayLines.size) {
+                    if (displayLines.isNotEmpty()) {
+                        listState.scrollToItem(displayLines.size - 1)
+                    }
+                }
+
                 Column(modifier = Modifier.fillMaxSize()) {
-                    Text(
-                        text = "[Session: ${activeSession.displayName} | PTY: ${activeSession.id} | Incarnation: ${controller?.incarnation ?: 0u}]",
-                        color = DamHopperColors.TextSecondary,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Text(
-                        text = "$ ${activeSession.command}",
-                        color = DamHopperColors.Success,
-                        fontSize = fontSize.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (controller?.isReplayCompleted == true) {
-                            "Terminal connected. Interactive session ready."
-                        } else {
-                            "Replaying stream buffer..."
-                        },
-                        color = DamHopperColors.TextSecondary,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    // Header metadata bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DamHopperColors.SurfaceVariant)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "[${activeSession.displayName} | ${activeSession.id} | Inc:${controller?.incarnation ?: 0u}]",
+                            color = DamHopperColors.TextSecondary,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = if (controller?.isReplayCompleted == true) "READY" else "REPLAYING",
+                            color = if (controller?.isReplayCompleted == true) DamHopperColors.Success else DamHopperColors.Warning,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    if (displayLines.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(8.dp)
+                        ) {
+                            Text(
+                                text = "$ ${activeSession.command}",
+                                color = DamHopperColors.Success,
+                                fontSize = fontSize.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (controller?.isReplayCompleted == true) {
+                                    "Terminal connected. Interactive session ready."
+                                } else {
+                                    "Replaying stream buffer..."
+                                },
+                                color = DamHopperColors.TextSecondary,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            itemsIndexed(displayLines) { _, line ->
+                                Text(
+                                    text = if (line.isEmpty()) AnnotatedString(" ") else line,
+                                    color = DamHopperColors.TextPrimary,
+                                    fontSize = fontSize.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = (fontSize + 3).sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -376,6 +658,57 @@ fun TerminalPanelScreen(
                     isActive = isSearchOpen,
                     onClick = { isSearchOpen = !isSearchOpen }
                 )
+                AccessoryKeyButton(
+                    label = "CLEAR",
+                    isActive = false,
+                    onClick = {
+                        (controller.surface as? VtTerminalSurface)?.clearDisplayBuffer()
+                            ?: (controller.surface as? ConsoleBufferTerminalSurface)?.clearDisplayBuffer()
+                    }
+                )
+            }
+
+            // 6. Inline Command Input Bar (strictly docked above bottom, zero FABs)
+            var panelCommandInput by remember(activeSessionId) { mutableStateOf("") }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = panelCommandInput,
+                    onValueChange = { panelCommandInput = it },
+                    placeholder = { Text("Enter command...", fontSize = 12.sp, color = DamHopperColors.TextSecondary) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        val toSend = panelCommandInput
+                        controller.sendInput("$toSend\r".encodeToByteArray())
+                        panelCommandInput = ""
+                    }),
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = DamHopperColors.TextPrimary
+                    ),
+                    modifier = Modifier.weight(1f).height(44.dp)
+                )
+                Button(
+                    onClick = {
+                        val toSend = panelCommandInput
+                        controller.sendInput("$toSend\r".encodeToByteArray())
+                        panelCommandInput = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(40.dp)
+                ) {
+                    Text("Send", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

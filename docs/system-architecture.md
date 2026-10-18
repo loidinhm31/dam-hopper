@@ -375,11 +375,22 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 ## Android Native Client Architecture
 
-**Client core and shell implementation established; physical hardware qualification deferred to Phase 18.** The Android-first client is rooted under `native-app/`, completely isolated from the existing Tauri host (`apps/native/`). It connects to the existing remote Rust APIs via REST, WebSockets, and SSE (transport implemented and unit/static-tested in Phase 03; live-server qualification pending) with no WebView, embedded browser engine, local PTY, local Git, or local AI agent execution.
+**Android app entry flow implemented; deployment/runtime qualification remains open.** `native-app/` is the Kotlin Multiplatform and Jetpack Compose client, isolated from the Tauri host (`apps/native/`). The active root presents Profile Login → Project List → Project Terminal over the existing Rust backend. Automated unit-level coverage does not imply live-server or physical-device qualification.
 
 ### Two-Module Architecture
 - `:shared` — Kotlin Multiplatform module targeting Android and JVM (`jvmTarget` set to JVM 17, `minSdk = 29`). Contains common domain models (`dev.damhopper.nativeapp.model.WorkbenchModel`), state containers, theme definitions, and Compose Multiplatform UI components (`WorkbenchScreen`, `WorkbenchHeader`, `PanelNavigationRow`, `PanelPlaceholders`). Common code strictly excludes Android- or Swing-specific APIs.
 - `:androidApp` — Android application module (`compileSdk = 35`, `minSdk = 29`, `targetSdk = 35`, ABI filters `arm64-v8a` and `x86_64`). Hosts `MainActivity.kt` providing Compose entry point with `statusBarsPadding()` top status bar inset handling, Android application manifest, and security configurations.
+
+### Active Android root flow and navigation lifecycle
+
+`MainActivity` initializes `ProfileRepository`, creates `AppFlowNavigation`, and installs the root Back handler. `DamHopperMobileApp` renders `ProfileLoginScreen`, `ProjectListScreen`, or `ProjectTerminalScreen` from `AppFlowState`. The state stores the current stage, profile ID, project, and terminal session ID.
+
+After successful authentication the flow enters Project List; choosing a project updates `ProjectTargetStore` and opens Terminal. The root reconstructs `WorkspaceRepository` and `TerminalRepository` when profile ID, base URL, or connection generation changes, clearing prior repository references before creating replacements. Loss of authentication returns the UI to Profile Login.
+
+Back changes only the visible stage: Terminal → Project List → Profile Login; at Profile Login the handler yields to the activity. These back transitions preserve selection values. Profiles / Switch explicitly clears the session ID; a different profile clears project and session, and a different project clears the session. Leaving the terminal screen deactivates input and disposes local controllers but does not kill or remove the server-owned PTY.
+
+The current root does not mount `WorkbenchScreen` or `PanelHost`. Their separate 12-panel shell remains in source and in the panel-shell contract below, but those destinations are not reachable through the active three-screen flow.
+
 
 ### Toolchain Pins
 Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
@@ -391,7 +402,9 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Ktor Client**: 3.1.0 (`ktor-client-okhttp`, `ktor-client-java` staged for Phase 03 transport).
 - **Bytecode & SDK Target**: Java 17 across modules; minSdk 29 (Android 10+), targetSdk 35, compileSdk 35.
 
-### 12-Panel Registry & Shell Invariants
+### Retained 12-Panel Workbench Shell (Separate from Active Root Flow)
+
+`WorkbenchScreen`, `PanelHost`, and `WorkbenchNavigation` describe a separate panel subsystem. `MainActivity` currently hosts `DamHopperMobileApp`, which exposes only the three core flow screens; do not infer panel reachability from the retained components or their unit tests.
 - **12-Panel Registry**: Modeled authoritatively in `dev/damhopper/nativeapp/model/WorkbenchModel.kt` (`WorkbenchPanel` enum) and registered in `ui/navigation/PanelRegistry.kt` (`PanelDescriptor` map for all 12 entries: `TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), each with display label, monospace short code (e.g. `RESOURCES` / `RES`, `SSH_HOST` / `HOST`), icon glyph, and description. Fails closed on unmodeled panel identifiers.
 - **Single-Row Navigation**: Docked horizontal scrollable row (`ui/navigation/PanelNavigationRow.kt`) directly beneath the server/project header. Monospace short codes and labels indicate active selection; Compose `BringIntoViewRequester` automatically scrolls the selected button into viewport on activation. Zero floating action buttons (FABs) or secondary navigation drawers.
 - **Shell Restrictions**: Strict TERMINAL mode only (`workspaceMode = "terminal"`), Traditional terminal presentation only (`terminalUsageMode = "traditional"`), and a single content area across all screen geometries (`singleContentArea = true`). Selecting a panel replaces the visible content area without multi-panel or split docking.
@@ -402,7 +415,7 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 ### Security Policies & Manifest Isolation
 - **Network Security Configuration**:
   - Release base config (`src/main/res/xml/network_security_config.xml`) sets `cleartextTrafficPermitted="false"` with system trust anchors.
-  - Debug overrides (`src/debug/res/xml/network_security_config.xml`) permit cleartext traffic strictly for local development loopback domains (`10.0.2.2`, `127.0.0.1`, `localhost`) and user trust anchors.
+  - Debug network configuration (`src/debug/res/xml/network_security_config.xml`) permits cleartext traffic to any host and trusts system and user-installed certificates. This is a debug-only transport allowance; authenticated device traffic should use HTTPS. Release config remains TLS-only with system trust anchors.
 - **Data Extraction & Backup**:
   - Application manifest explicitly sets `android:allowBackup="false"` and `android:fullBackupContent="false"`.
   - Data extraction rules (`src/main/res/xml/data_extraction_rules.xml`) exclude root path (`.`) from both `<cloud-backup>` and `<device-transfer>`.
@@ -640,7 +653,7 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - `WorkbenchJourneys.kt` (`androidApp/src/androidTest/`): Android JUnit4 instrumentation journey suite validating package identity, device workbench state invariants, 12-panel navigation on device runtime, and Cognito overlay touch/keyboard dismissal.
 - **Automation & Security Audit Tooling:**
   - `run-device-journeys.sh`: Automated device test runner configuring reverse port forwarding (4801); cleanly exits with code 2 and `BLOCKED_PENDING_DEVICE` status when ADB or physical/emulator hardware is absent without faking evidence.
-  - `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to verify manifest backup exclusions (`allowBackup="false"`, `fullBackupContent="false"`), `windowSoftInputMode="adjustResize"`, release TLS-only network security (`cleartextTrafficPermitted="false"`), debug loopback scoping, secret leak scanning, ABI filters (`arm64-v8a`, `x86_64`), and real 16 KiB ELF segment alignment checks on packaged libraries via `readelf -W -l`.
+  - `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to inspect manifest backup exclusions, `adjustResize`, release TLS-only policy, debug network configuration, secret leaks, ABI filters, and packaged-library ELF alignment. Its debug check verifies common development-domain entries are present; it does not assert that cleartext is limited to those domains. The current debug base config permits cleartext to any host.
 - **Cross-Phase Residual Remediations Delivered:**
   - Phase 15: Clean EOF handling in `ResourceStreamCoordinator`; 5s REST fallback and `LifecycleAware` in `HostResourceController` registered in `WorkbenchScreen`; dynamic model filter derivation with `knownModels` accumulation in `UsageController`/`UsageScreens`; explicit UTC date bounds and completed-days interval labeling in `UsageDialogs`.
   - Phase 16: Action error preservation across refresh in `IdleConsentController`; explicit failure validation on SSH credential forget in `SshRepository`.
@@ -672,7 +685,7 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - *Automated Verification Evidence:* 1,430 cumulative static structural assertions passing across 17 phase test scripts (Phases 02–18, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 481 unit test executions across shared JVM and Android variants (310 `:shared:jvmTest`, 82 debug, 82 release, 399 unique test definitions, 0 failures, 0 skipped); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 18 tooling baseline recorded under review Cycle 2 (score 6/10, approved by user); GATE-C physical device/visual qualification is BLOCKED_PENDING_DEVICE.
 - *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18 (GATE-C BLOCKED_PENDING_DEVICE).
 
-See [proposed native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
+See [Android native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

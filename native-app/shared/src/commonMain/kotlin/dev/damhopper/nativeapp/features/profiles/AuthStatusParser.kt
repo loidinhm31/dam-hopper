@@ -21,13 +21,23 @@ internal object AuthStatusParser {
         }
 
         if (raw.authenticated) {
+            val isDev = raw.dev_mode == true || raw.devMode == true
+            val effectiveToken = if (token.isNullOrBlank() && isDev) "dev-session" else (token ?: "")
+            if (effectiveToken.isBlank()) {
+                return AuthStatus.LoginRequired(
+                    code = raw.code ?: AuthErrorCodes.AUTH_REQUIRED,
+                    error = raw.error ?: "Authentication required",
+                    workbenchProtocol = benchProto,
+                    authProtocol = authProto,
+                )
+            }
             val session = AuthSession(
-                token = token ?: "",
-                user = raw.user ?: "",
+                token = effectiveToken,
+                user = raw.user?.ifBlank { null } ?: if (isDev) "dev-user" else "user",
                 role = raw.role ?: "user",
                 expiresAt = raw.expiresAt ?: "",
                 mfaDueAt = raw.mfaDueAt,
-                devMode = raw.dev_mode == true || raw.devMode == true,
+                devMode = isDev,
                 authProtocol = authProto,
             )
             return AuthStatus.Authenticated(

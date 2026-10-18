@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.terminal
 
+import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 
 /**
@@ -100,11 +101,39 @@ open class TerminalSessionController(
     fun handleLiveChunk(data: ByteArray, offset: ULong, chunkIncarnation: ULong) {
         // Drop chunks from older incarnations
         if (chunkIncarnation < incarnation) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-session",
+                message = "stream_chunk_dropped_stale_incarnation",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf(
+                    "chunkIncarnation" to chunkIncarnation.toString(),
+                    "currentIncarnation" to incarnation.toString(),
+                    "byteCount" to data.size.toString(),
+                    "offset" to offset.toString()
+                )
+            )
             return
         }
 
         // Newer incarnation detected before buffer: bump incarnation and reset offset
         if (chunkIncarnation > incarnation) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-session",
+                message = "stream_newer_incarnation_detected",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = chunkIncarnation.toLong(),
+                metadata = mapOf(
+                    "prevIncarnation" to incarnation.toString(),
+                    "newIncarnation" to chunkIncarnation.toString()
+                )
+            )
             incarnation = chunkIncarnation
             lastSeenOffset = 0uL
             gate.resetForAttach()
@@ -114,6 +143,15 @@ open class TerminalSessionController(
 
         // If historical replay is still in progress, queue live chunk
         if (!gate.isLiveStreamReady) {
+            AppLogger.debug(
+                tag = "TerminalSessionController",
+                message = "stream_chunk_queued_for_replay",
+                metadata = mapOf(
+                    "sessionId" to sessionId,
+                    "byteCount" to data.size.toString(),
+                    "offset" to offset.toString()
+                )
+            )
             gate.enqueueLiveChunk(QueuedLiveChunk(data, offset, chunkIncarnation))
             return
         }
@@ -121,14 +159,36 @@ open class TerminalSessionController(
         // Reconcile contiguous/overlapping chunk
         when (val result = reconcileTerminalOutput(data, offset, lastSeenOffset)) {
             is ReconcileOutputResult.Discard -> {
-                // Chunk already processed; discard duplicate
+                AppLogger.debug(
+                    tag = "TerminalSessionController",
+                    message = "stream_chunk_discarded_duplicate",
+                    metadata = mapOf(
+                        "sessionId" to sessionId,
+                        "offset" to offset.toString(),
+                        "lastSeenOffset" to lastSeenOffset.toString()
+                    )
+                )
             }
             is ReconcileOutputResult.Gap -> {
-                // Stream gap detected; request re-attach
+                AppLogger.recordDiagnostic(
+                    type = "transport",
+                    scope = "terminal-panel",
+                    message = "stream_gap_detected",
+                    profileId = connectionRef.profileId,
+                    generation = connectionRef.generation,
+                    sessionId = sessionId,
+                    incarnation = incarnation.toLong(),
+                    metadata = mapOf(
+                        "expectedOffset" to lastSeenOffset.toString(),
+                        "receivedStartOffset" to offset.toString(),
+                        "byteCount" to data.size.toString()
+                    )
+                )
                 requestReattach()
             }
             is ReconcileOutputResult.Render -> {
                 lastSeenOffset = result.nextOffset
+                (surface as? VtTerminalSurface)?.isLiveStream = true
                 surface?.feedOutput(result.data, result.nextOffset.toLong() - result.data.size, false)
             }
         }
@@ -145,6 +205,19 @@ open class TerminalSessionController(
         bufferIncarnation: ULong,
     ) {
         if (bufferIncarnation < incarnation) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-session",
+                message = "buffer_replay_dropped_stale_incarnation",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf(
+                    "bufferIncarnation" to bufferIncarnation.toString(),
+                    "currentIncarnation" to incarnation.toString()
+                )
+            )
             return
         }
         if (bufferIncarnation > incarnation) {
@@ -152,11 +225,28 @@ open class TerminalSessionController(
         }
         isTruncated = truncated
 
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "terminal-panel",
+            message = "buffer_replay",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf(
+                "byteCount" to data.size.toString(),
+                "offset" to offset.toString(),
+                "reset" to reset.toString(),
+                "truncated" to truncated.toString()
+            )
+        )
         gate.beginReplayWrite()
         try {
+            (surface as? VtTerminalSurface)?.isLiveStream = false
             surface?.feedOutput(data, offset.toLong() - data.size, reset)
             lastSeenOffset = offset
         } finally {
+            (surface as? VtTerminalSurface)?.isLiveStream = true
             gate.finishReplayWrite()
             gate.notifyReplayDrain()
         }
@@ -165,6 +255,18 @@ open class TerminalSessionController(
     private fun drainQueuedChunksAfterReplay() {
         gate.markLiveStreamReady()
         val queued = gate.drainQueuedChunks()
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "terminal-panel",
+            message = "buffer_replay_complete",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf(
+                "queuedChunkCount" to queued.size.toString()
+            )
+        )
         for (chunk in queued) {
             if (!gate.isLiveStreamReady) break
             handleLiveChunk(chunk.data, chunk.offset, chunk.incarnation)
@@ -187,6 +289,20 @@ open class TerminalSessionController(
         exitCode = code
         willRestart = restart
         restarts?.let { restartCount = it }
+        AppLogger.recordDiagnostic(
+            type = "terminal",
+            scope = "terminal-session",
+            message = "terminal.exit",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf(
+                "exitCode" to (code?.toString() ?: "null"),
+                "willRestart" to restart.toString(),
+                "restartCount" to (restarts?.toString() ?: restartCount.toString())
+            )
+        )
     }
 
     /**
@@ -198,16 +314,40 @@ open class TerminalSessionController(
         willRestart = false
         restartCount = count
         gate.markReadyAfterRestart()
+        AppLogger.recordDiagnostic(
+            type = "terminal",
+            scope = "terminal-session",
+            message = "process.restarted",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf(
+                "restartCount" to count.toString(),
+                "prevExitCode" to (prevExitCode?.toString() ?: "null")
+            )
+        )
     }
-
     /**
      * Handles lagged stream notification.
      */
     fun handleLagged(dropped: ULong) {
         lastLaggedDropped = dropped
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "terminal-panel",
+            message = "broadcast_lagged",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf(
+                "droppedCount" to dropped.toString(),
+                "lastSeenOffset" to lastSeenOffset.toString()
+            )
+        )
         requestReattach()
     }
-
     private fun requestReattach() {
         gate.resetForAttach()
         onRequestReattach?.invoke(sessionId, lastSeenOffset)
@@ -266,13 +406,14 @@ open class TerminalSessionController(
     open fun encodeSpecialKey(name: String): ByteArray {
         val isAlt = activeModifiers.contains(TerminalModifier.ALT)
         clearModifiers()
+        val isAppCursor = (surface as? VtTerminalSurface)?.engine?.isAppCursorKeys == true
         val seq = when (name.uppercase()) {
-            "UP" -> "\u001b[A"
-            "DOWN" -> "\u001b[B"
-            "RIGHT" -> "\u001b[C"
-            "LEFT" -> "\u001b[D"
-            "HOME" -> "\u001b[H"
-            "END" -> "\u001b[F"
+            "UP" -> if (isAppCursor) "\u001bOA" else "\u001b[A"
+            "DOWN" -> if (isAppCursor) "\u001bOB" else "\u001b[B"
+            "RIGHT" -> if (isAppCursor) "\u001bOC" else "\u001b[C"
+            "LEFT" -> if (isAppCursor) "\u001bOD" else "\u001b[D"
+            "HOME" -> if (isAppCursor) "\u001bOH" else "\u001b[H"
+            "END" -> if (isAppCursor) "\u001bOF" else "\u001b[F"
             "PAGE_UP", "PAGEUP" -> "\u001b[5~"
             "PAGE_DOWN", "PAGEDOWN" -> "\u001b[6~"
             "INSERT" -> "\u001b[2~"
@@ -303,10 +444,66 @@ open class TerminalSessionController(
      * Sends user keystrokes / input to remote PTY.
      */
     fun sendInput(bytes: ByteArray) {
-        if (!isPanelActive) return
-        if (!isReplayCompleted) return
-        if (!gate.shouldForwardTerminalData()) return
-        if (!isInputAllowed()) return
+        if (!isPanelActive) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-input",
+                message = "terminal.input_dropped",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf("reason" to "panel_inactive", "byteCount" to bytes.size.toString())
+            )
+            return
+        }
+        if (!isReplayCompleted) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-input",
+                message = "terminal.input_dropped",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf("reason" to "replay_in_progress", "byteCount" to bytes.size.toString())
+            )
+            return
+        }
+        if (!gate.shouldForwardTerminalData()) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-input",
+                message = "terminal.input_dropped",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf("reason" to "gate_blocked", "byteCount" to bytes.size.toString())
+            )
+            return
+        }
+        if (!isInputAllowed()) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-input",
+                message = "terminal.input_dropped",
+                profileId = connectionRef.profileId,
+                generation = connectionRef.generation,
+                sessionId = sessionId,
+                incarnation = incarnation.toLong(),
+                metadata = mapOf("reason" to "input_disallowed", "byteCount" to bytes.size.toString())
+            )
+            return
+        }
+        AppLogger.debug(
+            tag = "TerminalSessionController",
+            message = "terminal.input_dispatched",
+            metadata = mapOf(
+                "sessionId" to sessionId,
+                "byteCount" to bytes.size.toString()
+            )
+        )
         rawInputSink?.invoke(bytes)
     }
 
@@ -314,10 +511,22 @@ open class TerminalSessionController(
         sendInput(bytes)
     }
 
-    fun resize(cols: Int, rows: Int) {
-        surface?.resize(cols, rows)
-    }
+    var onResizeBroadcast: ((cols: Int, rows: Int) -> Unit)? = null
 
+    fun resize(cols: Int, rows: Int) {
+        AppLogger.recordDiagnostic(
+            type = "terminal",
+            scope = "terminal-session",
+            message = "terminal.resize",
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = sessionId,
+            incarnation = incarnation.toLong(),
+            metadata = mapOf("cols" to cols.toString(), "rows" to rows.toString())
+        )
+        surface?.resize(cols, rows)
+        onResizeBroadcast?.invoke(cols, rows)
+    }
     fun search(query: String, matchCase: Boolean = false): TerminalSearchResult? {
         return surface?.search(query, matchCase)
     }

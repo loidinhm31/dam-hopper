@@ -962,8 +962,10 @@ fun WorkbenchScreen(
                         activeProfileId = activeProfileId,
                         authStatuses = authStatuses,
                         onSelectProfile = { id ->
-                            profileRepository.selectProfile(id)
-                            navigation.closeProfileList()
+                            coroutineScope.launch {
+                                profileRepository.selectProfile(id)
+                                navigation.closeProfileList()
+                            }
                         },
                         onAddProfile = { name, url, username ->
                             coroutineScope.launch {

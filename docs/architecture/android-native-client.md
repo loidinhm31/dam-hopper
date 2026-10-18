@@ -1,6 +1,6 @@
-# Android Native Client — Proposed Architecture
+# Android Native Client Architecture
 
-**Status:** Core foundation (Phase 02), contracts & live transport (Phase 03), profiles, auth & credential vault (Phase 04), shell & config (Phase 06), terminal sessions/replay/agents (Phase 07), filesystem watchers/search/replace (Phase 08), editor safe saves (Phase 09), diff/merge/blame (Phase 10), encrypted transfers/media/storage scaffolding (Phase 11), Git/safe history workflows (Phase 12), workflow tracking & project plans (Phase 13), Agent Store, memory & imports (Phase 14), host resources fleet streaming & aggregate usage insights (Phase 15), ports, tunnels, idle consent & host controls (Phase 16), preferences, privacy, notifications & lifecycle (Phase 17), and integrated device security and performance qualification tooling (Phase 18) baselines recorded; contract/host prototypes validated with documented open limitations; GATE-C physical device/visual qualification and TypeScript language engine decision pending. Updated: 2026-10-17.
+**Status (2026-10-18):** The active root host implements the Profile Login → Project List → Project Terminal flow. Unit-level flow tests exist; live-server and physical-device qualification remain open. The retained multi-panel workbench shell is not mounted by the current root. GATE-C physical-device/visual qualification and the TypeScript language-engine decision remain open.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
@@ -15,7 +15,27 @@
 - Linux/Windows extension is a design constraint, not implemented desktop functionality. No placeholder desktop host.
 - Existing web and Tauri products remain; no cutover or retirement authorized.
 
-### Workspace presentation — user restriction
+## Core mobile app flow and lifecycle
+
+`MainActivity` initializes profile persistence and credentials, creates `AppFlowNavigation`, and routes platform Back through a root `BackHandler`. `DamHopperMobileApp` renders one of three stages: `ProfileLoginScreen`, `ProjectListScreen`, or `ProjectTerminalScreen`.
+
+| Stage | Entry | Transition |
+| --- | --- | --- |
+| `PROFILE_LOGIN` | Initial state; also used when authentication is lost or Profiles / Switch is selected. | Successful authentication selects the active profile and advances to `PROJECT_LIST`. |
+| `PROJECT_LIST` | `WorkspaceRepository` fetches projects for the active profile. | Selecting a project updates `ProjectTargetStore` and advances to `TERMINAL`. |
+| `TERMINAL` | `TerminalRepository` loads project sessions and `ProjectTerminalScreen` attaches to the selected remote PTY. | Back returns to `PROJECT_LIST`; project or profile changes can invalidate the current session selection. |
+
+`AppFlowState` stores the visible stage and the active profile, project, and terminal-session IDs. Repository construction in `DamHopperMobileApp` is keyed by active profile ID, base URL, and `ConnectionRef.generation`. The host clears old repository/client/socket references before building replacements, so workspace and terminal operations use the current profile generation.
+
+Back handling changes the stage without clearing selection fields: Terminal → Project List and Project List → Profile Login; Back at Profile Login is yielded to the Android activity. The explicit Profiles / Switch action clears the active session ID but leaves the project selection. Authenticating a different profile clears both project and session; selecting a different project clears the session. Re-authenticating the same profile preserves its selections.
+
+When the Terminal screen leaves composition, its local input/controllers are deactivated and disposed; the remote PTY is not killed or removed. Returning can reattach using the retained session ID. Terminal history replay and live output pass through the terminal controller/replay gate, while command input and accessory keys are fenced to the active session.
+
+The root flow currently exposes only these three screens. `WorkbenchScreen`, `PanelHost`, and the 12-panel navigation components remain separate source modules; their presence does not make the other panels reachable from `MainActivity`'s current root.
+
+### Retained workbench panel-shell contract (not mounted by current root)
+
+The following constraints describe the separate `WorkbenchScreen` subsystem and its approved shell design. They do not describe the active three-screen root flow or establish that those panel destinations are currently user-reachable.
 
 - Workspace is **TERMINAL only** (`workspaceMode = "terminal"`); no IDE shell or workspace-mode switcher.
 - Terminal presentation is **Traditional only** (`terminalUsageMode = "traditional"`); no Runtime terminal presentation or usage-mode switcher.
@@ -26,7 +46,6 @@
 - Validated row placement: top, directly below server/project header; icon + short text buttons; horizontal scrolling with selected-button reveal. The row remains visible while the software keyboard is open.
 - Validated panel body: one content area on every phone/tablet/foldable size. Selecting a panel replaces the terminal visually, not its controllers/sessions; no wide-screen dock beside the terminal. Internal diff/merge panes remain content of their selected panel.
 - The active panel alone receives input; hidden terminal/editor surfaces retain state but cannot receive keystrokes or steal IME focus. [Validation answers](../../plans/261015-1647-android-native-app/validation-answers.md) bind these decisions.
-
 
 ## Components
 
@@ -66,13 +85,14 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 
 ## Transport and authentication
 
-- Default HTTPS/WSS with platform certificate/hostname validation. Debug-only loopback/emulator development exceptions cannot leak into release policy.
+- Default authenticated use is HTTPS/WSS with platform certificate and hostname validation. The debug network configuration permits cleartext to any host and trusts user-installed CAs; app-level authentication guards do not make HTTP confidential or trustworthy. Never carry this debug allowance into the release policy.
 - Ktor client uses a per-profile runtime with explicit API errors and cancellation. No single global authenticated client or shared cookie jar.
 - REST Bearer session credential is obtained through current password/TOTP MFA flow, not the server signing-secret file. Enrollment challenges are not sessions; step-up rotates credentials.
 - WebSocket auth currently accepts `token` query or auth cookie, not REST Bearer-header extraction. `server/src/api/ws.rs:262–274` admits an origin-less authenticated native handshake only with a query token. Use that existing WSS path with mandatory URL/request-log redaction; do not fabricate Origin to evade policy. Cookie-only admission requires an explicitly allowed Origin and separate proof, not an assumed native alternative.
 - Strict `kind` JSON envelopes, exact per-field serialized casing, current integer bounds and mixed JSON/binary transfer ordering. One serialized writer owns header/binary pairs.
 - REST snapshots reestablish domain baselines after reconnect. Do not replay uncertain input, file commits, Git/destructive mutations or capability approvals automatically.
 - SSE is an authenticated stream with owner-qualified lifecycle, epoch/revision pairing, admission limits and documented REST fallback—not another permanent stream per composable.
+- **Bearer-token request guards:** REST and SSE request builders attach bearer headers only to HTTPS or loopback URLs; the WebSocket builder adds a query token only for HTTPS/WSS or loopback. The SSE client belongs to the separate retained panel shell and is not mounted by the current root. These request-construction guards do not establish redirect behavior.
 - `host:uiConnection` capability belongs only to the exact live socket; revoke it on termination and never persist or expose it in generic state/logs.
 
 ## Terminal lifetime
@@ -364,7 +384,7 @@ The native Android client introduces filesystem navigation, live directory event
 
 ### Security Audit & Automation Tooling
 - `run-device-journeys.sh`: Automated device test runner configuring reverse port forwarding (4801); cleanly exits with code 2 and `BLOCKED_PENDING_DEVICE` status when ADB or physical/emulator hardware is absent without faking evidence.
-- `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to verify manifest backup exclusions (`allowBackup="false"`, `fullBackupContent="false"`), `windowSoftInputMode="adjustResize"`, release TLS-only network security (`cleartextTrafficPermitted="false"`), debug loopback scoping, secret leak scanning, ABI filters (`arm64-v8a`, `x86_64`), and real 16 KiB ELF segment alignment checks on packaged libraries via `readelf -W -l`.
+- `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to inspect manifest backup exclusions, `adjustResize`, release TLS-only policy, debug network configuration, secret leaks, ABI filters, and packaged-library ELF alignment. Its debug check verifies common development-domain entries are present; it does not assert that cleartext is limited to those domains. The current debug base config permits cleartext to any host.
 
 ### Cross-Phase Remediations Delivered
 - Phase 15: Clean EOF handling in `ResourceStreamCoordinator`; 5s REST fallback and `LifecycleAware` in `HostResourceController` registered in `WorkbenchScreen`; dynamic model filter derivation with `knownModels` accumulation in `UsageController`/`UsageScreens`; explicit UTC date bounds and completed-days interval labeling in `UsageDialogs`.

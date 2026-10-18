@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.core.transport
 
+import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
 import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
 import dev.damhopper.nativeapp.core.model.ConnectionRef
@@ -82,8 +83,15 @@ open class WsConnection(
         if (_state.value is WsState.Connected || _state.value is WsState.Connecting) {
             return@withLock
         }
-
         _state.value = WsState.Connecting
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "ws-transport",
+            message = "connecting",
+            profileId = connection.profileId,
+            generation = connection.generation,
+            metadata = mapOf("baseUrl" to baseUrl)
+        )
         val socketId = "sock-${++socketSequence}"
         val socketRef = SocketInstanceRef(connection, socketId)
         correlator.bindSocket(socketRef)
@@ -98,6 +106,14 @@ open class WsConnection(
                 _state.value = WsState.Disconnected
                 correlator.cancelAll("WebSocket connect failed or cancelled: ${t.message}")
             }
+            AppLogger.recordDiagnostic(
+                type = "transport",
+                scope = "ws-transport",
+                message = "ws.error",
+                profileId = connection.profileId,
+                generation = connection.generation,
+                metadata = mapOf("error" to (t.message ?: "connect_failed"))
+            )
             if (t is kotlinx.coroutines.CancellationException) throw t
             _state.value = WsState.Error(t)
             return@withLock
@@ -117,6 +133,14 @@ open class WsConnection(
         val writer = SerializedWsWriter(session)
         activeWriter = writer
         _state.value = WsState.Connected(socketRef)
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "ws-transport",
+            message = "status:connected",
+            profileId = connection.profileId,
+            generation = connection.generation,
+            metadata = mapOf("socketId" to socketId)
+        )
         readerJob = scope.launch {
             readLoop(session, socketRef)
         }
@@ -191,7 +215,18 @@ open class WsConnection(
                         val text = frame.readText()
                         val msg = try {
                             ProtocolJson.decodeFromString(ServerMsgSerializer, text)
-                        } catch (_: Throwable) {
+                        } catch (decodeErr: Throwable) {
+                            AppLogger.recordDiagnostic(
+                                type = "transport",
+                                scope = "ws-transport",
+                                message = "ws.parse_error",
+                                profileId = connection.profileId,
+                                generation = connection.generation,
+                                metadata = mapOf(
+                                    "errorCategory" to (decodeErr::class.simpleName ?: "DecodeError"),
+                                    "frameLength" to text.length.toString()
+                                )
+                            )
                             null
                         }
 
@@ -249,6 +284,18 @@ open class WsConnection(
             else -> WsState.Disconnected
         }
 
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "ws-transport",
+            message = "status:disconnected",
+            profileId = connection.profileId,
+            generation = connection.generation,
+            metadata = mapOf(
+                "code" to (code?.toString() ?: "none"),
+                "reason" to (reason?.message ?: "")
+            )
+        )
+
         lifecycleMutex.withLock {
             if (activeSocketRef != socketRef) return@withLock
             closeInternal("Socket closed (code: $code)", nextState)
@@ -256,6 +303,14 @@ open class WsConnection(
     }
 
     private suspend fun handleSocketFailure(t: Throwable, socketRef: SocketInstanceRef) {
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "ws-transport",
+            message = "ws.error",
+            profileId = connection.profileId,
+            generation = connection.generation,
+            metadata = mapOf("error" to (t.message ?: "socket_failure"))
+        )
         lifecycleMutex.withLock {
             if (activeSocketRef != socketRef) return@withLock
             closeInternal("Socket failure: ${t.message}", WsState.Error(t))

@@ -36,7 +36,21 @@ class AndroidProfileMetadataStore(
         Unit
     }
 
+    override suspend fun loadActiveProfileId(): String? = withContext(Dispatchers.IO) {
+        prefs.getString(KEY_ACTIVE_PROFILE, null)
+    }
+
+    override suspend fun saveActiveProfileId(id: String?) = withContext(Dispatchers.IO) {
+        if (id == null) {
+            prefs.edit().remove(KEY_ACTIVE_PROFILE).commit()
+        } else {
+            prefs.edit().putString(KEY_ACTIVE_PROFILE, id).commit()
+        }
+        Unit
+    }
+
     companion object {
         const val KEY_PROFILES = "damhopper_server_profiles"
+        const val KEY_ACTIVE_PROFILE = "damhopper_active_profile"
     }
 }

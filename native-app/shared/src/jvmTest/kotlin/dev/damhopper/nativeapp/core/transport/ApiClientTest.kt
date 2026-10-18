@@ -142,4 +142,48 @@ class ApiClientTest {
             assertEquals(ConnectionErrorReason.STALE, err.reason)
         }
     }
+    @Test
+    fun testCleartextNonLoopbackBlocksBearerToken() = kotlinx.coroutines.test.runTest {
+        var observedAuthHeader: String? = null
+
+        server!!.createContext("/api/check-auth") { exchange ->
+            observedAuthHeader = exchange.requestHeaders.getFirst("Authorization")
+            val resp = """{"status":"ok"}"""
+            exchange.sendResponseHeaders(200, resp.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(resp.toByteArray()) }
+        }
+
+        // 1. Loopback cleartext (http://127.0.0.1) permits token for local dev
+        val refLoopback = ConnectionRef("dev-profile", 1L)
+        val loopbackClient = ApiClient(
+            connection = refLoopback,
+            baseUrl = "http://127.0.0.1:$serverPort",
+            authTokenProvider = { "secret-loopback-token" },
+        )
+        loopbackClient.get("/api/check-auth")
+        assertEquals("Bearer secret-loopback-token", observedAuthHeader)
+
+        // 2. Non-loopback cleartext (ws handshake) blocks token
+        val remoteWs = buildWsHandshakeUrl("http://192.168.1.100:4801", "my-secret-token")
+        assertFalse(remoteWs.contains("token="), "Non-loopback cleartext WebSocket must not attach token")
+
+        // 3. Loopback cleartext (ws handshake) permits token
+        val loopbackWs = buildWsHandshakeUrl("http://127.0.0.1:4801", "my-secret-token")
+        assertTrue(loopbackWs.contains("token="), "Loopback cleartext WebSocket permits token")
+
+        // 4. Secure HTTPS WebSocket always permits token
+        val secureWs = buildWsHandshakeUrl("https://dam-hopper.example.com", "my-secret-token")
+        assertTrue(secureWs.contains("token="), "Secure WSS permits token")
+
+        // 5. Direct evaluation of shouldAttachBearerToken across schemas and hosts
+        assertTrue(loopbackClient.shouldAttachBearerToken("tok", "https://api.example.com/api/test"))
+        assertTrue(loopbackClient.shouldAttachBearerToken("tok", "http://127.0.0.1:4801/api/test"))
+        assertTrue(loopbackClient.shouldAttachBearerToken("tok", "http://localhost:4801/api/test"))
+        assertTrue(loopbackClient.shouldAttachBearerToken("tok", "http://10.0.2.2:4801/api/test"))
+        assertTrue(loopbackClient.shouldAttachBearerToken("tok", "http://[::1]:4801/api/test"))
+        assertFalse(loopbackClient.shouldAttachBearerToken("tok", "http://192.168.1.50:4801/api/test"))
+        assertFalse(loopbackClient.shouldAttachBearerToken("tok", "http://api.remote.com:4801/api/test"))
+        assertFalse(loopbackClient.shouldAttachBearerToken(null, "https://api.example.com/api/test"))
+        assertFalse(loopbackClient.shouldAttachBearerToken("", "https://api.example.com/api/test"))
+    }
 }

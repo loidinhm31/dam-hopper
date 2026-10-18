@@ -91,9 +91,9 @@ fi
 
 if [ -f "$NET_SEC_DEBUG" ]; then
     if grep -Fq '10.0.2.2' "$NET_SEC_DEBUG" && grep -Fq '127.0.0.1' "$NET_SEC_DEBUG" && grep -Fq 'localhost' "$NET_SEC_DEBUG"; then
-        record_pass "Debug network security config isolates cleartext permits strictly to development loopback"
+        record_pass "Debug network security config permits local development endpoints"
     else
-        record_fail "Debug network security" "Loopback domains not isolated in debug config"
+        record_fail "Debug network security" "Local development endpoints (10.0.2.2, 127.0.0.1, localhost) not declared in debug config"
     fi
 else
     record_fail "Debug network security" "$NET_SEC_DEBUG not found"

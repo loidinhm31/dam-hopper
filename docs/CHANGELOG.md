@@ -1,3 +1,10 @@
+# 2026-10-18
+
+- **Android native app: Simple mobile flow refactor.** Delivered the focused Profile Login → project list → project terminal journey through shared Compose screens, `AppFlowNavigation`, and a root host with profile/generation-scoped repository reconstruction.
+  - **Flow & session behavior:** Existing profile/vault and workspace repositories power login and project selection; PTY history/live output uses the reconciled terminal stream; command/accessory input is available; leaving the terminal detaches local controllers without killing the remote PTY.
+  - **Security & scope:** Debug base config permits cleartext to all hosts; release remains TLS-only. Password/MFA login is blocked over HTTP. REST, WebSocket, and SSE bearer-token construction is gated to secure or recognized loopback targets; `--no-auth` remains loopback-only. Main reports the REST/WS policy test green, but existing tests do not prove the full non-loopback HTTP request path for REST/SSE or HTTPS token retention for SSE. The APK audit's debug-host check only greps for local-development host strings; it does not verify effective XML declarations or constrain debug base-config host scope. Authenticated Wi-Fi requires HTTPS.
+  - **Validation & qualification:** Phase 06 records green `:shared:jvmTest` and `:androidApp:testDebugUnitTest`. These results were not rerun for this documentation update; no Android device launch qualification is claimed. See [plan](../plans/261018-1643-android-core-flow-refactor/plan.md) and [PM report](../plans/reports/project-manager-261018-1643-android-core-flow-refactor.md).
+
 # 2026-10-16
 
 - **Android native app: Phase 15 Host resources fleet and usage.** Implemented non-browser host resources fleet streaming/fallback and aggregate usage telemetry analytics (`plans/261015-1647-android-native-app/`):

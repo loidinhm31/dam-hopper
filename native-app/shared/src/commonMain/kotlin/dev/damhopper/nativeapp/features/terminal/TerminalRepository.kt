@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.terminal
 
+import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.ServerMsg
@@ -48,11 +49,30 @@ class TerminalRepository(
      * Spawns a new PTY session via POST /api/terminal.
      */
     suspend fun createSession(request: CreateSessionRequest): TerminalSessionMeta {
-        val body = json.encodeToString(CreateSessionRequest.serializer(), request)
-        val response = apiClient.postJson("/api/terminal", body)
-        return json.decodeFromString(response)
+        AppLogger.recordDiagnostic(
+            type = "terminal",
+            scope = "terminal-repository",
+            message = "terminal.create",
+            profileId = apiClient.connection.profileId,
+            generation = apiClient.connection.generation,
+            metadata = mapOf("project" to (request.project ?: "default"))
+        )
+        return try {
+            val body = json.encodeToString(CreateSessionRequest.serializer(), request)
+            val response = apiClient.postJson("/api/terminal", body)
+            json.decodeFromString(response)
+        } catch (t: Throwable) {
+            AppLogger.recordDiagnostic(
+                type = "terminal",
+                scope = "terminal-repository",
+                message = "terminal.create_failed",
+                profileId = apiClient.connection.profileId,
+                generation = apiClient.connection.generation,
+                metadata = mapOf("error" to (t.message ?: "unknown"))
+            )
+            throw t
+        }
     }
-
     /**
      * Renames an existing session via PATCH /api/terminal/:id.
      */
@@ -204,6 +224,15 @@ class TerminalRepository(
      */
     suspend fun attachTerminal(id: String, fromOffset: ULong? = null) {
         val ws = wsConnection ?: return
+        AppLogger.recordDiagnostic(
+            type = "transport",
+            scope = "terminal-panel",
+            message = "terminal.attach",
+            profileId = apiClient.connection.profileId,
+            generation = apiClient.connection.generation,
+            sessionId = id,
+            metadata = mapOf("fromOffset" to (fromOffset?.toString() ?: "null"))
+        )
         ws.send(ClientMsg.TermAttach(id = id, fromOffset = fromOffset))
     }
 

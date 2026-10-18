@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** Foundation, live transport, profile/auth/vault, native proof gates, Traditional shell/workspaces/config, and terminal sessions/replay/agents host contracts implemented and verified (Phases 02–07). Native surface integration and live backend/device runtime launch qualification remain open.  
+**Status:** The active Android entry flow is implemented as Profile Login → Project List → Project Terminal. Unit-level flow coverage is in place; live-server and physical-device qualification remain separate open gates. Broader workbench panel components remain in the source tree but are not mounted by the current root flow.
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
@@ -15,28 +15,45 @@ Unlike `apps/native/` (which hosts the desktop application using Tauri 2 and Web
 
 ---
 
-## 2. Workspace & Shell Invariants
+## 2. Core Mobile Flow & Navigation Lifecycle
 
-The native Android client adheres to strict presentation rules established by architectural decisions and user validation:
+The current app entry point is a guided three-screen flow:
 
-1. **TERMINAL Mode Shell:**
-   - The workbench operates strictly in **TERMINAL mode** (`workspaceMode = "terminal"`).
-   - The desktop IDE shell and workspace mode switchers are excluded.
-2. **Traditional Terminal Presentation:**
-   - The terminal operates strictly in **Traditional terminal mode** (`terminalUsageMode = "traditional"`).
-   - The desktop Runtime terminal presentation and usage mode switchers are excluded.
-3. **Single Top Panel-Navigation Row:**
-   - All 12 included remote workbench panels are accessed via a single horizontally scrollable button row positioned at the top, directly beneath the server/project header.
-   - Buttons display an icon and a short text label, with visual indication of the active panel.
-   - The navigation row stays visible and docked when the software keyboard (IME) is displayed.
-   - No wrapping into multiple rows; no overflow/More menu.
-4. **Zero Floating Buttons:**
-   - Floating Action Buttons (FABs), draggable launchers, and floating panel toggles are strictly prohibited. All navigation and actions are inline.
-5. **Single Content Area:**
-   - One content area is used across all screen sizes (phones, foldables, tablets). Selecting a panel visually replaces the terminal while keeping underlying terminal sessions and controllers alive. No multi-pane or side-by-side terminal/panel docking.
-6. **First-Release Preview Exceptions:**
-   - **HTML Preview:** Embedded interactive HTML/JS browser preview is excluded (B01). HTML files are edited as raw source code.
-   - **Mermaid Rendering:** DOM-rendered Mermaid diagrams are excluded (B02). Markdown files display raw fenced Mermaid code blocks with an explicit rendering-unavailable notice.
+| Stage | Screen | Behavior |
+| --- | --- | --- |
+| `PROFILE_LOGIN` | `ProfileLoginScreen` | Select or add a server profile, test reachability, authenticate (including MFA), or use Dev Login only after a server capability probe confirms development mode. |
+| `PROJECT_LIST` | `ProjectListScreen` | Load workspace projects with loading, error, and empty states; refresh the list or return to Profiles / Switch. Selecting a card sets the project target. |
+| `TERMINAL` | `ProjectTerminalScreen` | List and attach to PTY sessions for the selected project, reconcile replay with live output, and send commands from the inline input field. |
+
+`MainActivity` initializes `ProfileRepository`, creates `AppFlowNavigation`, and installs the platform `BackHandler`. `DamHopperMobileApp` renders the screen selected by `AppFlowState`, which tracks the stage, profile ID, project, and active session. It reconstructs the workspace and terminal repositories when the active profile, server URL, or connection generation changes, clearing the old references before constructing owner-scoped replacements.
+
+Back navigation is hierarchical: Terminal → Project List → Profile Login. At Profile Login, the flow leaves Back unconsumed so `MainActivity` can finish. A Back transition changes the visible stage but preserves selection fields; the active session ID can therefore be reused when returning to Terminal. The explicit Profiles / Switch action clears the session ID. Switching to a different profile clears the selected project and session; selecting a different project clears the prior session.
+
+Leaving Terminal deactivates input and disposes the screen's local terminal controllers, but does not kill or remove the server-owned PTY. The terminal controls are inline: command input with Send, Ctrl+C, Tab, Esc, Up, Down, and Clear. Clear affects only the local display buffer. The hosted screens contain no WebView or floating action button.
+
+The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell, so its other panel destinations are not reachable through this three-screen flow. The panel-shell contract below describes that retained subsystem, not the active app navigation.
+
+### Physical-device development over Wi-Fi
+
+1. Build and install the debug variant on a connected Android device:
+
+   ```bash
+   ./native-app/gradlew -p native-app :androidApp:installDebug
+   ```
+
+   On Windows PowerShell:
+
+   ```powershell
+   .\native-app\gradlew.bat -p native-app :androidApp:installDebug
+   ```
+
+2. Connect the phone and development host to the same trusted Wi-Fi network. Use the host's reachable LAN address and server port in the profile URL; `localhost` and `127.0.0.1` on a phone refer to the phone itself. The emulator preset `10.0.2.2:4803` is for the Android emulator, not a physical device. The host service must listen on a reachable interface and the host firewall must allow the chosen port on the trusted network.
+
+3. `src/debug/res/xml/network_security_config.xml` permits cleartext traffic to any host in debug builds, not only LAN addresses. This is a transport allowance, not a security boundary. Profile Login blocks password/MFA submission over HTTP; the active REST and WebSocket request builders restrict bearer credentials to HTTPS/WSS or loopback targets. These are request-construction guards; redirect behavior is not established, and HTTP remains unencrypted. Do not expect an authenticated Wi-Fi flow over HTTP. Use HTTPS for authenticated device login; debug builds trust system and user-installed CAs, so a local development CA can be installed on the device while normal certificate and hostname validation still apply.
+
+4. Dev Login is available only after Test Connection confirms the server's `dev_mode` capability. Treat an HTTP capability response as untrusted on a network; do not use Dev Login on an untrusted network. The server's `--no-auth` mode is loopback-only by project security policy and must not be exposed over Wi-Fi/LAN. Release network security remains TLS-only.
+
+For a USB-connected device that needs a loopback-bound development server, `adb reverse` can forward a device-local port to the host without opening that server to the Wi-Fi network.
 
 ---
 
@@ -116,7 +133,7 @@ native-app/
 │       ├── main/
 │       │   ├── AndroidManifest.xml # Backup disabled, adjustResize, network security config
 │       │   ├── kotlin/dev/damhopper/nativeapp/
-│       │   │   ├── MainActivity.kt # Compose entry point with NativeTheme and WorkbenchScreen
+│       │   │   ├── MainActivity.kt # Initializes repositories; hosts DamHopperMobileApp and AppFlowNavigation
 │       │   │   ├── platform/
 │       │   │   │   ├── crypto/      # OpaqueClientBridge (JNI companion for Rust crypto-bridge)
 │       │   │   │   ├── network/     # AndroidHttpClientFactory
@@ -129,7 +146,7 @@ native-app/
 │       │           ├── network_security_config.xml # Release TLS-only base config
 │       │           └── data_extraction_rules.xml   # Excludes cloud-backup and device-transfer
 │       ├── debug/res/xml/
-│       │   └── network_security_config.xml # Debug loopback cleartext overrides (10.0.2.2, 127.0.0.1)
+│       │   └── network_security_config.xml # Debug cleartext policy and user-CA trust overrides
 │       └── test/kotlin/dev/damhopper/nativeapp/
 │           └── ManifestSecurityTest.kt # Unit tests verifying manifest security invariants
 └── crypto-bridge/               # Rust cdylib (libdamhopper_crypto_bridge.so): OPAQUE PAKE, AES-256-GCM HKDF
@@ -137,7 +154,8 @@ native-app/
 
 ### Security Policies & Manifest Isolation
 - **Release TLS Policy**: `src/main/res/xml/network_security_config.xml` sets `cleartextTrafficPermitted="false"` with system trust anchors only.
-- **Debug Loopback Cleartext**: `src/debug/res/xml/network_security_config.xml` permits cleartext traffic strictly for `10.0.2.2`, `127.0.0.1`, and `localhost` with user trust anchors.
+- **Debug Network Policy**: `src/debug/res/xml/network_security_config.xml` allows cleartext traffic to any host and trusts user-installed certificates; this is a debug-only transport allowance, not an authentication or confidentiality guarantee. Profile Login blocks password/MFA submission over HTTP. REST and SSE request builders add bearer headers only to HTTPS or loopback URLs; the WebSocket builder adds a query token only for HTTPS/WSS or loopback. These are request-construction guards and do not establish redirect behavior. The SSE client belongs to the separate, unmounted panel shell.
+  - For physical-device Wi-Fi testing, use HTTPS for authenticated sessions and restrict the server port to the trusted network. Never expose `--no-auth` over Wi-Fi/LAN; the release config remains TLS-only.
 - **Data Extraction & Backup**: Manifest sets `android:allowBackup="false"` and `android:fullBackupContent="false"`; `data_extraction_rules.xml` excludes root path from cloud-backup and device-transfer.
 - **IME Window Management**: Manifest sets `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across virtual keyboards pending device testing).
 - **Prohibited Dependency Exclusion**: Zero occurrences of `WebView` or `tauri` detected in `native-app/shared/src/` or `native-app/androidApp/src/main/` by the static test suite.

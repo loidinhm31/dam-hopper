@@ -183,7 +183,11 @@ fun SettingsScreens(
                             profiles = availableProfiles,
                             activeProfileId = activeProfileId,
                             authStatuses = authStatuses,
-                            onSelectProfile = { id -> profileRepository.selectProfile(id) },
+                            onSelectProfile = { id ->
+                                coroutineScope.launch {
+                                    profileRepository.selectProfile(id)
+                                }
+                            },
                             onAddProfile = { name, url, username ->
                                 coroutineScope.launch {
                                     profileRepository.addProfile(name, url, username)

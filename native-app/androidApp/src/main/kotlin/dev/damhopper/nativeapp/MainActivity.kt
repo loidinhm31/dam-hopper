@@ -14,8 +14,8 @@ import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationSink
 import dev.damhopper.nativeapp.platform.storage.AndroidPreferencesStore
 import dev.damhopper.nativeapp.platform.storage.AndroidProfileMetadataStore
 import dev.damhopper.nativeapp.platform.vault.AndroidCredentialVault
-import dev.damhopper.nativeapp.ui.navigation.WorkbenchNavigation
-import dev.damhopper.nativeapp.ui.screens.WorkbenchScreen
+import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
+import dev.damhopper.nativeapp.ui.screens.DamHopperMobileApp
 import dev.damhopper.nativeapp.ui.theme.NativeTheme
 import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
@@ -42,17 +42,16 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             NativeTheme {
-                val navigation = remember { WorkbenchNavigation() }
+                val flowNavigation = remember { AppFlowNavigation() }
                 BackHandler(enabled = true) {
-                    if (!navigation.handleBackPress()) {
+                    if (!flowNavigation.handleBackPress()) {
                         finish()
                     }
                 }
-                WorkbenchScreen(
+                DamHopperMobileApp(
                     profileRepository = profileRepository,
-                    navigation = navigation,
+                    navigation = flowNavigation,
                     preferencesStore = preferencesStore,
-                    notificationSink = notificationSink,
                     lifecycleCoordinator = lifecycleCoordinator.coordinator,
                 )
             }

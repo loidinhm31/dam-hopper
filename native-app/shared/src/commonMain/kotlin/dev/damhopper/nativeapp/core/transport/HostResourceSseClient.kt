@@ -62,7 +62,10 @@ open class HostResourceSseClient(
         val statement = httpClient.prepareGet(fullUrl) {
             header(HttpHeaders.Accept, "text/event-stream")
             header(HttpHeaders.CacheControl, "private, no-store, no-transform")
-            if (!token.isNullOrBlank()) {
+            val isHttps = fullUrl.startsWith("https://", ignoreCase = true)
+            val host = try { io.ktor.http.Url(fullUrl).host } catch (_: Exception) { "" }
+            val allowToken = isHttps || dev.damhopper.nativeapp.features.profiles.ServerProfile.isLoopbackHost(host)
+            if (!token.isNullOrBlank() && allowToken) {
                 header(HttpHeaders.Authorization, "Bearer $token")
             }
         }

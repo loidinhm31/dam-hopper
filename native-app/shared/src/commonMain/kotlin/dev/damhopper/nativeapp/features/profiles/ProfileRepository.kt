@@ -34,11 +34,16 @@ class ProfileRepository(
 
     suspend fun initialize() {
         val loaded = metadataStore.loadProfiles()
+        val persistedActiveId = metadataStore.loadActiveProfileId()
         mutex.withLock {
             _profiles.value = loaded
-            if (_activeProfileId.value == null && loaded.isNotEmpty()) {
-                _activeProfileId.value = loaded.first().id
+            val resolvedActive = when {
+                persistedActiveId != null && loaded.any { it.id == persistedActiveId } -> persistedActiveId
+                _activeProfileId.value != null && loaded.any { it.id == _activeProfileId.value } -> _activeProfileId.value
+                loaded.isNotEmpty() -> loaded.first().id
+                else -> null
             }
+            _activeProfileId.value = resolvedActive
         }
     }
 
@@ -51,6 +56,7 @@ class ProfileRepository(
             metadataStore.saveProfiles(updated)
             if (_activeProfileId.value == null) {
                 _activeProfileId.value = newProfile.id
+                metadataStore.saveActiveProfileId(newProfile.id)
             }
         }
         return newProfile
@@ -91,16 +97,19 @@ class ProfileRepository(
         _profiles.value = updated
         metadataStore.saveProfiles(updated)
         if (_activeProfileId.value == id) {
-            _activeProfileId.value = updated.firstOrNull()?.id
+            val newActive = updated.firstOrNull()?.id
+            _activeProfileId.value = newActive
+            metadataStore.saveActiveProfileId(newActive)
         }
         val statusMap = _authStatuses.value.toMutableMap()
         statusMap.remove(id)
         _authStatuses.value = statusMap
     }
 
-    fun selectProfile(id: String) {
+    suspend fun selectProfile(id: String) = mutex.withLock {
         require(_profiles.value.any { it.id == id }) { "Profile does not exist: $id" }
         _activeProfileId.value = id
+        metadataStore.saveActiveProfileId(id)
     }
 
     suspend fun getOrCreateApiClient(profileId: String): ApiClient {
@@ -195,6 +204,9 @@ class ProfileRepository(
             val currentProfile = _profiles.value.find { it.id == profileId }
             val currentConn = registry.getCurrentConnection(profileId)
             if (currentProfile != null && currentConn?.generation == expectedGen) {
+                if (status is AuthStatus.LoginRequired) {
+                    vault.clearToken(profileId, currentProfile.baseUrl)
+                }
                 val statusMap = _authStatuses.value.toMutableMap()
                 statusMap[profileId] = status
                 _authStatuses.value = statusMap

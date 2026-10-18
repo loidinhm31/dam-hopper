@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
  * Android platform HTTP engine and client factory.
  *
  * Configures the OkHttp engine to:
- * - Enforce Android's platform NetworkSecurityConfig (TLS-only in release; cleartext debug loopback isolated)
+ * - Enforce Android's platform NetworkSecurityConfig (TLS-only in release; cleartext debug permitted for local development)
  * - Disable automatic cross-origin redirect following to prevent auth credential leakage
  * - Configure bounded timeouts and ping intervals for long-lived WebSocket sessions
  */

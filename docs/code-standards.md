@@ -13,7 +13,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
 | `apps/web/`, `apps/native/` | Vite browser and Tauri desktop hosts |
 | `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
-| `native-app/` | Android native client root (KMP + Jetpack Compose, Phase 01 baseline, planned Phase 02+ implementation) |
+| `native-app/` | Kotlin Multiplatform + Jetpack Compose Android client; current root flow is Profile Login → Project List → Project Terminal |
 
 ## Cross-cutting rules
 
@@ -55,8 +55,10 @@ These standards describe the current Rust backend, shared React UI, and profile-
 ### Kotlin Multiplatform and Android Native Client (`native-app`)
 
 - **Ownership & Connection Scoping:** Mirror React/web invariants; asynchronous operations must capture `ConnectionRef = { profileId, generation }` and recheck upon resume. Never route through ambient fallback.
-- **Strict Boundary Constraints:** No WebView, embedded browser engine, local PTY, local Git, or local AI execution in `native-app/`. Remote Rust backend owns PTY, Git, agent, and remote workbench operations, while UI rendering, Android Keystore credential storage, and client cryptography execute locally. Embedded interactive HTML preview and rendered Mermaid diagrams are the sole deferred preview exceptions; native Markdown, media, and large binary file viewing remain in scope.
-- **Presentation Invariants:** Strict TERMINAL mode (`workspaceMode = "terminal"`) and Traditional terminal presentation (`terminalUsageMode = "traditional"`). Single top horizontally scrollable panel-navigation row; zero floating action buttons (FABs) or draggable triggers.
+- **Client boundary:** No WebView, embedded browser engine, local PTY, local Git, or local AI execution in `native-app/`. The remote Rust backend owns PTY, Git, agent, and remote workbench operations; Android owns presentation, Keystore credential storage, and client cryptography. Embedded interactive HTML preview and rendered Mermaid diagrams remain deferred.
+- **Navigation ownership:** Route the active app flow through `DamHopperMobileApp` and `AppFlowNavigation` (`PROFILE_LOGIN` → `PROJECT_LIST` → `TERMINAL`). The separate `WorkbenchScreen`/12-panel subsystem is not mounted by the current root; do not infer user-visible reachability from a component's presence in source.
+- **Network security:** Release builds prohibit cleartext. Debug network config permits cleartext to any host and trusts user-installed CAs; this does not make HTTP safe. Profile Login blocks password/MFA over HTTP. REST/SSE request builders restrict bearer headers to HTTPS or loopback; the WebSocket builder restricts query tokens to HTTPS/WSS or loopback. These request-construction guards do not prove redirect safety. The panel-shell SSE client is not mounted by the current root. `--no-auth` must remain loopback-only.
+- **Panel-shell contract:** When the separate workbench shell is mounted, it uses TERMINAL/Traditional presentation, a single top horizontal panel-navigation row, and zero floating action buttons (FABs) or draggable triggers.
 - **Module Separation:** Kotlin Multiplatform `commonMain` (`native-app/shared/`) owns domain models, networking, DTOs, and Compose UI; platform adapters in `androidApp/`. Never leak Android platform types into `commonMain`.
 - **Wire Projection:** Wire requests omit client-only `profileId`; backend authenticates and authorizes project/worktree paths.
 - **Filesystem Wire Invariants:** File, directory, stat, read, and mutation operations pass the explicit `ProjectTargetRef`; write operations use chunked streaming with expected mtime compare-and-swap (CAS).
