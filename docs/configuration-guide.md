@@ -207,8 +207,6 @@ Terminal env precedence is:
 3. Project environment-file values
 4. Explicit terminal request `env` overrides
 
-If a project-level environment file sets `MONGODB_DATABASE=gleanOak` and the terminal create request includes `env.MONGODB_DATABASE=overrideDb`, the terminal child process sees `overrideDb`.
-
 ### Agent Store Configuration
 
 Optional: configure where the agent store directory is located.
