@@ -910,4 +910,66 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
       }),
     );
   });
+
+  it("reconciles and demotes a deleted worktree to root when discovery confirms target unavailability upon reload", async () => {
+    const DELETED_WORKTREE_PATH = "/workspace/project-1-deleted-worktree";
+
+    // Seed storage with a worktree path that does not exist in the repository's registered worktrees
+    const seedBytes = JSON.stringify({
+      version: 1,
+      state: {
+        activeTargetByProject: {
+          [PROJECT]: DELETED_WORKTREE_PATH,
+        },
+      },
+    });
+    window.localStorage.setItem("dam-hopper:project-target-state", seedBytes);
+
+    // Rehydrate store: initial selection intent restored before discovery runs
+    await useProjectTargetStore.persist.rehydrate();
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[PROJECT],
+    ).toBe(DELETED_WORKTREE_PATH);
+
+    // Re-mount WorkspacePage with the unverified target
+    await act(async () => root.unmount());
+    container.innerHTML = "";
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <>
+          <WorkspacePage />
+          <TargetPreviewSurfaces />
+        </>,
+      ),
+    );
+
+    await expect
+      .element(page.getByTestId("workspace-project-info-panel"))
+      .toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^▶ Worktrees$/ }));
+
+    // Discovery reconciliation detects the target is missing and falls back to root with notification
+    await expect
+      .element(page.getByRole("radio", { name: /Project root/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("radio", { name: /Project root/ }))
+      .toBeChecked();
+
+    // Unavailable target notice is rendered
+    expect(
+      page.getByText(/Worktree \/workspace\/project-1-deleted-worktree is unavailable/i),
+    ).toBeTruthy();
+
+    // Store and storage demote target to root (absence)
+    expect(
+      useProjectTargetStore.getState().activeTargetByProject[PROJECT],
+    ).toBeUndefined();
+    const updatedStorage = window.localStorage.getItem("dam-hopper:project-target-state");
+    if (updatedStorage) {
+      const parsed = JSON.parse(updatedStorage);
+      expect(parsed.state.activeTargetByProject[PROJECT]).toBeUndefined();
+    }
+  });
 });

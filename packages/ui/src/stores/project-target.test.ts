@@ -12,6 +12,7 @@ import {
   initProjectTargetStorageSync,
   isSelectableWorktree,
   markProjectTargetUnavailable,
+  mergeTargetMapChanges,
   normalizeWorktreePath,
   projectScopeKey,
   useProjectTargetStore,
@@ -1292,6 +1293,112 @@ describe("project target store persistence", () => {
     expect(useProjectTargetStore.getState().activeTargetByProject["project-3"]).toBe(
       "/worktrees/tab-a-wt-3",
     );
+  });
+  it("preserves remote modification to project X when local tab selects project Y", () => {
+    // Both tabs start with project-x at v1
+    useProjectTargetStore.getState().selectTarget("project-x", "/worktrees/x-v1");
+
+    // Tab A concurrently updates project-x to v2 in localStorage
+    const tabABytes = JSON.stringify({
+      version: 1,
+      state: {
+        activeTargetByProject: {
+          "project-x": "/worktrees/x-v2",
+        },
+      },
+    });
+    window.localStorage.setItem(PROJECT_TARGET_STORAGE_KEY, tabABytes);
+
+    // Tab B now selects project-y
+    useProjectTargetStore.getState().selectTarget("project-y", "/worktrees/y-target");
+
+    const storedRaw = window.localStorage.getItem(PROJECT_TARGET_STORAGE_KEY);
+    expect(storedRaw).not.toBeNull();
+    const stored = JSON.parse(storedRaw!);
+    // Must preserve Tab A's new worktree for project-x and Tab B's project-y
+    expect(stored.state.activeTargetByProject).toEqual({
+      "project-x": "/worktrees/x-v2",
+      "project-y": "/worktrees/y-target",
+    });
+    // Local store is also updated with Tab A's remote change
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-x"]).toBe(
+      "/worktrees/x-v2",
+    );
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-y"]).toBe(
+      "/worktrees/y-target",
+    );
+  });
+
+  it("preserves remote reset of project X to root when local tab selects project Y", () => {
+    // Both tabs start with project-x at v1
+    useProjectTargetStore.getState().selectTarget("project-x", "/worktrees/x-v1");
+
+    // Tab A concurrently resets project-x to root (empty activeTargetByProject)
+    const tabABytes = JSON.stringify({
+      version: 1,
+      state: {
+        activeTargetByProject: {},
+      },
+    });
+    window.localStorage.setItem(PROJECT_TARGET_STORAGE_KEY, tabABytes);
+
+    // Tab B selects project-y
+    useProjectTargetStore.getState().selectTarget("project-y", "/worktrees/y-target");
+
+    const storedRaw = window.localStorage.getItem(PROJECT_TARGET_STORAGE_KEY);
+    expect(storedRaw).not.toBeNull();
+    const stored = JSON.parse(storedRaw!);
+    // project-x must remain root (NOT resurrected from Tab B's stale base), and project-y is selected
+    expect(stored.state.activeTargetByProject).toEqual({
+      "project-y": "/worktrees/y-target",
+    });
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-x"]).toBeUndefined();
+    expect(useProjectTargetStore.getState().activeTargetByProject["project-y"]).toBe(
+      "/worktrees/y-target",
+    );
+  });
+
+  it("correctly performs 3-way merge calculations across delta combinations", () => {
+    // 1. Remote update preserved when local modifies another key
+    const merged1 = mergeTargetMapChanges(
+      { "proj-x": "/wt-x-v2" },
+      { "proj-x": "/wt-x-v1", "proj-y": "/wt-y" },
+      { "proj-x": "/wt-x-v1" },
+    );
+    expect(merged1).toEqual({
+      "proj-x": "/wt-x-v2",
+      "proj-y": "/wt-y",
+    });
+
+    // 2. Remote deletion preserved when local modifies another key
+    const merged2 = mergeTargetMapChanges(
+      {},
+      { "proj-x": "/wt-x-v1", "proj-y": "/wt-y" },
+      { "proj-x": "/wt-x-v1" },
+    );
+    expect(merged2).toEqual({
+      "proj-y": "/wt-y",
+    });
+
+    // 3. Local deletion applied while preserving remote changes
+    const merged3 = mergeTargetMapChanges(
+      { "proj-x": "/wt-x-v1", "proj-remote": "/wt-remote" },
+      {},
+      { "proj-x": "/wt-x-v1" },
+    );
+    expect(merged3).toEqual({
+      "proj-remote": "/wt-remote",
+    });
+
+    // 4. Same-key conflict resolved in favor of local modification
+    const merged4 = mergeTargetMapChanges(
+      { "proj-x": "/wt-x-remote" },
+      { "proj-x": "/wt-x-local" },
+      { "proj-x": "/wt-x-base" },
+    );
+    expect(merged4).toEqual({
+      "proj-x": "/wt-x-local",
+    });
   });
 
   it("does not write to localStorage when only transient failure maps are mutated", () => {

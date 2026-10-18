@@ -118,14 +118,24 @@ export function mergeTargetMapChanges(
   baseMap: Record<string, string>,
 ): Record<string, string> {
   const merged = copyTargetMap(diskMap);
+
+  // 1. Apply local additions and modifications (only keys where localMap differs from baseMap)
   for (const key of Object.keys(localMap)) {
-    merged[key] = localMap[key]!;
+    if (
+      !Object.prototype.hasOwnProperty.call(baseMap, key) ||
+      baseMap[key] !== localMap[key]
+    ) {
+      merged[key] = localMap[key]!;
+    }
   }
+
+  // 2. Apply local deletions (keys present in baseMap that localMap explicitly removed)
   for (const key of Object.keys(baseMap)) {
     if (!Object.prototype.hasOwnProperty.call(localMap, key)) {
       delete merged[key];
     }
   }
+
   return merged;
 }
 
