@@ -12,7 +12,7 @@ Solid. Persist is narrow (only `activeTargetByProject`), envelope strictly valid
 None.
 
 ## Medium
-1. Scope creep in working tree, unrelated to feature: `docs/configuration-guide.md` + `server/src/api/tests.rs` (`gleanOak`→`gleanHub`), untracked `.omp/evcrate/scripts/worktree.cjs`, unrelated `plans/reports/*` (android-compose, mongodb-auth). Exclude from the commit.
+1. Scope creep in working tree, unrelated to feature: `docs/configuration-guide.md` + `server/src/api/tests.rs` (sample env rename), untracked `.omp/evcrate/scripts/worktree.cjs`, unrelated `plans/reports/*` (android-compose, mongodb-auth). Exclude from the commit.
 2. Whole-map last-writer-wins, no `storage` event sync: two tabs clobber each other's selections for other projects (tab writes its full in-memory map). Same pattern as other persisted stores; accept or note in docs.
 3. No pruning: entries for deleted projects/profiles live forever; no cap on entries/value length when hydrating tampered storage. Same-origin only, low impact; optional cap.
 
@@ -33,4 +33,4 @@ Explicit version gate in storage adapter, `merge` replaces (no overlay resurrect
 
 ## Unresolved
 - Is multi-tab clobbering acceptable for this feature?
-- Should unrelated edits (gleanHub rename, worktree.cjs) land in this branch?
+- Should unrelated edits (env sample rename, worktree.cjs) land in this branch?
