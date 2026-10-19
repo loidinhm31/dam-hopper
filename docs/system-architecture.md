@@ -181,7 +181,7 @@ Git operations use porcelain semantics for worktree/index state. Normal push rem
 - **Active vs. inactive branch safety**:
   - Active branch updates lock `HEAD` then the branch ref (`refs/heads/<branch>`), checking worktree invariants.
   - Inactive branch rewrites lock only the target branch ref (`refs/heads/<branch>`), atomically verifying `HEAD` did not transition to the target branch during mutation. Active checkout, index, staged, unstaged, and untracked files remain completely untouched.
-  - Operations fail closed with `checked-out-branch` if the target is checked out in another linked worktree, and with `active-operation` if a rebase, merge, or cherry-pick is ongoing.
+  - Operations fail closed with `checked-out-branch` if the target is checked out in another linked worktree, and with `active-operation` if a rebase, merge, or cherry-pick is ongoing; the active-operation detector also recognizes `REVERT_HEAD` (`server/src/git/cli_fallback.rs`), while complete revert lifecycle/sequencer coverage remains unqualified.
 - **UI surface parity and accessibility**:
   - Both the compact Workspace Git Panel and standalone Git Page permit commit-message editing and squashing when viewing any local branch (`isViewingLocalBranch`), active or inactive.
   - Checkout-sensitive operations (`reset`, `drop`, `undoLastCommit`) remain strictly guarded by `isViewingActiveBranch`.
@@ -190,6 +190,20 @@ Git operations use porcelain semantics for worktree/index state. Normal push rem
 - **Leased publication**: Local rewrite and publication are strictly decoupled. Publication uses an exact-OID CAS lease tied to the target branch (`PublishSnapshot`) and expected remote OID; stale remote state aborts the push with `stale-remote`. The lease is invariant to subsequent checkout state changes.
 
 Search filters full commit messages before pagination without mutating refs. See [Git History Architecture](./architecture/git-history-search.md) and [Git API Reference](./api/git.md).
+### Git Conflict Resolver Architecture & Proposed Contracts (Phase 01 Feasibility)
+
+Feasibility and contract gating work in progress under [Git conflict resolver plan](../plans/261019-1505-git-conflict-resolver/plan.md). Foundational mechanisms prototyped; production resolver integration pending.
+
+- **Merge Engine & Lossless Tokenization (`node-diff3`):** Uses `node-diff3` (MIT, v3.2.1, zero runtime dependencies) for 3-way conflict computation. Pure helper `tokenizeLosslessLines` in `packages/ui/src/lib/conflict-merge-model.ts` splits text into line tokens preserving exact `\r\n`, `\n`, lone `\r`, and missing final newlines (`tokens.join("") === text`). Diff3 groups identical changes into clean `{ ok: [...] }` chunks. Main-thread execution budget: proposed budget targets $\le$ 5,000 lines (or $\le$ 500 KB) for synchronous diff3 computation, with worker or terminal handoff for larger files; measured resource limits and worst-case diff complexity bounds remain unqualified.
+- **Joint History Authority Prototype (`JointHistoryAuthority`):** Located at `packages/ui/src/lib/joint-history-authority.ts`. Prototype wraps public Monaco editor APIs (`model.onDidChangeContent`, `editor.addCommand`) to record native text edits and metadata review decisions ("Ignore", "Mark reviewed") in a shared linear transaction stack. Intercepts `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, and `Ctrl/Cmd+Y` to coordinate undo/redo. Full native keybinding/context-menu interception and Monaco-internal EOL/byte fidelity remain open Phase 01 gates, blocking dependent phases as specified by the plan.
+- **Backend Operation Detection:** `server/src/git/cli_fallback.rs` detects `REVERT_HEAD` alongside merge, rebase, and cherry-pick, exposing `GitRecoveryOperation::Revert` and updating the UI client recovery union (`client.ts`).
+- **Proposed Wire Contracts (Design Gate):** These are proposed contracts, not descriptions of currently implemented router behavior; legacy rejection and outcome handling remain implementation requirements. Proposed camelCase DTOs in [feasibility evidence](../plans/261019-1505-git-conflict-resolver/reports/feasibility-evidence.md):
+  - `GET /api/git/{project}/conflicts`: returns `ConflictSummaryResponse` listing entries with conflict status, binary flag, and unsupported reasons.
+  - `GET /api/git/{project}/conflicts/file`: returns `ConflictSnapshot` with stage descriptors (base 1, ours 2, theirs 3), worktree descriptor, effective gitattributes, and `snapshotVersion` precondition token.
+  - `POST /api/git/{project}/resolve`: accepts `ResolveRequest` (`snapshotVersion`, `fullIndexFingerprint`, action `reviewedText` | `indexSide` | `delete`) and emits `ResolveOutcome` (`applied`, `stale`, `unsupported`, `busy`, `failedBeforeWrite`, `worktreeChangedStageFailed`, `outcomeUnknown`).
+  - Precondition & Legacy Guard: Legacy `{ path, content }` or missing `snapshotVersion` must fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
+  - `GET /api/git/{project}/operation`: returns `OperationStatusResponse` detecting active operations, blocked reasons, and `terminalHandoffRequired` (when Git commit message editor is blocked).
+  - `POST /api/git/{project}/operation`: accepts `OperationActionRequest` (`continue` | `abort`) returning `OperationOutcome`.
 
 ## Cognito Privacy Mode
 

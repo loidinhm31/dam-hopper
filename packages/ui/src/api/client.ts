@@ -2272,7 +2272,7 @@ export interface GitActionResult {
   dirty?: boolean;
   destructive?: boolean;
   recovery?: {
-    operation: "merge" | "rebase" | "cherry-pick";
+    operation: "merge" | "rebase" | "cherry-pick" | "revert";
     canAbort: boolean;
     canContinue: boolean;
   };

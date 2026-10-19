@@ -200,6 +200,7 @@ pub enum GitRecoveryOperation {
     Merge,
     Rebase,
     CherryPick,
+    Revert,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

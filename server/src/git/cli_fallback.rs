@@ -112,7 +112,7 @@ pub(crate) async fn is_clean_worktree(cwd: &Path) -> Result<bool, AppError> {
         .is_empty())
 }
 
-pub(crate) async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecoveryState>, AppError> {
+pub async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecoveryState>, AppError> {
     if git_path_exists(cwd, "rebase-merge").await? || git_path_exists(cwd, "rebase-apply").await? {
         return Ok(Some(GitRecoveryState {
             operation: GitRecoveryOperation::Rebase,
@@ -130,6 +130,13 @@ pub(crate) async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecover
     if git_path_exists(cwd, "CHERRY_PICK_HEAD").await? {
         return Ok(Some(GitRecoveryState {
             operation: GitRecoveryOperation::CherryPick,
+            can_abort: true,
+            can_continue: true,
+        }));
+    }
+    if git_path_exists(cwd, "REVERT_HEAD").await? {
+        return Ok(Some(GitRecoveryState {
+            operation: GitRecoveryOperation::Revert,
             can_abort: true,
             can_continue: true,
         }));

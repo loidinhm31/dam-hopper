@@ -19,6 +19,7 @@ pub mod worktree;
 mod tests;
 
 pub use bulk::BulkGitService;
+pub use cli_fallback::active_git_operation;
 pub use blame::execute_native_blame;
 pub use blame_cache::{BlameBaseline, BlameBaselineCache, CacheKey};
 pub use commit_details::get_commit_details;
