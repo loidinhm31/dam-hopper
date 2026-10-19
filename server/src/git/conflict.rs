@@ -132,7 +132,7 @@ pub fn is_binary_content(bytes: &[u8]) -> bool {
 
 /// Safe join with ancestor verification to prevent traversal, Windows drive prefixes, or escaped symlinks.
 pub fn verify_safe_worktree_path(base: &Path, rel: &str) -> Result<PathBuf, AppError> {
-    if rel.is_empty() || rel.starts_with('/') || rel.starts_with('\\') {
+    if rel.is_empty() || rel.starts_with('/') || rel.starts_with('\\') || rel.contains('\\') {
         return Err(AppError::InvalidInput(format!("invalid path: {rel}")));
     }
     let candidate = Path::new(rel);
@@ -247,6 +247,26 @@ pub fn inspect_effective_attributes(repo: &git2::Repository, path: &str) -> Effe
         git2::AttrValue::Unspecified | git2::AttrValue::False => true,
         git2::AttrValue::String(f) if f.trim().is_empty() => true,
         _ => false,
+    } && !ident && encoding.is_none();
+
+    let text = match git2::AttrValue::from_string(
+        repo.get_attr(p, "text", git2::AttrCheckFlags::empty())
+            .ok()
+            .flatten(),
+    ) {
+        git2::AttrValue::String(s) => Some(s.to_string()),
+        git2::AttrValue::True => Some("true".to_string()),
+        git2::AttrValue::False => Some("false".to_string()),
+        _ => None,
+    };
+
+    let (core_autocrlf, core_eol) = if let Ok(cfg) = repo.config() {
+        (
+            cfg.get_string("core.autocrlf").ok(),
+            cfg.get_string("core.eol").ok(),
+        )
+    } else {
+        (None, None)
     };
 
     EffectiveAttributes {
@@ -254,7 +274,36 @@ pub fn inspect_effective_attributes(repo: &git2::Repository, path: &str) -> Effe
         encoding,
         ident,
         filter_qualified,
+        text,
+        core_autocrlf,
+        core_eol,
     }
+}
+
+pub fn compute_attributes_fingerprint(attrs: &EffectiveAttributes) -> String {
+    let mut hasher = Sha256::new();
+    if let Some(eol) = &attrs.eol {
+        hasher.update(eol.as_bytes());
+    }
+    hasher.update(b"\0");
+    if let Some(enc) = &attrs.encoding {
+        hasher.update(enc.as_bytes());
+    }
+    hasher.update(b"\0");
+    hasher.update(&[attrs.ident as u8]);
+    hasher.update(&[attrs.filter_qualified as u8]);
+    if let Some(text) = &attrs.text {
+        hasher.update(text.as_bytes());
+    }
+    hasher.update(b"\0");
+    if let Some(c_acrlf) = &attrs.core_autocrlf {
+        hasher.update(c_acrlf.as_bytes());
+    }
+    hasher.update(b"\0");
+    if let Some(c_eol) = &attrs.core_eol {
+        hasher.update(c_eol.as_bytes());
+    }
+    hex::encode(hasher.finalize())
 }
 
 pub fn compute_full_index_fingerprint(index: &git2::Index) -> String {
@@ -280,12 +329,15 @@ pub struct StateFingerprint {
     pub full_index_fingerprint: String,
     pub worktree_mtime_nanos: u64,
     pub worktree_size: u64,
+    pub worktree_content_hash: Option<String>,
+    pub attributes_fingerprint: String,
 }
 
 fn capture_state_fingerprint(
     repo: &git2::Repository,
     index: &git2::Index,
     worktree_file: Option<&Path>,
+    path_for_attrs: Option<&str>,
 ) -> StateFingerprint {
     let target_revision = repo
         .head()
@@ -295,7 +347,7 @@ fn capture_state_fingerprint(
         .unwrap_or_default();
     let operation = get_active_operation(repo).to_string();
     let full_index_fingerprint = compute_full_index_fingerprint(index);
-    let (worktree_mtime_nanos, worktree_size) = if let Some(p) = worktree_file {
+    let (worktree_mtime_nanos, worktree_size, worktree_content_hash) = if let Some(p) = worktree_file {
         if let Ok(meta) = std::fs::symlink_metadata(p) {
             let nanos = meta
                 .modified()
@@ -303,12 +355,28 @@ fn capture_state_fingerprint(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
-            (nanos, meta.len())
+            let size = meta.len();
+            let hash = if meta.file_type().is_file() && size <= MAX_WORKTREE_BYTES {
+                if let Ok(bytes) = std::fs::read(p) {
+                    Some(hex::encode(Sha256::digest(&bytes)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            (nanos, size, hash)
         } else {
-            (0, 0)
+            (0, 0, None)
         }
     } else {
-        (0, 0)
+        (0, 0, None)
+    };
+    let attributes_fingerprint = if let Some(rel) = path_for_attrs {
+        let attrs = inspect_effective_attributes(repo, rel);
+        compute_attributes_fingerprint(&attrs)
+    } else {
+        String::new()
     };
     StateFingerprint {
         target_revision,
@@ -316,6 +384,8 @@ fn capture_state_fingerprint(
         full_index_fingerprint,
         worktree_mtime_nanos,
         worktree_size,
+        worktree_content_hash,
+        attributes_fingerprint,
     }
 }
 
@@ -375,6 +445,9 @@ pub fn compute_snapshot_version(input: &SnapshotInput<'_>) -> String {
         hasher.update(h.as_bytes());
     }
 
+    hasher.update(input.state.attributes_fingerprint.as_bytes());
+    hasher.update(b"\0");
+
     if let Some(eol) = &input.effective_attrs.eol {
         hasher.update(eol.as_bytes());
     }
@@ -383,7 +456,15 @@ pub fn compute_snapshot_version(input: &SnapshotInput<'_>) -> String {
     }
     hasher.update(&[input.effective_attrs.ident as u8]);
     hasher.update(&[input.effective_attrs.filter_qualified as u8]);
-
+    if let Some(t) = &input.effective_attrs.text {
+        hasher.update(t.as_bytes());
+    }
+    if let Some(a) = &input.effective_attrs.core_autocrlf {
+        hasher.update(a.as_bytes());
+    }
+    if let Some(e) = &input.effective_attrs.core_eol {
+        hasher.update(e.as_bytes());
+    }
     hex::encode(hasher.finalize())
 }
 
@@ -663,7 +744,7 @@ pub fn get_conflict_snapshot(
         Ok(s) => s.to_string(),
         Err(_) => {
             let lossy_path = String::from_utf8_lossy(&target_raw_path).into_owned();
-            let before_state = capture_state_fingerprint(&repo, &index, None);
+            let before_state = capture_state_fingerprint(&repo, &index, None, None);
             let build_unsupported_stage = |stage_num: u16, entry_opt: Option<&git2::IndexEntry>| -> StageDescriptor {
                 match entry_opt {
                     Some(e) => StageDescriptor {
@@ -705,6 +786,9 @@ pub fn get_conflict_snapshot(
                 encoding: None,
                 ident: false,
                 filter_qualified: false,
+                text: None,
+                core_autocrlf: None,
+                core_eol: None,
             };
             let snapshot_input = SnapshotInput {
                 canonical_root: &canonical_root,
@@ -731,6 +815,8 @@ pub fn get_conflict_snapshot(
                 stages: empty_stages,
                 worktree: empty_worktree,
                 effective_attributes: empty_attrs,
+                target_revision: Some(before_state.target_revision),
+                operation: Some(before_state.operation),
             });
         }
     };
@@ -738,8 +824,7 @@ pub fn get_conflict_snapshot(
 
     // Step 8: Capture before-state fingerprint
     let before_state =
-        capture_state_fingerprint(&repo, &index, Some(&safe_disk_path));
-
+        capture_state_fingerprint(&repo, &index, Some(&safe_disk_path), Some(&display_path));
     let odb = repo
         .odb()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -798,10 +883,20 @@ pub fn get_conflict_snapshot(
         }
 
         // Pre-allocation check: inspect ODB header without loading blob content
-        let (odb_size, obj_type) = odb
-            .read_header(entry.id)
-            .map_err(|e| AppError::Git(e.message().to_string()))?;
-
+        let (odb_size, obj_type) = match odb.read_header(entry.id) {
+            Ok(h) => h,
+            Err(_) => {
+                return Ok(StageDescriptor {
+                    stage: stage_num,
+                    path: Some(stage_path),
+                    oid: Some(oid_str),
+                    mode,
+                    byte_size: 0,
+                    kind: StageKind::ReadError,
+                    text_tokens: None,
+                });
+            }
+        };
         if obj_type != git2::ObjectType::Blob {
             return Ok(StageDescriptor {
                 stage: stage_num,
@@ -829,9 +924,20 @@ pub fn get_conflict_snapshot(
             });
         }
 
-        let blob = repo
-            .find_blob(entry.id)
-            .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let blob = match repo.find_blob(entry.id) {
+            Ok(b) => b,
+            Err(_) => {
+                return Ok(StageDescriptor {
+                    stage: stage_num,
+                    path: Some(stage_path),
+                    oid: Some(oid_str),
+                    mode,
+                    byte_size,
+                    kind: StageKind::ReadError,
+                    text_tokens: None,
+                });
+            }
+        };
         let content = blob.content();
         if is_binary_content(content) {
             return Ok(StageDescriptor {
@@ -975,20 +1081,28 @@ pub fn get_conflict_snapshot(
                     }
                 } else {
                     use std::io::Read;
-                    let mut f = std::fs::File::open(&safe_disk_path).map_err(AppError::Io)?;
                     let mut disk_bytes = Vec::new();
-                    let bytes_read = f
-                        .by_ref()
-                        .take(MAX_WORKTREE_BYTES + 1)
-                        .read_to_end(&mut disk_bytes)
-                        .map_err(AppError::Io)?;
-
-                    if bytes_read as u64 > MAX_WORKTREE_BYTES {
+                    let read_res = std::fs::File::open(&safe_disk_path).and_then(|mut f| {
+                        f.by_ref()
+                            .take(MAX_WORKTREE_BYTES + 1)
+                            .read_to_end(&mut disk_bytes)
+                    });
+                    if read_res.is_err() {
+                        WorktreeDescriptor {
+                            exists: true,
+                            kind: WorktreeKind::Unreadable,
+                            mode,
+                            byte_length: 0,
+                            text_tokens: None,
+                            has_conflict_markers: false,
+                            is_dirty_vs_stages: true,
+                        }
+                    } else if disk_bytes.len() as u64 > MAX_WORKTREE_BYTES {
                         WorktreeDescriptor {
                             exists: true,
                             kind: WorktreeKind::Regular,
                             mode,
-                            byte_length: bytes_read as u64,
+                            byte_length: disk_bytes.len() as u64,
                             text_tokens: None,
                             has_conflict_markers: false,
                             is_dirty_vs_stages: true,
@@ -1020,7 +1134,7 @@ pub fn get_conflict_snapshot(
                                 if st_desc.byte_size != disk_bytes.len() as u64 {
                                     return false;
                                 }
-                                if let Some(ref oid_str) = st_desc.oid {
+                                if let Some(oid_str) = &st_desc.oid {
                                     if let Ok(oid) = git2::Oid::from_str(oid_str) {
                                         if let Ok(b) = repo.find_blob(oid) {
                                             return b.content() == disk_bytes.as_slice();
@@ -1053,7 +1167,7 @@ pub fn get_conflict_snapshot(
 
     // Re-read index and verify after-state
     index.read(true).map_err(|e| AppError::Git(e.message().to_string()))?;
-    let after_state = capture_state_fingerprint(&repo, &index, Some(&safe_disk_path));
+    let after_state = capture_state_fingerprint(&repo, &index, Some(&safe_disk_path), Some(&display_path));
 
     if before_state != after_state {
         return Err(AppError::ConflictStateChanged);
@@ -1156,6 +1270,8 @@ pub fn get_conflict_snapshot(
         stages,
         worktree,
         effective_attributes,
+        target_revision: Some(after_state.target_revision),
+        operation: Some(after_state.operation),
     })
 }
 #[cfg(test)]
@@ -1248,6 +1364,8 @@ mod tests {
             full_index_fingerprint: "idx1".to_string(),
             worktree_mtime_nanos: 100,
             worktree_size: 50,
+            worktree_content_hash: Some("contenthash1".to_string()),
+            attributes_fingerprint: "attrfp1".to_string(),
         };
         let stages = ConflictStages {
             base: None,
@@ -1284,6 +1402,9 @@ mod tests {
             encoding: None,
             ident: false,
             filter_qualified: true,
+            text: None,
+            core_autocrlf: None,
+            core_eol: None,
         };
 
         let input1 = SnapshotInput {

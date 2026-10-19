@@ -292,12 +292,41 @@ pub async fn get_conflict_file(
 // ---------------------------------------------------------------------------
 
 pub async fn resolve(
-    State(_state): State<AppState>,
-    Path(_project): Path<String>,
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Err::<(), ApiError>(ApiError::from_app(
-        crate::error::AppError::LegacyPayloadRejected,
-    ))
+    let has_conflict_id = body.get("conflictId").and_then(|v| v.as_str()).is_some();
+    let has_snapshot_version = body.get("snapshotVersion").and_then(|v| v.as_str()).is_some();
+    let has_legacy_content = body.get("content").is_some();
+
+    if !has_conflict_id || !has_snapshot_version || has_legacy_content {
+        return Err(ApiError::from_app(
+            crate::error::AppError::LegacyPayloadRejected,
+        ));
+    }
+
+    let req: git::ResolveRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(ApiError::from_app(
+                crate::error::AppError::InvalidInput(format!("Invalid resolve request: {e}")),
+            ));
+        }
+    };
+
+    let proj_path = resolve_target_path(&state, &project, req.worktree_path.clone()).await?;
+    let root_arg = req.root.clone();
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&proj_path, root_arg.as_deref())?;
+        git::apply_conflict_resolution(&root.root_path, &req)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
+
+    Ok(Json(outcome))
 }
 
 // ---------------------------------------------------------------------------

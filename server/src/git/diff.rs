@@ -11,9 +11,10 @@ use git2::{DiffOptions, Repository};
 
 use crate::error::AppError;
 use crate::git::types::{
-    ConflictFile, DiffFileEntry, DiffResponse, FileDiffContent, GitLineChange, HunkInfo,
+    DiffFileEntry, DiffResponse, FileDiffContent, GitLineChange, HunkInfo,
     SubmoduleGitlinkInfo, VcsRootKind, UNTRACKED_PAGE_SIZE,
 };
+use crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR;
 use crate::git::vcs_roots::discover_vcs_roots;
 
 // ---------------------------------------------------------------------------
@@ -651,10 +652,37 @@ pub fn stage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError> 
         safe_join(project_path, rel)?;
     }
     let repo = open_repo(project_path)?;
+    let _guard = GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let mut index = repo
         .index()
         .map_err(|e| AppError::Git(e.message().to_string()))?;
 
+    // Preflight: reject any unmerged (conflicted) paths before staging any file (CUT1)
+    if index.has_conflicts() {
+        let unmerged_entries: Vec<String> = index
+            .iter()
+            .filter(|e| (e.flags & 0x3000) != 0)
+            .map(|e| String::from_utf8_lossy(&e.path).into_owned())
+            .collect();
+
+        for rel in paths {
+            let trimmed = rel.trim_start_matches("./");
+            let p = Path::new(trimmed);
+            if index.get_path(p, 1).is_some()
+                || index.get_path(p, 2).is_some()
+                || index.get_path(p, 3).is_some()
+                || unmerged_entries
+                    .iter()
+                    .any(|u| u == trimmed || u.starts_with(&format!("{trimmed}/")))
+            {
+                return Err(AppError::InvalidInput(format!(
+                    "cannot stage conflicted path '{rel}'; resolve conflict first"
+                )));
+            }
+        }
+    }
     for rel in paths {
         let abs_path = project_path.join(rel);
         if abs_path.exists() {
@@ -680,7 +708,9 @@ pub fn unstage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError
         safe_join(project_path, rel)?;
     }
     let repo = open_repo(project_path)?;
-
+    let _guard = GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let head_commit = match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
         Some(c) => c,
         None => {
@@ -707,7 +737,9 @@ pub fn unstage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError
 pub fn discard_file(project_path: &Path, rel_path: &str) -> Result<(), AppError> {
     safe_join(project_path, rel_path)?;
     let repo = open_repo(project_path)?;
-
+    let _guard = GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let mut cb = git2::build::CheckoutBuilder::new();
     cb.path(rel_path).force();
     repo.checkout_head(Some(&mut cb))
@@ -735,7 +767,9 @@ pub fn discard_hunk(
 ) -> Result<(), AppError> {
     let abs_path = safe_join(project_path, rel_path)?;
     let repo = open_repo(project_path)?;
-
+    let _guard = GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     // HEAD blob
     let original_bytes = read_head_blob(&repo, rel_path)?
         .ok_or_else(|| AppError::Git(format!("no HEAD blob for {rel_path}")))?;
@@ -827,97 +861,6 @@ pub fn discard_hunk(
     Ok(())
 }
 
-/// List all conflicted files with ancestor/ours/theirs content.
-pub fn get_conflicts(project_path: &Path) -> Result<Vec<ConflictFile>, AppError> {
-    let repo = open_repo(project_path)?;
-    let index = repo
-        .index()
-        .map_err(|e| AppError::Git(e.message().to_string()))?;
-
-    if !index.has_conflicts() {
-        return Ok(vec![]);
-    }
-
-    let mut conflicts: Vec<ConflictFile> = Vec::new();
-
-    for conflict_result in index
-        .conflicts()
-        .map_err(|e| AppError::Git(e.message().to_string()))?
-    {
-        let conflict = conflict_result.map_err(|e| AppError::Git(e.message().to_string()))?;
-
-        let path = conflict
-            .our
-            .as_ref()
-            .or(conflict.their.as_ref())
-            .or(conflict.ancestor.as_ref())
-            .and_then(|e| std::str::from_utf8(&e.path).ok().map(|s| s.to_string()))
-            .unwrap_or_default();
-
-        let ancestor = conflict
-            .ancestor
-            .as_ref()
-            .and_then(|e| read_blob_utf8(&repo, e.id))
-            .flatten();
-        let ours = conflict
-            .our
-            .as_ref()
-            .and_then(|e| read_blob_utf8(&repo, e.id))
-            .flatten();
-        let theirs = conflict
-            .their
-            .as_ref()
-            .and_then(|e| read_blob_utf8(&repo, e.id))
-            .flatten();
-
-        conflicts.push(ConflictFile {
-            path,
-            ancestor,
-            ours,
-            theirs,
-        });
-    }
-
-    Ok(conflicts)
-}
-
-fn read_blob_utf8(repo: &Repository, oid: git2::Oid) -> Option<Option<String>> {
-    if oid.is_zero() {
-        return Some(None);
-    }
-    match repo.find_blob(oid) {
-        Ok(blob) => {
-            if is_binary_content(blob.content()) {
-                Some(None)
-            } else {
-                Some(Some(String::from_utf8_lossy(blob.content()).into_owned()))
-            }
-        }
-        Err(_) => None,
-    }
-}
-
-/// Write resolved content and stage the file, clearing the conflict.
-pub fn resolve_conflict(
-    project_path: &Path,
-    rel_path: &str,
-    content: &str,
-) -> Result<(), AppError> {
-    let abs_path = safe_join(project_path, rel_path)?;
-    std::fs::write(&abs_path, content).map_err(AppError::Io)?;
-
-    let repo = open_repo(project_path)?;
-    let mut index = repo
-        .index()
-        .map_err(|e| AppError::Git(e.message().to_string()))?;
-    index
-        .add_path(Path::new(rel_path))
-        .map_err(|e| AppError::Git(e.message().to_string()))?;
-    index
-        .write()
-        .map_err(|e| AppError::Git(e.message().to_string()))?;
-    Ok(())
-}
 
 /// Create a commit from the current index with the given message.
 /// Returns the new commit's hash as a hex string.
@@ -929,6 +872,9 @@ pub fn commit_files(project_path: &Path, message: &str, amend: bool) -> Result<S
         ));
     }
     let repo = open_repo(project_path)?;
+    let _guard = GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let sig = repo.signature().map_err(|e| {
         AppError::Git(format!(
             "git user not configured (set user.name and user.email): {}",

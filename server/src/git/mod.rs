@@ -4,10 +4,12 @@ pub mod blame_cache;
 pub mod bulk;
 pub mod cli_fallback;
 pub mod conflict;
+pub mod conflict_resolve;
 pub mod commit_details;
 pub mod commit_file_ops;
 pub mod commit_message_rewrite;
 pub mod diff;
+pub mod mutation_coordination;
 pub mod leased_push;
 pub mod progress;
 pub mod repository;
@@ -29,10 +31,10 @@ pub use commit_file_ops::{
 };
 pub use commit_message_rewrite::{edit_commit_message, get_commit_message, CommitMessageSnapshot};
 pub use conflict::{get_conflict_snapshot, get_conflicts_summary};
+pub use conflict_resolve::apply_conflict_resolution;
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
-    get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,
-    stage_files, unstage_files,
+    get_diff_files, get_file_diff, get_untracked_page, stage_files, unstage_files,
 };
 pub use leased_push::{prepare_leased_push, publish_leased_push};
 pub use progress::ProgressSender;
@@ -42,15 +44,17 @@ pub use repository::{
 };
 pub use squash_commits::squash_commits;
 pub use types::{
-    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, ConflictSnapshot,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictSnapshot,
     ConflictStages, ConflictStatus, ConflictSummaryEntry, ConflictSummaryResponse, DiffFileEntry,
     DiffResponse, EffectiveAttributes, FileDiffContent, GitActionResult, GitBlockReason,
     GitLogEntry, GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase,
     GitRecoveryOperation, GitRecoveryState, GitStatus, HunkInfo, PublishBlockReason, PublishPreview,
-    PublishResult, PublishResultStatus, PublishSnapshot, ResetMode, StageDescriptor, StageKind,
+    PublishResult, PublishResultStatus, PublishSnapshot, ResetMode, ResolveAction, ResolveEol,
+    ResolveOutcome, ResolveRequest, ResolveSide, StageDescriptor, StageKind,
     SubmoduleGitlinkInfo, VcsRoot, VcsRootKind, VcsRootMappingState, Worktree, WorktreeAddOptions,
     WorktreeDescriptor, WorktreeKind, UNTRACKED_PAGE_SIZE,
 };
+pub use mutation_coordination::{GitMutationCoordinator, GLOBAL_MUTATION_COORDINATOR};
 pub use vcs_roots::{
     discover_available_vcs_roots, discover_vcs_roots, resolve_git_path_root,
     resolve_git_request_root, resolve_vcs_root, staged_vcs_root_ids, ResolvedGitRoot,

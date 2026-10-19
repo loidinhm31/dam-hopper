@@ -383,10 +383,13 @@ Response:
 ```
 
 **POST /api/git/:project/stage**
-Stage files.
+Stage files in the index with conflict preflight and process-local mutation coordination.
 
 Body: `{ paths: string[], root?: string }`
 
+Preconditions and safety guards:
+- **Process-local mutation coordination (`GitMutationCoordinator`):** Acquires an exclusive in-memory lock keyed on the canonical repository common Git directory (`commondir` for linked worktrees, or canonical `.git` directory). If another server-coordinated Git mutation is in progress on the repository, returns HTTP 503 (`UNAVAILABLE`) with `"Another Git mutation is in progress for this repository"`.
+- **Generic stage preflight (CUT1):** Before staging any path, inspects `index.has_conflicts()`. If any path in `paths` is an unmerged conflict entry, the request is rejected immediately with HTTP 400 (`INVALID_INPUT`: `"Cannot stage unmerged conflicted file '{path}'. Resolve conflict first."`) before any clean files in the batch are staged. Clean-only batches pass this conflict preflight (subsequent standard staging validations still apply).
 **POST /api/git/:project/unstage**
 Unstage files.
 
@@ -512,11 +515,62 @@ Pre-allocation bounds, classification, and failure semantics:
 - **Coherence verification (HTTP 409 `REFRESH_REQUIRED`):** Before and after reading stages and worktree, the server captures a fingerprint encompassing HEAD target OID, full index entries, and worktree file attributes. If detected repository or worktree state drifts during reading, the request fails with HTTP 409 and error code `REFRESH_REQUIRED`.
 - **Unknown conflict ID (HTTP 404):** Returns HTTP 404 if the requested `conflictId` is absent from the unmerged index.
 **POST /api/git/{project}/resolve**
-Merge conflict resolution endpoint.
+Safe conflict resolution and staging endpoint with strict precondition verification, process-local mutation coordination, atomic file publication, and post-staging oracle verification.
 
-*Current Implementation Status (Phase 02):*
-Fails closed for all requests with HTTP 400 and error code `LEGACY_PAYLOAD_REJECTED`. The legacy payload format (`{ path, content }`) is retired, and mutation requires precondition verification (`snapshotVersion`, `fullIndexFingerprint`, and structured action) scheduled for Phase 03.
+*Implementation status:* Backend mutation contract implemented; safety review remains active and public cutover is blocked until Phase 05 migrates frontend callers. Requests missing `conflictId` or `snapshotVersion` strings, or containing legacy `content`, are rejected with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields or malformed action payloads are rejected (`deny_unknown_fields`) with HTTP 400 (`INVALID_INPUT`).
 
+**Request body (`ResolveRequest`):**
+```json
+{
+  "conflictId": "cid_7372632f636f6e666c6963742e7273",
+  "snapshotVersion": "6f2d8e41a3b4c5d6...",
+  "fullIndexFingerprint": "9a8b7c6d5e4f3a2b...",
+  "action": {
+    "type": "reviewedText",
+    "tokens": ["fn main() {\n", "    println!(\"resolved\");\n", "}\n"],
+    "eol": "preserve",
+    "executable": false
+  },
+  "worktreePath": "/path/to/worktree",
+  "root": "vcs-root"
+}
+```
+
+Request fields:
+- `conflictId` (required string): Opaque URL-safe server identifier representing the raw unmerged path bytes.
+- `snapshotVersion` (required string): Exact snapshot version token from `GET /api/git/{project}/conflicts/file`.
+- `fullIndexFingerprint` (required string): Fingerprint of the full index state captured during snapshot generation.
+- `action` (required object): Discriminated action union tagged on `"type"`:
+  - `reviewedText`: Write explicitly reviewed text tokens to worktree and stage. Fields:
+    - `tokens` (required array of strings): Complete reviewed worktree lines including terminators.
+    - `eol` (optional enum): Line ending normalization: `"lf"`, `"crlf"`, or `"preserve"` (default: `"preserve"`).
+    - `executable` (optional boolean): When present, forces worktree/stage mode to executable (`0o755`) or non-executable (`0o644`).
+  - `indexSide`: Select an existing unmerged stage and stage its exact OID/mode. Fields:
+    - `side` (required enum): `"ours"` (stage 2) or `"theirs"` (stage 3).
+    - `stage` (required integer): Must match `2` for `"ours"` or `3` for `"theirs"`.
+  - `delete`: Delete unmerged path from worktree and index. Object: `{ "type": "delete" }`.
+- `worktreePath` (optional string): Registered Git worktree absolute path.
+- `root` (optional string): Target VCS root identifier.
+
+**Response (`ResolveOutcome`):**
+The endpoint returns HTTP 200 with a tagged domain outcome JSON object (`outcome` discriminator). Callers must evaluate `outcome`:
+
+| Outcome Discriminator | Fields | Meaning & Client Action |
+| --- | --- | --- |
+| `applied` | `newOid?: string`, `stage0Mode?: number`, `deleted?: boolean` | Mutation succeeded. For `reviewedText` and `indexSide`, worktree file written, unmerged stages 1–3 removed, and stage 0 entry verified (`deleted` omitted when `false`). For `delete`, worktree file removed and all index stages 0–3 verified absent (`deleted: true`, `newOid` and `stage0Mode` omitted). |
+| `stale` | `reason: string`, `requiredRefresh: boolean` | Precondition mismatch: index drifted (`fullIndexFingerprint`), snapshot drifted (`snapshotVersion`), or conflict resolved externally. Client must refresh state; zero writes occurred. |
+| `unsupported` | `reason: string` | Path or configuration unsupported (e.g. symlink/directory/gitlink worktree kinds, non-UTF-8 path, custom encoding, or `ident=true`). Zero writes occurred. |
+| `busy` | `reason: string` | Mutation lock held: either in-memory `GitMutationCoordinator` active on repository or Git `index.lock` present on disk. Zero writes occurred. |
+| `failedBeforeWrite` | `error: string` | Validation failure prior to disk mutation (e.g. path traversal or ancestor check failure). Zero writes occurred. |
+| `worktreeChangedStageFailed` | `error: string`, `worktreeWritten: boolean`, `staged: boolean` | Partial mutation: file was published to worktree disk, but staging the index entry failed. UI must retain submitted reviewed text and prompt user to review/refresh. |
+| `outcomeUnknown` | `error: string`, `requiredRefresh: boolean` | Mutation state uncertain (e.g. repository reopen failed or unmerged stages lingered after staging). Client must refresh and re-inspect state before taking further action. Automatic replay is prohibited. |
+
+**Mutation checks and limitations:**
+- **Precondition re-validation:** Verifies `fullIndexFingerprint`, `snapshotVersion`, target path boundaries (`verify_safe_worktree_path`), and on-disk file type (refusing to overwrite symlinks or directories) before touching disk.
+- **Process-local coordination:** Acquires in-memory `GitMutationCoordinator` keyed on the canonical repository common Git directory (`commondir` for linked worktrees, or canonical `.git` directory), then checks for existing disk `index.lock`. External uninstrumented Git CLI processes or external file edits are not synchronized.
+- **Publication mechanism:** For `reviewedText` and `indexSide`, writes to a unique temporary sibling file (`.tmp_resolve_<hex>`) before renaming onto the target path (`safe_atomic_write`). This pathname-based publication does not provide a cross-system filesystem/index transaction or race-resistant ancestor containment against concurrent external writers.
+- **Post-staging oracle verification:** Reopens repository and index to assert outcome facts for the resolved path: for `reviewedText` and `indexSide` (`verify_applied_oracle`), verifies unmerged stages 1–3 are removed, stage 0 matches expected OID/mode, and disk bytes match expected content; for `delete` (`verify_deleted_oracle`), verifies all stages 0–3 are absent from the index and the file no longer exists in the worktree.
+- **Retry and replay policy:** Callers must not perform automatic or blind retries after timeouts, connection drops, or received `outcomeUnknown` / `worktreeChangedStageFailed`. Because partial mutations may have updated the worktree on disk prior to index stage failure, clients must refresh repository state and prompt the operator to review prior to any subsequent submission.
 **POST /api/git/:project/commit**
 Create a commit from staged files.
 

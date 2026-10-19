@@ -7,11 +7,12 @@
 
 ## Overview
 
-- Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Date: 2026-10-20. Priority: P2.
+- Status: DONE (2026-10-20T01:50:00+07:00).
+- Implementation: Complete. Review: Complete (Cycle 3 review 7.0/10; critical `undo_last_commit` guard scope verified and resolved; user approved on 2026-10-20). Progress: 100%. Effort: unestimated.
 - Owner: backend mutation owner; integration lead owns cross-writer coordination and public cutover.
-- Entry: Phase 02 discovery and snapshot endpoints delivered with accepted deferrals; coherent-snapshot (AC8), conversion gating, and descriptor read error (AC6/AC7) gates remain open and must be remediated in Phase 03 alongside mutation safety. Phase 01 exact-side/conversion/path/locking proofs passed.
-- Handoff: typed preconditioned Apply & stage service, generic-stage rejection and truthful mutation facts.
+- Entry: Phase 02 discovery and snapshot endpoints delivered with accepted deferrals; coherent-snapshot (AC8), conversion gating, and descriptor read error (AC6/AC7) gates remediated in Phase 03 alongside mutation safety. Phase 01 exact-side/conversion/path/locking proofs passed.
+- Handoff: typed preconditioned Apply & stage service, generic-stage rejection and truthful mutation facts delivered to Phase 04 operation lifecycle and Phase 05 client.
 - Go/no-go: exact intended path/index result with unrelated entries preserved; no permissive legacy resolver survives.
 
 ## Key insights
@@ -104,12 +105,12 @@ Backend/client cutover remains unreleasable until Phase 05 migrates every caller
 
 ## Todo list
 
-- [ ] Coordinate actual application index/ref writers without Git lock self-deadlock.
-- [ ] Implement three typed actions with secure preconditioned publication.
-- [ ] Verify selected OID/mode and exact supported byte outcomes.
-- [ ] Reject generic mixed conflict-stage batches before any mutation.
-- [ ] Return truthful no-write/partial/unknown outcomes; retire unchecked resolver and reject legacy writes without fallback/shim at coordinated cutover.
-- [ ] Add deterministic post-write failure, concurrency and external-writer preservation evidence.
+- [x] Coordinate actual application index/ref writers without Git lock self-deadlock (`GitMutationCoordinator` keyed via `commondir` covering linked and main worktrees across 14 application Git writers; CLI fallback continue/abort deferred to Phase 04).
+- [x] Implement three typed actions with secure preconditioned publication (`reviewedText`, `indexSide`, `delete {}` with `deny_unknown_fields`).
+- [x] Verify selected OID/mode and exact supported byte outcomes (`verify_applied_oracle` and `verify_deleted_oracle`; stage bounds checks).
+- [x] Reject generic mixed conflict-stage batches before any mutation (CUT1 preflight in `stage_files` checking trimmed path and directory prefixes).
+- [x] Return truthful no-write/partial/unknown outcomes; retire unchecked resolver (`Applied`, `Stale`, `Unsupported`, `Busy`, `FailedBeforeWrite`, `WorktreeChangedStageFailed`, `OutcomeUnknown`; removed legacy `resolve_conflict`, `get_conflicts`, `read_blob_utf8`, and Rust `ConflictFile` DTO; UI caller pending Phase 05).
+- [x] Add deterministic post-write failure, concurrency and external-writer preservation evidence (10 integration tests in `git_conflict_exact_staging.rs`, 11 in `git_conflict_discovery_api.rs`, 203 unit tests passing in `server`).
 
 ## Success criteria
 

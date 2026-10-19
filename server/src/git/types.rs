@@ -418,18 +418,6 @@ pub struct HunkInfo {
     pub header: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConflictFile {
-    pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ancestor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ours: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub theirs: Option<String>,
-}
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -521,6 +509,12 @@ pub struct EffectiveAttributes {
     pub encoding: Option<String>,
     pub ident: bool,
     pub filter_qualified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_autocrlf: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_eol: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,6 +541,104 @@ pub struct ConflictSnapshot {
     pub stages: ConflictStages,
     pub worktree: WorktreeDescriptor,
     pub effective_attributes: EffectiveAttributes,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResolveEol {
+    Lf,
+    Crlf,
+    Preserve,
+}
+
+fn default_eol_preserve() -> ResolveEol {
+    ResolveEol::Preserve
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResolveSide {
+    Ours,
+    Theirs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type", deny_unknown_fields)]
+pub enum ResolveAction {
+    #[serde(rename = "reviewedText")]
+    ReviewedText {
+        tokens: Vec<String>,
+        #[serde(default = "default_eol_preserve")]
+        eol: ResolveEol,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executable: Option<bool>,
+    },
+    #[serde(rename = "indexSide")]
+    IndexSide {
+        side: ResolveSide,
+        stage: u16,
+    },
+    #[serde(rename = "delete")]
+    Delete {},
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolveRequest {
+    pub conflict_id: String,
+    pub snapshot_version: String,
+    pub full_index_fingerprint: String,
+    pub action: ResolveAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "outcome")]
+pub enum ResolveOutcome {
+    #[serde(rename = "applied")]
+    Applied {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_oid: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage0_mode: Option<u32>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        deleted: bool,
+    },
+    #[serde(rename = "stale")]
+    Stale {
+        reason: String,
+        required_refresh: bool,
+    },
+    #[serde(rename = "unsupported")]
+    Unsupported {
+        reason: String,
+    },
+    #[serde(rename = "busy")]
+    Busy {
+        reason: String,
+    },
+    #[serde(rename = "failedBeforeWrite")]
+    FailedBeforeWrite {
+        error: String,
+    },
+    #[serde(rename = "worktreeChangedStageFailed")]
+    WorktreeChangedStageFailed {
+        error: String,
+        worktree_written: bool,
+        staged: bool,
+    },
+    #[serde(rename = "outcomeUnknown")]
+    OutcomeUnknown {
+        error: String,
+        required_refresh: bool,
+    },
 }
 // ---------------------------------------------------------------------------
 
@@ -752,4 +844,93 @@ pub struct GitCommitDetails {
 pub struct GitCommitDetailsQuery {
     pub root: Option<String>,
     pub worktree_path: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_outcome_and_attributes_camel_case_json() {
+        let attrs = EffectiveAttributes {
+            eol: Some("lf".into()),
+            encoding: None,
+            ident: false,
+            filter_qualified: true,
+            text: Some("auto".into()),
+            core_autocrlf: Some("false".into()),
+            core_eol: Some("lf".into()),
+        };
+        let json = serde_json::to_string(&attrs).unwrap();
+        assert!(json.contains("\"filterQualified\":true"));
+        assert!(json.contains("\"coreAutocrlf\":\"false\""));
+        assert!(json.contains("\"coreEol\":\"lf\""));
+
+        let outcome_stale = ResolveOutcome::Stale {
+            reason: "state changed".into(),
+            required_refresh: true,
+        };
+        let json_stale = serde_json::to_string(&outcome_stale).unwrap();
+        assert!(json_stale.contains("\"requiredRefresh\":true"));
+
+        let outcome_applied = ResolveOutcome::Applied {
+            new_oid: Some("abc123".into()),
+            stage0_mode: Some(0o100644),
+            deleted: false,
+        };
+        let json_applied = serde_json::to_string(&outcome_applied).unwrap();
+        assert!(json_applied.contains("\"newOid\":\"abc123\""));
+        assert!(json_applied.contains("\"stage0Mode\":33188"));
+
+        let outcome_failed = ResolveOutcome::WorktreeChangedStageFailed {
+            error: "lock err".into(),
+            worktree_written: true,
+            staged: false,
+        };
+        let json_failed = serde_json::to_string(&outcome_failed).unwrap();
+        assert!(json_failed.contains("\"worktreeWritten\":true"));
+        assert!(json_failed.contains("\"staged\":false"));
+    }
+
+    #[test]
+    fn test_resolve_request_rejects_unknown_fields() {
+        let json = r#"{
+            "conflictId": "cid_123",
+            "snapshotVersion": "snap1",
+            "fullIndexFingerprint": "fp1",
+            "action": {
+                "type": "delete"
+            },
+            "unknownProperty": 42
+        }"#;
+        let res: Result<ResolveRequest, _> = serde_json::from_str(json);
+        assert!(res.is_err(), "Must reject unknown fields on request");
+
+        let json_delete_extra = r#"{
+            "conflictId": "cid_123",
+            "snapshotVersion": "snap1",
+            "fullIndexFingerprint": "fp1",
+            "action": {
+                "type": "delete",
+                "extraField": 123
+            }
+        }"#;
+        let res2: Result<ResolveRequest, _> = serde_json::from_str(json_delete_extra);
+        assert!(res2.is_err(), "Must reject unknown fields on delete action");
+    }
+
+    #[test]
+    fn test_resolve_request_parses_delete_action_successfully() {
+        let json_delete = r#"{
+            "conflictId": "cid_123",
+            "snapshotVersion": "snap1",
+            "fullIndexFingerprint": "fp1",
+            "action": {
+                "type": "delete"
+            }
+        }"#;
+        let res: Result<ResolveRequest, _> = serde_json::from_str(json_delete);
+        assert!(res.is_ok(), "Must accept valid delete action");
+        assert!(matches!(res.unwrap().action, ResolveAction::Delete {}));
+    }
 }

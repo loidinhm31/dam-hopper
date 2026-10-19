@@ -582,3 +582,136 @@ fn test_conflict_non_utf8_path_marked_unsupported() {
     let decoded = dam_hopper_server::git::conflict::decode_conflict_id(&cid).unwrap();
     assert_eq!(decoded, raw_non_utf8);
 }
+
+#[tokio::test]
+async fn test_conflict_api_resolve_endpoint_success_and_stale() {
+    let app = setup_test_app();
+    let root = &app.project_path;
+
+    std::fs::write(root.join("test_file.txt"), b"base content\n").unwrap();
+    git(&["add", "test_file.txt"], root);
+    git(&["commit", "-m", "base"], root);
+
+    git(&["checkout", "-b", "side"], root);
+    std::fs::write(root.join("test_file.txt"), b"side content\n").unwrap();
+    git(&["add", "test_file.txt"], root);
+    git(&["commit", "-m", "side"], root);
+
+    git(&["checkout", "main"], root);
+    std::fs::write(root.join("test_file.txt"), b"main content\n").unwrap();
+    git(&["add", "test_file.txt"], root);
+    git(&["commit", "-m", "main"], root);
+
+    let _ = git_try(&["merge", "side"], root);
+
+    // 1. Get conflicts summary
+    let req_summary = Request::builder()
+        .uri("/api/git/test-repo/conflicts")
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let res_summary = app.router.clone().oneshot(req_summary).await.unwrap();
+    assert_eq!(res_summary.status(), StatusCode::OK);
+    let summary_bytes = axum::body::to_bytes(res_summary.into_body(), usize::MAX).await.unwrap();
+    let summary: ConflictSummaryResponse = serde_json::from_slice(&summary_bytes).unwrap();
+    let entry = summary.entries.iter().find(|e| e.path == "test_file.txt").unwrap();
+
+    // 2. Get conflict snapshot
+    let file_uri = format!("/api/git/test-repo/conflicts/file?conflictId={}", entry.conflict_id);
+    let req_file = Request::builder()
+        .uri(&file_uri)
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let res_file = app.router.clone().oneshot(req_file).await.unwrap();
+    assert_eq!(res_file.status(), StatusCode::OK);
+    let file_bytes = axum::body::to_bytes(res_file.into_body(), usize::MAX).await.unwrap();
+    let snapshot: ConflictSnapshot = serde_json::from_slice(&file_bytes).unwrap();
+
+    // 3. Resolve via POST /api/git/test-repo/resolve
+    let resolve_body = serde_json::json!({
+        "conflictId": entry.conflict_id,
+        "snapshotVersion": snapshot.snapshot_version,
+        "fullIndexFingerprint": snapshot.full_index_fingerprint,
+        "action": {
+            "type": "reviewedText",
+            "tokens": ["resolved via API\n"],
+            "eol": "preserve"
+        }
+    });
+
+    let req_resolve = Request::builder()
+        .uri("/api/git/test-repo/resolve")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&resolve_body).unwrap()))
+        .unwrap();
+
+    let res_resolve = app.router.clone().oneshot(req_resolve).await.unwrap();
+    assert_eq!(res_resolve.status(), StatusCode::OK);
+    let resolve_bytes = axum::body::to_bytes(res_resolve.into_body(), usize::MAX).await.unwrap();
+    let outcome: dam_hopper_server::git::types::ResolveOutcome =
+        serde_json::from_slice(&resolve_bytes).unwrap();
+
+    match outcome {
+        dam_hopper_server::git::types::ResolveOutcome::Applied { new_oid, stage0_mode, deleted } => {
+            assert!(!deleted);
+            assert!(new_oid.is_some());
+            assert_eq!(stage0_mode, Some(0o100644));
+        }
+        other => panic!("Expected Applied outcome, got {other:?}"),
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(root.join("test_file.txt")).unwrap(),
+        "resolved via API\n"
+    );
+}
+
+#[tokio::test]
+async fn test_conflict_api_generic_stage_rejects_conflicted_file_cut1() {
+    let app = setup_test_app();
+    let root = &app.project_path;
+
+    std::fs::write(root.join("conflict.txt"), b"base c\n").unwrap();
+    std::fs::write(root.join("clean.txt"), b"base clean\n").unwrap();
+    git(&["add", "."], root);
+    git(&["commit", "-m", "base"], root);
+
+    git(&["checkout", "-b", "side"], root);
+    std::fs::write(root.join("conflict.txt"), b"side c\n").unwrap();
+    git(&["add", "."], root);
+    git(&["commit", "-m", "side"], root);
+
+    git(&["checkout", "main"], root);
+    std::fs::write(root.join("conflict.txt"), b"main c\n").unwrap();
+    git(&["add", "."], root);
+    git(&["commit", "-m", "main"], root);
+
+    let _ = git_try(&["merge", "side"], root);
+
+    // Modify clean.txt
+    std::fs::write(root.join("clean.txt"), b"modified clean\n").unwrap();
+
+    // POST /api/git/test-repo/stage with mixed batch must fail
+    let req_stage = Request::builder()
+        .uri("/api/git/test-repo/stage")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "paths": ["clean.txt", "conflict.txt"]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res_stage = app.router.clone().oneshot(req_stage).await.unwrap();
+    assert_eq!(res_stage.status(), StatusCode::BAD_REQUEST);
+
+    // Verify clean.txt was NOT staged in index
+    let repo = git2::Repository::open(root).unwrap();
+    let index = repo.index().unwrap();
+    let clean_entry = index.get_path(Path::new("clean.txt"), 0).unwrap();
+    assert_eq!(clean_entry.file_size, 11, "clean.txt must remain unstaged (base size 11)");
+}

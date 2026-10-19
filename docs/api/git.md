@@ -2,7 +2,7 @@
 
 Git route and history-safety contracts moved from the [API reference index](../api-reference.md).
 Git routes are scoped to the configured project name and run inside the resolved project path.
-For unmerged conflict summaries and snapshots, see [Git Conflict Discovery & Snapshots](./rest-endpoints.md#git-conflict-discovery--snapshots).
+For unmerged conflict summaries, snapshots, safe resolution (`ResolveOutcome`), `GitMutationCoordinator`, and CUT1 generic stage preflight, see [Git Conflict Discovery, Snapshots & Resolution](./rest-endpoints.md#git-conflict-discovery--snapshots).
 
 When a project is not a Git repository, Git routes that require repository
 state return HTTP `409` with the standard error body
