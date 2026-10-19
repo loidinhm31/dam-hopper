@@ -59,6 +59,14 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Publish rewritten history only with an explicit confirmation and exact expected-OID lease. Ordinary push remains fast-forward-only.
 - Preserve final tree/index/working tree and required signature-loss consent. Never publish automatically after editing or squashing commits.
 
+### Git conflict discovery and snapshots
+
+- Conflict summary queries (`GET /api/git/{project}/conflicts`) return bounded unmerged index entries without eager blob or worktree file loading; pagination cursors validate target revisions and fail closed on stale cursors.
+- Conflict detail snapshots (`GET /api/git/{project}/conflicts/file`) enforce pre-allocation byte bounds before allocating blob memory (5 MiB per stage, 15 MiB aggregate across stages 1/2/3) and worktree read bounds (5 MiB). Tokenization bounds line counts (50,000 lines) and line lengths (100,000 bytes). Oversized files or custom filters withhold line tokens and mark stages `unsupported`.
+- Text splitting preserves line terminators losslessly (`\r\n`, `\n`, lone `\r`) without normalization or replacement characters.
+- Detail reads capture before/after state fingerprints (HEAD OID, full index entries, worktree attributes); detected state drift between before and after reads returns HTTP 409 `REFRESH_REQUIRED`.
+- Conflict resolution mutation requires structured precondition verification (`snapshotVersion`, `fullIndexFingerprint`); legacy resolution payloads (`{ path, content }`) fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
+
 ### Agent Status
 
 - Correlate terminal ID with PTY incarnation and fence updates with reporter epochs and leases.

@@ -72,6 +72,10 @@ pub enum AppError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("Conflict state changed during read; refresh required")]
+    ConflictStateChanged,
+    #[error("Legacy conflict resolver payload rejected")]
+    LegacyPayloadRejected,
     #[error(transparent)]
     AgentStatusIntegration(#[from] crate::agent_status::IntegrationError),
     #[error(transparent)]
@@ -170,6 +174,8 @@ impl AppError {
             AppError::Config(_) | AppError::InvalidInput(_) => 400,
             AppError::UnsupportedMediaType(_) => 415,
             AppError::Conflict(_) => 409,
+            AppError::ConflictStateChanged => 409,
+            AppError::LegacyPayloadRejected => 400,
             AppError::Fs(e) => e.status_code(),
             AppError::Unavailable(_) => 503,
             AppError::WorkspaceTarget(error) => match error {
@@ -205,6 +211,8 @@ impl AppError {
             AppError::GitUnavailable => Some("GIT_NOT_INITIALIZED"),
             AppError::WorktreeDirty(_) => Some("WORKTREE_DIRTY"),
             AppError::IdleSuspendHandoffInProgress(_) => Some("idleSuspendHandoffInProgress"),
+            AppError::ConflictStateChanged => Some("REFRESH_REQUIRED"),
+            AppError::LegacyPayloadRejected => Some("LEGACY_PAYLOAD_REJECTED"),
             AppError::WorkspaceTarget(error) => Some(match error {
                 WorkspaceTargetError::UnknownProject => "WORKSPACE_PROJECT_NOT_FOUND",
                 WorkspaceTargetError::UnregisteredTarget => "WORKSPACE_TARGET_UNREGISTERED",

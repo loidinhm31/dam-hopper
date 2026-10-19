@@ -20,7 +20,7 @@ use crate::git::vcs_roots::discover_vcs_roots;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn open_repo(path: &Path) -> Result<Repository, AppError> {
+pub(crate) fn open_repo(path: &Path) -> Result<Repository, AppError> {
     unsafe {
         let _ = git2::opts::set_verify_owner_validation(false);
     }

@@ -32,6 +32,7 @@ import {
 import { cn } from "@/lib/utils.js";
 import {
   useGitConflicts,
+  useGitConflictFile,
   useGitFileDiff,
   useGitResolve,
 } from "@/api/queries.js";
@@ -166,14 +167,20 @@ export function MergeConflictEditor({
 
   const { data: conflicts, isLoading: conflictsLoading } =
     useGitConflicts(targetRef);
+  const conflictEntry = conflicts?.entries?.find((c) => c.path === filePath);
+  const { data: snapshot, isLoading: snapshotLoading } = useGitConflictFile(
+    targetRef,
+    conflictEntry?.conflictId ?? "",
+  );
   const { data: fileDiff, isLoading: diffLoading } = useGitFileDiff(
     targetRef,
     filePath,
   );
   const resolveMutation = useGitResolve(targetRef);
 
-  const conflictFile = conflicts?.find((c) => c.path === filePath);
-
+  const conflictFile = conflictEntry;
+  const theirsText = snapshot?.stages?.theirs?.textTokens?.join("") ?? "";
+  const oursText = snapshot?.stages?.ours?.textTokens?.join("") ?? "";
   // Workdir content with conflict markers — from fileDiff.modified
   const workdirContent = fileDiff?.modified ?? "";
   const language = fileLanguage ?? fileDiff?.language ?? "plaintext";
@@ -464,7 +471,7 @@ export function MergeConflictEditor({
 
   // ── Loading / error states ───────────────────────────────────────────────────
 
-  const isLoading = conflictsLoading || diffLoading;
+  const isLoading = conflictsLoading || snapshotLoading || diffLoading;
 
   if (isLoading) {
     return (
@@ -655,7 +662,7 @@ export function MergeConflictEditor({
         <Editor
           height="100%"
           keepCurrentModel
-          value={conflictFile.theirs ?? ""}
+          value={theirsText}
           language={language}
           theme="vs-dark"
           options={{ ...editorOptions, readOnly: true }}
@@ -680,7 +687,7 @@ export function MergeConflictEditor({
         <Editor
           height="100%"
           keepCurrentModel
-          value={conflictFile.ours ?? ""}
+          value={oursText}
           language={language}
           theme="vs-dark"
           options={{ ...editorOptions, readOnly: true }}

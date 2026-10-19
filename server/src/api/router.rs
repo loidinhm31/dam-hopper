@@ -221,6 +221,10 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/git/{project}/conflicts",
             get(git_diff::list_conflicts),
         )
+        .route(
+            "/api/git/{project}/conflicts/file",
+            get(git_diff::get_conflict_file),
+        )
         .route("/api/git/{project}/resolve", post(git_diff::resolve))
         .route("/api/git/{project}/commit", post(git_diff::commit))
         .route("/api/git/{project}/squash", post(git::squash_commits_route))

@@ -8,7 +8,8 @@
 ## Overview
 
 - Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Status: Complete with accepted deferrals; safety gates remain open (2026-10-19).
+- Implementation: Complete with accepted deferrals. Review: Complete with user-accepted deferrals (cycle 3 changes requested with 6 gate warnings deferred). Progress: 100% (implementation); qualification gates remain open. Effort: unestimated.
 - Owner: backend discovery owner; integration owner controls shared Rust DTO/API edits.
 - Entry: Phase 01 passed with frozen single coordinated UI/server schema, byte/classification policy, supported conversions, measured web/Linux limits and repository identity rules; Windows-native client qualification remains separately Pending/nonblocking.
 - Handoff: bounded inventory and coherent on-demand detail usable by mutation and retained draft owners.
@@ -91,11 +92,11 @@ During phases 02–05 the changed API is not independently releasable; coordinat
 
 ## Todo list
 
-- [ ] Replace eager summary and define deterministic bounds/paging.
-- [ ] Preserve raw paths, modes, OIDs and all missing/content/type distinctions.
-- [ ] Implement coherent detail and operation/attribute/content fingerprint.
-- [ ] Enforce scope, response and materialization limits.
-- [ ] Add real-Git negative/race fixtures and DTO examples; require coordinated consumer cutover with legacy writes rejected, no fallback/shim.
+- [x] Replace eager summary and define deterministic bounds/paging.
+- [x] Preserve raw paths, modes, OIDs and all missing/content/type distinctions.
+- [x] Implement coherent detail and operation/attribute/content fingerprint.
+- [x] Enforce scope, response and materialization limits.
+- [x] Add real-Git negative/race fixtures and DTO examples; require coordinated consumer cutover with legacy writes rejected, no fallback/shim.
 
 ## Success criteria
 
@@ -125,7 +126,18 @@ Bound input identifiers and output content; safe UI labels must be escaped, not 
 Pass frozen summary/detail fixtures and precondition composition to [Phase 03](./phase-03-safe-resolution-and-staging.md).
 Pass owner/root identity and read outcomes to Phase 05; no writable UI until mutation and client cutover agree.
 
+## Deferred items to subsequent phases
+
+User approved proceeding from cycle-3 code review (`plans/reports/code-reviewer-261019-2332-phase-02-conflict-discovery-snapshots-cycle3.md`) with the following items deferred to Phase 03 and Phase 05:
+
+- **W1 (High, AC6/AC7) — Read error status mapping (Deferred to Phase 03):** Handle final component, `File::open`, and blob errors per-descriptor rather than collapsing to HTTP 5xx/4xx. Worktree files with mode 000 should yield `WorktreeKind::Unreadable`; dangling symlinks or escaping symlinks should yield `WorktreeKind::Symlink`/`Unsupported` without failing in `verify_safe_worktree_path`; blob read failures should produce `StageKind::ReadError`; backslash-prefixed paths should be handled consistently (reject backslash only on Windows or mark Unsupported in summary).
+- **W2 (High, AC8) — Attribute and content coherence (Deferred to Phase 03):** Include effective attributes and config in the before/after `StateFingerprint` comparison window (detect mid-read `.gitattributes` or config modifications) for both the discovery/detail snapshot window and mutation revalidation; re-hash worktree bytes (or re-stat + hash) across the read window to detect same-size same-mtime edits on coarse-mtime filesystems; hash symlink targets.
+- **W3 (High, gate) — Conversion policy gating (Deferred to Phase 03):** Expand conversion policy inspection beyond `eol`/`working-tree-encoding`/`ident`/`filter` to cover `text`, `crlf`, `binary`, `diff`, `merge`, `core.autocrlf`, `core.eol`, `core.safecrlf`. Explicitly gate `ident=true` ($Id$) and `working-tree-encoding` to return unsupported before mutation.
+- **W4 (Med-High) — Operation roles and limits in DTO (Deferred to Phase 03 / Phase 05):** Enhance the conflict snapshot DTO to explicitly include `operation`, `targetRevision`, contextual `roles` (ours/theirs derived from operation context rather than unconditional labels), and `limits` fields required for mutation and retained draft lifecycle.
+- **W6 (Med) — Offset pagination cursor stability (Deferred to Phase 03 / Phase 05):** Server cursor contract must bind to the last raw path/hash of the unmerged set rather than HEAD + offset, with explicit stale-cursor rejection/restart semantics, ensuring resolving conflicts mid-operation does not cause subsequent entries to be skipped in client pagination.
+- **W7 (Med) — Legacy code retirement (Deferred to Phase 03 / Phase 05 / Phase 08):** Retire legacy helpers `diff.rs::get_conflicts`, `read_blob_utf8`, `resolve_conflict`, Rust `ConflictFile` (in `types.rs`/`mod.rs`), UI `ConflictFile` (in `client.ts`), and legacy tests as part of the coordinated clean cutover once mutation callers migrate.
+- **W12 (Low) — UI query and pane binding (Deferred to Phase 05):** Pass explicit `root` parameter to conflict queries, handle multi-page inventory lookup in editor, bind result pane to conflict drafts rather than `useGitFileDiff`, and replace fail-closed `useGitResolve` with Phase 03 preconditioned apply service.
+
 ## Unresolved questions
 
-- Backend discovery owner: exact coherent-read/hash and attribute fingerprint implementation; run step 8 controlled races, retain before/after evidence, stop mutation integration if any mixed snapshot is accepted.
-- Integration owner: measured paging/materialization limits from Phase 01's required web/Linux scope; run boundary/over-bound scenarios, publish reachable inventory evidence, stop coordinated API release without deterministic completeness semantics. Separately Pending Windows-native client evidence does not block this handoff or waive server safety.
+Phase 02 is administratively closed with accepted deferred findings recorded for resolution in downstream phases; coherent-snapshot (AC8), conversion gating, and inventory-completeness gates remain open. Writable integration and release qualification remain blocked pending their remediation in Phases 03 and 05.

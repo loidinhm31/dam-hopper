@@ -13,7 +13,55 @@ vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
 
 vi.mock("@/api/queries.js", () => ({
   useGitConflicts: () => ({
-    data: [{ path: "src/conflict.ts", ours: "ours", theirs: "theirs" }],
+    data: {
+      targetRevision: "main",
+      entries: [
+        {
+          conflictId: "cid_1",
+          path: "src/conflict.ts",
+          status: "bothModified",
+          isBinary: false,
+        },
+      ],
+      truncated: false,
+    },
+    isLoading: false,
+  }),
+  useGitConflictFile: () => ({
+    data: {
+      conflictId: "cid_1",
+      path: "src/conflict.ts",
+      snapshotVersion: "ver1",
+      fullIndexFingerprint: "idx1",
+      stages: {
+        ours: {
+          stage: 2,
+          mode: 0o100644,
+          byteSize: 4,
+          kind: "text",
+          textTokens: ["ours\n"],
+        },
+        theirs: {
+          stage: 3,
+          mode: 0o100644,
+          byteSize: 6,
+          kind: "text",
+          textTokens: ["theirs\n"],
+        },
+      },
+      worktree: {
+        exists: true,
+        kind: "regular",
+        mode: 0o100644,
+        byteLength: 40,
+        hasConflictMarkers: true,
+        isDirtyVsStages: true,
+      },
+      effectiveAttributes: {
+        ident: false,
+        filterQualified: true,
+      },
+    },
     isLoading: false,
   }),
   useGitFileDiff: () => ({

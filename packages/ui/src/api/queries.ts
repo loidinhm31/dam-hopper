@@ -35,7 +35,8 @@ import type {
   DiffFileEntry,
   GitDiffResult,
   FileDiffContent,
-  ConflictFile,
+  ConflictSnapshot,
+  ConflictSummaryResponse,
   ResetMode,
   UiConfig,
   UsageSettingsPatch,
@@ -1399,14 +1400,37 @@ export function useGitCommitDetails(
   });
 }
 
-export function useGitConflicts(target: ProjectTargetInput, root?: string) {
+export function useGitConflicts(
+  target: ProjectTargetInput,
+  root?: string,
+  cursor?: string,
+  limit?: number,
+) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
   const rootKey = gitRootKey(root);
-  return useQuery<ConflictFile[]>({
-    queryKey: gitQueryKey("git-conflicts", normalized, rootKey),
-    queryFn: () => getBoundApiClient(owner).git.conflicts(normalized, root),
+  return useQuery<ConflictSummaryResponse>({
+    queryKey: gitQueryKey("git-conflicts", normalized, rootKey, cursor, limit),
+    queryFn: () =>
+      getBoundApiClient(owner).git.conflicts(normalized, root, cursor, limit),
     enabled: !!normalized.project,
+    staleTime: 0,
+  });
+}
+
+export function useGitConflictFile(
+  target: ProjectTargetInput,
+  conflictId: string,
+  root?: string,
+) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  const rootKey = gitRootKey(root);
+  return useQuery<ConflictSnapshot>({
+    queryKey: gitQueryKey("git-conflict-file", normalized, rootKey, conflictId),
+    queryFn: () =>
+      getBoundApiClient(owner).git.conflictFile(normalized, conflictId, root),
+    enabled: !!normalized.project && !!conflictId,
     staleTime: 0,
   });
 }

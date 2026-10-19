@@ -9,6 +9,7 @@ use crate::git::diff::{
     commit_files, discard_file, discard_hunk, get_conflicts, get_diff_files, get_file_diff,
     stage_files, unstage_files,
 };
+use crate::git::get_conflicts_summary;
 use crate::git::repository::{
     checkout_branch, cherry_pick, create_branch, delete_branch, get_log, get_status, list_branches,
     push, reset_to_commit, undo_last_commit, update_branch,
@@ -1407,6 +1408,9 @@ fn conflicts_empty_when_no_merge() {
     let repo = make_temp_repo();
     let conflicts = get_conflicts(repo.path()).unwrap();
     assert!(conflicts.is_empty());
+    let summary = get_conflicts_summary(repo.path(), None, None).unwrap();
+    assert!(summary.entries.is_empty());
+    assert!(!summary.truncated);
 }
 
 #[tokio::test]

@@ -2447,6 +2447,91 @@ export interface ConflictFile {
   theirs?: string;
 }
 
+export type ConflictStatus =
+  | "bothModified"
+  | "modifyDelete"
+  | "deleteModify"
+  | "bothAdded"
+  | "unsupported";
+
+export type StageKind =
+  | "text"
+  | "binary"
+  | "missing"
+  | "invalidEncoding"
+  | "unsupported"
+  | "readError";
+
+export type WorktreeKind =
+  | "regular"
+  | "symlink"
+  | "directory"
+  | "gitlink"
+  | "unreadable"
+  | "missing";
+
+export interface ConflictSummaryEntry {
+  conflictId: string;
+  path: string;
+  status: ConflictStatus;
+  isBinary: boolean;
+  unsupportedReason?: string;
+}
+
+export interface ConflictSummaryResponse {
+  targetRevision: string;
+  entries: ConflictSummaryEntry[];
+  truncated: boolean;
+  nextCursor?: string;
+}
+
+export interface StageDescriptor {
+  stage: 1 | 2 | 3;
+  path?: string;
+  oid?: string;
+  mode: number;
+  byteSize: number;
+  kind: StageKind;
+  textTokens?: string[];
+}
+
+export interface WorktreeDescriptor {
+  exists: boolean;
+  kind: WorktreeKind;
+  mode: number;
+  byteLength: number;
+  textTokens?: string[];
+  hasConflictMarkers: boolean;
+  isDirtyVsStages: boolean;
+}
+
+export interface EffectiveAttributes {
+  eol?: "lf" | "crlf" | "native";
+  encoding?: string;
+  ident: boolean;
+  filterQualified: boolean;
+}
+
+export interface ConflictStages {
+  base?: StageDescriptor;
+  ours: StageDescriptor;
+  theirs: StageDescriptor;
+}
+
+export interface ConflictSnapshot {
+  conflictId: string;
+  path: string;
+  repositoryRoot: string;
+  worktreeRoot: string;
+  snapshotVersion: string;
+  fullIndexFingerprint: string;
+  status: ConflictStatus;
+  unsupportedReason?: string;
+  stages: ConflictStages;
+  worktree: WorktreeDescriptor;
+  effectiveAttributes: EffectiveAttributes;
+}
+
 export interface GitBlameInput {
   path: string;
   content: string;
@@ -2758,9 +2843,26 @@ export function createApiClient(
           hunkIndex,
           root,
         }),
-      conflicts: (target: ProjectTargetInput, root?: string) =>
-        transport.invoke<ConflictFile[]>("git:conflicts", {
+      conflicts: (
+        target: ProjectTargetInput,
+        root?: string,
+        cursor?: string,
+        limit?: number,
+      ) =>
+        transport.invoke<ConflictSummaryResponse>("git:conflicts", {
           ...toWireTarget(target),
+          root,
+          cursor,
+          limit,
+        }),
+      conflictFile: (
+        target: ProjectTargetInput,
+        conflictId: string,
+        root?: string,
+      ) =>
+        transport.invoke<ConflictSnapshot>("git:conflictFile", {
+          ...toWireTarget(target),
+          conflictId,
           root,
         }),
       resolve: (
@@ -3683,7 +3785,14 @@ export interface ApiClient {
     conflicts: (
       target: ProjectTargetInput,
       root?: string,
-    ) => Promise<ConflictFile[]>;
+      cursor?: string,
+      limit?: number,
+    ) => Promise<ConflictSummaryResponse>;
+    conflictFile: (
+      target: ProjectTargetInput,
+      conflictId: string,
+      root?: string,
+    ) => Promise<ConflictSnapshot>;
     resolve: (
       target: ProjectTargetInput,
       path: string,

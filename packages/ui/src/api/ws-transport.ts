@@ -1028,14 +1028,35 @@ function channelToEndpoint(
         project: string;
         worktreePath?: string;
         root?: string;
+        cursor?: string;
+        limit?: number;
       };
       const params = new URLSearchParams();
       setWorktreePath(params, d);
       if (d.root) params.set("root", d.root);
+      if (d.cursor) params.set("cursor", d.cursor);
+      if (d.limit != null) params.set("limit", String(d.limit));
       const qs = params.toString();
       return {
         method: "GET",
         url: `/api/git/${encodeURIComponent(d.project)}/conflicts${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:conflictFile": {
+      const d = data as {
+        project: string;
+        conflictId: string;
+        worktreePath?: string;
+        root?: string;
+      };
+      const params = new URLSearchParams();
+      setWorktreePath(params, d);
+      params.set("conflictId", d.conflictId);
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/conflicts/file${qs ? `?${qs}` : ""}`,
       };
     }
     case "git:resolve": {

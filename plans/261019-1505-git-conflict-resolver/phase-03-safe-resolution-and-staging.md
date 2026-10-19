@@ -10,7 +10,7 @@
 - Date: 2026-10-19. Priority: P2.
 - Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
 - Owner: backend mutation owner; integration lead owns cross-writer coordination and public cutover.
-- Entry: Phase 02 coherent snapshots and Phase 01 exact-side/conversion/path/locking proofs passed.
+- Entry: Phase 02 discovery and snapshot endpoints delivered with accepted deferrals; coherent-snapshot (AC8), conversion gating, and descriptor read error (AC6/AC7) gates remain open and must be remediated in Phase 03 alongside mutation safety. Phase 01 exact-side/conversion/path/locking proofs passed.
 - Handoff: typed preconditioned Apply & stage service, generic-stage rejection and truthful mutation facts.
 - Go/no-go: exact intended path/index result with unrelated entries preserved; no permissive legacy resolver survives.
 
@@ -22,6 +22,14 @@
 - A preexisting index.lock normally proves busy-before-write; it does not prove the required later stage-failure branch.
 - Generic stage endpoint must enforce conflicts itself; disabled row controls are insufficient.
 
+
+### Incoming deferred items from Phase 02
+
+- **W1 (read error status mapping):** Ensure per-descriptor read errors, unreadable worktrees (`WorktreeKind::Unreadable`), dangling symlinks (`WorktreeKind::Symlink`), and blob read errors (`StageKind::ReadError`) do not fail snapshot or mutation preflights with generic 5xx/4xx.
+- **W2 (attribute and content coherence):** Expand `StateFingerprint` to include effective attributes and config before and after read, covering both the discovery/detail snapshot window and mutation revalidation; re-hash worktree bytes across the window to detect coarse-mtime races.
+- **W3 (ident/encoding gating):** Enforce unsupported before mutation for `ident=true`, `working-tree-encoding`, and non-default autocrlf policies.
+- **W4 (operation roles/limits):** Bind mutation preconditions to explicit operation, targetRevision, and role definitions.
+- **W7 (legacy code retirement):** Retire legacy resolver functions (`diff.rs::get_conflicts`, `read_blob_utf8`, `resolve_conflict`) and DTOs during coordinated mutation cutover.
 ## Requirements
 
 ### Functional

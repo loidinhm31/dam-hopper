@@ -10,7 +10,7 @@
 - Date: 2026-10-19. Priority: P2.
 - Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
 - Owner: scoped client/draft owner; integration lead serializes shared API/query/WorkspacePage edits.
-- Entry: Phase 02–04 contracts and Phase 01 retained model/history/budget decisions passed.
+- Entry: Phase 02–04 contracts and Phase 01 retained model/history/budget decisions passed. Incoming deferred items from Phase 02 (W4, W6, W7, W12) addressed here for client draft lifecycle, role mapping, cursor paging, and legacy DTO cutover.
 - Handoff: one typed wire projection and workspace-owned memory-only drafts surviving shell/target/file visibility changes.
 - Go/no-go: old-owner bytes cannot reach a replacement server/root, and no callback or capacity policy silently destroys dirty work.
 
@@ -22,6 +22,13 @@
 - beforeunload is best effort, not durable storage; explicit no-crash/reload guarantee must be honest.
 - An apply response describes the submitted revision, not whatever the user typed while it was in flight.
 
+
+### Incoming deferred items from Phase 02
+
+- **W4 (operation roles and limits):** Consume explicit operation, targetRevision, contextual roles, and limits in client drafts and UI model.
+- **W6 (offset pagination cursor stability):** Integrate with server stable cursor (anchored to last raw path/hash of unmerged set) and handle stale-cursor refresh/restart semantics in client pagination to prevent skipping when index shrinks.
+- **W7 (legacy code retirement):** Remove legacy UI DTO `ConflictFile` (`packages/ui/src/api/client.ts`) and legacy endpoints as part of coordinated cutover.
+- **W12 (UI query and pane binding):** Pass explicit `root` to conflict queries, handle multi-page inventory lookup in editor, bind result pane to conflict drafts rather than `useGitFileDiff`, and replace fail-closed `useGitResolve` with Phase 03 preconditioned apply service.
 ## Requirements
 
 ### Functional

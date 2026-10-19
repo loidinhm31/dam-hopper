@@ -3,6 +3,7 @@ pub mod blame;
 pub mod blame_cache;
 pub mod bulk;
 pub mod cli_fallback;
+pub mod conflict;
 pub mod commit_details;
 pub mod commit_file_ops;
 pub mod commit_message_rewrite;
@@ -27,6 +28,7 @@ pub use commit_file_ops::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
 };
 pub use commit_message_rewrite::{edit_commit_message, get_commit_message, CommitMessageSnapshot};
+pub use conflict::{get_conflict_snapshot, get_conflicts_summary};
 pub use diff::{
     commit_files, discard_file, discard_hunk, get_commit_file_diff, get_commit_files,
     get_conflicts, get_diff_files, get_file_diff, get_untracked_page, resolve_conflict,
@@ -40,12 +42,14 @@ pub use repository::{
 };
 pub use squash_commits::squash_commits;
 pub use types::{
-    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, DiffFileEntry, DiffResponse,
-    FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry, GitOperation,
-    GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation, GitRecoveryState,
-    GitStatus, HunkInfo, PublishBlockReason, PublishPreview, PublishResult, PublishResultStatus,
-    PublishSnapshot, ResetMode, SubmoduleGitlinkInfo, VcsRoot, VcsRootKind, VcsRootMappingState,
-    Worktree, WorktreeAddOptions, UNTRACKED_PAGE_SIZE,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictFile, ConflictSnapshot,
+    ConflictStages, ConflictStatus, ConflictSummaryEntry, ConflictSummaryResponse, DiffFileEntry,
+    DiffResponse, EffectiveAttributes, FileDiffContent, GitActionResult, GitBlockReason,
+    GitLogEntry, GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase,
+    GitRecoveryOperation, GitRecoveryState, GitStatus, HunkInfo, PublishBlockReason, PublishPreview,
+    PublishResult, PublishResultStatus, PublishSnapshot, ResetMode, StageDescriptor, StageKind,
+    SubmoduleGitlinkInfo, VcsRoot, VcsRootKind, VcsRootMappingState, Worktree, WorktreeAddOptions,
+    WorktreeDescriptor, WorktreeKind, UNTRACKED_PAGE_SIZE,
 };
 pub use vcs_roots::{
     discover_available_vcs_roots, discover_vcs_roots, resolve_git_path_root,

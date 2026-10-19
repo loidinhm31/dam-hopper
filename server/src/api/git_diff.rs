@@ -238,52 +238,66 @@ pub async fn discard_hunk(
 // GET /api/git/{project}/conflicts
 // ---------------------------------------------------------------------------
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictsSummaryQuery {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+}
+
 pub async fn list_conflicts(
     State(state): State<AppState>,
     Path(project): Path<String>,
-    Query(q): Query<RootQuery>,
+    Query(q): Query<ConflictsSummaryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_target_path(&state, &project, q.worktree_path).await?;
-    let conflicts = tokio::task::spawn_blocking(move || {
+    let summary = tokio::task::spawn_blocking(move || {
         let root = resolve_git_request_root(&path, q.root.as_deref())?;
-        git::get_conflicts(&root.root_path)
+        git::get_conflicts_summary(&root.root_path, q.cursor.as_deref(), q.limit)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
     .map_err(ApiError::from_app)?;
-    Ok(Json(conflicts))
+    Ok(Json(summary))
 }
-
-// ---------------------------------------------------------------------------
-// POST /api/git/{project}/resolve  — { path: string, content: string }
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolveBody {
-    pub path: String,
-    pub content: String,
+pub struct ConflictFileQuery {
+    pub conflict_id: String,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
-pub async fn resolve(
+pub async fn get_conflict_file(
     State(state): State<AppState>,
     Path(project): Path<String>,
-    Json(body): Json<ResolveBody>,
+    Query(q): Query<ConflictFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
-    let rel = body.path;
-    let content = body.content;
-    let root = body.root;
-    tokio::task::spawn_blocking(move || {
-        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
-        git::resolve_conflict(&root.root_path, &paths[0], &content)
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
+    let snapshot = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        git::get_conflict_snapshot(&root.root_path, &q.conflict_id)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
     .map_err(ApiError::from_app)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(snapshot))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/{project}/resolve  — fails closed for legacy payloads
+// ---------------------------------------------------------------------------
+
+pub async fn resolve(
+    State(_state): State<AppState>,
+    Path(_project): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    Err::<(), ApiError>(ApiError::from_app(
+        crate::error::AppError::LegacyPayloadRejected,
+    ))
 }
 
 // ---------------------------------------------------------------------------

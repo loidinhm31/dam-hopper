@@ -30,7 +30,7 @@ See the [idle-suspend API reference](./api/idle-suspend.md). Automatic policy, t
 
 ## Git API
 
-See the [Git endpoint reference](./api/git.md). Commit rewriting and squash are local CAS-protected operations; publication is a separate exact-OID leased action.
+See the [Git endpoint reference](./api/git.md). Commit rewriting and squash are local CAS-protected operations; publication is a separate exact-OID leased action. For unmerged index summaries and on-demand conflict snapshots, see [Git Conflict Discovery & Snapshots](./api/rest-endpoints.md#git-conflict-discovery--snapshots).
 
 ## Project Worktree Targets
 
@@ -47,8 +47,7 @@ The [Git API reference](./api/git.md#commit-history) documents full-message lite
 
 ## Git Operations
 
-The [REST endpoint reference](./api/rest-endpoints.md#git-operations) documents ordinary fast-forward pushes and explicit leased publication.
-
+The [REST endpoint reference](./api/rest-endpoints.md#git-operations) documents ordinary fast-forward pushes, explicit leased publication, and [Git conflict discovery & snapshots](./api/rest-endpoints.md#git-conflict-discovery--snapshots).
 ## IDE File Explorer
 
 See [filesystem and media APIs](./api/filesystem-and-media.md).

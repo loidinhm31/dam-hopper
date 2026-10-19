@@ -430,6 +430,124 @@ pub struct ConflictFile {
     pub theirs: Option<String>,
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictStatus {
+    BothModified,
+    ModifyDelete,
+    DeleteModify,
+    BothAdded,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictSummaryEntry {
+    pub conflict_id: String,
+    pub path: String,
+    pub status: ConflictStatus,
+    pub is_binary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictSummaryResponse {
+    pub target_revision: String,
+    pub entries: Vec<ConflictSummaryEntry>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StageKind {
+    Text,
+    Binary,
+    Missing,
+    InvalidEncoding,
+    Unsupported,
+    ReadError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageDescriptor {
+    pub stage: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oid: Option<String>,
+    pub mode: u32,
+    pub byte_size: u64,
+    pub kind: StageKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_tokens: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeKind {
+    Regular,
+    Symlink,
+    Directory,
+    Gitlink,
+    Unreadable,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeDescriptor {
+    pub exists: bool,
+    pub kind: WorktreeKind,
+    pub mode: u32,
+    pub byte_length: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_tokens: Option<Vec<String>>,
+    pub has_conflict_markers: bool,
+    pub is_dirty_vs_stages: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveAttributes {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    pub ident: bool,
+    pub filter_qualified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictStages {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<StageDescriptor>,
+    pub ours: StageDescriptor,
+    pub theirs: StageDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictSnapshot {
+    pub conflict_id: String,
+    pub path: String,
+    pub repository_root: String,
+    pub worktree_root: String,
+    pub snapshot_version: String,
+    pub full_index_fingerprint: String,
+    pub status: ConflictStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
+    pub stages: ConflictStages,
+    pub worktree: WorktreeDescriptor,
+    pub effective_attributes: EffectiveAttributes,
+}
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

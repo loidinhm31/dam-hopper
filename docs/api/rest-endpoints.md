@@ -402,15 +402,120 @@ Discard single hunk from file.
 
 Body: `{ path: string, hunkIndex: number, root?: string }`
 
-**GET /api/git/:project/conflicts**
-List conflicted files with 3-way merge content.
+<a id="git-conflict-discovery--snapshots"></a>
+### Git Conflict Discovery & Snapshots
 
-Optional query: `root=ID` for root-scoped conflict discovery.
+**GET /api/git/{project}/conflicts**
+Bounded deterministic summary of unmerged index entries without eager stage blob or worktree file loading.
 
-**POST /api/git/:project/resolve**
-Resolve merge conflict.
+Query parameters:
+- `worktreePath` (optional string): Absolute path to a registered Git worktree. When omitted or `null`, defaults to the configured project root.
+- `root` (optional string): Explicit VCS root identifier for multi-root projects.
+- `cursor` (optional string): Opaque pagination cursor returned from a previous response (`nextCursor`). Stale cursors (where the repository target revision drifted) are rejected with HTTP 400.
+- `limit` (optional integer): Maximum conflict entries per page (clamped between 1 and 500, default 100).
 
-Body: `{ path: string, content: string, root?: string }`
+Response (`ConflictSummaryResponse`):
+```json
+{
+  "targetRevision": "0123456789abcdef0123456789abcdef01234567",
+  "entries": [
+    {
+      "conflictId": "cid_7372632f636f6e666c6963742e7273",
+      "path": "src/conflict.rs",
+      "status": "bothModified",
+      "isBinary": false
+    }
+  ],
+  "truncated": false
+}
+```
+
+Fields and behaviors:
+- `conflictId`: Opaque URL-safe server identifier representing the raw unmerged path bytes. Clients must pass this identifier unchanged to detail queries.
+- `status`: Unmerged conflict state enum: `bothModified`, `modifyDelete`, `deleteModify`, `bothAdded`, or `unsupported`.
+- `isBinary`: Binary file detection combining gitattributes `diff` configuration, known binary file extensions, and bounded ODB sniffing ($\le$ 8,000 bytes) without loading all stage blobs or reading worktree files.
+- `unsupportedReason`: Present when path cannot be safely edited in the browser (e.g. non-UTF-8 path bytes, submodules/gitlinks, or symbolic links); omitted when `None`.
+- `truncated`: `true` when more conflict entries exist beyond the returned page limit.
+- `nextCursor`: Opaque cursor for fetching subsequent pages; omitted when `None`.
+
+**GET /api/git/{project}/conflicts/file**
+Coherent on-demand detail snapshot for a single conflict, including stage blobs, worktree metadata, effective gitattributes, and before/after coherence verification.
+
+Query parameters:
+- `conflictId` (required string): Opaque conflict identifier issued by `GET /api/git/{project}/conflicts` (max 4096 bytes).
+- `worktreePath` (optional string): Absolute path to a registered Git worktree. When omitted or `null`, defaults to the configured project root.
+- `root` (optional string): Explicit VCS root identifier.
+
+Response (`ConflictSnapshot`):
+```json
+{
+  "conflictId": "cid_7372632f636f6e666c6963742e7273",
+  "path": "src/conflict.rs",
+  "repositoryRoot": "/path/to/repo",
+  "worktreeRoot": "/path/to/repo",
+  "snapshotVersion": "6f2d8e41a3...",
+  "fullIndexFingerprint": "9c1b7a2e5d...",
+  "status": "bothModified",
+  "stages": {
+    "base": {
+      "stage": 1,
+      "path": "src/conflict.rs",
+      "oid": "1111111111222222222233333333334444444444",
+      "mode": 33188,
+      "byteSize": 24,
+      "kind": "text",
+      "textTokens": ["base line 1\n", "base line 2\n"]
+    },
+    "ours": {
+      "stage": 2,
+      "path": "src/conflict.rs",
+      "oid": "5555555555666666666677777777778888888888",
+      "mode": 33188,
+      "byteSize": 22,
+      "kind": "text",
+      "textTokens": ["our line 1\n", "our line 2\n"]
+    },
+    "theirs": {
+      "stage": 3,
+      "path": "src/conflict.rs",
+      "oid": "9999999999aaaaaaaaaabbbbbbbbbbcccccccccc",
+      "mode": 33188,
+      "byteSize": 24,
+      "kind": "text",
+      "textTokens": ["their line 1\n", "their line 2\n"]
+    }
+  },
+  "worktree": {
+    "exists": true,
+    "kind": "regular",
+    "mode": 33188,
+    "byteLength": 60,
+    "textTokens": ["<<<<<<< HEAD\n", "our line 1\n", "=======\n", "their line 1\n", ">>>>>>> branch\n"],
+    "hasConflictMarkers": true,
+    "isDirtyVsStages": true
+  },
+  "effectiveAttributes": {
+    "eol": "lf",
+    "ident": false,
+    "filterQualified": true
+  }
+}
+```
+
+Pre-allocation bounds, classification, and failure semantics:
+- **Pre-allocation stage limits:** Before allocating blob memory, object headers are inspected in the Git ODB via `read_header`. A stage blob exceeding `MAX_STAGE_BYTES` (5 MiB) or cumulative stage bytes exceeding `MAX_TOTAL_STAGE_BYTES` (15 MiB combined across stages 1, 2, 3) marks the stage `kind: "unsupported"` and its `textTokens` is withheld (omitted from serialized JSON).
+- **Worktree file limits:** Worktree file reading is capped at `MAX_WORKTREE_BYTES` (5 MiB). Files exceeding this bound retain `kind: "regular"`, set `isDirtyVsStages: true`, and withhold `textTokens` (omitted from serialized JSON).
+- **Bounded line tokenization:** UTF-8 text is tokenized into line tokens preserving raw terminators (`\n`, `\r\n`, or lone `\r`) such that `textTokens.join("") == content`. Tokenization enforces limits of `MAX_LINES` (50,000 lines) and `MAX_LINE_LENGTH` (100,000 bytes); exceeding either during tokenization marks the stage `kind: "unsupported"` and withholds `textTokens`.
+- **Stage classifications (`kind`):** `text`, `binary` (detected via NUL byte sniff in initial 8,000 bytes), `missing` (stage absent from index; `path` and `oid` are omitted), `invalidEncoding` (non-UTF-8 text bytes), `unsupported` (gitlink, symlink, limits exceeded, or custom filter), or `readError`. When ancestor stage 1 is absent (e.g. `bothAdded`), `stages.base` is omitted from the serialized object.
+- **Worktree classifications (`kind`):** `regular`, `symlink`, `directory`, `gitlink`, `unreadable`, or `missing`. `hasConflictMarkers` detects standard `<<<<<<<` and `>>>>>>>` markers.
+- **Filter qualification:** When custom Git filters are configured, `effectiveAttributes.filterQualified` is `false`. To prevent data loss from unapplied filters, text tokens are withheld from all stages and the worktree, and stage kinds are marked `unsupported`.
+- **Coherence verification (HTTP 409 `REFRESH_REQUIRED`):** Before and after reading stages and worktree, the server captures a fingerprint encompassing HEAD target OID, full index entries, and worktree file attributes. If detected repository or worktree state drifts during reading, the request fails with HTTP 409 and error code `REFRESH_REQUIRED`.
+- **Unknown conflict ID (HTTP 404):** Returns HTTP 404 if the requested `conflictId` is absent from the unmerged index.
+**POST /api/git/{project}/resolve**
+Merge conflict resolution endpoint.
+
+*Current Implementation Status (Phase 02):*
+Fails closed for all requests with HTTP 400 and error code `LEGACY_PAYLOAD_REJECTED`. The legacy payload format (`{ path, content }`) is retired, and mutation requires precondition verification (`snapshotVersion`, `fullIndexFingerprint`, and structured action) scheduled for Phase 03.
 
 **POST /api/git/:project/commit**
 Create a commit from staged files.
@@ -591,50 +696,4 @@ No client query cache is persisted to localStorage. The fresh-state reset
 removes allowlisted legacy browser-resource records, never calls
 `localStorage.clear()`, preserves profiles/auth/server data, and rejects
 unqualified `project`/`session` links that lack `profileId`.
-
-**POST /api/git/:project/stage**
-Stage files for commit.
-
-Body: `{ paths: string[], root?: string }`
-
-**POST /api/git/:project/unstage**
-Unstage files.
-
-Body: `{ paths: string[], root?: string }`
-
-**POST /api/git/:project/discard**
-Discard changes to file (restore from HEAD).
-
-Body: `{ path: string, root?: string }`
-
-**POST /api/git/:project/discard-hunk**
-Discard single hunk from file.
-
-Body: `{ path: string, hunkIndex: number, root?: string }`
-
-**GET /api/git/:project/conflicts**
-List conflicted files with 3-way merge content.
-
-Optional query: `root=ID`.
-
-Response:
-
-```json
-{
-  "conflicts": [
-    {
-      "path": "src/conflict.rs",
-      "ancestor": "...",
-      "ours": "...",
-      "theirs": "..."
-    }
-  ]
-}
-```
-
-**POST /api/git/:project/resolve**
-Resolve merge conflict.
-
-Body: `{ path: string, content: string, root?: string }`
-
 
