@@ -176,6 +176,9 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/api/queries.js", () => ({
+  invalidateGitProjectQueries: vi.fn(),
+  useGitExecuteOperation: () => ({ mutateAsync: vi.fn() }),
+  useGitOperationStatus: () => ({ data: undefined, isLoading: false }),
   useExportDiagnostics: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useProjects: () => ({ data: projectList, isLoading: false }),
   useProject: () => ({ data: testState.project, isLoading: false }),
@@ -593,7 +596,9 @@ vi.mock("@/components/atoms/Button.js", () => ({
 }));
 vi.mock("@/components/ui/Select.js", () => ({
   Select: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  SelectGroup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectGroup: ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  ),
   SelectContent: ({ children }: { children?: ReactNode }) => (
     <div>{children}</div>
   ),
@@ -604,7 +609,9 @@ vi.mock("@/components/ui/Select.js", () => ({
   SelectValue: ({ children }: { children?: ReactNode }) => (
     <div>{children}</div>
   ),
-  SelectLabel: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SelectLabel: ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  ),
   SelectSeparator: () => <div />,
   SelectScrollUpButton: () => <div />,
   SelectScrollDownButton: () => <div />,
@@ -865,7 +872,10 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
     ).toBeUndefined();
 
     // Reinstall the on-disk state as a freshly loaded tab would have
-    window.localStorage.setItem("dam-hopper:project-target-state", capturedBytes);
+    window.localStorage.setItem(
+      "dam-hopper:project-target-state",
+      capturedBytes,
+    );
 
     // Rehydrate store from localStorage on startup
     await useProjectTargetStore.persist.rehydrate();
@@ -959,14 +969,18 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
 
     // Unavailable target notice is rendered
     expect(
-      page.getByText(/Worktree \/workspace\/project-1-deleted-worktree is unavailable/i),
+      page.getByText(
+        /Worktree \/workspace\/project-1-deleted-worktree is unavailable/i,
+      ),
     ).toBeTruthy();
 
     // Store and storage demote target to root (absence)
     expect(
       useProjectTargetStore.getState().activeTargetByProject[PROJECT],
     ).toBeUndefined();
-    const updatedStorage = window.localStorage.getItem("dam-hopper:project-target-state");
+    const updatedStorage = window.localStorage.getItem(
+      "dam-hopper:project-target-state",
+    );
     if (updatedStorage) {
       const parsed = JSON.parse(updatedStorage);
       expect(parsed.state.activeTargetByProject[PROJECT]).toBeUndefined();

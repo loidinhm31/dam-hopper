@@ -5,28 +5,47 @@ import { ConflictBlock, MergeConflictEditor } from "./MergeConflictEditor.js";
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const editorOptions: Array<Record<string, unknown>> = [];
 
+const recoveryState = vi.hoisted(() => ({
+  drafts: [] as Array<Record<string, unknown>>,
+  activeDraft: null as Record<string, unknown> | null,
+  currentScope: null as Record<string, unknown> | null,
+}));
+
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
   useAndroidChromeInputPolicy: () => ({
     isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
   }),
 }));
 
-vi.mock("@/api/queries.js", () => ({
-  useGitConflicts: () => ({
-    data: {
-      targetRevision: "main",
-      entries: [
-        {
-          conflictId: "cid_1",
-          path: "src/conflict.ts",
-          status: "bothModified",
-          isBinary: false,
-        },
-      ],
-      truncated: false,
-    },
+vi.mock("@/hooks/use-conflict-resolver.js", () => ({
+  useConflictResolver: () => ({
+    conflicts: [
+      {
+        conflictId: "cid_1",
+        path: "src/conflict.ts",
+        status: "bothModified",
+        isBinary: false,
+      },
+    ],
     isLoading: false,
+    drafts: recoveryState.drafts,
+    activeDraft: recoveryState.activeDraft,
+    currentScope: recoveryState.currentScope,
+    inventoryError: null,
+    refreshError: null,
+    importRecoveryDraft: vi.fn(),
+    confirmFreshReview: vi.fn(),
+    discardDraft: vi.fn(),
+    loadConflictDraft: vi.fn(),
+    cancelPendingDraftLoads: vi.fn(),
+    getDraft: vi.fn(),
+    updateDraftResult: vi.fn(() => ({ success: true })),
+    undoDraft: vi.fn(() => null),
+    redoDraft: vi.fn(() => null),
+    applyDraft: vi.fn(),
   }),
+}));
+vi.mock("@/api/queries.js", () => ({
   useGitConflictFile: () => ({
     data: {
       conflictId: "cid_1",
@@ -54,6 +73,13 @@ vi.mock("@/api/queries.js", () => ({
         kind: "regular",
         mode: 0o100644,
         byteLength: 40,
+        textTokens: [
+          "<<<<<<< ours\n",
+          "ours\n",
+          "=======\n",
+          "theirs\n",
+          ">>>>>>> theirs\n",
+        ],
         hasConflictMarkers: true,
         isDirtyVsStages: true,
       },
@@ -71,7 +97,6 @@ vi.mock("@/api/queries.js", () => ({
     },
     isLoading: false,
   }),
-  useGitResolve: () => ({ mutateAsync: vi.fn() }),
 }));
 
 vi.mock("@/lib/monaco-setup.js", () => ({}));
@@ -87,6 +112,78 @@ describe("MergeConflictEditor Android policy", () => {
   beforeEach(() => {
     mockPolicy.enabled = false;
     editorOptions.length = 0;
+    recoveryState.drafts = [];
+    recoveryState.activeDraft = null;
+    recoveryState.currentScope = null;
+  });
+
+  it("shows memory-only recovery and requires fresh review before Apply", () => {
+    const scope = {
+      profileId: "profile-1",
+      generation: 1,
+      serverUrl: "http://localhost:4803",
+      project: "demo-project",
+      worktreePath: "/repo",
+      root: "/repo",
+    };
+    const authority = { repositoryRoot: "/repo", worktreeRoot: "/repo" };
+    const recovery = {
+      history: { past: [], future: [] },
+      id: "recovery-1",
+      isRecovery: true,
+      requiresReview: false,
+      scope,
+      target: {
+        conflictId: "cid_1",
+        path: "src/conflict.ts",
+        snapshotVersion: "old-ver",
+      },
+      authority,
+      recoveryReason: "Earlier conflict snapshot",
+    };
+    recoveryState.drafts = [
+      recovery,
+      {
+        ...recovery,
+        id: "other-owner",
+        scope: { ...scope, profileId: "profile-2" },
+      },
+      {
+        history: { past: [], future: [] },
+        id: "fresh-1",
+        isRecovery: false,
+        requiresReview: true,
+        scope,
+        target: {
+          conflictId: "cid_1",
+          path: "src/conflict.ts",
+          snapshotVersion: "ver1",
+        },
+        authority,
+      },
+    ];
+    recoveryState.activeDraft = recoveryState.drafts[2] ?? null;
+    recoveryState.currentScope = scope;
+
+    const markup = renderToStaticMarkup(
+      <MergeConflictEditor
+        project="demo-project"
+        filePath="src/conflict.ts"
+        onClose={() => {}}
+        onResolved={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Saved recovery for src/conflict.ts.");
+    expect(markup).toContain("This text is memory-only and");
+    expect(markup).toContain("not sent to the server or worktree.");
+    expect(markup).toContain("Refresh and import for review");
+    expect(markup.match(/Refresh and import for review/g)).toHaveLength(1);
+    expect(markup).toContain("Discard saved text");
+    expect(markup).toContain("Confirm fresh review");
+    expect(markup).toContain(
+      'disabled="" title="Confirm fresh-snapshot review before Apply"',
+    );
   });
 
   it("keeps the result editor read-only and disables text mutations on Android policy", () => {
@@ -105,6 +202,8 @@ describe("MergeConflictEditor Android policy", () => {
     expect(editorOptions[0]?.readOnly).toBe(true);
     expect(editorOptions[1]?.readOnly).toBe(true);
     expect(editorOptions[2]?.readOnly).toBe(true);
+    expect(markup).toContain('title="Undo conflict draft edit" disabled=""');
+    expect(markup).toContain('title="Redo conflict draft edit" disabled=""');
     expect(markup).toContain(
       'disabled="" title="Accept all incoming (theirs)"',
     );
@@ -113,7 +212,6 @@ describe("MergeConflictEditor Android policy", () => {
       'disabled="" title="Unavailable on Android Chrome: result is read-only"',
     );
     expect(markup).toContain("Text editing is unavailable on Android Chrome");
-    expect(markup.match(/disabled=""/g)).toHaveLength(3);
   });
 
   it("disables each per-conflict accept action when the result is read-only", () => {

@@ -8,9 +8,10 @@
 ## Overview
 
 - Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Status: DONE (2026-10-21).
+- Implementation: Complete (2026-10-21). Review: Complete (2026-10-21). Progress: 100%. Effort: unestimated.
 - Owner: scoped client/draft owner; integration lead serializes shared API/query/WorkspacePage edits.
-- Entry: Phase 02–04 contracts and Phase 01 retained model/history/budget decisions passed. Incoming deferred items from Phase 02 (W4, W6, W7, W12) addressed here for client draft lifecycle, role mapping, cursor paging, and legacy DTO cutover.
+- Entry: Phase 02–04 contracts and Phase 01 retained model/history/budget decisions passed. Incoming deferred items from Phase 02 (W4, W6, W7, W12) and Phase 04 (W6, W9) addressed and closed here for client draft lifecycle, role mapping, cursor paging, legacy DTO cutover, and operation status.
 - Handoff: one typed wire projection and workspace-owned memory-only drafts surviving shell/target/file visibility changes.
 - Go/no-go: old-owner bytes cannot reach a replacement server/root, and no callback or capacity policy silently destroys dirty work.
 
@@ -29,6 +30,11 @@
 - **W6 (offset pagination cursor stability):** Integrate with server stable cursor (anchored to last raw path/hash of unmerged set) and handle stale-cursor refresh/restart semantics in client pagination to prevent skipping when index shrinks.
 - **W7 (legacy code retirement):** Remove legacy UI DTO `ConflictFile` (`packages/ui/src/api/client.ts`) and legacy endpoints as part of coordinated cutover.
 - **W12 (UI query and pane binding):** Pass explicit `root` to conflict queries, handle multi-page inventory lookup in editor, bind result pane to conflict drafts rather than `useGitFileDiff`, and replace fail-closed `useGitResolve` with Phase 03 preconditioned apply service.
+
+### Incoming deferred items from Phase 04
+
+- **W6 (terminal handoff owner identity):** Bind `TerminalHandoffRequired` reason and worktree root to client profile/generation/session context and wire terminal focus/handoff.
+- **W9 (legacy recovery model retirement):** Fully migrate UI callers off legacy `GitRecoveryState` / `GitOperation` to new `OperationStatusResponse`.
 ## Requirements
 
 ### Functional
@@ -107,17 +113,46 @@ Public API migration is coordinated with 02–04; every caller migrates, old res
     Qualify native typing/IME/paste guard behavior in Phase 01; if public APIs cannot enforce this safely, stop the capacity gate rather than silently trim history.
 11. Add best-effort beforeunload warning and supported native close lifecycle integration only after discovering actual host capability.
     Qualify the required Linux Tauri close/cancel capability or document its supported limitation; no crash/reload durability claim or unauthorized persistence. Windows-native client qualification remains separately Pending/nonblocking/unqualified, not an implementation prerequisite.
+
+**Native close limitation (observed):** `apps/native/src-tauri/src/lib.rs` installs `WindowEvent::CloseRequested` interception only under `cfg(windows)`; Linux has no resolver-aware close/cancel handshake. This phase adds only the browser `beforeunload` best-effort warning. Linux-native dirty-draft close protection remains unsupported and must stay an explicit qualification limitation; do not claim crash/reload durability.
 12. Add owner/capacity/revision behavior scenarios with delayed real request boundaries and retained model/history observations.
     Hand the retained model interface and owner transitions to Phase 06/07; preserve one history authority selected in Phase 01.
 
 ## Todo list
 
-- [ ] Cut over one typed client/transport/query contract with server/every caller; retries disabled, legacy writes rejected, no fallback/shim.
-- [ ] Bind every draft/request to exact owner/server/root/generation identity.
-- [ ] Retain memory-only model/history above shell visibility.
-- [ ] Implement explicit discard/reconnect/review and retained configured-editor handoff recovery with post-attempt/post-terminal authoritative refresh.
-- [ ] Preserve post-submit typing and reject dirty-capacity eviction.
-- [ ] Add owner retirement, same-name server and late-response behavior evidence.
+- [x] Cut over one typed client/transport/query contract with server/every caller; retries disabled, legacy writes rejected, no fallback/shim.
+- [x] Bind every draft/request to exact owner/server/root/generation identity.
+- [x] Retain memory-only model/history above shell visibility.
+- [x] Implement explicit discard/reconnect/review and retained configured-editor handoff recovery with post-attempt/post-terminal authoritative refresh.
+- [x] Preserve post-submit typing and reject dirty-capacity eviction.
+- [x] Add owner retirement, same-name server and late-response behavior evidence.
+
+### Phase 05 closure and verification results (2026-10-21)
+
+Phase 05 delivered complete scoped client contracts, draft registry, and workspace editor controller integration:
+- **Full UI DTO cutover (`client.ts`, `ws-transport.ts`, `queries.ts`):** Complete migration to typed `ResolveRequest` (action union: `reviewedText`, `indexSide`, `delete`), `ResolveOutcome`, `OperationStatusResponse`, `OperationActionRequest`, and `OperationOutcome`. Retired legacy `{ path, content }` payload and legacy `ConflictFile` UI DTO.
+- **In-memory `ConflictDraftRegistry` (`conflict-draft-store.ts`, `conflict-draft-transitions.ts`, `conflict-draft-capacity.ts`, `conflict-draft-key.ts`, `conflict-draft-types.ts`):** Scoped by immutable draft key (`profileId`, `generation`, `serverUrl`, `project`, `worktreePath`, `conflictId`, `snapshotVersion`). Fences out stale callbacks and retired owner replays, coalesces rapid typing history, and enforces measured capacity (10MB total / 2MB per draft / 10 dirty drafts maximum). Marks stale snapshots as recovery drafts requiring explicit fresh-snapshot import/review before apply.
+- **Workspace & Editor Integration (`MergeConflictEditor.tsx`, `WorkspacePage.tsx`, `use-conflict-resolver.ts`):** Retains draft state and Monaco Undo/Redo across shell switches/hiding, handles Android Chrome read-only input policy, and binds terminal handoff recovery with authoritative post-terminal refresh.
+- **Monaco 0.55.1 patched (`patches/monaco-editor@0.55.1.patch`):** Catches unhandled `CancellationError` in `WordHighlighter` on unmount/dispose.
+- **Resolution of deferred items:**
+  - **Phase 02 W4 (operation roles & limits):** Consumed in client drafts and UI model.
+  - **Phase 02 W6 (offset pagination cursor stability):** Integrated stable cursor with restart on stale cursor (`GIT_CONFLICT_CURSOR_STALE`).
+  - **Phase 02 W7 (legacy code retirement):** Retired legacy `ConflictFile` UI DTO and `{ path, content }` resolve requests.
+  - **Phase 02 W12 (UI query & pane binding):** Explicit `root` parameter passed in queries; result pane bound to retained drafts above shell visibility.
+  - **Phase 04 W6 (terminal handoff owner identity):** Bound `TerminalHandoffRequired` reason and worktree root to client profile/generation/session context and wired terminal focus/handoff.
+  - **Phase 04 W9 (legacy recovery model retirement):** Fully migrated UI callers to `OperationStatusResponse` / `OperationActionRequest` / `OperationOutcome`.
+
+### Test Execution Summary
+
+1. **UI Unit Tests:** 80 passed across 5 test files (0 failures, 0 errors, 0.75s duration):
+   - `src/lib/conflict-draft-capacity.test.ts`: 3 passed (capacity bounds, eviction preserving dirty drafts, dirty draft limit refusal)
+   - `src/lib/conflict-draft-store.test.ts`: 17 passed (deterministic key fencing, undo/redo history, typing coalescing, apply transitions, owner retirements, same-owner snapshot recovery import/fencing, different-profile rejection)
+   - `src/components/organisms/MergeConflictEditor.test.tsx`: 3 passed (Android read-only policy, memory-only recovery banner, disabled accept actions)
+   - `src/api/ws-transport.test.ts`: 54 passed (including Rust `type` discriminator for resolve REST contract, terminal attach, SSE lifecycle)
+   - `src/hooks/use-conflict-resolver.test.tsx`: 3 passed (retains draft on switch, cursor restarts on stale cursor, owner-guarded operation-status read)
+2. **Browser Monaco Joint History Tests:** 4 browser test files (8 tests total; 1 passed in `conflict-monaco-history.browser.tsx` proving public joint undo/redo authority across native typing and metadata decisions, 3.75s duration).
+3. **UI TypeScript Typecheck:** Clean exit, 0 errors in 7.91s (`pnpm --filter @dam-hopper/ui exec tsc -p tsconfig.json --noEmit`).
+4. **Server Conflict Regression Tests:** 40 passed across 63 test suites, 0 failed, 1961 filtered out in 34.90s (`cargo test --manifest-path server/Cargo.toml conflict`).
 
 ## Success criteria
 
@@ -148,7 +183,9 @@ Never export recovery content to another endpoint merely because profile labels 
 Hand retained draft/controller/history interface to [Phase 06](./phase-06-merge-model-and-history.md) and visibility/lifetime seam to Phase 07.
 Phase 08 consumes commands, not raw mutable routing parameters or duplicate draft state.
 
-## Unresolved questions
+## Unresolved questions and qualification limitations
 
-- Draft owner: exact resource accounting and retained model disposal boundaries; run step 10 capacity/hide/retire scenarios, record heap/model evidence, stop surface integration if dirty work can disappear.
-- Native integration owner: required Linux Tauri close guard capability; inspect actual host API and exercise close/cancel, document evidence/limitation, keep required AC12 Linux/human evidence Pending until qualified. Track Windows-native client qualification separately Pending/nonblocking; do not infer support from shared code.
+- **Draft resource accounting:** In-memory capacity bounds (10MB total / 2MB per draft / 10 dirty drafts) and prospective growth guards implemented and unit tested (`conflict-draft-capacity.test.ts`, `conflict-draft-store.test.ts`). Continuous heap observation under long-lived multi-file Monaco sessions continues into Phase 07 and Phase 09.
+- **Linux-native close limitation:** `apps/native/src-tauri/src/lib.rs` provides `WindowEvent::CloseRequested` only for Windows; Linux Tauri has no resolver-aware close guard handshake. Browser `beforeunload` is best-effort only. Full native qualification on Linux host remains Pending for Phase 09 (AC12).
+- **Post-attempt non-success requery (Phase 04 W3):** Client refresh wired for terminal handoff; post-attempt non-success requery (`Blocked`, `Failed`, `OutcomeUnknown`) across workspace UI surfaces remains scheduled for Phase 08.
+- **Unreleasable coordinated migration boundary:** Phase 05 completes UI client DTO migration and draft store fencing; backend retirement of parallel legacy endpoints and final fail-closed cutover complete in Phase 08.

@@ -1062,20 +1062,64 @@ function channelToEndpoint(
     case "git:resolve": {
       const d = data as {
         project: string;
-        path: string;
-        content: string;
+        conflictId: string;
+        snapshotVersion: string;
+        fullIndexFingerprint: string;
+        action: unknown;
         worktreePath?: string;
         root?: string;
       };
+      const body: Record<string, unknown> = {
+        conflictId: d.conflictId,
+        snapshotVersion: d.snapshotVersion,
+        fullIndexFingerprint: d.fullIndexFingerprint,
+        action: d.action,
+      };
+      if (d.worktreePath) body.worktreePath = d.worktreePath;
+      if (d.root) body.root = d.root;
       return {
         method: "POST",
         url: `/api/git/${encodeURIComponent(d.project)}/resolve`,
-        body: {
-          path: d.path,
-          content: d.content,
-          worktreePath: d.worktreePath,
-          root: d.root,
-        },
+        body,
+      };
+    }
+    case "git:operationStatus": {
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
+      };
+      const params = new URLSearchParams();
+      setWorktreePath(params, d);
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/operation${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:executeOperation": {
+      const d = data as {
+        project: string;
+        operationPrecondition: string;
+        fullIndexFingerprint: string;
+        action: "continue" | "abort";
+        abortConfirmed?: boolean;
+        worktreePath?: string;
+        root?: string;
+      };
+      const body: Record<string, unknown> = {
+        operationPrecondition: d.operationPrecondition,
+        fullIndexFingerprint: d.fullIndexFingerprint,
+        action: d.action,
+        abortConfirmed: Boolean(d.abortConfirmed),
+      };
+      if (d.worktreePath) body.worktreePath = d.worktreePath;
+      if (d.root) body.root = d.root;
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/operation`,
+        body,
       };
     }
     case "git:commit": {

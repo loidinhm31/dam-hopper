@@ -7,3 +7,4 @@ allowBuilds:
 
 patchedDependencies:
   '@radix-ui/react-compose-refs@1.1.2': patches/@radix-ui__react-compose-refs@1.1.2.patch
+  monaco-editor@0.55.1: patches/monaco-editor@0.55.1.patch

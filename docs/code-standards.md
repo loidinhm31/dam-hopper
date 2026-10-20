@@ -4,15 +4,15 @@ These standards describe the current Rust backend, shared React UI, and profile-
 
 ## Repository structure
 
-| Path | Responsibility |
-| --- | --- |
-| `server/src/api/` | Axum route registration, handlers, auth, and WebSocket/API transport |
-| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status}/` | Backend domain boundaries and services |
-| `server/src/state.rs` | Shared server `AppState` and service ownership |
-| `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
-| `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
-| `apps/web/`, `apps/native/` | Vite browser and Tauri desktop hosts |
-| `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
+| Path                                                                | Responsibility                                                         |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `server/src/api/`                                                   | Axum route registration, handlers, auth, and WebSocket/API transport   |
+| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status}/` | Backend domain boundaries and services                                 |
+| `server/src/state.rs`                                               | Shared server `AppState` and service ownership                         |
+| `packages/ui/src/api/`                                              | Owner-bound API clients, connections, DTOs, transports, and query keys |
+| `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/`          | Shared React UI and client-side domain behavior                        |
+| `apps/web/`, `apps/native/`                                         | Vite browser and Tauri desktop hosts                                   |
+| `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage                          |
 
 ## Cross-cutting rules
 
@@ -50,6 +50,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - **Root Font & Layout Invariance:** `html` font size is never dynamically altered; layout `rem` dimensions (spacing, padding, container widths, hit target heights) remain stable. App zoom (`--app-zoom`) operates independently.
 - **Editor & Terminal Font Independence:** Monaco code editor (`editorFontSize`) and xterm terminal (`terminalFontSize`) maintain independent font size configurations and must never be driven by `--app-font-size`.
 - **Virtualized Trees (`FileTree`):** Uniform item row heights in Arborist are computed dynamically using `getFileTreeRowHeight(systemFontSize)` from `@/lib/workbench-typography.js` to ensure content never clips across the supported 10–32px range without resetting scroll or unmounting trees.
+
 ## Domain-specific invariants
 
 ### Git history changes
@@ -59,14 +60,15 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Publish rewritten history only with an explicit confirmation and exact expected-OID lease. Ordinary push remains fast-forward-only.
 - Preserve final tree/index/working tree and required signature-loss consent. Never publish automatically after editing or squashing commits.
 
-### Git conflict discovery and snapshots
+### Git conflict discovery, snapshots, and client mutations
 
-- Conflict summary queries (`GET /api/git/{project}/conflicts`) return bounded unmerged index entries without eager blob or worktree file loading; pagination cursors validate target revisions and fail closed on stale cursors.
+- Conflict summary queries (`GET /api/git/{project}/conflicts`) return bounded unmerged index entries without eager blob or worktree file loading. Opaque v2 cursors bind the full unmerged conflict-set fingerprint and last raw-path anchor; changed sets or missing anchors fail closed with `GIT_CONFLICT_CURSOR_STALE`.
 - Conflict detail snapshots (`GET /api/git/{project}/conflicts/file`) enforce pre-allocation byte bounds before allocating blob memory (5 MiB per stage, 15 MiB aggregate across stages 1/2/3) and worktree read bounds (5 MiB). Tokenization bounds line counts (50,000 lines) and line lengths (100,000 bytes). Oversized files or custom filters withhold line tokens and mark stages `unsupported`.
 - Text splitting preserves line terminators losslessly (`\r\n`, `\n`, lone `\r`) without normalization or replacement characters.
 - Detail reads capture before/after state fingerprints (HEAD OID, full index entries, worktree attributes); detected state drift between before and after reads returns HTTP 409 `REFRESH_REQUIRED`.
 - Conflict resolution mutation requires structured precondition verification (`snapshotVersion`, `fullIndexFingerprint`); legacy resolution payloads (`{ path, content }`) fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
-
+- **Client Git Mutation DTO Conventions:** Client Git mutation requests and responses must use fail-closed typed unions with no legacy string fallbacks (`ResolveRequest` with discriminated `action`: `reviewedText`, `indexSide`, `delete`; `OperationActionRequest` with discriminated `action`: `continue`, `abort`). Wire transports and client layers must reject untyped payload shapes or legacy fallback fields (`{ path, content }`); missing precondition tokens (`conflictId`, `snapshotVersion`, `fullIndexFingerprint` on resolve; `operationPrecondition`, `fullIndexFingerprint` on operation actions) fail closed on the client before dispatch. Responses must be evaluated against their respective domain outcome taxonomies: `ResolveOutcome` (`applied`, `stale`, `unsupported`, `busy`, `failedBeforeWrite`, `worktreeChangedStageFailed`, `outcomeUnknown`) and `OperationOutcome` (`continued`, `aborted`, `blocked`, `stale`, `failed`, `outcomeUnknown`). Blind or automatic retries on timeouts, disconnects, or uncertain outcomes (`outcomeUnknown`, `worktreeChangedStageFailed`) are strictly forbidden.
+- **In-Memory Draft Capacity Fences:** Conflict draft stores must remain strictly memory-only; drafts must never be serialized or resuscitated from browser persistence (`localStorage`, `sessionStorage`, IndexedDB). Memory accounting must track accounted UTF-8 text bytes (`TextEncoder`), not JavaScript object heap overhead, across source stages, working tree, resolved text, edit history, and recovery text. Registries must enforce hard capacity fences (default 10 MiB total, 2 MiB per draft, 10 dirty drafts). Clean drafts may be evicted oldest-first under memory pressure, but dirty or recovery drafts are never silently evicted; admission fails closed when dirty drafts saturate capacity. Prospective edit growth checks must validate that proposed text mutations and history fit within limits prior to mutating draft state. Snapshot drift must mark dirty drafts as requiring operator recovery and review; automatic replay or unreviewed submission across snapshot drift is prohibited.
 ### Agent Status
 
 - Correlate terminal ID with PTY incarnation and fence updates with reporter epochs and leases.

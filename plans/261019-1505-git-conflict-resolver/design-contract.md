@@ -56,7 +56,7 @@ Reuse existing `GET /api/git/{project}/conflicts` and `POST /api/git/{project}/r
 
 | Surface | Proposed response/request |
 | --- | --- |
-| GET conflicts + `worktreePath?`, `root` | Bounded `{targetRevision, entries, truncated, nextCursor?}` summary; no blob text. Prefer deterministic paging only if needed to avoid dropping unsupported entries |
+| GET conflicts + `worktreePath?`, `root` | Bounded `{targetRevision, entries, truncated, nextCursor?}` summary; opaque v2 cursor bound to the full unmerged conflict-set fingerprint and last raw-path anchor |
 | GET conflicts/file + same scope, `conflictId` | Coherent `ConflictSnapshot`, immutable source stage descriptors and supported content; actual worktree result/type and precondition token |
 | POST resolve | Scope + conflictId + precondition + discriminated `reviewedText`, `indexSide` or `delete` action |
 | GET operation + same scope | `none|merge|rebase|cherry-pick|revert|unsupported|unknown`, identity/version, actual stage-role labels, allowed actions/blockers |

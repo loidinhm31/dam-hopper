@@ -37,6 +37,9 @@ import type {
   FileDiffContent,
   ConflictSnapshot,
   ConflictSummaryResponse,
+  OperationStatusResponse,
+  OperationActionRequest,
+  OperationOutcome,
   ResetMode,
   UiConfig,
   UsageSettingsPatch,
@@ -398,7 +401,7 @@ export async function invalidateGitBranchOperation(
   ]);
 }
 
-function invalidateGitProjectQueries(
+export function invalidateGitProjectQueries(
   qc: QueryInvalidator,
   target: ProjectTargetInput,
   options?: {
@@ -407,6 +410,7 @@ function invalidateGitProjectQueries(
     includeFileTree?: boolean;
     includeGitDiff?: boolean;
     includeGitLog?: boolean;
+    includeOperation?: boolean;
     includeProjects?: boolean;
     includeProjectStatus?: boolean;
     reconcileEditorTabs?: boolean;
@@ -439,6 +443,14 @@ function invalidateGitProjectQueries(
   if (options?.includeConflicts) {
     void qc.invalidateQueries({
       queryKey: gitQueryKey("git-conflicts", normalized),
+    });
+    void qc.invalidateQueries({
+      queryKey: gitQueryKey("git-conflict-file", normalized),
+    });
+  }
+  if (options?.includeOperation) {
+    void qc.invalidateQueries({
+      queryKey: gitQueryKey("git-operation-status", normalized),
     });
   }
   if (options?.includeFileTree) {
@@ -1332,7 +1344,12 @@ export function useGitCommitMessage(
   return useQuery<CommitMessageResponse>({
     queryKey: gitCommitMessageQueryKey(normalized, hash, root, branch),
     queryFn: () =>
-      getBoundApiClient(owner).git.commitMessage(normalized, hash, root, branch),
+      getBoundApiClient(owner).git.commitMessage(
+        normalized,
+        hash,
+        root,
+        branch,
+      ),
     enabled: !!normalized.project && !!hash,
     staleTime: 0,
   });
@@ -1498,15 +1515,42 @@ export function useGitDiscardHunk(target: ProjectTargetInput, root?: string) {
   });
 }
 
-export function useGitResolve(target: ProjectTargetInput, root?: string) {
+export function useGitOperationStatus(
+  target: ProjectTargetInput,
+  root?: string,
+  options: { enabled?: boolean } = {},
+) {
+  const normalized = normalizeProjectTarget(target);
+  const owner = resolveTargetOwner(normalized.profileId);
+  const rootKey = gitRootKey(root);
+  return useQuery<OperationStatusResponse>({
+    queryKey: gitQueryKey("git-operation-status", normalized, rootKey),
+    queryFn: () =>
+      getBoundApiClient(owner).git.operationStatus(normalized, root),
+    enabled: (options.enabled ?? true) && !!normalized.project,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export function useGitExecuteOperation(target: ProjectTargetInput) {
   const normalized = normalizeProjectTarget(target);
   const owner = resolveTargetOwner(normalized.profileId);
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ path, content }: { path: string; content: string }) =>
-      getBoundApiClient(owner).git.resolve(normalized, path, content, root),
-    onSuccess: (_result, { path }) =>
-      void invalidateGitHistoryOperation(qc, normalized, [path]),
+  return useMutation<OperationOutcome, Error, OperationActionRequest>({
+    mutationFn: (request: OperationActionRequest) =>
+      getBoundApiClient(owner).git.executeOperation(normalized, request),
+    retry: false,
+    networkMode: "always",
+    onSettled: () =>
+      invalidateGitProjectQueries(qc, normalized, {
+        includeConflicts: true,
+        includeGitDiff: true,
+        includeGitLog: true,
+        includeProjects: true,
+        includeProjectStatus: true,
+        includeOperation: true,
+      }),
     onError: (error) => markTargetUnavailableIfNeeded(normalized, error),
   });
 }

@@ -13,7 +13,7 @@ created: 2026-10-19
 
 ## Overview and authority
 
-Phase 01 (Feasibility and contract gates), Phase 02 (Conflict discovery and snapshots), Phase 03 (Safe resolution and staging), and Phase 04 (Operation lifecycle) complete (2026-10-20). Phase 02 (Conflict discovery and snapshots) and Phase 04 (Operation lifecycle) administratively closed with accepted deferrals (2026-10-19 and 2026-10-20). Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phase 04 delivered authoritative operation detection and stage roles (`GET /api/git/{project}/operation`), guarded continue/abort lifecycle (`POST /api/git/{project}/operation`), truthful `OperationOutcome` taxonomy, bounded noninteractive runner with editor sentinel detection, and terminal handoff contract with accepted deferrals. Phases 05–09 remain.
+Phase 01 (Feasibility and contract gates), Phase 02 (Conflict discovery and snapshots), Phase 03 (Safe resolution and staging), Phase 04 (Operation lifecycle), and Phase 05 (Scoped client and drafts) complete (2026-10-21). Phase 02 (Conflict discovery and snapshots) and Phase 04 (Operation lifecycle) administratively closed with accepted deferrals (2026-10-19 and 2026-10-20). Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phase 04 delivered authoritative operation detection and stage roles (`GET /api/git/{project}/operation`), guarded continue/abort lifecycle (`POST /api/git/{project}/operation`), truthful `OperationOutcome` taxonomy, bounded noninteractive runner with editor sentinel detection, and terminal handoff contract with accepted deferrals. Phase 05 delivered full UI DTO cutover, owner-bound in-memory `ConflictDraftRegistry` with measured capacity and recovery draft lifecycle, `useConflictResolver` integration across `MergeConflictEditor.tsx` and `WorkspacePage.tsx`, and patched Monaco 0.55.1 unmount/cancellation safety. Phases 06–09 remain.
 
 Build one workspace-owned floating resolver for terminal-started merge/rebase/cherry-pick/revert and index conflicts. Immutable sources/base, editable retained result, full reviewed decisions, explicit Apply & stage, separate Continue/Abort, truthful unsupported/partial/unknown outcomes. Initial release qualification requires web and actual Linux-native runtime evidence; Windows-native remains explicitly unqualified until separately tested.
 
@@ -29,7 +29,7 @@ No editor-tab/DiffViewer integration, operation initiation, auto-continue/skip, 
 | 02 | [Conflict discovery and snapshots](./phase-02-conflict-discovery-and-snapshots.md) | 01 | Complete* | Complete* | 100% |
 | 03 | [Safe resolution and staging](./phase-03-safe-resolution-and-staging.md) | 02 | Complete | Complete | 100% |
 | 04 | [Operation lifecycle](./phase-04-operation-lifecycle.md) | 03 | Complete* | Complete* | 100% |
-| 05 | [Scoped client and drafts](./phase-05-scoped-client-and-drafts.md) | 02–04 | Pending | Pending | 0% |
+| 05 | [Scoped client and drafts](./phase-05-scoped-client-and-drafts.md) | 02–04 | Complete | Complete | 100% |
 | 06 | [Merge model and history](./phase-06-merge-model-and-history.md) | 01, 05 | Pending | Pending | 0% |
 | 07 | [Floating Monaco surface](./phase-07-floating-monaco-surface.md) | 05–06 | Pending | Pending | 0% |
 | 08 | [Workspace integration and cutover](./phase-08-workspace-integration-and-cutover.md) | 03–07 | Pending | Pending | 0% |
@@ -47,7 +47,7 @@ Cycle-3 review (`plans/reports/code-reviewer-261019-2332-phase-02-conflict-disco
   - **W4 (operation roles/limits):** Provide explicit operation, targetRevision, contextual roles, and limits in snapshot DTO.
 - **Phase 05 scoped client and drafts:**
   - **W4 (operation roles/limits):** Consume operation context and stage roles in client drafts and UI model.
-  - **W6 (offset pagination cursor stability):** Implement server cursor contract binding to last raw path/hash with stale-cursor rejection/restart semantics, and integrate into client pagination.
+  - **W6 (offset pagination cursor stability):** Bind opaque v2 cursors to the full unmerged conflict-set fingerprint and last raw-path anchor; reject changed sets/missing anchors with `GIT_CONFLICT_CURSOR_STALE` and restart pagination once from the first page.
   - **W12 (UI query and pane binding):** Pass explicit `root` parameter, handle multi-page inventory lookup, bind result pane to conflict drafts, and replace fail-closed `useGitResolve`.
 - **Phase 03/05/08 clean cutover:**
   - **W7 (legacy code retirement):** Remove legacy `get_conflicts`, `read_blob_utf8`, `resolve_conflict`, Rust `ConflictFile`, and UI `ConflictFile` as part of coordinated cutover once mutation callers migrate.
@@ -99,6 +99,23 @@ Phase 04 delivered the operation lifecycle backend, authoritative status detecti
   - **W7 (Extended test matrix):** Execute production qualification proofs for timeout, hanging descendant daemons, revert continue/abort under hooks, GPG signing, and conflictless edit/exec rebase stops.
   - **W10 (Unredacted diagnostics):** Apply bounded redaction/filtering for paths and sensitive metadata in `Failed` diagnostics.
   - **W11 (Metadata-read fail-open edges):** Harden metadata parsing against I/O errors and distinguish unsupported vs unknown stopped reasons.
+
+### Phase 05 closure (2026-10-21)
+
+Phase 05 delivered the scoped client DTO cutover, memory-retained draft registry, and workspace editor controller:
+- **Full UI DTO cutover (`client.ts`, `ws-transport.ts`, `queries.ts`):** Completely replaced legacy `{ path, content }` payload with typed `ResolveRequest` (action union: `reviewedText`, `indexSide`, `delete`), `ResolveOutcome`, `OperationStatusResponse`, `OperationActionRequest`, and `OperationOutcome`. Disabled automatic mutation retries and retired legacy write fallbacks.
+- **In-memory `ConflictDraftRegistry` (`conflict-draft-store.ts`, `conflict-draft-transitions.ts`, `conflict-draft-capacity.ts`, `conflict-draft-key.ts`, `conflict-draft-types.ts`):** Scoped by immutable draft key (`profileId`, `generation`, `serverUrl`, `project`, `worktreePath`, `conflictId`, `snapshotVersion`). Fences out stale callbacks and retired owner replays, coalesces rapid typing history, and enforces measured capacity (10MB total / 2MB per draft / 10 dirty drafts maximum). Stale snapshots are marked as recovery drafts requiring explicit fresh-snapshot import/review before apply.
+- **Workspace & Editor Integration (`MergeConflictEditor.tsx`, `WorkspacePage.tsx`):** Wired with `useConflictResolver` hook, supporting Undo/Redo across retained draft history in Monaco above shell visibility, handling Android Chrome read-only input policy, and binding terminal handoff recovery with authoritative post-terminal refresh.
+- **Monaco 0.55.1 patched (`patches/monaco-editor@0.55.1.patch`):** Applied patch to catch unhandled `CancellationError` in `WordHighlighter` on unmount/dispose during rapid component lifecycle changes.
+- **Disposition of Phase 02 and Phase 04 deferrals:**
+  - **Phase 02 W4 (operation roles & limits):** Consumed `OperationStatusResponse` context and stage roles in client drafts and UI model.
+  - **Phase 02 W6 (offset pagination cursor stability):** Integrated client pagination with stable cursor and automatic restart on stale cursor (`GIT_CONFLICT_CURSOR_STALE`).
+  - **Phase 02 W7 (legacy code retirement):** Retired legacy UI `ConflictFile` DTO and legacy `{ path, content }` resolve requests in UI; backend parallel legacy endpoints remain gated until Phase 08 cutover.
+  - **Phase 02 W12 (UI query & pane binding):** Explicit `root` parameter passed in queries; result pane bound to retained drafts above shell visibility.
+  - **Phase 04 W6 (terminal handoff owner identity):** Bound `TerminalHandoffRequired` reason and worktree root to client profile/generation/session context and wired terminal focus/handoff.
+  - **Phase 04 W9 (legacy recovery model retirement):** Fully migrated UI callers from legacy `GitRecoveryState` / `GitOperation` to `OperationStatusResponse` / `OperationActionRequest` / `OperationOutcome`; backend retirement proceeds in Phase 08.
+- **Verification & review:** Validated by 80 UI unit tests across 5 test files (`conflict-draft-capacity.test.ts`, `conflict-draft-store.test.ts`, `MergeConflictEditor.test.tsx`, `ws-transport.test.ts`, `use-conflict-resolver.test.tsx`), 4 browser test files (8 tests total; latest suite run verified `conflict-monaco-history.browser.tsx`), 40 server conflict regression tests across 63 test suites, and clean TypeScript compilation (`tsc -p tsconfig.json --noEmit`, 0 errors).
+- **Deployment boundary & limitations:** Unreleasable coordinated migration boundary remains active; Linux-native dirty-draft close protection remains unsupported (browser `beforeunload` is best-effort); Phase 04 W3 non-success post-attempt requery proceeds in Phase 08.
 ## Execution and dependency rules
 
 Execute numbered order by default. Overlap backend and pure model work only after 01 freezes invariants and one integration owner assigns shared `types.rs`, `client.ts`, transport/query and WorkspacePage edits. Each phase states entry artifacts and go/no-go evidence; a failed prerequisite blocks dependents.

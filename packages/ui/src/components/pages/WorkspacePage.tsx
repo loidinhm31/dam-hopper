@@ -66,6 +66,7 @@ import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
+import { useConflictResolver } from "@/hooks/use-conflict-resolver.js";
 import { useProjects, useExportDiagnostics } from "@/api/queries.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import {
@@ -792,6 +793,7 @@ export default function WorkspacePage() {
       ? { profileId: activeProfileId, project: projectName }
       : projectName);
   const projectTarget = useProjectTarget(projectTargetInput);
+  useConflictResolver(projectTargetInput ?? undefined);
   const rootGitTarget = useMemo<ProjectTargetRef | undefined>(() => {
     if (!projectName) return undefined;
     return activeProfileId

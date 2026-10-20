@@ -10,13 +10,6 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-if (typeof window !== "undefined") {
-  window.addEventListener("unhandledrejection", (e) => {
-    if (String(e.reason).includes("Canceled")) {
-      e.preventDefault();
-    }
-  });
-}
 
 describe("Phase 01: Monaco public joint history authority browser proof", () => {
   let container: HTMLDivElement;

@@ -28,14 +28,12 @@ import {
   ChevronUp,
   CheckCircle2,
   GitMerge,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import {
-  useGitConflicts,
-  useGitConflictFile,
-  useGitFileDiff,
-  useGitResolve,
-} from "@/api/queries.js";
+import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
+import { useConflictResolver } from "@/hooks/use-conflict-resolver.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
@@ -75,6 +73,7 @@ interface Props {
   targetAvailable?: boolean;
   filePath: string;
   fileLanguage?: string;
+  root?: string;
   onClose: () => void;
   onResolved: () => void;
 }
@@ -156,6 +155,7 @@ export function MergeConflictEditor({
   targetAvailable = true,
   filePath,
   fileLanguage,
+  root,
   onClose,
   onResolved,
 }: Props) {
@@ -165,52 +165,112 @@ export function MergeConflictEditor({
     useAndroidChromeInputPolicy();
   useConflictStyles();
 
-  const { data: conflicts, isLoading: conflictsLoading } =
-    useGitConflicts(targetRef);
-  const conflictEntry = conflicts?.entries?.find((c) => c.path === filePath);
+  const resolver = useConflictResolver(targetRef, root);
+  const conflicts = resolver.conflicts;
+  const conflictsLoading = resolver.isLoading;
+  const conflictEntry = conflicts.find((c) => c.path === filePath);
   const { data: snapshot, isLoading: snapshotLoading } = useGitConflictFile(
     targetRef,
     conflictEntry?.conflictId ?? "",
+    root,
   );
   const { data: fileDiff, isLoading: diffLoading } = useGitFileDiff(
     targetRef,
     filePath,
   );
-  const resolveMutation = useGitResolve(targetRef);
 
   const conflictFile = conflictEntry;
   const theirsText = snapshot?.stages?.theirs?.textTokens?.join("") ?? "";
   const oursText = snapshot?.stages?.ours?.textTokens?.join("") ?? "";
-  // Workdir content with conflict markers — from fileDiff.modified
-  const workdirContent = fileDiff?.modified ?? "";
+  const workdirContent = snapshot?.worktree.textTokens?.join("") ?? "";
   const language = fileLanguage ?? fileDiff?.language ?? "plaintext";
 
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [selectedConflict, setSelectedConflict] = useState(0);
-
-  // Track current result content for conflict region parsing
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  const draftKeyRef = useRef<string | null>(null);
   const [resultContent, setResultContent] = useState<string>("");
   const resultContentRef = useRef<string>("");
+  const [isImportingRecovery, setIsImportingRecovery] = useState(false);
 
-  // Initialize result content when workdir content loads
-  const initialized = useRef(false);
   useEffect(() => {
-    if (workdirContent && !initialized.current) {
-      initialized.current = true;
-      resultContentRef.current = workdirContent;
-      setResultContent(workdirContent);
-    }
-  }, [workdirContent]);
-
-  // Reset when file changes
-  useEffect(() => {
-    initialized.current = false;
+    setDraftKey(null);
+    draftKeyRef.current = null;
     setResultContent("");
     resultContentRef.current = "";
     setResolveError(null);
     setSelectedConflict(0);
-  }, [filePath, targetKey]);
+  }, [filePath, root, targetKey]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    let cancelled = false;
+    void resolver
+      .loadConflictDraft(snapshot.conflictId, snapshot)
+      .then((draft) => {
+        if (cancelled) return;
+        setDraftKey(draft.id);
+        draftKeyRef.current = draft.id;
+        resultContentRef.current = draft.result;
+        setResultContent(draft.result);
+        const model = resultEditorRef.current?.getModel();
+        if (model && model.getValue() !== draft.result) {
+          model.setValue(draft.result);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setResolveError(
+            error instanceof Error
+              ? error.message
+              : "Conflict draft could not be loaded",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+      resolver.cancelPendingDraftLoads();
+    };
+  }, [snapshot, resolver.cancelPendingDraftLoads, resolver.loadConflictDraft]);
+  const draftCandidate =
+    resolver.drafts.find((draft) => draft.id === draftKey) ??
+    resolver.activeDraft;
+  const scope = resolver.currentScope;
+  const activeDraft =
+    draftCandidate &&
+    scope &&
+    snapshot &&
+    draftCandidate.scope.profileId === scope.profileId &&
+    draftCandidate.scope.generation === scope.generation &&
+    draftCandidate.scope.serverUrl === scope.serverUrl &&
+    (draftCandidate.scope.configuredRoot ?? "") ===
+      (scope.configuredRoot ?? "") &&
+    draftCandidate.scope.project === scope.project &&
+    (draftCandidate.scope.worktreePath ?? "") === (scope.worktreePath ?? "") &&
+    (draftCandidate.scope.root ?? "") === (scope.root ?? "") &&
+    draftCandidate.target.conflictId === snapshot.conflictId &&
+    draftCandidate.target.path === filePath &&
+    draftCandidate.target.snapshotVersion === snapshot.snapshotVersion
+      ? draftCandidate
+      : null;
+  const recoveryDrafts = useMemo(() => {
+    const scope = resolver.currentScope;
+    if (!scope || !activeDraft) return [];
+    return resolver.drafts.filter(
+      (draft) =>
+        draft.isRecovery &&
+        draft.scope.profileId === scope.profileId &&
+        draft.scope.serverUrl === scope.serverUrl &&
+        draft.scope.project === scope.project &&
+        (draft.scope.worktreePath ?? "") === (scope.worktreePath ?? "") &&
+        (draft.scope.root ?? "") === (scope.root ?? "") &&
+        draft.target.path === filePath &&
+        draft.authority.repositoryRoot ===
+          activeDraft.authority.repositoryRoot &&
+        draft.authority.worktreeRoot === activeDraft.authority.worktreeRoot,
+    );
+  }, [resolver.currentScope, resolver.drafts, activeDraft, filePath]);
 
   const conflictRegions = useMemo(
     () => parseConflictRegions(resultContent),
@@ -218,7 +278,7 @@ export function MergeConflictEditor({
   );
 
   const allResolved =
-    resultContent !== "" && !hasRemainingConflicts(resultContent);
+    Boolean(activeDraft) && !hasRemainingConflicts(resultContent);
   const isMalformed =
     resultContent !== "" && hasMalformedConflicts(resultContent);
 
@@ -240,8 +300,12 @@ export function MergeConflictEditor({
   }>({ theirs: null, result: null, ours: null });
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const isSyncing = useRef(false);
+  const isApplyingDraftHistoryRef = useRef(false);
   const decorationCollection =
     useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
+  const isGuardingCapacityRef = useRef(false);
+  const currentSelectionRef = useRef("");
+  currentSelectionRef.current = `${targetKey}:${filePath}:${root ?? ""}`;
 
   const syncScroll = useCallback((scrollTop: number) => {
     if (isSyncing.current) return;
@@ -261,6 +325,23 @@ export function MergeConflictEditor({
     ro.observe(container);
     (editor as unknown as { _roCleanup?: () => void })._roCleanup = () =>
       ro.disconnect();
+  }
+  function restoreDraftHistory(apply: (key: string) => string | null) {
+    const key = draftKeyRef.current;
+    const editor = resultEditorRef.current;
+    const model = editor?.getModel();
+    if (!key || !editor || !model) return;
+    const value = apply(key);
+    if (value === null || value === model.getValue()) return;
+
+    isApplyingDraftHistoryRef.current = true;
+    try {
+      model.setValue(value);
+      resultContentRef.current = value;
+      setResultContent(value);
+    } finally {
+      isApplyingDraftHistoryRef.current = false;
+    }
   }
 
   useEffect(() => {
@@ -302,7 +383,12 @@ export function MergeConflictEditor({
     (editor, monaco) => {
       resultEditorRef.current = editor;
       modelsRef.current.result = editor.getModel();
-      if (isAndroidChromeNativeInputSuppressed || !targetAvailable) {
+      if (
+        isAndroidChromeNativeInputSuppressed ||
+        !targetAvailable ||
+        !activeDraft ||
+        activeDraft.isRecovery
+      ) {
         editor.updateOptions({ readOnly: true });
         if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
@@ -312,9 +398,48 @@ export function MergeConflictEditor({
 
       if (!monacoRef.current) monacoRef.current = monaco;
 
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ, () =>
+        restoreDraftHistory(resolver.undoDraft),
+      );
+      editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ,
+        () => restoreDraftHistory(resolver.redoDraft),
+      );
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, () =>
+        restoreDraftHistory(resolver.redoDraft),
+      );
+
       // Track content changes
       editor.onDidChangeModelContent(() => {
         const value = editor.getValue();
+        if (
+          isApplyingDraftHistoryRef.current ||
+          isGuardingCapacityRef.current
+        ) {
+          resultContentRef.current = value;
+          setResultContent(value);
+          return;
+        }
+        const previous = resultContentRef.current;
+        const currentDraftKey = draftKeyRef.current;
+        const update = currentDraftKey
+          ? resolver.updateDraftResult(currentDraftKey, value)
+          : { success: false, error: "Conflict draft is still loading" };
+        if (!update.success) {
+          setResolveError(update.error ?? "Draft capacity exceeded");
+          const model = editor.getModel();
+          if (model) {
+            isGuardingCapacityRef.current = true;
+            try {
+              editor.executeEdits("capacity-guard", [
+                { range: model.getFullModelRange(), text: previous },
+              ]);
+            } finally {
+              isGuardingCapacityRef.current = false;
+            }
+          }
+          return;
+        }
         resultContentRef.current = value;
         setResultContent(value);
       });
@@ -324,17 +449,33 @@ export function MergeConflictEditor({
       });
       attachResizeObserver(editor);
     },
-    [isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
+    [
+      activeDraft?.id,
+      activeDraft?.isRecovery,
+      isAndroidChromeNativeInputSuppressed,
+      resolver.updateDraftResult,
+      syncScroll,
+      targetAvailable,
+    ],
   );
 
   useEffect(() => {
     const editor = resultEditorRef.current;
     if (!editor) return;
     editor.updateOptions({
-      readOnly: isAndroidChromeNativeInputSuppressed || !targetAvailable,
+      readOnly:
+        isAndroidChromeNativeInputSuppressed ||
+        !targetAvailable ||
+        !activeDraft ||
+        Boolean(activeDraft.isRecovery),
     });
     if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
-  }, [isAndroidChromeNativeInputSuppressed, targetAvailable]);
+  }, [
+    activeDraft?.id,
+    activeDraft?.isRecovery,
+    isAndroidChromeNativeInputSuppressed,
+    targetAvailable,
+  ]);
 
   const handleOursMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -399,21 +540,41 @@ export function MergeConflictEditor({
   // ── Accept actions ───────────────────────────────────────────────────────────
 
   function applyAccept(regionIndex: number, side: "ours" | "theirs") {
-    if (isAndroidChromeNativeInputSuppressed || !targetAvailable) return;
+    if (
+      isAndroidChromeNativeInputSuppressed ||
+      !targetAvailable ||
+      !activeDraft ||
+      activeDraft.isRecovery
+    ) {
+      return;
+    }
+    const currentDraftKey = draftKeyRef.current;
+    if (!currentDraftKey) {
+      setResolveError("Conflict draft is still loading");
+      return;
+    }
     const regions = parseConflictRegions(resultContentRef.current);
     const region = regions[regionIndex];
     if (!region) return;
 
     const next = acceptConflict(resultContentRef.current, region, side);
-    resultContentRef.current = next;
+    const update = resolver.updateDraftResult(currentDraftKey, next);
+    if (!update.success) {
+      setResolveError(update.error ?? "Draft capacity exceeded");
+      return;
+    }
 
-    // Use applyEdits to replace full content — preserves cursor position and undo stack
+    resultContentRef.current = next;
     const editor = resultEditorRef.current;
     if (editor) {
       const model = editor.getModel();
       if (model) {
-        model.applyEdits([{ range: model.getFullModelRange(), text: next }]);
-        // Navigate to the next unresolved conflict
+        isApplyingDraftHistoryRef.current = true;
+        try {
+          model.applyEdits([{ range: model.getFullModelRange(), text: next }]);
+        } finally {
+          isApplyingDraftHistoryRef.current = false;
+        }
         const newRegions = parseConflictRegions(next);
         const nextConflict =
           newRegions[regionIndex] ?? newRegions[regionIndex - 1];
@@ -429,20 +590,96 @@ export function MergeConflictEditor({
   }
 
   function acceptAll(side: "ours" | "theirs") {
-    if (isAndroidChromeNativeInputSuppressed || !targetAvailable) return;
+    if (
+      isAndroidChromeNativeInputSuppressed ||
+      !targetAvailable ||
+      !activeDraft ||
+      activeDraft.isRecovery
+    ) {
+      return;
+    }
+    const currentDraftKey = draftKeyRef.current;
+    if (!currentDraftKey) {
+      setResolveError("Conflict draft is still loading");
+      return;
+    }
     let content = resultContentRef.current;
-    // Accept from last to first to preserve line numbers for earlier conflicts
     const regions = parseConflictRegions(content);
     for (let i = regions.length - 1; i >= 0; i--) {
       content = acceptConflict(content, regions[i], side);
     }
+    const update = resolver.updateDraftResult(currentDraftKey, content);
+    if (!update.success) {
+      setResolveError(update.error ?? "Draft capacity exceeded");
+      return;
+    }
+
     resultContentRef.current = content;
     const model = resultEditorRef.current?.getModel();
     if (model) {
-      model.applyEdits([{ range: model.getFullModelRange(), text: content }]);
+      isApplyingDraftHistoryRef.current = true;
+      try {
+        model.applyEdits([{ range: model.getFullModelRange(), text: content }]);
+      } finally {
+        isApplyingDraftHistoryRef.current = false;
+      }
     }
     setSelectedConflict(0);
     setResultContent(content);
+  }
+
+  async function handleImportRecovery(recoveryKey: string) {
+    const capturedSelection = currentSelectionRef.current;
+    setIsImportingRecovery(true);
+    setResolveError(null);
+    try {
+      const draft = await resolver.importRecoveryDraft(recoveryKey);
+      if (currentSelectionRef.current !== capturedSelection) return;
+      setDraftKey(draft.id);
+      draftKeyRef.current = draft.id;
+      resultContentRef.current = draft.result;
+      setResultContent(draft.result);
+      const model = resultEditorRef.current?.getModel();
+      if (model && model.getValue() !== draft.result) {
+        model.setValue(draft.result);
+      }
+    } catch (error) {
+      setResolveError(
+        error instanceof Error
+          ? error.message
+          : "Recovery text could not be imported",
+      );
+    } finally {
+      setIsImportingRecovery(false);
+    }
+  }
+
+  async function handleConfirmFreshReview() {
+    if (!draftKey) {
+      setResolveError("Fresh-snapshot review could not be confirmed");
+      return;
+    }
+    const capturedSelection = currentSelectionRef.current;
+    try {
+      await resolver.confirmFreshReview(draftKey);
+      if (currentSelectionRef.current !== capturedSelection) return;
+      setResolveError(null);
+    } catch (error) {
+      setResolveError(
+        error instanceof Error
+          ? error.message
+          : "Fresh-snapshot review could not be confirmed",
+      );
+    }
+  }
+
+  function handleDiscardRecovery(recoveryKey: string) {
+    if (!window.confirm("Discard this saved conflict recovery text?")) return;
+    if (!resolver.discardDraft(recoveryKey, true)) {
+      setResolveError("Recovery text could not be discarded");
+      return;
+    }
+    if (recoveryKey === draftKey) onClose();
   }
 
   // ── Resolve ──────────────────────────────────────────────────────────────────
@@ -452,18 +689,61 @@ export function MergeConflictEditor({
       !allResolved ||
       isAndroidChromeNativeInputSuppressed ||
       !targetAvailable
-    )
+    ) {
       return;
+    }
+    if (!draftKey) {
+      setResolveError("Conflict draft is not loaded");
+      return;
+    }
+    if (!activeDraft) {
+      setResolveError("Conflict draft is no longer available");
+      return;
+    }
+    if (
+      activeDraft.isRecovery ||
+      activeDraft.requiresReview ||
+      activeDraft.isApplied
+    ) {
+      setResolveError(
+        "Import and review the draft against a fresh snapshot before Apply",
+      );
+      return;
+    }
+    const capturedSelection = currentSelectionRef.current;
     setIsResolving(true);
     setResolveError(null);
     try {
-      await resolveMutation.mutateAsync({
-        path: filePath,
-        content: resultContentRef.current,
-      });
-      onResolved();
-    } catch (e) {
-      setResolveError(e instanceof Error ? e.message : "Resolve failed");
+      const outcome = await resolver.applyDraft(draftKey);
+      if (currentSelectionRef.current !== capturedSelection) return;
+      if (outcome.outcome === "applied") {
+        const currentDraft = resolver.getDraft(draftKey);
+        if (
+          currentDraft?.isDirty ||
+          currentDraft?.isRecovery ||
+          currentDraft?.requiresReview
+        ) {
+          setResolveError(
+            "The submitted revision was staged; newer local edits remain in recovery and were not applied",
+          );
+        } else {
+          onResolved();
+        }
+      } else {
+        const errorReason =
+          outcome.outcome === "stale" ||
+          outcome.outcome === "unsupported" ||
+          outcome.outcome === "busy"
+            ? outcome.reason
+            : outcome.error;
+        setResolveError(
+          `Resolution rejected (${outcome.outcome}): ${errorReason}`,
+        );
+      }
+    } catch (error) {
+      setResolveError(
+        error instanceof Error ? error.message : "Resolve failed",
+      );
     } finally {
       setIsResolving(false);
     }
@@ -482,7 +762,7 @@ export function MergeConflictEditor({
     );
   }
 
-  if (!conflictFile || workdirContent === "") {
+  if (!conflictFile || !snapshot?.worktree.exists) {
     return (
       <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-danger)] glass-card">
         <AlertTriangle className="h-4 w-4" />
@@ -536,10 +816,41 @@ export function MergeConflictEditor({
         {/* Bulk actions */}
         <div className="shrink-0 flex items-center gap-1">
           <button
+            type="button"
+            aria-label="Undo conflict draft edit"
+            title="Undo conflict draft edit"
+            disabled={
+              !activeDraft ||
+              activeDraft.history.past.length === 0 ||
+              isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable
+            }
+            onClick={() => restoreDraftHistory(resolver.undoDraft)}
+            className="rounded border border-[var(--color-border)] p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
+          >
+            <Undo2 className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            aria-label="Redo conflict draft edit"
+            title="Redo conflict draft edit"
+            disabled={
+              !activeDraft ||
+              activeDraft.history.future.length === 0 ||
+              isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable
+            }
+            onClick={() => restoreDraftHistory(resolver.redoDraft)}
+            className="rounded border border-[var(--color-border)] p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
+          >
+            <Redo2 className="h-3 w-3" />
+          </button>
+          <button
             onClick={() => acceptAll("theirs")}
             disabled={
               isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
+              Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
             }
             title="Accept all incoming (theirs)"
@@ -552,6 +863,7 @@ export function MergeConflictEditor({
             disabled={
               isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
+              Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
             }
             title="Accept all current (ours)"
@@ -565,18 +877,32 @@ export function MergeConflictEditor({
               isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               !allResolved ||
-              isResolving
+              isResolving ||
+              Boolean(
+                activeDraft?.isRecovery ||
+                activeDraft?.requiresReview ||
+                activeDraft?.isApplied,
+              )
             }
             title={
-              isAndroidChromeNativeInputSuppressed
-                ? "Unavailable on Android Chrome: result is read-only"
-                : allResolved
-                  ? "Write resolved content and stage file"
-                  : "Resolve all conflicts first"
+              activeDraft?.isApplied
+                ? "Already applied; refresh and review a fresh snapshot before another Apply"
+                : activeDraft?.isRecovery
+                  ? "Import recovery against a fresh snapshot before editing"
+                  : activeDraft?.requiresReview
+                    ? "Confirm fresh-snapshot review before Apply"
+                    : isAndroidChromeNativeInputSuppressed
+                      ? "Unavailable on Android Chrome: result is read-only"
+                      : allResolved
+                        ? "Write resolved content and stage file"
+                        : "Resolve all conflicts first"
             }
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
-              allResolved && !isResolving
+              allResolved &&
+                !isResolving &&
+                !activeDraft?.isRecovery &&
+                !activeDraft?.requiresReview
                 ? "border-[var(--color-success,#4caf50)]/40 text-[var(--color-success,#4caf50)] hover:bg-[var(--color-success,#4caf50)]/10"
                 : "border-[var(--color-border)] text-[var(--color-text-muted)] opacity-40 cursor-not-allowed",
             )}
@@ -618,6 +944,75 @@ export function MergeConflictEditor({
           This worktree is unavailable. Conflict edits and resolution are
           disabled until the target returns.
         </p>
+      )}
+      {resolver.inventoryError && (
+        <p
+          role="alert"
+          className="shrink-0 border-b border-red-400/20 bg-red-400/10 px-3 py-1.5 text-[11px] text-red-300"
+        >
+          Conflict inventory unavailable: {resolver.inventoryError}
+        </p>
+      )}
+      {resolver.refreshError && (
+        <p
+          role="alert"
+          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
+        >
+          Apply outcome is retained. Authoritative refresh failed:{" "}
+          {resolver.refreshError}
+        </p>
+      )}
+      {recoveryDrafts.map((draft) => (
+        <div
+          key={draft.id}
+          role="alert"
+          className="shrink-0 flex items-center justify-between gap-3 border-b border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-300"
+        >
+          <span className="min-w-0">
+            Saved recovery for {draft.target.path}. This text is memory-only and
+            is not sent to the server or worktree.{" "}
+            {draft.recoveryReason ??
+              "Import only after checking the fresh conflict."}
+          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={isImportingRecovery || isResolving || !targetAvailable}
+              onClick={() => void handleImportRecovery(draft.id)}
+              className="rounded border border-amber-300/40 px-2 py-1 disabled:opacity-50"
+            >
+              {isImportingRecovery
+                ? "Refreshing…"
+                : "Refresh and import for review"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDiscardRecovery(draft.id)}
+              className="rounded border border-amber-300/40 px-2 py-1"
+            >
+              Discard saved text
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {activeDraft?.requiresReview && (
+        <div
+          role="note"
+          className="shrink-0 flex items-center justify-between gap-3 border-b border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-300"
+        >
+          <span>
+            Recovery text was imported from an earlier snapshot. Compare it with
+            the fresh stages before confirming review and applying.
+          </span>
+          <button
+            type="button"
+            disabled={isResolving || !targetAvailable}
+            onClick={() => void handleConfirmFreshReview()}
+          >
+            Confirm fresh review
+          </button>
+        </div>
       )}
 
       {/* Resolve error */}
@@ -673,12 +1068,17 @@ export function MergeConflictEditor({
         <Editor
           height="100%"
           keepCurrentModel
-          defaultValue={workdirContent}
+          value={resultContent}
           language={language}
           theme="vs-dark"
           options={{
+            contextmenu: false,
             ...editorOptions,
-            readOnly: isAndroidChromeNativeInputSuppressed || !targetAvailable,
+            readOnly:
+              isAndroidChromeNativeInputSuppressed ||
+              !targetAvailable ||
+              !activeDraft ||
+              Boolean(activeDraft.isRecovery),
           }}
           onMount={handleResultMount}
         />
@@ -712,7 +1112,9 @@ export function MergeConflictEditor({
                 onAcceptOurs={() => applyAccept(i, "ours")}
                 onAcceptTheirs={() => applyAccept(i, "theirs")}
                 actionsDisabled={
-                  isAndroidChromeNativeInputSuppressed || !targetAvailable
+                  isAndroidChromeNativeInputSuppressed ||
+                  !targetAvailable ||
+                  Boolean(activeDraft?.isRecovery)
                 }
               />
             ))}

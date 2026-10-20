@@ -27,13 +27,13 @@ flowchart LR
 
 ### Port & Network Topology
 
-| Runtime Environment | API Port | Web Port | Bind Address | Authority & Invariants |
-| --- | --- | --- | --- | --- |
-| **Standalone Server** (`dam-hopper-server`) | `4800` | N/A (combined if `--web-dir`) | `0.0.0.0` | `server/src/main.rs:44,48` default. |
-| **Production Systemd Managed** | `4801` | `4802` (`dam-hopper-web`) | `0.0.0.0` | `deploy/systemd/dam-hopper-api.service`, `dam-hopper-web.service`. |
-| **Development Mode** | `4803` | `5173` (Vite) | `0.0.0.0` / loopback | `apps/web/vite.config.ts` proxy to `127.0.0.1:4803`. |
+| Runtime Environment                         | API Port | Web Port                      | Bind Address         | Authority & Invariants                                             |
+| ------------------------------------------- | -------- | ----------------------------- | -------------------- | ------------------------------------------------------------------ |
+| **Standalone Server** (`dam-hopper-server`) | `4800`   | N/A (combined if `--web-dir`) | `0.0.0.0`            | `server/src/main.rs:44,48` default.                                |
+| **Production Systemd Managed**              | `4801`   | `4802` (`dam-hopper-web`)     | `0.0.0.0`            | `deploy/systemd/dam-hopper-api.service`, `dam-hopper-web.service`. |
+| **Development Mode**                        | `4803`   | `5173` (Vite)                 | `0.0.0.0` / loopback | `apps/web/vite.config.ts` proxy to `127.0.0.1:4803`.               |
 
-*Security Warning:* When starting the server with `--no-auth` during local development, operators should explicitly bind to loopback (`--host 127.0.0.1`) to prevent exposing unauthenticated control surfaces to the local network.
+_Security Warning:_ When starting the server with `--no-auth` during local development, operators should explicitly bind to loopback (`--host 127.0.0.1`) to prevent exposing unauthenticated control surfaces to the local network.
 
 ### UI Surfaces and Settings Topology
 
@@ -62,6 +62,7 @@ The navigator includes an accessible multi-select status filter dropdown (`Tradi
 - New terminals resolve the selected target through the owning profile's launch path (`worktreePath`). Existing PTYs, terminal grouping, splits, and editor target bindings remain completely unchanged; selection never sends `cd`, restarts a process, or checks out a branch.
 - Discovery uses profile/generation-qualified worktree queries (`useWorktrees`). Project root is explicit; unavailable, bare, or prunable paths are disabled and cannot be selected. Detached HEAD and locked worktree states are informative; failed discovery or transport errors preserve the current target selection safely.
 - Project tabs and dropdown triggers remain separate interactive controls in desktop and compact Projects-sheet layouts. Same-name cross-profile isolation, root switching, and unchanged live-terminal identity/directory are verified by focused Chromium regressions and production application PTY journeys.
+
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.
@@ -106,6 +107,7 @@ Tunnels are explicitly started port forwards, independent of detected PTY owners
 ## Workflow Tracking Engine
 
 The `WorkflowService` manages hierarchical plans, phases, tasks (max depth 3), workflow sessions, notes, and activity event streams backed by SQLite (`010_workflow_tracking.sql`).
+
 - Non-blocking PTY observation receives terminal lifecycle transitions via bounded `sync_channel(256)` without capturing terminal I/O.
 - Event records in the database use a hardcoded 90-day retention (`DEFAULT_EVENT_RETENTION_DAYS = 90`) at insertion time, while deleted-note retention is configurable through `server.workflow_deleted_note_retention_days`, defaulting to 7 days.
 - Optimistic concurrency control uses `updatedAt` CAS timestamps on item and note mutations.
@@ -155,10 +157,12 @@ See [Workflow API Specification](./workflow-api.md).
 - Linux runtime exercised. Windows strict source/tests cross-compiled in an
   isolated harness; full cross-target build requires native MSVC tools. Windows
   runtime remains explicitly unqualified until tested on Windows.
+
 ## Telemetry & OTLP Analytics
 
 <a id="codex-otel-usage-analytics"></a>
 DamHopper server includes an internal loopback OTLP collector (`server/src/telemetry/`) receiving protobuf metrics and execution traces:
+
 - **Identifier Obfuscation:** Uses HMAC-SHA256 (`~/.config/dam-hopper/telemetry-hmac-key`, regular file, mode `0600`, opened with `O_NOFOLLOW`).
 - **Strict Privacy Invariants:** Forbidden fields (`command`, `argv`, `cwd`, `environment`, `pty_output`, `prompt`, `response`, `tool_arguments`, `tool_output`) are dropped during normalization.
 - **Storage:** Persisted locally in SQLite (`~/.config/dam-hopper/telemetry.db`) with daily retention rollups.
@@ -177,6 +181,7 @@ See [Agent Status Architecture](./architecture/agent-status.md).
 ## Git Safety Model
 
 Git operations use porcelain semantics for worktree/index state. Normal push remains fast-forward-only. A commit-message edit or squash operates on raw object plumbing without modifying working tree files or index entries:
+
 - **Compare-and-swap ref updates**: First captures branch and HEAD, checks candidate rewrites against that snapshot, and updates refs via compare-and-swap. Squash requires a unique contiguous oldest-first parent chain reaching the captured tip and preserving the final tree. Signature loss requires explicit consent when applicable.
 - **Active vs. inactive branch safety**:
   - Active branch updates lock `HEAD` then the branch ref (`refs/heads/<branch>`), checking worktree invariants.
@@ -190,12 +195,13 @@ Git operations use porcelain semantics for worktree/index state. Normal push rem
 - **Leased publication**: Local rewrite and publication are strictly decoupled. Publication uses an exact-OID CAS lease tied to the target branch (`PublishSnapshot`) and expected remote OID; stale remote state aborts the push with `stale-remote`. The lease is invariant to subsequent checkout state changes.
 
 Search filters full commit messages before pagination without mutating refs. See [Git History Architecture](./architecture/git-history-search.md) and [Git API Reference](./api/git.md).
-### Git Conflict Resolver Architecture (Phase 03 Safe Resolution & Staging Backend Implemented)
 
-Development progresses under the [Git conflict resolver plan](../plans/261019-1505-git-conflict-resolver/plan.md). Phase 02 discovery and snapshots are complete with accepted deferrals; Phase 03 safe resolution and staging backend contracts are implemented in `server/src/git/conflict_resolve.rs`, `server/src/git/mutation_coordination.rs`, and `server/src/git/diff.rs`, with safety review active and coordinated UI/server cutover blocked until Phase 05 migrates frontend callers.
+### Git Conflict Resolver Architecture (Phase 05 Scoped Client & In-Memory Drafts Implemented)
+
+Development progresses under the [Git conflict resolver plan](../plans/261019-1505-git-conflict-resolver/plan.md). Phase 02 discovery and snapshots, Phase 03 safe backend resolution, Phase 04 operation lifecycle, and Phase 05 scoped client and in-memory draft stores are implemented. Backend contracts are enforced in `server/src/git/conflict_resolve.rs`, `server/src/git/mutation_coordination.rs`, `server/src/git/diff.rs`, and `server/src/git/operation.rs`; frontend client DTO cutover, in-memory draft stores, and editor integrations are implemented in `packages/ui/src/lib/conflict-draft-*.ts`, `packages/ui/src/api/client.ts`, and `packages/ui/src/components/MergeConflictEditor.tsx`.
 
 - **Implemented Discovery & Snapshots (Phase 02):**
-  - `GET /api/git/{project}/conflicts`: returns bounded deterministic `ConflictSummaryResponse` directly from the unmerged index without reading blob content or touching worktree files. Opaque cursor pagination verifies target revision consistency.
+  - `GET /api/git/{project}/conflicts`: returns bounded deterministic `ConflictSummaryResponse` directly from the unmerged index without reading blob content or touching worktree files. Opaque v2 cursors bind the full unmerged conflict-set fingerprint and last raw-path anchor; changed sets or missing anchors return `GIT_CONFLICT_CURSOR_STALE`, allowing a client to restart pagination from the first page.
   - `GET /api/git/{project}/conflicts/file`: returns on-demand `ConflictSnapshot` with descriptors for stages 1 (base), 2 (ours), and 3 (theirs), worktree disk state, and effective gitattributes.
   - **Pre-allocation Bounds & Memory Protection:** Inspects Git ODB object headers before allocating blob memory. Stage blob sizes exceeding `MAX_STAGE_BYTES` (5 MiB) or cumulative stage sizes exceeding `MAX_TOTAL_STAGE_BYTES` (15 MiB combined across stages 1, 2, 3) mark the stage `unsupported` and withhold `textTokens`. Worktree files exceeding `MAX_WORKTREE_BYTES` (5 MiB) withhold `textTokens`.
   - **Lossless Line Tokenization:** Splits UTF-8 text into line tokens preserving raw terminators (`\r\n`, `\n`, lone `\r`) with enforcement of `MAX_LINES` (50,000) and `MAX_LINE_LENGTH` (100,000 bytes) during tokenization. Exceeding limits marks the stage `unsupported` and withholds tokens.
@@ -207,11 +213,28 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
   - **Atomic Publication & Index Staging:** Writes reviewed or index-side content to sibling temporary files (`.tmp_resolve_<hex>`) before renaming (`safe_atomic_write`), removes unmerged stages 1–3, and inserts stage 0 with exact OID and mode (`stage_index_entry`). This pathname-based publication does not establish a cross-process worktree/index transaction against external writers.
   - **Post-Mutation Verification Oracle:** Reopens repository and index to assert outcome facts for the resolved path: for `reviewedText` and `indexSide` (`verify_applied_oracle`), verifies unmerged stages 1–3 are removed, stage 0 matches expected OID/mode, and disk bytes match; for `delete` (`verify_deleted_oracle`), asserts that all index stages 0–3 are absent and the file no longer exists in the worktree. Returns typed `ResolveOutcome` tagged union (`applied`, `stale`, `unsupported`, `busy`, `failedBeforeWrite`, `worktreeChangedStageFailed`, `outcomeUnknown`). Automatic or blind retry after timeout, response loss, or uncertain completion is prohibited without client refresh/review.
   - **Generic Stage Preflight (CUT1):** `stage_files` in `server/src/git/diff.rs` checks `index.has_conflicts()`. If any path in the batch is in an unmerged conflict state, the batch is rejected atomically with HTTP 400 `INVALID_INPUT` ("Cannot stage unmerged conflicted file '{path}'. Resolve conflict first.") before any clean file in the batch is staged; clean-only batches pass this conflict preflight.
+- **Implemented Operation Lifecycle Contracts (Phase 04):**
+  - `GET /api/git/{project}/operation`: returns `OperationStatusResponse` detecting active operations (`none`, `merge`, `rebase`, `cherry-pick`, `revert`), stopped reason (`conflicts`, `messageEditRequired`, `hookBlocked`, `unknown`), `canContinue`, `canAbort`, role labels, blockers, and `terminalHandoffRequired` (when commit-message editing is blocked).
+  - `POST /api/git/{project}/operation`: accepts typed `OperationActionRequest` (`continue` | `abort`) preconditioned on `operationFingerprint` and `fullIndexFingerprint`, executing under `GitMutationCoordinator` and returning typed `OperationOutcome`.
+- **Frontend Scoped Client & In-Memory Draft Store (Phase 05):**
+  - **Memory-Only Draft Store (`ConflictDraftRegistry`):** Located at `packages/ui/src/lib/conflict-draft-store.ts`. Singleton registry managing in-memory draft entries with snapshot publication (`getSnapshot`, `subscribe`, `notify`). Draft state is strictly memory-only; it is never persisted to `localStorage`, `sessionStorage`, or IndexedDB, eliminating stale draft resuscitation across reloads.
+  - **Owner-Scoped Draft Key Identity & Fencing:** Generated by `createDraftKey` in `packages/ui/src/lib/conflict-draft-key.ts` as a deterministic JSON tuple:
+    `[profileId, generation, serverUrl, configuredRoot, project, worktreePath, root, repositoryRoot, worktreeRoot, fullIndexFingerprint, conflictId, snapshotVersion]`.
+    Separates persistent repository target identity from active connection-generation fencing (`isOwnerActive`). Requests, callbacks, and draft subscriptions capture `{ profileId, generation }` and fail closed on profile switch or reconnection, preventing cross-profile, cross-server, or cross-worktree draft bleed and fencing out stale asynchronous callbacks or replays.
+  - **Measured Capacity Boundaries & Eviction Rules:** Enforced by `packages/ui/src/lib/conflict-draft-capacity.ts` using accounted UTF-8 text bytes via `TextEncoder` (measuring string payload bytes rather than JavaScript object heap overhead).
+    - *Tracked byte metrics:* `sourceBytes` (stages 1–3 + worktree file content), `resultBytes` (resolved text), `historyBytes` (past/future history entries text), and `recoveryBytes` (`recoveryText`).
+    - *Default limits:* `DEFAULT_MAX_TOTAL_BYTES` = 10 MiB (10,485,760 bytes) across all drafts in the registry, `DEFAULT_MAX_DRAFT_BYTES` = 2 MiB (2,097,152 bytes) per individual draft, and `DEFAULT_MAX_DIRTY_DRAFTS` = 10 dirty drafts per registry instance.
+    - *Admission & Eviction (`canAdmitDraft`):* When admitting new drafts under memory pressure, clean drafts (not dirty, not in recovery, not in flight) are evicted oldest-first. Dirty and recovery drafts are never silently evicted; admission fails closed with `"Memory capacity exceeded"` if dirty drafts saturate capacity.
+    - *Prospective Edit Growth (`checkProspectiveEditGrowth`):* Inspects proposed text updates and history creation before mutating draft text. Edits exceeding per-draft (2 MiB) or registry total (10 MiB) limits are rejected fail-closed. Typing edits within 1,000ms coalesce into a single history entry to bound history growth.
+  - **Stale Snapshot Drift & Recovery Import Flow:** When `loadSnapshot` receives an updated snapshot version or altered index fingerprint for a conflict with uncommitted edits (`isDirty`, `isRecovery`, or `isResolving`), the existing draft transitions to `isRecovery = true` with `requiresReview = true` and `recoveryReason: "Conflict snapshot changed; import into a fresh snapshot and review"`. Direct resolve and automatic replaying are blocked. `importRecoveryDraft(recoveryId, freshDraftId)` enforces:
+    1. Source draft is in recovery (`isRecovery: true`) with valid `recoveryText`.
+    2. Target draft is an unrecovered, clean baseline snapshot (`!fresh.isRecovery`, `!fresh.isDirty`, empty history).
+    3. Scopes match exactly (`profileId`, `serverUrl`, `configuredRoot`, `project`, `worktreePath`, `root`, `path`, `repositoryRoot`, `worktreeRoot`).
+    4. Distinct snapshot versions (`source.id !== fresh.id`), preventing duplicate replay on the identical snapshot.
+    5. After import, `fresh.requiresReview = true` is latched, mandating operator review before resolution submission.
+  - **Monaco Delayer Promise Patch:** Applied via `patches/monaco-editor@0.55.1.patch` targeting `esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js`. In Monaco 0.55.1, `WordHighlighter` schedules occurrence highlights via `this.runDelayer.trigger(...)`. Canceling the delayer during editor unmount or model disposal rejects the underlying promise with `CancellationError`, creating unhandled promise rejection errors. The patch wraps all delayer trigger promises in `observeDelayerPromise(promise)` using a `WeakSet` to attach `.catch(onUnexpectedError)` without unhandled rejection noise. This patch addresses Monaco contribution unmount cancellation only, and is distinct from text tokenization or EOL byte fidelity gates.
 - **Merge Engine & Lossless Tokenization (`node-diff3`):** Uses `node-diff3` (MIT, v3.2.1, zero runtime dependencies) for 3-way conflict computation. Diff3 groups identical changes into clean `{ ok: [...] }` chunks. Main-thread execution budget: proposed budget targets $\le$ 5,000 lines (or $\le$ 500 KB) for synchronous diff3 computation, with proposed worker or terminal handoff for larger files; measured resource limits and worst-case diff complexity bounds remain unqualified.
 - **Joint History Authority Prototype (`JointHistoryAuthority`):** Located at `packages/ui/src/lib/joint-history-authority.ts`. Prototype wraps public Monaco editor APIs (`model.onDidChangeContent`, `editor.addCommand`) to record native text edits and metadata review decisions ("Ignore", "Mark reviewed") in a shared linear transaction stack. Native keybinding interception and Monaco-internal EOL/byte fidelity remain open Phase 01 gates, blocking dependent phases as specified by the plan.
-- **Proposed Lifecycle Contracts (Phase 04 Gates):**
-  - `GET /api/git/{project}/operation`: proposed `OperationStatusResponse` detecting active operations, blocked reasons, and `terminalHandoffRequired` (when Git commit message editor is blocked).
-  - `POST /api/git/{project}/operation`: proposed `OperationActionRequest` (`continue` | `abort`) returning `OperationOutcome`.
 ## Cognito Privacy Mode
 
 <a id="cognito-mode"></a>
@@ -237,6 +260,7 @@ Linux terminal idle suspend is coordinated by the server and an enrolled Unix-so
 
 Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
 Phase 01 through Phase 06 are fully implemented and certified, including end-to-end verification, security boundaries, and safe operational rollout runbooks.
+
 - **Policy & Fixed Timing**:
   - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
   - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.
@@ -332,7 +356,7 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
   1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
   2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).
   3. Inner / Fine: `AgentStatusRuntime::registry` lock (synchronous read/write lock for semantic agent states).
-  Invariants:
+     Invariants:
   - Never hold any lock across `.await`, Tokio channel dispatch, filesystem I/O, or procfs/network inspection.
   - Never acquire in reverse order (`AgentStatusRuntime` -> `PtySessionManager` -> `ClientPresence`).
   - Asynchronous authentication, database verification, and fresh process sampling complete before acquiring the final admission fence; only monotonic session/revocation epochs and fleet/semantic revisions are checked under the fence.

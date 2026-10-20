@@ -1,6 +1,7 @@
 # REST Endpoint Reference
 
 Global configuration, projects, terminals, Git operations, and SSH route contracts moved from the [API reference index](../api-reference.md).
+
 ## REST Endpoints
 
 ### Global Configuration & Preferences
@@ -160,7 +161,7 @@ Body: `{ worktreePath?: string, root?: string, branch?: string }`
 - `branch` (optional string): Full local branch reference under `refs/heads/` (e.g. `"refs/heads/feature"`). When provided, prepares a preview for the specified branch (active or inactive, even if `HEAD` is detached). When omitted, defaults to the currently checked-out branch at `HEAD` (and returns blocked `detached-head` if `HEAD` is detached).
 - `worktreePath` (optional string): Target registered worktree path.
 - `root` (optional string): Target VCS root.
-Response: `PublishPreview`:
+  Response: `PublishPreview`:
 
 ```json
 {
@@ -388,10 +389,11 @@ Stage files in the index with conflict preflight and process-local mutation coor
 Body: `{ paths: string[], root?: string }`
 
 Preconditions and safety guards:
+
 - **Process-local mutation coordination (`GitMutationCoordinator`):** Acquires an exclusive in-memory lock keyed on the canonical repository common Git directory (`commondir` for linked worktrees, or canonical `.git` directory). If another server-coordinated Git mutation is in progress on the repository, returns HTTP 503 (`UNAVAILABLE`) with `"Another Git mutation is in progress for this repository"`.
 - **Generic stage preflight (CUT1):** Before staging any path, inspects `index.has_conflicts()`. If any path in `paths` is an unmerged conflict entry, the request is rejected immediately with HTTP 400 (`INVALID_INPUT`: `"Cannot stage unmerged conflicted file '{path}'. Resolve conflict first."`) before any clean files in the batch are staged. Clean-only batches pass this conflict preflight (subsequent standard staging validations still apply).
-**POST /api/git/:project/unstage**
-Unstage files.
+  **POST /api/git/:project/unstage**
+  Unstage files.
 
 Body: `{ paths: string[], root?: string }`
 
@@ -406,18 +408,21 @@ Discard single hunk from file.
 Body: `{ path: string, hunkIndex: number, root?: string }`
 
 <a id="git-conflict-discovery--snapshots"></a>
+
 ### Git Conflict Discovery & Snapshots
 
 **GET /api/git/{project}/conflicts**
 Bounded deterministic summary of unmerged index entries without eager stage blob or worktree file loading.
 
 Query parameters:
+
 - `worktreePath` (optional string): Absolute path to a registered Git worktree. When omitted or `null`, defaults to the configured project root.
 - `root` (optional string): Explicit VCS root identifier for multi-root projects.
-- `cursor` (optional string): Opaque pagination cursor returned from a previous response (`nextCursor`). Stale cursors (where the repository target revision drifted) are rejected with HTTP 400.
+- `cursor` (optional string): Opaque v2 pagination cursor bound to the full unmerged conflict-set fingerprint and last raw-path anchor. A changed conflict set or missing anchor is rejected with HTTP 400 (`GIT_CONFLICT_CURSOR_STALE`); clients may restart pagination once from the first page.
 - `limit` (optional integer): Maximum conflict entries per page (clamped between 1 and 500, default 100).
 
 Response (`ConflictSummaryResponse`):
+
 ```json
 {
   "targetRevision": "0123456789abcdef0123456789abcdef01234567",
@@ -434,6 +439,7 @@ Response (`ConflictSummaryResponse`):
 ```
 
 Fields and behaviors:
+
 - `conflictId`: Opaque URL-safe server identifier representing the raw unmerged path bytes. Clients must pass this identifier unchanged to detail queries.
 - `status`: Unmerged conflict state enum: `bothModified`, `modifyDelete`, `deleteModify`, `bothAdded`, or `unsupported`.
 - `isBinary`: Binary file detection combining gitattributes `diff` configuration, known binary file extensions, and bounded ODB sniffing ($\le$ 8,000 bytes) without loading all stage blobs or reading worktree files.
@@ -445,11 +451,13 @@ Fields and behaviors:
 Coherent on-demand detail snapshot for a single conflict, including stage blobs, worktree metadata, effective gitattributes, and before/after coherence verification.
 
 Query parameters:
+
 - `conflictId` (required string): Opaque conflict identifier issued by `GET /api/git/{project}/conflicts` (max 4096 bytes).
 - `worktreePath` (optional string): Absolute path to a registered Git worktree. When omitted or `null`, defaults to the configured project root.
 - `root` (optional string): Explicit VCS root identifier.
 
 Response (`ConflictSnapshot`):
+
 ```json
 {
   "conflictId": "cid_7372632f636f6e666c6963742e7273",
@@ -493,7 +501,13 @@ Response (`ConflictSnapshot`):
     "kind": "regular",
     "mode": 33188,
     "byteLength": 60,
-    "textTokens": ["<<<<<<< HEAD\n", "our line 1\n", "=======\n", "their line 1\n", ">>>>>>> branch\n"],
+    "textTokens": [
+      "<<<<<<< HEAD\n",
+      "our line 1\n",
+      "=======\n",
+      "their line 1\n",
+      ">>>>>>> branch\n"
+    ],
     "hasConflictMarkers": true,
     "isDirtyVsStages": true
   },
@@ -506,6 +520,7 @@ Response (`ConflictSnapshot`):
 ```
 
 Pre-allocation bounds, classification, and failure semantics:
+
 - **Pre-allocation stage limits:** Before allocating blob memory, object headers are inspected in the Git ODB via `read_header`. A stage blob exceeding `MAX_STAGE_BYTES` (5 MiB) or cumulative stage bytes exceeding `MAX_TOTAL_STAGE_BYTES` (15 MiB combined across stages 1, 2, 3) marks the stage `kind: "unsupported"` and its `textTokens` is withheld (omitted from serialized JSON).
 - **Worktree file limits:** Worktree file reading is capped at `MAX_WORKTREE_BYTES` (5 MiB). Files exceeding this bound retain `kind: "regular"`, set `isDirtyVsStages: true`, and withhold `textTokens` (omitted from serialized JSON).
 - **Bounded line tokenization:** UTF-8 text is tokenized into line tokens preserving raw terminators (`\n`, `\r\n`, or lone `\r`) such that `textTokens.join("") == content`. Tokenization enforces limits of `MAX_LINES` (50,000 lines) and `MAX_LINE_LENGTH` (100,000 bytes); exceeding either during tokenization marks the stage `kind: "unsupported"` and withholds `textTokens`.
@@ -517,9 +532,10 @@ Pre-allocation bounds, classification, and failure semantics:
 **POST /api/git/{project}/resolve**
 Safe conflict resolution and staging endpoint with strict precondition verification, process-local mutation coordination, atomic file publication, and post-staging oracle verification.
 
-*Implementation status:* Backend mutation contract implemented; safety review remains active and public cutover is blocked until Phase 05 migrates frontend callers. Requests missing `conflictId` or `snapshotVersion` strings, or containing legacy `content`, are rejected with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields or malformed action payloads are rejected (`deny_unknown_fields`) with HTTP 400 (`INVALID_INPUT`).
+_Implementation status:_ Backend mutation contract and Phase 05 frontend client DTO cutover implemented (`client.ts`, `ws-transport.ts`, `queries.ts`). Requests missing `conflictId` or `snapshotVersion` strings, or containing legacy `content`, are rejected fail-closed with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields or malformed action payloads are rejected (`deny_unknown_fields`) with HTTP 400 (`INVALID_INPUT`). Client mutations are preconditioned on `fullIndexFingerprint` and `snapshotVersion`; blind retries on timeouts, disconnects, or `outcomeUnknown` / `worktreeChangedStageFailed` are strictly prohibited.
 
 **Request body (`ResolveRequest`):**
+
 ```json
 {
   "conflictId": "cid_7372632f636f6e666c6963742e7273",
@@ -537,6 +553,7 @@ Safe conflict resolution and staging endpoint with strict precondition verificat
 ```
 
 Request fields:
+
 - `conflictId` (required string): Opaque URL-safe server identifier representing the raw unmerged path bytes.
 - `snapshotVersion` (required string): Exact snapshot version token from `GET /api/git/{project}/conflicts/file`.
 - `fullIndexFingerprint` (required string): Fingerprint of the full index state captured during snapshot generation.
@@ -555,17 +572,18 @@ Request fields:
 **Response (`ResolveOutcome`):**
 The endpoint returns HTTP 200 with a tagged domain outcome JSON object (`outcome` discriminator). Callers must evaluate `outcome`:
 
-| Outcome Discriminator | Fields | Meaning & Client Action |
-| --- | --- | --- |
-| `applied` | `newOid?: string`, `stage0Mode?: number`, `deleted?: boolean` | Mutation succeeded. For `reviewedText` and `indexSide`, worktree file written, unmerged stages 1–3 removed, and stage 0 entry verified (`deleted` omitted when `false`). For `delete`, worktree file removed and all index stages 0–3 verified absent (`deleted: true`, `newOid` and `stage0Mode` omitted). |
-| `stale` | `reason: string`, `requiredRefresh: boolean` | Precondition mismatch: index drifted (`fullIndexFingerprint`), snapshot drifted (`snapshotVersion`), or conflict resolved externally. Client must refresh state; zero writes occurred. |
-| `unsupported` | `reason: string` | Path or configuration unsupported (e.g. symlink/directory/gitlink worktree kinds, non-UTF-8 path, custom encoding, or `ident=true`). Zero writes occurred. |
-| `busy` | `reason: string` | Mutation lock held: either in-memory `GitMutationCoordinator` active on repository or Git `index.lock` present on disk. Zero writes occurred. |
-| `failedBeforeWrite` | `error: string` | Validation failure prior to disk mutation (e.g. path traversal or ancestor check failure). Zero writes occurred. |
-| `worktreeChangedStageFailed` | `error: string`, `worktreeWritten: boolean`, `staged: boolean` | Partial mutation: file was published to worktree disk, but staging the index entry failed. UI must retain submitted reviewed text and prompt user to review/refresh. |
-| `outcomeUnknown` | `error: string`, `requiredRefresh: boolean` | Mutation state uncertain (e.g. repository reopen failed or unmerged stages lingered after staging). Client must refresh and re-inspect state before taking further action. Automatic replay is prohibited. |
+| Outcome Discriminator        | Fields                                                         | Meaning & Client Action                                                                                                                                                                                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applied`                    | `newOid?: string`, `stage0Mode?: number`, `deleted?: boolean`  | Mutation succeeded. For `reviewedText` and `indexSide`, worktree file written, unmerged stages 1–3 removed, and stage 0 entry verified (`deleted` omitted when `false`). For `delete`, worktree file removed and all index stages 0–3 verified absent (`deleted: true`, `newOid` and `stage0Mode` omitted). |
+| `stale`                      | `reason: string`, `requiredRefresh: boolean`                   | Precondition mismatch: index drifted (`fullIndexFingerprint`), snapshot drifted (`snapshotVersion`), or conflict resolved externally. Client must refresh state; zero writes occurred.                                                                                                                      |
+| `unsupported`                | `reason: string`                                               | Path or configuration unsupported (e.g. symlink/directory/gitlink worktree kinds, non-UTF-8 path, custom encoding, or `ident=true`). Zero writes occurred.                                                                                                                                                  |
+| `busy`                       | `reason: string`                                               | Mutation lock held: either in-memory `GitMutationCoordinator` active on repository or Git `index.lock` present on disk. Zero writes occurred.                                                                                                                                                               |
+| `failedBeforeWrite`          | `error: string`                                                | Validation failure prior to disk mutation (e.g. path traversal or ancestor check failure). Zero writes occurred.                                                                                                                                                                                            |
+| `worktreeChangedStageFailed` | `error: string`, `worktreeWritten: boolean`, `staged: boolean` | Partial mutation: file was published to worktree disk, but staging the index entry failed. UI must retain submitted reviewed text and prompt user to review/refresh.                                                                                                                                        |
+| `outcomeUnknown`             | `error: string`, `requiredRefresh: boolean`                    | Mutation state uncertain (e.g. repository reopen failed or unmerged stages lingered after staging). Client must refresh and re-inspect state before taking further action. Automatic replay is prohibited.                                                                                                  |
 
 **Mutation checks and limitations:**
+
 - **Precondition re-validation:** Verifies `fullIndexFingerprint`, `snapshotVersion`, target path boundaries (`verify_safe_worktree_path`), and on-disk file type (refusing to overwrite symlinks or directories) before touching disk.
 - **Process-local coordination:** Acquires in-memory `GitMutationCoordinator` keyed on the canonical repository common Git directory (`commondir` for linked worktrees, or canonical `.git` directory), then checks for existing disk `index.lock`. External uninstrumented Git CLI processes or external file edits are not synchronized.
 - **Publication mechanism:** For `reviewedText` and `indexSide`, writes to a unique temporary sibling file (`.tmp_resolve_<hex>`) before renaming onto the target path (`safe_atomic_write`). This pathname-based publication does not provide a cross-system filesystem/index transaction or race-resistant ancestor containment against concurrent external writers.
@@ -573,6 +591,7 @@ The endpoint returns HTTP 200 with a tagged domain outcome JSON object (`outcome
 - **Retry and replay policy:** Callers must not perform automatic or blind retries after timeouts, connection drops, or received `outcomeUnknown` / `worktreeChangedStageFailed`. Because partial mutations may have updated the worktree on disk prior to index stage failure, clients must refresh repository state and prompt the operator to review prior to any subsequent submission.
 
 <a id="git-operation-lifecycle"></a>
+
 ### Git Operation Lifecycle
 
 Authoritative detection, fingerprint-preconditioned continue/abort mutations, and truthful outcomes for active Git operations (`merge`, `rebase`, `cherry-pick`, `revert`). Detailed sequencer state machine and runner invariants are documented in the [Git Operation Lifecycle API](./git-operation-lifecycle.md).
@@ -581,10 +600,12 @@ Authoritative detection, fingerprint-preconditioned continue/abort mutations, an
 Inspect authoritative active Git operation status, sequencer state, blockers, and fingerprints.
 
 Query parameters:
+
 - `worktreePath` (optional string): Absolute path to registered worktree. Defaults to project root.
 - `root` (optional string): Target VCS root identifier.
 
 Response (`OperationStatusResponse`):
+
 ```json
 {
   "operation": "merge",
@@ -593,17 +614,23 @@ Response (`OperationStatusResponse`):
   "stoppedReason": "conflicts",
   "operationFingerprint": "4a7f29e1...",
   "fullIndexFingerprint": "8b9c1d2e...",
-  "stageRoleLabels": { "base": "Base (merge base)", "ours": "Current branch (HEAD)", "theirs": "Incoming change (MERGE_HEAD)" },
+  "stageRoleLabels": {
+    "base": "Base (merge base)",
+    "ours": "Current branch (HEAD)",
+    "theirs": "Incoming change (MERGE_HEAD)"
+  },
   "terminalHandoffRequired": null,
   "blockers": ["Unresolved merge conflicts remain in index"]
 }
 ```
+
 Fields: `operation` (`"none"`, `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`, `"unsupported"`, `"unknown"`), `canContinue` (server-computed eligibility: `true` when supported operation is active and index has no unresolved conflicts), `canAbort`, optional `stoppedReason` (`"conflicts"`, `"messageEditRequired"`, `"hookBlocked"`, `"unknown"`), `operationFingerprint` (SHA-256 of metadata/sequencer state), `fullIndexFingerprint`, `stageRoleLabels`, optional `terminalHandoffRequired` (`{ reason: "commitMessageEditor", worktreeRoot }`), `blockers`.
 
 **POST /api/git/{project}/operation**
 Execute preconditioned operation continue or abort mutation under `GitMutationCoordinator`.
 
 Body (`OperationActionRequest`, strict `deny_unknown_fields`):
+
 ```json
 {
   "operationPrecondition": "4a7f29e1...",
@@ -614,21 +641,25 @@ Body (`OperationActionRequest`, strict `deny_unknown_fields`):
   "root": "optional-root"
 }
 ```
+
 Validation & execution rules:
+
 - Missing `operationPrecondition`, `fullIndexFingerprint`, or `action` string fails closed with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields return HTTP 400 (`INVALID_INPUT`).
 - Exclusive process-local `GitMutationCoordinator` lock acquired across common gitdir and worktree. Preconditions re-validated under lock; mismatches return `stale`.
 - Subprocess executed via `run_bounded_git_command` with 15-second deadline, `kill_on_drop(true)`, `GIT_TERMINAL_PROMPT=0`, process-group termination, and non-interactive `GIT_EDITOR` sentinel (exit 42) to catch interactive editor prompts non-interactively.
 - Response returns tagged `OperationOutcome` (`outcome`): `continued` (`{ newStatus }`), `aborted` (`{ worktreeCleaned }`), `blocked` (`{ reason, terminalHandoffRequired?: boolean }`; note `terminalHandoffRequired` is a boolean flag in this outcome), `stale` (`{ reason, requiredRefresh: true }`), `failed` (`{ error }`), or `outcomeUnknown` (`{ error, requiredRefresh: true }`; automated replay prohibited).
-**POST /api/git/:project/commit**
-Create a commit from staged files.
+  **POST /api/git/:project/commit**
+  Create a commit from staged files.
 
 Body: `{ message: string, amend?: bool, root?: string }`
+
 ### Git History Rewriting & Squash
 
 **GET /api/git/:project/commit/:hash/message**
 Read the complete UTF-8 message, canonical branch ref, and tip OID for a commit reachable from the target branch.
 
 Query parameters:
+
 - `branch` (optional string): Full local branch reference under `refs/heads/` (e.g. `refs/heads/feature`). Enables reading commit messages from inactive branches or while `HEAD` is detached. When omitted, defaults to the currently checked-out branch at `HEAD`. Non-branch refs or invalid ref syntax return HTTP `400 Bad Request`.
 - `worktreePath` (optional string): Target registered worktree path.
 - `root` (optional string): Target VCS root.
@@ -660,6 +691,7 @@ Body:
 ```
 
 Notes:
+
 - Supports rewriting both active and inactive local branches. Inactive branch rewrites leave the active checkout, index, and dirty working tree files completely untouched.
 - Enforces CAS: returns `ok: false` with `blockedReason: "stale-ref"` if the branch tip moved or if the branch changed active/inactive status during snapshot acquisition or publication.
 - Blocked with `checked-out-branch` if the target branch is checked out in another linked worktree, or `active-operation` if a rebase, merge, or cherry-pick is in progress.
@@ -684,13 +716,16 @@ Body:
 ```
 
 Notes:
+
 - Commits must be unique full 40-hex OIDs in exact oldest-first order with unbroken parent links and no merge commits in the range or rewritten descendants.
 - Supports active and inactive local branches. Inactive branch squashes preserve active checkout and working tree state.
 - Guarded against checkout in other linked worktrees (`checked-out-branch`), concurrent branch switches (`stale-ref`), and active operations (`active-operation`).
 - Publication requires a separate user-confirmed leased push (`/push/prepare` and `/push/publish`).
 - UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
+
 ## Client-Side Profile Management
+
 <a id="client-side-profile-management"></a>
 
 Profile metadata and endpoint-bound credentials live in the browser. The profile runtime is client-side; the server participates through its normal authentication and WebSocket endpoints.
