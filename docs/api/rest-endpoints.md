@@ -571,6 +571,54 @@ The endpoint returns HTTP 200 with a tagged domain outcome JSON object (`outcome
 - **Publication mechanism:** For `reviewedText` and `indexSide`, writes to a unique temporary sibling file (`.tmp_resolve_<hex>`) before renaming onto the target path (`safe_atomic_write`). This pathname-based publication does not provide a cross-system filesystem/index transaction or race-resistant ancestor containment against concurrent external writers.
 - **Post-staging oracle verification:** Reopens repository and index to assert outcome facts for the resolved path: for `reviewedText` and `indexSide` (`verify_applied_oracle`), verifies unmerged stages 1–3 are removed, stage 0 matches expected OID/mode, and disk bytes match expected content; for `delete` (`verify_deleted_oracle`), verifies all stages 0–3 are absent from the index and the file no longer exists in the worktree.
 - **Retry and replay policy:** Callers must not perform automatic or blind retries after timeouts, connection drops, or received `outcomeUnknown` / `worktreeChangedStageFailed`. Because partial mutations may have updated the worktree on disk prior to index stage failure, clients must refresh repository state and prompt the operator to review prior to any subsequent submission.
+
+<a id="git-operation-lifecycle"></a>
+### Git Operation Lifecycle
+
+Authoritative detection, fingerprint-preconditioned continue/abort mutations, and truthful outcomes for active Git operations (`merge`, `rebase`, `cherry-pick`, `revert`). Detailed sequencer state machine and runner invariants are documented in the [Git Operation Lifecycle API](./git-operation-lifecycle.md).
+
+**GET /api/git/{project}/operation**
+Inspect authoritative active Git operation status, sequencer state, blockers, and fingerprints.
+
+Query parameters:
+- `worktreePath` (optional string): Absolute path to registered worktree. Defaults to project root.
+- `root` (optional string): Target VCS root identifier.
+
+Response (`OperationStatusResponse`):
+```json
+{
+  "operation": "merge",
+  "canContinue": false,
+  "canAbort": true,
+  "stoppedReason": "conflicts",
+  "operationFingerprint": "4a7f29e1...",
+  "fullIndexFingerprint": "8b9c1d2e...",
+  "stageRoleLabels": { "base": "Base (merge base)", "ours": "Current branch (HEAD)", "theirs": "Incoming change (MERGE_HEAD)" },
+  "terminalHandoffRequired": null,
+  "blockers": ["Unresolved merge conflicts remain in index"]
+}
+```
+Fields: `operation` (`"none"`, `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`, `"unsupported"`, `"unknown"`), `canContinue` (server-computed eligibility: `true` when supported operation is active and index has no unresolved conflicts), `canAbort`, optional `stoppedReason` (`"conflicts"`, `"messageEditRequired"`, `"hookBlocked"`, `"unknown"`), `operationFingerprint` (SHA-256 of metadata/sequencer state), `fullIndexFingerprint`, `stageRoleLabels`, optional `terminalHandoffRequired` (`{ reason: "commitMessageEditor", worktreeRoot }`), `blockers`.
+
+**POST /api/git/{project}/operation**
+Execute preconditioned operation continue or abort mutation under `GitMutationCoordinator`.
+
+Body (`OperationActionRequest`, strict `deny_unknown_fields`):
+```json
+{
+  "operationPrecondition": "4a7f29e1...",
+  "fullIndexFingerprint": "8b9c1d2e...",
+  "action": "continue",
+  "abortConfirmed": false,
+  "worktreePath": "/path/to/worktree",
+  "root": "optional-root"
+}
+```
+Validation & execution rules:
+- Missing `operationPrecondition`, `fullIndexFingerprint`, or `action` string fails closed with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields return HTTP 400 (`INVALID_INPUT`).
+- Exclusive process-local `GitMutationCoordinator` lock acquired across common gitdir and worktree. Preconditions re-validated under lock; mismatches return `stale`.
+- Subprocess executed via `run_bounded_git_command` with 15-second deadline, `kill_on_drop(true)`, `GIT_TERMINAL_PROMPT=0`, process-group termination, and non-interactive `GIT_EDITOR` sentinel (exit 42) to catch interactive editor prompts non-interactively.
+- Response returns tagged `OperationOutcome` (`outcome`): `continued` (`{ newStatus }`), `aborted` (`{ worktreeCleaned }`), `blocked` (`{ reason, terminalHandoffRequired?: boolean }`; note `terminalHandoffRequired` is a boolean flag in this outcome), `stale` (`{ reason, requiredRefresh: true }`), `failed` (`{ error }`), or `outcomeUnknown` (`{ error, requiredRefresh: true }`; automated replay prohibited).
 **POST /api/git/:project/commit**
 Create a commit from staged files.
 
@@ -644,110 +692,7 @@ Notes:
 - Response follows `GitActionResult`.
 ## Client-Side Profile Management
 <a id="client-side-profile-management"></a>
-Profile metadata and endpoint-bound credentials live in the browser. The
-profile runtime is client-side; the server participates through its normal
-authentication and WebSocket endpoints. The shared shell does not require a
-profile connection to mount.
 
-### Data model
+Profile metadata and endpoint-bound credentials live in the browser. The profile runtime is client-side; the server participates through its normal authentication and WebSocket endpoints.
 
-```typescript
-export interface ServerProfile {
-  id: string; // UUID v4
-  name: string;
-  url: string; // normalized HTTP(S) URL
-  authType: "basic" | "none";
-  username?: string; // display value; password is never stored
-  createdAt: number; // Unix timestamp
-  autoConnect: boolean;
-}
-
-export interface ProfileAuthV2 {
-  version: 2;
-  serverUrl: string;
-  authType: "basic" | "none";
-  token: string;
-}
-```
-
-`ProfileAuthV2` is stored under
-`damhopper_profile_auth_v2_<profileId>`. Reads require a profile ID and verify
-the saved URL and auth type against the current profile. A legacy
-`damhopper_auth_token_<profileId>` record is migrated only when its profile
-still exists; an unbound legacy single-server token is not copied to an
-unrelated endpoint.
-
-### Profile configuration functions
-
-All functions are in `packages/ui/src/api/server-config.ts`:
-
-- `readServerProfiles(): KnownServerProfiles` distinguishes available storage
-  from an unavailable storage backend.
-- `getProfiles(): ServerProfile[]` reads available profiles.
-- `createProfile(data): ServerProfile` defaults `autoConnect` to `true`.
-- `updateProfile(id, data): boolean` updates metadata, including `autoConnect`.
-- `deleteProfile(id): boolean` clears credentials and removes local profile
-  state; it does not delete remote server data.
-- `migrateToProfiles(): void` converts the legacy URL/token configuration and
-  preserves explicit profile choices.
-- `getAuthToken(profileId?): string | null`,
-  `setAuthToken(token, profileId?): boolean`, and
-  `clearAuthToken(profileId?): boolean` are profile-explicit at runtime;
-  missing IDs do not fall back to a global token.
-- `isSameOriginProfile(profile): boolean` applies the native platform origin
-  restriction before auto-login or connection traffic.
-
-The `damhopper_active_profile_id` record remains a compatibility/default
-endpoint input for legacy helpers. It is not the owner of connection state.
-`connections.ts` exposes `connectProfile(profileId)`,
-`disconnectProfile(profileId)`, and `removeProfileConnection(profileId)` for
-independent profile runtimes.
-
-`getMediaClientId(owner)` returns an in-memory UUIDv4 for the exact
-`{ profileId, generation }`. `getMediaClientIdForProfile(profileId)` uses the
-current snapshot when connected and creates a stable generation-1 fallback when
-the profile is disconnected, so profile removal/logout cleanup still addresses
-the original namespace. `removeProfileConnection` deletes all serialized owner
-tuple keys for that profile; malformed keys are ignored.
-
-### Connection contract
-
-```typescript
-export type ConnectionStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "login-required"
-  | "offline"
-  | "unsupported";
-
-export interface ConnectionSnapshot {
-  owner: { profileId: string; generation: number };
-  status: ConnectionStatus;
-  intent: boolean;
-  serverUrl: string;
-  error?: string;
-}
-```
-
-`connectProfile` first checks URL validity, native origin support, and
-`GET /api/auth/status`. The response must include `workbenchProtocol: 2`.
-Generation and owner checks prevent a previous profile runtime from publishing
-results after edit, removal, logout, or replacement.
-
-### Persistence breakdown
-
-| Key                                 | Storage             | Scope                                       |
-| ----------------------------------- | ------------------- | ------------------------------------------- |
-| `damhopper_server_profiles`         | `localStorage`      | All profile metadata; shared by tabs        |
-| `damhopper_profile_auth_v2_<id>`    | `localStorage`      | Endpoint-bound auth per profile             |
-| `damhopper_active_profile_id`       | `localStorage`      | Compatibility/default endpoint input        |
-| `dam-hopper:workspace-state`        | Zustand persistence | Qualified `selectedProject`                 |
-| `dam-hopper:preferences-source:v1`  | Zustand persistence | Independent preference/settings/browser IDs |
-| TanStack Query and connection state | Memory only         | Owner/generation-qualified                  |
-
-No client query cache is persisted to localStorage. The fresh-state reset
-removes allowlisted legacy browser-resource records, never calls
-`localStorage.clear()`, preserves profiles/auth/server data, and rejects
-unqualified `project`/`session` links that lack `profileId`.
-
+Detailed TypeScript data models (`ServerProfile`, `ProfileAuthV2`), storage keys (`damhopper_server_profiles`), connection lifecycle contracts (`ConnectionStatus`), and profile management functions are documented in the dedicated [Client-Side Profile Management Reference](./client-side-profiles.md) and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
-use sha2::{Digest, Sha256};
 use crate::error::AppError;
 use crate::git::diff::open_repo;
 use crate::git::types::{
     ConflictSnapshot, ConflictStages, ConflictStatus, ConflictSummaryEntry,
-    ConflictSummaryResponse, EffectiveAttributes, StageDescriptor, StageKind,
-    WorktreeDescriptor, WorktreeKind,
+    ConflictSummaryResponse, EffectiveAttributes, StageDescriptor, StageKind, WorktreeDescriptor,
+    WorktreeKind,
 };
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 pub const MAX_STAGE_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
 pub const MAX_TOTAL_STAGE_BYTES: u64 = 15 * 1024 * 1024; // 15 MB
@@ -178,34 +178,7 @@ pub fn verify_safe_worktree_path(base: &Path, rel: &str) -> Result<PathBuf, AppE
 }
 
 pub fn get_active_operation(repo: &git2::Repository) -> &'static str {
-    match repo.state() {
-        git2::RepositoryState::Merge => "merge",
-        git2::RepositoryState::Rebase
-        | git2::RepositoryState::RebaseInteractive
-        | git2::RepositoryState::RebaseMerge => "rebase",
-        git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
-            "cherry-pick"
-        }
-        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => "revert",
-        git2::RepositoryState::ApplyMailbox | git2::RepositoryState::ApplyMailboxOrRebase => {
-            "rebase"
-        }
-        git2::RepositoryState::Bisect => "bisect",
-        git2::RepositoryState::Clean => {
-            let git_dir = repo.path();
-            if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
-                "rebase"
-            } else if git_dir.join("MERGE_HEAD").exists() {
-                "merge"
-            } else if git_dir.join("CHERRY_PICK_HEAD").exists() {
-                "cherry-pick"
-            } else if git_dir.join("REVERT_HEAD").exists() {
-                "revert"
-            } else {
-                "none"
-            }
-        }
-    }
+    crate::git::operation::active_operation_kind(repo).as_str()
 }
 
 pub fn inspect_effective_attributes(repo: &git2::Repository, path: &str) -> EffectiveAttributes {
@@ -247,7 +220,8 @@ pub fn inspect_effective_attributes(repo: &git2::Repository, path: &str) -> Effe
         git2::AttrValue::Unspecified | git2::AttrValue::False => true,
         git2::AttrValue::String(f) if f.trim().is_empty() => true,
         _ => false,
-    } && !ident && encoding.is_none();
+    } && !ident
+        && encoding.is_none();
 
     let text = match git2::AttrValue::from_string(
         repo.get_attr(p, "text", git2::AttrCheckFlags::empty())
@@ -347,31 +321,32 @@ fn capture_state_fingerprint(
         .unwrap_or_default();
     let operation = get_active_operation(repo).to_string();
     let full_index_fingerprint = compute_full_index_fingerprint(index);
-    let (worktree_mtime_nanos, worktree_size, worktree_content_hash) = if let Some(p) = worktree_file {
-        if let Ok(meta) = std::fs::symlink_metadata(p) {
-            let nanos = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            let size = meta.len();
-            let hash = if meta.file_type().is_file() && size <= MAX_WORKTREE_BYTES {
-                if let Ok(bytes) = std::fs::read(p) {
-                    Some(hex::encode(Sha256::digest(&bytes)))
+    let (worktree_mtime_nanos, worktree_size, worktree_content_hash) =
+        if let Some(p) = worktree_file {
+            if let Ok(meta) = std::fs::symlink_metadata(p) {
+                let nanos = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                let size = meta.len();
+                let hash = if meta.file_type().is_file() && size <= MAX_WORKTREE_BYTES {
+                    if let Ok(bytes) = std::fs::read(p) {
+                        Some(hex::encode(Sha256::digest(&bytes)))
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
+                };
+                (nanos, size, hash)
             } else {
-                None
-            };
-            (nanos, size, hash)
+                (0, 0, None)
+            }
         } else {
             (0, 0, None)
-        }
-    } else {
-        (0, 0, None)
-    };
+        };
     let attributes_fingerprint = if let Some(rel) = path_for_attrs {
         let attrs = inspect_effective_attributes(repo, rel);
         compute_attributes_fingerprint(&attrs)
@@ -495,9 +470,9 @@ pub fn get_conflicts_summary(
                         "Stale cursor: target revision has changed since cursor was issued".into(),
                     ));
                 }
-                parts[1].parse::<usize>().map_err(|_| {
-                    AppError::InvalidInput("Malformed cursor offset".into())
-                })?
+                parts[1]
+                    .parse::<usize>()
+                    .map_err(|_| AppError::InvalidInput("Malformed cursor offset".into()))?
             } else {
                 return Err(AppError::InvalidInput("Malformed cursor format".into()));
             }
@@ -621,9 +596,13 @@ pub fn get_conflicts_summary(
         // Bounded binary detection: attributes -> known extension -> bounded ODB sniff (<= 8KB)
         let mut is_binary = false;
         let diff_attr = git2::AttrValue::from_string(
-            repo.get_attr(Path::new(&display_path), "diff", git2::AttrCheckFlags::empty())
-                .ok()
-                .flatten(),
+            repo.get_attr(
+                Path::new(&display_path),
+                "diff",
+                git2::AttrCheckFlags::empty(),
+            )
+            .ok()
+            .flatten(),
         );
         if matches!(diff_attr, git2::AttrValue::False) {
             is_binary = true;
@@ -632,10 +611,17 @@ pub fn get_conflicts_summary(
         } else {
             let is_known_binary_ext = {
                 let p = Path::new(&display_path);
-                match p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()).as_deref() {
-                    Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" | "pdf" | "zip"
-                        | "tar" | "gz" | "bz2" | "7z" | "exe" | "dll" | "so" | "dylib"
-                        | "bin" | "dat" | "pyc" | "class" | "wasm") => true,
+                match p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|s| s.to_ascii_lowercase())
+                    .as_deref()
+                {
+                    Some(
+                        "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" | "pdf" | "zip" | "tar"
+                        | "gz" | "bz2" | "7z" | "exe" | "dll" | "so" | "dylib" | "bin" | "dat"
+                        | "pyc" | "class" | "wasm",
+                    ) => true,
                     _ => false,
                 }
             };
@@ -695,7 +681,9 @@ pub fn get_conflict_snapshot(
     conflict_id: &str,
 ) -> Result<ConflictSnapshot, AppError> {
     if conflict_id.len() > 4096 {
-        return Err(AppError::InvalidInput("conflictId exceeds maximum allowed length".into()));
+        return Err(AppError::InvalidInput(
+            "conflictId exceeds maximum allowed length".into(),
+        ));
     }
     let repo = open_repo(root_path)?;
     let mut index = repo
@@ -745,30 +733,34 @@ pub fn get_conflict_snapshot(
         Err(_) => {
             let lossy_path = String::from_utf8_lossy(&target_raw_path).into_owned();
             let before_state = capture_state_fingerprint(&repo, &index, None, None);
-            let build_unsupported_stage = |stage_num: u16, entry_opt: Option<&git2::IndexEntry>| -> StageDescriptor {
-                match entry_opt {
-                    Some(e) => StageDescriptor {
-                        stage: stage_num,
-                        path: Some(lossy_path.clone()),
-                        oid: Some(e.id.to_string()),
-                        mode: e.mode,
-                        byte_size: 0,
-                        kind: StageKind::Unsupported,
-                        text_tokens: None,
-                    },
-                    None => StageDescriptor {
-                        stage: stage_num,
-                        path: None,
-                        oid: None,
-                        mode: 0,
-                        byte_size: 0,
-                        kind: StageKind::Missing,
-                        text_tokens: None,
-                    },
-                }
-            };
+            let build_unsupported_stage =
+                |stage_num: u16, entry_opt: Option<&git2::IndexEntry>| -> StageDescriptor {
+                    match entry_opt {
+                        Some(e) => StageDescriptor {
+                            stage: stage_num,
+                            path: Some(lossy_path.clone()),
+                            oid: Some(e.id.to_string()),
+                            mode: e.mode,
+                            byte_size: 0,
+                            kind: StageKind::Unsupported,
+                            text_tokens: None,
+                        },
+                        None => StageDescriptor {
+                            stage: stage_num,
+                            path: None,
+                            oid: None,
+                            mode: 0,
+                            byte_size: 0,
+                            kind: StageKind::Missing,
+                            text_tokens: None,
+                        },
+                    }
+                };
             let empty_stages = ConflictStages {
-                base: conflict.ancestor.as_ref().map(|_| build_unsupported_stage(1, conflict.ancestor.as_ref())),
+                base: conflict
+                    .ancestor
+                    .as_ref()
+                    .map(|_| build_unsupported_stage(1, conflict.ancestor.as_ref())),
                 ours: build_unsupported_stage(2, conflict.our.as_ref()),
                 theirs: build_unsupported_stage(3, conflict.their.as_ref()),
             };
@@ -833,8 +825,8 @@ pub fn get_conflict_snapshot(
     let mut total_stage_bytes: u64 = 0;
 
     let build_stage = |stage_num: u16,
-                           entry_opt: Option<&git2::IndexEntry>,
-                           total_bytes: &mut u64|
+                       entry_opt: Option<&git2::IndexEntry>,
+                       total_bytes: &mut u64|
      -> Result<StageDescriptor, AppError> {
         let entry = match entry_opt {
             Some(e) => e,
@@ -1166,8 +1158,11 @@ pub fn get_conflict_snapshot(
     let effective_attributes = inspect_effective_attributes(&repo, &display_path);
 
     // Re-read index and verify after-state
-    index.read(true).map_err(|e| AppError::Git(e.message().to_string()))?;
-    let after_state = capture_state_fingerprint(&repo, &index, Some(&safe_disk_path), Some(&display_path));
+    index
+        .read(true)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    let after_state =
+        capture_state_fingerprint(&repo, &index, Some(&safe_disk_path), Some(&display_path));
 
     if before_state != after_state {
         return Err(AppError::ConflictStateChanged);
@@ -1209,9 +1204,15 @@ pub fn get_conflict_snapshot(
                     ConflictStatus::Unsupported,
                     Some("Complex rename conflict with mismatched stage paths".to_string()),
                 )
-            } else if conflict.ancestor.is_some() && conflict.our.is_some() && conflict.their.is_some() {
+            } else if conflict.ancestor.is_some()
+                && conflict.our.is_some()
+                && conflict.their.is_some()
+            {
                 (ConflictStatus::BothModified, None)
-            } else if conflict.ancestor.is_none() && conflict.our.is_some() && conflict.their.is_some() {
+            } else if conflict.ancestor.is_none()
+                && conflict.our.is_some()
+                && conflict.their.is_some()
+            {
                 (ConflictStatus::BothAdded, None)
             } else if conflict.our.is_some() && conflict.their.is_none() {
                 (ConflictStatus::DeleteModify, None)
@@ -1320,7 +1321,10 @@ mod tests {
         let raw_ascii = b"src/index.ts";
         let cid1 = encode_conflict_id(raw_ascii);
         assert!(cid1.starts_with("cid_"));
-        assert_eq!(decode_conflict_id(&cid1).as_deref(), Some(raw_ascii.as_slice()));
+        assert_eq!(
+            decode_conflict_id(&cid1).as_deref(),
+            Some(raw_ascii.as_slice())
+        );
 
         // Non-UTF-8 bytes preserved losslessly
         let raw_non_utf8 = b"invalid_\xFF\xFE_path.txt";
@@ -1338,8 +1342,12 @@ mod tests {
     #[test]
     fn test_detect_conflict_markers_boundary() {
         assert!(!detect_conflict_markers("normal text\nwith regular lines"));
-        assert!(!detect_conflict_markers("<<<<<<< only start marker\nrest of file"));
-        assert!(!detect_conflict_markers(">>>>>>> only end marker\nrest of file"));
+        assert!(!detect_conflict_markers(
+            "<<<<<<< only start marker\nrest of file"
+        ));
+        assert!(!detect_conflict_markers(
+            ">>>>>>> only end marker\nrest of file"
+        ));
         assert!(detect_conflict_markers(
             "<<<<<<< ours\nours content\n=======\ntheirs content\n>>>>>>> theirs\n"
         ));
@@ -1420,7 +1428,10 @@ mod tests {
 
         let hash1 = compute_snapshot_version(&input1);
         let hash1_repeat = compute_snapshot_version(&input1);
-        assert_eq!(hash1, hash1_repeat, "Identical inputs must yield identical hash");
+        assert_eq!(
+            hash1, hash1_repeat,
+            "Identical inputs must yield identical hash"
+        );
 
         // Changing operation changes hash
         let mut state_op_changed = state1.clone();

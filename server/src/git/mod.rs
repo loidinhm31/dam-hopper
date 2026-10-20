@@ -3,14 +3,15 @@ pub mod blame;
 pub mod blame_cache;
 pub mod bulk;
 pub mod cli_fallback;
-pub mod conflict;
-pub mod conflict_resolve;
 pub mod commit_details;
 pub mod commit_file_ops;
 pub mod commit_message_rewrite;
+pub mod conflict;
+pub mod conflict_resolve;
 pub mod diff;
-pub mod mutation_coordination;
 pub mod leased_push;
+pub mod mutation_coordination;
+pub mod operation;
 pub mod progress;
 pub mod repository;
 pub mod squash_commits;
@@ -21,10 +22,10 @@ pub mod worktree;
 #[cfg(test)]
 mod tests;
 
-pub use bulk::BulkGitService;
-pub use cli_fallback::active_git_operation;
 pub use blame::execute_native_blame;
 pub use blame_cache::{BlameBaseline, BlameBaselineCache, CacheKey};
+pub use bulk::BulkGitService;
+pub use cli_fallback::active_git_operation;
 pub use commit_details::get_commit_details;
 pub use commit_file_ops::{
     cherry_pick_commit_files, drop_commit, drop_commit_files, revert_commit, revert_commit_files,
@@ -37,6 +38,10 @@ pub use diff::{
     get_diff_files, get_file_diff, get_untracked_page, stage_files, unstage_files,
 };
 pub use leased_push::{prepare_leased_push, publish_leased_push};
+pub use mutation_coordination::{GitMutationCoordinator, GLOBAL_MUTATION_COORDINATOR};
+pub use operation::{
+    active_operation_kind, execute_operation_action, get_authoritative_operation_status,
+};
 pub use progress::ProgressSender;
 pub use repository::{
     checkout_branch, cherry_pick, create_branch, delete_branch, fetch, get_log, get_status,
@@ -44,17 +49,18 @@ pub use repository::{
 };
 pub use squash_commits::squash_commits;
 pub use types::{
-    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictSnapshot,
-    ConflictStages, ConflictStatus, ConflictSummaryEntry, ConflictSummaryResponse, DiffFileEntry,
-    DiffResponse, EffectiveAttributes, FileDiffContent, GitActionResult, GitBlockReason,
-    GitLogEntry, GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase,
-    GitRecoveryOperation, GitRecoveryState, GitStatus, HunkInfo, PublishBlockReason, PublishPreview,
-    PublishResult, PublishResultStatus, PublishSnapshot, ResetMode, ResolveAction, ResolveEol,
-    ResolveOutcome, ResolveRequest, ResolveSide, StageDescriptor, StageKind,
-    SubmoduleGitlinkInfo, VcsRoot, VcsRootKind, VcsRootMappingState, Worktree, WorktreeAddOptions,
-    WorktreeDescriptor, WorktreeKind, UNTRACKED_PAGE_SIZE,
+    BranchInfo, BranchUpdateResult, CheckoutStrategy, ConflictSnapshot, ConflictStages,
+    ConflictStatus, ConflictSummaryEntry, ConflictSummaryResponse, DiffFileEntry, DiffResponse,
+    EffectiveAttributes, FileDiffContent, GitActionResult, GitBlockReason, GitLogEntry,
+    GitOperation, GitOperationResult, GitProgressEvent, GitProgressPhase, GitRecoveryOperation,
+    GitRecoveryState, GitStatus, HunkInfo, OperationAction, OperationActionRequest, OperationKind,
+    OperationOutcome, OperationStatusResponse, OperationStoppedReason, PublishBlockReason,
+    PublishPreview, PublishResult, PublishResultStatus, PublishSnapshot, ResetMode, ResolveAction,
+    ResolveEol, ResolveOutcome, ResolveRequest, ResolveSide, StageDescriptor, StageKind,
+    StageRoleLabels, SubmoduleGitlinkInfo, TerminalHandoffRequired, VcsRoot, VcsRootKind,
+    VcsRootMappingState, Worktree, WorktreeAddOptions, WorktreeDescriptor, WorktreeKind,
+    UNTRACKED_PAGE_SIZE,
 };
-pub use mutation_coordination::{GitMutationCoordinator, GLOBAL_MUTATION_COORDINATOR};
 pub use vcs_roots::{
     discover_available_vcs_roots, discover_vcs_roots, resolve_git_path_root,
     resolve_git_request_root, resolve_vcs_root, staged_vcs_root_ids, ResolvedGitRoot,

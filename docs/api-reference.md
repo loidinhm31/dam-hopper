@@ -15,7 +15,9 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Agent status, usage, and sessions](./api/agent-usage-and-sessions.md) | Agent snapshot, Codex usage, and PTY session persistence |
 | [Git API](./api/git.md) | Worktrees, branches, history search, commit rewrite/squash, leased publication |
 | [Client transport and events](./api/transport-and-events.md) | Reconnection, PTY subscriptions, and client event methods |
-| [REST endpoints](./api/rest-endpoints.md) | Global config, projects, terminal and Git routes, SSH credentials, profile client contract |
+| [REST endpoints](./api/rest-endpoints.md) | Global config, projects, terminal, Git conflict/operation routes, SSH credentials |
+| [Git operation lifecycle](./api/git-operation-lifecycle.md) | Sequencer state machine, operation continuation/abort, stage role labels, and truthful outcomes |
+| [Client-side profiles](./api/client-side-profiles.md) | Profile metadata, connection contracts, and client-side persistence breakdown |
 | [Filesystem and media](./api/filesystem-and-media.md) | File explorer/search, media tickets, stream authorization |
 | [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health |
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
@@ -30,7 +32,7 @@ See the [idle-suspend API reference](./api/idle-suspend.md). Automatic policy, t
 
 ## Git API
 
-See the [Git endpoint reference](./api/git.md). Commit rewriting and squash are local CAS-protected operations; publication is a separate exact-OID leased action. For unmerged index summaries, on-demand conflict snapshots, safe resolution contracts (`ResolveOutcome`), `GitMutationCoordinator`, and CUT1 generic stage preflight, see [Git Conflict Discovery, Snapshots & Resolution](./api/rest-endpoints.md#git-conflict-discovery--snapshots).
+See the [Git endpoint reference](./api/git.md). Commit rewriting and squash are local CAS-protected operations; publication is a separate exact-OID leased action. For unmerged index summaries, on-demand conflict snapshots, safe resolution contracts (`ResolveOutcome`), `GitMutationCoordinator`, and CUT1 generic stage preflight, see [Git Conflict Discovery, Snapshots & Resolution](./api/rest-endpoints.md#git-conflict-discovery--snapshots). For authoritative active operation inspection, preconditioned continue/abort lifecycle mutations, stage role semantics, and truthful execution outcomes, see the [Git Operation Lifecycle API](./api/git-operation-lifecycle.md) and [REST Endpoints](./api/rest-endpoints.md#git-operation-lifecycle).
 
 ## Project Worktree Targets
 
@@ -40,14 +42,14 @@ operations.
 
 ## Client-Side Profile Management
 
-See the [REST endpoint reference](./api/rest-endpoints.md#client-side-profile-management) and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).
+See the [Client-side profile reference](./api/client-side-profiles.md), [REST endpoint reference](./api/rest-endpoints.md#client-side-profile-management), and [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md).
 ## Commit history
 
 The [Git API reference](./api/git.md#commit-history) documents full-message literal filtering and pagination.
 
 ## Git Operations
 
-The [REST endpoint reference](./api/rest-endpoints.md#git-operations) documents ordinary fast-forward pushes, explicit leased publication, [Git conflict discovery, snapshots & resolution](./api/rest-endpoints.md#git-conflict-discovery--snapshots), and CUT1 generic stage preflight.
+The [REST endpoint reference](./api/rest-endpoints.md#git-operations) documents ordinary fast-forward pushes, explicit leased publication, [Git conflict discovery, snapshots & resolution](./api/rest-endpoints.md#git-conflict-discovery--snapshots), [Git operation lifecycle](./api/rest-endpoints.md#git-operation-lifecycle) (see also [Git Operation Lifecycle API](./api/git-operation-lifecycle.md)), and CUT1 generic stage preflight.
 ## IDE File Explorer
 
 See [filesystem and media APIs](./api/filesystem-and-media.md).

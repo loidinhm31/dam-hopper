@@ -201,6 +201,7 @@ pub enum GitRecoveryOperation {
     Rebase,
     CherryPick,
     Revert,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -418,7 +419,6 @@ pub struct HunkInfo {
     pub header: String,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictStatus {
@@ -567,7 +567,12 @@ pub enum ResolveSide {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
 pub enum ResolveAction {
     #[serde(rename = "reviewedText")]
     ReviewedText {
@@ -578,10 +583,7 @@ pub enum ResolveAction {
         executable: Option<bool>,
     },
     #[serde(rename = "indexSide")]
-    IndexSide {
-        side: ResolveSide,
-        stage: u16,
-    },
+    IndexSide { side: ResolveSide, stage: u16 },
     #[serde(rename = "delete")]
     Delete {},
 }
@@ -600,7 +602,11 @@ pub struct ResolveRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "outcome")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
 pub enum ResolveOutcome {
     #[serde(rename = "applied")]
     Applied {
@@ -617,23 +623,140 @@ pub enum ResolveOutcome {
         required_refresh: bool,
     },
     #[serde(rename = "unsupported")]
-    Unsupported {
-        reason: String,
-    },
+    Unsupported { reason: String },
     #[serde(rename = "busy")]
-    Busy {
-        reason: String,
-    },
+    Busy { reason: String },
     #[serde(rename = "failedBeforeWrite")]
-    FailedBeforeWrite {
-        error: String,
-    },
+    FailedBeforeWrite { error: String },
     #[serde(rename = "worktreeChangedStageFailed")]
     WorktreeChangedStageFailed {
         error: String,
         worktree_written: bool,
         staged: bool,
     },
+    #[serde(rename = "outcomeUnknown")]
+    OutcomeUnknown {
+        error: String,
+        required_refresh: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationKind {
+    None,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    Unsupported,
+    Unknown,
+}
+
+impl OperationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OperationKind::None => "none",
+            OperationKind::Merge => "merge",
+            OperationKind::Rebase => "rebase",
+            OperationKind::CherryPick => "cherry-pick",
+            OperationKind::Revert => "revert",
+            OperationKind::Unsupported => "unsupported",
+            OperationKind::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationStoppedReason {
+    Conflicts,
+    MessageEditRequired,
+    HookBlocked,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageRoleLabels {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    pub ours: String,
+    pub theirs: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalHandoffRequired {
+    pub reason: String,
+    pub worktree_root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationStatusResponse {
+    pub operation: OperationKind,
+    pub can_continue: bool,
+    pub can_abort: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_reason: Option<OperationStoppedReason>,
+    pub operation_fingerprint: String,
+    pub full_index_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_role_labels: Option<StageRoleLabels>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_handoff_required: Option<TerminalHandoffRequired>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationAction {
+    Continue,
+    Abort,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationActionRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    pub operation_precondition: String,
+    pub full_index_fingerprint: String,
+    pub action: OperationAction,
+    #[serde(default)]
+    pub abort_confirmed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
+pub enum OperationOutcome {
+    #[serde(rename = "continued")]
+    Continued { new_status: OperationStatusResponse },
+    #[serde(rename = "aborted")]
+    Aborted { worktree_cleaned: bool },
+    #[serde(rename = "blocked")]
+    Blocked {
+        reason: OperationStoppedReason,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        terminal_handoff_required: bool,
+    },
+    #[serde(rename = "stale")]
+    Stale {
+        reason: String,
+        required_refresh: bool,
+    },
+    #[serde(rename = "failed")]
+    Failed { error: String },
     #[serde(rename = "outcomeUnknown")]
     OutcomeUnknown {
         error: String,

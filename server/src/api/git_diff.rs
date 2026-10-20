@@ -297,7 +297,10 @@ pub async fn resolve(
     Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let has_conflict_id = body.get("conflictId").and_then(|v| v.as_str()).is_some();
-    let has_snapshot_version = body.get("snapshotVersion").and_then(|v| v.as_str()).is_some();
+    let has_snapshot_version = body
+        .get("snapshotVersion")
+        .and_then(|v| v.as_str())
+        .is_some();
     let has_legacy_content = body.get("content").is_some();
 
     if !has_conflict_id || !has_snapshot_version || has_legacy_content {
@@ -309,9 +312,9 @@ pub async fn resolve(
     let req: git::ResolveRequest = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => {
-            return Err(ApiError::from_app(
-                crate::error::AppError::InvalidInput(format!("Invalid resolve request: {e}")),
-            ));
+            return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                format!("Invalid resolve request: {e}"),
+            )));
         }
     };
 
@@ -325,6 +328,73 @@ pub async fn resolve(
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
     .map_err(ApiError::from_app)?;
+
+    Ok(Json(outcome))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/git/{project}/operation & POST /api/git/{project}/operation
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationQuery {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+}
+
+pub async fn get_operation(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<OperationQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
+    let status = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        git::get_authoritative_operation_status(&root.root_path)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
+    Ok(Json(status))
+}
+
+pub async fn execute_operation(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let has_precondition = body
+        .get("operationPrecondition")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_index = body
+        .get("fullIndexFingerprint")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_action = body.get("action").and_then(|v| v.as_str()).is_some();
+
+    if !has_precondition || !has_index || !has_action {
+        return Err(ApiError::from_app(
+            crate::error::AppError::LegacyPayloadRejected,
+        ));
+    }
+
+    let req: git::OperationActionRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                format!("Invalid operation request: {e}"),
+            )));
+        }
+    };
+
+    let proj_path = resolve_target_path(&state, &project, req.worktree_path.clone()).await?;
+    let root =
+        resolve_git_request_root(&proj_path, req.root.as_deref()).map_err(ApiError::from_app)?;
+    let outcome = git::execute_operation_action(&root.root_path, &req)
+        .await
+        .map_err(ApiError::from_app)?;
 
     Ok(Json(outcome))
 }

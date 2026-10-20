@@ -13,7 +13,7 @@ created: 2026-10-19
 
 ## Overview and authority
 
-Phase 01 (Feasibility and contract gates) and Phase 03 (Safe resolution and staging) complete (2026-10-20). Phase 02 (Conflict discovery and snapshots) administratively closed with accepted deferrals (2026-10-19): bounded conflict inventory (`GET /api/git/{project}/conflicts`) and snapshot read API (`GET /api/git/{project}/conflicts/file`) delivered. Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phases 04–09 remain.
+Phase 01 (Feasibility and contract gates), Phase 02 (Conflict discovery and snapshots), Phase 03 (Safe resolution and staging), and Phase 04 (Operation lifecycle) complete (2026-10-20). Phase 02 (Conflict discovery and snapshots) and Phase 04 (Operation lifecycle) administratively closed with accepted deferrals (2026-10-19 and 2026-10-20). Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phase 04 delivered authoritative operation detection and stage roles (`GET /api/git/{project}/operation`), guarded continue/abort lifecycle (`POST /api/git/{project}/operation`), truthful `OperationOutcome` taxonomy, bounded noninteractive runner with editor sentinel detection, and terminal handoff contract with accepted deferrals. Phases 05–09 remain.
 
 Build one workspace-owned floating resolver for terminal-started merge/rebase/cherry-pick/revert and index conflicts. Immutable sources/base, editable retained result, full reviewed decisions, explicit Apply & stage, separate Continue/Abort, truthful unsupported/partial/unknown outcomes. Initial release qualification requires web and actual Linux-native runtime evidence; Windows-native remains explicitly unqualified until separately tested.
 
@@ -28,7 +28,7 @@ No editor-tab/DiffViewer integration, operation initiation, auto-continue/skip, 
 | 01 | [Feasibility and contract gates](./phase-01-feasibility-and-contract-gates.md) | None | Complete | Complete | 100% |
 | 02 | [Conflict discovery and snapshots](./phase-02-conflict-discovery-and-snapshots.md) | 01 | Complete* | Complete* | 100% |
 | 03 | [Safe resolution and staging](./phase-03-safe-resolution-and-staging.md) | 02 | Complete | Complete | 100% |
-| 04 | [Operation lifecycle](./phase-04-operation-lifecycle.md) | 03 | Pending | Pending | 0% |
+| 04 | [Operation lifecycle](./phase-04-operation-lifecycle.md) | 03 | Complete* | Complete* | 100% |
 | 05 | [Scoped client and drafts](./phase-05-scoped-client-and-drafts.md) | 02–04 | Pending | Pending | 0% |
 | 06 | [Merge model and history](./phase-06-merge-model-and-history.md) | 01, 05 | Pending | Pending | 0% |
 | 07 | [Floating Monaco surface](./phase-07-floating-monaco-surface.md) | 05–06 | Pending | Pending | 0% |
@@ -52,7 +52,7 @@ Cycle-3 review (`plans/reports/code-reviewer-261019-2332-phase-02-conflict-disco
 - **Phase 03/05/08 clean cutover:**
   - **W7 (legacy code retirement):** Remove legacy `get_conflicts`, `read_blob_utf8`, `resolve_conflict`, Rust `ConflictFile`, and UI `ConflictFile` as part of coordinated cutover once mutation callers migrate.
 
-*\*Note: Phase 02 is administratively closed with accepted deferrals; safety gates (AC6/AC7, AC8, inventory completeness) remain open until remediated in Phases 03/05.*
+*\*Note: Phase 02 and Phase 04 are administratively closed with accepted deferrals; safety and qualification gates remain open until remediated in downstream phases (Phases 03, 05, 08, 09).*
 
 ### Phase 03 closure (2026-10-20)
 
@@ -69,6 +69,36 @@ Phase 03 delivered safe preconditioned resolution and staging backend (`POST /ap
   - **W7 (legacy code retirement):** Completely removed legacy `resolve_conflict`, `get_conflicts`, `read_blob_utf8`, and the legacy Rust `ConflictFile` DTO from `diff.rs` and `types.rs`. UI `client.ts` legacy caller cleanup proceeds in Phase 05.
 - **Deployment restriction:** Phase 03 is backend delivery within an **unreleasable coordinated migration**; writable UI integration remains blocked until Phases 04–05 deliver operation lifecycle and scoped client drafts.
 - **Verification & review:** Validated by 10 integration tests in `tests/git_conflict_exact_staging.rs`, 11 in `tests/git_conflict_discovery_api.rs`, and 203 unit tests in `server::git` passing 100%. Cycle 3 code review (7.0/10) completed; critical `undo_last_commit` guard scope verified and resolved; user approved on 2026-10-20.
+
+### Phase 04 closure with accepted deferrals (2026-10-20)
+
+Phase 04 delivered the operation lifecycle backend, authoritative status detection, guarded mutation endpoints, truthful outcomes, and terminal handoff contract:
+- **Authoritative detection & role labels:** `active_operation_kind` in `server/src/git/operation.rs` and `cli_fallback.rs` provides single-source detection for `none`, `merge`, `rebase`, `cherry_pick`, `revert`, `unsupported`, and `unknown` operations using `.git` worktree metadata (`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/` distinguishing `git am`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `sequencer/todo`). Generates truthful `StageRoleLabels` (e.g., rebase onto/replayed swap).
+- **Operation status query (`GET /api/git/{project}/operation`):** Returns `OperationStatusResponse` with `OperationFingerprint` (capturing HEAD OID, active operation kind, sequencer metadata, full index hash including stage 0 and stages 1..3), stage role labels, stopped reason, blockers, and allowed actions (`can_continue`, `can_abort`).
+- **Guarded operation mutation (`POST /api/git/{project}/operation`):** Strictly revalidates `OperationFingerprint` under `GitMutationCoordinator` lock before executing server-selected `git <op> --continue` or `--abort`. Rejects stale preconditions (409 Conflict) and unexpected inputs (`deny_unknown_fields`).
+- **Guarded abort lifecycle:** Requires explicit client confirmation (`confirmed: true`); safely cleans worktree and verifies clean state (`Aborted { worktree_cleaned }`).
+- **Bounded runner & process protection:** `run_bounded_git_command` enforces `GIT_TERMINAL_PROMPT=0`, stdin null, bounded stdout/stderr draining (64KB limits), `kill_on_drop(true)` on direct child process, and process-group SIGKILL on 15s timeout.
+- **Truthful outcome taxonomy (`OperationOutcome`):** Explicit observed facts (`Continued`, `Aborted`, `Blocked`, `Failed`, `StalePrecondition`, `ConflictDetected`, `OutcomeUnknown`) without misleading `ok: true`.
+- **Configured-editor terminal handoff:** Intercepts `EDITOR_SENTINEL` when commit message editing is required, returning `Blocked(MessageEditRequired)` with `TerminalHandoffRequired` directing user to the exact owning terminal.
+- **Fail-closed mutation guards:** `cli_fallback::active_git_operation` fails closed for `unsupported` (e.g. `git am`, `bisect`, contradictory metadata) and `unknown` states.
+- **UI type alignment:** Added `"unsupported"` to `GitRecoveryState.operation` union in `packages/ui/src/api/client.ts`.
+- **Deployment restriction:** Phase 04 backend delivery is part of an **unreleasable coordinated migration**; UI caller migration proceeds in Phase 05 scoped client and drafts.
+- **Verification & review:** Validated by 11 integration tests in `git_conflict_operation_lifecycle.rs`, 5 in `git_conflict_operation_api.rs`, 2 in `git_conflict_operation_metadata.rs`, and 204 unit tests in `server::git` passing 100%. Cycle 3 review (score 7.0/10) completed; administrative closure approved with accepted deferrals on 2026-10-20.
+
+**Accepted deferrals for downstream phases:**
+- **Phase 05 scoped client and drafts:**
+  - **W6 (Terminal handoff owner identity):** Bind `TerminalHandoffRequired` (reason and worktree root) to client profile/generation/session context and wire terminal focus/handoff.
+  - **W9 (Legacy recovery model retirement):** Fully migrate UI callers off legacy `GitRecoveryState` / `GitOperation` to new `OperationStatusResponse`.
+- **Phase 08 workspace integration and cutover:**
+  - **W3 (Post-attempt requery on non-success):** Immediate requery is implemented on exit-0 (`Continued`); non-success outcomes (`Blocked`, `Failed`, `OutcomeUnknown`) return `requires_refresh: true`; wire explicit client post-attempt and post-terminal authoritative requery in the workspace conflict surface.
+- **Phase 09 qualification and documentation:**
+  - **W1 (EOL line-ending normalization):** Clean up working tree / index line-ending normalization on `server/src/api/git_diff.rs`.
+  - **W2 (Process group termination & cancellation):** `kill_on_drop(true)` terminates direct child process; expand process group cleanup across Unix/Windows and verify detached task cancellation semantics under production runtime.
+  - **W4 (Hook classification via requery):** Replace output substring classification heuristic with authoritative post-attempt metadata and sequencer status inspection.
+  - **W5 (Runner qualification):** Validate 15s deadline against slow hooks/signing agents, verify pipe draining under daemon processes, and qualify Windows child process tree cleanup.
+  - **W7 (Extended test matrix):** Execute production qualification proofs for timeout, hanging descendant daemons, revert continue/abort under hooks, GPG signing, and conflictless edit/exec rebase stops.
+  - **W10 (Unredacted diagnostics):** Apply bounded redaction/filtering for paths and sensitive metadata in `Failed` diagnostics.
+  - **W11 (Metadata-read fail-open edges):** Harden metadata parsing against I/O errors and distinguish unsupported vs unknown stopped reasons.
 ## Execution and dependency rules
 
 Execute numbered order by default. Overlap backend and pure model work only after 01 freezes invariants and one integration owner assigns shared `types.rs`, `client.ts`, transport/query and WorkspacePage edits. Each phase states entry artifacts and go/no-go evidence; a failed prerequisite blocks dependents.

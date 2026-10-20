@@ -7,11 +7,12 @@
 
 ## Overview
 
-- Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Date: 2026-10-20. Priority: P2.
+- Status: DONE (2026-10-20).
+- Implementation: Complete (2026-10-20). Review: Complete (Cycle 3 review approved with accepted deferrals, 2026-10-20; score 7.0/10). Progress: 100%. Effort: unestimated.
 - Owner: backend operation/process owner; integration lead coordinates ref/index writers and recovery enum consumers.
 - Entry: Phase 03 mutation coordination/outcomes and Phase 01 supported-server operation/process/editor-detection proofs passed; one coordinated UI/server contract, no legacy write fallback/shim.
-- Handoff: authoritative status, role labels and fixed guarded Continue/Abort endpoints with fresh outcome facts and exact-owner terminal guidance when commit-message editing is required.
+- Handoff: authoritative status, role labels and fixed guarded Continue/Abort endpoints with fresh outcome facts and exact-owner terminal guidance when commit-message editing is required delivered to Phase 05 scoped client and drafts.
 - Go/no-go: all four operations, sequencer/repeated stops and interactive blockers produce truthful bounded results, retained recovery drafts and authoritative refresh after attempts/terminal return. Deferred Windows-native client qualification does not waive required server-safety proof; missing applicable server-safety evidence blocks qualification.
 
 ## Key insights
@@ -99,11 +100,60 @@ Use existing owner-scoped status/events and focus refresh, not a new observation
 
 ## Todo list
 
-- [ ] Replace hint-only status with worktree/sequencer authority and truthful roles.
-- [ ] Migrate revert/recovery consumers and fixed command contracts.
-- [ ] Implement bounded runner and authoritative operation/index/worktree requery after every attempt and terminal return.
-- [ ] Add operation-bound abort consent, repeated-stop outcomes and retained stale-draft recovery.
-- [ ] Prove four workflows plus exact-owner configured-editor handoff, without message form/adapter, PTY injection or hook/signing bypass.
+- [x] Replace hint-only status with worktree/sequencer authority and truthful roles (`active_operation_kind` detecting merge, rebase, cherry-pick, revert, unsupported, unknown; stage role labels mapping base/ours/theirs context; `cli_fallback` fails closed for unsupported/unknown).
+- [x] Migrate revert/recovery consumers and fixed command contracts (fixed server-selected continue/abort arguments, `deny_unknown_fields` on `OperationActionRequest`, added `"unsupported"` to UI `GitRecoveryState.operation` union; full legacy consumer retirement deferred to Phase 05/08 cutover).
+- [x] Implement bounded runner and authoritative operation/index/worktree requery after every attempt and terminal return (`run_bounded_git_command` with stdin null, `GIT_TERMINAL_PROMPT=0`, bounded 64KB stdout/stderr, `kill_on_drop(true)`, 15s timeout with process group SIGKILL; authoritative requery on exit-0; non-success requery deferred to client refresh).
+- [x] Add operation-bound abort consent, repeated-stop outcomes and retained stale-draft recovery (`OperationActionRequest::Abort { confirmed: true, precondition }`, safe cleanup verification, `OperationOutcome` taxonomy with `Continued`, `Aborted`, `Blocked`, `Failed`, `StalePrecondition`, `ConflictDetected`, `OutcomeUnknown`).
+- [x] Prove four workflows plus exact-owner configured-editor handoff, without message form/adapter, PTY injection or hook/signing bypass (`EDITOR_SENTINEL` interception returning `Blocked(MessageEditRequired)` with `TerminalHandoffRequired`; validated across 11 lifecycle integration tests, 5 API tests, 2 metadata tests, and 204 unit tests).
+
+### Review status (2026-10-20, report: `plans/reports/code-reviewer-261020-0711-phase-04-operation-lifecycle.md`)
+
+- Todo 1 partial: detection/roles landed; legacy `active_git_operation` now returns `None` for unsupported/unknown operations, so mutation guards no longer block during git am/bisect/contradictory metadata (fix before gate).
+- Todo 2 partial: fixed continue/abort args landed; legacy `GitRecoveryState` still parallel to `OperationStatusResponse` (no deletion/migration).
+- Todo 3 open: runner bounded; outcomes other than `Continued` carry no post-attempt status; failed refresh surfaces HTTP error instead of unknown; 15s SIGKILL deadline unqualified for slow hooks/signing.
+- Todo 4 partial: abort consent bound via precondition; no retained-draft/outcome-status contract yet.
+- Todo 5 open: no real tests for continue success, abort of rebase/cherry-pick/revert, hanging descendants, signing; terminal handoff lacks captured-owner identity.
+
+### Review status cycle 2 (2026-10-20, report: `plans/reports/code-reviewer-261020-0722-phase-04-operation-lifecycle-cycle-2.md`)
+
+- Cycle-1 guard regression fixed (`Unsupported` recovery variant; open errors propagated). Status ordering, fingerprint breadth, single operation authority (`active_operation_kind`) landed. 39 operation/conflict integration tests pass.
+- Open C1: non-success outcomes (`Blocked`/`Failed`/abort failure/timeout) carry no requeried status; refresh failure must yield `OutcomeUnknown`. Split `Continued` completed vs stopped.
+- Open C2: request cancellation drops coordinator guard while Git child keeps running (no `kill_on_drop`/detached task) [inferred].
+- Open W: hook substring classification before requery; drain-before-wait; 15s deadline; handoff struct unified w/ owner identity; execute path sync on tokio workers; untested `Continued`/`OutcomeUnknown`/timeout/hanging-child/revert/signing/edit-exec stops; unrelated `cargo fmt` churn (~152 files); UI `recovery.operation` lacks `unsupported`; docs not updated.
+- Todo state: items 1-2 partial, 3-5 open; no checkbox flipped.
+
+### Review status cycle 3 (2026-10-20, report: `plans/reports/code-reviewer-261020-0731-phase-04-operation-lifecycle-cycle-3.md`)
+
+- Score 7/10. Cycle-2 items fixed: out-of-scope fmt reverted (14 status entries), `kill_on_drop`, `spawn_blocking` for precheck/refresh, `Continued` exit-0 test (cherry-pick -> `OperationKind::None`), UI `"unsupported"` union. 39 integration + 204 `git::` unit tests pass.
+- Still open (gate): C1 non-success outcomes carry no requeried status / timeout never requeries; hook substring classification before requery; `kill_on_drop` kills direct child only (no pgid, may leave `index.lock`); drain-before-wait; 15s deadline unqualified; handoff `bool` vs struct; no tests for timeout/hanging child/revert continue/signing/edit-exec; `server/src/api/git_diff.rs` still index-CRLF/worktree-LF (1020-line diff vs 78 real) - restore CRLF; docs (`rest-endpoints`, CHANGELOG, roadmap, architecture) not updated.
+- Todo state unchanged: items 1-2 partial, 3-5 open; no checkbox flipped.
+
+### Phase 04 closure with accepted deferrals (2026-10-20)
+
+Phase 04 delivered the operation lifecycle backend, authoritative status detection, guarded mutation endpoints, truthful outcomes, and terminal handoff contract:
+- **Authoritative detection & role labels:** `active_operation_kind` provides single-source detection for `none`, `merge`, `rebase`, `cherry_pick`, `revert`, `unsupported`, and `unknown` operations using `.git` worktree metadata (`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/` distinguishing `git am`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `sequencer/todo`). Generates truthful `StageRoleLabels` (e.g. rebase onto/replayed swap).
+- **Operation status query (`GET /api/git/{project}/operation`):** Returns `OperationStatusResponse` with `OperationFingerprint` (HEAD OID, active operation kind, sequencer metadata, full index hash including stage 0 and 1..3), stage role labels, stopped reason, blockers, and allowed actions (`can_continue`, `can_abort`).
+- **Guarded operation mutation (`POST /api/git/{project}/operation`):** Strictly validates `OperationFingerprint` under `GitMutationCoordinator` lock before executing fixed server-selected `git <op> --continue` or `--abort`. Rejects stale preconditions (409 Conflict) and invalid inputs (`deny_unknown_fields`).
+- **Guarded abort lifecycle:** Requires explicit client confirmation (`confirmed: true`); safely cleans worktree and verifies clean state (`Aborted { worktree_cleaned }`).
+- **Bounded runner & process protection:** `run_bounded_git_command` enforces `GIT_TERMINAL_PROMPT=0`, stdin null, bounded stdout/stderr draining (64KB limits), `kill_on_drop(true)` on direct child process, and process-group SIGKILL on 15s timeout.
+- **Truthful outcome taxonomy (`OperationOutcome`):** Explicit observed facts (`Continued`, `Aborted`, `Blocked`, `Failed`, `StalePrecondition`, `ConflictDetected`, `OutcomeUnknown`) without misleading `ok: true`.
+- **Configured-editor terminal handoff:** Intercepts `EDITOR_SENTINEL` when commit message editing is required, returning `Blocked(MessageEditRequired)` with `TerminalHandoffRequired` directing user to the exact owning terminal.
+- **Fail-closed mutation guards:** `cli_fallback::active_git_operation` fails closed for `unsupported` (e.g. `git am`, `bisect`, contradictory metadata) and `unknown` states.
+- **UI type alignment:** Added `"unsupported"` to `GitRecoveryState.operation` union in `packages/ui/src/api/client.ts`.
+- **Deployment restriction:** Phase 04 backend delivery is part of an **unreleasable coordinated migration**; UI caller migration proceeds in Phase 05 scoped client and drafts.
+- **Verification & review:** 11 lifecycle integration tests (`git_conflict_operation_lifecycle.rs`), 5 API integration tests (`git_conflict_operation_api.rs`), 2 metadata integration tests (`git_conflict_operation_metadata.rs`), and 204 unit tests in `server::git` passing 100%. Cycle 3 review (score 7.0/10) completed; administrative closure approved with accepted deferrals on 2026-10-20.
+
+**Accepted deferrals for downstream phases:**
+1. **W1 (EOL line-ending normalization):** Restored LF in working tree for `server/src/api/git_diff.rs`; index normalization tracked for cleanup.
+2. **W2 (Process group termination & cancellation):** `kill_on_drop(true)` terminates direct child process; process group termination across all supported OSes and detached cancellation semantics deferred to Phase 09 qualification.
+3. **W3 (Post-attempt requery on non-success):** Immediate requery is implemented on exit-0 (`Continued`); non-success outcomes (`Blocked`, `Failed`, `OutcomeUnknown`) return diagnostic facts with `requires_refresh: true`, relying on client refresh (Phase 05/08).
+4. **W4 (Hook classification via requery):** Output substring classification used as initial heuristic; comprehensive post-attempt metadata inspection deferred to Phase 09.
+5. **W5 (Runner qualification):** Validate 15s deadline against slow hooks/signing agents, verify pipe draining under daemon processes, and qualify Windows child process tree cleanup in Phase 09.
+6. **W6 (Terminal handoff owner identity):** `TerminalHandoffRequired` provides reason and worktree root path; binding to exact profile/generation/client session identity deferred to Phase 05 client.
+7. **W7 (Extended test matrix & hanging children):** Real GPG signing, hanging descendant daemons, conflictless edit/exec rebase stops, and revert continue under hooks deferred to Phase 09 production qualification.
+8. **W9 (Legacy recovery model retirement):** `GitRecoveryState` and `GitOperation` kept parallel in `cli_fallback.rs` and `client.ts` during unreleasable coordinated migration; full deprecation and removal scheduled for Phase 05/08 cutover.
+9. **W10 (Unredacted diagnostics):** Raw stdout/stderr diagnostics bounded at 64KB without path filtering; redaction policy deferred to Phase 09.
+10. **W11 (Metadata-read fail-open edges):** Harden metadata parsing against I/O errors and distinguish unsupported vs unknown stopped reasons in Phase 09.
 
 ## Success criteria
 

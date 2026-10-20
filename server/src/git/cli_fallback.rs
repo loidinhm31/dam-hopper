@@ -113,35 +113,44 @@ pub(crate) async fn is_clean_worktree(cwd: &Path) -> Result<bool, AppError> {
 }
 
 pub async fn active_git_operation(cwd: &Path) -> Result<Option<GitRecoveryState>, AppError> {
-    if git_path_exists(cwd, "rebase-merge").await? || git_path_exists(cwd, "rebase-apply").await? {
-        return Ok(Some(GitRecoveryState {
-            operation: GitRecoveryOperation::Rebase,
-            can_abort: true,
-            can_continue: true,
-        }));
-    }
-    if git_path_exists(cwd, "MERGE_HEAD").await? {
-        return Ok(Some(GitRecoveryState {
-            operation: GitRecoveryOperation::Merge,
-            can_abort: true,
-            can_continue: false,
-        }));
-    }
-    if git_path_exists(cwd, "CHERRY_PICK_HEAD").await? {
-        return Ok(Some(GitRecoveryState {
-            operation: GitRecoveryOperation::CherryPick,
-            can_abort: true,
-            can_continue: true,
-        }));
-    }
-    if git_path_exists(cwd, "REVERT_HEAD").await? {
-        return Ok(Some(GitRecoveryState {
-            operation: GitRecoveryOperation::Revert,
-            can_abort: true,
-            can_continue: true,
-        }));
-    }
-    Ok(None)
+    let repo = match git2::Repository::open(cwd) {
+        Ok(r) => r,
+        Err(e) => {
+            if e.code() == git2::ErrorCode::NotFound {
+                return Ok(None);
+            }
+            return Err(AppError::Git(format!("Failed to open repository: {e}")));
+        }
+    };
+    let op = crate::git::operation::active_operation_kind(&repo);
+    let (recovery_op, can_abort, can_continue) = match op {
+        crate::git::types::OperationKind::Merge => {
+            let has_conflicts = repo.index().map(|idx| idx.has_conflicts()).unwrap_or(false);
+            (GitRecoveryOperation::Merge, true, !has_conflicts)
+        }
+        crate::git::types::OperationKind::Rebase => {
+            let has_conflicts = repo.index().map(|idx| idx.has_conflicts()).unwrap_or(false);
+            (GitRecoveryOperation::Rebase, true, !has_conflicts)
+        }
+        crate::git::types::OperationKind::CherryPick => {
+            let has_conflicts = repo.index().map(|idx| idx.has_conflicts()).unwrap_or(false);
+            (GitRecoveryOperation::CherryPick, true, !has_conflicts)
+        }
+        crate::git::types::OperationKind::Revert => {
+            let has_conflicts = repo.index().map(|idx| idx.has_conflicts()).unwrap_or(false);
+            (GitRecoveryOperation::Revert, true, !has_conflicts)
+        }
+        crate::git::types::OperationKind::Unsupported
+        | crate::git::types::OperationKind::Unknown => {
+            (GitRecoveryOperation::Unsupported, false, false)
+        }
+        crate::git::types::OperationKind::None => return Ok(None),
+    };
+    Ok(Some(GitRecoveryState {
+        operation: recovery_op,
+        can_abort,
+        can_continue,
+    }))
 }
 
 pub(crate) async fn is_commit_reachable_from_head(
@@ -178,14 +187,6 @@ pub(crate) async fn git_status(args: &[&str], cwd: &Path) -> Result<bool, AppErr
         .await
         .map_err(|e| AppError::Git(format!("Failed to spawn git: {e}")))?;
     Ok(output.status.success())
-}
-
-async fn git_path_exists(cwd: &Path, git_path: &str) -> Result<bool, AppError> {
-    let resolved = run_git(&["rev-parse", "--git-path", git_path], cwd)
-        .await?
-        .trim()
-        .to_string();
-    Ok(cwd.join(resolved).exists())
 }
 
 pub async fn pull_ff_only(
