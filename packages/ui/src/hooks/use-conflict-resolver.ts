@@ -28,9 +28,14 @@ import {
   type ConnectionRef,
   type ConflictSnapshot,
   type ConflictSummaryEntry,
+  type OperationOutcome,
+  type OperationStatusResponse,
   type ProjectTargetInput,
+  type ResolveAction,
+  type ResolveOutcome,
 } from "@/api/client.js";
 import type {
+  ConflictDraft,
   DraftOwnerScope,
   TerminalHandoffContext,
 } from "@/lib/conflict-draft-types.js";
@@ -99,10 +104,79 @@ function captureScopeOwner(scope: DraftOwnerScope): ConnectionRef {
   }
   return owner;
 }
+export interface ConflictResolverHandle {
+  drafts: readonly ConflictDraft[];
+  activeDraft: ConflictDraft | null;
+  activeDraftKey: string | null;
+  isPanelVisible: boolean;
+  currentScope: DraftOwnerScope | null;
+  conflicts: readonly ConflictSummaryEntry[];
+  inventoryError: string | null;
+  refreshError: string | null;
+  operation?: OperationStatusResponse;
+  terminalHandoff: TerminalHandoffContext | null;
+  refreshAfterTerminalReturn: (handoff: TerminalHandoffContext) => Promise<void>;
+  loadConflicts: (freshScope: DraftOwnerScope) => Promise<ConflictSummaryEntry[]>;
+  loadConflictDraft: (
+    conflictId: string,
+    snapshot?: ConflictSnapshot,
+  ) => Promise<ConflictDraft>;
+  cancelPendingDraftLoads: () => void;
+  getDraft: (key: string) => ConflictDraft | null;
+  isLoading: boolean;
+  selectDraft: (key: string | null) => void;
+  setVisible: (visible: boolean) => void;
+  updateDraftResult: (
+    key: string,
+    text: string,
+  ) => { success: boolean; error?: string };
+  undoDraft: (key: string) => string | null;
+  redoDraft: (key: string) => string | null;
+  discardDraft: (key: string, confirmDirtyLoss?: boolean) => boolean;
+  acceptSide: (
+    key: string,
+    regionId: string,
+    side: "ours" | "theirs",
+  ) => { success: boolean; error?: string };
+  ignoreSide: (
+    key: string,
+    regionId: string,
+    side: "ours" | "theirs",
+  ) => { success: boolean; error?: string };
+  acceptBoth: (
+    key: string,
+    regionId: string,
+    order: "ours-then-theirs" | "theirs-then-ours",
+  ) => { success: boolean; error?: string };
+  markReviewed: (key: string, regionId: string) => void;
+  previewAcceptAllOurs: (key: string) => WholeFileActionPreview | null;
+  previewAcceptAllTheirs: (key: string) => WholeFileActionPreview | null;
+  previewRebuildClean: (key: string) => WholeFileActionPreview | null;
+  confirmWholeFileAction: (
+    key: string,
+    preview: WholeFileActionPreview,
+  ) => { success: boolean; error?: string };
+  importRecoveryDraft: (recoveryKey: string) => Promise<ConflictDraft>;
+  confirmFreshReview: (key: string) => Promise<void>;
+  applyDraft: (
+    draftKey: string,
+    explicitAction?: ResolveAction,
+  ) => Promise<ResolveOutcome>;
+  applyIndexSide: (
+    draftKey: string,
+    side: "ours" | "theirs",
+  ) => Promise<ResolveOutcome>;
+  applyDelete: (draftKey: string) => Promise<ResolveOutcome>;
+  continueOperation: () => Promise<OperationOutcome>;
+  abortOperation: (confirmed: boolean) => Promise<OperationOutcome>;
+  refetchAll: () => Promise<ConflictSummaryEntry[]>;
+}
+
 export function useConflictResolver(
   targetInput?: ProjectTargetInput,
   root?: string,
-) {
+  options: { enabled?: boolean } = {},
+): ConflictResolverHandle {
   const storeState = useSyncExternalStore(
     (l) => conflictDraftStore.subscribe(l),
     () => conflictDraftStore.getSnapshot(),
@@ -159,13 +233,18 @@ export function useConflictResolver(
   }, []);
 
   const operationQuery = useGitOperationStatus(normalizedTarget ?? "", root, {
-    enabled: Boolean(project && connection?.status === "connected"),
+    enabled: Boolean(
+      options.enabled !== false &&
+        project &&
+        connection?.status === "connected",
+    ),
   });
   const executeOperationMutation = useGitExecuteOperation(
     normalizedTarget ?? "",
   );
   const currentScope: DraftOwnerScope | null = useMemo(
     () =>
+      options.enabled !== false &&
       project &&
       connection?.status === "connected" &&
       connection.owner.profileId === targetProfileId
@@ -180,6 +259,7 @@ export function useConflictResolver(
           }
         : null,
     [
+      options.enabled,
       project,
       connection,
       targetProfileId,
@@ -475,7 +555,7 @@ export function useConflictResolver(
   );
 
   const applyDraft = useCallback(
-    async (draftKey: string) => {
+    async (draftKey: string, explicitAction?: ResolveAction) => {
       const draft = conflictDraftStore
         .getSnapshot()
         .drafts.find((candidate) => candidate.id === draftKey);
@@ -496,15 +576,53 @@ export function useConflictResolver(
       if (draft.isRecovery || draft.requiresReview || draft.isApplied) {
         throw new Error("Draft requires a fresh snapshot before another Apply");
       }
-      if (
-        draft.status === "unsupported" ||
-        draft.worktree.kind !== "regular" ||
-        draft.stages.ours.kind !== "text" ||
-        draft.stages.theirs.kind !== "text"
-      ) {
-        throw new Error(
-          "This conflict is not eligible for reviewed-text resolution",
-        );
+
+      let action: ResolveAction;
+      if (explicitAction) {
+        if (explicitAction.type === "indexSide") {
+          const stageSide = explicitAction.side;
+          const stageDesc =
+            stageSide === "ours" ? draft.stages.ours : draft.stages.theirs;
+          if (!stageDesc || stageDesc.kind === "missing") {
+            throw new Error(
+              `Selected side (${stageSide}) does not exist in this conflict`,
+            );
+          }
+          action = explicitAction;
+        } else if (explicitAction.type === "delete") {
+          action = explicitAction;
+        } else {
+          if (
+            draft.status === "unsupported" ||
+            draft.worktree.kind !== "regular" ||
+            draft.stages.ours.kind !== "text" ||
+            draft.stages.theirs.kind !== "text"
+          ) {
+            throw new Error(
+              "This conflict is not eligible for reviewed-text resolution",
+            );
+          }
+          action = explicitAction;
+        }
+      } else {
+        if (
+          draft.status === "unsupported" ||
+          draft.worktree.kind !== "regular" ||
+          draft.stages.ours.kind !== "text" ||
+          draft.stages.theirs.kind !== "text"
+        ) {
+          throw new Error(
+            "This conflict is not eligible for reviewed-text resolution",
+          );
+        }
+        const eolAttr = draft.authority.effectiveAttributes?.eol;
+        const eol: "preserve" | "lf" | "crlf" =
+          eolAttr === "crlf" ? "crlf" : eolAttr === "lf" ? "lf" : "preserve";
+        action = {
+          type: "reviewedText" as const,
+          tokens: tokenizeLosslessLines(draft.result),
+          eol,
+        };
       }
 
       let owner: ConnectionRef;
@@ -523,14 +641,7 @@ export function useConflictResolver(
         project: draft.scope.project,
         worktreePath: draft.scope.worktreePath ?? undefined,
       };
-      const eolAttr = draft.authority.effectiveAttributes?.eol;
-      const eol: "preserve" | "lf" | "crlf" =
-        eolAttr === "crlf" ? "crlf" : eolAttr === "lf" ? "lf" : "preserve";
-      const action = {
-        type: "reviewedText" as const,
-        tokens: tokenizeLosslessLines(draft.result),
-        eol,
-      };
+      // Action was constructed above
       const attempt = conflictDraftStore.beginResolve(draftKey, action);
       try {
         const outcome = await getApi(owner).git.resolve(target, {
@@ -794,6 +905,19 @@ export function useConflictResolver(
     importRecoveryDraft,
     confirmFreshReview,
     applyDraft,
+    applyIndexSide: useCallback(
+      async (draftKey: string, side: "ours" | "theirs") => {
+        const stage = side === "ours" ? (2 as const) : (3 as const);
+        return applyDraft(draftKey, { type: "indexSide", side, stage });
+      },
+      [applyDraft],
+    ),
+    applyDelete: useCallback(
+      async (draftKey: string) => {
+        return applyDraft(draftKey, { type: "delete" });
+      },
+      [applyDraft],
+    ),
     continueOperation,
     abortOperation,
     refetchAll: refreshAuthoritative,

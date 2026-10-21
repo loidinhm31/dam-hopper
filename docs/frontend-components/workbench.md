@@ -261,6 +261,9 @@ for source arbitration. The [Preferences, Settings, and Host Resources architect
 
 **Locations:**
 
+- `packages/ui/src/components/organisms/ChangedFilesList.tsx`
+- `packages/ui/src/components/pages/WorkspacePage.tsx`
+- `packages/ui/src/hooks/use-conflict-resolver.ts`
 - `packages/ui/src/components/organisms/ConflictResolverPanel.tsx`
 - `packages/ui/src/components/organisms/ConflictResolverToolbar.tsx`
 - `packages/ui/src/components/organisms/ConflictRegionNav.tsx`
@@ -270,16 +273,19 @@ for source arbitration. The [Preferences, Settings, and Host Resources architect
 - `packages/ui/src/lib/conflict-resolver-panel-state.ts`
 - `packages/ui/src/lib/conflict-editor-decorations.ts`
 
+*(Note: Legacy `packages/ui/src/lib/conflict-parser.ts` and `ConflictBlock` types were retired and deleted in Phase 08.)*
 The floating Git conflict resolver provides a cross-shell resolution workbench mounted directly in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`.
 
 ### Component Roles & Host Integration
 
-- **`ConflictResolverPanel`:** Root floating frame container rendered inside an overlay boundary (`fixed inset-0 z-40`). Receives controlled `open`, `zIndex`, `isTopmost`, `onActivate`, and `onHide` props. Does not own or dispose draft models on close: hiding the panel toggles visibility while retaining active draft text and decision states in memory (while integrated Monaco command undo/redo remains an open Phase 08 integration gate).
-- **Floating Conflict Indicator Pill:** When unmerged conflicts exist while the panel is hidden, `WorkspacePage` displays a bottom-docked pill (`fixed bottom-4 right-4 z-40`) showing an animated `GitMerge` icon and conflict count. Clicking the pill reopens the resolver panel without refetching or discarding edits.
-- **`ConflictResolverToolbar`:** Provides title bar drag handling (`onMouseDown={onDragStart}`), active Git operation indicator badge (e.g. `MERGE`, `REBASE`, `CHERRY-PICK`, `REVERT`), project label, file selection dropdown for multi-file conflict lists, maximize/restore toggle, and close/hide control.
+- **`ConflictResolverPanel`:** Root floating frame container rendered inside an overlay boundary (`fixed inset-0 z-40`). Mounted conditionally in `WorkspacePage` when `isPanelVisible` is true. Receives controlled `open`, `zIndex`, `isTopmost`, `onActivate`, and `onHide` props. Does not own draft models in local state: draft text and decision states are retained in `ConflictDraftRegistry` outside the component lifecycle, so unmounting and remounting reloads the retained draft by deterministic `DraftKey` (while Monaco-specific view states like scroll position and local undo command stacks reset on remount). Tracks `lastConsumedNonceRef` during component mount to apply `revealIntent` file paths once without snapping back during background refetches (unmounting resets the ref, re-evaluating fresh reveal intents on remount).
+- **Reveal Intent Routing (`ConflictRevealIntent`):** Changed Files conflict row clicks emit typed `{ nonce, filePath, root }` via `buildConflictRevealIntent`, calling `handleOpenConflictResolver(selection)` instead of `onSelectFile`. `openChangedFileDiff` returns immediately for conflicted entries, preventing editor tabs or diff viewers from opening. Aggregate and multi-root views derive the entry's actual worktree root (`selection.gitRootId !== "." ? selection.gitRootId : undefined`).
+- **Staging Bypass Closures:** Conflicted row checkboxes in `ChangedFilesList` are disabled (`disabled={isConflicted}`, `readOnly`, `cursor-not-allowed`, click handler early returns). Context menu popover replaces stage/unstage/discard with "Resolve conflict…". Bulk staging (`handleStageAll`) filters out conflicted files (`files.filter(f => f.status !== "conflicted")`). Backend `stage_files` rejects conflicted batches with HTTP 400 `INVALID_INPUT` under `GitMutationCoordinator` lock, and legacy resolve payloads fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
+- **Active Operation Banner & Floating Pill:** `ChangedFilesList` renders a `GitMerge` status banner when `useGitOperationStatus` returns an active operation (`merge`, `rebase`, `cherry-pick`, `revert`), displaying stopped reasons (`conflicts`, `messageEditRequired`) and providing an "Open Resolver" button. A floating conflict pill also mounts when conflicts exist or an active operation is stopped while the panel is hidden.
+- **Configured-Editor Terminal Handoff Guidance:** When `resolver.terminalHandoff` is active (`stoppedReason === "messageEditRequired"`), the panel displays a prominent banner detailing the owning `worktreeRoot` and Git configured editor requirement, with a "Refresh after terminal return" button invoking `resolver.refreshAfterTerminalReturn(terminalHandoff)` or `resolver.refetchAll()`.
+- **`ConflictResolverToolbar`:** Provides title bar drag handling (`onMouseDown={onDragStart}`), active Git operation indicator badge (e.g. `MERGE`, `REBASE`, `CHERRY-PICK`, `REVERT`), project label, file selection dropdown for multi-file conflict lists, continue and abort operation controls, maximize/restore toggle, and close/hide control.
 - **`MergeConflictEditor`:** 3-panel merge editor consuming the Phase 06 `ConflictMergeModel`, `useConflictResolver`, `useGitConflictFile`, and `useGitFileDiff`. Renders read-only source editors for Theirs and Ours (plus optional Base) alongside the editable Result editor.
 - **`ConflictRegionNav`:** Chunk navigation bar rendering conflict chips, prev/next navigation (`ChevronUp` / `ChevronDown`), and decision actions (`Accept Ours`, `Accept Theirs`, `Accept Both`, `Ignore`, `Mark Reviewed`) keyed strictly to stable `region.id` identifiers.
-
 ### Unified Panel Stacking (`terminal-workspace-panel.ts`)
 
 Floating surfaces across the workbench share a single stacking model:

@@ -723,6 +723,7 @@ describe("WorkspacePage", () => {
       openChangedFileDiff("demo-project", selection, openDiff);
     }
 
+    expect(openDiff).toHaveBeenCalledTimes(1);
     expect(openDiff).toHaveBeenNthCalledWith(
       1,
       "demo-project",
@@ -734,19 +735,22 @@ describe("WorkspacePage", () => {
       ".",
       "removed.ts",
     );
-    expect(openDiff).toHaveBeenNthCalledWith(
-      2,
-      "demo-project",
-      "packages/app/conflict.ts",
-      "conflicted",
-      3,
-      2,
-      undefined,
-      "packages/app",
-      "conflict.ts",
-    );
   });
 
+  it("routes conflicted file selection away from openDiff and ignores it in openChangedFileDiff", () => {
+    const openDiff = vi.fn();
+    const conflictSelection = createChangedFileSelection({
+      path: "src/conflict.ts",
+      status: "conflicted",
+      staged: false,
+      additions: 10,
+      deletions: 5,
+      rootId: "packages/child",
+    });
+
+    openChangedFileDiff("demo-project", conflictSelection, openDiff);
+    expect(openDiff).not.toHaveBeenCalled();
+  });
   it("falls back to a valid compact surface when the current one disappears", () => {
     expect(
       resolveActiveCompactSurfaceId(

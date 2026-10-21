@@ -139,6 +139,13 @@ Native command starts a host, not an automated proof; record actual Linux Tauri 
 - [ ] Capture fresh local viewport artifacts and explicit human ACCEPTED; missing/rejected proof blocks initial release.
 - [ ] Update actual implementation docs/changelog/roadmap with coordinated no-fallback contract and honest Linux-first/Windows-unqualified scope; remove throwaway proofs.
 
+### Inherited Tasks and Validation from Phase 08 (Accepted Deferrals)
+
+- [ ] **Step 12 live-daemon multi-worktree smoke testing:** Live production runtime validation with authenticated app registered to nested repositories, aggregate Changed Files, two conflicts plus unrelated staged file, delayed apply with newer typing, lost response, repeated operation stop, and configured-editor terminal handoff.
+- [ ] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
+- [ ] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
+- [ ] **W6 (Monaco view zones, panel geometry/selected file retention & hook consolidation):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
+
 ## Success criteria
 
 - AC1: four CLI-started operations open from both entries into floating panel; tab inventory unchanged. Failure boundary: any ordinary conflict tab routing.

@@ -38,6 +38,7 @@ import {
 } from "@/components/organisms/BrowserDebugKeepAliveHost.js";
 import { BrowserDebugPanel } from "@/components/organisms/BrowserDebugPanel.js";
 import type { ChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
+import type { ConflictRevealIntent } from "@/components/organisms/ConflictResolverPanel.js";
 import { DiagnosticsTimeWindowSelect } from "@/components/molecules/DiagnosticsTimeWindowSelect.js";
 import { TerminalDiagnosticsContextMenu } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { RenameItemDialog } from "@/components/organisms/RenameItemDialog.js";
@@ -175,6 +176,10 @@ export function openChangedFileDiff(
   selection: ChangedFileSelection,
   openDiff: OpenDiff,
 ) {
+  if (selection.status === "conflicted") {
+    // Conflicts are handled by the dedicated conflict resolver, never an editor tab
+    return;
+  }
   openDiff(
     target,
     selection.projectPath,
@@ -258,6 +263,20 @@ function PanelFallback({ label = "Loading…" }: { label?: string }) {
     </div>
   );
 }
+export function buildConflictRevealIntent(
+  selection?: ChangedFileSelection,
+): ConflictRevealIntent {
+  const root =
+    selection?.gitRootId && selection.gitRootId !== "."
+      ? selection.gitRootId
+      : undefined;
+  return {
+    nonce: Date.now() + Math.random(),
+    filePath: selection?.diffPath,
+    root,
+  };
+}
+
 
 const IDE_COMPACT_SURFACE_IDS = [
   "explorer",
@@ -843,6 +862,17 @@ export default function WorkspacePage() {
     removeFloatingPanelFromStack("resolver");
     conflictResolver.setVisible(false);
   }, [conflictResolver, removeFloatingPanelFromStack]);
+  const [resolverRevealIntent, setResolverRevealIntent] =
+    useState<ConflictRevealIntent | null>(null);
+  const setConflictResolverVisible = conflictResolver.setVisible;
+  const handleOpenConflictResolver = useCallback(
+    (selection?: ChangedFileSelection) => {
+      setResolverRevealIntent(buildConflictRevealIntent(selection));
+      setConflictResolverVisible(true);
+      bringFloatingPanelToFront("resolver");
+    },
+    [bringFloatingPanelToFront, setConflictResolverVisible],
+  );
   const rootGitTarget = useMemo<ProjectTargetRef | undefined>(() => {
     if (!projectName) return undefined;
     return activeProfileId
@@ -2172,13 +2202,19 @@ export default function WorkspacePage() {
                 project={projectName}
                 target={projectTarget?.target}
                 selectedFile={null}
-                onSelectFile={(selection) =>
-                  openChangedFileDiff(
-                    projectTarget?.target ?? projectName,
-                    selection,
-                    openDiff,
-                  )
-                }
+                onSelectFile={(selection) => {
+                  if (selection.status === "conflicted") {
+                    handleOpenConflictResolver(selection);
+                  } else {
+                    openChangedFileDiff(
+                      projectTarget?.target ?? projectName,
+                      selection,
+                      openDiff,
+                    );
+                  }
+                }}
+                onSelectConflict={handleOpenConflictResolver}
+                onOpenOperationResolver={() => handleOpenConflictResolver()}
               />
             </Suspense>
           </div>
@@ -2241,6 +2277,7 @@ export default function WorkspacePage() {
       activeProfileId,
       rootGitTarget,
       isRootGitAvailable,
+      handleOpenConflictResolver,
     ],
   );
 
@@ -2473,6 +2510,7 @@ export default function WorkspacePage() {
         focusEditorSignal={terminalFilePanelEditorFocusSignal}
         treeResizeHandleProps={terminalFileTreeResizeHandleProps}
         zIndex={controls.zIndex}
+        isTopmost={controls.isTopmost}
         onActivate={controls.onActivate}
         explorerContent={
           projectName ? (
@@ -2511,13 +2549,19 @@ export default function WorkspacePage() {
                 project={projectName}
                 target={projectTarget?.target}
                 selectedFile={null}
-                onSelectFile={(selection) =>
-                  openChangedFileDiff(
-                    projectTarget?.target ?? projectName,
-                    selection,
-                    openDiff,
-                  )
-                }
+                onSelectFile={(selection) => {
+                  if (selection.status === "conflicted") {
+                    handleOpenConflictResolver(selection);
+                  } else {
+                    openChangedFileDiff(
+                      projectTarget?.target ?? projectName,
+                      selection,
+                      openDiff,
+                    );
+                  }
+                }}
+                onSelectConflict={handleOpenConflictResolver}
+                onOpenOperationResolver={() => handleOpenConflictResolver()}
               />
             </Suspense>
           ) : (
@@ -2553,6 +2597,7 @@ export default function WorkspacePage() {
       terminalFileTreeWidth,
       projectTarget,
       handleRevealGitCommit,
+      handleOpenConflictResolver,
     ],
   );
 
@@ -2799,6 +2844,7 @@ export default function WorkspacePage() {
             project={projectName}
             target={projectTarget?.target}
             targetAvailable={isRootGitAvailable}
+            revealIntent={resolverRevealIntent}
             zIndex={resolveFloatingPanelStackZIndex(
               "resolver",
               floatingPanelStack,
@@ -2813,21 +2859,29 @@ export default function WorkspacePage() {
         </Suspense>
       )}
       {/* Floating conflict pill when conflicts exist but panel is hidden */}
-      {conflictResolver.conflicts.length > 0 &&
+      {/* Floating conflict pill when conflicts exist or active operation stopped */}
+      {((conflictResolver.conflicts.length > 0) ||
+        (conflictResolver.operation?.operation &&
+          conflictResolver.operation.operation !== "none")) &&
         !conflictResolver.isPanelVisible &&
         projectName && (
           <div className="fixed bottom-4 right-4 z-40">
             <button
               type="button"
-              onClick={() => conflictResolver.setVisible(true)}
+              onClick={() => handleOpenConflictResolver()}
               className="flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-[var(--color-surface)]/95 px-3 py-1.5 text-xs font-medium text-amber-300 shadow-xl backdrop-blur-md transition-all hover:bg-amber-400/10 hover:border-amber-400"
               title="Open Git conflict resolver"
-              aria-label={`Open Git conflict resolver (${conflictResolver.conflicts.length} conflicts)`}
+              aria-label={
+                conflictResolver.conflicts.length > 0
+                  ? `Open Git conflict resolver (${conflictResolver.conflicts.length} conflicts)`
+                  : `Open Git conflict resolver (${conflictResolver.operation?.operation.toUpperCase()} in progress)`
+              }
             >
               <GitMerge className="h-3.5 w-3.5 text-amber-400 animate-pulse" />
               <span>
-                {conflictResolver.conflicts.length} conflict
-                {conflictResolver.conflicts.length > 1 ? "s" : ""}
+                {conflictResolver.conflicts.length > 0
+                  ? `${conflictResolver.conflicts.length} conflict${conflictResolver.conflicts.length > 1 ? "s" : ""}`
+                  : `${conflictResolver.operation?.operation.toUpperCase()} in progress`}
               </span>
             </button>
           </div>

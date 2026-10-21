@@ -114,6 +114,15 @@ export function TerminalWorkspaceShell({
     floatingPanelStack && floatingPanelStack.length > 0
       ? floatingPanelStack[floatingPanelStack.length - 1]
       : frontPanelId;
+  const effectiveTopmost =
+    effectiveFront ??
+    (frontPanelId !== null
+      ? frontPanelId
+      : activePanelId !== null
+        ? "tool"
+        : terminalOverlayOpen
+          ? "files"
+          : null);
   const resolveZ = (panelId: TerminalFloatingPanelId) => {
     if (floatingPanelStack && floatingPanelStack.length > 0) {
       return resolveFloatingPanelStackZIndex(panelId, floatingPanelStack);
@@ -140,6 +149,7 @@ export function TerminalWorkspaceShell({
           {terminalContent}
           {terminalOverlayContent?.({
             zIndex: resolveZ("files"),
+            isTopmost: effectiveTopmost === "files",
             onActivate: () => activateFloatingPanel("files"),
           })}
           <TerminalFloatingToolPanel
@@ -147,7 +157,7 @@ export function TerminalWorkspaceShell({
             title={activePanel.label}
             content={activePanel.content}
             zIndex={resolveZ("tool")}
-            isTopmost={effectiveFront === "tool"}
+            isTopmost={effectiveTopmost === "tool"}
             onActivate={() => activateFloatingPanel("tool")}
             onClose={closeSidePanel}
           />

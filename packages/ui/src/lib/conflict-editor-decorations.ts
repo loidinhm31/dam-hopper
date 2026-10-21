@@ -1,7 +1,11 @@
 import type * as monacoNs from "monaco-editor";
-import type { ConflictRegion } from "@/lib/conflict-parser.js";
 import type { RegionDecisionState } from "@/lib/conflict-merge-types.js";
 
+export interface ConflictMarkerRegion {
+  startLine: number;
+  separatorLine: number;
+  endLine: number;
+}
 export const CONFLICT_DECORATION_STYLES = `
 .mc-conflict-marker     { background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; }
 .mc-conflict-ours       { background: rgba(34, 197, 94, 0.12); border-left: 3px solid #22c55e; }
@@ -22,7 +26,7 @@ export function injectConflictStylesOnce(): void {
 }
 
 export function buildResultDecorations(
-  regions: ConflictRegion[],
+  regions: ConflictMarkerRegion[],
   decisions: Record<string, RegionDecisionState> | undefined,
   monaco: typeof monacoNs,
 ): monacoNs.editor.IModelDeltaDecoration[] {

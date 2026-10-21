@@ -20,6 +20,7 @@ export interface TerminalWorkspacePanelRequest {
 export interface TerminalWorkspacePanelControls {
   zIndex: number;
   onActivate: () => void;
+  isTopmost?: boolean;
 }
 
 export function resolveTerminalFloatingPanelZIndex(
@@ -49,9 +50,19 @@ export function updateFloatingPanelStack(
   panelId: TerminalFloatingPanelId,
   action: "bringToFront" | "remove",
 ): TerminalFloatingPanelId[] {
-  const filtered = currentStack.filter((id) => id !== panelId);
   if (action === "bringToFront") {
+    if (
+      currentStack.length > 0 &&
+      currentStack[currentStack.length - 1] === panelId
+    ) {
+      return currentStack as TerminalFloatingPanelId[];
+    }
+    const filtered = currentStack.filter((id) => id !== panelId);
     return [...filtered, panelId];
+  }
+  const filtered = currentStack.filter((id) => id !== panelId);
+  if (filtered.length === currentStack.length) {
+    return currentStack as TerminalFloatingPanelId[];
   }
   return filtered;
 }

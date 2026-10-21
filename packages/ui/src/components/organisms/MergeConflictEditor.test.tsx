@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ConflictBlock, MergeConflictEditor } from "./MergeConflictEditor.js";
+import { MergeConflictEditor } from "./MergeConflictEditor.js";
+import { ConflictRegionNav } from "./ConflictRegionNav.js";
+import type { ConflictSnapshot } from "@/api/client.js";
 
 const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const editorOptions: Array<Record<string, unknown>> = [];
@@ -9,6 +11,57 @@ const recoveryState = vi.hoisted(() => ({
   drafts: [] as Array<Record<string, unknown>>,
   activeDraft: null as Record<string, unknown> | null,
   currentScope: null as Record<string, unknown> | null,
+}));
+
+const initialConflictSnapshot: ConflictSnapshot = {
+  conflictId: "cid_1",
+  path: "src/conflict.ts",
+  repositoryRoot: "/repo",
+  worktreeRoot: "/repo",
+  snapshotVersion: "ver1",
+  fullIndexFingerprint: "idx1",
+  status: "bothModified",
+  stages: {
+    ours: {
+      stage: 2,
+      mode: 0o100644,
+      byteSize: 4,
+      kind: "text",
+      textTokens: ["ours\n"],
+      oid: "abc1234",
+    },
+    theirs: {
+      stage: 3,
+      mode: 0o100644,
+      byteSize: 6,
+      kind: "text",
+      textTokens: ["theirs\n"],
+      oid: "def5678",
+    },
+  },
+  worktree: {
+    exists: true,
+    kind: "regular",
+    mode: 0o100644,
+    byteLength: 40,
+    textTokens: [
+      "<<<<<<< ours\n",
+      "ours\n",
+      "=======\n",
+      "theirs\n",
+      ">>>>>>> theirs\n",
+    ],
+    hasConflictMarkers: true,
+    isDirtyVsStages: true,
+  },
+  effectiveAttributes: {
+    ident: false,
+    filterQualified: true,
+  },
+};
+
+const mockConflictFileState = vi.hoisted(() => ({
+  data: null as ConflictSnapshot | null,
 }));
 
 vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
@@ -47,47 +100,7 @@ vi.mock("@/hooks/use-conflict-resolver.js", () => ({
 }));
 vi.mock("@/api/queries.js", () => ({
   useGitConflictFile: () => ({
-    data: {
-      conflictId: "cid_1",
-      path: "src/conflict.ts",
-      snapshotVersion: "ver1",
-      fullIndexFingerprint: "idx1",
-      stages: {
-        ours: {
-          stage: 2,
-          mode: 0o100644,
-          byteSize: 4,
-          kind: "text",
-          textTokens: ["ours\n"],
-        },
-        theirs: {
-          stage: 3,
-          mode: 0o100644,
-          byteSize: 6,
-          kind: "text",
-          textTokens: ["theirs\n"],
-        },
-      },
-      worktree: {
-        exists: true,
-        kind: "regular",
-        mode: 0o100644,
-        byteLength: 40,
-        textTokens: [
-          "<<<<<<< ours\n",
-          "ours\n",
-          "=======\n",
-          "theirs\n",
-          ">>>>>>> theirs\n",
-        ],
-        hasConflictMarkers: true,
-        isDirtyVsStages: true,
-      },
-      effectiveAttributes: {
-        ident: false,
-        filterQualified: true,
-      },
-    },
+    data: mockConflictFileState.data ?? initialConflictSnapshot,
     isLoading: false,
   }),
   useGitFileDiff: () => ({
@@ -115,6 +128,7 @@ describe("MergeConflictEditor Android policy", () => {
     recoveryState.drafts = [];
     recoveryState.activeDraft = null;
     recoveryState.currentScope = null;
+    mockConflictFileState.data = null;
   });
 
   it("shows memory-only recovery and requires fresh review before Apply", () => {
@@ -216,19 +230,139 @@ describe("MergeConflictEditor Android policy", () => {
 
   it("disables each per-conflict accept action when the result is read-only", () => {
     const markup = renderToStaticMarkup(
-      <ConflictBlock
-        index={0}
-        isSelected={false}
-        onNavigate={() => {}}
-        onAcceptOurs={() => {}}
-        onAcceptTheirs={() => {}}
-        actionsDisabled
+      <ConflictRegionNav
+        regions={[{ id: "conflict-1", startLine: 1, endLine: 5 }]}
+        selectedIndex={0}
+        onSelectIndex={() => {}}
+        onAcceptSide={() => {}}
+        disabled={true}
       />,
     );
 
-    expect(markup.match(/disabled=""/g)).toHaveLength(2);
-    expect(markup).toContain(
-      "Unavailable on Android Chrome: result is read-only",
+    expect(markup).toContain('disabled="" title="Editing disabled"');
+    expect(markup.match(/disabled=""/g)!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("renders binary conflict view when stages are binary", () => {
+    mockConflictFileState.data = {
+      ...initialConflictSnapshot,
+      stages: {
+        ours: {
+          stage: 2,
+          mode: 0o100644,
+          byteSize: 1024,
+          kind: "binary",
+          oid: "1234567890abcdef",
+        },
+        theirs: {
+          stage: 3,
+          mode: 0o100644,
+          byteSize: 2048,
+          kind: "binary",
+          oid: "abcdef1234567890",
+        },
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      <MergeConflictEditor
+        project="demo-project"
+        filePath="src/conflict.ts"
+        onClose={() => {}}
+        onResolved={() => {}}
+      />,
     );
+
+    expect(markup).toContain("Binary File Conflict");
+    expect(markup).toContain("Take Ours (Stage 2)");
+    expect(markup).toContain("Take Theirs (Stage 3)");
+    expect(markup).toContain("1024 bytes");
+    expect(markup).toContain("2048 bytes");
+  });
+
+  it("renders modify / delete conflict view keeping Ours when Ours is present and Theirs is missing", () => {
+    mockConflictFileState.data = {
+      ...initialConflictSnapshot,
+      status: "modifyDelete",
+      stages: {
+        ...initialConflictSnapshot.stages,
+        theirs: { kind: "missing" },
+      },
+      worktree: {
+        exists: false,
+        kind: "missing",
+        mode: 0,
+        byteLength: 0,
+        hasConflictMarkers: false,
+        isDirtyVsStages: false,
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      <MergeConflictEditor
+        project="demo-project"
+        filePath="src/conflict.ts"
+        onClose={() => {}}
+        onResolved={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Modify / Delete Conflict");
+    expect(markup).toContain("Keep modified version (Ours)");
+    expect(markup).toContain("Delete file");
+  });
+
+  it("renders modify / delete conflict view keeping Theirs when Ours is missing and Theirs is present", () => {
+    mockConflictFileState.data = {
+      ...initialConflictSnapshot,
+      status: "modifyDelete",
+      stages: {
+        ...initialConflictSnapshot.stages,
+        ours: { kind: "missing" },
+      },
+      worktree: {
+        exists: false,
+        kind: "missing",
+        mode: 0,
+        byteLength: 0,
+        hasConflictMarkers: false,
+        isDirtyVsStages: false,
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      <MergeConflictEditor
+        project="demo-project"
+        filePath="src/conflict.ts"
+        onClose={() => {}}
+        onResolved={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Modify / Delete Conflict");
+    expect(markup).toContain("Keep modified version (Theirs)");
+    expect(markup).toContain("Delete file");
+  });
+
+  it("renders unsupported conflict view when status is unsupported", () => {
+    mockConflictFileState.data = {
+      ...initialConflictSnapshot,
+      status: "unsupported",
+      unsupportedReason: "Unsupported git attributes filter",
+      worktreeRoot: "/home/user/project",
+    };
+
+    const markup = renderToStaticMarkup(
+      <MergeConflictEditor
+        project="demo-project"
+        filePath="src/conflict.ts"
+        onClose={() => {}}
+        onResolved={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Unsupported Conflict");
+    expect(markup).toContain("Unsupported git attributes filter");
+    expect(markup).toContain("Automatic resolution is disabled for safety");
   });
 });

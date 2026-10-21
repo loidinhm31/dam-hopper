@@ -31,19 +31,16 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
-import { useConflictResolver } from "@/hooks/use-conflict-resolver.js";
+import {
+  useConflictResolver,
+  type ConflictResolverHandle,
+} from "@/hooks/use-conflict-resolver.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
-import {
-  parseConflictRegions,
-  acceptConflict,
-  hasRemainingConflicts,
-  hasMalformedConflicts,
-  type ConflictRegion,
-} from "@/lib/conflict-parser.js";
+import { parseResultMarkerBlocks } from "@/lib/conflict-marker-parser.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   injectConflictStylesOnce,
@@ -60,6 +57,7 @@ interface Props {
   filePath: string;
   fileLanguage?: string;
   root?: string;
+  resolver?: ConflictResolverHandle;
   onClose: () => void;
   onResolved: () => void;
 }
@@ -86,6 +84,7 @@ export function MergeConflictEditor({
   filePath,
   fileLanguage,
   root,
+  resolver: propResolver,
   onClose,
   onResolved,
 }: Props) {
@@ -98,7 +97,12 @@ export function MergeConflictEditor({
     injectConflictStylesOnce();
   }, []);
 
-  const resolver = useConflictResolver(targetRef, root);
+  const fallbackResolver = useConflictResolver(
+    propResolver ? undefined : targetRef,
+    propResolver ? undefined : root,
+    { enabled: !propResolver },
+  );
+  const resolver = propResolver ?? fallbackResolver;
   const conflicts = resolver.conflicts;
   const conflictsLoading = resolver.isLoading;
   const conflictEntry = conflicts.find((c) => c.path === filePath);
@@ -136,6 +140,11 @@ export function MergeConflictEditor({
     "theirs" | "result" | "ours" | "base"
   >("result");
   const [showBaseInWide, setShowBaseInWide] = useState(false);
+  const pendingRevealLineRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    pendingRevealLineRef.current = null;
+  }, [draftKey]);
 
   useEffect(() => {
     if (!containerNode) return;
@@ -236,10 +245,11 @@ export function MergeConflictEditor({
     );
   }, [resolver.currentScope, resolver.drafts, activeDraft, filePath]);
 
-  const conflictRegions = useMemo(
-    () => parseConflictRegions(resultContent),
+  const parsedMarkers = useMemo(
+    () => parseResultMarkerBlocks(resultContent),
     [resultContent],
   );
+  const conflictRegions = parsedMarkers;
 
   const conflictMergeRegions = useMemo(() => {
     return activeDraft?.mergeModel?.regions.filter((r) => !r.stable) ?? [];
@@ -261,10 +271,21 @@ export function MergeConflictEditor({
   }, [conflictMergeRegions, conflictRegions]);
   const isModelReady = activeDraft?.mergeModel
     ? activeDraft.mergeModel.readiness.isReady
-    : !hasRemainingConflicts(resultContent);
+    : parsedMarkers.length === 0;
   const allResolved = Boolean(activeDraft) && isModelReady;
-  const isMalformed =
-    resultContent !== "" && hasMalformedConflicts(resultContent);
+  const isMalformed = useMemo(() => {
+    if (!resultContent) return false;
+    const lines = resultContent.split("\n");
+    let opens = 0;
+    let seps = 0;
+    let closes = 0;
+    for (const line of lines) {
+      if (line.startsWith("<<<<<<<")) opens++;
+      else if (line.startsWith("=======")) seps++;
+      else if (line.startsWith(">>>>>>>")) closes++;
+    }
+    return opens !== closes || (opens > 0 && opens !== seps);
+  }, [resultContent]);
 
   // ── Editor refs ──────────────────────────────────────────────────────────────
 
@@ -364,9 +385,62 @@ export function MergeConflictEditor({
     };
   }, []);
 
+  // Apply decorations across editors
+  const applyDecorations = useCallback(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+
+    if (resultEditorRef.current) {
+      const decisions = activeDraft?.mergeModel
+        ? extractModelDecisions(activeDraft.mergeModel)
+        : undefined;
+      const decs = buildResultDecorations(
+        conflictRegions,
+        decisions,
+        monaco,
+      );
+      if (resultDecorationsCollection.current) {
+        resultDecorationsCollection.current.set(decs);
+      } else {
+        resultDecorationsCollection.current =
+          resultEditorRef.current.createDecorationsCollection(decs);
+      }
+    }
+
+    if (theirsEditorRef.current) {
+      if (conflictMergeRegions.length > 0) {
+        const theirsRanges = conflictMergeRegions.map((r) => r.theirsRange);
+        const decs = buildSourceDecorations(theirsRanges, "theirs", monaco);
+        if (theirsDecorationsCollection.current) {
+          theirsDecorationsCollection.current.set(decs);
+        } else {
+          theirsDecorationsCollection.current =
+            theirsEditorRef.current.createDecorationsCollection(decs);
+        }
+      } else if (theirsDecorationsCollection.current) {
+        theirsDecorationsCollection.current.clear();
+      }
+    }
+
+    if (oursEditorRef.current) {
+      if (conflictMergeRegions.length > 0) {
+        const oursRanges = conflictMergeRegions.map((r) => r.oursRange);
+        const decs = buildSourceDecorations(oursRanges, "ours", monaco);
+        if (oursDecorationsCollection.current) {
+          oursDecorationsCollection.current.set(decs);
+        } else {
+          oursDecorationsCollection.current =
+            oursEditorRef.current.createDecorationsCollection(decs);
+        }
+      } else if (oursDecorationsCollection.current) {
+        oursDecorationsCollection.current.clear();
+      }
+    }
+  }, [activeDraft?.mergeModel, conflictMergeRegions, conflictRegions]);
   const handleTheirsMount: OnMount = useCallback(
     (editor, monaco) => {
       theirsEditorRef.current = editor;
+      theirsDecorationsCollection.current = null;
       modelsRef.current.theirs = editor.getModel();
       editor.onDidChangeModel(() => {
         modelsRef.current.theirs = editor.getModel();
@@ -374,13 +448,15 @@ export function MergeConflictEditor({
       if (!monacoRef.current) monacoRef.current = monaco;
       editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "theirs"));
       attachResizeObserver(editor);
+      applyDecorations();
     },
-    [syncScroll],
+    [applyDecorations, syncScroll],
   );
 
   const handleResultMount: OnMount = useCallback(
     (editor, monaco) => {
       resultEditorRef.current = editor;
+      resultDecorationsCollection.current = null;
       modelsRef.current.result = editor.getModel();
       if (
         isAndroidChromeNativeInputSuppressed ||
@@ -444,10 +520,22 @@ export function MergeConflictEditor({
 
       editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "result"));
       attachResizeObserver(editor);
+      applyDecorations();
+
+      if (pendingRevealLineRef.current !== null) {
+        const line = pendingRevealLineRef.current;
+        editor.revealLineInCenter(line);
+        editor.setPosition({ lineNumber: line, column: 1 });
+        if (!isAndroidChromeNativeInputSuppressed) {
+          editor.focus();
+        }
+        pendingRevealLineRef.current = null;
+      }
     },
     [
       activeDraft?.id,
       activeDraft?.isRecovery,
+      applyDecorations,
       isAndroidChromeNativeInputSuppressed,
       resolver.redoDraft,
       resolver.undoDraft,
@@ -478,6 +566,7 @@ export function MergeConflictEditor({
   const handleOursMount: OnMount = useCallback(
     (editor, monaco) => {
       oursEditorRef.current = editor;
+      oursDecorationsCollection.current = null;
       modelsRef.current.ours = editor.getModel();
       editor.onDidChangeModel(() => {
         modelsRef.current.ours = editor.getModel();
@@ -485,8 +574,9 @@ export function MergeConflictEditor({
       if (!monacoRef.current) monacoRef.current = monaco;
       editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "ours"));
       attachResizeObserver(editor);
+      applyDecorations();
     },
-    [syncScroll],
+    [applyDecorations, syncScroll],
   );
 
   const handleBaseMount: OnMount = useCallback(
@@ -503,50 +593,6 @@ export function MergeConflictEditor({
     [syncScroll],
   );
 
-  // Apply decorations across editors
-  const applyDecorations = useCallback(() => {
-    const monaco = monacoRef.current;
-    if (!monaco) return;
-
-    if (resultEditorRef.current) {
-      const decisions = activeDraft?.mergeModel
-        ? extractModelDecisions(activeDraft.mergeModel)
-        : undefined;
-      const decs = buildResultDecorations(
-        conflictRegions,
-        decisions,
-        monaco,
-      );
-      if (resultDecorationsCollection.current) {
-        resultDecorationsCollection.current.set(decs);
-      } else {
-        resultDecorationsCollection.current =
-          resultEditorRef.current.createDecorationsCollection(decs);
-      }
-    }
-
-    if (theirsEditorRef.current && conflictMergeRegions.length > 0) {
-      const theirsRanges = conflictMergeRegions.map((r) => r.theirsRange);
-      const decs = buildSourceDecorations(theirsRanges, "theirs", monaco);
-      if (theirsDecorationsCollection.current) {
-        theirsDecorationsCollection.current.set(decs);
-      } else {
-        theirsDecorationsCollection.current =
-          theirsEditorRef.current.createDecorationsCollection(decs);
-      }
-    }
-
-    if (oursEditorRef.current && conflictMergeRegions.length > 0) {
-      const oursRanges = conflictMergeRegions.map((r) => r.oursRange);
-      const decs = buildSourceDecorations(oursRanges, "ours", monaco);
-      if (oursDecorationsCollection.current) {
-        oursDecorationsCollection.current.set(decs);
-      } else {
-        oursDecorationsCollection.current =
-          oursEditorRef.current.createDecorationsCollection(decs);
-      }
-    }
-  }, [activeDraft?.mergeModel, conflictMergeRegions, conflictRegions]);
 
   useEffect(() => {
     applyDecorations();
@@ -556,17 +602,22 @@ export function MergeConflictEditor({
   function navigateToConflict(index: number) {
     const region = navRegions[index];
     if (!region) return;
+    setSelectedConflict(index);
     if (isNarrow) {
+      pendingRevealLineRef.current = region.startLine;
       setActiveNarrowPane("result");
     }
-    setSelectedConflict(index);
-    resultEditorRef.current?.revealLineInCenter(region.startLine);
-    resultEditorRef.current?.setPosition({
-      lineNumber: region.startLine,
-      column: 1,
-    });
-    if (!isAndroidChromeNativeInputSuppressed) {
-      resultEditorRef.current?.focus();
+    const editor = resultEditorRef.current;
+    if (editor) {
+      editor.revealLineInCenter(region.startLine);
+      editor.setPosition({
+        lineNumber: region.startLine,
+        column: 1,
+      });
+      if (!isAndroidChromeNativeInputSuppressed) {
+        editor.focus();
+      }
+      pendingRevealLineRef.current = null;
     }
   }
 
@@ -606,32 +657,6 @@ export function MergeConflictEditor({
       setResultContent(next);
       return;
     }
-
-    // Fallback if mergeModel not loaded
-    const fallbackIndex = parseInt(regionId.replace("conflict-", ""), 10) - 1;
-    const regions = parseConflictRegions(resultContentRef.current);
-    const fbRegion = regions[fallbackIndex >= 0 ? fallbackIndex : 0];
-    if (!fbRegion) return;
-    const next = acceptConflict(resultContentRef.current, fbRegion, side);
-    const update = resolver.updateDraftResult(draftKey, next);
-    if (!update.success) {
-      setResolveError(update.error ?? "Draft capacity exceeded");
-      return;
-    }
-    resultContentRef.current = next;
-    const editor = resultEditorRef.current;
-    if (editor) {
-      const model = editor.getModel();
-      if (model) {
-        isApplyingDraftHistoryRef.current = true;
-        try {
-          model.applyEdits([{ range: model.getFullModelRange(), text: next }]);
-        } finally {
-          isApplyingDraftHistoryRef.current = false;
-        }
-      }
-    }
-    setResultContent(next);
   }
 
   function applyAcceptBoth(
@@ -711,30 +736,6 @@ export function MergeConflictEditor({
       setResultContent(next);
       return;
     }
-
-    // Fallback if model preview unavailable
-    let content = resultContentRef.current;
-    const regions = parseConflictRegions(content);
-    for (let i = regions.length - 1; i >= 0; i--) {
-      content = acceptConflict(content, regions[i], side);
-    }
-    const update = resolver.updateDraftResult(draftKey, content);
-    if (!update.success) {
-      setResolveError(update.error ?? "Draft capacity exceeded");
-      return;
-    }
-    resultContentRef.current = content;
-    const model = resultEditorRef.current?.getModel();
-    if (model) {
-      isApplyingDraftHistoryRef.current = true;
-      try {
-        model.applyEdits([{ range: model.getFullModelRange(), text: content }]);
-      } finally {
-        isApplyingDraftHistoryRef.current = false;
-      }
-    }
-    setSelectedConflict(0);
-    setResultContent(content);
   }
 
   async function handleImportRecovery(recoveryKey: string) {
@@ -856,8 +857,126 @@ export function MergeConflictEditor({
     }
   }
 
-  const isLoading = conflictsLoading || snapshotLoading || diffLoading;
+  const isBinaryConflict = Boolean(
+    conflictEntry?.isBinary ||
+      snapshot?.stages?.ours?.kind === "binary" ||
+      snapshot?.stages?.theirs?.kind === "binary",
+  );
 
+  const isDeleteModifyConflict = Boolean(
+    snapshot?.status === "modifyDelete" || snapshot?.status === "deleteModify",
+  );
+
+  const isUnsupportedConflict = Boolean(
+    snapshot?.status === "unsupported" ||
+      snapshot?.worktree?.kind === "symlink" ||
+      snapshot?.worktree?.kind === "gitlink" ||
+      snapshot?.unsupportedReason,
+  );
+
+  const handleBinaryChoice = async (side: "ours" | "theirs") => {
+    if (!draftKey || isResolving || !targetAvailable) return;
+    const sideLabel = side === "ours" ? "Ours (Stage 2)" : "Theirs (Stage 3)";
+    if (
+      !window.confirm(
+        `Resolve binary conflict for ${filePath} by keeping ${sideLabel} and staging the file?`,
+      )
+    ) {
+      return;
+    }
+    setIsResolving(true);
+    setResolveError(null);
+    try {
+      const outcome = await resolver.applyIndexSide(draftKey, side);
+      if (outcome.outcome === "applied") {
+        onResolved();
+      } else {
+        const errorMsg =
+          "error" in outcome
+            ? outcome.error
+            : "reason" in outcome
+              ? outcome.reason
+              : "Binary resolution failed";
+        setResolveError(errorMsg);
+      }
+    } catch (err) {
+      setResolveError(
+        err instanceof Error ? err.message : "Binary resolution failed",
+      );
+    } finally {
+      setIsResolving(false);
+    }
+  };
+  const oursPresent = Boolean(
+    snapshot?.stages?.ours && snapshot.stages.ours.kind !== "missing",
+  );
+  const theirsPresent = Boolean(
+    snapshot?.stages?.theirs && snapshot.stages.theirs.kind !== "missing",
+  );
+  const modifiedSide: "ours" | "theirs" | null =
+    oursPresent && !theirsPresent
+      ? "ours"
+      : theirsPresent && !oursPresent
+        ? "theirs"
+        : null;
+
+  const handleKeepModified = async () => {
+    if (!draftKey || isResolving || !targetAvailable || !modifiedSide) return;
+    setIsResolving(true);
+    setResolveError(null);
+    try {
+      const outcome = await resolver.applyIndexSide(draftKey, modifiedSide);
+      if (outcome.outcome === "applied") {
+        onResolved();
+      } else {
+        const errorMsg =
+          "error" in outcome
+            ? outcome.error
+            : "reason" in outcome
+              ? outcome.reason
+              : "Resolution failed";
+        setResolveError(errorMsg);
+      }
+    } catch (err) {
+      setResolveError(err instanceof Error ? err.message : "Resolution failed");
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (!draftKey || isResolving || !targetAvailable) return;
+    if (
+      !window.confirm(
+        `Delete ${filePath} from the working tree and index to resolve this conflict?`,
+      )
+    ) {
+      return;
+    }
+    setIsResolving(true);
+    setResolveError(null);
+    try {
+      const outcome = await resolver.applyDelete(draftKey);
+      if (outcome.outcome === "applied") {
+        onResolved();
+      } else {
+        const errorMsg =
+          "error" in outcome
+            ? outcome.error
+            : "reason" in outcome
+              ? outcome.reason
+              : "Delete failed";
+        setResolveError(errorMsg);
+      }
+    } catch (err) {
+      setResolveError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const isLoading =
+    snapshotLoading || diffLoading || (!conflictEntry && conflictsLoading);
   if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] glass-card">
@@ -867,7 +986,10 @@ export function MergeConflictEditor({
     );
   }
 
-  if (!conflictFile || !snapshot?.worktree.exists) {
+  if (
+    !conflictFile ||
+    (!snapshot?.worktree.exists && !isDeleteModifyConflict)
+  ) {
     return (
       <div className="h-full flex items-center justify-center gap-2 text-xs text-[var(--color-danger)] glass-card">
         <AlertTriangle className="h-4 w-4" />
@@ -1188,9 +1310,132 @@ export function MergeConflictEditor({
         </div>
       )}
 
-      {/* Narrow pane switcher tabs */}
-      {/* Narrow pane switcher tabs */}
-      {isNarrow ? (
+      {/* Specialized conflict handling views (Unsupported, Binary, Modify/Delete) */}
+      {isUnsupportedConflict ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-3">
+          <div className="rounded-full bg-amber-500/10 p-3 text-amber-400">
+            <AlertTriangle className="h-6 w-6" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">
+              Unsupported Conflict
+            </h3>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {snapshot?.unsupportedReason ??
+                "This conflict involves unsupported attributes, symlinks, gitlinks, or conversion policies."}
+            </p>
+            <p className="text-2xs text-[var(--color-text-muted)]">
+              Automatic resolution is disabled for safety. Please resolve this
+              conflict manually in the owning worktree terminal:
+            </p>
+            <p className="font-mono text-2xs bg-[var(--color-surface-2)] px-2 py-1 rounded border border-[var(--color-border)] select-all">
+              {snapshot?.worktreeRoot ?? resolver.terminalHandoff?.worktreeRoot ?? projectName}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => resolver.refetchAll()}
+            className="rounded border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+          >
+            Refresh after terminal resolution
+          </button>
+        </div>
+      ) : isDeleteModifyConflict ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-4">
+          <div className="rounded-full bg-amber-500/10 p-3 text-amber-400">
+            <AlertTriangle className="h-6 w-6" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">
+              Modify / Delete Conflict
+            </h3>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {oursPresent
+                ? "This file was modified on Ours (current HEAD) and deleted on Theirs (incoming)."
+                : "This file was deleted on Ours (current HEAD) and modified on Theirs (incoming)."}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              disabled={isResolving || !targetAvailable || !modifiedSide}
+              onClick={() => void handleKeepModified()}
+              className="rounded bg-green-600 px-4 py-2 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50"
+            >
+              {isResolving
+                ? "Resolving…"
+                : `Keep modified version (${modifiedSide === "ours" ? "Ours" : modifiedSide === "theirs" ? "Theirs" : "Unknown"})`}
+            </button>
+            <button
+              type="button"
+              disabled={isResolving || !targetAvailable}
+              onClick={() => void handleDeleteFile()}
+              className="rounded border border-[var(--color-danger)] px-4 py-2 text-xs font-medium text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 disabled:opacity-50"
+            >
+              {isResolving ? "Deleting…" : "Delete file"}
+            </button>
+          </div>
+        </div>
+      ) : isBinaryConflict ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-4">
+          <div className="rounded-full bg-blue-500/10 p-3 text-blue-400">
+            <Split className="h-6 w-6" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">
+              Binary File Conflict
+            </h3>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Binary files cannot be merged as text. Select which version to keep:
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 w-full max-w-md">
+            <div className="flex-1 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]/60 text-left space-y-2">
+              <div className="text-xs font-semibold text-green-400">
+                Ours (Stage 2)
+              </div>
+              <div className="text-2xs text-[var(--color-text-muted)] font-mono truncate">
+                OID: {snapshot?.stages?.ours?.oid?.slice(0, 10) ?? "unknown"}
+              </div>
+              <div className="text-2xs text-[var(--color-text-muted)]">
+                Size: {snapshot?.stages?.ours?.byteSize ?? 0} bytes
+              </div>
+              <button
+                type="button"
+                disabled={isResolving || !targetAvailable}
+                onClick={() => void handleBinaryChoice("ours")}
+                className="w-full rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50"
+              >
+                {isResolving ? "Resolving…" : "Take Ours (Stage 2)"}
+              </button>
+            </div>
+
+            <div className="flex-1 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]/60 text-left space-y-2">
+              <div className="text-xs font-semibold text-blue-400">
+                Theirs (Stage 3)
+              </div>
+              <div className="text-2xs text-[var(--color-text-muted)] font-mono truncate">
+                OID: {snapshot?.stages?.theirs?.oid?.slice(0, 10) ?? "unknown"}
+              </div>
+              <div className="text-2xs text-[var(--color-text-muted)]">
+                Size: {snapshot?.stages?.theirs?.byteSize ?? 0} bytes
+              </div>
+              <button
+                type="button"
+                disabled={isResolving || !targetAvailable}
+                onClick={() => void handleBinaryChoice("theirs")}
+                className="w-full rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+              >
+                {isResolving ? "Resolving…" : "Take Theirs (Stage 3)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Narrow pane switcher tabs */}
+          {isNarrow ? (
         <div
           role="tablist"
           aria-label="Conflict editor panes"
@@ -1427,73 +1672,8 @@ export function MergeConflictEditor({
           <strong className="mx-1">Mark Resolved</strong> to stage
         </div>
       )}
-    </div>
-  );
-}
-
-interface ConflictBlockProps {
-  index: number;
-  isSelected: boolean;
-  onNavigate: () => void;
-  onAcceptOurs: () => void;
-  onAcceptTheirs: () => void;
-  actionsDisabled: boolean;
-}
-
-export function ConflictBlock({
-  index,
-  isSelected,
-  onNavigate,
-  onAcceptOurs,
-  onAcceptTheirs,
-  actionsDisabled,
-}: ConflictBlockProps) {
-  return (
-    <div
-      className={cn(
-        "shrink-0 flex items-center gap-0.5 rounded px-1 py-0.5 border text-[10px] cursor-pointer transition-colors",
-        isSelected
-          ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
-          : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary)]/40 hover:text-[var(--color-text)]",
+        </>
       )}
-      onClick={onNavigate}
-      title={`Jump to conflict ${index + 1}`}
-    >
-      <span className="font-mono font-semibold w-4 text-center">
-        {index + 1}
-      </span>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onAcceptTheirs();
-        }}
-        disabled={actionsDisabled}
-        title={
-          actionsDisabled
-            ? "Unavailable on Android Chrome: result is read-only"
-            : "Accept theirs (incoming)"
-        }
-        className="px-1 rounded text-blue-400 hover:bg-blue-400/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-      >
-        ←T
-      </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onAcceptOurs();
-        }}
-        disabled={actionsDisabled}
-        title={
-          actionsDisabled
-            ? "Unavailable on Android Chrome: result is read-only"
-            : "Accept ours (current HEAD)"
-        }
-        className="px-1 rounded text-green-400 hover:bg-green-400/10 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-      >
-        O→
-      </button>
     </div>
   );
 }

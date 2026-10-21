@@ -12,6 +12,10 @@ interface ConflictResolverToolbarProps {
   onToggleMaximize: () => void;
   onHide: () => void;
   onDragStart: (event: ReactMouseEvent) => void;
+  onContinue?: () => void;
+  onAbort?: () => void;
+  isContinuing?: boolean;
+  isAborting?: boolean;
 }
 
 export function ConflictResolverToolbar({
@@ -24,6 +28,10 @@ export function ConflictResolverToolbar({
   onToggleMaximize,
   onHide,
   onDragStart,
+  onContinue,
+  onAbort,
+  isContinuing = false,
+  isAborting = false,
 }: ConflictResolverToolbarProps) {
   const opKind = operation?.operation ?? null;
   const opLabel = opKind && opKind !== "none" ? opKind.toUpperCase() : null;
@@ -72,6 +80,51 @@ export function ConflictResolverToolbar({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {/* Operation Continue and Abort buttons */}
+      {opKind && opKind !== "none" && (
+        <div className="flex shrink-0 items-center gap-1.5 mr-2">
+          {onAbort && (
+            <button
+              type="button"
+              disabled={!operation?.canAbort || isContinuing || isAborting}
+              onClick={onAbort}
+              className="rounded border border-[var(--color-border)] px-2 py-0.5 text-2xs font-medium text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10 disabled:opacity-40"
+              title={
+                !operation?.canAbort
+                  ? `Cannot abort ${opLabel}`
+                  : `Abort ${opLabel}`
+              }
+              aria-label={`Abort ${opLabel}`}
+            >
+              {isAborting ? "Aborting…" : "Abort"}
+            </button>
+          )}
+          {onContinue && (
+            <button
+              type="button"
+              disabled={
+                !operation?.canContinue ||
+                isContinuing ||
+                isAborting ||
+                conflicts.length > 0
+              }
+              onClick={onContinue}
+              className="rounded bg-green-600 px-2 py-0.5 text-2xs font-semibold text-white shadow-sm transition-colors hover:bg-green-500 disabled:opacity-40"
+              title={
+                conflicts.length > 0
+                  ? "Resolve all conflicts before continuing"
+                  : !operation?.canContinue
+                    ? `Cannot continue ${opLabel}`
+                    : `Continue ${opLabel}`
+              }
+              aria-label={`Continue ${opLabel}`}
+            >
+              {isContinuing ? "Continuing…" : `Continue ${opLabel}`}
+            </button>
+          )}
         </div>
       )}
 

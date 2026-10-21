@@ -9,7 +9,8 @@
 ## Overview
 
 - Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Status: Complete* / DONE (2026-10-21; administratively closed with accepted deferrals and handoff to Phase 09).
+- Implementation: Complete* (2026-10-21). Review: Complete* (Cycle 3 score: 6.0/10, approved by user with accepted deferrals on 2026-10-21). Progress: 100%. Effort: unestimated.
 - Owner: workspace integration lead; affected backend/client/model/surface owners supply passed handoffs.
 - Entry: Phase 03–07 contracts, controller, structured model and actual floating host passed.
 - Handoff: one end-to-end production entry/apply/recovery path with obsolete marker behavior and staging bypasses removed.
@@ -103,25 +104,38 @@ Cutover removes obsolete references only after both entry paths and mutation out
 
 ## Todo list
 
-- [ ] Wire row and operation-status reveal to one exact owner/root floating host.
-- [ ] Separate text/binary/delete/unsupported and Apply/Continue/Abort, including configured-editor terminal handoff without message form/adapter.
-- [ ] Preserve submitted-revision and stale/partial/unknown recovery semantics.
-- [ ] Close every generic conflict stage bypass at UI/backend boundary.
-- [ ] Complete coordinated UI/server/every-caller cutover; remove parser/ConflictBlock/unchecked behavior and reject legacy writes without fallback/shim.
-- [ ] Exercise actual production entry, repeated stop and unrelated behavior boundaries.
+- [x] Wire row and operation-status reveal to one exact owner/root floating host (`buildConflictRevealIntent`, `deriveAggregateConflictRoot`, `lastConsumedNonceRef`).
+- [x] Separate text/binary/delete/unsupported and Apply/Continue/Abort, including configured-editor terminal handoff without message form/adapter.
+- [x] Preserve submitted-revision and stale/partial/unknown recovery semantics.
+- [x] Close every generic conflict stage bypass at UI/backend boundary (CUT1 preflight in `diff.rs` and UI stage-checkbox suppression).
+- [x] Complete coordinated UI/server/every-caller cutover; remove parser/ConflictBlock/unchecked behavior (CUT2) and reject legacy writes without fallback/shim (`LEGACY_PAYLOAD_REJECTED`).
+- [ ] Exercise actual production entry, repeated stop and unrelated behavior boundaries in live production environment. *(Step 12 live-daemon multi-worktree smoke testing formally handed off to Phase 09 qualification)*
 
 ### Inherited Tasks from Phase 07 (Accepted Deferrals)
 
-- [ ] **C1 (Tool & files panel Escape activation):** Ensure shell populates `floatingPanelStack` or activates panels immediately upon toggle/open so Escape closes panels without requiring prior pointer click/focus capture.
-- [ ] **C2 (Narrow pane switch decoration re-application):** Re-apply Monaco conflict decorations (`applyDecorations`) and reset collection refs on async mount of Theirs/Result/Ours/Base editors during narrow tab switching.
-- [ ] **C3 (Nav auto-switch line reveal):** Apply pending conflict line reveal (`pendingRevealRef`) upon Result editor mount when navigating from Theirs/Ours/Base tabs.
-- [ ] **W1 (Files panel Escape stack scoping):** Scope `TerminalFloatingFilePanel` Escape handler to `isTopmost={effectiveFront === "files"}` with focus containment to prevent simultaneous dismissals.
-- [ ] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
-- [ ] **W4 (Dead code & allocation cleanup):** Remove or wire `isTopmostFloatingPanel` helper and memoize `updateFloatingPanelStack` when array contents are unchanged.
-- [ ] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
-- [ ] **W6 (Monaco view zones & hook consolidation):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
-- [ ] **W7 (Escape widget query scoping):** Scope Monaco widget queries to `panelRef.current`.
+- [x] **C1 (Tool & files panel Escape activation):** Ensure shell populates `floatingPanelStack` or activates panels immediately upon toggle/open so Escape closes panels without requiring prior pointer click/focus capture.
+- [x] **C2 (Narrow pane switch decoration re-application):** Re-apply Monaco conflict decorations (`applyDecorations`) and reset collection refs on async mount of Theirs/Result/Ours/Base editors during narrow tab switching.
+- [x] **C3 (Nav auto-switch line reveal):** Apply pending conflict line reveal (`pendingRevealRef`) upon Result editor mount when navigating from Theirs/Ours/Base tabs.
+- [x] **W1 (Files panel Escape stack scoping):** Scope `TerminalFloatingFilePanel` Escape handler to `isTopmost={effectiveFront === "files"}` with focus containment to prevent simultaneous dismissals.
+- [ ] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`. *(Deferred / handed off to Phase 09)*
+- [x] **W4 (Dead code & allocation cleanup):** Remove or wire `isTopmostFloatingPanel` helper and memoize `updateFloatingPanelStack` when array contents are unchanged.
+- [ ] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout. *(Deferred / handed off to Phase 09)*
+- [ ] **W6 (Monaco view zones, panel geometry/selected file retention & hook consolidation):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks. *(Consolidation, view zones, and panel geometry retention deferred / handed off to Phase 09)*
+- [x] **W7 (Escape widget query scoping):** Scope Monaco widget queries to `panelRef.current`.
 
+### Phase 08 Closure and Handoff to Phase 09 (2026-10-21)
+
+Phase 08 delivered the workspace integration, reveal routing, stage bypass closure, and clean cutover:
+- **Reveal intent routing & exact owner/root derivation:** `ChangedFilesList` detects conflicts, suppresses normal diff opening and stage checkboxes, provides "Resolve conflict" context-menu item and active Git operation banner (`Open Resolver`), dispatching through single-source `buildConflictRevealIntent`. For aggregate views, `deriveAggregateConflictRoot` extracts the entry's exact child VCS root and relative project path rather than guessing. `ConflictResolverPanel` consumes the nonce-guarded intent once (`lastConsumedNonceRef`) to prevent selection snapback on background refetch.
+- **Action presentation & separation:** Dedicated presentations for text review, binary side choice, delete/modify choices (derived truthfully from stage presence non-missing side), and unsupported entries with terminal handoff; separates Apply & stage from Continue/Finish and Abort.
+- **Generic stage bypass closure (CUT1):** Enhanced `stage_files` in `server/src/git/diff.rs` to inspect unmerged index entries under `GitMutationCoordinator` lock, rejecting any batch containing conflicted paths or directory prefixes; UI staging checkbox and bulk actions disallow conflict staging.
+- **Legacy code retirement & fail-closed cutover (CUT2):** Completely retired legacy `conflict-parser.ts`, `ConflictBlock` exports, and legacy `{ path, content }` payload; legacy write payloads fail closed (`LEGACY_PAYLOAD_REJECTED`); Android read-only policy coverage preserved via behavioral rewrite in `MergeConflictEditor.test.tsx`.
+- **Configured-editor terminal guidance:** Intercepts commit-message editing requirement and directs user to Git's configured editor in the exact owning repository/worktree terminal without message form/adapter or PTY command injection.
+- **Phase 07 inherited items:** Closed C1 (panel Escape activation on toggle/open), C2/C3 (narrow tab decoration and line reveal on async mount), W1 (files panel Escape stack scoping to topmost), W4 (dead code and allocation cleanup), and W7 (widget scoping to panelRef).
+- **Validation evidence:** Cycle-2 test report (`plans/reports/tester-261021-1406-phase-08-workspace-integration-cutover-cycle2.md`) recorded 364 passing tests (109 UI unit/integration tests across 10 suites, 12 browser component tests across 4 Chromium suites, 39 backend integration tests across 5 suites, 204 server unit tests). Cycle 3 review completed (score 6.0/10; approved by user with accepted deferrals on 2026-10-21). Post-cycle-3 fixes applied for modify/delete stage presence derivation and root-qualified editor keying.
+- **Explicit handoff to Phase 09 (Qualification and documentation):**
+  1. **Step 12 live-daemon multi-worktree smoke testing:** Live production runtime verification with authenticated app registered to nested repositories, aggregate Changed Files, two conflicts plus unrelated staged file, delayed apply with newer typing, lost response, repeated operation stop, and configured-editor terminal handoff.
+  2. **Inherited deferrals:** Extended multi-panel browser test matrix (W2/W3), app chrome z-order alignment (W5), and Monaco view zones, panel geometry/selected-file retention & hook consolidation (W6).
 ## Success criteria
 
 - AC1: terminal-started four-operation conflicts open through row and status into floating resolver; EditorTabs inventory is unchanged.
@@ -148,10 +162,13 @@ Keep capture fixtures synthetic and controlled; avoid exposing real repository c
 
 ## Next steps
 
-Hand one integrated production path and completed reference inventory to [Phase 09](./phase-09-qualification-and-documentation.md).
-Any unfinished cutover or bypass blocks qualification; contract-only scaffolding is not a delivered resolver.
-
+Phase 08 is administratively closed with accepted deferrals; hand integrated production path, completed reference inventory, and remaining qualification items to [Phase 09](./phase-09-qualification-and-documentation.md).
+Phase 09 executes Step 12 live-daemon multi-worktree smoke testing, W2/W3 extended browser test matrix, W5 z-order alignment, and production web / actual Linux Tauri qualification.
+Any unfinished cutover, wrong-root actions, lost newer edits/history, missing authoritative refresh, or permissive legacy/generic staging bypass blocks qualification; contract-only scaffolding is not a delivered resolver.
 ## Unresolved questions
 
-- Integration lead: exact remaining exported/reference cleanup set; execute steps 1/11 with semantic tooling where available, publish reference evidence, stop release if permissive or second path remains.
-- Workspace owner: aggregate-row root/reveal, delayed-response and exact-owner terminal handoff/return; execute steps 3/7–8/12 in actual app, retain request/operation/index/draft-history evidence, stop cutover on wrong-root actions, newer-text loss or missing authoritative refresh. No message-input product choice remains.
+- Phase 08 implementation closed with user approval (2026-10-21).
+- Outstanding technical items formally handed off to Phase 09:
+  1. Step 12 live-daemon multi-worktree smoke testing (delayed apply with newer typing, lost response, repeated operation stop, configured-editor terminal handoff/return).
+  2. Inherited Phase 07 items: W2/W3 extended browser test matrix, W5 app chrome z-order alignment, W6 Monaco view zones and hook consolidation.
+  3. Platform qualification: Authenticated production web and Linux-native runtime evidence (Windows-native remains nonblocking / deferred).
