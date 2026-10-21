@@ -43,8 +43,10 @@ export function clampResolverPanelLayout(
   const width = Math.min(Math.max(effectiveMinWidth, layout.width), availableWidth);
   const height = Math.min(Math.max(effectiveMinHeight, layout.height), availableHeight);
 
+  // Keep panel within screen bounds so bottom information never goes off-screen
   const maxTop = Math.max(RESOLVER_PANEL_MARGIN, bounds.height - height - RESOLVER_PANEL_MARGIN);
   const top = Math.min(Math.max(RESOLVER_PANEL_MARGIN, layout.top), maxTop);
+
   let left = layout.left;
   if (left !== null) {
     const maxLeft = Math.max(RESOLVER_PANEL_MARGIN, bounds.width - width - RESOLVER_PANEL_MARGIN);

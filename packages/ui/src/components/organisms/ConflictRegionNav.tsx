@@ -37,8 +37,8 @@ export function ConflictRegionNav({
   if (regions.length === 0) return null;
 
   return (
-    <div className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 overflow-x-auto">
+    <div className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] relative z-10">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 overflow-x-auto pr-14">
         <span className="text-[10px] font-semibold text-[var(--color-text-muted)] shrink-0 mr-1">
           Conflicts ({regions.length}):
         </span>

@@ -358,6 +358,19 @@ export function MergeConflictEditor({
     resizeObserverCleanups.set(editor, () => ro.disconnect());
   }
 
+  useEffect(() => {
+    const handleLayoutChange = () => {
+      theirsEditorRef.current?.layout();
+      resultEditorRef.current?.layout();
+      oursEditorRef.current?.layout();
+      baseEditorRef.current?.layout();
+    };
+    window.addEventListener("workspace:layout-change", handleLayoutChange);
+    return () => {
+      window.removeEventListener("workspace:layout-change", handleLayoutChange);
+    };
+  }, []);
+
   function restoreDraftHistory(apply: (key: string) => string | null) {
     const key = draftKeyRef.current;
     const editor = resultEditorRef.current;
@@ -1677,7 +1690,7 @@ export function MergeConflictEditor({
       )}
 
       {/* Editor views */}
-      <div className="flex-1 min-h-0 relative">
+      <div className="flex-1 min-h-0 relative overflow-hidden">
         {isNarrow ? (
           <div className="h-full w-full">
             {activeNarrowPane === "theirs" && (
@@ -1817,7 +1830,7 @@ export function MergeConflictEditor({
 
       {/* All resolved banner */}
       {allResolved && (
-        <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 bg-[var(--color-success,#4caf50)]/10 border-t border-[var(--color-success,#4caf50)]/20 text-[var(--color-success,#4caf50)] text-[11px]">
+        <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 bg-[var(--color-success,#4caf50)]/10 border-t border-[var(--color-success,#4caf50)]/20 text-[var(--color-success,#4caf50)] text-[11px] relative z-10 pr-14">
           <CheckCircle2 className="h-3.5 w-3.5" />
           All conflicts resolved — click{" "}
           <strong className="mx-1">Mark Resolved</strong> to stage
