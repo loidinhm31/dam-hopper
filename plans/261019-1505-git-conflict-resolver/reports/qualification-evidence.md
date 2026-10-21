@@ -23,8 +23,8 @@ Per the authoritative Phase 09 qualification policy:
 | **Web Browser Monaco Surface** | Required / Blocking | **QUALIFIED** | 4 Chromium browser suites passing in real headless Chromium: wide 1400px 3-pane layout, responsive narrow tab switcher, TopNav z-50 alignment, joint undo/redo |
 | **Live Daemon Smoke Harness** | Required / Blocking | **QUALIFIED** | `scripts/qualify-git-conflict-resolver.mjs` passes 54/54 assertions: merge conflicts, delete/modify, CUT1 preflight, CUT2 legacy rejection, stale preconditions, live sentinel handoff, abort lifecycle, and nested repo isolation |
 | **Actual Linux Tauri Host Interaction** | Required / Blocking | **PENDING** | Requires interactive launch and manual confirmation on actual Linux desktop host with recorded OS/runtime versions |
-| **Fresh Local Viewport Captures** | Required / Blocking | **PENDING** | Requires local full-viewport captures (`screenshot.png`) under `packages/ui/e2e/git-conflict-resolver/` |
-| **Human Visual Acceptance** | Required / Blocking | **PENDING** | Requires explicit human `ACCEPTED` verdict in `review.md` |
+| **Fresh Local Viewport Captures** | Required / Blocking | **CAPTURED** | Local full-viewport captures (`screenshot.png`, `narrow.png`, `compact.png`) generated with cryptographic SHA-256 in `evidence.json` under `packages/ui/e2e/git-conflict-resolver/` |
+| **Human Visual Acceptance** | Required / Blocking | **PENDING** | Requires explicit human `ACCEPTED` verdict in `packages/ui/e2e/git-conflict-resolver/review.md` |
 | **Windows-Native Client (Tauri)** | Deferred / Nonblocking | **SEPARATELY PENDING** | Explicitly unqualified until separately tested on Windows hardware; client deferral does not waive backend server safety |
 
 ---
@@ -122,14 +122,18 @@ Per the authoritative Phase 09 qualification policy:
   - `plans/261019-1505-git-conflict-resolver/reports/resource-qualification.md`.
 
 ### AC12 — Production Web, Linux-Native & Visual Acceptance Gating
-- **Status:** **PENDING / BLOCKING INITIAL RELEASE**
+- **Status:** **EVIDENCE CAPTURED / PENDING HUMAN VISUAL REVIEW**
 - **Current Evidence:**
   - Automated headless Chromium component tests: **Passed** (14 tests across 4 suites).
   - Standalone daemon loopback smoke test: **Passed** (54 assertions).
+  - Production containerized E2E application journey (`packages/ui/e2e/git-conflict-resolver/git-conflict-resolver.spec.ts`): **Passed** (10.8s execution).
+  - Fresh local viewport captures generated under `packages/ui/e2e/git-conflict-resolver/`:
+    - `screenshot.png` (1440x900 desktop viewport, SHA-256: `bef777c6c5c3ba35405818f2220bcf457f2187af0af3c3b601a3426befd515a0`)
+    - `narrow.png` (768x1024 tablet viewport, SHA-256: `b1d933e62b79684f0723c9789c81d2508e54aed9f7f29d6489ba71d0dde738dd`)
+    - `compact.png` (390x844 mobile viewport, SHA-256: `e03e6aab625cd73f379f1eebbd3818c29ed5ca24217ba49cdad1ddd292cec6f5`)
+    - Validated session metadata in `packages/ui/e2e/git-conflict-resolver/evidence.json`.
+  - Human visual inspection governance: `packages/ui/e2e/git-conflict-resolver/review.md` generated (ready for human `ACCEPTED` verdict).
   - Actual Linux Tauri client launch: **Pending**.
-  - Fresh local viewport captures (`screenshot.png`): **Pending**.
-  - Human visual inspection (`review.md` `ACCEPTED`): **Pending**.
-
 ---
 
 ## 3. Discovered Cutover Invariants (CUT1–CUT5)

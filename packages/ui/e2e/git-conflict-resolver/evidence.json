@@ -1,0 +1,50 @@
+{
+  "run_id": "e2e-run-1792582995079-52c8c0ef",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-21T11:43:15.079Z",
+  "completed_at": "2026-10-21T11:43:22.015Z",
+  "case_name": "git-conflict-resolver",
+  "route": "/workspace",
+  "git_head": "7bcb3d16da31930120b93ab59543d8a153b6468d",
+  "source_fingerprint": "1696c8bf8a5c8e2704dc95d9a76f2130ac95b9e506a30f67550c144a4ef597a8",
+  "seed_digest": "6889aeadfa54c1ea8b117d866bf1c9d5b066d0bd21fe353d2f4225a7295d74dc",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "screenshot",
+      "file_name": "screenshot.png",
+      "sha256": "bef777c6c5c3ba35405818f2220bcf457f2187af0af3c3b601a3426befd515a0",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "narrow",
+      "file_name": "narrow.png",
+      "sha256": "b1d933e62b79684f0723c9789c81d2508e54aed9f7f29d6489ba71d0dde738dd",
+      "dimensions": {
+        "width": 768,
+        "height": 1024
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "sha256": "e03e6aab625cd73f379f1eebbd3818c29ed5ca24217ba49cdad1ddd292cec6f5",
+      "dimensions": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}
