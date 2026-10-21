@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import type {
   ApiClient,
   ConflictSnapshot,
@@ -171,6 +172,7 @@ describe("Git Conflict Resolver floating Monaco surface in Chromium", () => {
   });
 
   afterEach(async () => {
+    await page.viewport(1280, 800);
     act(() => root.unmount());
     await queryClient.cancelQueries();
     container.remove();
@@ -392,5 +394,83 @@ describe("Git Conflict Resolver floating Monaco surface in Chromium", () => {
     expect(onHide).not.toHaveBeenCalled();
 
     outsideBtn.remove();
+  });
+
+  it("renders wide 3-pane layout at 1400px without narrow tab list", async () => {
+    await page.viewport(1400, 900);
+    container.style.width = "1400px";
+    container.style.height = "900px";
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ConflictResolverPanel
+            open={true}
+            project="demo-repo"
+            target={target}
+            targetAvailable={true}
+            isTopmost={true}
+            zIndex={24}
+            onHide={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+      await delayTurn();
+      await delayTurn();
+    });
+
+    // In wide mode (>= 768px), narrow tablist should NOT be present
+    const tablist = container.querySelector('div[role="tablist"]');
+    expect(tablist).toBeNull();
+
+    // The panel and wide headers (Theirs, Result, Ours) must be present
+    const panel = container.querySelector('[data-testid="conflict-resolver-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.textContent).toContain("Theirs");
+    expect(panel?.textContent).toContain("Result");
+    expect(panel?.textContent).toContain("Ours");
+    await page.viewport(1280, 800);
+  });
+
+  it("arbitrates multi-panel z-order underneath TopNav (z-50)", async () => {
+    const topNav = document.createElement("header");
+    topNav.className = "z-50 fixed top-0 left-0 right-0 h-12";
+    topNav.style.zIndex = "50";
+    topNav.style.position = "fixed";
+    topNav.style.top = "0";
+    topNav.style.left = "0";
+    topNav.style.width = "100%";
+    topNav.style.height = "48px";
+    topNav.dataset.testid = "app-topnav";
+    const navBtn = document.createElement("button");
+    navBtn.textContent = "Profile Select";
+    topNav.appendChild(navBtn);
+    document.body.appendChild(topNav);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ConflictResolverPanel
+            open={true}
+            project="demo-repo"
+            target={target}
+            targetAvailable={true}
+            isTopmost={true}
+            zIndex={24}
+            onHide={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+      await delayTurn();
+    });
+
+    const overlayEl = container.querySelector('[data-testid="conflict-resolver-overlay"]') as HTMLElement;
+    expect(overlayEl).not.toBeNull();
+    expect(getComputedStyle(overlayEl).zIndex).toBe("24");
+    // TopNav at z-50 must be above panel at (20, 20)
+    const elementAtNav = document.elementFromPoint(20, 20);
+    expect(topNav.contains(elementAtNav)).toBe(true);
+
+    topNav.remove();
   });
 });

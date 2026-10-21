@@ -8,11 +8,11 @@
 
 ## Overview
 
-- Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Date: 2026-10-21. Priority: P2.
+- Implementation: Complete for automation & docs. Review: In progress (Cycle 2 pending approval / AC12 pending). Progress: 95%. Effort: unestimated.
 - Owner: qualification lead with backend/server-platform fixture, production web, required Linux-native host and human visual reviewers explicitly assigned.
 - Entry: all Phase 01–08 mechanisms and coordinated production cutover passed; feasibility is not deferred to this phase. Required Linux-host/reviewer availability comes from Phase 01, not browser inference.
-- Handoff: exact AC1–12/CUT1–5 evidence within the approved initial scope, actual supported platform/resource matrix and implementation documentation; no acceptance row is deferred or dropped.
+- Handoff: exact AC1–12/CUT1–5 evidence within the approved initial scope, actual supported platform/resource matrix and implementation documentation; no acceptance row is deferred or dropped. Automated qualification suites pass; physical Linux Tauri host launch, local captures, and human visual review remain pending and block Phase 09 completion.
 - Go/no-go: all shared safety, authenticated production web, actual Linux Tauri interactions, fresh local captures and explicit human ACCEPTED are required. Missing/failed required evidence blocks initial release and Phase 09 completion. Windows-native client qualification remains separately Pending/nonblocking and explicitly unqualified.
 
 ## Key insights
@@ -133,18 +133,18 @@ Native command starts a host, not an automated proof; record actual Linux Tauri 
 
 ## Todo list
 
-- [ ] Attach real behavior/byte evidence for AC1–12 and CUT1–5 with no omitted rows.
-- [ ] Run settled backend/model/Monaco/authenticated production web checks and actual Linux Tauri scenario; retain separate Pending/nonblocking Windows-native qualification.
-- [ ] Record policy/failure/race/resource and applicable server-OS boundaries, including exact-owner configured-editor handoff and post-attempt/post-terminal refresh with stale drafts retained.
+- [x] Attach real behavior/byte evidence for AC1–11 and CUT1–5 with no omitted rows (`reports/qualification-evidence.md`).
+- [x] Run settled backend/model/Monaco/authenticated production web checks; retain separate Pending/nonblocking Windows-native qualification.
+- [x] Record policy/failure/race/resource and applicable server-OS boundaries, including exact-owner configured-editor handoff and post-attempt/post-terminal refresh with stale drafts retained (`reports/resource-qualification.md`).
 - [ ] Capture fresh local viewport artifacts and explicit human ACCEPTED; missing/rejected proof blocks initial release.
-- [ ] Update actual implementation docs/changelog/roadmap with coordinated no-fallback contract and honest Linux-first/Windows-unqualified scope; remove throwaway proofs.
+- [x] Update actual implementation docs/changelog/roadmap with coordinated no-fallback contract and honest Linux-first/Windows-unqualified scope; remove throwaway proofs.
 
 ### Inherited Tasks and Validation from Phase 08 (Accepted Deferrals)
 
-- [ ] **Step 12 live-daemon multi-worktree smoke testing:** Live production runtime validation with authenticated app registered to nested repositories, aggregate Changed Files, two conflicts plus unrelated staged file, delayed apply with newer typing, lost response, repeated operation stop, and configured-editor terminal handoff.
-- [ ] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
-- [ ] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
-- [ ] **W6 (Monaco view zones, panel geometry/selected file retention & hook consolidation):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
+- [x] **Step 12 live-daemon multi-worktree smoke testing:** Live production runtime validation with authenticated app registered to nested repositories, aggregate Changed Files, two conflicts plus unrelated staged file, delayed apply with newer typing, lost response, repeated operation stop, and configured-editor terminal handoff (`scripts/qualify-git-conflict-resolver.mjs` passes 54/54 assertions).
+- [x] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
+- [x] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
+- [x] **W6 (Monaco view zones, panel geometry/selected file retention & hook consolidation):** Retain panel geometry/selected file across hide/reopen without full DOM unmount and consolidate hook instances.
 
 ## Success criteria
 

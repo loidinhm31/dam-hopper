@@ -673,9 +673,9 @@ pub enum OperationStoppedReason {
     Conflicts,
     MessageEditRequired,
     HookBlocked,
+    Unsupported,
     Unknown,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageRoleLabels {

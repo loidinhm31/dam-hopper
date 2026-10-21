@@ -18,16 +18,46 @@ const MAX_OUTPUT_DRAIN_BYTES: usize = 65_536; // 64 KB memory cap for diagnostic
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(15);
 const EDITOR_SENTINEL_TOKEN: &str = "DAM_HOPPER_EDITOR_REQUIRED";
 
+fn check_path_exists_fail_closed(path: &Path) -> Result<bool, AppError> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(AppError::Git(format!(
+            "Failed inspecting Git metadata at {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+fn read_optional_metadata(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::Git(format!(
+            "Failed reading Git metadata at {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
 /// Unified authoritative detection of active Git operation and sequencer state.
 pub fn active_operation_kind(repo: &git2::Repository) -> OperationKind {
+    match detect_operation_kind_safe(repo) {
+        Ok(op) => op,
+        Err(_) => OperationKind::Unknown,
+    }
+}
+
+fn detect_operation_kind_safe(repo: &git2::Repository) -> Result<OperationKind, AppError> {
     let git_dir = repo.path();
 
-    let has_merge_head = git_dir.join("MERGE_HEAD").exists();
-    let has_rebase_merge = git_dir.join("rebase-merge").exists();
-    let has_rebase_apply = git_dir.join("rebase-apply").exists();
-    let has_cherry_pick_head = git_dir.join("CHERRY_PICK_HEAD").exists();
-    let has_revert_head = git_dir.join("REVERT_HEAD").exists();
-    let has_bisect = git_dir.join("BISECT_LOG").exists() || git_dir.join("BISECT_START").exists();
+    let has_merge_head = check_path_exists_fail_closed(&git_dir.join("MERGE_HEAD"))?;
+    let has_rebase_merge = check_path_exists_fail_closed(&git_dir.join("rebase-merge"))?;
+    let has_rebase_apply = check_path_exists_fail_closed(&git_dir.join("rebase-apply"))?;
+    let has_cherry_pick_head = check_path_exists_fail_closed(&git_dir.join("CHERRY_PICK_HEAD"))?;
+    let has_revert_head = check_path_exists_fail_closed(&git_dir.join("REVERT_HEAD"))?;
+    let has_bisect = check_path_exists_fail_closed(&git_dir.join("BISECT_LOG"))?
+        || check_path_exists_fail_closed(&git_dir.join("BISECT_START"))?;
 
     // Check for contradictory or mutually exclusive markers
     let active_marker_count = [
@@ -43,64 +73,69 @@ pub fn active_operation_kind(repo: &git2::Repository) -> OperationKind {
 
     if active_marker_count > 1 {
         // Contradictory metadata must fail closed as unsupported/unknown, not none
-        return OperationKind::Unsupported;
+        return Ok(OperationKind::Unsupported);
     }
 
     if has_bisect {
-        return OperationKind::Unsupported;
+        return Ok(OperationKind::Unsupported);
     }
 
     if has_rebase_merge {
-        return OperationKind::Rebase;
+        return Ok(OperationKind::Rebase);
     }
 
     if has_rebase_apply {
         // Distinguish git am vs git rebase --apply
-        let rebasing = git_dir.join("rebase-apply/rebasing").exists();
-        let applying = git_dir.join("rebase-apply/applying").exists();
+        let rebasing = check_path_exists_fail_closed(&git_dir.join("rebase-apply/rebasing"))?;
+        let applying = check_path_exists_fail_closed(&git_dir.join("rebase-apply/applying"))?;
         if rebasing {
-            return OperationKind::Rebase;
+            return Ok(OperationKind::Rebase);
         } else if applying {
             // git am mailbox processing is unsupported for conflict recovery
-            return OperationKind::Unsupported;
+            return Ok(OperationKind::Unsupported);
         } else {
-            return OperationKind::Unsupported;
+            return Ok(OperationKind::Unsupported);
         }
     }
 
     if has_merge_head {
-        return OperationKind::Merge;
+        return Ok(OperationKind::Merge);
     }
 
     if has_cherry_pick_head {
-        return OperationKind::CherryPick;
+        return Ok(OperationKind::CherryPick);
     }
 
     if has_revert_head {
-        return OperationKind::Revert;
+        return Ok(OperationKind::Revert);
     }
 
     // Inspect sequencer/todo even when CHERRY_PICK_HEAD or REVERT_HEAD is absent between commits
     let sequencer_todo = git_dir.join("sequencer/todo");
-    if sequencer_todo.exists() {
-        if let Ok(content) = fs::read_to_string(&sequencer_todo) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                if trimmed.starts_with("pick ") || trimmed.starts_with("p ") {
-                    return OperationKind::CherryPick;
-                }
-                if trimmed.starts_with("revert ") {
-                    return OperationKind::Revert;
+    if check_path_exists_fail_closed(&sequencer_todo)? {
+        match fs::read(&sequencer_todo) {
+            Ok(bytes) => {
+                let content = String::from_utf8_lossy(&bytes);
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    if trimmed.starts_with("pick ") || trimmed.starts_with("p ") {
+                        return Ok(OperationKind::CherryPick);
+                    }
+                    if trimmed.starts_with("revert ") {
+                        return Ok(OperationKind::Revert);
+                    }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(AppError::Git(format!("Failed to read sequencer/todo: {e}"))),
         }
     }
 
     // Fallback to git2 RepositoryState
-    match repo.state() {
+    let op = match repo.state() {
         git2::RepositoryState::Merge => OperationKind::Merge,
         git2::RepositoryState::Rebase
         | git2::RepositoryState::RebaseInteractive
@@ -116,7 +151,8 @@ pub fn active_operation_kind(repo: &git2::Repository) -> OperationKind {
         }
         git2::RepositoryState::Bisect => OperationKind::Unsupported,
         git2::RepositoryState::Clean => OperationKind::None,
-    }
+    };
+    Ok(op)
 }
 
 /// Computes a deterministic SHA-256 operation fingerprint bound to HEAD, target revision,
@@ -125,36 +161,35 @@ pub fn compute_operation_fingerprint(
     repo: &git2::Repository,
     op: OperationKind,
     git_dir: &Path,
-) -> String {
+) -> Result<String, AppError> {
     let mut hasher = Sha256::new();
     hasher.update(op.as_str().as_bytes());
     hasher.update(b"\0");
 
-    let head_oid = repo
-        .head()
-        .ok()
-        .and_then(|h| h.target())
-        .map(|oid| oid.to_string())
-        .unwrap_or_default();
+    let (head_oid, head_name) = match repo.head() {
+        Ok(h) => {
+            let oid = h.target().map(|oid| oid.to_string()).unwrap_or_default();
+            let name = h.name().map(|n| n.to_string()).unwrap_or_default();
+            (oid, name)
+        }
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch || e.code() == git2::ErrorCode::NotFound => {
+            (String::new(), String::new())
+        }
+        Err(e) => return Err(AppError::Git(format!("Failed to read HEAD reference: {e}"))),
+    };
     hasher.update(head_oid.as_bytes());
     hasher.update(b"\0");
-
-    let head_name = repo
-        .head()
-        .ok()
-        .and_then(|h| h.name().map(|n| n.to_string()))
-        .unwrap_or_default();
     hasher.update(head_name.as_bytes());
     hasher.update(b"\0");
 
     match op {
         OperationKind::Merge => {
-            if let Ok(bytes) = fs::read(git_dir.join("MERGE_HEAD")) {
+            if let Some(bytes) = read_optional_metadata(&git_dir.join("MERGE_HEAD"))? {
                 hasher.update(b"MERGE_HEAD\0");
                 hasher.update(&bytes);
                 hasher.update(b"\0");
             }
-            if let Ok(bytes) = fs::read(git_dir.join("MERGE_MSG")) {
+            if let Some(bytes) = read_optional_metadata(&git_dir.join("MERGE_MSG"))? {
                 hasher.update(b"MERGE_MSG\0");
                 hasher.update(&bytes);
                 hasher.update(b"\0");
@@ -170,7 +205,7 @@ pub fn compute_operation_fingerprint(
                 "rebase-apply/next",
                 "REBASE_HEAD",
             ] {
-                if let Ok(bytes) = fs::read(git_dir.join(file)) {
+                if let Some(bytes) = read_optional_metadata(&git_dir.join(file))? {
                     hasher.update(file.as_bytes());
                     hasher.update(b"\0");
                     hasher.update(&bytes);
@@ -186,7 +221,7 @@ pub fn compute_operation_fingerprint(
                 "sequencer/head",
                 "sequencer/abort-safety",
             ] {
-                if let Ok(bytes) = fs::read(git_dir.join(file)) {
+                if let Some(bytes) = read_optional_metadata(&git_dir.join(file))? {
                     hasher.update(file.as_bytes());
                     hasher.update(b"\0");
                     hasher.update(&bytes);
@@ -197,7 +232,7 @@ pub fn compute_operation_fingerprint(
         OperationKind::None | OperationKind::Unsupported | OperationKind::Unknown => {}
     }
 
-    hex::encode(hasher.finalize())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Truthful stage role labels based on authoritative operation semantics.
@@ -247,7 +282,7 @@ pub fn get_authoritative_operation_status(
         .map_err(|e| AppError::Git(format!("Failed to open index: {e}")))?;
 
     let full_index_fingerprint = compute_full_index_fingerprint(&index);
-    let operation_fingerprint = compute_operation_fingerprint(&repo, op, &git_dir);
+    let operation_fingerprint = compute_operation_fingerprint(&repo, op, &git_dir)?;
     let stage_role_labels = get_stage_role_labels(op);
 
     let has_conflicts = index.has_conflicts();
@@ -256,7 +291,7 @@ pub fn get_authoritative_operation_status(
         blockers.push(
             "Active operation is unsupported or ambiguous (e.g. git am or bisect)".to_string(),
         );
-        (false, false, Some(OperationStoppedReason::Unknown))
+        (false, false, Some(OperationStoppedReason::Unsupported))
     } else if op == OperationKind::Unknown {
         blockers.push("Operation state is unknown".to_string());
         (false, false, Some(OperationStoppedReason::Unknown))
@@ -311,6 +346,45 @@ pub fn get_authoritative_operation_status(
     })
 }
 
+pub(crate) struct RollingSentinelScanner {
+    sentinel: &'static [u8],
+    tail: Vec<u8>,
+    detected: bool,
+}
+
+impl RollingSentinelScanner {
+    pub(crate) fn new(sentinel: &'static str) -> Self {
+        assert!(!sentinel.is_empty(), "sentinel must not be empty");
+        Self {
+            sentinel: sentinel.as_bytes(),
+            tail: Vec::with_capacity(sentinel.len() * 2),
+            detected: false,
+        }
+    }
+
+    pub(crate) fn feed(&mut self, chunk: &[u8]) {
+        if self.detected || chunk.is_empty() {
+            return;
+        }
+
+        self.tail.extend_from_slice(chunk);
+        if self.tail.windows(self.sentinel.len()).any(|w| w == self.sentinel) {
+            self.detected = true;
+            self.tail.clear();
+            return;
+        }
+
+        let keep = self.sentinel.len().saturating_sub(1);
+        if self.tail.len() > keep {
+            let drain_count = self.tail.len() - keep;
+            self.tail.drain(..drain_count);
+        }
+    }
+    pub(crate) fn detected(&self) -> bool {
+        self.detected
+    }
+}
+
 async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(mut reader: R) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -327,6 +401,108 @@ async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(mut reader: R) -> String
         }
     }
     String::from_utf8_lossy(&buf).to_string()
+}
+
+async fn drain_bounded_with_sentinel<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: R,
+    scanner: &mut RollingSentinelScanner,
+) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                let slice = &chunk[..n];
+                scanner.feed(slice);
+                if buf.len() < MAX_OUTPUT_DRAIN_BYTES {
+                    let to_copy = (MAX_OUTPUT_DRAIN_BYTES - buf.len()).min(n);
+                    buf.extend_from_slice(&chunk[..to_copy]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+struct ProcessGroupGuard {
+    #[cfg(unix)]
+    pgid: Option<i32>,
+    #[cfg(windows)]
+    pid: Option<u32>,
+    active: bool,
+}
+
+impl ProcessGroupGuard {
+    fn new(child: &tokio::process::Child) -> Self {
+        #[cfg(unix)]
+        let pgid = child.id().map(|id| id as i32);
+        #[cfg(windows)]
+        let pid = child.id();
+
+        Self {
+            #[cfg(unix)]
+            pgid,
+            #[cfg(windows)]
+            pid,
+            active: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+
+    fn kill_group(&mut self) {
+        if !self.active {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+                libc::kill(pgid, libc::SIGKILL);
+            }
+        }
+        #[cfg(windows)]
+        if let Some(pid) = self.pid {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output();
+        }
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.kill_group();
+        }
+    }
+}
+
+const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 4096;
+
+pub fn sanitize_git_diagnostic(raw_err: &str, worktree_root: &Path) -> String {
+    let redacted = crate::diagnostics::redact_diagnostic_text(raw_err);
+    let root_str = worktree_root.to_string_lossy();
+    let stripped = if !root_str.is_empty() {
+        redacted.replace(&*root_str, "[WORKTREE_ROOT]")
+    } else {
+        redacted
+    };
+
+    let trimmed = stripped.trim();
+    if trimmed.len() <= MAX_DIAGNOSTIC_MESSAGE_BYTES {
+        trimmed.to_string()
+    } else {
+        let mut end = MAX_DIAGNOSTIC_MESSAGE_BYTES;
+        while !trimmed.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}... [truncated]", &trimmed[..end])
+    }
 }
 
 /// Qualified bounded non-interactive subprocess runner with editor sentinel and process cleanup.
@@ -357,6 +533,8 @@ pub async fn run_bounded_git_command(
         .spawn()
         .map_err(|e| AppError::Git(format!("Failed to spawn git: {e}")))?;
 
+    let mut group_guard = ProcessGroupGuard::new(&child);
+
     let stdout_pipe = child
         .stdout
         .take()
@@ -366,33 +544,32 @@ pub async fn run_bounded_git_command(
         .take()
         .ok_or_else(|| AppError::Git("Failed to capture stderr".into()))?;
 
+    let mut stderr_scanner = RollingSentinelScanner::new(EDITOR_SENTINEL_TOKEN);
+
     let wait_fut = async {
-        let (stdout_str, stderr_str) =
-            tokio::join!(drain_bounded(stdout_pipe), drain_bounded(stderr_pipe));
+        let (stdout_str, stderr_str) = tokio::join!(
+            drain_bounded(stdout_pipe),
+            drain_bounded_with_sentinel(stderr_pipe, &mut stderr_scanner),
+        );
         let status = child
             .wait()
             .await
             .map_err(|e| AppError::Git(format!("Failed waiting for git process: {e}")))?;
         let code = status.code().unwrap_or(-1);
-        let editor_invoked = stderr_str.contains(EDITOR_SENTINEL_TOKEN);
+        let editor_invoked = stderr_scanner.detected();
         Ok::<_, AppError>((code, stdout_str, stderr_str, editor_invoked))
     };
 
     match tokio::time::timeout(SUBPROCESS_TIMEOUT, wait_fut).await {
-        Ok(res) => res,
+        Ok(res) => {
+            group_guard.disarm();
+            res
+        }
         Err(_) => {
             // Process timed out: perform process tree cleanup
-            #[cfg(unix)]
-            if let Some(pid) = child.id() {
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
-                    libc::kill(pid as i32, libc::SIGKILL);
-                }
-            }
-            #[cfg(windows)]
-            let _ = child.kill().await;
-
+            group_guard.kill_group();
             let _ = child.wait().await;
+            group_guard.disarm();
             Err(AppError::Git(format!(
                 "Git process exceeded deadline of {} seconds and was terminated",
                 SUBPROCESS_TIMEOUT.as_secs()
@@ -475,18 +652,21 @@ pub async fn execute_operation_action(
                     } else {
                         stdout.trim().to_string()
                     };
+                    let sanitized = sanitize_git_diagnostic(&err, worktree_root);
                     Ok(OperationOutcome::Failed {
-                        error: format!("Abort failed: {err}"),
+                        error: format!("Abort failed: {sanitized}"),
                     })
                 }
-                Err(e) => Ok(OperationOutcome::OutcomeUnknown {
-                    error: e.to_string(),
-                    required_refresh: true,
-                }),
+                Err(e) => {
+                    let sanitized = sanitize_git_diagnostic(&e.to_string(), worktree_root);
+                    Ok(OperationOutcome::OutcomeUnknown {
+                        error: sanitized,
+                        required_refresh: true,
+                    })
+                }
             }
         }
         OperationAction::Continue => {
-            // Guard: conflicts must not be present
             if !current_status.can_continue {
                 return Ok(OperationOutcome::Blocked {
                     reason: OperationStoppedReason::Conflicts,
@@ -530,24 +710,55 @@ pub async fn execute_operation_action(
                         });
                     }
 
-                    // Check for hook failure
-                    let combined = format!("{stdout}\n{stderr}").to_lowercase();
-                    if combined.contains("hook failed")
-                        || combined.contains("hook declined")
-                        || combined.contains("pre-commit")
-                        || combined.contains("commit-msg")
-                    {
+                    let root_path = worktree_root.to_path_buf();
+                    let post_status_res = tokio::task::spawn_blocking(move || {
+                        get_authoritative_operation_status(&root_path)
+                    })
+                    .await;
+
+                    let post_status = match post_status_res {
+                        Ok(Ok(st)) => st,
+                        Ok(Err(e)) => {
+                            return Ok(OperationOutcome::OutcomeUnknown {
+                                error: format!("Post-attempt status inspection failed: {e}"),
+                                required_refresh: true,
+                            });
+                        }
+                        Err(e) => {
+                            return Ok(OperationOutcome::OutcomeUnknown {
+                                error: format!("Post-attempt status inspection worker panicked: {e}"),
+                                required_refresh: true,
+                            });
+                        }
+                    };
+
+                    // Check if re-queried state indicates new conflicts (e.g. repeated rebase stops)
+                    if post_status.stopped_reason == Some(OperationStoppedReason::Conflicts) {
+                        return Ok(OperationOutcome::Continued { new_status: post_status });
+                    }
+
+                    // Check for hook failure only when the operation is STILL ACTIVE in metadata,
+                    // has no unmerged conflicts, and stderr specifically indicates a hook failure from git.
+                    let is_still_active_op = matches!(
+                        post_status.operation,
+                        OperationKind::Merge
+                            | OperationKind::Rebase
+                            | OperationKind::CherryPick
+                            | OperationKind::Revert
+                    );
+                    let no_conflicts = post_status.stopped_reason != Some(OperationStoppedReason::Conflicts);
+
+                    let combined_lower = format!("{stdout}\n{stderr}").to_lowercase();
+                    let is_hook_error = combined_lower.contains("hook failed")
+                        || combined_lower.contains("hook declined")
+                        || combined_lower.contains("pre-commit hook")
+                        || combined_lower.contains("commit-msg hook");
+
+                    if is_still_active_op && no_conflicts && is_hook_error {
                         return Ok(OperationOutcome::Blocked {
                             reason: OperationStoppedReason::HookBlocked,
                             terminal_handoff_required: false,
                         });
-                    }
-
-                    // Re-query to determine whether state is now stopped with conflicts (e.g. repeated rebase stops)
-                    if let Ok(new_status) = get_authoritative_operation_status(worktree_root) {
-                        if new_status.stopped_reason == Some(OperationStoppedReason::Conflicts) {
-                            return Ok(OperationOutcome::Continued { new_status });
-                        }
                     }
 
                     let err = if !stderr.trim().is_empty() {
@@ -555,15 +766,62 @@ pub async fn execute_operation_action(
                     } else {
                         stdout.trim().to_string()
                     };
+                    let sanitized = sanitize_git_diagnostic(&err, worktree_root);
                     Ok(OperationOutcome::Failed {
-                        error: format!("Continue failed: {err}"),
+                        error: format!("Continue failed: {sanitized}"),
                     })
                 }
-                Err(e) => Ok(OperationOutcome::OutcomeUnknown {
-                    error: e.to_string(),
-                    required_refresh: true,
-                }),
+                Err(e) => {
+                    let sanitized = sanitize_git_diagnostic(&e.to_string(), worktree_root);
+                    Ok(OperationOutcome::OutcomeUnknown {
+                        error: sanitized,
+                        required_refresh: true,
+                    })
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rolling_sentinel_scanner_single_chunk() {
+        let mut scanner = RollingSentinelScanner::new("MY_TOKEN");
+        assert!(!scanner.detected());
+        scanner.feed(b"some prefix text ");
+        assert!(!scanner.detected());
+        scanner.feed(b"here is MY_TOKEN in chunk");
+        assert!(scanner.detected());
+    }
+
+    #[test]
+    fn test_rolling_sentinel_scanner_1_byte_chunks() {
+        let mut scanner = RollingSentinelScanner::new("MY_TOKEN");
+        for b in "prefix_MY_TOKEN_suffix".bytes() {
+            scanner.feed(&[b]);
+        }
+        assert!(scanner.detected());
+    }
+
+    #[test]
+    fn test_rolling_sentinel_scanner_arbitrary_short_chunks() {
+        let mut scanner = RollingSentinelScanner::new("MY_TOKEN");
+        scanner.feed(b"MY_");
+        assert!(!scanner.detected());
+        scanner.feed(b"TO");
+        assert!(!scanner.detected());
+        scanner.feed(b"KEN");
+        assert!(scanner.detected());
+    }
+
+    #[test]
+    fn test_rolling_sentinel_scanner_no_false_positives() {
+        let mut scanner = RollingSentinelScanner::new("MY_TOKEN");
+        scanner.feed(b"regular output line 1\n");
+        scanner.feed(b"regular output line 2\n");
+        assert!(!scanner.detected());
     }
 }

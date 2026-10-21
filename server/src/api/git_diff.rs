@@ -392,9 +392,13 @@ pub async fn execute_operation(
     let proj_path = resolve_target_path(&state, &project, req.worktree_path.clone()).await?;
     let root =
         resolve_git_request_root(&proj_path, req.root.as_deref()).map_err(ApiError::from_app)?;
-    let outcome = git::execute_operation_action(&root.root_path, &req)
-        .await
-        .map_err(ApiError::from_app)?;
+    let root_path = root.root_path.clone();
+    let outcome = tokio::spawn(async move {
+        git::execute_operation_action(&root_path, &req).await
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(format!("Operation task execution failed: {e}"))))?
+    .map_err(ApiError::from_app)?;
 
     Ok(Json(outcome))
 }

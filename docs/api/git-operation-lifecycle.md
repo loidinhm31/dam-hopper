@@ -115,7 +115,8 @@ Inspect authoritative active Git operation status, sequencer state, blockers, an
   - `"conflicts"`: Unresolved conflict entries exist in the index.
   - `"messageEditRequired"`: All conflicts resolved, but Git requires interactive commit message review (e.g. clean merge).
   - `"hookBlocked"`: Pre-commit or commit-msg hook failed.
-  - `"unknown"`: Ambiguous or unsupported state.
+  - `"unsupported"`: Active operation is unsupported or ambiguous (e.g. git am or bisect).
+  - `"unknown"`: Ambiguous or unreadable metadata state.
 - `operationFingerprint` (string): Deterministic SHA-256 of active operation metadata.
 - `fullIndexFingerprint` (string): Deterministic SHA-256 of all index entries.
 - `stageRoleLabels` (optional object): Semantic labels for stages 1, 2, and 3.
@@ -185,21 +186,24 @@ On valid requests, the endpoint returns HTTP 200 with an `OperationOutcome` obje
 
 All Git mutation commands (`git merge --continue`, `git rebase --abort`, etc.) run through `run_bounded_git_command`:
 
-1. **Process-Local Coordination:**
+1. **Process-Local Coordination & HTTP Request Decoupling:**
    - Exclusive lock acquired via `GLOBAL_MUTATION_COORDINATOR.try_acquire_for_repo(&repo, worktree_root)` covering common gitdir (`commondir`) and worktree.
+   - *HTTP Request Decoupling:* In `server/src/api/git_diff.rs`, `execute_operation` spawns the mutation into an owned background task (`tokio::spawn`). Client disconnections or HTTP transport cancellations do not drop the running mutation future mid-execution or release the coordinator lock prematurely while Git subprocesses run. Note: Decoupling protects against client disconnects; it does not provide crash or shutdown durability.
    - *Limitation:* Protects only against concurrent mutations within the same DamHopper server instance; external CLI processes running outside DamHopper are not coordinated.
-2. **Subprocess Deadline & Process-Group Termination:**
+2. **Subprocess Deadline & Process-Group Termination (`ProcessGroupGuard`):**
    - Hard execution deadline: 15 seconds (`SUBPROCESS_TIMEOUT`).
-   - On Unix, commands run in a dedicated process group (`cmd.process_group(0)`). On timeout, `SIGKILL` is sent to both `-pid` (the process group) and `pid`. On Windows, `child.kill()` terminates the immediate process. Returns `outcomeUnknown`.
-   - *Limitation:* External grandchild processes that detach from the process group or stubborn subprocess trees on Windows may not be terminated.
+   - Subprocess lifecycle is guarded by RAII `ProcessGroupGuard`. On Unix, commands run in a dedicated process group (`cmd.process_group(0)`); on timeout or abnormal drop, `SIGKILL` is sent to both `-pgid` (the process group) and `pgid`. On Windows, the guard executes best-effort tree termination via `taskkill /F /T /PID <pid>`.
+   - Subprocess timeout or failure to complete returns `outcome: "outcomeUnknown"` with `requiredRefresh: true`.
+   - *Limitation:* External grandchild processes that detach from the process group or stubborn processes on Windows may not be terminated.
 3. **Non-Interactive Environment:**
    - Stdin is set to `Stdio::null()`.
    - `GIT_TERMINAL_PROMPT=0` prevents Git from waiting for terminal credentials.
    - `kill_on_drop(true)` ensures process cleanup if async future is dropped before completion.
-4. **Editor Sentinel:**
+4. **Streaming Editor Sentinel Detection (`RollingSentinelScanner`):**
    - `GIT_EDITOR` is set to an inline script emitting the internal sentinel token `DAM_HOPPER_EDITOR_REQUIRED` (constant `EDITOR_SENTINEL_TOKEN`) to stderr and exiting with code 42.
    - *Note:* `DAM_HOPPER_EDITOR_REQUIRED` is an internal stderr string token, not a user-configurable environment variable.
-   - If Git attempts to launch an editor (such as for `MERGE_MSG`), the sentinel intercepts it without hanging.
-   - The runner detects the sentinel token and returns `outcome: "blocked"` with `reason: "messageEditRequired"` and `terminalHandoffRequired: true`.
-5. **Bounded Diagnostic Buffering:**
+   - `drain_bounded_with_sentinel` streams stderr through `RollingSentinelScanner`. The scanner maintains a trailing window across chunk boundaries (`sentinel.len() - 1` bytes), detecting the sentinel token across arbitrary chunk splits and streaming data volumes independently of retained diagnostic buffer limits.
+   - When detected, the runner flags `editor_invoked: true`, and the action returns `outcome: "blocked"` with `reason: "messageEditRequired"` and `terminalHandoffRequired: true`.
+5. **Bounded Diagnostic Buffering & Sanitization:**
    - Stdout and stderr draining is capped at 64 KiB (`MAX_OUTPUT_DRAIN_BYTES`) to avoid unbounded memory buffering on noisy output.
+   - Exposed diagnostics are processed by `sanitize_git_diagnostic`: occurrences of the known worktree path are replaced with `[WORKTREE_ROOT]`, sensitive bearer tokens and secrets are redacted via `redact_diagnostic_text`, and message length is bounded to 4,096 bytes of trimmed text (truncated cleanly at a UTF-8 character boundary with `... [truncated]`).

@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use crate::error::AppError;
 use crate::git::conflict::{
@@ -57,18 +58,43 @@ fn stage_index_entry(
     oid: git2::Oid,
     mode: u32,
     file_size: u32,
+    disk_path: Option<&Path>,
 ) -> Result<(), git2::Error> {
     let _ = index.remove(Path::new(display_path), 1);
     let _ = index.remove(Path::new(display_path), 2);
     let _ = index.remove(Path::new(display_path), 3);
+
+    #[cfg(unix)]
+    let (ctime_sec, ctime_nsec, mtime_sec, mtime_nsec, dev, ino, uid, gid) = if let Some(p) = disk_path {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(m) = fs::symlink_metadata(p) {
+            (
+                m.ctime() as i32,
+                m.ctime_nsec() as u32,
+                m.mtime() as i32,
+                m.mtime_nsec() as u32,
+                m.dev() as u32,
+                m.ino() as u32,
+                m.uid(),
+                m.gid(),
+            )
+        } else {
+            (0, 0, 0, 0, 0, 0, 0, 0)
+        }
+    } else {
+        (0, 0, 0, 0, 0, 0, 0, 0)
+    };
+    #[cfg(not(unix))]
+    let (ctime_sec, ctime_nsec, mtime_sec, mtime_nsec, dev, ino, uid, gid) = (0, 0, 0, 0, 0, 0, 0, 0);
+
     let entry = git2::IndexEntry {
-        ctime: git2::IndexTime::new(0, 0),
-        mtime: git2::IndexTime::new(0, 0),
-        dev: 0,
-        ino: 0,
+        ctime: git2::IndexTime::new(ctime_sec, ctime_nsec),
+        mtime: git2::IndexTime::new(mtime_sec, mtime_nsec),
+        dev,
+        ino,
         mode,
-        uid: 0,
-        gid: 0,
+        uid,
+        gid,
         file_size,
         id: oid,
         flags: 0,
@@ -489,6 +515,7 @@ pub fn apply_conflict_resolution(
                     blob_oid,
                     target_mode,
                     content_bytes.len() as u32,
+                    Some(&safe_disk_path),
                 )?;
                 Ok(blob_oid.to_string())
             })();
@@ -584,6 +611,7 @@ pub fn apply_conflict_resolution(
                     selected_oid,
                     selected_mode,
                     blob_bytes.len() as u32,
+                    Some(&safe_disk_path),
                 )
             })();
 

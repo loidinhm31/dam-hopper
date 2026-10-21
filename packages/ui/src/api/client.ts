@@ -2545,8 +2545,8 @@ export type OperationStoppedReason =
   | "conflicts"
   | "messageEditRequired"
   | "hookBlocked"
+  | "unsupported"
   | "unknown";
-
 export interface StageRoleLabels {
   base?: string;
   ours: string;

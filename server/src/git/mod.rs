@@ -41,6 +41,7 @@ pub use leased_push::{prepare_leased_push, publish_leased_push};
 pub use mutation_coordination::{GitMutationCoordinator, GLOBAL_MUTATION_COORDINATOR};
 pub use operation::{
     active_operation_kind, execute_operation_action, get_authoritative_operation_status,
+    run_bounded_git_command, sanitize_git_diagnostic,
 };
 pub use progress::ProgressSender;
 pub use repository::{

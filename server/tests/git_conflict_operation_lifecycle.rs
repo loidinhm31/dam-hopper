@@ -794,3 +794,153 @@ async fn test_active_git_operation_blocks_on_unsupported_mailbox() {
     assert!(!r.can_continue);
     assert!(!r.can_abort);
 }
+
+#[tokio::test]
+async fn test_stopped_reason_unsupported_vs_unknown() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_repo(root);
+
+    // 1. Unsupported: git am mailbox
+    let rebase_apply = root.join(".git/rebase-apply");
+    fs::create_dir_all(&rebase_apply).unwrap();
+    fs::write(rebase_apply.join("applying"), b"1\n").unwrap();
+
+    let status = get_authoritative_operation_status(root).unwrap();
+    assert_eq!(status.operation, OperationKind::Unsupported);
+    assert_eq!(status.stopped_reason, Some(OperationStoppedReason::Unsupported));
+    assert!(!status.can_continue);
+    assert!(!status.can_abort);
+
+    // 2. Contradictory markers -> Unsupported
+    let merge_head = root.join(".git/MERGE_HEAD");
+    fs::write(&merge_head, b"0123456789abcdef0123456789abcdef01234567\n").unwrap();
+    let status_contra = get_authoritative_operation_status(root).unwrap();
+    assert_eq!(status_contra.operation, OperationKind::Unsupported);
+    assert_eq!(status_contra.stopped_reason, Some(OperationStoppedReason::Unsupported));
+
+    // 3. Unreadable corrupt metadata (e.g. sequencer/todo is a directory, causing read error) -> Unknown
+    let dir2 = TempDir::new().unwrap();
+    let root2 = dir2.path();
+    init_repo(root2);
+    let sequencer_dir = root2.join(".git/sequencer/todo");
+    fs::create_dir_all(&sequencer_dir).unwrap(); // Directory instead of regular file
+    let status_corrupt = get_authoritative_operation_status(root2).unwrap();
+    assert_eq!(status_corrupt.operation, OperationKind::Unknown);
+    assert_eq!(status_corrupt.stopped_reason, Some(OperationStoppedReason::Unknown));
+    assert!(!status_corrupt.can_continue);
+    assert!(!status_corrupt.can_abort);
+}
+
+#[tokio::test]
+async fn test_diagnostic_sanitization_and_utf8_truncation() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let root_str = root.to_string_lossy().to_string();
+
+    // 1. Path stripping and secret redaction
+    let raw_msg = format!(
+        "Error in {}/src/main.rs: Bearer secret-token-xyz123 failed authorization",
+        root_str
+    );
+    let sanitized = dam_hopper_server::git::sanitize_git_diagnostic(&raw_msg, root);
+    assert!(!sanitized.contains(&root_str), "Worktree root path must be stripped");
+    assert!(sanitized.contains("[WORKTREE_ROOT]"), "Must replace worktree root with [WORKTREE_ROOT]");
+    assert!(!sanitized.contains("secret-token-xyz123"), "Bearer token must be redacted");
+    assert!(sanitized.contains("[REDACTED]"), "Must include redaction token");
+
+    // 2. Oversize message safely capped at 4096 bytes with UTF-8 boundary integrity
+    let long_prefix = "🦀".repeat(2000); // 8000 bytes of multibyte UTF-8
+    let sanitized_long = dam_hopper_server::git::sanitize_git_diagnostic(&long_prefix, root);
+    assert!(sanitized_long.len() <= 4096 + 32);
+    assert!(sanitized_long.ends_with("... [truncated]"));
+    // Valid UTF-8 check (string itself enforces UTF-8, no panics on multibyte boundary)
+    assert!(std::str::from_utf8(sanitized_long.as_bytes()).is_ok());
+}
+
+#[tokio::test]
+async fn test_hook_failure_not_misclassified_by_precommit_path() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_repo(root);
+    // Base commit on main first
+    fs::write(root.join("base.txt"), "base\n").unwrap();
+    git(&["add", "base.txt"], root);
+    git(&["commit", "-m", "init"], root);
+
+    // Set up a rebase conflict
+    git(&["checkout", "-b", "feature"], root);
+    fs::write(root.join("file.txt"), "feature line\n").unwrap();
+    git(&["add", "file.txt"], root);
+    git(&["commit", "-m", "feature commit"], root);
+
+    git(&["checkout", "main"], root);
+    fs::write(root.join("file.txt"), "main line\n").unwrap();
+    git(&["add", "file.txt"], root);
+    git(&["commit", "-m", "main commit"], root);
+
+    let _ = git_try(&["merge", "feature"], root);
+
+    let initial_status = get_authoritative_operation_status(root).unwrap();
+    assert_eq!(initial_status.operation, OperationKind::Merge);
+    assert_eq!(initial_status.stopped_reason, Some(OperationStoppedReason::Conflicts));
+
+    // 1. Attempt continue while conflicts remain - must be blocked on Conflicts, not HookBlocked
+    let req = OperationActionRequest {
+        project: Some("test".to_string()),
+        worktree_path: None,
+        root: None,
+        operation_precondition: initial_status.operation_fingerprint,
+        full_index_fingerprint: initial_status.full_index_fingerprint,
+        action: OperationAction::Continue,
+        abort_confirmed: false,
+    };
+    let outcome = execute_operation_action(root, &req).await.unwrap();
+    assert_eq!(
+        outcome,
+        OperationOutcome::Blocked {
+            reason: OperationStoppedReason::Conflicts,
+            terminal_handoff_required: false,
+        }
+    );
+
+    // 2. Resolve conflict and stage it
+    fs::write(root.join("file.txt"), "resolved\n").unwrap();
+    git(&["add", "file.txt"], root);
+
+    // Install a real pre-commit hook that fails
+    let hooks_dir = root.join(".git/hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    let pre_commit_hook = hooks_dir.join("pre-commit");
+    fs::write(
+        &pre_commit_hook,
+        "#!/bin/sh\necho 'pre-commit hook failed: lint error' >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&pre_commit_hook).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&pre_commit_hook, perms).unwrap();
+    }
+
+    let staged_status = get_authoritative_operation_status(root).unwrap();
+    let req2 = OperationActionRequest {
+        project: Some("test".to_string()),
+        worktree_path: None,
+        root: None,
+        operation_precondition: staged_status.operation_fingerprint,
+        full_index_fingerprint: staged_status.full_index_fingerprint,
+        action: OperationAction::Continue,
+        abort_confirmed: false,
+    };
+    let outcome2 = execute_operation_action(root, &req2).await.unwrap();
+    assert_eq!(
+        outcome2,
+        OperationOutcome::Blocked {
+            reason: OperationStoppedReason::HookBlocked,
+            terminal_handoff_required: false,
+        }
+    );
+}
