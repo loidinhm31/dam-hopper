@@ -11,11 +11,12 @@ export const RESOLVER_PANEL_DEFAULT_HEIGHT = 700;
 export const RESOLVER_PANEL_MIN_WIDTH = 480;
 export const RESOLVER_PANEL_MIN_HEIGHT = 360;
 export const RESOLVER_PANEL_MARGIN = 12;
+export const RESOLVER_PANEL_TOP_MARGIN = 56;
 
 export const INITIAL_RESOLVER_PANEL_LAYOUT: ResolverPanelLayout = {
   width: RESOLVER_PANEL_DEFAULT_WIDTH,
   height: RESOLVER_PANEL_DEFAULT_HEIGHT,
-  top: RESOLVER_PANEL_MARGIN,
+  top: RESOLVER_PANEL_TOP_MARGIN,
   left: null,
   isMaximized: false,
 };
@@ -44,7 +45,6 @@ export function clampResolverPanelLayout(
 
   const maxTop = Math.max(RESOLVER_PANEL_MARGIN, bounds.height - height - RESOLVER_PANEL_MARGIN);
   const top = Math.min(Math.max(RESOLVER_PANEL_MARGIN, layout.top), maxTop);
-
   let left = layout.left;
   if (left !== null) {
     const maxLeft = Math.max(RESOLVER_PANEL_MARGIN, bounds.width - width - RESOLVER_PANEL_MARGIN);
