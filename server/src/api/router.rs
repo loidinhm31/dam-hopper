@@ -28,11 +28,11 @@ const GIT_BLAME_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa,
-    browser_debug, commands, config, diagnostics, fs as fs_api, fs_image, fs_video, git,
-    git_blame, git_diff, host_actions, idle_suspend, media_session, plans as plans_api,
-    port_forward as port_forward_api, resource_events, settings, ssh, system, terminal, tunnel,
-    usage, usage_sessions, workflow, workspace, ws,
+    agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
+    config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
+    idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
+    resource_events, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
+    workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -221,7 +221,15 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/git/{project}/conflicts",
             get(git_diff::list_conflicts),
         )
+        .route(
+            "/api/git/{project}/conflicts/file",
+            get(git_diff::get_conflict_file),
+        )
         .route("/api/git/{project}/resolve", post(git_diff::resolve))
+        .route(
+            "/api/git/{project}/operation",
+            get(git_diff::get_operation).post(git_diff::execute_operation),
+        )
         .route("/api/git/{project}/commit", post(git_diff::commit))
         .route("/api/git/{project}/squash", post(git::squash_commits_route))
         .route(
@@ -238,8 +246,7 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route(
             "/api/git/{project}/blame",
-            post(git_blame::blame_route)
-                .layer(DefaultBodyLimit::max(GIT_BLAME_MAX_BODY_BYTES)),
+            post(git_blame::blame_route).layer(DefaultBodyLimit::max(GIT_BLAME_MAX_BODY_BYTES)),
         )
         .route(
             "/api/git/{project}/commit/{hash}/details",
@@ -392,7 +399,8 @@ pub fn build_router_with_web_dir_and_origins(
         )
         .route(
             "/api/system/idle-suspend/v1/consent/decision",
-            post(idle_suspend::submit_consent_decision).layer(RequestBodyLimitLayer::new(16 * 1024)),
+            post(idle_suspend::submit_consent_decision)
+                .layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
         // Diagnostics
         .route(

@@ -129,6 +129,9 @@ vi.mock("@/api/queries.js", () => ({
     data: [{ name: "web" }],
     isLoading: false,
   }),
+  invalidateGitProjectQueries: vi.fn(),
+  useGitExecuteOperation: () => ({ mutateAsync: vi.fn() }),
+  useGitOperationStatus: () => ({ data: undefined, isLoading: false }),
   markTargetUnavailableIfNeeded: vi.fn(),
 }));
 

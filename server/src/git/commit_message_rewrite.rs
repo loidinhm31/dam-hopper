@@ -459,6 +459,9 @@ pub async fn edit_commit_message(
     let outcome = tokio::task::spawn_blocking(move || -> Result<SyncRewriteOutcome, AppError> {
         let repo = git2::Repository::open(&project_path_buf)
             .map_err(|e| AppError::Git(e.message().to_string()))?;
+        let _guard = super::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+            .try_acquire_for_repo(&repo, &project_path_buf)
+            .map_err(|e| AppError::Unavailable(e.to_string()))?;
         let odb = repo
             .odb()
             .map_err(|e| AppError::Git(e.message().to_string()))?;

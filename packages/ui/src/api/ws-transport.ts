@@ -1028,6 +1028,66 @@ function channelToEndpoint(
         project: string;
         worktreePath?: string;
         root?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      const params = new URLSearchParams();
+      setWorktreePath(params, d);
+      if (d.root) params.set("root", d.root);
+      if (d.cursor) params.set("cursor", d.cursor);
+      if (d.limit != null) params.set("limit", String(d.limit));
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/conflicts${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:conflictFile": {
+      const d = data as {
+        project: string;
+        conflictId: string;
+        worktreePath?: string;
+        root?: string;
+      };
+      const params = new URLSearchParams();
+      setWorktreePath(params, d);
+      params.set("conflictId", d.conflictId);
+      if (d.root) params.set("root", d.root);
+      const qs = params.toString();
+      return {
+        method: "GET",
+        url: `/api/git/${encodeURIComponent(d.project)}/conflicts/file${qs ? `?${qs}` : ""}`,
+      };
+    }
+    case "git:resolve": {
+      const d = data as {
+        project: string;
+        conflictId: string;
+        snapshotVersion: string;
+        fullIndexFingerprint: string;
+        action: unknown;
+        worktreePath?: string;
+        root?: string;
+      };
+      const body: Record<string, unknown> = {
+        conflictId: d.conflictId,
+        snapshotVersion: d.snapshotVersion,
+        fullIndexFingerprint: d.fullIndexFingerprint,
+        action: d.action,
+      };
+      if (d.worktreePath) body.worktreePath = d.worktreePath;
+      if (d.root) body.root = d.root;
+      return {
+        method: "POST",
+        url: `/api/git/${encodeURIComponent(d.project)}/resolve`,
+        body,
+      };
+    }
+    case "git:operationStatus": {
+      const d = data as {
+        project: string;
+        worktreePath?: string;
+        root?: string;
       };
       const params = new URLSearchParams();
       setWorktreePath(params, d);
@@ -1035,26 +1095,31 @@ function channelToEndpoint(
       const qs = params.toString();
       return {
         method: "GET",
-        url: `/api/git/${encodeURIComponent(d.project)}/conflicts${qs ? `?${qs}` : ""}`,
+        url: `/api/git/${encodeURIComponent(d.project)}/operation${qs ? `?${qs}` : ""}`,
       };
     }
-    case "git:resolve": {
+    case "git:executeOperation": {
       const d = data as {
         project: string;
-        path: string;
-        content: string;
+        operationPrecondition: string;
+        fullIndexFingerprint: string;
+        action: "continue" | "abort";
+        abortConfirmed?: boolean;
         worktreePath?: string;
         root?: string;
       };
+      const body: Record<string, unknown> = {
+        operationPrecondition: d.operationPrecondition,
+        fullIndexFingerprint: d.fullIndexFingerprint,
+        action: d.action,
+        abortConfirmed: Boolean(d.abortConfirmed),
+      };
+      if (d.worktreePath) body.worktreePath = d.worktreePath;
+      if (d.root) body.root = d.root;
       return {
         method: "POST",
-        url: `/api/git/${encodeURIComponent(d.project)}/resolve`,
-        body: {
-          path: d.path,
-          content: d.content,
-          worktreePath: d.worktreePath,
-          root: d.root,
-        },
+        url: `/api/git/${encodeURIComponent(d.project)}/operation`,
+        body,
       };
     }
     case "git:commit": {

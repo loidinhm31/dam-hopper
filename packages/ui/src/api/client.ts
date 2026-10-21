@@ -1003,7 +1003,9 @@ const CONSENT_DECISIONS: Record<string, true> = {
   deny: true,
 };
 
-export function decodeAgentFreeStatus(val: unknown): IdleSuspendAgentFreeStatusV1 {
+export function decodeAgentFreeStatus(
+  val: unknown,
+): IdleSuspendAgentFreeStatusV1 {
   if (!isPlainObject(val)) {
     throw new Error("Invalid agentFree: expected plain object");
   }
@@ -1077,7 +1079,8 @@ export function decodeAgentFreeStatus(val: unknown): IdleSuspendAgentFreeStatusV
   if (
     val.reasonCode !== null &&
     val.reasonCode !== undefined &&
-    (typeof val.reasonCode !== "string" || !AGENT_FREE_REASON_CODES[val.reasonCode])
+    (typeof val.reasonCode !== "string" ||
+      !AGENT_FREE_REASON_CODES[val.reasonCode])
   ) {
     throw new Error("Invalid agentFree: invalid reasonCode");
   }
@@ -1153,7 +1156,9 @@ export function decodeConsentStatus(val: unknown): IdleSuspendConsentStatusV1 {
     throw new Error("Invalid consent: invalid decision");
   }
   if (
-    (val.state === "pending" && val.decision !== null && val.decision !== undefined) ||
+    (val.state === "pending" &&
+      val.decision !== null &&
+      val.decision !== undefined) ||
     (val.state === "approved" && val.decision !== "approve") ||
     (val.state === "denied" && val.decision !== "deny")
   ) {
@@ -1554,12 +1559,18 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
   ) {
     automaticPolicy = "empty-fleet";
     activity = null;
-  } else if (!hasAutomaticPolicy || (!hasActivity && value.automaticPolicy !== "agent-free")) {
+  } else if (
+    !hasAutomaticPolicy ||
+    (!hasActivity && value.automaticPolicy !== "agent-free")
+  ) {
     throw new Error(
       "Invalid idle suspend status: partial additive fields (one of automaticPolicy/activity missing)",
     );
   } else {
-    if (value.automaticPolicy === undefined || (value.activity === undefined && value.automaticPolicy !== "agent-free")) {
+    if (
+      value.automaticPolicy === undefined ||
+      (value.activity === undefined && value.automaticPolicy !== "agent-free")
+    ) {
       throw new Error(
         "Invalid idle suspend status: additive fields cannot be undefined",
       );
@@ -1570,7 +1581,11 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
           "Invalid idle suspend status: activity must be null for empty-fleet policy",
         );
       }
-      if (hasAgentFree && value.agentFree !== null && value.agentFree !== undefined) {
+      if (
+        hasAgentFree &&
+        value.agentFree !== null &&
+        value.agentFree !== undefined
+      ) {
         throw new Error(
           "Invalid idle suspend status: agentFree must be null for empty-fleet policy",
         );
@@ -1597,7 +1612,11 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
           "Invalid idle suspend status: activity object required for agent-activity policy",
         );
       }
-      if (hasAgentFree && value.agentFree !== null && value.agentFree !== undefined) {
+      if (
+        hasAgentFree &&
+        value.agentFree !== null &&
+        value.agentFree !== undefined
+      ) {
         throw new Error(
           "Invalid idle suspend status: agentFree must be null for agent-activity policy",
         );
@@ -1619,12 +1638,20 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
       automaticPolicy = "agent-activity";
       activity = decodeActivityStatus(value.activity);
     } else if (value.automaticPolicy === "agent-free") {
-      if (hasActivity && value.activity !== null && value.activity !== undefined) {
+      if (
+        hasActivity &&
+        value.activity !== null &&
+        value.activity !== undefined
+      ) {
         throw new Error(
           "Invalid idle suspend status: activity must be null for agent-free policy",
         );
       }
-      if (!hasAgentFree || value.agentFree === null || typeof value.agentFree !== "object") {
+      if (
+        !hasAgentFree ||
+        value.agentFree === null ||
+        typeof value.agentFree !== "object"
+      ) {
         throw new Error(
           "Invalid idle suspend status: agentFree object required for agent-free policy",
         );
@@ -1674,7 +1701,8 @@ export function decodeIdleSuspendStatusV1(value: unknown): IdleSuspendStatusV1 {
     agentFree,
     clientPresence,
     consent,
-    probeReasonCode: (value.probeReasonCode ?? null) as SafeProbeReasonCode | null,
+    probeReasonCode: (value.probeReasonCode ??
+      null) as SafeProbeReasonCode | null,
     probeCheckedAtMs: (value.probeCheckedAtMs ?? null) as number | null,
     timestampMs: value.timestampMs as number,
   };
@@ -2272,7 +2300,7 @@ export interface GitActionResult {
   dirty?: boolean;
   destructive?: boolean;
   recovery?: {
-    operation: "merge" | "rebase" | "cherry-pick";
+    operation: "merge" | "rebase" | "cherry-pick" | "revert" | "unsupported";
     canAbort: boolean;
     canContinue: boolean;
   };
@@ -2440,11 +2468,231 @@ export interface FileDiffContent {
   isBinary: boolean;
 }
 
-export interface ConflictFile {
+export type ResolveEol = "preserve" | "lf" | "crlf";
+
+export type ResolveSide = "ours" | "theirs";
+
+export type ResolveAction =
+  | {
+      type: "reviewedText";
+      tokens: string[];
+      eol?: ResolveEol;
+      executable?: boolean;
+    }
+  | {
+      type: "indexSide";
+      side: ResolveSide;
+      stage: 2 | 3;
+    }
+  | {
+      type: "delete";
+    };
+
+export interface ResolveRequest {
+  conflictId: string;
+  snapshotVersion: string;
+  fullIndexFingerprint: string;
+  action: ResolveAction;
+  root?: string;
+}
+
+export type ResolveOutcome =
+  | {
+      outcome: "applied";
+      newOid?: string;
+      stage0Mode?: number;
+      deleted?: boolean;
+    }
+  | {
+      outcome: "stale";
+      reason: string;
+      requiredRefresh: boolean;
+    }
+  | {
+      outcome: "unsupported";
+      reason: string;
+    }
+  | {
+      outcome: "busy";
+      reason: string;
+    }
+  | {
+      outcome: "failedBeforeWrite";
+      error: string;
+    }
+  | {
+      outcome: "worktreeChangedStageFailed";
+      error: string;
+      worktreeWritten: boolean;
+      staged: boolean;
+    }
+  | {
+      outcome: "outcomeUnknown";
+      error: string;
+      requiredRefresh: boolean;
+    };
+
+export type OperationKind =
+  | "none"
+  | "merge"
+  | "rebase"
+  | "cherry-pick"
+  | "revert"
+  | "unsupported"
+  | "unknown";
+
+export type OperationStoppedReason =
+  | "conflicts"
+  | "messageEditRequired"
+  | "hookBlocked"
+  | "unsupported"
+  | "unknown";
+export interface StageRoleLabels {
+  base?: string;
+  ours: string;
+  theirs: string;
+}
+
+export interface TerminalHandoffRequired {
+  reason: string;
+  worktreeRoot: string;
+}
+
+export interface OperationStatusResponse {
+  operation: OperationKind;
+  canContinue: boolean;
+  canAbort: boolean;
+  stoppedReason?: OperationStoppedReason;
+  operationFingerprint: string;
+  fullIndexFingerprint: string;
+  stageRoleLabels?: StageRoleLabels;
+  terminalHandoffRequired?: TerminalHandoffRequired;
+  blockers?: string[];
+}
+
+export type OperationAction = "continue" | "abort";
+
+export interface OperationActionRequest {
+  worktreePath?: string;
+  root?: string;
+  operationPrecondition: string;
+  fullIndexFingerprint: string;
+  action: OperationAction;
+  abortConfirmed?: boolean;
+}
+
+export type OperationOutcome =
+  | {
+      outcome: "continued";
+      newStatus: OperationStatusResponse;
+    }
+  | {
+      outcome: "aborted";
+      worktreeCleaned: boolean;
+    }
+  | {
+      outcome: "blocked";
+      reason: OperationStoppedReason;
+      terminalHandoffRequired?: boolean;
+    }
+  | {
+      outcome: "stale";
+      reason: string;
+      requiredRefresh: boolean;
+    }
+  | {
+      outcome: "failed";
+      error: string;
+    }
+  | {
+      outcome: "outcomeUnknown";
+      error: string;
+      requiredRefresh: boolean;
+    };
+
+export type ConflictStatus =
+  | "bothModified"
+  | "modifyDelete"
+  | "deleteModify"
+  | "bothAdded"
+  | "unsupported";
+
+export type StageKind =
+  | "text"
+  | "binary"
+  | "missing"
+  | "invalidEncoding"
+  | "unsupported"
+  | "readError";
+
+export type WorktreeKind =
+  | "regular"
+  | "symlink"
+  | "directory"
+  | "gitlink"
+  | "unreadable"
+  | "missing";
+
+export interface ConflictSummaryEntry {
+  conflictId: string;
   path: string;
-  ancestor?: string;
-  ours?: string;
-  theirs?: string;
+  status: ConflictStatus;
+  isBinary: boolean;
+  unsupportedReason?: string;
+}
+
+export interface ConflictSummaryResponse {
+  targetRevision: string;
+  entries: ConflictSummaryEntry[];
+  truncated: boolean;
+  nextCursor?: string;
+}
+
+export interface StageDescriptor {
+  stage: 1 | 2 | 3;
+  path?: string;
+  oid?: string;
+  mode: number;
+  byteSize: number;
+  kind: StageKind;
+  textTokens?: string[];
+}
+
+export interface WorktreeDescriptor {
+  exists: boolean;
+  kind: WorktreeKind;
+  mode: number;
+  byteLength: number;
+  textTokens?: string[];
+  hasConflictMarkers: boolean;
+  isDirtyVsStages: boolean;
+}
+
+export interface EffectiveAttributes {
+  eol?: "lf" | "crlf" | "native";
+  encoding?: string;
+  ident: boolean;
+  filterQualified: boolean;
+}
+
+export interface ConflictStages {
+  base?: StageDescriptor;
+  ours: StageDescriptor;
+  theirs: StageDescriptor;
+}
+
+export interface ConflictSnapshot {
+  conflictId: string;
+  path: string;
+  repositoryRoot: string;
+  worktreeRoot: string;
+  snapshotVersion: string;
+  fullIndexFingerprint: string;
+  status: ConflictStatus;
+  unsupportedReason?: string;
+  stages: ConflictStages;
+  worktree: WorktreeDescriptor;
+  effectiveAttributes: EffectiveAttributes;
 }
 
 export interface GitBlameInput {
@@ -2758,22 +3006,54 @@ export function createApiClient(
           hunkIndex,
           root,
         }),
-      conflicts: (target: ProjectTargetInput, root?: string) =>
-        transport.invoke<ConflictFile[]>("git:conflicts", {
+      conflicts: (
+        target: ProjectTargetInput,
+        root?: string,
+        cursor?: string,
+        limit?: number,
+      ) =>
+        transport.invoke<ConflictSummaryResponse>("git:conflicts", {
+          ...toWireTarget(target),
+          root,
+          cursor,
+          limit,
+        }),
+      conflictFile: (
+        target: ProjectTargetInput,
+        conflictId: string,
+        root?: string,
+      ) =>
+        transport.invoke<ConflictSnapshot>("git:conflictFile", {
+          ...toWireTarget(target),
+          conflictId,
+          root,
+        }),
+      resolve: (target: ProjectTargetInput, request: ResolveRequest) =>
+        transport.invoke<ResolveOutcome>("git:resolve", {
+          ...toWireTarget(target),
+          conflictId: request.conflictId,
+          snapshotVersion: request.snapshotVersion,
+          fullIndexFingerprint: request.fullIndexFingerprint,
+          action: request.action,
+          root: request.root,
+        }),
+      operationStatus: (target: ProjectTargetInput, root?: string) =>
+        transport.invoke<OperationStatusResponse>("git:operationStatus", {
           ...toWireTarget(target),
           root,
         }),
-      resolve: (
+      executeOperation: (
         target: ProjectTargetInput,
-        path: string,
-        content: string,
-        root?: string,
+        request: OperationActionRequest,
       ) =>
-        transport.invoke<{ ok: boolean; error?: string }>("git:resolve", {
+        transport.invoke<OperationOutcome>("git:executeOperation", {
           ...toWireTarget(target),
-          path,
-          content,
-          root,
+          operationPrecondition: request.operationPrecondition,
+          fullIndexFingerprint: request.fullIndexFingerprint,
+          action: request.action,
+          abortConfirmed: request.abortConfirmed,
+          root: request.root,
+          worktreePath: request.worktreePath,
         }),
       commit: (
         target: ProjectTargetInput,
@@ -3340,7 +3620,9 @@ export function createApiClient(
           ).then((r) => (typeof r === "number" ? r : r.sub_id));
         }
         return transport
-          .invoke<{ sub_id: number }>("fs:subscribeTree", { ...wire, path, ...opts })
+          .invoke<{
+            sub_id: number;
+          }>("fs:subscribeTree", { ...wire, path, ...opts })
           .then((r) => r.sub_id);
       },
       unsubscribeTree: (sub_id: number) => {
@@ -3683,13 +3965,26 @@ export interface ApiClient {
     conflicts: (
       target: ProjectTargetInput,
       root?: string,
-    ) => Promise<ConflictFile[]>;
+      cursor?: string,
+      limit?: number,
+    ) => Promise<ConflictSummaryResponse>;
+    conflictFile: (
+      target: ProjectTargetInput,
+      conflictId: string,
+      root?: string,
+    ) => Promise<ConflictSnapshot>;
     resolve: (
       target: ProjectTargetInput,
-      path: string,
-      content: string,
+      request: ResolveRequest,
+    ) => Promise<ResolveOutcome>;
+    operationStatus: (
+      target: ProjectTargetInput,
       root?: string,
-    ) => Promise<{ ok: boolean; error?: string }>;
+    ) => Promise<OperationStatusResponse>;
+    executeOperation: (
+      target: ProjectTargetInput,
+      request: OperationActionRequest,
+    ) => Promise<OperationOutcome>;
     commit: (
       target: ProjectTargetInput,
       message: string,

@@ -216,10 +216,11 @@ export function installSquashFixture(): SquashFixture {
           unstaged: [],
           untracked: [],
         };
+      else if (url.pathname.endsWith("/conflicts"))
+        data = { targetRevision: "", entries: [], truncated: false };
       else if (
         url.pathname.endsWith("/files") ||
         url.pathname.endsWith("/keys") ||
-        url.pathname.endsWith("/conflicts") ||
         url.pathname.endsWith("/projects")
       )
         data = [];

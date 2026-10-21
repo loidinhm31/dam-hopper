@@ -17,6 +17,7 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ ...queryState, refetch: vi.fn() }),
   useGitUntracked: () => ({ data: undefined, isFetching: false }),
+  useGitOperationStatus: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock("@/api/client.js", () => ({

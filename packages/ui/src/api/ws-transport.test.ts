@@ -1,6 +1,10 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiRequestError, createApiClient, type UiConnectionFrame } from "./client.js";
+import {
+  ApiRequestError,
+  createApiClient,
+  type UiConnectionFrame,
+} from "./client.js";
 import { WsTransport } from "./ws-transport.js";
 import { setActiveProfile, setAuthToken } from "./server-config.js";
 
@@ -402,10 +406,17 @@ describe("WsTransport commit message endpoints", () => {
   it("encodes branch URL parameter alongside root and worktree with nested branch names and spaces", async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ message: "test", branch: "refs/heads/feat/nested branch", headOid: "abc" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({
+            message: "test",
+            branch: "refs/heads/feat/nested branch",
+            headOid: "abc",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -420,10 +431,14 @@ describe("WsTransport commit message endpoints", () => {
     });
 
     const calledUrl = new URL(fetchMock.mock.calls[0][0]);
-    expect(calledUrl.pathname).toBe("/api/git/demo%20project/commit/abc1234/message");
+    expect(calledUrl.pathname).toBe(
+      "/api/git/demo%20project/commit/abc1234/message",
+    );
     expect(calledUrl.searchParams.get("root")).toBe("modules/sub folder");
     expect(calledUrl.searchParams.get("worktreePath")).toBe("/tmp/work tree");
-    expect(calledUrl.searchParams.get("branch")).toBe("refs/heads/feat/nested branch");
+    expect(calledUrl.searchParams.get("branch")).toBe(
+      "refs/heads/feat/nested branch",
+    );
 
     // Omitted branch compatibility: does not emit branch param
     await transport.invoke("git:commitMessage", {
@@ -460,7 +475,9 @@ describe("WsTransport leased push endpoints", () => {
       branch: "refs/heads/feature/inactive",
     });
 
-    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:4800/api/git/demo/push/prepare");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/git/demo/push/prepare",
+    );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
       method: "POST",
       body: JSON.stringify({
@@ -501,7 +518,9 @@ describe("WsTransport leased push endpoints", () => {
       root: "dir",
     });
 
-    expect(fetchMock.mock.calls[2][0]).toBe("http://localhost:4800/api/git/demo/push/publish");
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/git/demo/push/publish",
+    );
     expect(fetchMock.mock.calls[2][1].method).toBe("POST");
     expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
       root: "dir",
@@ -1579,7 +1598,10 @@ describe("WsTransport idle suspend endpoints", () => {
       decisionCapability: "cap-1",
       decision: "approve",
     };
-    const result = await transport.invoke("system:submitConsentDecision", payload);
+    const result = await transport.invoke(
+      "system:submitConsentDecision",
+      payload,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://localhost:4800/api/system/idle-suspend/v1/consent/decision",
@@ -2225,6 +2247,64 @@ describe("WsTransport host:uiConnection receipt lifecycle (Phase 03)", () => {
     expect(receipts[2]).toBeNull();
 
     unsubscribe();
+    transport.destroy();
+  });
+});
+describe("Git conflict resolve REST contract", () => {
+  it("projects every typed action with the Rust `type` discriminator", async () => {
+    installMockWebSocket();
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ outcome: "applied" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("http://localhost:4800");
+    const client = createApiClient(
+      { profileId: "profile-a", generation: 1 },
+      transport,
+    );
+    const target = {
+      profileId: "profile-a",
+      project: "repo",
+      worktreePath: "/work/repo",
+    };
+    const base = {
+      conflictId: "cid_66696c65",
+      snapshotVersion: "snapshot-1",
+      fullIndexFingerprint: "index-1",
+      root: "root-a",
+    };
+    const actions = [
+      {
+        type: "reviewedText" as const,
+        tokens: ["resolved\r\n"],
+        eol: "preserve" as const,
+      },
+      {
+        type: "indexSide" as const,
+        side: "theirs" as const,
+        stage: 3 as const,
+      },
+      { type: "delete" as const },
+    ];
+
+    for (const action of actions) {
+      await client.git.resolve(target, { ...base, action });
+    }
+
+    for (const [index, action] of actions.entries()) {
+      expect(fetchMock.mock.calls[index][0]).toBe(
+        "http://localhost:4800/api/git/repo/resolve",
+      );
+      expect(JSON.parse(fetchMock.mock.calls[index][1].body)).toEqual({
+        ...base,
+        action,
+        worktreePath: target.worktreePath,
+      });
+    }
     transport.destroy();
   });
 });
