@@ -176,8 +176,6 @@ export function applyDraftUndo(draft: ConflictDraft): boolean {
   });
   draft.result = prev.text;
   draft.resultRevision++;
-  draft.isDirty = draft.result !== (draft.appliedResult ?? draft.initialResult);
-  retainRecoveryResult(draft);
   draft.canCoalesceHistory = false;
   draft.metrics = calculateDraftMetrics(
     draft.metrics.sourceBytes,
@@ -192,6 +190,18 @@ export function applyDraftUndo(draft: ConflictDraft): boolean {
       draft.mergeModel = restoreModelDecisions(draft.mergeModel, prev.decisions);
     }
   }
+  const hasUndoDecisions = draft.mergeModel
+    ? Object.values(extractModelDecisions(draft.mergeModel)).some(
+        (d) =>
+          d.oursDecision !== "pending" ||
+          d.theirsDecision !== "pending" ||
+          d.manualReview === "reviewed",
+      )
+    : false;
+  draft.isDirty =
+    draft.result !== (draft.appliedResult ?? draft.initialResult) ||
+    hasUndoDecisions;
+  retainRecoveryResult(draft);
   return true;
 }
 
@@ -206,8 +216,6 @@ export function applyDraftRedo(draft: ConflictDraft): boolean {
   });
   draft.result = next.text;
   draft.resultRevision++;
-  draft.isDirty = draft.result !== (draft.appliedResult ?? draft.initialResult);
-  retainRecoveryResult(draft);
   draft.canCoalesceHistory = false;
   draft.metrics = calculateDraftMetrics(
     draft.metrics.sourceBytes,
@@ -222,6 +230,18 @@ export function applyDraftRedo(draft: ConflictDraft): boolean {
       draft.mergeModel = restoreModelDecisions(draft.mergeModel, next.decisions);
     }
   }
+  const hasRedoDecisions = draft.mergeModel
+    ? Object.values(extractModelDecisions(draft.mergeModel)).some(
+        (d) =>
+          d.oursDecision !== "pending" ||
+          d.theirsDecision !== "pending" ||
+          d.manualReview === "reviewed",
+      )
+    : false;
+  draft.isDirty =
+    draft.result !== (draft.appliedResult ?? draft.initialResult) ||
+    hasRedoDecisions;
+  retainRecoveryResult(draft);
   return true;
 }
 

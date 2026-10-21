@@ -4,11 +4,11 @@ export type TerminalWorkspacePanelId =
   | "project"
   | "terminals";
 
-export type TerminalFloatingPanelId = "files" | "tool";
+export type TerminalFloatingPanelId = "files" | "tool" | "resolver";
 
 export const TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20;
 export const TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX = 25;
-
+export const TERMINAL_FLOATING_PANEL_TOPMOST_Z_INDEX = 30;
 export type TerminalWorkspacePanelIntent = "toggle" | "reveal";
 
 export interface TerminalWorkspacePanelRequest {
@@ -29,6 +29,43 @@ export function resolveTerminalFloatingPanelZIndex(
   return frontPanelId === panelId
     ? TERMINAL_FLOATING_PANEL_FRONT_Z_INDEX
     : TERMINAL_FLOATING_PANEL_BASE_Z_INDEX;
+}
+
+/**
+ * Return true if panelId is currently the topmost active floating panel.
+ */
+export function isTopmostFloatingPanel(
+  panelId: TerminalFloatingPanelId,
+  frontPanelId: TerminalFloatingPanelId | null,
+): boolean {
+  return frontPanelId === panelId;
+}
+
+/**
+ * Maintain an ordered stack of open floating panels, where the last item is topmost.
+ */
+export function updateFloatingPanelStack(
+  currentStack: readonly TerminalFloatingPanelId[],
+  panelId: TerminalFloatingPanelId,
+  action: "bringToFront" | "remove",
+): TerminalFloatingPanelId[] {
+  const filtered = currentStack.filter((id) => id !== panelId);
+  if (action === "bringToFront") {
+    return [...filtered, panelId];
+  }
+  return filtered;
+}
+
+/**
+ * Determine zIndex from a floating panel stack. Topmost panel receives the highest zIndex.
+ */
+export function resolveFloatingPanelStackZIndex(
+  panelId: TerminalFloatingPanelId,
+  stack: readonly TerminalFloatingPanelId[],
+): number {
+  const index = stack.indexOf(panelId);
+  if (index === -1) return TERMINAL_FLOATING_PANEL_BASE_Z_INDEX;
+  return TERMINAL_FLOATING_PANEL_BASE_Z_INDEX + (index + 1) * 2;
 }
 
 /**

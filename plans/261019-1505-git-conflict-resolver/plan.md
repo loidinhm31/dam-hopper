@@ -13,7 +13,7 @@ created: 2026-10-19
 
 ## Overview and authority
 
-Phase 01 (Feasibility and contract gates), Phase 02 (Conflict discovery and snapshots), Phase 03 (Safe resolution and staging), Phase 04 (Operation lifecycle), Phase 05 (Scoped client and drafts), and Phase 06 (Merge model and history) complete (2026-10-21). Phase 02 (Conflict discovery and snapshots) and Phase 04 (Operation lifecycle) administratively closed with accepted deferrals (2026-10-19 and 2026-10-20). Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phase 04 delivered authoritative operation detection and stage roles (`GET /api/git/{project}/operation`), guarded continue/abort lifecycle (`POST /api/git/{project}/operation`), truthful `OperationOutcome` taxonomy, bounded noninteractive runner with editor sentinel detection, and terminal handoff contract with accepted deferrals. Phase 05 delivered full UI DTO cutover, owner-bound in-memory `ConflictDraftRegistry` with measured capacity and recovery draft lifecycle, `useConflictResolver` integration across `MergeConflictEditor.tsx` and `WorkspacePage.tsx`, and patched Monaco 0.55.1 unmount/cancellation safety. Phase 06 delivered lossless line tokenization, deterministic diff3 source regions, conservative imported-result mapping, atomic text+metadata decisions, confirmed whole-file actions, unified draft history with decision snapshots, and Monaco Chromium browser qualification. Phases 07–09 remain.
+Phase 01 (Feasibility and contract gates), Phase 02 (Conflict discovery and snapshots), Phase 03 (Safe resolution and staging), Phase 04 (Operation lifecycle), Phase 05 (Scoped client and drafts), Phase 06 (Merge model and history), and Phase 07 (Floating Monaco surface) complete (2026-10-21). Phase 02 (Conflict discovery and snapshots) and Phase 04 (Operation lifecycle) administratively closed with accepted deferrals (2026-10-19 and 2026-10-20); Phase 07 administratively closed with accepted deferrals for Phase 08 (2026-10-21). Phase 03 delivered typed preconditioned mutation (`POST /api/git/{project}/resolve`), truthful `ResolveOutcome` taxonomy, application-wide `GitMutationCoordinator` across 14 writers, CUT1 generic stage preflight, and retired legacy Rust resolver. Phase 04 delivered authoritative operation detection and stage roles (`GET /api/git/{project}/operation`), guarded continue/abort lifecycle (`POST /api/git/{project}/operation`), truthful `OperationOutcome` taxonomy, bounded noninteractive runner with editor sentinel detection, and terminal handoff contract with accepted deferrals. Phase 05 delivered full UI DTO cutover, owner-bound in-memory `ConflictDraftRegistry` with measured capacity and recovery draft lifecycle, `useConflictResolver` integration across `MergeConflictEditor.tsx` and `WorkspacePage.tsx`, and patched Monaco 0.55.1 unmount/cancellation safety. Phase 06 delivered lossless line tokenization, deterministic diff3 source regions, conservative imported-result mapping, atomic text+metadata decisions, confirmed whole-file actions, unified draft history with decision snapshots, and Monaco Chromium browser qualification. Phase 07 delivered shared floating `ConflictResolverPanel` host in `WorkspacePage` above shells, unified `floatingPanelStack` identity and z-index ordering across `WorkspacePage` and `TerminalWorkspaceShell`, scoped Escape key arbitration, responsive narrow tabbed mode (Theirs/Result/Ours/Base), exact region-id action binding on non-stable conflict blocks, in-memory model paths, and Chromium browser tests. Phases 08–09 remain.
 
 Build one workspace-owned floating resolver for terminal-started merge/rebase/cherry-pick/revert and index conflicts. Immutable sources/base, editable retained result, full reviewed decisions, explicit Apply & stage, separate Continue/Abort, truthful unsupported/partial/unknown outcomes. Initial release qualification requires web and actual Linux-native runtime evidence; Windows-native remains explicitly unqualified until separately tested.
 
@@ -31,7 +31,7 @@ No editor-tab/DiffViewer integration, operation initiation, auto-continue/skip, 
 | 04 | [Operation lifecycle](./phase-04-operation-lifecycle.md) | 03 | Complete* | Complete* | 100% |
 | 05 | [Scoped client and drafts](./phase-05-scoped-client-and-drafts.md) | 02–04 | Complete | Complete | 100% |
 | 06 | [Merge model and history](./phase-06-merge-model-and-history.md) | 01, 05 | Complete | Complete (Cycle 3 score: 7.0/10, approved by user) | 100% |
-| 07 | [Floating Monaco surface](./phase-07-floating-monaco-surface.md) | 05–06 | Pending | Pending | 0% |
+| 07 | [Floating Monaco surface](./phase-07-floating-monaco-surface.md) | 05–06 | Complete* | Complete* (Cycle 3 score: 6.0/10, approved by user) | 100% |
 | 08 | [Workspace integration and cutover](./phase-08-workspace-integration-and-cutover.md) | 03–07 | Pending | Pending | 0% |
 | 09 | [Qualification and documentation](./phase-09-qualification-and-documentation.md) | 01–08 | Pending | Pending | 0% |
 
@@ -52,7 +52,7 @@ Cycle-3 review (`plans/reports/code-reviewer-261019-2332-phase-02-conflict-disco
 - **Phase 03/05/08 clean cutover:**
   - **W7 (legacy code retirement):** Remove legacy `get_conflicts`, `read_blob_utf8`, `resolve_conflict`, Rust `ConflictFile`, and UI `ConflictFile` as part of coordinated cutover once mutation callers migrate.
 
-*\*Note: Phase 02 and Phase 04 are administratively closed with accepted deferrals; safety and qualification gates remain open until remediated in downstream phases (Phases 03, 05, 08, 09).*
+*\*Note: Phase 02, Phase 04, and Phase 07 are administratively closed with accepted deferrals; safety, UX remediation, and qualification gates remain open until remediated in downstream phases (Phases 03, 05, 08, 09).*
 
 ### Phase 03 closure (2026-10-20)
 
@@ -141,6 +141,29 @@ Phase 06 delivered the structured merge model, lossless tokenization, conservati
     - **W-9 (BOM boundary responsibility):** Clarify and enforce BOM re-application at Apply/Save boundary.
   - **Phase 08 workspace integration and cutover:**
     - Complete end-to-end workspace surface integration, legacy endpoint retirement, and fail-closed cutover.
+- **Deployment boundary:** Unreleasable coordinated migration boundary remains active; UI model and client contracts are unreleasable until Phase 08 cutover.
+
+### Phase 07 closure with accepted deferrals (2026-10-21)
+
+Phase 07 delivered the workspace-owned floating Monaco conflict resolver surface above shell branching:
+- **Shared floating host (`ConflictResolverPanel.tsx`, `WorkspacePage.tsx`):** Mounted a single shared conflict resolver host in `WorkspacePage` above IDE, terminal, and mobile shell branching, wired directly to `useConflictResolver` without opening editor tabs or adapting `DiffViewer`.
+- **Unified floating panel stacking (`terminal-workspace-panel.ts`, `TerminalWorkspaceShell.tsx`, `WorkspacePage.tsx`):** Extended `FloatingPanelId` to `"files" | "tool" | "resolver"`. Managed `floatingPanelStack` in `WorkspacePage` with z-index derivation (`resolveFloatingPanelZIndex`) across surfaces (`files`: 20, `tool`: 21, `resolver`: 22). Frontmost panel derives `isTopmost` dynamically.
+- **Scoped Escape key arbitration (`ConflictResolverPanel.tsx`, `TerminalFloatingToolPanel.tsx`):** Enforces topmost panel ownership and focus containment (`contains(document.activeElement)`). Monaco suggest, find, and context-menu widgets consume Escape first (`querySelector(".monaco-editor .suggest-widget.visible, .find-widget.visible, .monaco-menu-container")`); unconsumed Escape in topmost resolver hides only the resolver without leaking to terminal or closing background panels.
+- **Responsive narrow tabbed mode (`MergeConflictEditor.tsx`):** Implemented narrow viewport (<768px) tabbed layout switching between Theirs, Result, Ours, and Base views (`button[role=tab]`) while preserving wide 3-pane layout for desktop.
+- **Exact region-id action binding (`MergeConflictEditor.tsx`, `ConflictRegionNav.tsx`):** Keyed region accept/ignore actions to exact `region.id` rather than stale index, correctly handling leading stable text lines. Nav chips jump to target conflict line.
+- **In-memory model paths & lifecycle:** Created isolated in-memory model URIs per role (`inmemory://git-conflict/{role}-{path}`) with explicit model disposal on unmount, preventing model leak and dirty draft desynchronization.
+- **Verification & review:** Validated by 721 unit tests passing (including `terminal-workspace-panel.test.ts`, `conflict-resolver-panel-state.test.ts`, `conflict-draft-store.test.ts`), 12 browser tests across 4 suites under real Chromium (`git-conflict-resolver.browser.tsx`, `terminal-floating-panels.browser.tsx`, `conflict-resolver-history.browser.tsx`, `conflict-monaco-history.browser.tsx`), 0 TypeScript errors (`tsc -p tsconfig.json --noEmit`), and 0 ESLint errors. Cycle 3 review completed (score 6.0/10; approved by user with accepted deferrals on 2026-10-21).
+
+**Accepted deferrals for Phase 08 workspace integration and cutover:**
+- **C1 (Tool & files panel Escape activation):** Ensure shell populates `floatingPanelStack` or activates panels immediately upon toggle/open so Escape closes panels without requiring prior pointer click/focus capture.
+- **C2 (Narrow pane switch decoration re-application):** Re-apply Monaco conflict decorations (`applyDecorations`) and reset collection refs on async mount of Theirs/Result/Ours/Base editors during narrow tab switching.
+- **C3 (Nav auto-switch line reveal):** Apply pending conflict line reveal (`pendingRevealRef`) upon Result editor mount when navigating from Theirs/Ours/Base tabs.
+- **W1 (Files panel Escape stack scoping):** Scope `TerminalFloatingFilePanel` Escape handler to `isTopmost={effectiveFront === "files"}` with focus containment to prevent simultaneous dismissals.
+- **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
+- **W4 (Dead code & allocation cleanup):** Remove or wire `isTopmostFloatingPanel` helper and memoize `updateFloatingPanelStack` when array contents are unchanged.
+- **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
+- **W6 (Carry-over Cycle 1/2 items):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
+- **W7 (Escape widget query scoping):** Scope Monaco widget queries to `panelRef.current`.
 - **Deployment boundary:** Unreleasable coordinated migration boundary remains active; UI model and client contracts are unreleasable until Phase 08 cutover.
 ## Execution and dependency rules
 

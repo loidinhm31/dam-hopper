@@ -1,8 +1,5 @@
 import {
   useEffect,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { Grip, Move, X } from "lucide-react";
@@ -12,6 +9,7 @@ import {
   type TerminalFloatingFilePanelLayout,
 } from "@/lib/terminal-floating-file-panel-state.js";
 import { TERMINAL_FLOATING_PANEL_BASE_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
+import { useFloatingPanelGeometry } from "@/hooks/use-floating-panel-geometry.js";
 
 const TOOL_PANEL_LAYOUT: TerminalFloatingFilePanelLayout = {
   width: 720,
@@ -34,13 +32,22 @@ interface TerminalFloatingToolPanelProps {
   onClose: () => void;
   zIndex?: number;
   onActivate?: () => void;
+  isTopmost?: boolean;
 }
 
 export function handleTerminalFloatingToolPanelKeyDown(
-  event: Pick<KeyboardEvent, "key">,
+  event: Pick<KeyboardEvent, "key"> & {
+    stopPropagation?: () => void;
+    stopImmediatePropagation?: () => void;
+    preventDefault?: () => void;
+  },
   onClose: () => void,
+  isTopmost = true,
 ) {
-  if (event.key !== "Escape") return false;
+  if (event.key !== "Escape" || !isTopmost) return false;
+  event.stopImmediatePropagation?.();
+  event.stopPropagation?.();
+  event.preventDefault?.();
   onClose();
   return true;
 }
@@ -63,117 +70,39 @@ export function TerminalFloatingToolPanel({
   onClose,
   zIndex = TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
   onActivate,
+  isTopmost = true,
 }: TerminalFloatingToolPanelProps) {
-  const boundsRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLElement>(null);
-  const [layout, setLayout] =
-    useState<TerminalFloatingFilePanelLayout>(TOOL_PANEL_LAYOUT);
+  const {
+    boundsRef,
+    panelRef,
+    layout,
+    handleDragStart,
+    handleResizeStart,
+  } = useFloatingPanelGeometry({
+    initialLayout: TOOL_PANEL_LAYOUT,
+    clampLayout: clampTerminalFloatingToolPanelLayout,
+  });
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      handleTerminalFloatingToolPanelKeyDown(event, onClose);
+      if (event.defaultPrevented) return;
+      const activeEl = document.activeElement;
+      if (
+        panelRef.current &&
+        activeEl &&
+        activeEl !== document.body &&
+        !panelRef.current.contains(activeEl)
+      ) {
+        return;
+      }
+      handleTerminalFloatingToolPanelKeyDown(event, onClose, isTopmost);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+  }, [isTopmost, onClose, open]);
 
   if (!open) return null;
-
-  const resolveCurrentFrame = () => {
-    const bounds = boundsRef.current?.getBoundingClientRect();
-    const panel = panelRef.current?.getBoundingClientRect();
-    if (!bounds || !panel) return null;
-
-    return {
-      bounds,
-      frame: {
-        left: panel.left - bounds.left,
-        top: panel.top - bounds.top,
-        width: panel.width,
-        height: panel.height,
-      },
-    };
-  };
-
-  const updateLayout = (
-    nextLayout: TerminalFloatingFilePanelLayout,
-    bounds: { width: number; height: number },
-  ) => {
-    setLayout(clampTerminalFloatingToolPanelLayout(nextLayout, bounds));
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("workspace:layout-change"));
-    }
-  };
-
-  const handleDragStart = (event: ReactMouseEvent) => {
-    if (event.button !== 0) return;
-    const current = resolveCurrentFrame();
-    if (!current) return;
-    event.preventDefault();
-
-    const { bounds, frame } = current;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    document.body.style.cursor = "move";
-    document.body.style.userSelect = "none";
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      updateLayout(
-        {
-          width: frame.width,
-          height: frame.height,
-          top: frame.top + moveEvent.clientY - startY,
-          left: frame.left + moveEvent.clientX - startX,
-        },
-        bounds,
-      );
-    };
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("workspace:layout-change"));
-      }
-    };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  };
-
-  const handleResizeStart = (event: ReactMouseEvent) => {
-    if (event.button !== 0) return;
-    const current = resolveCurrentFrame();
-    if (!current) return;
-    event.preventDefault();
-
-    const { bounds, frame } = current;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    document.body.style.cursor = "nwse-resize";
-    document.body.style.userSelect = "none";
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      updateLayout(
-        {
-          width: frame.width + moveEvent.clientX - startX,
-          height: frame.height + moveEvent.clientY - startY,
-          top: frame.top,
-          left: frame.left,
-        },
-        bounds,
-      );
-    };
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  };
 
   return (
     <div
@@ -183,6 +112,7 @@ export function TerminalFloatingToolPanel({
     >
       <section
         ref={panelRef}
+        tabIndex={-1}
         className="pointer-events-auto absolute flex min-h-0 max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)]/96 shadow-2xl backdrop-blur-xl"
         style={{
           top: layout.top,

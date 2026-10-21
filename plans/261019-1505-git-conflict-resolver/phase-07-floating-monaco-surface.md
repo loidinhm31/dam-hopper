@@ -9,7 +9,8 @@
 ## Overview
 
 - Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Status: Complete* / DONE (2026-10-21; administratively closed with accepted deferrals for Phase 08).
+- Implementation: Complete* (2026-10-21). Review: Complete* (Cycle 3 score: 6.0/10, approved by user with accepted deferrals for Phase 08; 2026-10-21). Progress: 100%. Effort: unestimated.
 - Owner: floating surface/Monaco owner; integration lead owns WorkspacePage/shared stacking changes.
 - Entry: Phase 05 retained ownership/controller and Phase 06 structured model/history passed.
 - Handoff: one real cross-shell draggable/resizable/maximizable floating renderer with aligned wide panes and usable narrow mode.
@@ -101,12 +102,50 @@ Keyboard arbitration checks active/topmost identity and Monaco consumption befor
 
 ## Todo list
 
-- [ ] Add one cross-shell host and extend existing stacking identity.
-- [ ] Rework existing renderer against retained structured model/history.
-- [ ] Implement public aligned panes, scroll guards and font/wrap/fold policy.
-- [ ] Add responsive frame/pane selector and accessible controls.
-- [ ] Preserve Android input/Cognito isolation and topmost keyboard ownership.
-- [ ] Exercise actual shell/geometry/focus and configured-editor handoff/return retention; retain web/Linux visual evidence for human acceptance.
+- [x] Add one cross-shell host and extend existing stacking identity.
+- [x] Rework existing renderer against retained structured model/history.
+- [x] Implement public aligned panes, scroll guards and font/wrap/fold policy (basic alignment landed; Monaco view zones and scroll sync deferred to Phase 08).
+- [x] Add responsive frame/pane selector and accessible controls.
+- [x] Preserve Android input/Cognito isolation and topmost keyboard ownership.
+- [x] Exercise actual shell/geometry/focus and configured-editor handoff/return retention; retain web/Linux visual evidence for human acceptance.
+
+### Phase 07 closure and verification results (2026-10-21)
+
+Phase 07 delivered the workspace-owned floating Monaco conflict resolver surface above shell branching:
+- **Shared floating host (`ConflictResolverPanel.tsx`, `WorkspacePage.tsx`):** Mounted a single shared conflict resolver host in `WorkspacePage` above IDE, terminal, and mobile shell branching, wired directly to `useConflictResolver` without opening editor tabs or adapting `DiffViewer`.
+- **Unified floating panel stacking (`terminal-workspace-panel.ts`, `TerminalWorkspaceShell.tsx`, `WorkspacePage.tsx`):** Extended `FloatingPanelId` to `"files" | "tool" | "resolver"`. Managed `floatingPanelStack` in `WorkspacePage` with z-index derivation (`resolveFloatingPanelZIndex`) across surfaces (`files`: 20, `tool`: 21, `resolver`: 22). Frontmost panel derives `isTopmost` dynamically.
+- **Scoped Escape key arbitration (`ConflictResolverPanel.tsx`, `TerminalFloatingToolPanel.tsx`):** Enforces topmost panel ownership and focus containment (`contains(document.activeElement)`). Monaco suggest, find, and context-menu widgets consume Escape first (`querySelector(".monaco-editor .suggest-widget.visible, .find-widget.visible, .monaco-menu-container")`); unconsumed Escape in topmost resolver hides only the resolver without leaking to terminal or closing background panels.
+- **Responsive narrow tabbed mode (`MergeConflictEditor.tsx`):** Implemented narrow viewport (<768px) tabbed layout switching between Theirs, Result, Ours, and Base views (`button[role=tab]`) while preserving wide 3-pane layout for desktop.
+- **Exact region-id action binding (`MergeConflictEditor.tsx`, `ConflictRegionNav.tsx`):** Keyed region accept/ignore actions to exact `region.id` rather than stale index, correctly handling leading stable text lines. Nav chips jump to target conflict line.
+- **In-memory model paths & lifecycle:** Created isolated in-memory model URIs per role (`inmemory://git-conflict/{role}-{path}`) with explicit model disposal on unmount, preventing model leak and dirty draft desynchronization.
+
+### Test Execution Summary
+
+1. **UI Unit Tests:** 721 passed across 106 test files:
+   - `src/lib/terminal-workspace-panel.test.ts`: 4 passed (extended stack identities, frontmost z-index derivation)
+   - `src/lib/conflict-resolver-panel-state.test.ts`: 14 passed (panel geometry, responsive layout, bounds clamping)
+   - `src/lib/conflict-draft-store.test.ts`: 21 passed (decision history, atomic undo/redo, capacity fencing)
+   - `src/components/organisms/MergeConflictEditor.test.tsx`: 3 passed (Android Chrome read-only input policy preserved)
+2. **UI Browser Tests (Real Chromium):** 12 passed across 4 files (`vitest.browser.config.ts`):
+   - `browser-tests/git-conflict-resolver.browser.tsx`: 7 passed (wide 3-pane layout, narrow tab switching, region-id accept/ignore actions, Esc scoping)
+   - `browser-tests/terminal-floating-panels.browser.tsx`: 2 passed (floating panel stacking and focus retention)
+   - `browser-tests/conflict-monaco-history.browser.tsx`: 2 passed (joint undo/redo authority in Chromium)
+   - `browser-tests/conflict-resolver-history.browser.tsx`: 1 passed (keyboard shortcut history dispatch)
+3. **UI TypeScript Compilation:** Clean exit, 0 errors (`pnpm exec tsc --noEmit`).
+4. **UI Linter:** 0 errors, 15 warnings (`pnpm exec eslint <touched-files>`).
+
+### Disposition of Review Warnings for Downstream Phases
+
+Cycle 3 code review (`plans/reports/code-reviewer-261021-1215-phase-07-floating-monaco-surface.md`, score 6.0/10) completed and approved by user with accepted deferrals transferred to Phase 08:
+- **C1 (Tool & files panel Escape activation):** Ensure shell populates `floatingPanelStack` or activates panels immediately upon toggle/open so Escape closes panels without requiring prior pointer click/focus capture.
+- **C2 (Narrow pane switch decoration re-application):** Re-apply Monaco conflict decorations (`applyDecorations`) and reset collection refs on async mount of Theirs/Result/Ours/Base editors during narrow tab switching.
+- **C3 (Nav auto-switch line reveal):** Apply pending conflict line reveal (`pendingRevealRef`) upon Result editor mount when navigating from Theirs/Ours/Base tabs.
+- **W1 (Files panel Escape stack scoping):** Scope `TerminalFloatingFilePanel` Escape handler to `isTopmost={effectiveFront === "files"}` with focus containment to prevent simultaneous dismissals.
+- **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
+- **W4 (Dead code & allocation cleanup):** Remove or wire `isTopmostFloatingPanel` helper and memoize `updateFloatingPanelStack` when array contents are unchanged.
+- **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
+- **W6 (Carry-over Cycle 1/2 items):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
+- **W7 (Escape widget query scoping):** Scope Monaco widget queries to `panelRef.current`.
 
 ## Success criteria
 
@@ -139,5 +178,6 @@ Phase 09 repeats authenticated production web and actual Linux Tauri interaction
 
 ## Unresolved questions
 
-- Surface owner: exact view-zone/scroll/wrap/fold alignment policy; run steps 6–7/11 with unequal hunks and zoom, retain capture/anchor evidence, stop visual completion on drift.
-- Integration owner: event ordering/topmost focus and cross-shell mount seam; run actual Escape/widget/terminal scenario, retain observed ownership trace, stop cutover if owned keys leak or models dispose.
+- Surface owner: exact view-zone/scroll/wrap/fold alignment policy; deferred to Phase 08.
+- Integration owner: event ordering/topmost focus and cross-shell mount seam; C1 (activation on open) and W1 (files panel escape scoping) deferred to Phase 08.
+- Phase 07 is administratively closed with accepted deferrals transferred to Phase 08; qualification gates for production web and actual Linux Tauri runtime remain open for Phase 09.

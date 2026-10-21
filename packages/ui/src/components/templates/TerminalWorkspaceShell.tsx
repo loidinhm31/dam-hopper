@@ -4,6 +4,7 @@ import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { TerminalFloatingToolPanel } from "@/components/organisms/TerminalFloatingToolPanel.js";
 import type { WorkspaceMode } from "@/lib/workspace-mode.js";
 import {
+  resolveFloatingPanelStackZIndex,
   resolveTerminalFloatingPanelZIndex,
   resolveTerminalWorkspacePanelActivation,
   type TerminalFloatingPanelId,
@@ -11,7 +12,6 @@ import {
   type TerminalWorkspacePanelId,
   type TerminalWorkspacePanelRequest,
 } from "@/lib/terminal-workspace-panel.js";
-
 type TerminalOverlayContent = (
   controls: TerminalWorkspacePanelControls,
 ) => ReactNode;
@@ -29,6 +29,9 @@ export function TerminalWorkspaceShell({
   onWorkspaceModeChange,
   workspaceModeShortcutLabel,
   toolbarActions,
+  floatingPanelStack,
+  onActivateFloatingPanel,
+  onDeactivateFloatingPanel,
 }: {
   terminalContent: ReactNode;
   terminalOverlayContent?: TerminalOverlayContent;
@@ -42,6 +45,9 @@ export function TerminalWorkspaceShell({
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   workspaceModeShortcutLabel?: string;
   toolbarActions?: ReactNode;
+  floatingPanelStack?: readonly TerminalFloatingPanelId[];
+  onActivateFloatingPanel?: (panelId: TerminalFloatingPanelId) => void;
+  onDeactivateFloatingPanel?: (panelId: TerminalFloatingPanelId) => void;
 }) {
   const { collapsed, toggle } = useSidebarCollapse();
   const [activePanelId, setActivePanelId] =
@@ -52,14 +58,16 @@ export function TerminalWorkspaceShell({
   const activateFloatingPanel = useCallback(
     (panelId: TerminalFloatingPanelId) => {
       setFrontPanelId(panelId);
+      onActivateFloatingPanel?.(panelId);
     },
-    [],
+    [onActivateFloatingPanel],
   );
 
   const closeSidePanel = useCallback(() => {
     setActivePanelId(null);
     setFrontPanelId((current) => (current === "tool" ? null : current));
-  }, []);
+    onDeactivateFloatingPanel?.("tool");
+  }, [onDeactivateFloatingPanel]);
   useEffect(() => {
     if (!activatePanelRequest) return;
     // This request prop is an intentional imperative bridge from WorkspacePage.
@@ -82,14 +90,16 @@ export function TerminalWorkspaceShell({
     // Clear tool ownership after Escape or a panel-toggle request closes it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFrontPanelId((current) => (current === "tool" ? null : current));
-  }, [activePanelId]);
+    onDeactivateFloatingPanel?.("tool");
+  }, [activePanelId, onDeactivateFloatingPanel]);
 
   useEffect(() => {
     if (terminalOverlayOpen !== false) return;
     // Files can close from WorkspacePage, so synchronize its external open state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFrontPanelId((current) => (current === "files" ? null : current));
-  }, [terminalOverlayOpen]);
+    onDeactivateFloatingPanel?.("files");
+  }, [onDeactivateFloatingPanel, terminalOverlayOpen]);
 
   const activePanel =
     activePanelId === "git"
@@ -100,6 +110,16 @@ export function TerminalWorkspaceShell({
           ? { label: "Ports", content: portsContent }
             : { label: "Fleet Terminal", content: fleetContent };
 
+  const effectiveFront =
+    floatingPanelStack && floatingPanelStack.length > 0
+      ? floatingPanelStack[floatingPanelStack.length - 1]
+      : frontPanelId;
+  const resolveZ = (panelId: TerminalFloatingPanelId) => {
+    if (floatingPanelStack && floatingPanelStack.length > 0) {
+      return resolveFloatingPanelStackZIndex(panelId, floatingPanelStack);
+    }
+    return resolveTerminalFloatingPanelZIndex(frontPanelId, panelId);
+  };
   return (
     <div className="app-screen-height flex flex-col overflow-clip gradient-bg">
       <TopNav
@@ -119,14 +139,15 @@ export function TerminalWorkspaceShell({
         <main className="relative flex min-w-0 flex-1 flex-col overflow-clip">
           {terminalContent}
           {terminalOverlayContent?.({
-            zIndex: resolveTerminalFloatingPanelZIndex(frontPanelId, "files"),
+            zIndex: resolveZ("files"),
             onActivate: () => activateFloatingPanel("files"),
           })}
           <TerminalFloatingToolPanel
             open={activePanelId !== null}
             title={activePanel.label}
             content={activePanel.content}
-            zIndex={resolveTerminalFloatingPanelZIndex(frontPanelId, "tool")}
+            zIndex={resolveZ("tool")}
+            isTopmost={effectiveFront === "tool"}
             onActivate={() => activateFloatingPanel("tool")}
             onClose={closeSidePanel}
           />

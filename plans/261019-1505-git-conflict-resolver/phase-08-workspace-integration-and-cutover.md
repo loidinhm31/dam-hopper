@@ -110,6 +110,18 @@ Cutover removes obsolete references only after both entry paths and mutation out
 - [ ] Complete coordinated UI/server/every-caller cutover; remove parser/ConflictBlock/unchecked behavior and reject legacy writes without fallback/shim.
 - [ ] Exercise actual production entry, repeated stop and unrelated behavior boundaries.
 
+### Inherited Tasks from Phase 07 (Accepted Deferrals)
+
+- [ ] **C1 (Tool & files panel Escape activation):** Ensure shell populates `floatingPanelStack` or activates panels immediately upon toggle/open so Escape closes panels without requiring prior pointer click/focus capture.
+- [ ] **C2 (Narrow pane switch decoration re-application):** Re-apply Monaco conflict decorations (`applyDecorations`) and reset collection refs on async mount of Theirs/Result/Ours/Base editors during narrow tab switching.
+- [ ] **C3 (Nav auto-switch line reveal):** Apply pending conflict line reveal (`pendingRevealRef`) upon Result editor mount when navigating from Theirs/Ours/Base tabs.
+- [ ] **W1 (Files panel Escape stack scoping):** Scope `TerminalFloatingFilePanel` Escape handler to `isTopmost={effectiveFront === "files"}` with focus containment to prevent simultaneous dismissals.
+- [ ] **W2 / W3 (Extended browser test matrix):** Add multi-panel (files + tool + resolver) z-order arbitration browser tests and wide-viewport (1400px) 3-pane layout tests with `page.viewport()`.
+- [ ] **W4 (Dead code & allocation cleanup):** Remove or wire `isTopmostFloatingPanel` helper and memoize `updateFloatingPanelStack` when array contents are unchanged.
+- [ ] **W5 (App chrome z-order alignment):** Validate resolver panel z-order against TopNav (`z-50`) in full application page layout.
+- [ ] **W6 (Monaco view zones & hook consolidation):** Implement Monaco view zones and scroll alignment for unequal hunks, retain panel geometry/selected file across hide/reopen without full DOM unmount, consolidate redundant `useConflictResolver` query instances, and remove legacy marker-parser fallbacks.
+- [ ] **W7 (Escape widget query scoping):** Scope Monaco widget queries to `panelRef.current`.
+
 ## Success criteria
 
 - AC1: terminal-started four-operation conflicts open through row and status into floating resolver; EditorTabs inventory is unchanged.

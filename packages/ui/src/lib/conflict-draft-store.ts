@@ -417,10 +417,17 @@ class ConflictDraftRegistry {
         draft.canCoalesceHistory = false;
         draft.isDirty = true;
         draft.resultRevision++;
+        draft.metrics = calculateDraftMetrics(
+          draft.metrics.sourceBytes,
+          draft.result,
+          draft.history,
+          draft.recoveryText,
+        );
         draft.mergeModel = updatedModel;
         this.notify();
         return { success: true };
       }
+      draft.canCoalesceHistory = false;
       const res = this.updateResult(key, serialized);
       if (!res.success) return res;
       draft.canCoalesceHistory = false;
@@ -461,6 +468,12 @@ class ConflictDraftRegistry {
       draft.history.future = [];
       draft.canCoalesceHistory = false;
       draft.isDirty = true;
+      draft.metrics = calculateDraftMetrics(
+        draft.metrics.sourceBytes,
+        draft.result,
+        draft.history,
+        draft.recoveryText,
+      );
       draft.mergeModel = updatedModel;
       this.notify();
       return { success: true };
@@ -501,10 +514,17 @@ class ConflictDraftRegistry {
         draft.canCoalesceHistory = false;
         draft.isDirty = true;
         draft.resultRevision++;
+        draft.metrics = calculateDraftMetrics(
+          draft.metrics.sourceBytes,
+          draft.result,
+          draft.history,
+          draft.recoveryText,
+        );
         draft.mergeModel = updatedModel;
         this.notify();
         return { success: true };
       }
+      draft.canCoalesceHistory = false;
       const res = this.updateResult(key, serialized);
       if (!res.success) return res;
       draft.canCoalesceHistory = false;
@@ -544,6 +564,12 @@ class ConflictDraftRegistry {
       draft.history.future = [];
       draft.canCoalesceHistory = false;
       draft.isDirty = true;
+      draft.metrics = calculateDraftMetrics(
+        draft.metrics.sourceBytes,
+        draft.result,
+        draft.history,
+        draft.recoveryText,
+      );
       draft.mergeModel = updatedModel;
       this.notify();
       return { success: true };
@@ -588,8 +614,11 @@ class ConflictDraftRegistry {
     if (draft.isRecovery || draft.isResolving || draft.isApplied) {
       return { success: false, error: "Draft cannot be modified in current state" };
     }
-    if (preview.draftKey && preview.draftKey !== key) {
-      return { success: false, error: "Preview was generated for a different draft" };
+    if (!preview.draftKey || preview.draftKey !== key) {
+      return { success: false, error: "Preview lacks draftKey or was generated for a different draft" };
+    }
+    if (preview.targetRevision !== undefined && preview.targetRevision !== draft.resultRevision) {
+      return { success: false, error: "Draft was modified after preview was generated" };
     }
     if (!draft.mergeModel) {
       return { success: false, error: "Draft has no merge model" };
@@ -610,10 +639,17 @@ class ConflictDraftRegistry {
         draft.canCoalesceHistory = false;
         draft.isDirty = true;
         draft.resultRevision++;
+        draft.metrics = calculateDraftMetrics(
+          draft.metrics.sourceBytes,
+          draft.result,
+          draft.history,
+          draft.recoveryText,
+        );
         draft.mergeModel = updatedModel;
         this.notify();
         return { success: true };
       }
+      draft.canCoalesceHistory = false;
       const res = this.updateResult(key, serialized);
       if (!res.success) return res;
       draft.canCoalesceHistory = false;

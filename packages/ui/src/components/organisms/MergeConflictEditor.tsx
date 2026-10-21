@@ -1,13 +1,11 @@
 /**
  * MergeConflictEditor — 3-panel merge conflict resolution editor.
  *
- * Layout: Theirs (readonly) | Result (editable) | Ours (readonly)
+ * Layout:
+ * - Wide: Theirs (readonly) | Result (editable) | Ours (readonly) + optional Base
+ * - Narrow: Tabbed pane selector [Theirs | Result* | Ours | Base]
  *
- * Conflict regions are parsed from the workdir conflict-marked content.
- * Accept theirs/ours does a targeted model edit in the result editor.
- * Mark Resolved → POST /api/git/:project/resolve.
- *
- * Lazy-imported from WorkspacePage.
+ * Bound to Phase 06 ConflictMergeModel and JointHistoryAuthority.
  */
 import "@/lib/monaco-setup.js";
 import { Editor, type OnMount } from "@monaco-editor/react";
@@ -24,12 +22,12 @@ import {
   X,
   Loader2,
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
   CheckCircle2,
   GitMerge,
   Undo2,
   Redo2,
+  Split,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
@@ -47,25 +45,13 @@ import {
   type ConflictRegion,
 } from "@/lib/conflict-parser.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
-
-// Inject decoration CSS once — Monaco class names aren't Tailwind-aware
-const CONFLICT_STYLES = `
-.mc-conflict-marker { background: rgba(239, 68, 68, 0.15); }
-.mc-conflict-ours   { background: rgba(34, 197, 94, 0.10); }
-.mc-conflict-theirs { background: rgba(59, 130, 246, 0.10); }
-.mc-conflict-sep    { background: rgba(245, 158, 11, 0.20); }
-`;
-
-function useConflictStyles() {
-  useInsertionEffect(() => {
-    const id = "mc-conflict-styles";
-    if (document.getElementById(id)) return;
-    const el = document.createElement("style");
-    el.id = id;
-    el.textContent = CONFLICT_STYLES;
-    document.head.appendChild(el);
-  }, []);
-}
+import {
+  injectConflictStylesOnce,
+  buildResultDecorations,
+  buildSourceDecorations,
+} from "@/lib/conflict-editor-decorations.js";
+import { ConflictRegionNav } from "./ConflictRegionNav.js";
+import { extractModelDecisions } from "@/lib/conflict-merge-model.js";
 
 interface Props {
   project: string;
@@ -78,6 +64,11 @@ interface Props {
   onResolved: () => void;
 }
 
+const resizeObserverCleanups = new WeakMap<
+  monacoNs.editor.IStandaloneCodeEditor,
+  () => void
+>();
+
 function blurEditorSurface(
   editor: monacoNs.editor.IStandaloneCodeEditor,
 ): void {
@@ -86,67 +77,6 @@ function blurEditorSurface(
   if (activeElement && domNode?.contains(activeElement)) {
     (activeElement as HTMLElement).blur();
   }
-}
-
-function buildDecorations(
-  regions: ConflictRegion[],
-  monaco: typeof monacoNs,
-): monacoNs.editor.IModelDeltaDecoration[] {
-  const dec: monacoNs.editor.IModelDeltaDecoration[] = [];
-
-  for (const r of regions) {
-    // <<<<<< marker line
-    dec.push({
-      range: new monaco.Range(r.startLine, 1, r.startLine, 1),
-      options: {
-        isWholeLine: true,
-        className: "mc-conflict-marker",
-        stickiness: 1,
-      },
-    });
-    // ours lines
-    if (r.separatorLine > r.startLine + 1) {
-      dec.push({
-        range: new monaco.Range(r.startLine + 1, 1, r.separatorLine - 1, 1),
-        options: {
-          isWholeLine: true,
-          className: "mc-conflict-ours",
-          stickiness: 1,
-        },
-      });
-    }
-    // ======= separator
-    dec.push({
-      range: new monaco.Range(r.separatorLine, 1, r.separatorLine, 1),
-      options: {
-        isWholeLine: true,
-        className: "mc-conflict-sep",
-        stickiness: 1,
-      },
-    });
-    // theirs lines
-    if (r.endLine > r.separatorLine + 1) {
-      dec.push({
-        range: new monaco.Range(r.separatorLine + 1, 1, r.endLine - 1, 1),
-        options: {
-          isWholeLine: true,
-          className: "mc-conflict-theirs",
-          stickiness: 1,
-        },
-      });
-    }
-    // >>>>>>> marker line
-    dec.push({
-      range: new monaco.Range(r.endLine, 1, r.endLine, 1),
-      options: {
-        isWholeLine: true,
-        className: "mc-conflict-marker",
-        stickiness: 1,
-      },
-    });
-  }
-
-  return dec;
 }
 
 export function MergeConflictEditor({
@@ -163,7 +93,10 @@ export function MergeConflictEditor({
   const targetKey = projectTargetCacheKey(targetRef);
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
-  useConflictStyles();
+
+  useInsertionEffect(() => {
+    injectConflictStylesOnce();
+  }, []);
 
   const resolver = useConflictResolver(targetRef, root);
   const conflicts = resolver.conflicts;
@@ -182,7 +115,8 @@ export function MergeConflictEditor({
   const conflictFile = conflictEntry;
   const theirsText = snapshot?.stages?.theirs?.textTokens?.join("") ?? "";
   const oursText = snapshot?.stages?.ours?.textTokens?.join("") ?? "";
-  const workdirContent = snapshot?.worktree.textTokens?.join("") ?? "";
+  const baseText = snapshot?.stages?.base?.textTokens?.join("") ?? "";
+  const basePresent = Boolean(snapshot?.stages?.base);
   const language = fileLanguage ?? fileDiff?.language ?? "plaintext";
 
   const [resolveError, setResolveError] = useState<string | null>(null);
@@ -193,6 +127,34 @@ export function MergeConflictEditor({
   const [resultContent, setResultContent] = useState<string>("");
   const resultContentRef = useRef<string>("");
   const [isImportingRecovery, setIsImportingRecovery] = useState(false);
+
+  // Responsive narrow layout state
+  // Responsive narrow layout state with callback ref to guarantee observation
+  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
+  const [isNarrow, setIsNarrow] = useState(false);
+  const [activeNarrowPane, setActiveNarrowPane] = useState<
+    "theirs" | "result" | "ours" | "base"
+  >("result");
+  const [showBaseInWide, setShowBaseInWide] = useState(false);
+
+  useEffect(() => {
+    if (!containerNode) return;
+    const updateWidth = (width: number) => {
+      setIsNarrow(width < 768);
+    };
+    updateWidth(
+      containerNode.getBoundingClientRect().width ||
+        (typeof window !== "undefined" ? window.innerWidth : 1024),
+    );
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        updateWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(containerNode);
+    return () => observer.disconnect();
+  }, [containerNode]);
 
   useEffect(() => {
     setDraftKey(null);
@@ -233,6 +195,7 @@ export function MergeConflictEditor({
       resolver.cancelPendingDraftLoads();
     };
   }, [snapshot, resolver.cancelPendingDraftLoads, resolver.loadConflictDraft]);
+
   const draftCandidate =
     resolver.drafts.find((draft) => draft.id === draftKey) ??
     resolver.activeDraft;
@@ -254,6 +217,7 @@ export function MergeConflictEditor({
     draftCandidate.target.snapshotVersion === snapshot.snapshotVersion
       ? draftCandidate
       : null;
+
   const recoveryDrafts = useMemo(() => {
     const scope = resolver.currentScope;
     if (!scope || !activeDraft) return [];
@@ -277,8 +241,28 @@ export function MergeConflictEditor({
     [resultContent],
   );
 
-  const allResolved =
-    Boolean(activeDraft) && !hasRemainingConflicts(resultContent);
+  const conflictMergeRegions = useMemo(() => {
+    return activeDraft?.mergeModel?.regions.filter((r) => !r.stable) ?? [];
+  }, [activeDraft?.mergeModel]);
+
+  const navRegions = useMemo(() => {
+    if (conflictMergeRegions.length > 0) {
+      return conflictMergeRegions.map((r) => ({
+        id: r.id,
+        startLine: r.mapping.resultRange?.startLine ?? r.oursRange.startLine,
+        endLine: r.mapping.resultRange?.endLine ?? r.oursRange.endLine,
+      }));
+    }
+    return conflictRegions.map((r, i) => ({
+      id: `conflict-${i + 1}`,
+      startLine: r.startLine,
+      endLine: r.endLine,
+    }));
+  }, [conflictMergeRegions, conflictRegions]);
+  const isModelReady = activeDraft?.mergeModel
+    ? activeDraft.mergeModel.readiness.isReady
+    : !hasRemainingConflicts(resultContent);
+  const allResolved = Boolean(activeDraft) && isModelReady;
   const isMalformed =
     resultContent !== "" && hasMalformedConflicts(resultContent);
 
@@ -293,27 +277,39 @@ export function MergeConflictEditor({
   const oursEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(
     null,
   );
+  const baseEditorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
   const modelsRef = useRef<{
     theirs: monacoNs.editor.ITextModel | null;
     result: monacoNs.editor.ITextModel | null;
     ours: monacoNs.editor.ITextModel | null;
-  }>({ theirs: null, result: null, ours: null });
+    base: monacoNs.editor.ITextModel | null;
+  }>({ theirs: null, result: null, ours: null, base: null });
   const monacoRef = useRef<typeof monacoNs | null>(null);
   const isSyncing = useRef(false);
   const isApplyingDraftHistoryRef = useRef(false);
-  const decorationCollection =
+  const resultDecorationsCollection =
+    useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
+  const theirsDecorationsCollection =
+    useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
+  const oursDecorationsCollection =
     useRef<monacoNs.editor.IEditorDecorationsCollection | null>(null);
   const isGuardingCapacityRef = useRef(false);
   const currentSelectionRef = useRef("");
   currentSelectionRef.current = `${targetKey}:${filePath}:${root ?? ""}`;
 
-  const syncScroll = useCallback((scrollTop: number) => {
+  const syncScroll = useCallback((scrollTop: number, source: string) => {
     if (isSyncing.current) return;
     isSyncing.current = true;
-    theirsEditorRef.current?.setScrollTop(scrollTop);
-    resultEditorRef.current?.setScrollTop(scrollTop);
-    oursEditorRef.current?.setScrollTop(scrollTop);
-    isSyncing.current = false;
+    try {
+      if (source !== "theirs") theirsEditorRef.current?.setScrollTop(scrollTop);
+      if (source !== "result") resultEditorRef.current?.setScrollTop(scrollTop);
+      if (source !== "ours") oursEditorRef.current?.setScrollTop(scrollTop);
+      if (source !== "base") baseEditorRef.current?.setScrollTop(scrollTop);
+    } finally {
+      isSyncing.current = false;
+    }
   }, []);
 
   function attachResizeObserver(editor: monacoNs.editor.IStandaloneCodeEditor) {
@@ -323,9 +319,9 @@ export function MergeConflictEditor({
       editor.layout();
     });
     ro.observe(container);
-    (editor as unknown as { _roCleanup?: () => void })._roCleanup = () =>
-      ro.disconnect();
+    resizeObserverCleanups.set(editor, () => ro.disconnect());
   }
+
   function restoreDraftHistory(apply: (key: string) => string | null) {
     const key = draftKeyRef.current;
     const editor = resultEditorRef.current;
@@ -347,17 +343,23 @@ export function MergeConflictEditor({
   useEffect(() => {
     const models = modelsRef.current;
     return () => {
-      for (const ref of [theirsEditorRef, resultEditorRef, oursEditorRef]) {
-        (
-          ref.current as unknown as { _roCleanup?: () => void } | null
-        )?._roCleanup?.();
+      for (const ref of [
+        theirsEditorRef,
+        resultEditorRef,
+        oursEditorRef,
+        baseEditorRef,
+      ]) {
+        const editor = ref.current;
+        if (editor) {
+          resizeObserverCleanups.get(editor)?.();
+        }
       }
-      // Defer model disposal so Monaco's own editor cleanup runs first.
-      const { theirs, result, ours } = models;
+      const { theirs, result, ours, base } = models;
       requestAnimationFrame(() => {
         if (theirs && !theirs.isDisposed()) theirs.dispose();
         if (result && !result.isDisposed()) result.dispose();
         if (ours && !ours.isDisposed()) ours.dispose();
+        if (base && !base.isDisposed()) base.dispose();
       });
     };
   }, []);
@@ -369,11 +371,8 @@ export function MergeConflictEditor({
       editor.onDidChangeModel(() => {
         modelsRef.current.theirs = editor.getModel();
       });
-
       if (!monacoRef.current) monacoRef.current = monaco;
-      editor.onDidScrollChange((e) => {
-        if (!isSyncing.current) syncScroll(e.scrollTop);
-      });
+      editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "theirs"));
       attachResizeObserver(editor);
     },
     [syncScroll],
@@ -409,7 +408,6 @@ export function MergeConflictEditor({
         restoreDraftHistory(resolver.redoDraft),
       );
 
-      // Track content changes
       editor.onDidChangeModelContent(() => {
         const value = editor.getValue();
         if (
@@ -444,15 +442,15 @@ export function MergeConflictEditor({
         setResultContent(value);
       });
 
-      editor.onDidScrollChange((e) => {
-        if (!isSyncing.current) syncScroll(e.scrollTop);
-      });
+      editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "result"));
       attachResizeObserver(editor);
     },
     [
       activeDraft?.id,
       activeDraft?.isRecovery,
       isAndroidChromeNativeInputSuppressed,
+      resolver.redoDraft,
+      resolver.undoDraft,
       resolver.updateDraftResult,
       syncScroll,
       targetAvailable,
@@ -484,48 +482,83 @@ export function MergeConflictEditor({
       editor.onDidChangeModel(() => {
         modelsRef.current.ours = editor.getModel();
       });
-
       if (!monacoRef.current) monacoRef.current = monaco;
-      editor.onDidScrollChange((e) => {
-        if (!isSyncing.current) syncScroll(e.scrollTop);
-      });
+      editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "ours"));
       attachResizeObserver(editor);
     },
     [syncScroll],
   );
 
-  // Apply decorations to result editor when conflict regions change
-  useEffect(() => {
-    const editor = resultEditorRef.current;
+  const handleBaseMount: OnMount = useCallback(
+    (editor, monaco) => {
+      baseEditorRef.current = editor;
+      modelsRef.current.base = editor.getModel();
+      editor.onDidChangeModel(() => {
+        modelsRef.current.base = editor.getModel();
+      });
+      if (!monacoRef.current) monacoRef.current = monaco;
+      editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "base"));
+      attachResizeObserver(editor);
+    },
+    [syncScroll],
+  );
+
+  // Apply decorations across editors
+  const applyDecorations = useCallback(() => {
     const monaco = monacoRef.current;
-    if (!editor || !monaco) return;
+    if (!monaco) return;
 
-    const decs = buildDecorations(conflictRegions, monaco);
-    if (decorationCollection.current) {
-      decorationCollection.current.set(decs);
-    } else {
-      decorationCollection.current = editor.createDecorationsCollection(decs);
+    if (resultEditorRef.current) {
+      const decisions = activeDraft?.mergeModel
+        ? extractModelDecisions(activeDraft.mergeModel)
+        : undefined;
+      const decs = buildResultDecorations(
+        conflictRegions,
+        decisions,
+        monaco,
+      );
+      if (resultDecorationsCollection.current) {
+        resultDecorationsCollection.current.set(decs);
+      } else {
+        resultDecorationsCollection.current =
+          resultEditorRef.current.createDecorationsCollection(decs);
+      }
     }
-  }, [conflictRegions]);
 
-  // Cleanup Monaco references on unmount to prevent memory leaks
+    if (theirsEditorRef.current && conflictMergeRegions.length > 0) {
+      const theirsRanges = conflictMergeRegions.map((r) => r.theirsRange);
+      const decs = buildSourceDecorations(theirsRanges, "theirs", monaco);
+      if (theirsDecorationsCollection.current) {
+        theirsDecorationsCollection.current.set(decs);
+      } else {
+        theirsDecorationsCollection.current =
+          theirsEditorRef.current.createDecorationsCollection(decs);
+      }
+    }
+
+    if (oursEditorRef.current && conflictMergeRegions.length > 0) {
+      const oursRanges = conflictMergeRegions.map((r) => r.oursRange);
+      const decs = buildSourceDecorations(oursRanges, "ours", monaco);
+      if (oursDecorationsCollection.current) {
+        oursDecorationsCollection.current.set(decs);
+      } else {
+        oursDecorationsCollection.current =
+          oursEditorRef.current.createDecorationsCollection(decs);
+      }
+    }
+  }, [activeDraft?.mergeModel, conflictMergeRegions, conflictRegions]);
+
   useEffect(() => {
-    return () => {
-      decorationCollection.current?.clear();
-      decorationCollection.current = null;
-      theirsEditorRef.current = null;
-      resultEditorRef.current = null;
-      oursEditorRef.current = null;
-      monacoRef.current = null;
-    };
-  }, []);
+    applyDecorations();
+  }, [applyDecorations, activeNarrowPane]);
 
-  // ── Conflict navigation ──────────────────────────────────────────────────────
-
+  // Conflict navigation
   function navigateToConflict(index: number) {
-    const regions = parseConflictRegions(resultContentRef.current);
-    const region = regions[index];
+    const region = navRegions[index];
     if (!region) return;
+    if (isNarrow) {
+      setActiveNarrowPane("result");
+    }
     setSelectedConflict(index);
     resultEditorRef.current?.revealLineInCenter(region.startLine);
     resultEditorRef.current?.setPosition({
@@ -537,33 +570,54 @@ export function MergeConflictEditor({
     }
   }
 
-  // ── Accept actions ───────────────────────────────────────────────────────────
-
-  function applyAccept(regionIndex: number, side: "ours" | "theirs") {
+  // Model-bound Accept actions
+  // Model-bound Accept actions keyed by exact regionId
+  function applyAccept(regionId: string, side: "ours" | "theirs") {
     if (
       isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
-      activeDraft.isRecovery
+      activeDraft.isRecovery ||
+      !draftKey
     ) {
       return;
     }
-    const currentDraftKey = draftKeyRef.current;
-    if (!currentDraftKey) {
-      setResolveError("Conflict draft is still loading");
+    if (activeDraft.mergeModel) {
+      const outcome = resolver.acceptSide(draftKey, regionId, side);
+      if (!outcome.success) {
+        setResolveError(outcome.error ?? "Accept action failed");
+        return;
+      }
+      const updated = resolver.getDraft(draftKey);
+      const next = updated?.result ?? resultContentRef.current;
+      resultContentRef.current = next;
+      const editor = resultEditorRef.current;
+      if (editor) {
+        const model = editor.getModel();
+        if (model && model.getValue() !== next) {
+          isApplyingDraftHistoryRef.current = true;
+          try {
+            model.setValue(next);
+          } finally {
+            isApplyingDraftHistoryRef.current = false;
+          }
+        }
+      }
+      setResultContent(next);
       return;
     }
-    const regions = parseConflictRegions(resultContentRef.current);
-    const region = regions[regionIndex];
-    if (!region) return;
 
-    const next = acceptConflict(resultContentRef.current, region, side);
-    const update = resolver.updateDraftResult(currentDraftKey, next);
+    // Fallback if mergeModel not loaded
+    const fallbackIndex = parseInt(regionId.replace("conflict-", ""), 10) - 1;
+    const regions = parseConflictRegions(resultContentRef.current);
+    const fbRegion = regions[fallbackIndex >= 0 ? fallbackIndex : 0];
+    if (!fbRegion) return;
+    const next = acceptConflict(resultContentRef.current, fbRegion, side);
+    const update = resolver.updateDraftResult(draftKey, next);
     if (!update.success) {
       setResolveError(update.error ?? "Draft capacity exceeded");
       return;
     }
-
     resultContentRef.current = next;
     const editor = resultEditorRef.current;
     if (editor) {
@@ -575,18 +629,51 @@ export function MergeConflictEditor({
         } finally {
           isApplyingDraftHistoryRef.current = false;
         }
-        const newRegions = parseConflictRegions(next);
-        const nextConflict =
-          newRegions[regionIndex] ?? newRegions[regionIndex - 1];
-        if (nextConflict) {
-          editor.revealLineInCenter(nextConflict.startLine);
-          setSelectedConflict(Math.min(regionIndex, newRegions.length - 1));
-        } else {
-          setSelectedConflict(0);
-        }
       }
     }
     setResultContent(next);
+  }
+
+  function applyAcceptBoth(
+    regionId: string,
+    order: "ours-then-theirs" | "theirs-then-ours",
+  ) {
+    if (
+      isAndroidChromeNativeInputSuppressed ||
+      !targetAvailable ||
+      !activeDraft ||
+      activeDraft.isRecovery ||
+      !draftKey
+    ) {
+      return;
+    }
+    const outcome = resolver.acceptBoth(draftKey, regionId, order);
+    if (!outcome.success) {
+      setResolveError(outcome.error ?? "Accept both failed");
+      return;
+    }
+    const updated = resolver.getDraft(draftKey);
+    if (updated) {
+      resultContentRef.current = updated.result;
+      const editor = resultEditorRef.current;
+      if (editor) {
+        const model = editor.getModel();
+        if (model && model.getValue() !== updated.result) {
+          isApplyingDraftHistoryRef.current = true;
+          try {
+            model.setValue(updated.result);
+          } finally {
+            isApplyingDraftHistoryRef.current = false;
+          }
+        }
+      }
+      setResultContent(updated.result);
+    }
+  }
+
+  function applyMarkReviewed(regionId: string) {
+    if (!draftKey || !activeDraft) return;
+    resolver.markReviewed(draftKey, regionId);
   }
 
   function acceptAll(side: "ours" | "theirs") {
@@ -594,26 +681,48 @@ export function MergeConflictEditor({
       isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
-      activeDraft.isRecovery
+      activeDraft.isRecovery ||
+      !draftKey
     ) {
       return;
     }
-    const currentDraftKey = draftKeyRef.current;
-    if (!currentDraftKey) {
-      setResolveError("Conflict draft is still loading");
+    const preview =
+      side === "ours"
+        ? resolver.previewAcceptAllOurs(draftKey)
+        : resolver.previewAcceptAllTheirs(draftKey);
+    if (preview) {
+      const outcome = resolver.confirmWholeFileAction(draftKey, preview);
+      if (!outcome.success) {
+        setResolveError(outcome.error ?? "Whole file action failed");
+        return;
+      }
+      const next = preview.previewText;
+      resultContentRef.current = next;
+      const model = resultEditorRef.current?.getModel();
+      if (model) {
+        isApplyingDraftHistoryRef.current = true;
+        try {
+          model.setValue(next);
+        } finally {
+          isApplyingDraftHistoryRef.current = false;
+        }
+      }
+      setSelectedConflict(0);
+      setResultContent(next);
       return;
     }
+
+    // Fallback if model preview unavailable
     let content = resultContentRef.current;
     const regions = parseConflictRegions(content);
     for (let i = regions.length - 1; i >= 0; i--) {
       content = acceptConflict(content, regions[i], side);
     }
-    const update = resolver.updateDraftResult(currentDraftKey, content);
+    const update = resolver.updateDraftResult(draftKey, content);
     if (!update.success) {
       setResolveError(update.error ?? "Draft capacity exceeded");
       return;
     }
-
     resultContentRef.current = content;
     const model = resultEditorRef.current?.getModel();
     if (model) {
@@ -682,8 +791,6 @@ export function MergeConflictEditor({
     if (recoveryKey === draftKey) onClose();
   }
 
-  // ── Resolve ──────────────────────────────────────────────────────────────────
-
   async function handleMarkResolved() {
     if (
       !allResolved ||
@@ -749,8 +856,6 @@ export function MergeConflictEditor({
     }
   }
 
-  // ── Loading / error states ───────────────────────────────────────────────────
-
   const isLoading = conflictsLoading || snapshotLoading || diffLoading;
 
   if (isLoading) {
@@ -776,6 +881,13 @@ export function MergeConflictEditor({
     ? filePath.slice(0, filePath.lastIndexOf("/"))
     : "";
 
+  const theirsRole = activeDraft?.stageRoleLabels?.theirs ?? "theirs";
+  const oursRole = activeDraft?.stageRoleLabels?.ours ?? "ours";
+  const baseRole = activeDraft?.stageRoleLabels?.base ?? "base";
+  const theirsOid = snapshot?.stages?.theirs?.oid ? snapshot.stages.theirs.oid.slice(0, 7) : "";
+  const oursOid = snapshot?.stages?.ours?.oid ? snapshot.stages.ours.oid.slice(0, 7) : "";
+  const baseOid = snapshot?.stages?.base?.oid ? snapshot.stages.base.oid.slice(0, 7) : "";
+
   const editorOptions: monacoNs.editor.IStandaloneEditorConstructionOptions = {
     fontSize: 12,
     fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
@@ -790,7 +902,10 @@ export function MergeConflictEditor({
   };
 
   return (
-    <div className="h-full flex flex-col glass-card overflow-hidden">
+    <div
+      ref={setContainerNode}
+      className="h-full flex flex-col glass-card overflow-hidden"
+    >
       {/* Toolbar */}
       <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
         <GitMerge className="h-3.5 w-3.5 text-amber-400 shrink-0" />
@@ -871,6 +986,24 @@ export function MergeConflictEditor({
           >
             All Ours
           </button>
+
+          {basePresent && !isNarrow && (
+            <button
+              type="button"
+              onClick={() => setShowBaseInWide((prev) => !prev)}
+              title={showBaseInWide ? "Hide base comparison" : "Compare with ancestor base"}
+              className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
+                showBaseInWide
+                  ? "border-purple-400/60 bg-purple-500/15 text-purple-300"
+                  : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+              )}
+            >
+              <Layers className="h-3 w-3" />
+              Base
+            </button>
+          )}
+
           <button
             onClick={() => void handleMarkResolved()}
             disabled={
@@ -916,14 +1049,31 @@ export function MergeConflictEditor({
           </button>
         </div>
 
-        <button
-          onClick={onClose}
-          aria-label="Close merge conflict editor"
-          className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors shrink-0"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+
       </div>
+
+      {/* Terminal handoff guidance banner */}
+      {resolver.terminalHandoff && (
+        <div
+          role="alert"
+          className="shrink-0 flex items-center justify-between gap-3 border-b border-blue-400/20 bg-blue-400/10 px-3 py-2 text-[11px] text-blue-300"
+        >
+          <span>
+            Commit message editing required in Git&apos;s configured editor. Return to terminal in{" "}
+            <strong>{resolver.terminalHandoff.worktreeRoot}</strong> to finish.
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              resolver.terminalHandoff &&
+              void resolver.refreshAfterTerminalReturn(resolver.terminalHandoff)
+            }
+            className="rounded border border-blue-300/40 px-2 py-1 hover:bg-blue-300/20"
+          >
+            Refresh status
+          </button>
+        </div>
+      )}
 
       {isAndroidChromeNativeInputSuppressed && (
         <p
@@ -1038,116 +1188,236 @@ export function MergeConflictEditor({
         </div>
       )}
 
-      {/* Panel headers */}
-      <div className="shrink-0 grid grid-cols-3 border-b border-[var(--color-border)] text-[10px] font-medium">
-        <div className="px-3 py-1 text-blue-400 border-r border-[var(--color-border)] bg-blue-400/5">
-          Theirs (incoming)
+      {/* Narrow pane switcher tabs */}
+      {/* Narrow pane switcher tabs */}
+      {isNarrow ? (
+        <div
+          role="tablist"
+          aria-label="Conflict editor panes"
+          className="shrink-0 flex border-b border-[var(--color-border)] bg-[var(--color-surface)] text-[11px] font-medium"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeNarrowPane === "theirs"}
+            onClick={() => setActiveNarrowPane("theirs")}
+            className={cn(
+              "flex-1 py-1.5 text-center border-b-2 transition-colors",
+              activeNarrowPane === "theirs"
+                ? "border-blue-400 text-blue-400 font-semibold bg-blue-400/10"
+                : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+            )}
+          >
+            Theirs {theirsOid && `(${theirsOid})`}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeNarrowPane === "result"}
+            onClick={() => setActiveNarrowPane("result")}
+            className={cn(
+              "flex-1 py-1.5 text-center border-b-2 transition-colors",
+              activeNarrowPane === "result"
+                ? "border-amber-400 text-amber-400 font-semibold bg-amber-400/10"
+                : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+            )}
+          >
+            Result {allResolved ? "✓" : "*"}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeNarrowPane === "ours"}
+            onClick={() => setActiveNarrowPane("ours")}
+            className={cn(
+              "flex-1 py-1.5 text-center border-b-2 transition-colors",
+              activeNarrowPane === "ours"
+                ? "border-green-400 text-green-400 font-semibold bg-green-400/10"
+                : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+            )}
+          >
+            Ours {oursOid && `(${oursOid})`}
+          </button>
+          {basePresent && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeNarrowPane === "base"}
+              onClick={() => setActiveNarrowPane("base")}
+              className={cn(
+                "flex-1 py-1.5 text-center border-b-2 transition-colors",
+                activeNarrowPane === "base"
+                  ? "border-purple-400 text-purple-400 font-semibold bg-purple-400/10"
+                  : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+              )}
+            >
+              Base {baseOid && `(${baseOid})`}
+            </button>
+          )}
         </div>
-        <div className="px-3 py-1 text-amber-400 border-r border-[var(--color-border)] bg-amber-400/5">
-          Result (editable)
-        </div>
-        <div className="px-3 py-1 text-green-400 bg-green-400/5">
-          Ours (current)
-        </div>
-      </div>
-
-      {/* 3 editors */}
-      <div className="flex-1 min-h-0 grid grid-cols-3 divide-x divide-[var(--color-border)]">
-        {/* Theirs */}
-        <Editor
-          height="100%"
-          keepCurrentModel
-          value={theirsText}
-          language={language}
-          theme="vs-dark"
-          options={{ ...editorOptions, readOnly: true }}
-          onMount={handleTheirsMount}
-        />
-
-        {/* Result (editable, workdir content) */}
-        <Editor
-          height="100%"
-          keepCurrentModel
-          value={resultContent}
-          language={language}
-          theme="vs-dark"
-          options={{
-            contextmenu: false,
-            ...editorOptions,
-            readOnly:
-              isAndroidChromeNativeInputSuppressed ||
-              !targetAvailable ||
-              !activeDraft ||
-              Boolean(activeDraft.isRecovery),
-          }}
-          onMount={handleResultMount}
-        />
-
-        {/* Ours */}
-        <Editor
-          height="100%"
-          keepCurrentModel
-          value={oursText}
-          language={language}
-          theme="vs-dark"
-          options={{ ...editorOptions, readOnly: true }}
-          onMount={handleOursMount}
-        />
-      </div>
-
-      {/* Conflict navigation strip */}
-      {conflictRegions.length > 0 && (
-        <div className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-          <div className="flex items-center gap-1 px-2 py-1 overflow-x-auto">
-            <span className="text-[10px] text-[var(--color-text-muted)] shrink-0 mr-1">
-              Conflicts:
-            </span>
-
-            {conflictRegions.map((region, i) => (
-              <ConflictBlock
-                key={region.startLine}
-                index={i}
-                isSelected={selectedConflict === i}
-                onNavigate={() => navigateToConflict(i)}
-                onAcceptOurs={() => applyAccept(i, "ours")}
-                onAcceptTheirs={() => applyAccept(i, "theirs")}
-                actionsDisabled={
-                  isAndroidChromeNativeInputSuppressed ||
-                  !targetAvailable ||
-                  Boolean(activeDraft?.isRecovery)
-                }
-              />
-            ))}
-
-            <div className="ml-auto shrink-0 flex items-center gap-1">
-              <button
-                type="button"
-                aria-label="Previous conflict"
-                onClick={() =>
-                  navigateToConflict(Math.max(0, selectedConflict - 1))
-                }
-                disabled={selectedConflict === 0}
-                className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
-              >
-                <ChevronUp className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Next conflict"
-                onClick={() =>
-                  navigateToConflict(
-                    Math.min(conflictRegions.length - 1, selectedConflict + 1),
-                  )
-                }
-                disabled={selectedConflict >= conflictRegions.length - 1}
-                className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
+      ) : (
+        /* Wide panel headers */
+        <div
+          className={cn(
+            "shrink-0 grid border-b border-[var(--color-border)] text-[10px] font-medium",
+            showBaseInWide ? "grid-cols-4" : "grid-cols-3",
+          )}
+        >
+          {showBaseInWide && (
+            <div className="px-3 py-1 text-purple-400 border-r border-[var(--color-border)] bg-purple-400/5">
+              Base ({baseRole} {baseOid})
             </div>
+          )}
+          <div className="px-3 py-1 text-blue-400 border-r border-[var(--color-border)] bg-blue-400/5">
+            Theirs ({theirsRole} {theirsOid})
+          </div>
+          <div className="px-3 py-1 text-amber-400 border-r border-[var(--color-border)] bg-amber-400/5">
+            Result (editable)
+          </div>
+          <div className="px-3 py-1 text-green-400 bg-green-400/5">
+            Ours ({oursRole} {oursOid})
           </div>
         </div>
       )}
+
+      {/* Editor views */}
+      <div className="flex-1 min-h-0 relative">
+        {isNarrow ? (
+          <div className="h-full w-full">
+            {activeNarrowPane === "theirs" && (
+              <Editor
+                path={`inmemory://${projectName}/${filePath}/theirs`}
+                height="100%"
+                keepCurrentModel
+                value={theirsText}
+                language={language}
+                theme="vs-dark"
+                options={{ ...editorOptions, readOnly: true }}
+                onMount={handleTheirsMount}
+              />
+            )}
+            {activeNarrowPane === "result" && (
+              <Editor
+                path={`inmemory://${projectName}/${filePath}/result`}
+                height="100%"
+                keepCurrentModel
+                value={resultContent}
+                language={language}
+                theme="vs-dark"
+                options={{
+                  contextmenu: false,
+                  ...editorOptions,
+                  readOnly:
+                    isAndroidChromeNativeInputSuppressed ||
+                    !targetAvailable ||
+                    !activeDraft ||
+                    Boolean(activeDraft.isRecovery),
+                }}
+                onMount={handleResultMount}
+              />
+            )}
+            {activeNarrowPane === "ours" && (
+              <Editor
+                path={`inmemory://${projectName}/${filePath}/ours`}
+                height="100%"
+                keepCurrentModel
+                value={oursText}
+                language={language}
+                theme="vs-dark"
+                options={{ ...editorOptions, readOnly: true }}
+                onMount={handleOursMount}
+              />
+            )}
+            {activeNarrowPane === "base" && (
+              <Editor
+                path={`inmemory://${projectName}/${filePath}/base`}
+                height="100%"
+                keepCurrentModel
+                value={baseText}
+                language={language}
+                theme="vs-dark"
+                options={{ ...editorOptions, readOnly: true }}
+                onMount={handleBaseMount}
+              />
+            )}
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "h-full grid divide-x divide-[var(--color-border)]",
+              showBaseInWide ? "grid-cols-4" : "grid-cols-3",
+            )}
+          >
+            {showBaseInWide && (
+              <Editor
+                path={`inmemory://${projectName}/${filePath}/base`}
+                height="100%"
+                keepCurrentModel
+                value={baseText}
+                language={language}
+                theme="vs-dark"
+                options={{ ...editorOptions, readOnly: true }}
+                onMount={handleBaseMount}
+              />
+            )}
+            <Editor
+              path={`inmemory://${projectName}/${filePath}/theirs`}
+              height="100%"
+              keepCurrentModel
+              value={theirsText}
+              theme="vs-dark"
+              options={{ ...editorOptions, readOnly: true }}
+              onMount={handleTheirsMount}
+            />
+            <Editor
+              path={`inmemory://${projectName}/${filePath}/result`}
+              height="100%"
+              keepCurrentModel
+              value={resultContent}
+              theme="vs-dark"
+              options={{
+                contextmenu: false,
+                ...editorOptions,
+                readOnly:
+                  isAndroidChromeNativeInputSuppressed ||
+                  !targetAvailable ||
+                  !activeDraft ||
+                  Boolean(activeDraft.isRecovery),
+              }}
+              onMount={handleResultMount}
+            />
+            <Editor
+              path={`inmemory://${projectName}/${filePath}/ours`}
+              height="100%"
+              keepCurrentModel
+              value={oursText}
+              theme="vs-dark"
+              options={{ ...editorOptions, readOnly: true }}
+              onMount={handleOursMount}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Conflict navigation strip */}
+      <ConflictRegionNav
+        regions={navRegions}
+        decisions={
+          activeDraft?.mergeModel
+            ? extractModelDecisions(activeDraft.mergeModel)
+            : undefined
+        }
+        selectedIndex={selectedConflict}
+        onSelectIndex={navigateToConflict}
+        onAcceptSide={applyAccept}
+        onAcceptBoth={applyAcceptBoth}
+        onMarkReviewed={applyMarkReviewed}
+        disabled={
+          isAndroidChromeNativeInputSuppressed ||
+          !targetAvailable ||
+          Boolean(activeDraft?.isRecovery)
+        }
+      />
 
       {/* All resolved banner */}
       {allResolved && (

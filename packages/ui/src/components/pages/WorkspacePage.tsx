@@ -26,6 +26,11 @@ import { IdeShell } from "@/components/templates/IdeShell.js";
 import { MobileWorkspaceShell } from "@/components/templates/MobileWorkspaceShell.js";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
 import { TerminalFloatingFilePanel } from "@/components/organisms/TerminalFloatingFilePanel.js";
+import {
+  resolveFloatingPanelStackZIndex,
+  updateFloatingPanelStack,
+  type TerminalFloatingPanelId,
+} from "@/lib/terminal-workspace-panel.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   BrowserDebugKeepAliveHost,
@@ -237,6 +242,11 @@ const PortsPanel = lazy(() =>
 const WorkspaceGitPanel = lazy(() =>
   import("@/components/organisms/WorkspaceGitPanel.js").then((m) => ({
     default: m.WorkspaceGitPanel,
+  })),
+);
+const ConflictResolverPanel = lazy(() =>
+  import("@/components/organisms/ConflictResolverPanel.js").then((m) => ({
+    default: m.ConflictResolverPanel,
   })),
 );
 
@@ -793,7 +803,46 @@ export default function WorkspacePage() {
       ? { profileId: activeProfileId, project: projectName }
       : projectName);
   const projectTarget = useProjectTarget(projectTargetInput);
-  useConflictResolver(projectTargetInput ?? undefined);
+  const conflictResolver = useConflictResolver(
+    projectTargetInput ?? undefined,
+  );
+  const [floatingPanelStack, setFloatingPanelStack] = useState<
+    TerminalFloatingPanelId[]
+  >([]);
+
+  const bringFloatingPanelToFront = useCallback(
+    (panelId: TerminalFloatingPanelId) => {
+      setFloatingPanelStack((current) =>
+        updateFloatingPanelStack(current, panelId, "bringToFront"),
+      );
+    },
+    [],
+  );
+
+  const removeFloatingPanelFromStack = useCallback(
+    (panelId: TerminalFloatingPanelId) => {
+      setFloatingPanelStack((current) =>
+        updateFloatingPanelStack(current, panelId, "remove"),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (conflictResolver.isPanelVisible) {
+      bringFloatingPanelToFront("resolver");
+    } else {
+      removeFloatingPanelFromStack("resolver");
+    }
+  }, [
+    bringFloatingPanelToFront,
+    conflictResolver.isPanelVisible,
+    removeFloatingPanelFromStack,
+  ]);
+  const handleHideResolver = useCallback(() => {
+    removeFloatingPanelFromStack("resolver");
+    conflictResolver.setVisible(false);
+  }, [conflictResolver, removeFloatingPanelFromStack]);
   const rootGitTarget = useMemo<ProjectTargetRef | undefined>(() => {
     if (!projectName) return undefined;
     return activeProfileId
@@ -2652,6 +2701,9 @@ export default function WorkspacePage() {
           onWorkspaceModeChange={setWorkspaceMode}
           workspaceModeShortcutLabel={terminalWorkspaceShortcut}
           toolbarActions={workflowToolbarActions}
+          floatingPanelStack={floatingPanelStack}
+          onActivateFloatingPanel={bringFloatingPanelToFront}
+          onDeactivateFloatingPanel={removeFloatingPanelFromStack}
         />
       ) : (
         <IdeShell
@@ -2738,6 +2790,48 @@ export default function WorkspacePage() {
           </div>
         </div>
       )}
+
+      {/* Floating Git Conflict Resolver */}
+      {conflictResolver.isPanelVisible && projectName && (
+        <Suspense fallback={null}>
+          <ConflictResolverPanel
+            open={conflictResolver.isPanelVisible}
+            project={projectName}
+            target={projectTarget?.target}
+            targetAvailable={isRootGitAvailable}
+            zIndex={resolveFloatingPanelStackZIndex(
+              "resolver",
+              floatingPanelStack,
+            )}
+            isTopmost={
+              floatingPanelStack.length === 0 ||
+              floatingPanelStack[floatingPanelStack.length - 1] === "resolver"
+            }
+            onActivate={() => bringFloatingPanelToFront("resolver")}
+            onHide={handleHideResolver}
+          />
+        </Suspense>
+      )}
+      {/* Floating conflict pill when conflicts exist but panel is hidden */}
+      {conflictResolver.conflicts.length > 0 &&
+        !conflictResolver.isPanelVisible &&
+        projectName && (
+          <div className="fixed bottom-4 right-4 z-40">
+            <button
+              type="button"
+              onClick={() => conflictResolver.setVisible(true)}
+              className="flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-[var(--color-surface)]/95 px-3 py-1.5 text-xs font-medium text-amber-300 shadow-xl backdrop-blur-md transition-all hover:bg-amber-400/10 hover:border-amber-400"
+              title="Open Git conflict resolver"
+              aria-label={`Open Git conflict resolver (${conflictResolver.conflicts.length} conflicts)`}
+            >
+              <GitMerge className="h-3.5 w-3.5 text-amber-400 animate-pulse" />
+              <span>
+                {conflictResolver.conflicts.length} conflict
+                {conflictResolver.conflicts.length > 1 ? "s" : ""}
+              </span>
+            </button>
+          </div>
+        )}
     </>
   );
 }

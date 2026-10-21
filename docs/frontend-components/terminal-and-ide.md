@@ -481,6 +481,8 @@ interface TerminalPanelProps {
 
 **Purpose:** Primary Git workspace view for branch management, history browsing, and local change review.
 
+
+> **Git Conflict Resolution:** For interactive 3-way merge conflict resolution across terminal and IDE workspaces, see the floating [ConflictResolverPanel](./workbench.md#floating-git-conflict-resolver-panel), which mounts above workspace shells with unified panel stacking, scoped keyboard arbitration, and responsive narrow layout.
 ### WorkspaceGitPanel
 
 **Location:** `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`
