@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TopNav } from "@/components/organisms/TopNav.js";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse.js";
 import { TerminalFloatingToolPanel } from "@/components/organisms/TerminalFloatingToolPanel.js";
@@ -54,6 +54,8 @@ export function TerminalWorkspaceShell({
     useState<TerminalWorkspacePanelId | null>(null);
   const [frontPanelId, setFrontPanelId] =
     useState<TerminalFloatingPanelId | null>(null);
+  const lastConsumedNonceRef = useRef<number | null>(null);
+  const prevActivePanelIdRef = useRef<TerminalWorkspacePanelId | null>(null);
 
   const activateFloatingPanel = useCallback(
     (panelId: TerminalFloatingPanelId) => {
@@ -65,11 +67,19 @@ export function TerminalWorkspaceShell({
 
   const closeSidePanel = useCallback(() => {
     setActivePanelId(null);
-    setFrontPanelId((current) => (current === "tool" ? null : current));
-    onDeactivateFloatingPanel?.("tool");
-  }, [onDeactivateFloatingPanel]);
+  }, []);
+
   useEffect(() => {
     if (!activatePanelRequest) return;
+    if (
+      activatePanelRequest.nonce !== undefined &&
+      lastConsumedNonceRef.current === activatePanelRequest.nonce
+    ) {
+      return;
+    }
+    if (activatePanelRequest.nonce !== undefined) {
+      lastConsumedNonceRef.current = activatePanelRequest.nonce;
+    }
     // This request prop is an intentional imperative bridge from WorkspacePage.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setActivePanelId((current) => {
@@ -81,18 +91,19 @@ export function TerminalWorkspaceShell({
       return next;
     });
     if (activatePanelRequest.intent === "reveal") {
-      setFrontPanelId("tool");
+      activateFloatingPanel("tool");
     }
-  }, [activatePanelRequest]);
+  }, [activateFloatingPanel, activatePanelRequest]);
 
   useEffect(() => {
-    if (activePanelId !== null) return;
+    const wasOpen = prevActivePanelIdRef.current !== null;
+    prevActivePanelIdRef.current = activePanelId;
+    if (!wasOpen || activePanelId !== null) return;
     // Clear tool ownership after Escape or a panel-toggle request closes it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFrontPanelId((current) => (current === "tool" ? null : current));
     onDeactivateFloatingPanel?.("tool");
   }, [activePanelId, onDeactivateFloatingPanel]);
-
   useEffect(() => {
     if (terminalOverlayOpen !== false) return;
     // Files can close from WorkspacePage, so synchronize its external open state.

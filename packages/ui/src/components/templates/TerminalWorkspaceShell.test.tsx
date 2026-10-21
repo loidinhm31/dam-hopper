@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveTerminalFloatingPanelZIndex,
   resolveTerminalWorkspacePanelActivation,
@@ -114,5 +116,222 @@ describe("TerminalWorkspaceShell rendering", () => {
     expect(markup).toContain('data-testid="workflow-toolbar"');
     expect(markup).toContain('data-testid="term-content"');
     expect(markup).toContain("Workflow Actions");
+  });
+});
+
+describe("TerminalWorkspaceShell floating panel activation lifecycle", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("invokes onActivateFloatingPanel with tool on reveal request and synchronizes topmost state", async () => {
+    const onActivate = vi.fn();
+    const onDeactivate = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div data-testid="term-content">Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div data-testid="git-panel-body">Git Panel Content</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          floatingPanelStack={["files"]}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{
+            nonce: 1,
+            targetId: "git",
+            intent: "reveal",
+          }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(onActivate).toHaveBeenCalledWith("tool");
+    expect(onDeactivate).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="git-panel-body"]')).not.toBeNull();
+  });
+
+  it("settles in active state when mounted with a reveal request without immediate deactivation", async () => {
+    const onActivate = vi.fn();
+    const onDeactivate = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{
+            nonce: 1,
+            targetId: "git",
+            intent: "reveal",
+          }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledWith("tool");
+    expect(onDeactivate).not.toHaveBeenCalled();
+  });
+
+  it("does not replay activation on unrelated parent rerenders with unchanged request nonce", async () => {
+    const onActivate = vi.fn();
+    const onDeactivate = vi.fn();
+    const request = { nonce: 10, targetId: "git" as const, intent: "reveal" as const };
+
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={request}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledTimes(1);
+
+    // Rerender with newly constructed object containing same nonce
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal Updated</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{ ...request }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(onDeactivate).not.toHaveBeenCalled();
+  });
+
+  it("calls onDeactivateFloatingPanel with tool when side panel is closed", async () => {
+    const onActivate = vi.fn();
+    const onDeactivate = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{
+            nonce: 1,
+            targetId: "git",
+            intent: "reveal",
+          }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledWith("tool");
+
+    // Close side panel via close button
+    const closeBtn = container.querySelector('button[aria-label="Close Git panel"]');
+    expect(closeBtn).not.toBeNull();
+    await act(async () => {
+      closeBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onDeactivate).toHaveBeenCalledWith("tool");
+  });
+
+  it("allows subsequent reveal with new nonce after side panel closure", async () => {
+    const onActivate = vi.fn();
+    const onDeactivate = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{
+            nonce: 1,
+            targetId: "git",
+            intent: "reveal",
+          }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(onActivate).toHaveBeenLastCalledWith("tool");
+
+    // Close side panel via close button
+    const closeBtn = container.querySelector('button[aria-label="Close Git panel"]');
+    await act(async () => {
+      closeBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onDeactivate).toHaveBeenCalledTimes(1);
+    expect(onDeactivate).toHaveBeenLastCalledWith("tool");
+
+    // New reveal request with incremented nonce 2
+    await act(async () => {
+      root.render(
+        <TerminalWorkspaceShell
+          terminalContent={<div>Terminal</div>}
+          fleetContent={<div>Fleet</div>}
+          gitContent={<div>Git</div>}
+          projectContent={<div>Project</div>}
+          workspaceMode="terminal"
+          onWorkspaceModeChange={() => {}}
+          onActivateFloatingPanel={onActivate}
+          onDeactivateFloatingPanel={onDeactivate}
+          activatePanelRequest={{
+            nonce: 2,
+            targetId: "git",
+            intent: "reveal",
+          }}
+        />,
+      );
+    });
+
+    expect(onActivate).toHaveBeenCalledTimes(2);
+    expect(onActivate).toHaveBeenLastCalledWith("tool");
   });
 });
