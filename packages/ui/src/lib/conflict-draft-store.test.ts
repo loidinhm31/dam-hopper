@@ -408,3 +408,162 @@ describe("Conflict Draft Store — Apply & Reconciliation", () => {
     expect(fresh.requiresReview).toBe(false);
   });
 });
+
+describe("Conflict Draft Store — Phase 06 Merge Model & Unified History", () => {
+  beforeEach(() => {
+    conflictDraftStore.resetForTesting();
+  });
+
+  it("restores decision states and text atomically on undo and redo", () => {
+    const snapshot = makeSnapshot({
+      worktree: {
+        kind: "normal",
+        sizeBytes: 100,
+        mtimeSeconds: 1000,
+        textTokens: [
+          "h\n",
+          "<<<<<<< ours\n",
+          "ours 1\n",
+          "=======\n",
+          "theirs 1\n",
+          ">>>>>>> theirs\n",
+          "f\n",
+        ],
+      },
+      stages: {
+        base: { stage: 1, oid: "b1", mode: 0o100644, textTokens: ["h\n", "base 1\n", "f\n"] },
+        ours: { stage: 2, oid: "o1", mode: 0o100644, textTokens: ["h\n", "ours 1\n", "f\n"] },
+        theirs: { stage: 3, oid: "t1", mode: 0o100644, textTokens: ["h\n", "theirs 1\n", "f\n"] },
+      },
+    });
+
+    const draft = loadOrThrow(makeScope(), snapshot);
+    expect(draft.mergeModel).toBeDefined();
+    const conflict = draft.mergeModel!.regions.find((r) => !r.stable)!;
+    expect(conflict.decision.oursDecision).toBe("pending");
+
+    // 1. Accept Ours
+    const acceptRes = conflictDraftStore.acceptSide(draft.id, conflict.id, "ours");
+    expect(acceptRes.success).toBe(true);
+    expect(draft.result).toBe("h\nours 1\nf\n");
+    const updatedConflict = draft.mergeModel!.regions.find((r) => r.id === conflict.id)!;
+    expect(updatedConflict.decision.oursDecision).toBe("accepted");
+
+    // 2. Undo: must restore text AND revert decisions back to pending
+    const undoOk = conflictDraftStore.undo(draft.id);
+    expect(undoOk).toBe(true);
+    expect(draft.result).toContain("<<<<<<< ours");
+    const revertedConflict = draft.mergeModel!.regions.find((r) => r.id === conflict.id)!;
+    expect(revertedConflict.decision.oursDecision).toBe("pending");
+    expect(revertedConflict.decision.manualReview).toBe("none");
+
+    // 3. Redo: must re-apply text and accepted decisions
+    const redoOk = conflictDraftStore.redo(draft.id);
+    expect(redoOk).toBe(true);
+    expect(draft.result).toBe("h\nours 1\nf\n");
+    const redoneConflict = draft.mergeModel!.regions.find((r) => r.id === conflict.id)!;
+    expect(redoneConflict.decision.oursDecision).toBe("accepted");
+  });
+
+  it("records metadata-only Ignore side and restores decisions on undo without touching text", () => {
+    const snapshot = makeSnapshot({
+      worktree: {
+        kind: "normal",
+        sizeBytes: 100,
+        mtimeSeconds: 1000,
+        textTokens: [
+          "h\n",
+          "<<<<<<< ours\n",
+          "ours 1\n",
+          "=======\n",
+          "theirs 1\n",
+          ">>>>>>> theirs\n",
+          "f\n",
+        ],
+      },
+      stages: {
+        base: { stage: 1, oid: "b1", mode: 0o100644, textTokens: ["h\n", "base 1\n", "f\n"] },
+        ours: { stage: 2, oid: "o1", mode: 0o100644, textTokens: ["h\n", "ours 1\n", "f\n"] },
+        theirs: { stage: 3, oid: "t1", mode: 0o100644, textTokens: ["h\n", "theirs 1\n", "f\n"] },
+      },
+    });
+
+    const draft = loadOrThrow(makeScope(), snapshot);
+    const initialText = draft.result;
+    const conflict = draft.mergeModel!.regions.find((r) => !r.stable)!;
+
+    // Ignore ours
+    const ignoreRes = conflictDraftStore.ignoreSide(draft.id, conflict.id, "ours");
+    expect(ignoreRes.success).toBe(true);
+    // Text is 100% unchanged
+    expect(draft.result).toBe(initialText);
+    expect(draft.history.past.length).toBe(1);
+    expect(draft.mergeModel!.regions.find((r) => r.id === conflict.id)!.decision.oursDecision).toBe("ignored");
+
+    // Undo ignore: reverts decision to pending, text still unchanged
+    const undoOk = conflictDraftStore.undo(draft.id);
+    expect(undoOk).toBe(true);
+    expect(draft.result).toBe(initialText);
+    expect(draft.mergeModel!.regions.find((r) => r.id === conflict.id)!.decision.oursDecision).toBe("pending");
+  });
+  it("records accept side even when text is identical to side and restores decisions on undo (C-B)", () => {
+    const snapshot = makeSnapshot({
+      worktree: {
+        kind: "normal",
+        sizeBytes: 100,
+        mtimeSeconds: 1000,
+        textTokens: ["h\n", "ours 1\n", "f\n"],
+      },
+      stages: {
+        base: { stage: 1, oid: "b1", mode: 0o100644, textTokens: ["h\n", "base 1\n", "f\n"] },
+        ours: { stage: 2, oid: "o1", mode: 0o100644, textTokens: ["h\n", "ours 1\n", "f\n"] },
+        theirs: { stage: 3, oid: "t1", mode: 0o100644, textTokens: ["h\n", "theirs 1\n", "f\n"] },
+      },
+    });
+
+    const draft = loadOrThrow(makeScope(), snapshot);
+    const conflict = draft.mergeModel!.regions.find((r) => !r.stable)!;
+    expect(conflict).toBeDefined();
+    expect(conflict.decision.oursDecision).toBe("pending");
+    expect(draft.history.past.length).toBe(0);
+
+    // Accept ours: text is already identical to ours
+    const acceptRes = conflictDraftStore.acceptSide(draft.id, conflict.id, "ours");
+    expect(acceptRes.success).toBe(true);
+    expect(draft.isDirty).toBe(true);
+    expect(draft.history.past.length).toBe(1);
+    expect(draft.mergeModel!.regions.find((r) => r.id === conflict.id)!.decision.oursDecision).toBe("accepted");
+
+    // Undo: decision reverts to pending
+    const undoOk = conflictDraftStore.undo(draft.id);
+    expect(undoOk).toBe(true);
+    expect(draft.mergeModel!.regions.find((r) => r.id === conflict.id)!.decision.oursDecision).toBe("pending");
+
+    // Redo: decision restored to accepted
+    const redoOk = conflictDraftStore.redo(draft.id);
+    expect(redoOk).toBe(true);
+    expect(draft.mergeModel!.regions.find((r) => r.id === conflict.id)!.decision.oursDecision).toBe("accepted");
+  });
+
+  it("blocks conflict actions and whole-file confirm on recovery or applied drafts", () => {
+    const draft = loadOrThrow(makeScope(), makeSnapshot());
+    conflictDraftStore.markAsRecovery(draft.id, "Stale test");
+
+    const acceptRes = conflictDraftStore.acceptSide(draft.id, "conflict-1", "ours");
+    expect(acceptRes.success).toBe(false);
+    expect(acceptRes.error).toContain("cannot be modified in current state");
+
+    const ignoreRes = conflictDraftStore.ignoreSide(draft.id, "conflict-1", "ours");
+    expect(ignoreRes.success).toBe(false);
+
+    const confirmRes = conflictDraftStore.confirmWholeFileAction(draft.id, {
+      action: "accept-all-ours",
+      previewText: "any",
+      targetRevision: 1,
+      affectedRegions: 1,
+      newDecisions: {},
+      draftKey: "different-draft-id",
+    });
+    expect(confirmRes.success).toBe(false);
+  });
+});

@@ -37,6 +37,7 @@ import type {
 import { conflictDraftStore } from "@/lib/conflict-draft-store.js";
 import { matchesOwnerScope } from "@/lib/conflict-draft-key.js";
 import { tokenizeLosslessLines } from "@/lib/conflict-merge-model.js";
+import type { WholeFileActionPreview } from "@/lib/conflict-merge-model.js";
 
 async function fetchConflictInventory(
   scope: DraftOwnerScope,
@@ -771,6 +772,25 @@ export function useConflictResolver(
     },
     discardDraft: (key: string, confirmDirtyLoss?: boolean) =>
       conflictDraftStore.discardDraft(key, confirmDirtyLoss),
+    acceptSide: (key: string, regionId: string, side: "ours" | "theirs") =>
+      conflictDraftStore.acceptSide(key, regionId, side),
+    ignoreSide: (key: string, regionId: string, side: "ours" | "theirs") =>
+      conflictDraftStore.ignoreSide(key, regionId, side),
+    acceptBoth: (
+      key: string,
+      regionId: string,
+      order: "ours-then-theirs" | "theirs-then-ours",
+    ) => conflictDraftStore.acceptBoth(key, regionId, order),
+    markReviewed: (key: string, regionId: string) =>
+      conflictDraftStore.markReviewed(key, regionId),
+    previewAcceptAllOurs: (key: string) =>
+      conflictDraftStore.previewAcceptAllOurs(key),
+    previewAcceptAllTheirs: (key: string) =>
+      conflictDraftStore.previewAcceptAllTheirs(key),
+    previewRebuildClean: (key: string) =>
+      conflictDraftStore.previewRebuildClean(key),
+    confirmWholeFileAction: (key: string, preview: WholeFileActionPreview) =>
+      conflictDraftStore.confirmWholeFileAction(key, preview),
     importRecoveryDraft,
     confirmFreshReview,
     applyDraft,

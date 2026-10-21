@@ -24,6 +24,20 @@ import {
   createInitialDraft,
   startResolveAttempt,
 } from "./conflict-draft-transitions.js";
+import {
+  acceptRegionSide,
+  ignoreRegionSide,
+  acceptRegionBoth,
+  markRegionReviewed,
+  previewAcceptAllOurs,
+  previewAcceptAllTheirs,
+  previewRebuildClean,
+  confirmWholeFileAction,
+  extractModelDecisions,
+  getModelSerializedResult,
+  type WholeFileActionPreview,
+} from "./conflict-merge-model.js";
+import type { JointHistorySnapshot } from "./joint-history-authority.js";
 
 interface ConflictDraftStoreSnapshot {
   drafts: ConflictDraft[];
@@ -374,6 +388,257 @@ class ConflictDraftRegistry {
       (d) => d.isDirty || d.isRecovery || d.isResolving,
     );
   }
+  acceptSide(
+    key: string,
+    regionId: string,
+    side: "ours" | "theirs",
+  ): { success: boolean; error?: string } {
+    const draft = this.drafts.get(key);
+    if (!draft) return { success: false, error: "Draft not found" };
+    if (draft.isRecovery || draft.isResolving || draft.isApplied) {
+      return { success: false, error: "Draft cannot be modified in current state" };
+    }
+    if (!draft.mergeModel) {
+      return { success: false, error: "Draft has no merge model" };
+    }
+    try {
+      const beforeDecisions = extractModelDecisions(draft.mergeModel);
+      const updatedModel = acceptRegionSide(draft.mergeModel, regionId, side);
+      const serialized = getModelSerializedResult(updatedModel);
+      if (draft.result === serialized) {
+        draft.history.past.push({
+          text: draft.result,
+          timestamp: Date.now(),
+          decisions: beforeDecisions,
+          description: `Accept ${side} on ${regionId}`,
+        });
+        if (draft.history.past.length > 100) draft.history.past.shift();
+        draft.history.future = [];
+        draft.canCoalesceHistory = false;
+        draft.isDirty = true;
+        draft.resultRevision++;
+        draft.mergeModel = updatedModel;
+        this.notify();
+        return { success: true };
+      }
+      const res = this.updateResult(key, serialized);
+      if (!res.success) return res;
+      draft.canCoalesceHistory = false;
+      draft.mergeModel = updatedModel;
+      this.notify();
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  ignoreSide(
+    key: string,
+    regionId: string,
+    side: "ours" | "theirs",
+  ): { success: boolean; error?: string } {
+    const draft = this.drafts.get(key);
+    if (!draft) return { success: false, error: "Draft not found" };
+    if (draft.isRecovery || draft.isResolving || draft.isApplied) {
+      return { success: false, error: "Draft cannot be modified in current state" };
+    }
+    if (!draft.mergeModel) {
+      return { success: false, error: "Draft has no merge model" };
+    }
+    try {
+      const beforeDecisions = extractModelDecisions(draft.mergeModel);
+      const updatedModel = ignoreRegionSide(draft.mergeModel, regionId, side);
+      draft.history.past.push({
+        text: draft.result,
+        timestamp: Date.now(),
+        decisions: beforeDecisions,
+        description: `Ignore ${side} on ${regionId}`,
+      });
+      if (draft.history.past.length > 100) draft.history.past.shift();
+      draft.history.future = [];
+      draft.canCoalesceHistory = false;
+      draft.isDirty = true;
+      draft.mergeModel = updatedModel;
+      this.notify();
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  acceptBoth(
+    key: string,
+    regionId: string,
+    order: "ours-then-theirs" | "theirs-then-ours",
+  ): { success: boolean; error?: string } {
+    const draft = this.drafts.get(key);
+    if (!draft) return { success: false, error: "Draft not found" };
+    if (draft.isRecovery || draft.isResolving || draft.isApplied) {
+      return { success: false, error: "Draft cannot be modified in current state" };
+    }
+    if (!draft.mergeModel) {
+      return { success: false, error: "Draft has no merge model" };
+    }
+    try {
+      const beforeDecisions = extractModelDecisions(draft.mergeModel);
+      const updatedModel = acceptRegionBoth(draft.mergeModel, regionId, order);
+      const serialized = getModelSerializedResult(updatedModel);
+      if (draft.result === serialized) {
+        draft.history.past.push({
+          text: draft.result,
+          timestamp: Date.now(),
+          decisions: beforeDecisions,
+          description: `Accept both on ${regionId}`,
+        });
+        if (draft.history.past.length > 100) draft.history.past.shift();
+        draft.history.future = [];
+        draft.canCoalesceHistory = false;
+        draft.isDirty = true;
+        draft.resultRevision++;
+        draft.mergeModel = updatedModel;
+        this.notify();
+        return { success: true };
+      }
+      const res = this.updateResult(key, serialized);
+      if (!res.success) return res;
+      draft.canCoalesceHistory = false;
+      draft.mergeModel = updatedModel;
+      this.notify();
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  markReviewed(
+    key: string,
+    regionId: string,
+  ): { success: boolean; error?: string } {
+    const draft = this.drafts.get(key);
+    if (!draft) return { success: false, error: "Draft not found" };
+    if (draft.isRecovery || draft.isResolving || draft.isApplied) {
+      return { success: false, error: "Draft cannot be modified in current state" };
+    }
+    if (!draft.mergeModel) {
+      return { success: false, error: "Draft has no merge model" };
+    }
+    try {
+      const beforeDecisions = extractModelDecisions(draft.mergeModel);
+      const updatedModel = markRegionReviewed(draft.mergeModel, regionId);
+      draft.history.past.push({
+        text: draft.result,
+        timestamp: Date.now(),
+        decisions: beforeDecisions,
+        description: `Mark reviewed ${regionId}`,
+      });
+      if (draft.history.past.length > 100) draft.history.past.shift();
+      draft.history.future = [];
+      draft.canCoalesceHistory = false;
+      draft.isDirty = true;
+      draft.mergeModel = updatedModel;
+      this.notify();
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  previewAcceptAllOurs(key: string): WholeFileActionPreview | null {
+    const draft = this.drafts.get(key);
+    if (!draft?.mergeModel) return null;
+    const preview = previewAcceptAllOurs(draft.mergeModel);
+    preview.draftKey = key;
+    return preview;
+  }
+
+  previewAcceptAllTheirs(key: string): WholeFileActionPreview | null {
+    const draft = this.drafts.get(key);
+    if (!draft?.mergeModel) return null;
+    const preview = previewAcceptAllTheirs(draft.mergeModel);
+    preview.draftKey = key;
+    return preview;
+  }
+
+  previewRebuildClean(key: string): WholeFileActionPreview | null {
+    const draft = this.drafts.get(key);
+    if (!draft?.mergeModel) return null;
+    const preview = previewRebuildClean(draft.mergeModel);
+    preview.draftKey = key;
+    return preview;
+  }
+
+  confirmWholeFileAction(
+    key: string,
+    preview: WholeFileActionPreview,
+  ): { success: boolean; error?: string } {
+    const draft = this.drafts.get(key);
+    if (!draft) return { success: false, error: "Draft not found" };
+    if (draft.isRecovery || draft.isResolving || draft.isApplied) {
+      return { success: false, error: "Draft cannot be modified in current state" };
+    }
+    if (preview.draftKey && preview.draftKey !== key) {
+      return { success: false, error: "Preview was generated for a different draft" };
+    }
+    if (!draft.mergeModel) {
+      return { success: false, error: "Draft has no merge model" };
+    }
+    try {
+      const beforeDecisions = extractModelDecisions(draft.mergeModel);
+      const updatedModel = confirmWholeFileAction(draft.mergeModel, preview);
+      const serialized = getModelSerializedResult(updatedModel);
+      if (draft.result === serialized) {
+        draft.history.past.push({
+          text: draft.result,
+          timestamp: Date.now(),
+          decisions: beforeDecisions,
+          description: `Confirm ${preview.action}`,
+        });
+        if (draft.history.past.length > 100) draft.history.past.shift();
+        draft.history.future = [];
+        draft.canCoalesceHistory = false;
+        draft.isDirty = true;
+        draft.resultRevision++;
+        draft.mergeModel = updatedModel;
+        this.notify();
+        return { success: true };
+      }
+      const res = this.updateResult(key, serialized);
+      if (!res.success) return res;
+      draft.canCoalesceHistory = false;
+      draft.mergeModel = updatedModel;
+      this.notify();
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  saveJointHistory(key: string, history: JointHistorySnapshot): void {
+    const draft = this.drafts.get(key);
+    if (draft) {
+      draft.jointHistory = history;
+    }
+  }
+
+  getJointHistory(key: string): JointHistorySnapshot | undefined {
+    return this.drafts.get(key)?.jointHistory;
+  }
+
 
   resetForTesting(): void {
     this.drafts.clear();

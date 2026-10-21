@@ -9,7 +9,8 @@
 ## Overview
 
 - Date: 2026-10-19. Priority: P2.
-- Implementation: Pending. Review: Pending. Progress: 0%. Effort: unestimated.
+- Status: DONE (2026-10-21).
+- Implementation: Complete (2026-10-21). Review: Complete (Cycle 3 score: 7.0/10, approved by user; 2026-10-21). Progress: 100%. Effort: unestimated.
 - Owner: frontend model/history owner; workspace draft owner supplies retained lifetime and submitted revision interface.
 - Entry: Phase 01 engine/import/byte/joint-history proofs and Phase 05 owner-bound retained drafts passed under the single coordinated contract. Required web/Linux mechanisms must pass; separately Pending Windows-native client qualification alone is nonblocking.
 - Handoff: deterministic structured regions, conservative result mapping and one reversible text/decision command authority.
@@ -97,12 +98,54 @@ Navigation derives from current unresolved/review state, stable root/file identi
 
 ## Todo list
 
-- [ ] Build immutable token regions and conservative imported-result mapping.
-- [ ] Implement per-side decisions, both orders and explicit readiness semantics.
-- [ ] Add confirmed whole-file/nonconflicting actions and read-only base comparison.
-- [ ] Integrate single native text/metadata history authority.
-- [ ] Invalidate/remap manual edits safely and restore state on undo/redo.
-- [ ] Cover empty output, exact bytes and real Monaco commands on required web/Linux targets; retain dirty history across terminal handoff/refresh.
+- [x] Build immutable token regions and conservative imported-result mapping.
+- [x] Implement per-side decisions, both orders and explicit readiness semantics.
+- [x] Add confirmed whole-file/nonconflicting actions and read-only base comparison.
+- [x] Integrate single native text/metadata history authority.
+- [x] Invalidate/remap manual edits safely and restore state on undo/redo.
+- [x] Cover empty output, exact bytes and real Monaco commands on required web/Linux targets; retain dirty history across terminal handoff/refresh.
+
+### Phase 06 closure and verification results (2026-10-21)
+
+Phase 06 delivered the structured merge model, lossless tokenization, conservative worktree mapping, and unified draft history authority:
+- **Lossless line tokenization (`conflict-tokenization.ts`):** Preserves line endings (LF, CRLF, mixed), trailing newline state (`hasFinalNewline`), and UTF-8 Byte Order Mark (BOM). Tokenizes base, left (ours), and right (theirs) into immutable token arrays with distinct empty-stage vs absent-stage handling.
+- **Deterministic diff3 source regions (`conflict-region-mapper.ts`, `node-diff3`):** Constructs 2-way and 3-way source conflict regions with stable block IDs using approved `node-diff3@3.2.1`. Safely handles absent base (add/add) and empty file combinations with immutable stage line ranges.
+- **Conservative imported-result mapping (`conflict-region-mapper.ts`, `conflict-marker-parser.ts`):** Maps source regions against actual worktree text (marker-free partial work, diff3, zdiff3, or manual edits). Ambiguous and unmapped regions conservatively downgrade to `needs-review` / `unmapped` rather than guessing destructive offsets. Advisory marker warnings guide review without blocking valid empty or resolved text.
+- **Atomic text+metadata decisions (`conflict-merge-actions.ts`, `conflict-merge-model.ts`):** Implements `acceptSide` (ours/theirs), `acceptBoth` with explicit order preservation (ours-then-theirs, theirs-then-ours), `ignoreSide` (metadata-only, preserves current result text), and `markReviewed`. Validates readiness when all regions are resolved and markers are reviewed. Cycle 3 resolved C-A (BOM offset desync across edits/actions) and C-B (identical-text accept pushing history entries for undoability).
+- **Confirmed whole-file actions (`conflict-merge-actions.ts`):** Safe two-step preview and confirmation (`previewWholeFileAction` / `confirmWholeFileAction`) for take-ours, take-theirs, take-base, and rebuild-clean; read-only base comparison.
+- **Unified draft history with decision snapshots (`conflict-draft-store.ts`, `conflict-draft-transitions.ts`, `joint-history-authority.ts`):** Integrates decision snapshots into draft history (`ConflictDraftHistoryEntry` with `decisions`, `isReady`, `unresolvedReasons`, `resultRevision`), ensuring Undo/Redo restores both text and metadata-only decisions (e.g. Ignore, no-text-change Accept). Capped depth at 100 entries. Includes standalone `JointHistoryAuthority` providing Monaco-compatible joint transaction semantics with snapshot capture and restore across remounts.
+- **Monaco Chromium browser qualification (`browser-tests/conflict-monaco-history.browser.tsx`, `browser-tests/conflict-resolver-history.browser.tsx`):** Proves single joint undo/redo authority across native typing and metadata decisions, atomic text and metadata transaction undo/redo with snapshot restoration in real Chromium runner, and `Ctrl+Z`/`Ctrl+Shift+Z` routing through retained draft history.
+
+### Test Execution Summary
+
+1. **UI Unit Tests:** 62 passed across 5 test files (0 failures, 0 errors, 4.32s runner duration):
+   - `src/lib/conflict-draft-capacity.test.ts`: 3 passed (capacity bounds, eviction preserving dirty drafts, dirty draft limit refusal)
+   - `src/lib/conflict-draft-store.test.ts`: 21 passed (key deterministic fencing, snapshot stability, dirty reloads, typing coalescing, discard confirmation, settlement, recovery transitions, scope retirement, cross-endpoint refusal, atomic decision+text restore on undo/redo, metadata-only ignore restore, block conflict actions on recovery/applied drafts, identical-text accept undo/redo)
+   - `src/lib/conflict-merge-model.test.ts`: 31 passed (lossless tokenization, empty file combinations, identical merges, CRLF preservation, scaling performance 1000 lines diff3 <50ms, EOL & BOM detection, 2-way & diff3 mapping, absent base stage, side acceptance, both orders, whole-file preview & confirm, drift rejection, base comparison, navigation, BOM preservation across edits/rebuild/accept)
+   - `src/hooks/use-conflict-resolver.test.tsx`: 3 passed (retains draft on switch, cursor restarts on stale cursor, owner-guarded operation-status read)
+   - `src/lib/joint-history-authority.test.ts`: 4 passed (records atomic action with text and decisions restoring both on undo, clears redo on new edit, bounds undo stack, captures/restores history snapshots across remounts)
+2. **UI Browser Tests (Real Chromium):** 3 passed across 2 files (0 failures, 4.61s runner duration):
+   - `browser-tests/conflict-monaco-history.browser.tsx`: 2 passed (proves single joint undo/redo authority across native typing and metadata decisions; proves atomic text and metadata transaction undo/redo with snapshot restoration)
+   - `browser-tests/conflict-resolver-history.browser.tsx`: 1 passed (routes Ctrl+Z and Ctrl+Shift+Z through retained draft history)
+3. **UI TypeScript Compilation:** Clean exit, 0 errors in 7.92s (`pnpm --filter @dam-hopper/ui build` / `tsc -p tsconfig.json`).
+4. **Server Conflict Regression Tests:** 23 passed across 3 integration suites (`git_conflict_exact_staging`, `git_conflict_operation_metadata`, `git_conflict_discovery_api`), 0 failed in 0.46s.
+5. **Supplementary UI Unit:** `MergeConflictEditor.test.tsx`: 3 passed in 0.36s.
+
+### Disposition of Review Warnings for Downstream Phases
+
+Cycle 3 code review (`plans/reports/code-reviewer-261021-0842-phase-06-merge-model-and-history-cycle3.md`, score 7.0/10) closed criticals C-A (BOM) and C-B (accept history). Downstream integration items are transferred as follows:
+- **Phase 07 floating Monaco surface:**
+  - **W-1 (History authority wiring):** Wire production Monaco editor adapter to `draft.history` decision-aware stack (or unify with `JointHistoryAuthority`), retiring dead parallel methods and duplicate keybindings.
+  - **W-2 (Typing-then-accept coalescing):** Clear `canCoalesceHistory` before calling `updateResult` in store actions to prevent rapid typing from coalescing with subsequent accept actions.
+  - **W-3 (Metadata history metrics):** Route metadata actions through draft capacity calculation and recalculate metrics to account for decision history growth.
+  - **W-4 (Decision-divergence dirty tracking):** Include decision divergence in `isDirty` calculation following redo of no-text-change accept.
+  - **W-5 (Preview binding):** Enforce mandatory `draftKey` binding and unified revision check in `WholeFileActionPreview`.
+  - **W-6 (Authority hardening):** Clean up `JointHistoryAuthority` duplicate keybindings, caller order `recordAtomicAction` discipline, and exception safety on callback pops.
+  - **W-7 (Apply nonconflicting changes):** Implement nonconflicting merge change application in UI surface.
+  - **W-8 (Extended browser qualification):** Qualify Monaco context-menu Undo and IME input on live editor.
+  - **W-9 (BOM boundary responsibility):** Clarify and enforce BOM re-application at Apply/Save boundary.
+- **Phase 08 workspace integration and cutover:**
+  - Complete end-to-end workspace surface integration, legacy endpoint retirement, and fail-closed cutover.
 
 ## Success criteria
 

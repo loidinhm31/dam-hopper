@@ -14,6 +14,12 @@ import type {
   DraftOwnerScope,
   InFlightResolveAttempt,
 } from "./conflict-draft-types.js";
+import {
+  createConflictMergeModel,
+  extractModelDecisions,
+  restoreModelDecisions,
+  applyManualResultTextEdit,
+} from "./conflict-merge-model.js";
 
 export function createInitialDraft(
   key: string,
@@ -30,6 +36,26 @@ export function createInitialDraft(
     past: [],
     future: [],
   });
+  const baseContent = snapshot.stages.base?.textTokens?.join("") ?? "";
+  const basePresent = Boolean(snapshot.stages.base);
+  const oursContent = snapshot.stages.ours?.textTokens?.join("") ?? "";
+  const oursPresent = Boolean(snapshot.stages.ours);
+  const theirsContent = snapshot.stages.theirs?.textTokens?.join("") ?? "";
+  const theirsPresent = Boolean(snapshot.stages.theirs);
+
+  const mergeModel =
+    oursPresent || theirsPresent || basePresent
+      ? createConflictMergeModel({
+          baseContent,
+          basePresent,
+          oursContent,
+          oursPresent,
+          theirsContent,
+          theirsPresent,
+          worktreeContent: initialText,
+        })
+      : undefined;
+
 
   return {
     id: key,
@@ -62,6 +88,7 @@ export function createInitialDraft(
     canCoalesceHistory: false,
     history: { past: [], future: [] },
     metrics,
+    mergeModel,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -116,7 +143,8 @@ export function applyDraftUpdate(
       timestamp,
     };
   } else {
-    draft.history.past.push({ text: draft.result, timestamp });
+    const decisions = draft.mergeModel ? extractModelDecisions(draft.mergeModel) : undefined;
+    draft.history.past.push({ text: draft.result, timestamp, decisions });
   }
   draft.history.future = [];
   draft.canCoalesceHistory = !draft.isApplied;
@@ -131,13 +159,21 @@ export function applyDraftUpdate(
     draft.recoveryText,
   );
   draft.updatedAt = timestamp;
+  if (draft.mergeModel) {
+    draft.mergeModel = applyManualResultTextEdit(draft.mergeModel, newText);
+  }
   return { success: true };
 }
 
 export function applyDraftUndo(draft: ConflictDraft): boolean {
   if (draft.history.past.length === 0) return false;
   const prev = draft.history.past.pop()!;
-  draft.history.future.push({ text: draft.result, timestamp: Date.now() });
+  const currentDecisions = draft.mergeModel ? extractModelDecisions(draft.mergeModel) : undefined;
+  draft.history.future.push({
+    text: draft.result,
+    timestamp: Date.now(),
+    decisions: currentDecisions,
+  });
   draft.result = prev.text;
   draft.resultRevision++;
   draft.isDirty = draft.result !== (draft.appliedResult ?? draft.initialResult);
@@ -150,13 +186,24 @@ export function applyDraftUndo(draft: ConflictDraft): boolean {
     draft.recoveryText,
   );
   draft.updatedAt = Date.now();
+  if (draft.mergeModel) {
+    draft.mergeModel = applyManualResultTextEdit(draft.mergeModel, draft.result);
+    if (prev.decisions) {
+      draft.mergeModel = restoreModelDecisions(draft.mergeModel, prev.decisions);
+    }
+  }
   return true;
 }
 
 export function applyDraftRedo(draft: ConflictDraft): boolean {
   if (draft.history.future.length === 0) return false;
   const next = draft.history.future.pop()!;
-  draft.history.past.push({ text: draft.result, timestamp: Date.now() });
+  const currentDecisions = draft.mergeModel ? extractModelDecisions(draft.mergeModel) : undefined;
+  draft.history.past.push({
+    text: draft.result,
+    timestamp: Date.now(),
+    decisions: currentDecisions,
+  });
   draft.result = next.text;
   draft.resultRevision++;
   draft.isDirty = draft.result !== (draft.appliedResult ?? draft.initialResult);
@@ -169,6 +216,12 @@ export function applyDraftRedo(draft: ConflictDraft): boolean {
     draft.recoveryText,
   );
   draft.updatedAt = Date.now();
+  if (draft.mergeModel) {
+    draft.mergeModel = applyManualResultTextEdit(draft.mergeModel, draft.result);
+    if (next.decisions) {
+      draft.mergeModel = restoreModelDecisions(draft.mergeModel, next.decisions);
+    }
+  }
   return true;
 }
 

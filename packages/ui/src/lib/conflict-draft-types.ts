@@ -6,6 +6,9 @@ import type {
   StageRoleLabels,
   WorktreeDescriptor,
 } from "@/api/client.js";
+import type { ConflictMergeModel } from "./conflict-merge-types.js";
+import type { RegionDecisionState } from "./conflict-merge-types.js";
+import type { JointHistorySnapshot } from "./joint-history-authority.js";
 
 export interface DraftOwnerScope {
   readonly profileId: string;
@@ -42,6 +45,8 @@ export interface DraftMemoryMetrics {
 export interface DraftHistoryEntry {
   readonly text: string;
   readonly timestamp: number;
+  readonly decisions?: Record<string, RegionDecisionState>;
+  readonly description?: string;
 }
 
 export interface InFlightResolveAttempt {
@@ -80,6 +85,8 @@ export interface ConflictDraft {
   };
   canCoalesceHistory: boolean;
   metrics: DraftMemoryMetrics;
+  mergeModel?: ConflictMergeModel;
+  jointHistory?: JointHistorySnapshot;
   readonly createdAt: number;
   updatedAt: number;
 }
