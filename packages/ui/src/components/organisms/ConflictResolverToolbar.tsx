@@ -37,13 +37,18 @@ export function ConflictResolverToolbar({
   const opLabel = opKind && opKind !== "none" ? opKind.toUpperCase() : null;
 
   return (
-    <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/90 px-3">
-      {/* Title & drag handle */}
-      <div
-        className="flex min-w-0 flex-1 cursor-move items-center gap-2 select-none"
-        onMouseDown={onDragStart}
-        title="Drag conflict resolver panel"
-      >
+    <div
+      className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/90 px-3 cursor-move select-none"
+      onMouseDown={(e) => {
+        if ((e.target as HTMLElement).closest("button, select, input, a, [role='button']")) {
+          return;
+        }
+        onDragStart(e);
+      }}
+      title="Drag conflict resolver panel"
+    >
+      {/* Title */}
+      <div className="flex min-w-0 flex-1 items-center gap-2 select-none pointer-events-none">
         <Move className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)]" />
         <GitMerge className="h-4 w-4 shrink-0 text-amber-400" />
         <span className="truncate text-xs font-semibold text-[var(--color-text)]">

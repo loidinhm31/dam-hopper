@@ -378,15 +378,30 @@ export function ConflictResolverPanel({
         </div>
 
         {!layout.isMaximized && (
-          <button
-            type="button"
-            onMouseDown={handleResizeStart}
-            className="absolute bottom-2 right-2 z-20 rounded-sm p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-            title="Resize conflict resolver"
-            aria-label="Resize conflict resolver"
-          >
-            <Grip className="h-4 w-4" />
-          </button>
+          <>
+            {/* Right edge resize zone */}
+            <div
+              onMouseDown={(e) => handleResizeStart(e, "e")}
+              className="absolute top-10 right-0 w-2 h-[calc(100%-48px)] z-20 cursor-ew-resize hover:bg-[var(--color-primary,#3b82f6)]/20 transition-colors"
+              title="Resize width"
+            />
+            {/* Bottom edge resize zone */}
+            <div
+              onMouseDown={(e) => handleResizeStart(e, "s")}
+              className="absolute bottom-0 left-0 h-2 w-[calc(100%-28px)] z-20 cursor-ns-resize hover:bg-[var(--color-primary,#3b82f6)]/20 transition-colors"
+              title="Resize height"
+            />
+            {/* Bottom-right corner resize button and handle */}
+            <button
+              type="button"
+              onMouseDown={(e) => handleResizeStart(e, "se")}
+              className="absolute bottom-1 right-1 z-30 rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] cursor-nwse-resize"
+              title="Resize conflict resolver (drag corner)"
+              aria-label="Resize conflict resolver"
+            >
+              <Grip className="h-4 w-4" />
+            </button>
+          </>
         )}
       </section>
     </div>

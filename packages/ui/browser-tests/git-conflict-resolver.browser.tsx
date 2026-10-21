@@ -302,9 +302,8 @@ describe("Git Conflict Resolver floating Monaco surface in Chromium", () => {
   });
 
   it("activates narrow tabbed mode in narrow viewport and switches tabs", async () => {
-    // Resize container to 500px width
+    await page.viewport(500, 800);
     container.style.width = "500px";
-
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -337,8 +336,8 @@ describe("Git Conflict Resolver floating Monaco surface in Chromium", () => {
     });
 
     expect(theirsTab.getAttribute("aria-selected")).toBe("true");
+    await page.viewport(1280, 800);
   });
-
   it("hides resolver when Escape is pressed while topmost and focused", async () => {
     const onHide = vi.fn();
 

@@ -2,8 +2,15 @@ import type * as monacoNs from "monaco-editor";
 import type { RegionDecisionState } from "@/lib/conflict-merge-types.js";
 
 export interface ConflictMarkerRegion {
+  id?: string;
   startLine: number;
   separatorLine: number;
+  endLine: number;
+}
+
+export interface SourceConflictRange {
+  regionId?: string;
+  startLine: number;
   endLine: number;
 }
 export const CONFLICT_DECORATION_STYLES = `
@@ -14,6 +21,64 @@ export const CONFLICT_DECORATION_STYLES = `
 .mc-conflict-sep        { background: rgba(245, 158, 11, 0.20); }
 .mc-conflict-resolved   { background: rgba(34, 197, 94, 0.08); }
 .mc-conflict-spacer     { background: repeating-linear-gradient(45deg, rgba(255,255,255,0.02), rgba(255,255,255,0.02) 10px, transparent 10px, transparent 20px); }
+.mc-glyph-arrow-theirs {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mc-glyph-arrow-theirs::after {
+  content: "→";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(59, 130, 246, 0.7);
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  transition: all 0.15s ease-in-out;
+}
+.mc-glyph-arrow-theirs:hover::after {
+  background: #2563eb;
+  border-color: #bfdbfe;
+  color: #ffffff;
+  transform: scale(1.18);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+.mc-glyph-arrow-ours {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mc-glyph-arrow-ours::after {
+  content: "←";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: rgba(34, 197, 94, 0.3);
+  border: 1px solid rgba(34, 197, 94, 0.7);
+  color: #86efac;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  transition: all 0.15s ease-in-out;
+}
+.mc-glyph-arrow-ours:hover::after {
+  background: #16a34a;
+  border-color: #bbf7d0;
+  color: #ffffff;
+  transform: scale(1.18);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
 `;
 
 export function injectConflictStylesOnce(): void {
@@ -33,14 +98,7 @@ export function buildResultDecorations(
   const dec: monacoNs.editor.IModelDeltaDecoration[] = [];
 
   for (const r of regions) {
-    const decision = decisions
-      ? Object.values(decisions).find(
-          (d) =>
-            d.oursDecision !== "pending" ||
-            d.theirsDecision !== "pending" ||
-            d.manualReview === "reviewed",
-        )
-      : undefined;
+    const decision = r.id && decisions ? decisions[r.id] : undefined;
 
     // <<<<<< marker line
     dec.push({
@@ -101,7 +159,7 @@ export function buildResultDecorations(
 }
 
 export function buildSourceDecorations(
-  lineRanges: Array<{ startLine: number; endLine: number }>,
+  lineRanges: SourceConflictRange[],
   side: "ours" | "theirs" | "base",
   monaco: typeof monacoNs,
 ): monacoNs.editor.IModelDeltaDecoration[] {
@@ -123,6 +181,25 @@ export function buildSourceDecorations(
           stickiness: 1,
         },
       });
+
+      // One gutter arrow per conflict chunk on its first line
+      if (side === "theirs" || side === "ours") {
+        dec.push({
+          range: new monaco.Range(r.startLine, 1, r.startLine, 1),
+          options: {
+            isWholeLine: false,
+            glyphMarginClassName:
+              side === "theirs" ? "mc-glyph-arrow-theirs" : "mc-glyph-arrow-ours",
+            glyphMarginHoverMessage: {
+              value:
+                side === "theirs"
+                  ? "Accept incoming (theirs) →"
+                  : "← Accept current (ours)",
+            },
+            stickiness: 1,
+          },
+        });
+      }
     }
   }
 

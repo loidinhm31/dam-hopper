@@ -14,6 +14,8 @@ export interface FloatingPanelFrame {
   isMaximized?: boolean;
 }
 
+export type ResizeDirection = "se" | "e" | "s";
+
 interface UseFloatingPanelGeometryOptions<T extends FloatingPanelFrame> {
   initialLayout: T;
   clampLayout: (layout: T, bounds: { width: number; height: number }) => T;
@@ -116,7 +118,10 @@ export function useFloatingPanelGeometry<T extends FloatingPanelFrame>({
     document.addEventListener("mouseup", onMouseUp);
   };
 
-  const handleResizeStart = (event: ReactMouseEvent) => {
+  const handleResizeStart = (
+    event: ReactMouseEvent,
+    direction: ResizeDirection = "se",
+  ) => {
     if (event.button !== 0 || layout.isMaximized) return;
     const current = resolveCurrentFrame();
     if (!current) return;
@@ -125,15 +130,23 @@ export function useFloatingPanelGeometry<T extends FloatingPanelFrame>({
     const { bounds, frame } = current;
     const startX = event.clientX;
     const startY = event.clientY;
-    document.body.style.cursor = "nwse-resize";
+    const cursor =
+      direction === "e"
+        ? "ew-resize"
+        : direction === "s"
+          ? "ns-resize"
+          : "nwse-resize";
+    document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
 
     const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
       updateLayout(
         {
           ...layout,
-          width: frame.width + moveEvent.clientX - startX,
-          height: frame.height + moveEvent.clientY - startY,
+          width: direction === "s" ? frame.width : frame.width + deltaX,
+          height: direction === "e" ? frame.height : frame.height + deltaY,
           top: frame.top,
           left: frame.left,
         },

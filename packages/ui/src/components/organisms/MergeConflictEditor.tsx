@@ -28,6 +28,8 @@ import {
   Redo2,
   Split,
   Layers,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
@@ -250,10 +252,23 @@ export function MergeConflictEditor({
     [resultContent],
   );
   const conflictRegions = parsedMarkers;
-
   const conflictMergeRegions = useMemo(() => {
     return activeDraft?.mergeModel?.regions.filter((r) => !r.stable) ?? [];
   }, [activeDraft?.mergeModel]);
+
+  const conflictRegionsWithId = useMemo(() => {
+    return parsedMarkers.map((m, i) => ({
+      ...m,
+      id: conflictMergeRegions[i]?.id ?? `conflict-${i + 1}`,
+    }));
+  }, [parsedMarkers, conflictMergeRegions]);
+
+  const activeDraftRef = useRef(activeDraft);
+  activeDraftRef.current = activeDraft;
+  const conflictMergeRegionsRef = useRef(conflictMergeRegions);
+  conflictMergeRegionsRef.current = conflictMergeRegions;
+  const theirsMouseDownDisposableRef = useRef<monacoNs.IDisposable | null>(null);
+  const oursMouseDownDisposableRef = useRef<monacoNs.IDisposable | null>(null);
 
   const navRegions = useMemo(() => {
     if (conflictMergeRegions.length > 0) {
@@ -395,7 +410,7 @@ export function MergeConflictEditor({
         ? extractModelDecisions(activeDraft.mergeModel)
         : undefined;
       const decs = buildResultDecorations(
-        conflictRegions,
+        conflictRegionsWithId,
         decisions,
         monaco,
       );
@@ -409,7 +424,11 @@ export function MergeConflictEditor({
 
     if (theirsEditorRef.current) {
       if (conflictMergeRegions.length > 0) {
-        const theirsRanges = conflictMergeRegions.map((r) => r.theirsRange);
+        const theirsRanges = conflictMergeRegions.map((r) => ({
+          regionId: r.id,
+          startLine: r.theirsRange.startLine,
+          endLine: r.theirsRange.endLine,
+        }));
         const decs = buildSourceDecorations(theirsRanges, "theirs", monaco);
         if (theirsDecorationsCollection.current) {
           theirsDecorationsCollection.current.set(decs);
@@ -424,7 +443,11 @@ export function MergeConflictEditor({
 
     if (oursEditorRef.current) {
       if (conflictMergeRegions.length > 0) {
-        const oursRanges = conflictMergeRegions.map((r) => r.oursRange);
+        const oursRanges = conflictMergeRegions.map((r) => ({
+          regionId: r.id,
+          startLine: r.oursRange.startLine,
+          endLine: r.oursRange.endLine,
+        }));
         const decs = buildSourceDecorations(oursRanges, "ours", monaco);
         if (oursDecorationsCollection.current) {
           oursDecorationsCollection.current.set(decs);
@@ -436,7 +459,7 @@ export function MergeConflictEditor({
         oursDecorationsCollection.current.clear();
       }
     }
-  }, [activeDraft?.mergeModel, conflictMergeRegions, conflictRegions]);
+  }, [activeDraft?.mergeModel, conflictMergeRegions, conflictRegionsWithId]);
   const handleTheirsMount: OnMount = useCallback(
     (editor, monaco) => {
       theirsEditorRef.current = editor;
@@ -448,9 +471,40 @@ export function MergeConflictEditor({
       if (!monacoRef.current) monacoRef.current = monaco;
       editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "theirs"));
       attachResizeObserver(editor);
+
+      theirsMouseDownDisposableRef.current?.dispose();
+      theirsMouseDownDisposableRef.current = editor.onMouseDown((e) => {
+        if (
+          isAndroidChromeNativeInputSuppressed ||
+          !targetAvailable ||
+          !activeDraftRef.current ||
+          activeDraftRef.current.isRecovery
+        ) {
+          return;
+        }
+        if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+          const line = e.target.position?.lineNumber;
+          if (line) {
+            const region = conflictMergeRegionsRef.current.find(
+              (r) => r.theirsRange.startLine <= line && line <= r.theirsRange.endLine,
+            );
+            if (region) {
+              applyAcceptRef.current(region.id, "theirs");
+            }
+          }
+        }
+      });
+
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () =>
+        handlePrevConflictRef.current(),
+      );
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () =>
+        handleNextConflictRef.current(),
+      );
+
       applyDecorations();
     },
-    [applyDecorations, syncScroll],
+    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
   );
 
   const handleResultMount: OnMount = useCallback(
@@ -482,6 +536,13 @@ export function MergeConflictEditor({
       );
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, () =>
         restoreDraftHistory(resolver.redoDraft),
+      );
+
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () =>
+        handlePrevConflictRef.current(),
+      );
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () =>
+        handleNextConflictRef.current(),
       );
 
       editor.onDidChangeModelContent(() => {
@@ -574,9 +635,40 @@ export function MergeConflictEditor({
       if (!monacoRef.current) monacoRef.current = monaco;
       editor.onDidScrollChange((e) => syncScroll(e.scrollTop, "ours"));
       attachResizeObserver(editor);
+
+      oursMouseDownDisposableRef.current?.dispose();
+      oursMouseDownDisposableRef.current = editor.onMouseDown((e) => {
+        if (
+          isAndroidChromeNativeInputSuppressed ||
+          !targetAvailable ||
+          !activeDraftRef.current ||
+          activeDraftRef.current.isRecovery
+        ) {
+          return;
+        }
+        if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+          const line = e.target.position?.lineNumber;
+          if (line) {
+            const region = conflictMergeRegionsRef.current.find(
+              (r) => r.oursRange.startLine <= line && line <= r.oursRange.endLine,
+            );
+            if (region) {
+              applyAcceptRef.current(region.id, "ours");
+            }
+          }
+        }
+      });
+
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () =>
+        handlePrevConflictRef.current(),
+      );
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () =>
+        handleNextConflictRef.current(),
+      );
+
       applyDecorations();
     },
-    [applyDecorations, syncScroll],
+    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
   );
 
   const handleBaseMount: OnMount = useCallback(
@@ -619,8 +711,38 @@ export function MergeConflictEditor({
       }
       pendingRevealLineRef.current = null;
     }
+    if (theirsEditorRef.current && conflictMergeRegions[index]) {
+      const line = conflictMergeRegions[index].theirsRange.startLine;
+      theirsEditorRef.current.revealLineInCenter(line);
+      theirsEditorRef.current.setPosition({ lineNumber: line, column: 1 });
+    }
+    if (oursEditorRef.current && conflictMergeRegions[index]) {
+      const line = conflictMergeRegions[index].oursRange.startLine;
+      oursEditorRef.current.revealLineInCenter(line);
+      oursEditorRef.current.setPosition({ lineNumber: line, column: 1 });
+    }
   }
 
+  const handlePrevConflict = useCallback(() => {
+    if (navRegions.length === 0) return;
+    const nextIdx =
+      (selectedConflict - 1 + navRegions.length) % navRegions.length;
+    navigateToConflict(nextIdx);
+  }, [navRegions.length, selectedConflict]);
+
+  const handleNextConflict = useCallback(() => {
+    if (navRegions.length === 0) return;
+    const nextIdx = (selectedConflict + 1) % navRegions.length;
+    navigateToConflict(nextIdx);
+  }, [navRegions.length, selectedConflict]);
+
+  const handlePrevConflictRef = useRef(handlePrevConflict);
+  handlePrevConflictRef.current = handlePrevConflict;
+  const handleNextConflictRef = useRef(handleNextConflict);
+  handleNextConflictRef.current = handleNextConflict;
+
+  const applyAcceptRef = useRef(applyAccept);
+  applyAcceptRef.current = applyAccept;
   // Model-bound Accept actions
   // Model-bound Accept actions keyed by exact regionId
   function applyAccept(regionId: string, side: "ours" | "theirs") {
@@ -1014,6 +1136,7 @@ export function MergeConflictEditor({
     fontSize: 12,
     fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",
     minimap: { enabled: false },
+    glyphMargin: true,
     scrollBeyondLastLine: false,
     automaticLayout: true,
     lineNumbers: "on",
@@ -1048,6 +1171,34 @@ export function MergeConflictEditor({
                 ? "resolved"
                 : ""}
           </span>
+
+          {navRegions.length > 0 && (
+            <div className="flex items-center gap-1 shrink-0 ml-2 border-l border-[var(--color-border)] pl-2">
+              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                {selectedConflict + 1}/{navRegions.length}
+              </span>
+              <button
+                type="button"
+                onClick={handlePrevConflict}
+                disabled={navRegions.length <= 1}
+                className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Previous conflict (Alt+Up)"
+                aria-label="Previous conflict"
+              >
+                <ChevronUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={handleNextConflict}
+                disabled={navRegions.length <= 1}
+                className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Next conflict (Alt+Down)"
+                aria-label="Next conflict"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Bulk actions */}
