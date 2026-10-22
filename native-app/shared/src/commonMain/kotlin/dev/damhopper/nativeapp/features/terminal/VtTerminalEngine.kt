@@ -14,9 +14,9 @@ class VtTerminalEngine(
     initialCols: Int = 80,
     initialRows: Int = 24,
 ) {
-    var cols: Int = initialCols
+    var cols: Int = initialCols.coerceAtLeast(1)
         private set
-    var rows: Int = initialRows
+    var rows: Int = initialRows.coerceAtLeast(1)
         private set
 
     val mainGrid = VtTerminalGrid(cols, rows, hasScrollback = true)
@@ -107,11 +107,13 @@ class VtTerminalEngine(
     }
 
     fun resize(newCols: Int, newRows: Int) {
-        if (newCols == cols && newRows == rows) return
-        cols = newCols
-        rows = newRows
-        mainGrid.resize(newCols, newRows)
-        altGrid.resize(newCols, newRows)
+        val width = newCols.coerceAtLeast(1)
+        val height = newRows.coerceAtLeast(1)
+        if (width == cols && height == rows) return
+        cols = width
+        rows = height
+        mainGrid.resize(width, height)
+        altGrid.resize(width, height)
     }
 
     /**
@@ -273,7 +275,7 @@ class VtTerminalEngine(
     private fun handleCsiCommand(cmd: Char, params: String, isLiveStream: Boolean) {
         val isPrivate = params.startsWith("?")
         val cleanParams = if (isPrivate) params.removePrefix("?") else params
-        val args = if (cleanParams.isBlank()) emptyList() else cleanParams.split(";").mapNotNull { it.toIntOrNull() }
+        val args = if (cleanParams.isBlank()) emptyList() else cleanParams.split(";").map { it.toIntOrNull() ?: 0 }
 
         when (cmd) {
             'm' -> handleSgr(args)
@@ -345,6 +347,7 @@ class VtTerminalEngine(
                 val count = args.getOrNull(0) ?: 1
                 activeGrid.deleteLines(count)
             }
+            'P' -> activeGrid.deleteCharacters((args.getOrNull(0) ?: 1).coerceAtLeast(1))
             'S' -> {
                 // Scroll Up
                 val count = args.getOrNull(0) ?: 1
@@ -369,11 +372,16 @@ class VtTerminalEngine(
                     for (arg in args) {
                         when (arg) {
                             1 -> isAppCursorKeys = true
+                            7 -> {
+                                mainGrid.isAutoWrap = true
+                                altGrid.isAutoWrap = true
+                            }
                             25 -> isCursorVisible = true
                             47, 1049 -> {
                                 if (!isAltScreen) {
                                     isAltScreen = true
                                     altGrid.clearAll()
+                                    altGrid.isAutoWrap = mainGrid.isAutoWrap
                                 }
                             }
                             2004 -> isBracketedPaste = true
@@ -387,6 +395,10 @@ class VtTerminalEngine(
                     for (arg in args) {
                         when (arg) {
                             1 -> isAppCursorKeys = false
+                            7 -> {
+                                mainGrid.isAutoWrap = false
+                                altGrid.isAutoWrap = false
+                            }
                             25 -> isCursorVisible = false
                             47, 1049 -> {
                                 if (isAltScreen) {

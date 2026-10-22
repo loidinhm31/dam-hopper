@@ -179,7 +179,8 @@ class VtTerminalEngineTest {
         val rendered = engine.renderAllLines()
         assertTrue(rendered.isNotEmpty())
         val firstLine = rendered[0]
-        assertEquals("Colored", firstLine.text)
+        // The cursor's blank cell has the same footprint even when its glyph is hidden.
+        assertEquals("Colored ", firstLine.text)
         assertTrue(firstLine.spanStyles.isNotEmpty())
         assertEquals(VtTerminalEngine.COLOR_RED, firstLine.spanStyles[0].item.color)
         assertEquals(Color(0xFF14532D), firstLine.spanStyles[0].item.background)
@@ -194,5 +195,86 @@ class VtTerminalEngineTest {
         // Only 1 line should be rendered because trailing empty lines are trimmed
         assertEquals(1, renderedWithCursor.size)
         assertEquals("sh-5.2$ █", renderedWithCursor[0].text)
+    }
+
+    @Test
+    fun autoWrapDisableOverwritesRightEdgeAndResetRestoresBothBuffers() {
+        val engine = VtTerminalEngine(4, 3)
+        engine.feedBytes("\u001B[?7".encodeToByteArray(), true)
+        engine.feedBytes("lABCDE".encodeToByteArray(), true)
+        assertEquals("ABCE", engine.activeGrid.getRowText(0))
+        assertEquals(0, engine.activeGrid.cursorRow)
+        assertEquals(3, engine.activeGrid.cursorCol)
+        assertEquals(1, engine.renderAllLines().size)
+        engine.feedBytes("\u001B[?7hFG".encodeToByteArray(), true)
+        assertEquals("ABCF", engine.activeGrid.getRowText(0))
+        assertEquals("G", engine.activeGrid.getRowText(1))
+        engine.feedBytes("\u001B[?7l\u001BcABCDE".encodeToByteArray(), true)
+        assertTrue(engine.mainGrid.isAutoWrap)
+        assertTrue(engine.altGrid.isAutoWrap)
+        assertEquals("ABCD", engine.activeGrid.getRowText(0))
+        assertEquals("E", engine.activeGrid.getRowText(1))
+    }
+
+    @Test
+    fun deleteCharactersDefaultsZeroLargeCountsAndSplitSequences() {
+        for ((parameter, expected) in listOf("" to "ACDE", "0" to "ACDE", "2" to "ADE", "999" to "A")) {
+            val engine = VtTerminalEngine(8, 3)
+            engine.feedBytes("ABCDE\u001B[1;2H\u001B[".encodeToByteArray(), true)
+            engine.feedBytes("${parameter}P".encodeToByteArray(), true)
+            assertEquals(expected, engine.activeGrid.getRowText(0), "CSI ${parameter}P")
+            assertEquals(0, engine.activeGrid.cursorRow)
+            assertEquals(1, engine.activeGrid.cursorCol)
+            engine.feedBytes("Z".encodeToByteArray(), true)
+            assertEquals(expected.replaceRange(1, minOf(2, expected.length), "Z"), engine.activeGrid.getRowText(0))
+        }
+    }
+
+    @Test
+    fun deleteCharactersMovesStylesAndBlanksRightMargin() {
+        val engine = VtTerminalEngine(5, 2)
+        engine.feedBytes("A\u001B[31mB\u001B[32mCD\u001B[0mE\u001B[1;2H\u001B[P".encodeToByteArray(), true)
+        val line = engine.renderAllLines()[0]
+        assertEquals("ACDE", line.text)
+        assertEquals(VtTerminalEngine.COLOR_GREEN, line.spanStyles.first { it.start == 1 }.item.color)
+        assertEquals(VT_DEFAULT_FOREGROUND, line.spanStyles.first { it.start == 3 }.item.color)
+        assertEquals(1, engine.activeGrid.cursorCol)
+        engine.feedBytes("\u001B[1;5HZ".encodeToByteArray(), true)
+        assertEquals("ACDEZ", engine.activeGrid.getRowText(0))
+    }
+
+    @Test
+    fun wideDeletionAndOverwriteNeverLeaveHalfPairsOrGhostGlyphs() {
+        for (column in listOf(2, 3)) {
+            val engine = VtTerminalEngine(8, 2)
+            engine.feedBytes("A中BC\u001B[1;${column}H\u001B[P".encodeToByteArray(), true)
+            assertEquals("A BC", engine.activeGrid.getRowText(0))
+            engine.resize(4, 2)
+            engine.resize(8, 2)
+            assertEquals("A BC", engine.activeGrid.getRowText(0))
+        }
+        val engine = VtTerminalEngine(8, 2)
+        engine.feedBytes("A中B\u001B[1;1H\u001B[P".encodeToByteArray(), true)
+        assertEquals("中B", engine.activeGrid.getRowText(0))
+        engine.feedBytes("\u001B[1;2HX".encodeToByteArray(), true)
+        assertEquals(" XB", engine.activeGrid.getRowText(0))
+        engine.resize(4, 2)
+        engine.resize(8, 2)
+        assertEquals(" XB", engine.activeGrid.getRowText(0))
+    }
+
+    @Test
+    fun wideGlyphWrapsBeforeRightMarginAndAutowrapOffDoesNotMakeHalfPair() {
+        val engine = VtTerminalEngine(4, 2)
+        engine.feedBytes("ABC中".encodeToByteArray(), true)
+        assertEquals("ABC", engine.activeGrid.getRowText(0))
+        assertEquals("中", engine.activeGrid.getRowText(1))
+        engine.resize(8, 2)
+        assertEquals("ABC中", engine.activeGrid.getRowText(0))
+        engine.reset()
+        engine.resize(4, 2)
+        engine.feedBytes("\u001B[?7lABC中".encodeToByteArray(), true)
+        assertEquals("ABC", engine.activeGrid.getRowText(0))
+        assertEquals(0, engine.activeGrid.cursorRow)
     }
 }

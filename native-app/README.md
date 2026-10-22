@@ -1,9 +1,10 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** The active Android entry flow is implemented as Profile Login → Project List → Project Terminal. Unit-level flow coverage is in place; live-server and physical-device qualification remain separate open gates. Broader workbench panel components remain in the source tree but are not mounted by the current root flow.
+**Status:** The active Android entry flow is implemented as Profile Login → Project List → Project Terminal. Terminal ANR remediation uses atomic display snapshots. The remediation handoff reports 111/111 JVM terminal tests passed, `:androidApp:assembleDebug` succeeded, and a 50,000-line live-stream run on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. Separate live-server and broader physical-device, visual, and IME qualification remain open. Broader workbench panels remain in source but are not mounted by the current root flow.
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
+**Terminal ANR remediation plan:** [Atomic display snapshot plan](../plans/261023-0232-android-terminal-anr-remediation/plan.md)
 
 ---
 
@@ -226,7 +227,7 @@ Phase 04 implements multi-server profile management, protocol version 2 authenti
 
 ### Terminal Sessions, Stream Replay & Agent Status Architecture (Phase 07)
 
-Phase 07 implements host-contract foundations for remote PTY lifecycle management, byte-for-byte stream replay, input isolation, and server-authoritative agent status observation (live emulator canvas integration, physical ConnectBot `libvterm.so` JNI binding, and live server-backed streaming remain open qualification gates):
+Phase 07 implements host-contract foundations for remote PTY lifecycle management, byte-for-byte stream replay, input isolation, and server-authoritative agent status observation. The remediation handoff reports a 50,000-line live-stream ANR stress run with zero ANRs and zero dropped frames on `Medium_Phone_API_36`; full live-server qualification, broader physical-device rendering, IME behavior, and native-library qualification remain open.
 
 1. **Traditional PTY Session Lifecycle (`TerminalRepository` & `TerminalSessionController`):**
    - Implements full CRUD operations for remote PTY sessions over REST (`/api/terminal/sessions`), supporting list, create, detailed metrics, rename, kill, remove, restart, and buffer fetching.
@@ -248,6 +249,19 @@ Phase 07 implements host-contract foundations for remote PTY lifecycle managemen
    - Gated execution: keystrokes and text commits are rejected when `isPanelActive == false` or `isReplayCompleted == false`.
    - Modifiers (Ctrl, Alt, Shift) unlatch on `ACTION_UP` events. Supplementary Unicode characters (> 0xFFFF) are handled via surrogate pairs.
    - Clipboard text is wrapped in standard bracketed paste escape sequences (`\u001b[200~` and `\u001b[201~`) before dispatch.
+
+
+#### Completed terminal rendering, replay, and ANR remediation (2026-10-23)
+
+- **Atomic Compose snapshot:** `TerminalDisplaySnapshot` contains the coherent rendered rows, lines, stable row IDs, cursor state, content revision, and surface generation. `VtTerminalSurface` publishes it through Compose state using `referentialEqualityPolicy()`, avoiding per-row `SnapshotStateList` mutation and its `orderedEquals` cost. Snapshot-reference comparison is O(1); building rendered rows and downstream Compose invalidation/rendering remain separate costs.
+- **Revision fencing and cursor updates:** Each `RenderedRow` keeps unpadded `baseText` for identity-based revision checks. Cursor-only presentation changes preserve the content revision and row IDs. Cursor blinking updates the snapshot without acquiring `bufferLock`.
+- **Rendering and row identity:** `VtTerminalRow` caches base styled rows; unchanged rows are reused by reference. `lineIds: List<Long>` stays aligned with `lines` and supplies stable Compose `LazyColumn` keys.
+- **Resize and VT behavior:** Main-buffer width reflow and height changes preserve displaced text above and below the viewport within the 2,000-line retention budget, with cursor anchoring, wide-cell repair, and hard-break preservation. Erase and RIS reset remain authoritative; the alternate buffer stays isolated without scrollback. DECAWM (`CSI ?7h/l`) supports right-edge overwrite when disabled; DCH (`CSI P`) deletes characters, moves styles, blanks the row tail, and repairs wide-cell pairs.
+- **Attach and replay:** `beginAttach(): ULong` synchronously closes the replay gate and captures the accepted byte offset before asynchronous transport work. UTF-8 byte end-offset reconciliation discards stale/duplicate deltas, slices partial overlaps, and requests reattach on gaps. Reset snapshots remain authoritative; queued live chunks drain in historical mode while input and protocol replies remain fenced through completion. `failAttach(): Unit` fences transport failure without dropping queued live chunks. The active REST buffer-prefill bypass is removed.
+- **Viewport and geometry:** User drag pauses follow; returning to bottom reenables it. Reading position stays anchored by stable `lineId` and pixel offset, clamping to the earliest surviving row after eviction. Grid geometry uses measured monospace metrics from the displayed 12sp text / 16sp line-height style; `softWrap = false` keeps one visual row per terminal row.
+- **Reported validation (remediation handoff):** 111/111 JVM terminal tests passed; `:androidApp:assembleDebug` succeeded; a 50,000-line live-stream test on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. These reported results were not independently rerun for this documentation update. Broader live-server, physical-device, visual, and IME qualification remains open.
+
+See the [terminal lifetime and remediation architecture](../docs/architecture/android-native-client.md#terminal-lifetime).
 
 ### Ports, Tunnels, Idle Consent & Host Controls Architecture (Phase 16)
 
@@ -338,7 +352,7 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 04:** Profiles authentication, MFA, and credential vault *(Implemented and verified; 57/57 static assertions, 53 shared JVM unit tests; live daemon and device qualification open)*
 - **Phase 05:** Native terminal, editor, and crypto proof gates *(Contract and host prototype validated; candidate pins recorded; device qualification open)*
 - **Phase 06:** TERMINAL Traditional shell, projects, and configuration *(Implemented and verified; 64/64 static assertions, 25 unit tests; device qualification open)*
-- **Phase 07:** Terminal sessions, replay, input, and agent status *(Host contracts implemented and verified; 45/45 static assertions; recorded QA report notes 155 unit tests passing; live emulator canvas integration, physical terminal rendering, IME behavior, and server-backed replay remain open qualification gates deferred to Phase 18)*
+- **Phase 07:** Terminal sessions, replay, input, and agent status *(Host contracts implemented and verified; 45/45 static assertions; recorded QA report notes 155 unit tests passing; remediation handoff reports a 50,000-line live-stream ANR stress run with zero ANRs and zero dropped frames on `Medium_Phone_API_36`; broader physical-device rendering, IME behavior, and server-backed replay remain open qualification gates deferred to Phase 18)*
 - **Phase 08:** Filesystem watchers, search, and replace *(Implementation baseline recorded; 57/57 static assertions; qualification open)*
 - **Phase 09:** Native editor, language services, and safe saves *(Implementation baseline recorded; 70/70 static assertions; candidate adapter and open limitations recorded)*
 - **Phase 10:** Native diff, merge, and blame *(Implementation baseline recorded; 77/77 static assertions; qualification open)*

@@ -1,7 +1,8 @@
 # Android Native Client Architecture
 
-**Status (2026-10-18):** The active root host implements the Profile Login → Project List → Project Terminal flow. Unit-level flow tests exist; live-server and physical-device qualification remain open. The retained multi-panel workbench shell is not mounted by the current root. GATE-C physical-device/visual qualification and the TypeScript language-engine decision remain open.
+**Status (2026-10-23):** The active root implements Profile Login → Project List → Project Terminal. The terminal ANR hot path is remediated through atomic `TerminalDisplaySnapshot` publication; the remediation handoff reports 111/111 JVM terminal tests passed, `:androidApp:assembleDebug` succeeded, and a 50,000-line live-stream run on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. Separate live-server and broader physical-device, visual, and IME qualification remain open. The retained workbench shell is not mounted. GATE-C physical-device/visual qualification and the TypeScript language-engine decision remain open.
 **Plan:** [Android native-app](../../plans/261015-1647-android-native-app/plan.md).
+**Terminal ANR remediation:** [Atomic display snapshot plan](../../plans/261023-0232-android-terminal-anr-remediation/plan.md).
 **Baseline:** `d897a91f76a07ec819a50ffc2756cb69327b2fe3`; existing server/web/Tauri behavior unchanged.
 
 ## Product boundary
@@ -99,10 +100,24 @@ Avoid one Gradle module per screen. Organize shared code by feature and separate
 
 - Server owns processes; an Android screen owns visibility, not PTY lifetime.
 - Session controller outlives tab/navigation recomposition. Explicit detach/dispose releases local resources; killing/removing a remote session requires distinct user intent.
-- Replay uses UTF-8 byte offsets, reset/truncation metadata and incarnation; gate live output/input until baseline replay is applied.
+- Replay uses UTF-8 byte end offsets, reset/truncation metadata and incarnation; queue incoming live output during replay, and keep input/protocol replies fenced until the authoritative baseline and queued-live drain complete.
 - Preserve terminal grid/emulator state across ordinary UI reattachment; bound retained buffers and pending output. A retained raw tail is not a full emulator framebuffer.
 - Android background suspension/process death can break transport. Foreground reconciliation must not spawn duplicate PTYs or replay keystrokes. No guaranteed always-on background socket or WorkManager keepalive.
 - Android-native terminal candidate is selected only after IME, Unicode, resize, TUI, replay, lifecycle and 16 KiB JNI acceptance. Upstream screenshots or published AARs are not qualification.
+
+### Completed terminal ANR, rendering, resize, and replay remediation (2026-10-23)
+
+The remediation retains the Kotlin VT engine and existing remote PTY protocol; it does not claim full xterm compatibility.
+
+- **ANR root cause and atomic publication:** Element-by-element `SnapshotStateList` updates caused expensive persistent-vector structural comparisons (`AbstractList.orderedEquals`) on the UI path during high-throughput output. `VtTerminalSurface` now publishes one immutable `TerminalDisplaySnapshot` through Compose state with `referentialEqualityPolicy()`, replacing per-row state-list mutations. Snapshot-reference comparison is O(1); building the snapshot still processes the rendered rows, and downstream Compose invalidation/rendering costs are separate.
+- **Revision fencing and cursor presentation:** `RenderedRow.baseText` retains unpadded row text for identity-based content revision checks. Cursor-only presentation changes do not advance the revision or change row IDs. Cursor blinking updates the snapshot without acquiring `bufferLock`.
+- **Rendering and row identity:** Unchanged rows reuse their `AnnotatedString` objects by reference. `lineIds: List<Long>` aligns one-for-one with `lines` and supplies stable Compose `LazyColumn` keys as rows move through scrollback.
+- **Resize and VT commands:** Main-buffer width reflow and height changes preserve displaced text above and below the viewport within a shared 2,000-line retention budget, mapping cursor positions and preserving hard breaks. Wide-cell pairs are repaired. Erase and RIS reset remain authoritative; the alternate buffer is isolated without scrollback. DECAWM (`CSI ?7h/l`) supports right-edge overwrite while wrap is disabled. DCH (`CSI P`) shifts character cells and styles, blanks the trailing cells, and repairs wide-cell boundaries.
+- **Attachment and replay:** `beginAttach(): ULong` synchronously closes the replay gate and returns the accepted byte end offset before asynchronous transport work. UTF-8 end-offset reconciliation discards stale/duplicate deltas, slices partial overlaps to unseen bytes, and requests reattach on gaps. Reset snapshots remain authoritative, including lower offsets. Queued live chunks drain as historical output while input and protocol replies stay fenced until the drain completes. `failAttach(): Unit` fences transport failure without dropping queued live chunks. The active REST buffer-prefill bypass has been removed.
+- **Viewport and geometry:** User drag pauses follow; returning to bottom reenables it. Reading position is anchored by stable `lineId` plus pixel offset; eviction clamps to the earliest surviving row. Grid geometry is measured from the displayed 12sp monospace style and 16sp line height. `softWrap = false` with one line per text item keeps one visual row per terminal row.
+
+**Reported validation (remediation handoff):** 111/111 JVM terminal tests passed; `:androidApp:assembleDebug` succeeded; a 50,000-line live-stream test on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. These reported results were not independently rerun for this documentation update. Separate live-server, physical-device, visual, and IME qualification remains open.
+
 
 ### Phase 05 Terminal Surface Implementation & Candidate Pin
 - **Implementation:** `AndroidTerminalSurface.kt` and `TerminalSessionController` in `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/`.

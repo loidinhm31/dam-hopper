@@ -1,8 +1,8 @@
 package dev.damhopper.nativeapp.features.terminal
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.AnnotatedString
 
@@ -12,13 +12,16 @@ import androidx.compose.ui.text.AnnotatedString
  * Implements [NativeTerminalSurface], providing a 2D VT100 character matrix,
  * dual buffers (main/alternate), ANSI cursor motion, line/screen erasing,
  * and live-fenced protocol responses (CPR/DA).
+ *
+ * State is published atomically as an immutable [TerminalDisplaySnapshot] to eliminate
+ * element-by-element persistent vector comparisons and UI thread freezes.
  */
 class VtTerminalSurface(
     initialCols: Int = 80,
     initialRows: Int = 24,
 ) : NativeTerminalSurface {
 
-    private var _dimensions = TerminalDimensions(initialCols, initialRows)
+    private var _dimensions = TerminalDimensions(initialCols.coerceAtLeast(1), initialRows.coerceAtLeast(1))
     override val dimensions: TerminalDimensions get() = _dimensions
 
     private var _isAttached: Boolean = true
@@ -29,19 +32,24 @@ class VtTerminalSurface(
 
     val engine = VtTerminalEngine(initialCols, initialRows)
 
-    val lines = mutableStateListOf<AnnotatedString>()
-    var updateRevision by mutableStateOf(0L)
+    var displaySnapshot by mutableStateOf(TerminalDisplaySnapshot(), referentialEqualityPolicy())
         private set
+
+    val lines: List<AnnotatedString> get() = displaySnapshot.lines
+    val lineIds: List<Long> get() = displaySnapshot.lineIds
+    val updateRevision: Long get() = displaySnapshot.revision
 
     var isCursorBlinkingOn: Boolean = true
         private set
 
+    var surfaceGeneration: Long = 0L
+        private set
+
     fun updateCursorBlink(visible: Boolean) {
-        if (_isDisposed) return
+        if (_isDisposed || isCursorBlinkingOn == visible) return
         isCursorBlinkingOn = visible
-        synchronized(bufferLock) {
-            syncLinesFromEngine()
-        }
+        // Lock-free presentation update on UI thread without taking bufferLock
+        displaySnapshot = displaySnapshot.withCursorBlink(visible)
     }
 
     /**
@@ -52,7 +60,7 @@ class VtTerminalSurface(
 
     private var onInputListener: ((ByteArray) -> Unit)? = null
     private var onResizeListener: ((Int, Int) -> Unit)? = null
-    private val bufferLock = Any()
+    val bufferLock = Any()
 
     init {
         engine.onProtocolReply = { reply ->
@@ -73,6 +81,7 @@ class VtTerminalSurface(
         if (_isDisposed) return
         synchronized(bufferLock) {
             if (reset) {
+                surfaceGeneration++
                 engine.reset()
             }
             engine.feedBytes(data, isLiveStream = isLiveStream)
@@ -81,29 +90,68 @@ class VtTerminalSurface(
     }
 
     fun clearDisplayBuffer() {
+        if (_isDisposed) return
         synchronized(bufferLock) {
+            surfaceGeneration++
             engine.reset()
-            lines.clear()
-            updateRevision++
+            syncLinesFromEngine(geometryChanged = true)
         }
     }
 
-    private fun syncLinesFromEngine() {
-        val rendered = engine.renderAllLines(cursorVisible = isCursorBlinkingOn)
-        lines.clear()
-        lines.addAll(rendered)
-        updateRevision++
+    internal fun syncLinesFromEngine(geometryChanged: Boolean = false) {
+        if (_isDisposed) return
+        val grid = engine.activeGrid
+        val includeHistory = !engine.isAltScreen
+        val count = grid.renderedRowCount(includeHistory, trimTrailingEmptyRows = includeHistory)
+        val oldSnapshot = displaySnapshot
+        var contentChanged = geometryChanged || count != oldSnapshot.rows.size
+        val cursorIdx = grid.renderedCursorIndex(includeHistory)
+        val showCursor = engine.isCursorVisible && isCursorBlinkingOn
+        val renderedRows = ArrayList<RenderedRow>(count)
+        val linesList = ArrayList<AnnotatedString>(count)
+        val idsList = ArrayList<Long>(count)
+        for (i in 0 until count) {
+            val row = grid.renderedRow(i, includeHistory)
+            val isCursorRow = (i == cursorIdx)
+            val base = row.render(cursorColumn = null, showCursor = false)
+            val padded = if (isCursorRow) row.render(grid.cursorCol, showCursor = false) else null
+            val cursor = if (isCursorRow) row.render(grid.cursorCol, showCursor = true) else null
+            val id = row.id
+            if (!contentChanged && (i >= oldSnapshot.rows.size || oldSnapshot.rows[i].id != id || oldSnapshot.rows[i].baseText !== base)) {
+                contentChanged = true
+            }
+            renderedRows.add(RenderedRow(id, base, padded, cursor))
+            linesList.add(if (isCursorRow && showCursor) cursor ?: padded ?: base else if (isCursorRow) padded ?: base else base)
+            idsList.add(id)
+        }
+        val nextRevision = if (contentChanged) oldSnapshot.revision + 1 else oldSnapshot.revision
+        displaySnapshot = TerminalDisplaySnapshot(
+            rows = renderedRows,
+            lines = linesList,
+            lineIds = idsList,
+            revision = nextRevision,
+            cursorIndex = cursorIdx,
+            cursorRow = grid.cursorRow,
+            cursorCol = grid.cursorCol,
+            isCursorVisible = engine.isCursorVisible,
+            isAppCursorKeys = engine.isAppCursorKeys,
+            isBracketedPaste = engine.isBracketedPaste,
+            isCursorBlinkingOn = isCursorBlinkingOn,
+            generation = surfaceGeneration,
+        )
     }
 
     override fun resize(cols: Int, rows: Int) {
         if (_isDisposed) return
-        if (cols == _dimensions.cols && rows == _dimensions.rows) return
-        _dimensions = TerminalDimensions(cols, rows)
+        val width = cols.coerceAtLeast(1)
+        val height = rows.coerceAtLeast(1)
+        if (width == _dimensions.cols && height == _dimensions.rows) return
         synchronized(bufferLock) {
-            engine.resize(cols, rows)
-            syncLinesFromEngine()
+            _dimensions = TerminalDimensions(width, height)
+            engine.resize(width, height)
+            syncLinesFromEngine(geometryChanged = true)
         }
-        onResizeListener?.invoke(cols, rows)
+        onResizeListener?.invoke(width, height)
     }
 
     override fun setOnInputListener(listener: (ByteArray) -> Unit) {
@@ -116,19 +164,18 @@ class VtTerminalSurface(
 
     override fun search(query: String, matchCase: Boolean): TerminalSearchResult {
         if (query.isEmpty()) return TerminalSearchResult(query, 0, -1)
+        val currentLines = displaySnapshot.lines
         var totalMatches = 0
-        synchronized(bufferLock) {
-            for (line in lines) {
-                val text = line.text
-                var idx = 0
-                while (idx < text.length) {
-                    val found = text.indexOf(query, idx, ignoreCase = !matchCase)
-                    if (found >= 0) {
-                        totalMatches++
-                        idx = found + query.length
-                    } else {
-                        break
-                    }
+        for (line in currentLines) {
+            val text = line.text
+            var idx = 0
+            while (idx < text.length) {
+                val found = text.indexOf(query, idx, ignoreCase = !matchCase)
+                if (found >= 0) {
+                    totalMatches++
+                    idx = found + query.length
+                } else {
+                    break
                 }
             }
         }
@@ -145,7 +192,8 @@ class VtTerminalSurface(
 
     override fun pasteText(text: String) {
         if (_isDisposed) return
-        val bytes = if (engine.isBracketedPaste) {
+        val isBracketed = displaySnapshot.isBracketedPaste
+        val bytes = if (isBracketed) {
             "\u001B[200~${text}\u001B[201~".encodeToByteArray()
         } else {
             text.encodeToByteArray()
@@ -156,11 +204,10 @@ class VtTerminalSurface(
     override fun close() {
         _isDisposed = true
         _isAttached = false
+        surfaceGeneration++
         onInputListener = null
         onResizeListener = null
         engine.onProtocolReply = null
-        synchronized(bufferLock) {
-            lines.clear()
-        }
+        displaySnapshot = TerminalDisplaySnapshot(generation = surfaceGeneration)
     }
 }

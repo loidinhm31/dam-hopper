@@ -84,13 +84,16 @@ class TerminalReplayGate(
     var isLiveStreamReady: Boolean = false
         private set
 
+    internal var isAttachFailed: Boolean = false
+        private set
+
     var replayGeneration: Long = 0L
         private set
 
     var activeReplayWrites: Int = 0
         private set
 
-    private val _queuedLiveData = mutableListOf<QueuedLiveChunk>()
+    private val _queuedLiveData = ArrayDeque<QueuedLiveChunk>()
     val queuedLiveData: List<QueuedLiveChunk> get() = _queuedLiveData
 
     private var queuedByteCount: Int = 0
@@ -104,6 +107,7 @@ class TerminalReplayGate(
      * historical parses cannot leak queries after an attach reset or reconnect.
      */
     fun resetForAttach() {
+        isAttachFailed = false
         hasAttachBufferBeenReceived = false
         isLiveStreamReady = false
         replayGeneration += 1L
@@ -112,10 +116,17 @@ class TerminalReplayGate(
         isReplayWriting = activeReplayWrites > 0
     }
 
+    /** Fences a failed send without starting another attempt or dropping queued output. */
+    internal fun failAttach() {
+        isAttachFailed = true
+        isLiveStreamReady = false
+    }
+
     /**
      * Marks stream ready immediately after process restart where buffer was cleared on server.
      */
     fun markReadyAfterRestart() {
+        isAttachFailed = false
         hasAttachBufferBeenReceived = true
         replayGeneration += 1L
         _queuedLiveData.clear()
@@ -143,20 +154,20 @@ class TerminalReplayGate(
     }
 
     /**
-     * Notifies drain completion when all pending replay writes reach zero.
+     * Requests a drain only for a received baseline, after all pending writes complete.
      */
     fun notifyReplayDrain() {
-        if (activeReplayWrites == 0) {
+        if (!isAttachFailed && hasAttachBufferBeenReceived && activeReplayWrites == 0) {
             onReplayDrain?.invoke()
         }
     }
 
     /**
      * Returns true when outbound data/queries may be forwarded to the PTY.
-     * Replay writes suppress outbound queries to prevent terminal echo loops.
+     * The entire attach and queued-live drain suppress outbound queries and input.
      */
     fun shouldForwardTerminalData(): Boolean {
-        return activeReplayWrites <= 0
+        return hasAttachBufferBeenReceived && isLiveStreamReady && activeReplayWrites == 0
     }
 
     /**
@@ -164,7 +175,7 @@ class TerminalReplayGate(
      * Returns false if queue bounds are exceeded.
      */
     fun enqueueLiveChunk(chunk: QueuedLiveChunk): Boolean {
-        if (_queuedLiveData.size >= maxQueuedChunks || (queuedByteCount + chunk.data.size) > maxQueuedBytes) {
+        if (_queuedLiveData.size >= maxQueuedChunks || chunk.data.size > maxQueuedBytes - queuedByteCount) {
             onQueueOverflow?.invoke()
             return false
         }
@@ -183,11 +194,21 @@ class TerminalReplayGate(
         return copy
     }
 
+    /** Removes one chunk without copying the queue or releasing the remaining queue's bounds. */
+    internal fun pollQueuedChunk(): QueuedLiveChunk? {
+        if (_queuedLiveData.isEmpty()) return null
+        val chunk = _queuedLiveData.removeFirst()
+        queuedByteCount -= chunk.data.size
+        return chunk
+    }
+
     /**
      * Marks live stream ready to accept real-time chunks.
      */
-    fun markLiveStreamReady() {
-        if (activeReplayWrites == 0) {
+    fun markLiveStreamReady(expectedGeneration: Long = replayGeneration) {
+        if (!isAttachFailed && replayGeneration == expectedGeneration && hasAttachBufferBeenReceived &&
+            activeReplayWrites == 0 && _queuedLiveData.isEmpty()
+        ) {
             isLiveStreamReady = true
         }
     }

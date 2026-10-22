@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
@@ -53,6 +54,8 @@ import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
 import dev.damhopper.nativeapp.features.terminal.TerminalPanelScreen
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
+import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
+import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
 import dev.damhopper.nativeapp.features.workspace.KnownWorkspace
 import dev.damhopper.nativeapp.features.workspace.ProjectSummary
@@ -88,6 +91,8 @@ import dev.damhopper.nativeapp.ui.navigation.PanelNavigationRow
 import dev.damhopper.nativeapp.ui.navigation.WorkbenchNavigation
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.first
 import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.editor.EditorTabsState
@@ -168,8 +173,18 @@ fun WorkbenchScreen(
     var agentReducer by remember { mutableStateOf<AgentStatusReducer?>(null) }
     val cryptoSessionManager = remember { dev.damhopper.nativeapp.core.security.CryptoSessionManager() }
     val terminalControllers = remember { mutableMapOf<String, TerminalSessionController>() }
+    val terminalAttachQueues = remember { mutableMapOf<TerminalSessionController, TerminalAttachQueue>() }
+    val terminalAttachTokens = remember { mutableMapOf<TerminalSessionController, Long>() }
+    var terminalListenersRepo by remember { mutableStateOf<TerminalRepository?>(null) }
     var terminalSessions by remember { mutableStateOf<List<TerminalSessionDetailed>>(emptyList()) }
     var activeTerminalSessionId by remember { mutableStateOf<String?>(null) }
+    var terminalSelectionEpoch by remember { mutableStateOf(0L) }
+    fun selectTerminalSession(id: String?) {
+        if (activeTerminalSessionId != id) {
+            terminalSelectionEpoch++
+            activeTerminalSessionId = id
+        }
+    }
     var sessionCounter by remember { mutableStateOf(1) }
     var settingsTab by remember { mutableStateOf(0) } // 0: Profiles, 1: Remote Config
     val privacyController = remember { PrivacyController() }
@@ -254,8 +269,10 @@ fun WorkbenchScreen(
     LaunchedEffect(activeProfileId, activeProfile?.baseUrl) {
         terminalControllers.values.forEach { it.close() }
         terminalControllers.clear()
+        terminalAttachQueues.clear()
+        terminalAttachTokens.clear()
         terminalSessions = emptyList()
-        activeTerminalSessionId = null
+        selectTerminalSession(null)
         cryptoSessionManager.closeAll()
 
         if (profileRepository != null && activeProfileId != null) {
@@ -452,9 +469,11 @@ fun WorkbenchScreen(
             currentWorktrees = emptyList()
             knownWorkspaces = emptyList()
             terminalSessions = emptyList()
-            activeTerminalSessionId = null
+            selectTerminalSession(null)
             terminalControllers.values.forEach { it.close() }
             terminalControllers.clear()
+            terminalAttachQueues.clear()
+            terminalAttachTokens.clear()
             fileTreeState?.dispose()
             fileRepo?.dispose()
             fileTreeState = null
@@ -539,71 +558,131 @@ fun WorkbenchScreen(
             isWorktreesLoading = false
         }
     }
-    // Refresh terminal sessions and agent status when active project changes or targetStore updates
-    // Retain or create controller helper ensuring controller exists before attaching
-    fun getOrCreateController(id: String, incarnation: Long = 0L): TerminalSessionController {
-        val profileKey = activeProfileId ?: "none"
-        val compositeKey = "$profileKey:$id"
+    fun scheduleTerminalAttach(
+        ctrl: TerminalSessionController,
+        repo: TerminalRepository,
+        recoveryOffset: ULong? = null,
+    ) {
+        val owner = repo.apiClient.connection
+        val sessionId = ctrl.sessionId
+        val incarnation = ctrl.incarnation
+        val epoch = terminalSelectionEpoch
+        val project = navState.activeProject
+        val controllerKey = "${owner.profileId}:$sessionId"
+        val token = (terminalAttachTokens[ctrl] ?: 0L) + 1L
+        terminalAttachTokens[ctrl] = token
+        val isCurrent = {
+            terminalRepo === repo && repo.apiClient.connection == owner &&
+                activeProfileId == owner.profileId && navState.activeProject == project &&
+                terminalControllers[controllerKey] === ctrl && ctrl.incarnation == incarnation &&
+                activeTerminalSessionId == sessionId && terminalSelectionEpoch == epoch &&
+                terminalAttachTokens[ctrl] == token
+        }
+        val queue = terminalAttachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, coroutineScope) }
+        val connect: suspend () -> Unit = {
+            // A tab action can arrive before the listener effect; keep its gate closed until subscribed.
+            snapshotFlow { terminalListenersRepo === repo || terminalRepo !== repo }.first { it }
+            if (isCurrent()) repo.wsConnection?.connect()
+        }
+        val send: suspend (ULong?) -> Unit = { offset -> repo.attachTerminal(sessionId, offset) }
+        val onResult: (Exception?) -> Unit = { error ->
+            if (error != null) {
+                AppLogger.recordDiagnostic(
+                    type = "transport",
+                    scope = "terminal-panel",
+                    message = "terminal.attach_failed",
+                    profileId = owner.profileId,
+                    generation = owner.generation,
+                    sessionId = sessionId,
+                )
+            }
+        }
+        if (recoveryOffset == null) queue.attach(isCurrent, connect, send, onResult)
+        else queue.recover(recoveryOffset, isCurrent, connect, send, onResult)
+    }
+
+    fun getOrCreateController(
+        id: String,
+        incarnation: Long = 0L,
+        repo: TerminalRepository = checkNotNull(terminalRepo),
+    ): TerminalSessionController {
+        val owner = repo.apiClient.connection
+        val compositeKey = "${owner.profileId}:$id"
+        val existing = terminalControllers[compositeKey]
+        if (existing != null && existing.connectionRef != owner) {
+            terminalControllers.remove(compositeKey)
+            terminalAttachQueues.remove(existing)
+            terminalAttachTokens.remove(existing)
+            existing.close()
+        }
         return terminalControllers.getOrPut(compositeKey) {
             val session = terminalSessions.find { it.id == id }
             val effectiveIncarnation = if (incarnation != 0L) incarnation else (session?.incarnation?.toLong() ?: 0L)
-            val connRef = terminalRepo?.apiClient?.connection
-                ?: dev.damhopper.nativeapp.core.model.ConnectionRef(activeProfileId ?: "default", 1L)
             val ctrl = TerminalSessionController(
                 sessionId = id,
                 initialIncarnation = effectiveIncarnation,
-                connectionRef = connRef,
-                terminalRepository = terminalRepo
+                connectionRef = owner,
+                terminalRepository = repo,
             )
             ctrl.setRawInputSink { bytes ->
+                val epoch = terminalSelectionEpoch
                 coroutineScope.launch {
-                    terminalRepo?.writeTerminal(id, bytes.decodeToString())
+                    if (terminalRepo === repo && repo.apiClient.connection == owner &&
+                        terminalControllers[compositeKey] === ctrl && terminalSelectionEpoch == epoch &&
+                        activeTerminalSessionId == id && ctrl.isPanelActive && ctrl.isReplayCompleted && ctrl.isInputAllowed()
+                    ) repo.writeTerminal(id, bytes.decodeToString())
                 }
             }
-            ctrl.onRequestReattach = { sId, offset ->
-                coroutineScope.launch {
-                    terminalRepo?.attachTerminal(sId, offset)
-                }
-            }
+            ctrl.onRequestReattach = { _, offset -> scheduleTerminalAttach(ctrl, repo, offset) }
             ctrl.isInputAllowed = { privacyController.isInputAllowed() }
             ctrl.isPanelActive = (id == activeTerminalSessionId && navState.activePanel == WorkbenchPanel.TERMINAL)
             ctrl
         }
     }
 
-    // Refresh terminal sessions and agent status when active project changes or targetStore updates
-    LaunchedEffect(currentActiveProj, terminalRepo) {
+    // Listener readiness is a prerequisite, not a best-effort ordering between separate effects.
+    LaunchedEffect(currentActiveProj, terminalRepo, terminalListenersRepo) {
         val repo = terminalRepo ?: return@LaunchedEffect
+        if (terminalListenersRepo !== repo) return@LaunchedEffect
+        val owner = repo.apiClient.connection
         try {
             val detailed = repo.listDetailed()
+            if (terminalRepo !== repo || repo.apiClient.connection != owner || navState.activeProject != currentActiveProj) {
+                return@LaunchedEffect
+            }
             terminalSessions = detailed
             if (detailed.isNotEmpty() && (activeTerminalSessionId == null || detailed.none { it.id == activeTerminalSessionId })) {
-                val first = detailed.first().id
-                activeTerminalSessionId = first
-                getOrCreateController(first, detailed.first().incarnation.toLong())
-                try { repo.attachTerminal(first) } catch (_: Exception) {}
+                val first = detailed.first()
+                selectTerminalSession(first.id)
+                scheduleTerminalAttach(getOrCreateController(first.id, first.incarnation.toLong(), repo), repo)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {}
         try {
             agentReducer?.reloadSnapshot()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {}
     }
 
     // Listen to WebSocket events from TerminalRepository
     LaunchedEffect(terminalRepo) {
         val repo = terminalRepo ?: return@LaunchedEffect
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             repo.terminalOutput.collect { msg ->
-                getOrCreateController(msg.id, msg.incarnation.toLong()).handleLiveChunk(
+                if (terminalRepo !== repo) return@collect
+                getOrCreateController(msg.id, msg.incarnation.toLong(), repo).handleLiveChunk(
                     msg.data.encodeToByteArray(),
                     msg.offset,
                     msg.incarnation
                 )
             }
         }
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             repo.terminalBuffer.collect { msg ->
-                getOrCreateController(msg.id, msg.incarnation.toLong()).handleBufferReplay(
+                if (terminalRepo !== repo) return@collect
+                getOrCreateController(msg.id, msg.incarnation.toLong(), repo).handleBufferReplay(
                     msg.data.encodeToByteArray(),
                     msg.offset,
                     msg.reset,
@@ -612,9 +691,10 @@ fun WorkbenchScreen(
                 )
             }
         }
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             repo.terminalExit.collect { msg ->
-                getOrCreateController(msg.id, msg.incarnation?.toLong() ?: 0L).handleExit(
+                if (terminalRepo !== repo) return@collect
+                getOrCreateController(msg.id, msg.incarnation?.toLong() ?: 0L, repo).handleExit(
                     msg.exitCode,
                     msg.willRestart,
                     msg.restartCount,
@@ -622,16 +702,18 @@ fun WorkbenchScreen(
                 )
             }
         }
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             repo.terminalLagged.collect { msg ->
+                if (terminalRepo !== repo) return@collect
                 activeTerminalSessionId?.let { id ->
-                    terminalControllers[id]?.handleLagged(msg.dropped)
+                    terminalControllers["${repo.apiClient.connection.profileId}:$id"]?.handleLagged(msg.dropped)
                 }
             }
         }
-        launch {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             repo.processRestarted.collect { msg ->
-                getOrCreateController(msg.id).handleProcessRestarted(
+                if (terminalRepo !== repo) return@collect
+                getOrCreateController(msg.id, repo = repo).handleProcessRestarted(
                     msg.restartCount,
                     msg.previousExitCode
                 )
@@ -652,9 +734,10 @@ fun WorkbenchScreen(
                 agentReducer?.applyStatusInvalidated(msg)
             }
         }
+        terminalListenersRepo = repo
     }
 
-    val activeTerminalController = activeTerminalSessionId?.let { id ->
+    val activeTerminalController = activeTerminalSessionId?.takeIf { terminalRepo != null }?.let { id ->
         getOrCreateController(id)
     }
     LaunchedEffect(navState.activePanel, activeTerminalSessionId, activeProfileId) {
@@ -851,7 +934,11 @@ fun WorkbenchScreen(
                 settingsRepository.onProfileRemoved(profileId)
                 val toRemove = terminalControllers.keys.filter { it.startsWith("$profileId:") }
                 toRemove.forEach { key ->
-                    terminalControllers.remove(key)?.close()
+                    terminalControllers.remove(key)?.let { controller ->
+                        terminalAttachQueues.remove(controller)
+                        terminalAttachTokens.remove(controller)
+                        controller.close()
+                    }
                 }
             }
             override fun onDestroy() {
@@ -1033,32 +1120,43 @@ fun WorkbenchScreen(
                                 sessions = terminalSessions,
                                 activeSessionId = activeTerminalSessionId,
                                 controller = activeTerminalController,
-                                onSelectSession = { id ->
-                                    activeTerminalSessionId = id
+                                onSelectSession = select@{ id ->
+                                    val repo = terminalRepo ?: return@select
+                                    selectTerminalSession(id)
                                     val session = terminalSessions.find { it.id == id }
-                                    getOrCreateController(id, session?.incarnation?.toLong() ?: 0L)
-                                    coroutineScope.launch {
-                                        try { terminalRepo?.attachTerminal(id) } catch (_: Exception) {}
-                                    }
+                                    scheduleTerminalAttach(getOrCreateController(id, session?.incarnation?.toLong() ?: 0L, repo), repo)
                                 },
-                                onCreateSession = { cmd, name ->
+                                onCreateSession = create@{ cmd, name ->
+                                    val repo = terminalRepo ?: return@create
+                                    val owner = repo.apiClient.connection
+                                    val project = navState.activeProject
+                                    val epoch = terminalSelectionEpoch
+                                    val worktreePath = snapshot.target.worktreePath
+                                    val newId = "term-${sessionCounter++}"
                                     coroutineScope.launch {
-                                        val newId = "term-${sessionCounter++}"
                                         try {
-                                            terminalRepo?.createSession(
+                                            repo.createSession(
                                                 CreateSessionRequest(
                                                     id = newId,
                                                     command = cmd,
                                                     name = name,
-                                                    project = navState.activeProject.takeIf { it != "Default Workspace" },
-                                                    worktreePath = snapshot.target.worktreePath
+                                                    project = project.takeIf { it != "Default Workspace" },
+                                                    worktreePath = worktreePath,
                                                 )
                                             )
-                                            val detailed = terminalRepo?.listDetailed() ?: emptyList()
+                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                                navState.activeProject != project || terminalSelectionEpoch != epoch
+                                            ) return@launch
+                                            val detailed = repo.listDetailed()
+                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                                navState.activeProject != project || terminalSelectionEpoch != epoch
+                                            ) return@launch
                                             terminalSessions = detailed
-                                            activeTerminalSessionId = newId
-                                            getOrCreateController(newId, 0L)
-                                            terminalRepo?.attachTerminal(newId)
+                                            selectTerminalSession(newId)
+                                            val incarnation = detailed.find { it.id == newId }?.incarnation?.toLong() ?: 0L
+                                            scheduleTerminalAttach(getOrCreateController(newId, incarnation, repo), repo)
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
                                         } catch (_: Exception) {}
                                     }
                                 },
@@ -1078,22 +1176,36 @@ fun WorkbenchScreen(
                                         } catch (_: Exception) {}
                                     }
                                 },
-                                onRemoveSession = { id ->
+                                onRemoveSession = remove@{ id ->
+                                    val repo = terminalRepo ?: return@remove
+                                    val owner = repo.apiClient.connection
+                                    val project = navState.activeProject
+                                    val epoch = terminalSelectionEpoch
                                     coroutineScope.launch {
                                         try {
-                                            terminalRepo?.removeSession(id)
-                                            terminalControllers.remove("${activeProfileId ?: "none"}:$id")?.close()
-                                            val detailed = terminalRepo?.listDetailed() ?: emptyList()
+                                            repo.removeSession(id)
+                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                                navState.activeProject != project
+                                            ) return@launch
+                                            terminalControllers.remove("${owner.profileId}:$id")?.let { controller ->
+                                                terminalAttachQueues.remove(controller)
+                                                terminalAttachTokens.remove(controller)
+                                                controller.close()
+                                            }
+                                            val detailed = repo.listDetailed()
+                                            if (terminalRepo !== repo || repo.apiClient.connection != owner ||
+                                                navState.activeProject != project
+                                            ) return@launch
                                             terminalSessions = detailed
-                                            if (activeTerminalSessionId == id) {
-                                                val next = detailed.firstOrNull()?.id
-                                                activeTerminalSessionId = next
+                                            if (activeTerminalSessionId == id && terminalSelectionEpoch == epoch) {
+                                                val next = detailed.firstOrNull()
+                                                selectTerminalSession(next?.id)
                                                 if (next != null) {
-                                                    val s = detailed.firstOrNull()
-                                                    getOrCreateController(next, s?.incarnation?.toLong() ?: 0L)
-                                                    terminalRepo?.attachTerminal(next)
+                                                    scheduleTerminalAttach(getOrCreateController(next.id, next.incarnation.toLong(), repo), repo)
                                                 }
                                             }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
                                         } catch (_: Exception) {}
                                     }
                                 },
@@ -1181,12 +1293,10 @@ fun WorkbenchScreen(
                                     importController = iCtrl,
                                     agentReducer = agentReducer,
                                     availableProjects = projects.map { it.name },
-                                    onJumpToTerminalSession = { termId, incarnation ->
-                                        activeTerminalSessionId = termId
-                                        getOrCreateController(termId, incarnation.toLong())
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.attachTerminal(termId) } catch (_: Exception) {}
-                                        }
+                                    onJumpToTerminalSession = jump@{ termId, incarnation ->
+                                        val repo = terminalRepo ?: return@jump
+                                        selectTerminalSession(termId)
+                                        scheduleTerminalAttach(getOrCreateController(termId, incarnation.toLong(), repo), repo)
                                         navigation.navigateTo(WorkbenchPanel.TERMINAL)
                                     },
                                     onRefreshObservation = {
@@ -1223,12 +1333,10 @@ fun WorkbenchScreen(
                             } else if (agentReducer != null) {
                                 AgentsPanelScreen(
                                     reducer = agentReducer!!,
-                                    onJumpToTerminalSession = { termId, incarnation ->
-                                        activeTerminalSessionId = termId
-                                        getOrCreateController(termId, incarnation.toLong())
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.attachTerminal(termId) } catch (_: Exception) {}
-                                        }
+                                    onJumpToTerminalSession = jump@{ termId, incarnation ->
+                                        val repo = terminalRepo ?: return@jump
+                                        selectTerminalSession(termId)
+                                        scheduleTerminalAttach(getOrCreateController(termId, incarnation.toLong(), repo), repo)
                                         navigation.navigateTo(WorkbenchPanel.TERMINAL)
                                     },
                                     onRefresh = {

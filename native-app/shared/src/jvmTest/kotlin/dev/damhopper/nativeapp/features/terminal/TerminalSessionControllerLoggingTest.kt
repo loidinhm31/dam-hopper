@@ -51,6 +51,7 @@ class TerminalSessionControllerLoggingTest {
         assertEquals("terminal-panel", gapEntry.scope)
         assertEquals("transport", gapEntry.type)
         assertEquals("10", gapEntry.metadata?.get("expectedOffset"))
+        assertEquals("30", gapEntry.metadata?.get("receivedStartOffset"), "Diagnostics report the gap start, not its end")
 
         // Assert strictly ZERO payload text is logged
         for (entry in snapshot.entries) {

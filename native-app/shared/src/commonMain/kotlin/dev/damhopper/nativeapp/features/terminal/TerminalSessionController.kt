@@ -52,13 +52,14 @@ open class TerminalSessionController(
     var isTruncated: Boolean = false
         private set
 
-
     var isInputAllowed: () -> Boolean = { true }
 
     val gate = TerminalReplayGate()
 
     private val activeModifiers = mutableSetOf<TerminalModifier>()
     private var rawInputSink: ((ByteArray) -> Unit)? = null
+    private var requiresResetSnapshot = false
+    private var pendingReplayDrainGeneration: Long? = null
     var onRequestReattach: ((sessionId: String, fromOffset: ULong) -> Unit)? = null
 
     init {
@@ -75,6 +76,22 @@ open class TerminalSessionController(
 
     fun setRawInputSink(sink: (ByteArray) -> Unit) {
         this.rawInputSink = sink
+    }
+
+    /**
+     * Closes replay/input before any asynchronous attach work, retaining accepted text/offset.
+     * Ordinary callers invoke once; recovery callbacks receive this already-captured offset.
+     */
+    fun beginAttach(): ULong {
+        pendingReplayDrainGeneration = null
+        gate.resetForAttach()
+        return lastSeenOffset
+    }
+
+    /** Keeps an uncertain/failed attach fenced, even if a late reset already supplied a baseline. */
+    fun failAttach() {
+        pendingReplayDrainGeneration = null
+        gate.failAttach()
     }
 
     fun markReplayCompleted() {
@@ -119,26 +136,14 @@ open class TerminalSessionController(
             return
         }
 
-        // Newer incarnation detected before buffer: bump incarnation and reset offset
+        // A new process needs an authoritative reset before its parser/output can be used.
         if (chunkIncarnation > incarnation) {
-            AppLogger.recordDiagnostic(
-                type = "terminal",
-                scope = "terminal-session",
-                message = "stream_newer_incarnation_detected",
-                profileId = connectionRef.profileId,
-                generation = connectionRef.generation,
-                sessionId = sessionId,
-                incarnation = chunkIncarnation.toLong(),
-                metadata = mapOf(
-                    "prevIncarnation" to incarnation.toString(),
-                    "newIncarnation" to chunkIncarnation.toString()
-                )
-            )
             incarnation = chunkIncarnation
             lastSeenOffset = 0uL
-            gate.resetForAttach()
+            requiresResetSnapshot = true
             requestReattach()
-            return
+            // A synchronous callback may already have supplied the new baseline.
+            if (chunkIncarnation != incarnation) return
         }
 
         // If historical replay is still in progress, queue live chunk
@@ -156,7 +161,11 @@ open class TerminalSessionController(
             return
         }
 
-        // Reconcile contiguous/overlapping chunk
+        applyReconciledOutput(data, offset, historical = false)
+    }
+
+    /** Also used by replay/drain while public live output and outbound traffic remain closed. */
+    private fun applyReconciledOutput(data: ByteArray, offset: ULong, historical: Boolean): Boolean {
         when (val result = reconcileTerminalOutput(data, offset, lastSeenOffset)) {
             is ReconcileOutputResult.Discard -> {
                 AppLogger.debug(
@@ -168,6 +177,7 @@ open class TerminalSessionController(
                         "lastSeenOffset" to lastSeenOffset.toString()
                     )
                 )
+                return true
             }
             is ReconcileOutputResult.Gap -> {
                 AppLogger.recordDiagnostic(
@@ -180,16 +190,16 @@ open class TerminalSessionController(
                     incarnation = incarnation.toLong(),
                     metadata = mapOf(
                         "expectedOffset" to lastSeenOffset.toString(),
-                        "receivedStartOffset" to offset.toString(),
+                        "receivedStartOffset" to result.receivedStartOffset.toString(),
                         "byteCount" to data.size.toString()
                     )
                 )
                 requestReattach()
+                return false
             }
             is ReconcileOutputResult.Render -> {
-                lastSeenOffset = result.nextOffset
-                (surface as? VtTerminalSurface)?.isLiveStream = true
-                surface?.feedOutput(result.data, result.nextOffset.toLong() - result.data.size, false)
+                feedAcceptedOutput(result.data, result.nextOffset, reset = false, historical = historical)
+                return true
             }
         }
     }
@@ -222,8 +232,19 @@ open class TerminalSessionController(
         }
         if (bufferIncarnation > incarnation) {
             incarnation = bufferIncarnation
+            lastSeenOffset = 0uL
+            requiresResetSnapshot = true
+            if (reset) {
+                val attachFailed = gate.isAttachFailed
+                beginAttach()
+                // An unsolicited process baseline is not evidence that a failed send succeeded.
+                if (attachFailed) failAttach()
+            }
         }
-        isTruncated = truncated
+        if (requiresResetSnapshot && !reset) {
+            requestReattach()
+            return
+        }
 
         AppLogger.recordDiagnostic(
             type = "transport",
@@ -240,21 +261,85 @@ open class TerminalSessionController(
                 "truncated" to truncated.toString()
             )
         )
+        val generation = gate.replayGeneration
         gate.beginReplayWrite()
+        val applied: Boolean
         try {
-            (surface as? VtTerminalSurface)?.isLiveStream = false
-            surface?.feedOutput(data, offset.toLong() - data.size, reset)
-            lastSeenOffset = offset
+            if (reset) {
+                // There is no wire attempt ID: even a lower/empty same-incarnation reset wins.
+                feedAcceptedOutput(data, offset, reset = true, historical = true)
+                if (generation == gate.replayGeneration) requiresResetSnapshot = false
+                applied = true
+            } else {
+                applied = applyReconciledOutput(data, offset, historical = true)
+            }
+            if (applied && generation == gate.replayGeneration) isTruncated = truncated
         } finally {
-            (surface as? VtTerminalSurface)?.isLiveStream = true
             gate.finishReplayWrite()
+        }
+        // Only successful current-generation baselines can authorize a drain.
+        if (applied && generation == gate.replayGeneration) pendingReplayDrainGeneration = generation
+        drainPendingReplay()
+    }
+
+    private fun feedAcceptedOutput(data: ByteArray, endOffset: ULong, reset: Boolean, historical: Boolean) {
+        val vtSurface = surface as? VtTerminalSurface
+        val previousMode = vtSurface?.isLiveStream
+        val previousOffset = lastSeenOffset
+        val generation = gate.replayGeneration
+        lastSeenOffset = endOffset
+        try {
+            vtSurface?.isLiveStream = !historical
+            surface?.feedOutput(data, endOffset.toLong() - data.size, reset)
+        } catch (error: Throwable) {
+            if (generation == gate.replayGeneration) {
+                lastSeenOffset = previousOffset
+                beginAttach()
+            }
+            throw error
+        } finally {
+            if (previousMode != null) vtSurface?.isLiveStream = previousMode
+        }
+    }
+
+    private fun drainPendingReplay() {
+        if (!gate.isAttachFailed && pendingReplayDrainGeneration == gate.replayGeneration && gate.activeReplayWrites == 0) {
+            pendingReplayDrainGeneration = null
             gate.notifyReplayDrain()
         }
     }
 
     private fun drainQueuedChunksAfterReplay() {
-        gate.markLiveStreamReady()
-        val queued = gate.drainQueuedChunks()
+        val generation = gate.replayGeneration
+        var queuedChunkCount = 0
+        var drained = false
+        // Count the drain as historical parser work, not a temporary opening of the live path.
+        gate.beginReplayWrite()
+        try {
+            while (!gate.isAttachFailed && generation == gate.replayGeneration) {
+                val chunk = gate.pollQueuedChunk()
+                if (chunk == null) {
+                    drained = true
+                    break
+                }
+                if (chunk.incarnation < incarnation) continue
+                if (chunk.incarnation > incarnation) {
+                    handleLiveChunk(chunk.data, chunk.offset, chunk.incarnation)
+                    break
+                }
+                queuedChunkCount += 1
+                if (!applyReconciledOutput(chunk.data, chunk.offset, historical = true)) break
+            }
+        } finally {
+            gate.finishReplayWrite()
+        }
+        if (!drained || generation != gate.replayGeneration) {
+            // A reentrant new baseline may be waiting for this superseded write to finish.
+            drainPendingReplay()
+            return
+        }
+        gate.markLiveStreamReady(generation)
+        if (!gate.isLiveStreamReady) return
         AppLogger.recordDiagnostic(
             type = "transport",
             scope = "terminal-panel",
@@ -263,14 +348,8 @@ open class TerminalSessionController(
             generation = connectionRef.generation,
             sessionId = sessionId,
             incarnation = incarnation.toLong(),
-            metadata = mapOf(
-                "queuedChunkCount" to queued.size.toString()
-            )
+            metadata = mapOf("queuedChunkCount" to queuedChunkCount.toString())
         )
-        for (chunk in queued) {
-            if (!gate.isLiveStreamReady) break
-            handleLiveChunk(chunk.data, chunk.offset, chunk.incarnation)
-        }
     }
 
     /**
@@ -349,8 +428,8 @@ open class TerminalSessionController(
         requestReattach()
     }
     private fun requestReattach() {
-        gate.resetForAttach()
-        onRequestReattach?.invoke(sessionId, lastSeenOffset)
+        val fromOffset = beginAttach()
+        onRequestReattach?.invoke(sessionId, fromOffset)
     }
 
     fun setAlternateScreen(active: Boolean) {

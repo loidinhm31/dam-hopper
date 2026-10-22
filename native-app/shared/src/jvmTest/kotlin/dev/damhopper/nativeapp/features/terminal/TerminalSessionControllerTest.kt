@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class TerminalSessionControllerTest {
@@ -16,12 +17,14 @@ class TerminalSessionControllerTest {
         val outputFeed = mutableListOf<ByteArray>()
         var resetCalled = false
         var inputListener: ((ByteArray) -> Unit)? = null
+        var onFeed: ((ByteArray, Boolean) -> Unit)? = null
 
         override fun attachView(hostView: Any?) { isAttached = true }
         override fun detachView() { isAttached = false }
         override fun feedOutput(data: ByteArray, offset: Long, reset: Boolean) {
             if (reset) resetCalled = true
             outputFeed.add(data)
+            onFeed?.invoke(data, reset)
         }
         override fun resize(cols: Int, rows: Int) {}
         override fun setOnInputListener(listener: (ByteArray) -> Unit) { inputListener = listener }
@@ -126,5 +129,232 @@ class TerminalSessionControllerTest {
         assertNull(controller.exitCode)
         assertFalse(controller.willRestart)
         assertEquals(2u, controller.restartCount)
+    }
+
+    @Test
+    fun drainKeepsInputAndSurfaceRepliesClosedIncludingReentrantQueuedOutput() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("drain", 1L, ConnectionRef("srv", 1L), surface)
+        controller.isPanelActive = true
+        val sent = mutableListOf<String>()
+        controller.setRawInputSink { sent += it.decodeToString() }
+        controller.handleLiveChunk("B".encodeToByteArray(), 2uL, 1uL)
+        controller.handleLiveChunk("C".encodeToByteArray(), 3uL, 1uL)
+        val observed = mutableListOf<String>()
+        surface.onFeed = { data, _ ->
+            observed += data.decodeToString()
+            assertFalse(controller.isReplayCompleted)
+            assertFalse(controller.gate.shouldForwardTerminalData())
+            assertTrue(controller.gate.activeReplayWrites > 0)
+            controller.sendInput("USER".encodeToByteArray())
+            surface.inputListener?.invoke("QUERY_REPLY".encodeToByteArray())
+            if (data.decodeToString() == "B") {
+                controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+            }
+        }
+        controller.handleBufferReplay("A".encodeToByteArray(), 1uL, true, false, 1uL)
+        assertEquals(listOf("A", "B", "C", "D"), observed)
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertTrue(controller.isReplayCompleted)
+        assertTrue(sent.isEmpty(), "No input or protocol response during any drain feed")
+        controller.sendInput("LIVE".encodeToByteArray())
+        assertEquals(listOf("LIVE"), sent, "Dropped historical input must never be replayed")
+    }
+
+    @Test
+    fun gapPartwayThroughDrainCapturesLastContiguousOffsetAndStops() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("gap", 1L, ConnectionRef("srv", 1L), surface)
+        val recoveries = mutableListOf<ULong>()
+        controller.onRequestReattach = { _, offset -> recoveries += offset }
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        controller.handleLiveChunk("G".encodeToByteArray(), 7uL, 1uL)
+        controller.handleLiveChunk("H".encodeToByteArray(), 8uL, 1uL)
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertEquals(listOf("ABC", "D"), surface.outputFeed.map { it.decodeToString() })
+        assertEquals(listOf(4uL), recoveries)
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertFalse(controller.isReplayCompleted)
+        assertFalse(controller.gate.shouldForwardTerminalData())
+        assertTrue(controller.gate.queuedLiveData.isEmpty())
+    }
+
+    @Test
+    fun attachDuringReplayPreservesActiveWriteAndCannotReopenSupersedingGate() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("reset", 1L, ConnectionRef("srv", 1L), surface)
+        surface.onFeed = { _, reset ->
+            if (reset) {
+                assertEquals(3uL, controller.beginAttach())
+                assertEquals(1, controller.gate.activeReplayWrites)
+                assertFalse(controller.gate.shouldForwardTerminalData())
+                controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+            }
+        }
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertFalse(controller.isReplayCompleted)
+        assertEquals(0, controller.gate.activeReplayWrites)
+        assertEquals(1, controller.gate.queuedLiveData.size)
+        surface.onFeed = null
+        controller.handleBufferReplay(byteArrayOf(), 3uL, false, false, 1uL)
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertTrue(controller.isReplayCompleted)
+    }
+
+    @Test
+    fun attachDuringDrainDoesNotConsumeNewAttemptQueueOrPublishReady() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("supersede", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        controller.handleLiveChunk("E".encodeToByteArray(), 5uL, 1uL)
+        surface.onFeed = { data, _ ->
+            if (data.decodeToString() == "D") {
+                assertEquals(4uL, controller.beginAttach())
+                controller.handleLiveChunk("E".encodeToByteArray(), 5uL, 1uL)
+            }
+        }
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertFalse(controller.isReplayCompleted)
+        assertEquals(listOf("ABC", "D"), surface.outputFeed.map { it.decodeToString() })
+        assertEquals(1, controller.gate.queuedLiveData.size)
+        surface.onFeed = null
+        controller.handleBufferReplay(byteArrayOf(), 4uL, false, false, 1uL)
+        assertEquals(listOf("ABC", "D", "E"), surface.outputFeed.map { it.decodeToString() })
+        assertTrue(controller.isReplayCompleted)
+    }
+
+    @Test
+    fun recoveryCapturesOffsetOnceAndDeferredSendMustNotResetQueuedLive() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("recovery", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        val generation = controller.gate.replayGeneration
+        var send: (() -> ULong)? = null
+        controller.onRequestReattach = { id, captured ->
+            assertEquals("recovery", id)
+            assertFalse(controller.isReplayCompleted)
+            assertEquals(generation + 1, controller.gate.replayGeneration)
+            send = { captured }
+        }
+        controller.handleLagged(1uL)
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        assertEquals(3uL, send?.invoke())
+        assertEquals(1, controller.gate.queuedLiveData.size, "Sending captured offset never resets the queue")
+        controller.handleBufferReplay(byteArrayOf(), 3uL, false, false, 1uL)
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertEquals(generation + 1, controller.gate.replayGeneration)
+        assertTrue(controller.isReplayCompleted)
+    }
+
+    @Test
+    fun recoverySendFailureAndCancellationRemainClosed() {
+        val controller = TerminalSessionController("failed-send", 1L, ConnectionRef("srv", 1L))
+        controller.markReplayCompleted()
+        controller.onRequestReattach = { _, _ -> error("transport unavailable") }
+        assertFailsWith<IllegalStateException> { controller.handleLagged(1uL) }
+        assertFalse(controller.isReplayCompleted)
+        controller.onRequestReattach = { _, _ ->
+            throw kotlin.coroutines.cancellation.CancellationException("cancelled")
+        }
+        assertFailsWith<kotlin.coroutines.cancellation.CancellationException> { controller.handleLagged(1uL) }
+        assertFalse(controller.isReplayCompleted)
+        assertFalse(controller.gate.shouldForwardTerminalData())
+    }
+
+    @Test
+    fun replayFeedExceptionDoesNotAdvanceOffsetOrDrainQueue() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("parser-failure", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        controller.beginAttach()
+        surface.onFeed = { _, _ -> error("parser failure") }
+        assertFailsWith<IllegalStateException> {
+            controller.handleBufferReplay("D".encodeToByteArray(), 4uL, false, false, 1uL)
+        }
+        assertEquals(3uL, controller.lastSeenOffset)
+        assertEquals(0, controller.gate.activeReplayWrites)
+        assertFalse(controller.isReplayCompleted)
+        assertFalse(controller.gate.shouldForwardTerminalData())
+    }
+
+    @Test
+    fun controllerOverflowAtDefaultCountAndByteBoundsRequestsAcceptedOffset() {
+        val controller = TerminalSessionController("overflow", 1L, ConnectionRef("srv", 1L))
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        controller.beginAttach()
+        val recoveries = mutableListOf<ULong>()
+        controller.onRequestReattach = { _, offset -> recoveries += offset }
+        repeat(TerminalReplayGate.DEFAULT_MAX_QUEUED_CHUNKS) {
+            controller.handleLiveChunk(byteArrayOf(1), 4uL, 1uL)
+        }
+        assertEquals(TerminalReplayGate.DEFAULT_MAX_QUEUED_CHUNKS, controller.gate.queuedLiveData.size)
+        controller.handleLiveChunk(byteArrayOf(1), 4uL, 1uL)
+        assertEquals(listOf(3uL), recoveries)
+        assertTrue(controller.gate.queuedLiveData.isEmpty())
+        controller.handleLiveChunk(ByteArray(TerminalReplayGate.DEFAULT_MAX_QUEUED_BYTES), 4_194_307uL, 1uL)
+        assertEquals(1, controller.gate.queuedLiveData.size)
+        controller.handleLiveChunk(byteArrayOf(1), 4_194_308uL, 1uL)
+        assertEquals(listOf(3uL, 3uL), recoveries)
+        assertEquals(3uL, controller.lastSeenOffset)
+        assertFalse(controller.isReplayCompleted)
+    }
+
+    @Test
+    fun reentrantRecoveryBaselineWaitsForSupersededDrainWriteToFinish() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("reentrant-baseline", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        controller.handleLiveChunk("G".encodeToByteArray(), 7uL, 1uL)
+        controller.onRequestReattach = { _, offset ->
+            assertEquals(4uL, offset)
+            controller.handleBufferReplay("EFG".encodeToByteArray(), 7uL, false, false, 1uL)
+            assertFalse(controller.isReplayCompleted, "Old drain still has an outstanding parser write")
+        }
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertEquals(listOf("ABC", "D", "EFG"), surface.outputFeed.map { it.decodeToString() })
+        assertEquals(7uL, controller.lastSeenOffset)
+        assertEquals(0, controller.gate.activeReplayWrites)
+        assertTrue(controller.isReplayCompleted, "Only the successful new baseline authorizes readiness")
+    }
+
+    @Test
+    fun queueOverflowDuringDrainCannotReopenReadiness() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("drain-overflow", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        val recoveries = mutableListOf<ULong>()
+        controller.onRequestReattach = { _, offset -> recoveries += offset }
+        surface.onFeed = { data, _ ->
+            if (data.decodeToString() == "D") {
+                repeat(TerminalReplayGate.DEFAULT_MAX_QUEUED_CHUNKS + 1) {
+                    controller.handleLiveChunk("E".encodeToByteArray(), 5uL, 1uL)
+                }
+            }
+        }
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertEquals(listOf(4uL), recoveries)
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertFalse(controller.isReplayCompleted)
+        assertFalse(controller.gate.shouldForwardTerminalData())
+        assertEquals(listOf("ABC", "D"), surface.outputFeed.map { it.decodeToString() })
+    }
+
+    @Test
+    fun sendFailureDuringDrainPreservesRemainingQueueAndCannotReopenReadiness() {
+        val surface = MockTerminalSurface()
+        val controller = TerminalSessionController("drain-failure", 1L, ConnectionRef("srv", 1L), surface)
+        controller.handleLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        controller.handleLiveChunk("E".encodeToByteArray(), 5uL, 1uL)
+        val generation = controller.gate.replayGeneration
+        surface.onFeed = { data, _ ->
+            if (data.decodeToString() == "D") controller.failAttach()
+        }
+        controller.handleBufferReplay("ABC".encodeToByteArray(), 3uL, true, false, 1uL)
+        assertEquals(listOf("ABC", "D"), surface.outputFeed.map { it.decodeToString() })
+        assertEquals(4uL, controller.lastSeenOffset)
+        assertEquals(generation, controller.gate.replayGeneration)
+        assertEquals(listOf(5uL), controller.gate.queuedLiveData.map { it.offset })
+        assertFalse(controller.isReplayCompleted)
+        assertFalse(controller.gate.shouldForwardTerminalData())
     }
 }

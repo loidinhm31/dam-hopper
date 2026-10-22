@@ -57,7 +57,7 @@ class TerminalReplayGateTest {
         val gate = TerminalReplayGate()
         assertFalse(gate.hasAttachBufferBeenReceived)
         assertFalse(gate.isLiveStreamReady)
-        assertTrue(gate.shouldForwardTerminalData())
+        assertFalse(gate.shouldForwardTerminalData(), "Attach must fence outbound data before parsing starts")
 
         gate.beginReplayWrite()
         assertTrue(gate.hasAttachBufferBeenReceived)
@@ -70,10 +70,12 @@ class TerminalReplayGateTest {
 
         gate.finishReplayWrite()
         assertFalse(gate.isReplayWriting)
-        assertTrue(gate.shouldForwardTerminalData())
+        assertFalse(gate.shouldForwardTerminalData(), "Completing parser writes must not bypass queued drain")
 
         gate.notifyReplayDrain()
         assertTrue(drainCalled)
+        gate.markLiveStreamReady()
+        assertTrue(gate.shouldForwardTerminalData())
     }
 
     @Test
@@ -93,7 +95,13 @@ class TerminalReplayGateTest {
         gate.finishReplayWrite()
         assertEquals(0, gate.activeReplayWrites)
         assertFalse(gate.isReplayWriting)
-        assertTrue(gate.shouldForwardTerminalData())
+        assertFalse(gate.shouldForwardTerminalData(), "Finishing an obsolete write cannot reopen a new attach")
+        var drainCalled = false
+        gate.onReplayDrain = { drainCalled = true }
+        gate.notifyReplayDrain()
+        gate.markLiveStreamReady(0L)
+        assertFalse(drainCalled)
+        assertFalse(gate.isLiveStreamReady)
     }
 
     @Test
@@ -114,5 +122,79 @@ class TerminalReplayGateTest {
         val drained = gate.drainQueuedChunks()
         assertEquals(2, drained.size)
         assertEquals(0, gate.queuedLiveData.size)
+    }
+
+    @Test
+    fun byteLimitUsesBytesAndReleasesCapacityOneChunkAtATime() {
+        val gate = TerminalReplayGate(maxQueuedChunks = 10, maxQueuedBytes = 4)
+        var overflows = 0
+        gate.onQueueOverflow = { overflows += 1 }
+        val multibyte = QueuedLiveChunk("é".encodeToByteArray(), 2uL, 1uL)
+        assertTrue(gate.enqueueLiveChunk(multibyte))
+        assertTrue(gate.enqueueLiveChunk(multibyte.copy(offset = 4uL)))
+        assertFalse(gate.enqueueLiveChunk(QueuedLiveChunk(byteArrayOf(1), 5uL, 1uL)))
+        assertEquals(1, overflows)
+        assertEquals(multibyte, gate.pollQueuedChunk())
+        assertTrue(gate.enqueueLiveChunk(multibyte.copy(offset = 6uL)))
+        assertEquals(listOf(4uL, 6uL), gate.drainQueuedChunks().map { it.offset })
+    }
+
+    @Test
+    fun readinessRequiresAnEmptyQueueAndCurrentGeneration() {
+        val gate = TerminalReplayGate()
+        gate.beginReplayWrite()
+        gate.finishReplayWrite()
+        gate.enqueueLiveChunk(QueuedLiveChunk(byteArrayOf(1), 1uL, 1uL))
+        gate.markLiveStreamReady()
+        assertFalse(gate.isLiveStreamReady)
+        gate.pollQueuedChunk()
+        val oldGeneration = gate.replayGeneration
+        gate.resetForAttach()
+        gate.beginReplayWrite()
+        gate.finishReplayWrite()
+        gate.markLiveStreamReady(oldGeneration)
+        assertFalse(gate.isLiveStreamReady)
+        gate.markLiveStreamReady(gate.replayGeneration)
+        assertTrue(gate.isLiveStreamReady)
+    }
+
+    @Test
+    fun emptyDeltaAndUtf8OverlapUseEndByteOffsets() {
+        assertEquals(ReconcileOutputResult.Discard(3uL), reconcileTerminalOutput(byteArrayOf(), 3uL, 3uL))
+        assertEquals(ReconcileOutputResult.Gap(3uL, 5uL), reconcileTerminalOutput(byteArrayOf(), 5uL, 3uL))
+        val bytes = "A中B".encodeToByteArray()
+        val overlap = reconcileTerminalOutput(bytes, 5uL, 2uL)
+        assertTrue(overlap is ReconcileOutputResult.Render)
+        assertTrue(overlap.data.contentEquals(bytes.copyOfRange(2, 5)))
+        assertEquals(5uL, overlap.nextOffset)
+    }
+
+    @Test
+    fun failedSendPreservesGenerationQueueAndOutstandingWriteButFencesLateReplay() {
+        val gate = TerminalReplayGate()
+        gate.beginReplayWrite()
+        val chunk = QueuedLiveChunk("D".encodeToByteArray(), 4uL, 1uL)
+        gate.enqueueLiveChunk(chunk)
+        val generation = gate.replayGeneration
+        gate.failAttach()
+        assertEquals(generation, gate.replayGeneration)
+        assertEquals(listOf(chunk), gate.queuedLiveData)
+        assertEquals(1, gate.activeReplayWrites)
+        gate.finishReplayWrite()
+        var drained = false
+        gate.onReplayDrain = { drained = true }
+        gate.notifyReplayDrain()
+        assertFalse(drained)
+        gate.pollQueuedChunk()
+        gate.beginReplayWrite()
+        gate.finishReplayWrite()
+        gate.markLiveStreamReady()
+        assertFalse(gate.isLiveStreamReady)
+        assertFalse(gate.shouldForwardTerminalData())
+        gate.resetForAttach()
+        gate.beginReplayWrite()
+        gate.finishReplayWrite()
+        gate.markLiveStreamReady()
+        assertTrue(gate.isLiveStreamReady)
     }
 }

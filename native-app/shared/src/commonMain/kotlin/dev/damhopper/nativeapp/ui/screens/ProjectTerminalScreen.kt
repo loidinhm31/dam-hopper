@@ -25,15 +25,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.withStyle
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -59,18 +56,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
-import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
-import dev.damhopper.nativeapp.features.terminal.ConsoleBufferTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.VtTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
@@ -78,6 +75,11 @@ import dev.damhopper.nativeapp.features.terminal.TerminalModifier
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
+import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
+import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
+import dev.damhopper.nativeapp.features.terminal.TerminalViewportEffects
+import dev.damhopper.nativeapp.features.terminal.terminalGeometry
+import dev.damhopper.nativeapp.features.terminal.TerminalDisplaySnapshot
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -122,7 +124,7 @@ private data class QueuedWrite(
  *    and [TerminalReplayGate] (no parallel unfenced buffers).
  * 2. Keystrokes, commands, and accessory shortcuts are strictly gated by [TerminalSessionController.sendInput]
  *    respecting [TerminalSessionController.isPanelActive] and privacy settings.
- * 3. Renders a bounded, scrollable monospace console viewer with ANSI code stripping.
+ * 3. Renders bounded VT rows with stable identities and user-controlled output following.
  *    Client-side "Clear" actions clear only the local display surface without affecting server stream offsets.
  * 4. Leaving the screen ("← Projects" back button) deactivates input fencing and cleans up local controllers
  *    without killing or removing the remote server PTY session.
@@ -193,6 +195,8 @@ fun ProjectTerminalScreen(
     // Observable Compose state maps ensuring controller publication triggers recomposition
     val controllers = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, TerminalSessionController>() }
     val surfaces = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, NativeTerminalSurface>() }
+    val attachQueues = remember(terminalRepo, connectionKey) { mutableMapOf<TerminalSessionController, TerminalAttachQueue>() }
+    val readingStates = remember(terminalRepo, connectionKey) { TerminalReadingStates() }
     val destroyingSessionIds = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, Boolean>() }
     val failedRecords = remember(terminalRepo, connectionKey) { mutableStateListOf<FailedCommandRecord>() }
     val sessionDrafts = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, String>() }
@@ -220,7 +224,11 @@ fun ProjectTerminalScreen(
     }
 
     fun removeSessionLocal(id: String) {
-        controllers.remove(id)?.close()
+        controllers.remove(id)?.let { controller ->
+            attachQueues.remove(controller)
+            readingStates.remove(controller)
+            controller.close()
+        }
         surfaces.remove(id)?.close()
     }
 
@@ -389,31 +397,30 @@ fun ProjectTerminalScreen(
             }
         }
 
-        ctrl.onRequestReattach = { sId, offset ->
+        ctrl.onRequestReattach = recovery@{ sId, offset ->
+            if (sId != activeSessionId || controllers[sId] !== ctrl ||
+                destroyingSessionIds[sId] == true || !ctrl.isPanelActive
+            ) return@recovery
             val requestEpoch = activeSessionEpoch
-            ownerScope.launch {
-                try {
-                    val eligible = withContext(Dispatchers.Default) {
-                        (terminalRepo.apiClient.connection == connectionRef) &&
-                            ctrl.isPanelActive &&
-                            (controllers[sId] === ctrl) &&
-                            (destroyingSessionIds[sId] != true) &&
-                            (sId == activeSessionId) &&
-                            (requestEpoch == activeSessionEpoch)
+            val requestIncarnation = ctrl.incarnation
+            val requestToken = ++attachmentAttemptToken
+            attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.recover(
+                capturedOffset = offset,
+                isCurrent = {
+                    terminalRepo.apiClient.connection == connectionRef &&
+                        ctrl.isPanelActive && controllers[sId] === ctrl &&
+                        destroyingSessionIds[sId] != true && sId == activeSessionId &&
+                        requestEpoch == activeSessionEpoch && requestIncarnation == ctrl.incarnation &&
+                        requestToken == attachmentAttemptToken
+                },
+                connect = { terminalRepo.wsConnection?.connect() },
+                send = { capturedOffset -> terminalRepo.attachTerminal(sId, capturedOffset) },
+                onResult = { error ->
+                    if (error != null) {
+                        uiErrorBanner = "Reattach failed: ${error.message ?: "network error"}"
                     }
-                    if (eligible) {
-                        withContext(Dispatchers.Default) {
-                            terminalRepo.attachTerminal(sId, offset)
-                        }
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (sId == activeSessionId && controllers[sId] === ctrl && requestEpoch == activeSessionEpoch && terminalRepo.apiClient.connection == connectionRef) {
-                        uiErrorBanner = "Reattach failed: ${e.message ?: "network error"}"
-                    }
-                }
-            }
+                },
+            )
         }
 
         ctrl.isPanelActive = (id == activeSessionId && activeSessionId != null && destroyingSessionIds[id] != true)
@@ -485,7 +492,7 @@ fun ProjectTerminalScreen(
 
     // Establish WebSocket stream listeners with UNDISPATCHED startup to guarantee subscription before attachment
     LaunchedEffect(terminalRepo, connectionKey) {
-        launch(Dispatchers.Main.immediate) {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalOutput.collect { msg ->
                 controllers[msg.id]?.handleLiveChunk(
                     msg.data.encodeToByteArray(),
@@ -494,7 +501,7 @@ fun ProjectTerminalScreen(
                 )
             }
         }
-        launch(Dispatchers.Main.immediate) {
+        launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalBuffer.collect { msg ->
                 controllers[msg.id]?.handleBufferReplay(
                     msg.data.encodeToByteArray(),
@@ -540,107 +547,36 @@ fun ProjectTerminalScreen(
 
     val activeSession = eligibleSessions.find { it.id == activeSessionId }
 
-    // Active session attachment effect: keyed by active session resolution, ensuring rerun on refresh
+    // This effect does not own the send job: per-controller ordering survives effect replacement.
     LaunchedEffect(activeSessionId, activeSession?.incarnation, attachmentRevision, terminalRepo, connectionKey) {
         val session = activeSession ?: return@LaunchedEffect
         if (destroyingSessionIds[session.id] == true) return@LaunchedEffect
         val ctrl = getOrCreateController(session.id, session.incarnation.toLong())
         ctrl.isPanelActive = true
-
-        val currentAttemptToken = ++attachmentAttemptToken
-        val currentSessionId = session.id
-        val currentSessionEpoch = activeSessionEpoch
-        val currentConnectionRef = connectionRef
-        val currentCtrl = ctrl
-
-        val attachOutcome = try {
-            val eligible = (currentAttemptToken == attachmentAttemptToken) &&
-                (activeSessionId == currentSessionId) &&
-                (currentSessionEpoch == activeSessionEpoch) &&
-                (terminalRepo.apiClient.connection == currentConnectionRef) &&
-                (destroyingSessionIds[session.id] != true) &&
-                (controllers[session.id] === currentCtrl)
-
-            if (eligible) {
-                withContext(Dispatchers.Default) {
-                    try {
-                        terminalRepo.wsConnection?.connect()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {}
-                    try {
-                        val bufferText = terminalRepo.getBuffer(session.id)
-                        AppLogger.recordDiagnostic(
-                            type = "transport",
-                            scope = "terminal-panel",
-                            message = "terminal.buffer_fetched",
-                            profileId = connectionRef.profileId,
-                            generation = connectionRef.generation,
-                            sessionId = session.id,
-                            metadata = mapOf("byteCount" to bufferText.length.toString())
-                        )
-                        if (bufferText.isNotEmpty() && ctrl.lastSeenOffset == 0uL) {
-                            withContext(Dispatchers.Main) {
-                                ctrl.surface?.feedOutput(bufferText.encodeToByteArray(), 0L, true)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        AppLogger.recordDiagnostic(
-                            type = "transport",
-                            scope = "terminal-panel",
-                            message = "terminal.buffer_fetch_failed",
-                            profileId = connectionRef.profileId,
-                            generation = connectionRef.generation,
-                            sessionId = session.id,
-                            metadata = mapOf("error" to (e.message ?: "unknown"))
-                        )
-                    }
-                    terminalRepo.attachTerminal(session.id, ctrl.lastSeenOffset.takeIf { it > 0uL })
-                }
-                true
-            } else {
-                false
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
-        }
-
-        if (currentAttemptToken == attachmentAttemptToken &&
-            activeSessionId == currentSessionId &&
-            currentSessionEpoch == activeSessionEpoch &&
-            terminalRepo.apiClient.connection == currentConnectionRef &&
-            destroyingSessionIds[session.id] != true &&
-            controllers[session.id] === currentCtrl
-        ) {
-            when (attachOutcome) {
-                true -> {
-                    attachError = null
-                    AppLogger.recordDiagnostic(
-                        type = "transport",
-                        scope = "terminal-panel",
-                        message = "terminal.attach_succeeded",
-                        profileId = connectionRef.profileId,
-                        generation = connectionRef.generation,
-                        sessionId = currentSessionId,
-                        metadata = mapOf("fromOffset" to currentCtrl.lastSeenOffset.toString())
-                    )
-                }
-                false -> { /* Skipped because superseded; preserve status */ }
-                null -> {
-                    attachError = "Failed to attach terminal to server"
-                    AppLogger.recordDiagnostic(
-                        type = "transport",
-                        scope = "terminal-panel",
-                        message = "terminal.attach_failed",
-                        profileId = connectionRef.profileId,
-                        generation = connectionRef.generation,
-                        sessionId = currentSessionId
-                    )
-                }
-            }
-        }
+        val requestToken = ++attachmentAttemptToken
+        val requestEpoch = activeSessionEpoch
+        val requestIncarnation = ctrl.incarnation
+        attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.attach(
+            isCurrent = {
+                requestToken == attachmentAttemptToken && activeSessionId == session.id &&
+                    requestEpoch == activeSessionEpoch && ctrl.incarnation == requestIncarnation &&
+                    terminalRepo.apiClient.connection == connectionRef &&
+                    destroyingSessionIds[session.id] != true && controllers[session.id] === ctrl
+            },
+            connect = { terminalRepo.wsConnection?.connect() },
+            send = { capturedOffset -> terminalRepo.attachTerminal(session.id, capturedOffset) },
+            onResult = { error ->
+                attachError = if (error == null) null else "Failed to attach terminal to server"
+                AppLogger.recordDiagnostic(
+                    type = "transport",
+                    scope = "terminal-panel",
+                    message = if (error == null) "terminal.attach_succeeded" else "terminal.attach_failed",
+                    profileId = connectionRef.profileId,
+                    generation = connectionRef.generation,
+                    sessionId = session.id,
+                )
+            },
+        )
     }
 
     // Clean detachment on unmount or connection invalidation: deactivate input, close local controllers and surfaces
@@ -658,6 +594,8 @@ fun ProjectTerminalScreen(
                 surf.close()
             }
             surfaces.clear()
+            attachQueues.clear()
+            readingStates.clear()
             destroyingSessionIds.clear()
             failedRecords.clear()
             sessionDrafts.clear()
@@ -1091,16 +1029,32 @@ fun ProjectTerminalScreen(
             }
         }
 
-        // 4. Main Console Output Area
-        val lines = (activeSurface as? VtTerminalSurface)?.lines ?: (activeSurface as? ConsoleBufferTerminalSurface)?.lines ?: emptyList()
-        val listState = rememberLazyListState()
-        val surfaceRevision = (activeSurface as? VtTerminalSurface)?.updateRevision ?: (activeSurface as? ConsoleBufferTerminalSurface)?.updateRevision
-
-        LaunchedEffect(surfaceRevision, lines.size) {
-            if (lines.isNotEmpty()) {
-                listState.scrollToItem(lines.size - 1)
-            }
+        // 4. Main Console Output Area. Each retained controller keeps its own reading intent.
+        val vtSurface = activeSurface as? VtTerminalSurface
+        val snapshot = vtSurface?.displaySnapshot ?: TerminalDisplaySnapshot()
+        val lines = snapshot.lines
+        val lineIds = snapshot.lineIds
+        val readingState = readingStates.forController(activeController)
+        TerminalViewportEffects(readingState, lineIds, snapshot.revision)
+        val density = LocalDensity.current
+        val terminalTextStyle = remember {
+            TextStyle(
+                color = DamHopperColors.TextPrimary,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                lineHeight = 16.sp,
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
+            )
         }
+        val textMeasurer = rememberTextMeasurer()
+        val cellMetrics = remember(textMeasurer, terminalTextStyle, density.density, density.fontScale) {
+            textMeasurer.measure("M", style = terminalTextStyle, softWrap = false, maxLines = 1)
+        }
+        val glyphAdvancePx = cellMetrics.multiParagraph.getLineRight(0) - cellMetrics.multiParagraph.getLineLeft(0)
+        val lineHeightPx = cellMetrics.size.height.toFloat()
 
         BoxWithConstraints(
             modifier = Modifier
@@ -1116,13 +1070,19 @@ fun ProjectTerminalScreen(
                 }
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
-            val charWidthDp = 7.2f
-            val charHeightDp = 16.0f
-            val computedCols = ((maxWidth.value / charWidthDp).toInt()).coerceIn(40, 200)
-            val computedRows = ((maxHeight.value / charHeightDp).toInt()).coerceIn(10, 80)
-
-            LaunchedEffect(computedCols, computedRows, activeSessionId) {
-                activeController?.resize(computedCols, computedRows)
+            // Box constraints already exclude the actual 8dp/4dp content padding above.
+            val geometry = remember(maxWidth, maxHeight, glyphAdvancePx, lineHeightPx, density.density) {
+                terminalGeometry(
+                    contentWidthPx = with(density) { maxWidth.toPx() },
+                    contentHeightPx = with(density) { maxHeight.toPx() },
+                    glyphAdvancePx = glyphAdvancePx,
+                    lineHeightPx = lineHeightPx,
+                )
+            }
+            LaunchedEffect(geometry, activeController) {
+                if (activeController != null && readingState.geometry.update(geometry)) {
+                    activeController.resize(geometry.columns, geometry.rows)
+                }
             }
 
             // Invisible direct IME input receiver for real-time keystroke interaction
@@ -1231,38 +1191,21 @@ fun ProjectTerminalScreen(
                 }
             } else {
                 LazyColumn(
-                    state = listState,
+                    state = readingState.list,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     itemsIndexed(
                         items = lines,
-                        key = { index, _ -> "${activeSessionId}_line_${index}" }
-                    ) { index, line ->
-                        val textToRender = if (activeSurface is VtTerminalSurface) {
-                            if (line.isEmpty()) AnnotatedString(" ") else line
-                        } else {
-                            val isLastLine = index == lines.lastIndex
-                            if (isLastLine && activeController?.isPanelActive == true) {
-                                buildAnnotatedString {
-                                    append(line)
-                                    if (cursorVisible) {
-                                        withStyle(SpanStyle(color = DamHopperColors.Primary)) {
-                                            append("█")
-                                        }
-                                    } else {
-                                        append(" ")
-                                    }
-                                }
-                            } else {
-                                if (line.isEmpty()) AnnotatedString(" ") else line
-                            }
-                        }
+                        // IDs carry the surface namespace and survive row movement/eviction.
+                        key = { index, _ -> lineIds[index] }
+                    ) { _, line ->
                         Text(
-                            text = textToRender,
-                            color = DamHopperColors.TextPrimary,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 16.sp
+                            text = if (line.isEmpty()) AnnotatedString(" ") else line,
+                            style = terminalTextStyle,
+                            softWrap = false,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier.height(with(density) { lineHeightPx.toDp() }),
                         )
                     }
                 }
@@ -1306,7 +1249,6 @@ fun ProjectTerminalScreen(
                             sessionId = activeSessionId
                         )
                         (activeSurface as? VtTerminalSurface)?.clearDisplayBuffer()
-                            ?: (activeSurface as? ConsoleBufferTerminalSurface)?.clearDisplayBuffer()
                     }
                 )
             }
