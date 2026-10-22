@@ -15,7 +15,10 @@ use crate::auth::store::StoreError;
 const APPLICATION_ID: i64 = 0x4448_4155;
 
 /// Ordered migrations; entry `n` upgrades schema version `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/001-auth.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/001-auth.sql"),
+    include_str!("../migrations/002-session-user-agent.sql"),
+];
 
 /// Bounded wait for a competing writer; matches the 2s database admission cap.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(2_000);

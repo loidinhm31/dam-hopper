@@ -706,3 +706,22 @@ async fn test_normal_auth_login_error_response_structure() {
         "'dev_mode' should not be present in error responses"
     );
 }
+
+#[tokio::test]
+async fn device_sessions_are_explicitly_unavailable_without_authentication() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = dam_hopper_server::api::build_router(create_no_auth_state(tmp.path().to_path_buf()));
+    for (method, uri) in [
+        ("GET", "/api/auth/sessions"),
+        ("DELETE", "/api/auth/sessions/dev-session"),
+    ] {
+        let response = app.clone().oneshot(Request::builder().method(method).uri(uri)
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().get("set-cookie").is_none());
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "DEVICE_SESSIONS_UNAVAILABLE");
+    }
+}

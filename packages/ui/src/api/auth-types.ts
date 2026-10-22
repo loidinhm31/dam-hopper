@@ -17,6 +17,8 @@ export const AUTH_ERROR_CODES = {
   CODE_REPLAYED: "CODE_REPLAYED",
   RATE_LIMITED: "RATE_LIMITED",
   AUTH_UNAVAILABLE: "AUTH_UNAVAILABLE",
+  DEVICE_SESSIONS_UNAVAILABLE: "DEVICE_SESSIONS_UNAVAILABLE",
+  UNSAFE_AUTH_TRANSPORT: "UNSAFE_AUTH_TRANSPORT",
   INCOMPATIBLE_PROTOCOL: "INCOMPATIBLE_PROTOCOL",
   NETWORK_ERROR: "NETWORK_ERROR",
 } as const;
@@ -126,3 +128,18 @@ export type AuthStatusResult =
   | AuthStatusSuccess
   | AuthStatusMfaRequired
   | AuthStatusLoginRequired;
+
+/** Account login sessions, not physical device identities. */
+export interface AuthSessionInfo {
+  id: string;
+  userAgent: string | null;
+  issuedAt: string;
+  expiresAt: string;
+  mfaVerifiedAt: string;
+  current: boolean;
+}
+
+export interface AuthSessionList {
+  sessions: AuthSessionInfo[];
+  nextCursor: string | null;
+}

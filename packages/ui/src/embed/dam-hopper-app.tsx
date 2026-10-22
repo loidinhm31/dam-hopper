@@ -100,6 +100,11 @@ const SettingsPage = lazy(() =>
     default: m.SettingsPage,
   })),
 );
+const DevicesPage = lazy(() =>
+  import("@/components/pages/DevicesPage.js").then((m) => ({
+    default: m.DevicesPage,
+  })),
+);
 const AgentStorePage = lazy(() =>
   import("@/components/pages/AgentStorePage.js").then((m) => ({
     default: m.AgentStorePage,
@@ -434,6 +439,16 @@ export function DamHopperApp() {
                   <ErrorBoundary>
                     <Suspense fallback={LOADING_FALLBACK}>
                       <UsagePage />
+                    </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/devices"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <DevicesPage />
                     </Suspense>
                   </ErrorBoundary>
                 }

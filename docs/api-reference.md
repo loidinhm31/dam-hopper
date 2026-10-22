@@ -8,7 +8,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 
 | Page | Coverage |
 | --- | --- |
-| [Authentication](./api/authentication.md) | Login, MFA, session, development-mode behavior |
+| [Authentication](./api/authentication.md) | Login, MFA, login session inventory and revocation, development-mode behavior |
 | [Workflow tracking](./api/workflow.md) | Workflow REST routes |
 | [System services](./api/system-services.md) | Diagnostics, browser-debug artifacts, native SSH forwarding, host resources |
 | [Terminal idle suspend](./api/idle-suspend.md) | Status, timing, manual force, helper protocol and status events |
@@ -24,7 +24,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 
 ## Authentication
 
-See the [authentication API reference](./api/authentication.md). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations remain denied in no-auth mode.
+See the [authentication API reference](./api/authentication.md). Covers registration, TOTP MFA enrollment and verification, session status, account-wide device login sessions inventory (`GET /api/auth/sessions`), and bearer-only session revocation (`DELETE /api/auth/sessions/{id}`). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations and login device sessions remain denied in no-auth mode (`409 DEVICE_SESSIONS_UNAVAILABLE`).
 
 ## Terminal idle suspend
 

@@ -78,6 +78,9 @@ pub struct AuthSession {
     /// UTC instant when this session was explicitly revoked/logged out.
     #[serde(default)]
     pub revoked_at: Option<BsonDateTime>,
+    /// Untrusted browser/client hint captured only when a full MFA session is created.
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 /// Purpose for which an authentication challenge was issued.

@@ -26,6 +26,7 @@ export interface ApplicationServicesConfig {
   sqlitePath?: string;
   databaseName?: string;
   username?: string;
+  additionalUsernames?: string[];
   mongoImage?: string;
   appImage?: string;
   port?: number;
@@ -45,6 +46,7 @@ export interface ApplicationServices {
   readonly serverToken: string;
   readonly seedDigest: string;
   readonly secondaryProjectName: string;
+  readonly additionalSessions: ReadonlyArray<{ username: string; token: string; sessionId: string }>;
   readContainerFile(filePath: string): Promise<string>;
   writeContainerFile(filePath: string, content: string): Promise<void>;
   statContainerFile(filePath: string): Promise<{ mtime: string; size: number }>;
@@ -210,6 +212,14 @@ export async function startApplicationServices(
           ];
     const seedRaw = await execInContainer(appContainerId, seedArgs);
     const seedOutput = JSON.parse(seedRaw) as SeedOutput;
+    // Seed additional identities before startup: SQLite authentication is single-process.
+    const additionalSessions: Array<{ username: string; token: string; sessionId: string }> = [];
+    for (const additionalUsername of config.additionalUsernames ?? []) {
+      const args = [...seedArgs];
+      args[args.length - 1] = additionalUsername;
+      const seeded = JSON.parse(await execInContainer(appContainerId, args)) as SeedOutput;
+      additionalSessions.push({ username: seeded.username, token: seeded.token, sessionId: seeded.sessionId });
+    }
 
     const authEnvArgs =
       authBackend === "sqlite"
@@ -278,6 +288,7 @@ export async function startApplicationServices(
       serverToken: seedTree.serverToken,
       seedDigest: seedTree.seedDigest,
       secondaryProjectName: seedTree.secondaryProjectName,
+      additionalSessions,
       readContainerFile(filePath: string): Promise<string> {
         return execInContainer(appContainerId, ["cat", filePath]);
       },

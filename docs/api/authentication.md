@@ -1,6 +1,6 @@
 # Authentication API and Protected Access
 
-**Authority:** Server Authentication API (`server/src/api/auth.rs`, `server/src/api/auth_mfa.rs`)  
+**Authority:** Server Authentication API (`server/src/api/auth.rs`, `server/src/api/auth_mfa.rs`, `server/src/api/auth_sessions.rs`)  
 **Status:** Authoritative REST & Transport Specification  
 
 This reference covers password login, TOTP enrollment and verification, MFA step-up, session status, logout, and protected transport enforcement. JSON field names use `camelCase`; timestamps are RFC 3339 UTC strings. All authentication responses set `Cache-Control: no-store`.
@@ -24,6 +24,8 @@ All MFA endpoints validate their challenge or session credential directly; a cha
 | `POST /api/auth/mfa/verify` | `{ "challengeToken", "code" }` | Authenticated session after login MFA or step-up |
 | `POST /api/auth/mfa/challenge` | Bearer token or `damhopper-auth` cookie; empty body | Step-up challenge |
 | `GET /api/auth/status` | Bearer token or `damhopper-auth` cookie | Current session state and deadlines |
+| `GET /api/auth/sessions` | Bearer token or `damhopper-auth` cookie; optional `?cursor=<opaque>` | Keyset page of active login sessions and `nextCursor` |
+| `DELETE /api/auth/sessions/{id}` | Validated explicit Bearer token only | `204 No Content` on owned revocation; `404` foreign/missing |
 | `POST /api/auth/logout` | Bearer token or `damhopper-auth` cookie (optional) | Revoke session when supplied; clear cookie |
 The MFA route group enforces a `16 KiB` request body limit (`router.rs:56`). `setup`, `confirm`, and `verify` accept JSON bodies; `challenge` has no request body. MFA challenge handles expire after 5 minutes and are single-purpose. Setup can be fetched repeatedly with the same pending enrollment challenge and returns the same secret.
 
@@ -225,6 +227,90 @@ In `--no-auth` mode, status reports authenticated development actor:
   "authProtocol": 2
 }
 ```
+## Login Device Sessions (Inventory & Revocation)
+
+Device login sessions represent authenticated logins on the selected DamHopper server. Session management is **account-wide and server-wide across all projects**, not scoped to project ACLs or permissions. The route group applies an outer `no_store` middleware layer, setting `Cache-Control: no-store` on all responses and errors.
+
+### `GET /api/auth/sessions`
+
+Lists active login sessions belonging to the authenticated account on the current server.
+
+**Credential Admission:** Accepts either an `Authorization: Bearer <token>` header or the `damhopper-auth` cookie.
+
+**Query Parameters:**
+- `cursor` (optional, string): Opaque keyset pagination cursor encoding the last session's issue timestamp and ID. An invalid or malformed cursor returns HTTP `400 Bad Request` with `code: "INVALID_CURSOR"`.
+
+**Filtering & Ordering:**
+- Returns only sessions belonging to the caller username, matching the current account `authVersion`, unrevoked (`revoked_at IS NULL`), and unexpired (`expiresAt > now`).
+- Sessions where MFA is due (`mfaDueAt <= now`) remain visible in the inventory so clients can review and manage them.
+- Ordered newest first by `(issuedAt DESC, id DESC)`.
+- Page size is fixed at 50 rows. The backend queries 51 rows to determine `nextCursor`; if a 51st row is returned, `nextCursor` is derived and the page is truncated to 50 rows without silent truncation.
+
+**Success Response (`200 OK`):**
+
+```json
+{
+  "sessions": [
+    {
+      "id": "671600000000000000000001",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36...",
+      "issuedAt": "2026-10-21T20:00:00Z",
+      "expiresAt": "2026-11-20T20:00:00Z",
+      "mfaVerifiedAt": "2026-10-21T20:00:00Z",
+      "current": true
+    }
+  ],
+  "nextCursor": "ey..."
+}
+```
+
+**Fields (`AuthSessionInfo`):**
+- `id` (string): Stable session identifier.
+- `userAgent` (string | null): Untrusted client/browser hint captured from the `User-Agent` header at full MFA session creation. Bounded to `<= 512` UTF-8 bytes on a character boundary; control characters are rejected and empty/absent headers result in `null`. Legacy sessions without metadata return `null`. The backend never stores or returns IP addresses, device fingerprints, tokens, or extra headers.
+- `issuedAt` (string, RFC 3339 UTC): Session creation timestamp.
+- `expiresAt` (string, RFC 3339 UTC): Absolute 30-day session expiration timestamp.
+- `mfaVerifiedAt` (string, RFC 3339 UTC): Most recent TOTP verification timestamp.
+- `current` (boolean): `true` when the session ID matches the caller's active session. The current session may appear on any page; clients must inspect `current` row-by-row rather than assuming the first item is current.
+
+**Development Mode (`--no-auth`):** Returns HTTP `409 Conflict` with `code: "DEVICE_SESSIONS_UNAVAILABLE"`.
+
+### `DELETE /api/auth/sessions/{id}`
+
+Revokes a login session by ID.
+
+**Credential Admission & Ordering (Strict Bearer Only):**
+Requires a validated explicit `Authorization: Bearer <token>` header (`CredentialMechanism::Bearer`).
+- Missing credentials return HTTP `401 Unauthorized` with `code: "AUTH_REQUIRED"`.
+- Invalid, expired, or revoked explicit `Bearer <token>` credentials return HTTP `401 Unauthorized` without falling back to cookie authentication.
+- Valid cookie credentials, including fallback from a non-Bearer or bare `Bearer` header, authenticate as `CredentialMechanism::Cookie`; DELETE then rejects them before any revocation write with HTTP `403 Forbidden`:
+
+```json
+{
+  "error": "Bearer token required to revoke login sessions; cookie credentials are not permitted",
+  "code": "BearerRequired"
+}
+```
+Cookie credentials alone cannot authorize a revocation write. Authentication middleware may still read account/session state before this denial.
+
+**Ownership & Idempotence:**
+- Storage mutation predicates on both the authenticated username and the target session ID.
+- Owned session: When requested using an active valid Bearer token, revoking an owned session (including an already-revoked session) returns HTTP `204 No Content` with an empty body, preserving the original `revoked_at` timestamp. Attempting to repeat self-revocation using the now-revoked token fails authentication at the middleware layer (`401 Unauthorized`) before reaching the handler.
+- Foreign or non-existent session: Returns an indistinguishable HTTP `404 Not Found` with `code: "SESSION_NOT_FOUND"`, preventing account session enumeration.
+**Cookie Invariants & Self-Revocation:**
+- The endpoint **never emits a `Set-Cookie` header** on success or failure.
+- Self-revoking the current session invalidates the server session and clears only the owning profile's local credentials; unrelated or replacement browser cookies in the cookie jar remain intact. A retained revoked cookie grants no access.
+
+**Media Capability Cleanup:**
+Revoking a session immediately invalidates all active media capabilities and tickets issued for that session (`media_tickets.revoke_by_actor_or_session`).
+
+**Development Mode (`--no-auth`):** Returns HTTP `409 Conflict` with `code: "DEVICE_SESSIONS_UNAVAILABLE"`.
+
+### Secure Transport & Client Guards
+
+The UI client (`packages/ui/src/api/auth-client.ts`) enforces strict transport invariants:
+- **HTTPS or Loopback HTTP Only:** Target URLs must use `https:` or loopback `http:` (`localhost`, `127.0.0.0/8`, `[::1]`). Remote plain HTTP URLs are rejected with `UNSAFE_AUTH_TRANSPORT`.
+- **Omit Cookies:** Client requests use `credentials: "omit"` and `cache: "no-store"`.
+- **Owner Fencing & Revoked-Draft Save Guard:** Requests, subscriptions, and self-revocation cleanup capture profile ID, URL, credential, and connection generation (`{ profileId, generation }`); stale responses or superseded generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile. On self-revocation acknowledgement, the Server Settings dialog clears the draft credential. A subsequent Save will not re-save the dead revoked token or overwrite any newly established replacement login.
 
 ## Logout and Errors
 
@@ -260,6 +346,10 @@ When rate limits or lockout windows apply, `retryAfter` is included in seconds a
 - `CHALLENGE_LIMIT_EXCEEDED` (429): Max 5 attempts exceeded for challenge
 - `ACCOUNT_LOCKED` (429): 10 failed attempts triggered 10-minute cooldown
 - `AUTH_UNAVAILABLE` (503): Database connection unavailable
+- `BearerRequired` (403): Explicit Bearer token required for session revocation; cookie authentication rejected
+- `SESSION_NOT_FOUND` (404): Session ID does not exist or belongs to another user
+- `INVALID_CURSOR` (400): Keyset pagination cursor is malformed or invalid
+- `DEVICE_SESSIONS_UNAVAILABLE` (409): Login devices endpoints are unavailable under `--no-auth` development mode
 
 ## Protected REST and Live Transports
 
@@ -271,9 +361,9 @@ The WebSocket handshake on `/ws` enforces the same session policy via query toke
 - `1013`: `AUTH_UNAVAILABLE`
 - `4001`: `CLOSE_OVERFLOW`
 
-Revocation detected by the periodic watcher takes up to 7 seconds to close an existing socket. Local session lease and effective-deadline guards run before inbound dispatch/commit without per-frame database reads.
+The periodic watcher checks persisted session state on a 5-second interval with a 2-second database timeout; scheduling and transport delivery are not a strict wall-clock cutoff guarantee. Inbound and outbound frames enforce the captured authentication deadline; persisted revocation is detected by the watcher. See the [isolated live-probe observations](../../plans/261022-0322-device-login-management/reports/live-revocation.md) for measured cutoff and sibling-survival evidence, rather than treating those timings as API guarantees.
 
-Image and video ticket issue routes (`/api/fs/{image,video}/tickets`) use the protected REST actor. Tickets and media sessions bind the auth session, account/credential versions, and effective deadline; absolute capability lifetimes are clamped to that deadline.
+Image and video ticket issue routes (`/api/fs/{image,video}/tickets`) use the protected REST actor. Tickets and media sessions bind the auth session, account/credential versions, and effective deadline; absolute capability lifetimes are clamped to that deadline. Revocation immediately invalidates the target session's tickets. An existing response revalidates persisted auth on a subsequent body read after at least 5 seconds since its last check, with a 2-second store timeout; paused, buffered, or completed responses have no unconditional wall-clock cutoff guarantee.
 
 ## Profile-Owned UI Client
 

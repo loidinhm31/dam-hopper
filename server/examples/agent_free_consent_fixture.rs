@@ -166,6 +166,7 @@ automatic_policy = "agent-free"
         expires_at: dam_hopper_server::auth::model::chrono_to_bson(exp),
         mfa_verified_at: dam_hopper_server::auth::model::chrono_to_bson(now),
         revoked_at: None,
+        user_agent: None,
     };
     store.create_user(user).await.unwrap();
     store.create_session(session).await.unwrap();

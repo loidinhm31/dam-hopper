@@ -70,6 +70,13 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/auth/mfa/challenge", post(auth_mfa::challenge))
         .layer(RequestBodyLimitLayer::new(16 * 1024));
 
+    // Separate boundary so no-store also wraps authentication/extractor rejections.
+    let device_sessions = Router::new()
+        .route("/api/auth/sessions", get(super::auth_sessions::list))
+        .route("/api/auth/sessions/{id}", delete(super::auth_sessions::revoke))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
+        .layer(middleware::from_fn(super::auth_sessions::no_store));
+
     // Public routes — no auth required
     let public = Router::new()
         .route("/api/health", get(settings::health))
@@ -573,6 +580,7 @@ pub fn build_router_with_web_dir_and_origins(
     let router = Router::new()
         .merge(public)
         .merge(protected)
+        .merge(device_sessions)
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream)
