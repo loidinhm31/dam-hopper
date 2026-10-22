@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use axum_extra::extract::CookieJar;
@@ -16,6 +16,7 @@ use crate::auth::policy::{
 };
 use crate::auth::totp::{TotpEngine, TotpError, TOTP_DIGITS, TOTP_ISSUER, TOTP_STEP_SECS};
 use crate::auth::AuthService;
+use crate::auth::session_inventory::normalize_user_agent;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,11 @@ pub fn no_store_json_response<T: Serialize>(status: StatusCode, body: T) -> Resp
         HeaderValue::from_static("no-store"),
     );
     resp
+}
+
+fn session_user_agent(headers: &HeaderMap) -> Option<String> {
+    normalize_user_agent(headers.get(header::USER_AGENT)
+        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok()))
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +301,7 @@ pub async fn setup(
 /// POST /api/auth/mfa/confirm — completes MFA enrollment and creates first session
 pub async fn confirm(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<MfaConfirmRequest>,
 ) -> Response {
     let now = state.auth_service.clock().now();
@@ -557,6 +564,7 @@ pub async fn confirm(
         expires_at: chrono_to_bson(expires_at),
         mfa_verified_at: chrono_to_bson(now),
         revoked_at: None,
+        user_agent: session_user_agent(&headers),
     };
 
     if let Err(e) = store.create_session(session).await {
@@ -617,6 +625,7 @@ pub async fn confirm(
 /// POST /api/auth/mfa/verify — verifies TOTP code for LoginMfa or StepUp challenge
 pub async fn verify(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<MfaVerifyRequest>,
 ) -> Response {
     let now = state.auth_service.clock().now();
@@ -858,6 +867,7 @@ pub async fn verify(
                 expires_at: chrono_to_bson(expires_at),
                 mfa_verified_at: chrono_to_bson(now),
                 revoked_at: None,
+                user_agent: session_user_agent(&headers),
             };
 
             if let Err(e) = store.create_session(session).await {

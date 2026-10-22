@@ -4,6 +4,7 @@ pub mod agent_memory;
 pub mod agent_store;
 pub mod auth;
 pub mod auth_mfa;
+pub mod auth_sessions;
 pub mod browser_debug;
 pub mod commands;
 pub mod config;

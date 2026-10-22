@@ -15,6 +15,7 @@ use thiserror::Error;
 use self::mongo::MongoAuthStore;
 use self::sqlite::SqliteAuthStore;
 use super::model::{AuthChallenge, AuthSession, ChallengePurpose, MfaConfirmed, UserRecord};
+use super::session_inventory::SessionCursor;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -241,6 +242,34 @@ impl AuthStore {
             }
         }
     }
+    /// Fetch at most 51 matching active sessions, in descending timestamp/ID order.
+    pub async fn list_active_sessions(
+        &self,
+        username: &str,
+        auth_version: i64,
+        now: DateTime<Utc>,
+        cursor: Option<&SessionCursor>,
+    ) -> Result<Vec<AuthSession>, StoreError> {
+        match &self.backend {
+            Backend::Mongo(store) => store.list_active_sessions(username, auth_version, now, cursor).await,
+            Backend::Sqlite(store) => store.list_active_sessions(username, auth_version, now, cursor).await,
+        }
+    }
+
+    /// Atomically revoke an owned existing session, preserving its first revocation.
+    /// Returns true for an already revoked owned record, false for foreign/missing IDs.
+    pub async fn revoke_owned_session(
+        &self,
+        username: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        match &self.backend {
+            Backend::Mongo(store) => store.revoke_owned_session(username, session_id, now).await,
+            Backend::Sqlite(store) => store.revoke_owned_session(username, session_id, now).await,
+        }
+    }
+
 
     /// Mark an active session as revoked.
     pub async fn revoke_session(

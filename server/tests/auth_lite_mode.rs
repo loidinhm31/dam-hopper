@@ -171,6 +171,7 @@ async fn bearer_for(lite: &Lite, username: &str) -> String {
         expires_at: chrono_to_bson(expires),
         mfa_verified_at: chrono_to_bson(now),
         revoked_at: None,
+        user_agent: None,
     };
     lite.store.create_session(session.clone()).await.unwrap();
     let claims = AuthClaims {
@@ -695,6 +696,7 @@ async fn session_revocation_denies_token() {
         expires_at: chrono_to_bson(expires),
         mfa_verified_at: chrono_to_bson(now),
         revoked_at: None,
+        user_agent: None,
     };
     lite.store.create_session(session).await.unwrap();
     let claims = AuthClaims {

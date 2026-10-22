@@ -6,6 +6,7 @@ import {
   Code2,
   ChartNoAxesCombined,
   GitBranch,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -21,6 +22,7 @@ export const BASE_NAV: NavEntry[] = [
   { to: "/git", icon: GitMerge, label: "GIT" },
   { to: "/usage", icon: ChartNoAxesCombined, label: "USAGE" },
   { to: "/agent-store", icon: Package, label: "AGENT STORE" },
+  { to: "/devices", icon: ShieldCheck, label: "DEVICES" },
   { to: "/settings", icon: Settings, label: "SETTINGS" },
 ];
 

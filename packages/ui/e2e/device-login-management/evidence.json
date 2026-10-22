@@ -1,0 +1,50 @@
+{
+  "run_id": "e2e-run-1792621601955-c069185b",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-21T22:26:41.955Z",
+  "completed_at": "2026-10-21T22:26:47.312Z",
+  "case_name": "device-login-management",
+  "route": "/workspace",
+  "git_head": "86f7aebdbae3f71a00f6eecbe19001f7ca665d01",
+  "source_fingerprint": "28c9880d8b5d1633fe303789a918279089a0670bf44b34150db614ca301f75dc",
+  "seed_digest": "131a7fd1a83668db8b02034b7309a9dedfd62069f227205baeab6db0a74b0509",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "desktop-login-devices",
+      "file_name": "desktop-login-devices.png",
+      "sha256": "4b9f4506b5aa684877b3b06f310f1b4a8c4f269a832a4c4d3ed0a331996feba4",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "narrow-login-devices",
+      "file_name": "narrow-login-devices.png",
+      "sha256": "5fb8ec7364c497ca7a2f3b0bb60183fad8b626e451bc5e891b68d4374232238c",
+      "dimensions": {
+        "width": 320,
+        "height": 667
+      }
+    },
+    {
+      "checkpoint": "narrow-self-revoke-confirmation",
+      "file_name": "narrow-self-revoke-confirmation.png",
+      "sha256": "a6331d3c74132b69dff7d7ad463c8b25736e867edc949da954c8f0e7a878b1ab",
+      "dimensions": {
+        "width": 320,
+        "height": 667
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

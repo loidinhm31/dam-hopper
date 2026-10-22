@@ -87,8 +87,17 @@ E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e editor-git-blame/editor-git-
 # Feature: SQLite Authentication Lite Mode (Application E2E)
 pnpm --filter @dam-hopper/ui test:e2e:typecheck
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts
-```
 
+# Feature: Device Login Management (Authentication Sessions & Revocation)
+cargo test --manifest-path server/Cargo.toml --test auth_device_sessions
+cargo test --manifest-path server/Cargo.toml --test auth_device_session_failures
+cargo test --manifest-path server/Cargo.toml --test auth_device_session_store
+cargo test --manifest-path server/Cargo.toml --test auth_session_metadata
+pnpm --filter @dam-hopper/ui exec vitest run src/api/auth-client.test.ts
+pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/LoginDevicesSection.test.tsx src/components/organisms/ServerSettingsDialog.test.tsx src/components/organisms/login-devices-connections.test.tsx
+pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/login-devices.browser.tsx
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e device-login-management/device-login-management.spec.ts
+```
 ---
 
 ## 4. Isolated Application Services
@@ -138,6 +147,13 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Verifies unauthenticated `GET /api/projects` returns `401`, while bearer-authenticated `GET /api/auth/status` reports `authenticated: true`, `user: "admin"`, `role: "admin"`, and omits `devMode`.
    - Verifies `POST /api/auth/register` with JSON `{ "username", "password" }` returns `200` `{ "ok": true }` and that subsequent `POST /api/auth/login` for that unapproved account returns `401` with `code: "ACCOUNT_DISABLED"`.
    - Navigates through `/settings` and `/workspace` and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
+3. **Device Login Management (`packages/ui/e2e/device-login-management/device-login-management.spec.ts`):**
+   - Starts isolated application services with real backend and seeds initial admin authentication.
+   - Creates secondary same-account sessions and foreign user sessions to verify session isolation.
+   - Verifies `GET /api/auth/sessions` lists active account sessions with untrusted client hint text, current session indicator, and keyset pagination.
+   - Revokes another session and verifies immediate rejection of revoked credentials for protected HTTP and WebSocket endpoints while current session remains authenticated.
+   - Tests self-revocation from Server Settings dialog, confirming local profile credential clearing, no unintended cookie mutation, and draft Save protection.
+   - Captures full-viewport visual evidence across desktop (1440x900) and narrow viewports (320x667). Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW` pending operator visual inspection.
 ---
 
 ## 6. Visual Evidence Authenticity & Governance

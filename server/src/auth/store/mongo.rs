@@ -19,6 +19,7 @@ use crate::auth::model::{
 use crate::auth::policy::{
     ACCOUNT_ATTEMPT_WINDOW_SECS, ACCOUNT_COOLDOWN_SECS, ACCOUNT_MAX_FAILED_ATTEMPTS,
 };
+use crate::auth::session_inventory::{SessionCursor, SESSION_FETCH_LIMIT};
 
 /// MongoDB duplicate-key write error code.
 const DUPLICATE_KEY_CODE: i32 = 11000;
@@ -86,6 +87,10 @@ impl MongoAuthStore {
             .keys(doc! { "username": 1 })
             .build();
         let _ = self.sessions.create_index(session_user_index).await;
+        let inventory_index = IndexModel::builder()
+            .keys(doc! { "username": 1, "authVersion": 1, "issuedAt": -1, "_id": -1 })
+            .build();
+        self.sessions.create_index(inventory_index).await?;
 
         let session_ttl_index = IndexModel::builder()
             .keys(doc! { "expiresAt": 1 })
@@ -405,6 +410,54 @@ impl MongoAuthStore {
             )
             .await?;
         Ok(session)
+    }
+
+    pub(super) async fn list_active_sessions(
+        &self,
+        username: &str,
+        auth_version: i64,
+        now: DateTime<Utc>,
+        cursor: Option<&SessionCursor>,
+    ) -> Result<Vec<AuthSession>, StoreError> {
+        let mut filter = doc! {
+            "username": username,
+            "authVersion": auth_version,
+            "revokedAt": null,
+            "expiresAt": { "$gt": chrono_to_bson(now) },
+        };
+        if let Some(cursor) = cursor {
+            let issued_at = mongodb::bson::DateTime::from_millis(cursor.issued_at_ms);
+            filter.insert("$or", vec![
+                doc! { "issuedAt": { "$lt": issued_at } },
+                doc! { "issuedAt": issued_at, "_id": { "$lt": &cursor.id } },
+            ]);
+        }
+        let mut rows = self.sessions.find(filter)
+            .sort(doc! { "issuedAt": -1, "_id": -1 })
+            .limit(SESSION_FETCH_LIMIT as i64)
+            .await?;
+        let mut sessions = Vec::with_capacity(SESSION_FETCH_LIMIT);
+        while rows.advance().await? {
+            sessions.push(rows.deserialize_current()?);
+        }
+        Ok(sessions)
+    }
+
+    pub(super) async fn revoke_owned_session(
+        &self,
+        username: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        // Pipeline update is one atomic owner-constrained mutation. ifNull keeps
+        // the first timestamp on concurrent/repeated revocations, including legacy rows.
+        let result = self.sessions.update_one(
+            doc! { "_id": session_id, "username": username },
+            vec![doc! { "$set": {
+                "revokedAt": { "$ifNull": ["$revokedAt", chrono_to_bson(now)] }
+            } }],
+        ).await?;
+        Ok(result.matched_count == 1)
     }
 
     /// Mark an active session as revoked.

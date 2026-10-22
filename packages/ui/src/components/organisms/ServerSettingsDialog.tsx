@@ -7,6 +7,8 @@ import {
 } from "@/api/connections.js";
 import type { ServerProfile } from "@/api/server-config.js";
 import { WorkspaceSwitcher } from "@/components/organisms/WorkspaceSwitcher.js";
+import { LoginDevicesSection } from "@/components/organisms/LoginDevicesSection.js";
+import type { LoginDevicesOwner } from "./login-devices-owner.js";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary.js";
 import {
   login,
@@ -54,6 +56,12 @@ interface Props {
 }
 
 type TestState = "idle" | "testing" | "challenge" | "ok" | "fail";
+
+interface CredentialDraftScope {
+  profileId: string | null;
+  serverUrl: string;
+  revokedToken?: string;
+}
 
 function secureBearerHeaders(
   serverUrl: string,
@@ -110,6 +118,17 @@ export function ServerSettingsDialog({
   const bodyScrollRef = useRef<HTMLDivElement>(null);
   const mfaSectionRef = useRef<HTMLDivElement>(null);
   const hasMfaSetupData = Boolean(mfaSetupData);
+  const [credentialDraftScope, setCredentialDraftScope] = useState<CredentialDraftScope | null>(null);
+  const credentialDraftScopeRef = useRef<CredentialDraftScope | null>(null);
+
+  const handleSelfRevoked = (owner: LoginDevicesOwner) => {
+    if (!credentialDraftScope || credentialDraftScopeRef.current !== credentialDraftScope ||
+        owner.profileId !== credentialDraftScope.profileId ||
+        owner.serverUrl !== credentialDraftScope.serverUrl || !owner.token) return;
+    credentialDraftScope.revokedToken = owner.token;
+    setToken((draft) => draft.trim() === owner.token ? "" : draft);
+    setInitialToken((initial) => initial === owner.token ? "" : initial);
+  };
 
   const isEditMode = profile !== undefined;
   const clearAuthDraft = useCallback(() => {
@@ -192,6 +211,9 @@ export function ServerSettingsDialog({
           : undefined);
       const storedToken =
         profile === null ? "" : (getAuthToken(tokenProfileId) ?? "");
+      const scope = { profileId: tokenProfileId ?? null, serverUrl: normalizeServerUrl(storedUrl) };
+      credentialDraftScopeRef.current = scope;
+      setCredentialDraftScope(scope);
       setInitialUrl(storedUrl);
       setInitialToken(storedToken);
       setToken(storedToken);
@@ -211,6 +233,7 @@ export function ServerSettingsDialog({
       }
     }
     return () => {
+      credentialDraftScopeRef.current = null;
       clearAuthDraft();
     };
   }, [open, profile, isEditMode, clearAuthDraft, initiateStepUp]);
@@ -413,6 +436,33 @@ export function ServerSettingsDialog({
     if (!urlSchemeValid) return;
 
     const t = token.trim();
+    const saveScope = credentialDraftScope;
+    const saveProfileId = profile?.id ?? (profile === undefined ? getActiveProfileId() ?? undefined : undefined);
+    let expectedCredential = getAuthToken(saveProfileId);
+    // Only self-revoked drafts need this precondition. A blanked stale draft is
+    // not an instruction to clear a replacement login stored by another flow.
+    // Recheck after awaits and before rollback/reconnect as well as on entry.
+    const credentialStillOwned = () => {
+      const revokedToken = saveScope?.revokedToken;
+      return !revokedToken ||
+        (credentialDraftScopeRef.current === saveScope &&
+          saveProfileId === saveScope?.profileId && t !== revokedToken &&
+          (expectedCredential === null || expectedCredential === revokedToken || t === expectedCredential) &&
+          getAuthToken(saveProfileId) === expectedCredential);
+    };
+    const requireCredentialOwnership = () => {
+      if (credentialStillOwned()) return true;
+      setTestState("fail");
+      setTestError("This login changed while settings were open. Reopen server settings before saving.");
+      return false;
+    };
+    const saveAuthToken = (value: string | null, profileId?: string) => {
+      if (!requireCredentialOwnership()) return false;
+      const persisted = value ? setAuthToken(value, profileId) : clearAuthToken(profileId);
+      if (persisted) expectedCredential = value;
+      return persisted;
+    };
+    if (!requireCredentialOwnership()) return;
     const urlChanged = haveServerUrlsChanged(initialUrl, normalized);
     const tokenMustBeCleared = shouldClearAuthTokenForUrlChange(
       initialUrl,
@@ -433,6 +483,7 @@ export function ServerSettingsDialog({
         (urlChanged || previousProfileToken !== t),
       );
       const restoreProfileState = (profileId: string): boolean => {
+        if (!credentialStillOwned() || previousProfileToken === saveScope?.revokedToken) return false;
         const profilesRestored = saveProfiles(previousProfiles);
         const activeProfileRestored = previousActiveProfileId
           ? setActiveProfile(previousActiveProfileId)
@@ -463,7 +514,7 @@ export function ServerSettingsDialog({
             getMediaClientIdForProfile(profile!.id),
           );
         }
-        if (!clearAuthToken(profile!.id)) {
+        if (!saveAuthToken(null, profile!.id)) {
           restoreProfileState(profile!.id);
           setTestState("fail");
           setTestError(
@@ -528,7 +579,7 @@ export function ServerSettingsDialog({
             getMediaClientIdForProfile(profile!.id),
           );
         }
-        if (!clearAuthToken(savedProfile.id)) {
+        if (!saveAuthToken(null, savedProfile.id)) {
           const restored = restoreProfileState(savedProfile.id);
           setTestState("fail");
           setTestError(
@@ -546,7 +597,7 @@ export function ServerSettingsDialog({
           getMediaClientIdForProfile(profile!.id),
         );
       }
-      if (t && !tokenMustBeCleared && !setAuthToken(t, savedProfile.id)) {
+      if (t && !tokenMustBeCleared && !saveAuthToken(t, savedProfile.id)) {
         const restored = restoreProfileState(savedProfile.id);
         setTestState("fail");
         setTestError(
@@ -563,6 +614,7 @@ export function ServerSettingsDialog({
       onSaved?.(savedProfile);
 
       // Invalidate the runtime connection for this profile so changes take effect without reloading
+      if (!requireCredentialOwnership()) return;
       if (urlChanged || tokenMustBeCleared || t) {
         disconnectProfile(savedProfile.id);
         if (
@@ -584,6 +636,7 @@ export function ServerSettingsDialog({
       );
       const previousUrlWasExplicit = hasServerUrl();
       const restoreLegacyState = (): boolean => {
+        if (!credentialStillOwned() || previousLegacyToken === saveScope?.revokedToken) return false;
         const urlRestored = previousUrlWasExplicit
           ? setServerUrl(initialUrl)
           : clearServerUrl();
@@ -605,7 +658,7 @@ export function ServerSettingsDialog({
               : null,
           );
         }
-        if (!clearAuthToken(activeProfileId)) {
+        if (!saveAuthToken(null, activeProfileId)) {
           restoreLegacyState();
           setTestState("fail");
           setTestError(
@@ -635,7 +688,7 @@ export function ServerSettingsDialog({
       if (
         !tokenClearedForUrlChange &&
         (tokenMustBeCleared || !t) &&
-        !clearAuthToken(activeProfileId)
+        !saveAuthToken(null, activeProfileId)
       ) {
         const restored = restoreLegacyState();
         setTestState("fail");
@@ -653,7 +706,7 @@ export function ServerSettingsDialog({
           activeProfileId ? getMediaClientIdForProfile(activeProfileId) : null,
         );
       }
-      if (t && !tokenMustBeCleared && !setAuthToken(t, activeProfileId)) {
+      if (t && !tokenMustBeCleared && !saveAuthToken(t, activeProfileId)) {
         const restored = restoreLegacyState();
         setTestState("fail");
         setTestError(
@@ -664,6 +717,7 @@ export function ServerSettingsDialog({
         return;
       }
 
+      if (!requireCredentialOwnership()) return;
       if (username) {
         setAuthUsername(username.trim());
       } else {
@@ -1002,6 +1056,12 @@ export function ServerSettingsDialog({
               />
             </div>
           )}
+
+          <LoginDevicesSection
+            key={profile === undefined ? "legacy" : (profile?.id ?? "new")}
+            profileId={profile === undefined ? undefined : (profile?.id ?? null)}
+            onSelfRevoked={handleSelfRevoked}
+          />
 
           {profile && (
             <div className="pt-3 border-t border-[var(--color-border)]">
