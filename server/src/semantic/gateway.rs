@@ -959,6 +959,18 @@ impl SemanticGateway {
                 self.send_outbound(err).await;
                 return Ok(());
             }
+            Err(SessionError::Invalidated) => {
+                self.client_to_internal.lock().await.remove(&client_id);
+                self.internal_to_client.lock().await.remove(&internal_id);
+                let err = json_rpc_error(
+                    client_id,
+                    RPC_ERR_AUTH_INVALIDATED,
+                    "Session invalidated: connection or target changed",
+                    Some("AUTH_INVALIDATED"),
+                );
+                self.send_outbound(err).await;
+                return Ok(());
+            }
             Err(_) => {
                 self.client_to_internal.lock().await.remove(&client_id);
                 self.internal_to_client.lock().await.remove(&internal_id);

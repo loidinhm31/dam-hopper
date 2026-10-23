@@ -121,6 +121,7 @@ pub enum SessionCommand {
     GetPgid {
         reply: oneshot::Sender<Option<u32>>,
     },
+    Invalidate,
 }
 
 /// Handle to communicate with an isolated semantic session.
@@ -220,6 +221,9 @@ impl SemanticSessionHandle {
 
     pub async fn cancel_request(&self, id: Value) {
         let _ = self.cmd_tx.send(SessionCommand::CancelRequest { id }).await;
+    }
+    pub async fn invalidate(&self) {
+        let _ = self.cmd_tx.send(SessionCommand::Invalidate).await;
     }
 
     pub async fn shutdown(&self) -> Result<(), SessionError> {
@@ -364,7 +368,41 @@ impl SemanticSessionActor {
     }
 
     async fn handle_command(&mut self, cmd: SessionCommand) -> bool {
+        if self.state == SemanticState::Invalidated {
+            match cmd {
+                SessionCommand::Shutdown { reply } => {
+                    let _ = reply.send(Ok(()));
+                    return true;
+                }
+                SessionCommand::GetState { reply } => {
+                    let _ = reply.send(SemanticState::Invalidated);
+                    return false;
+                }
+                SessionCommand::Navigation { reply, .. } => {
+                    let _ = reply.send(Err(SessionError::Invalidated));
+                    return false;
+                }
+                SessionCommand::DidOpen { reply, .. }
+                | SessionCommand::DidChange { reply, .. }
+                | SessionCommand::DidClose { reply, .. } => {
+                    let _ = reply.send(Err(SessionError::Invalidated));
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+
         match cmd {
+            SessionCommand::Invalidate => {
+                self.state = SemanticState::Invalidated;
+                self.overlays.clear();
+                let in_flights: Vec<InFlightRequest> =
+                    self.in_flight_requests.drain().map(|(_, req)| req).collect();
+                for req in in_flights {
+                    let _ = req.response_tx.send(Err(SessionError::Invalidated));
+                }
+                false
+            }
             SessionCommand::Initialize { reply } => {
                 let res = self.do_initialize().await;
                 let _ = reply.send(res);

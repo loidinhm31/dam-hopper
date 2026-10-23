@@ -26,8 +26,9 @@ import {
   type MonacoPositionLike,
   type MonacoRangeLike,
 } from "./semantic-model-uri.js";
-import { editorFileTabKey } from "@/stores/editor.js";
+import { editorFileTabKey, useEditorStore } from "@/stores/editor.js";
 import type { ProjectTargetInput } from "@/api/client.js";
+import type { FsArborNode } from "@/api/fs-types.js";
 import {
   registerSemanticToggleListener,
   useSemanticNavigationStore,
@@ -118,6 +119,7 @@ function getMonacoTypeScriptContribution(): MonacoTypeScriptContribution | null 
   return null;
 }
 export interface SemanticMonacoManagerOptions {
+  ownerId?: string;
   registry?: SemanticModelRegistry;
   getClientForModel?: (tabKey: string) => SemanticClient | null;
   onOpenCodeEditor?: (params: {
@@ -143,6 +145,14 @@ export class SemanticMonacoManager {
       !this.active
     ) {
       this.activate();
+    }
+  }
+
+  resetOptions(ownerId?: string): void {
+    if (!ownerId || this.options.ownerId === ownerId) {
+      this.options.getClientForModel = undefined;
+      this.options.onOpenCodeEditor = undefined;
+      this.options.ownerId = undefined;
     }
   }
 
@@ -236,9 +246,11 @@ export class SemanticMonacoManager {
     const registered = this.registry.getByLocalModelUri(model.uri.toString());
 
     if (registered && registered.wireBinding) {
-      const client = this.options.getClientForModel?.(
-        registered.identity.tabKey,
-      );
+      const client =
+        this.options.getClientForModel?.(registered.identity.tabKey) ??
+        useSemanticNavigationStore
+          .getState()
+          .findClientForTab(registered.identity.tabKey);
       if (client && client.getStatus() === "ready") {
         const lspPos = monacoPositionToLsp(position);
         const result = await client.getDefinition(
@@ -271,9 +283,11 @@ export class SemanticMonacoManager {
     const registered = this.registry.getByLocalModelUri(model.uri.toString());
 
     if (registered && registered.wireBinding) {
-      const client = this.options.getClientForModel?.(
-        registered.identity.tabKey,
-      );
+      const client =
+        this.options.getClientForModel?.(registered.identity.tabKey) ??
+        useSemanticNavigationStore
+          .getState()
+          .findClientForTab(registered.identity.tabKey);
       if (client && client.getStatus() === "ready") {
         const lspPos = monacoPositionToLsp(position);
         const result = await client.getImplementation(
@@ -360,7 +374,54 @@ export class SemanticMonacoManager {
       };
     }
 
-    return this.options.onOpenCodeEditor?.({ tabKey, range }) ?? false;
+    if (this.options.onOpenCodeEditor) {
+      const handled = this.options.onOpenCodeEditor({ tabKey, range });
+      if (handled) return true;
+    }
+
+    try {
+      const parsedKey = JSON.parse(tabKey);
+      const relativePath = parsedKey[parsedKey.length - 1];
+      if (typeof relativePath !== "string") return false;
+      const fileName = relativePath.split("/").pop() ?? relativePath;
+
+      const registered = this.registry.getByTabKey(tabKey);
+      const profileId = registered?.identity.profileId;
+      const project = registered?.identity.project ?? parsedKey[0];
+      const targetKey = registered?.identity.targetKey;
+
+      const targetInput: ProjectTargetInput = {
+        project,
+        profileId,
+      };
+
+      const fileNode: FsArborNode = {
+        id: relativePath,
+        name: fileName,
+        kind: "file",
+        size: 0,
+        mtime: 0,
+        isSymlink: false,
+        children: null,
+      };
+
+      if (range && profileId && targetKey) {
+        useSemanticNavigationStore.getState().setRevealIntent({
+          targetId: "",
+          profileId,
+          project,
+          targetKey,
+          relativePath,
+          range,
+          createdAt: Date.now(),
+        });
+      }
+
+      void useEditorStore.getState().open(targetInput, fileNode);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async fallbackBuiltinImplementation(

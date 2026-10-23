@@ -123,4 +123,89 @@ describe("semantic-navigation store", () => {
     spyActivate.mockRestore();
     spyDeactivate.mockRestore();
   });
+  it("scopes enablement per profile and disconnects only matching profile clients on disable", () => {
+    const store = useSemanticNavigationStore.getState();
+
+    store.setProfileSemanticEnabled("prof-a", true);
+    store.setProfileSemanticEnabled("prof-b", true);
+    expect(store.isSemanticEnabledForProfile("prof-a")).toBe(true);
+    expect(store.isSemanticEnabledForProfile("prof-b")).toBe(true);
+
+    const clientA = store.getOrCreateClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      serverUrl: "http://127.0.0.1:4803",
+      token: "tok-a",
+      profileId: "prof-a",
+      project: "proj-a",
+      targetKey: "target-a",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+    });
+
+    const clientB = store.getOrCreateClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      serverUrl: "http://127.0.0.1:4803",
+      token: "tok-b",
+      profileId: "prof-b",
+      project: "proj-b",
+      targetKey: "target-b",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+    });
+
+    const spyDisconnectA = vi.spyOn(clientA, "disconnect");
+    const spyDisconnectB = vi.spyOn(clientB, "disconnect");
+
+    // Disable prof-a
+    store.setProfileSemanticEnabled("prof-a", false);
+    expect(store.isSemanticEnabledForProfile("prof-a")).toBe(false);
+    expect(store.isSemanticEnabledForProfile("prof-b")).toBe(true);
+
+    expect(spyDisconnectA).toHaveBeenCalledTimes(1);
+    expect(spyDisconnectB).not.toHaveBeenCalled();
+
+    spyDisconnectA.mockRestore();
+    spyDisconnectB.mockRestore();
+  });
+
+  it("reference-counts shared clients so unmounting one editor does not disconnect other tabs", () => {
+    const store = useSemanticNavigationStore.getState();
+    const opts = {
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      serverUrl: "http://127.0.0.1:4803",
+      token: "tok-shared",
+      profileId: "prof-shared",
+      project: "proj-shared",
+      targetKey: "target-shared",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+    };
+
+    // Editor 1 opens
+    const client1 = store.getOrCreateClient(opts);
+    // Editor 2 opens same target
+    const client2 = store.getOrCreateClient(opts);
+    expect(client1).toBe(client2);
+
+    const spyDisconnect = vi.spyOn(client1, "disconnect");
+    const scopeKey = buildSemanticScopeKey(
+      opts.profileId,
+      opts.serverUrl,
+      opts.project,
+      opts.targetKey,
+      opts.connectionGeneration,
+    );
+
+    // Editor 1 unmounts / releases
+    store.releaseClient(scopeKey);
+    expect(spyDisconnect).not.toHaveBeenCalled();
+    expect(store.getClient(scopeKey)).toBe(client1);
+
+    // Editor 2 unmounts / releases final reference
+    store.releaseClient(scopeKey);
+    expect(spyDisconnect).toHaveBeenCalledTimes(1);
+    expect(store.getClient(scopeKey)).toBeNull();
+
+    spyDisconnect.mockRestore();
+  });
 });

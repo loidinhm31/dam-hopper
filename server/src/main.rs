@@ -1065,7 +1065,7 @@ async fn main() -> anyhow::Result<()> {
         ForceCloseListener::new(listener, force_close_token).tap_io(|_: &mut ForceCloseIo| {});
 
     let host_resource_events_shutdown = state.host_resource_events.clone();
-
+    let semantic_supervisor_shutdown_early = state.semantic_supervisor.clone();
     #[cfg(unix)]
     let shutdown_signal = async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -1078,7 +1078,7 @@ async fn main() -> anyhow::Result<()> {
             _ = sigterm.recv() => {},
         }
         tracing::info!("Received shutdown signal, beginning graceful shutdown");
-
+        semantic_supervisor_shutdown_early.revoke_admission();
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -1096,7 +1096,7 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_signal = async move {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("Received shutdown signal, beginning graceful shutdown");
-
+        semantic_supervisor_shutdown_early.revoke_admission();
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;

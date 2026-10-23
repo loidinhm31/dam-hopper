@@ -43,9 +43,12 @@ export interface NavigationRevealIntent {
 
 export interface SemanticNavigationState {
   globalSemanticEnabled: boolean;
+  profileSemanticEnabled: Record<string, boolean>;
   activeRevealIntent: NavigationRevealIntent | null;
   clientStatuses: Record<string, SemanticClientStatus>;
   setGlobalSemanticEnabled: (enabled: boolean) => void;
+  setProfileSemanticEnabled: (profileId: string, enabled: boolean) => void;
+  isSemanticEnabledForProfile: (profileId: string) => boolean;
   setRevealIntent: (intent: NavigationRevealIntent | null) => void;
   consumeRevealIntent: (
     profileId: string,
@@ -56,6 +59,7 @@ export interface SemanticNavigationState {
   getClient: (scopeKey: string) => SemanticClient | null;
   findClientForTab: (tabKey: string) => SemanticClient | null;
   getOrCreateClient: (options: SemanticClientOptions) => SemanticClient;
+  releaseClient: (scopeKey: string) => void;
   disconnectClient: (scopeKey: string) => void;
   disconnectAll: () => void;
 }
@@ -70,12 +74,56 @@ export function buildSemanticScopeKey(
   return `${profileId}::${serverUrl}::${project}::${targetKey}::gen_${connectionGeneration}`;
 }
 const activeClients = new Map<string, SemanticClient>();
+const clientRefCounts = new Map<string, number>();
 
 export const useSemanticNavigationStore = create<SemanticNavigationState>(
   (set, get) => ({
     globalSemanticEnabled: false,
+    profileSemanticEnabled: {},
     activeRevealIntent: null,
     clientStatuses: {},
+
+    setProfileSemanticEnabled: (profileId, enabled) => {
+      const prevGlobal = get().globalSemanticEnabled;
+      const nextProfiles = {
+        ...get().profileSemanticEnabled,
+        [profileId]: enabled,
+      };
+      const nextGlobal = Object.values(nextProfiles).some(Boolean);
+
+      set({
+        profileSemanticEnabled: nextProfiles,
+        globalSemanticEnabled: nextGlobal,
+      });
+
+      if (prevGlobal !== nextGlobal) {
+        for (const listener of toggleListeners) {
+          try {
+            listener(nextGlobal);
+          } catch {
+            // Ignore listener errors
+          }
+        }
+      }
+      if (!enabled) {
+        for (const [key, client] of Array.from(activeClients.entries())) {
+          if (key.startsWith(`${profileId}::`)) {
+            client.disconnect();
+            activeClients.delete(key);
+            clientRefCounts.delete(key);
+            set((state) => {
+              const next = { ...state.clientStatuses };
+              delete next[key];
+              return { clientStatuses: next };
+            });
+          }
+        }
+      }
+    },
+
+    isSemanticEnabledForProfile: (profileId) => {
+      return get().profileSemanticEnabled[profileId] ?? get().globalSemanticEnabled;
+    },
 
     setGlobalSemanticEnabled: (enabled) => {
       set({ globalSemanticEnabled: enabled });
@@ -154,6 +202,9 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
         options.targetKey,
         options.connectionGeneration,
       );
+
+      clientRefCounts.set(scopeKey, (clientRefCounts.get(scopeKey) ?? 0) + 1);
+
       const existing = activeClients.get(scopeKey);
       if (existing) {
         return existing;
@@ -176,7 +227,28 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
       return client;
     },
 
+    releaseClient: (scopeKey) => {
+      const currentCount = clientRefCounts.get(scopeKey) ?? 1;
+      const nextCount = currentCount - 1;
+      if (nextCount <= 0) {
+        clientRefCounts.delete(scopeKey);
+        const client = activeClients.get(scopeKey);
+        if (client) {
+          client.disconnect();
+          activeClients.delete(scopeKey);
+          set((state) => {
+            const next = { ...state.clientStatuses };
+            delete next[scopeKey];
+            return { clientStatuses: next };
+          });
+        }
+      } else {
+        clientRefCounts.set(scopeKey, nextCount);
+      }
+    },
+
     disconnectClient: (scopeKey) => {
+      clientRefCounts.delete(scopeKey);
       const client = activeClients.get(scopeKey);
       if (client) {
         client.disconnect();
@@ -190,6 +262,7 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
     },
 
     disconnectAll: () => {
+      clientRefCounts.clear();
       for (const client of activeClients.values()) {
         client.disconnect();
       }

@@ -140,9 +140,19 @@ dam-hopper://semantic/<target-id>/<encoded-relative-path>
 - **Encoding:** Segments are percent-encoded once. RFC 3986 unreserved characters (`a-z`, `A-Z`, `0-9`, `-`, `.`, `_`, `~`) must not be percent-encoded.
 - **Result Sanitization:** Containment is checked against canonical target root. Results resolving outside target root (e.g. external package directories, standard libraries, or symlink targets outside root) return `{ "outsideTarget": true }`, preventing disclosure of internal host filesystem paths. Malformed child location objects fold into this count in current builds.
 
-### Live Auth Invalidation & Close Codes
+### Invalidation, Lifecycle Boundaries & Error Codes
 
-A background watcher checks session validity every 5 seconds (2-second bounded lookup). On invalidation, it executes **cancellation-first teardown**: invalidating admission and reaping the child process tree _before_ closing the socket.
+Semantic WebSocket sessions participate in distinct invalidation mechanisms depending on the triggering event:
+
+- **Live Auth Invalidation:** A background watcher rechecks session validity every 5 seconds (2-second bounded lookup). On credential revocation, expiry, or user disablement, it executes **cancellation-first teardown**: supervisor admission is revoked and the child process tree is reaped _before_ socket closure (close code `4401 CLOSE_FULL_LOGIN_REQUIRED`).
+- **Two-Phase Lifecycle Invalidation:** Workspace switches (`switch_workspace`), config reloads (`reload_config_locked`), and settings cache clears (`clear_cache`) execute **two-phase scoped invalidation**: Phase 1 synchronously detaches sessions from the supervisor registry and enqueues actor invalidation under `workspace_context_guard.write()` (actor command processing and in-flight result publication fencing are subject to open review item C2); Phase 2 reaps child process groups asynchronously outside the lock (`spawn_reap_sessions` or `reap_sessions` via `join_all`, subject to open review item R3). Config reloads diff project sets, invalidating only removed project roots while preserving unaffected project sessions.
+- **Early Shutdown Cutoff:** The daemon signal handler calls `revoke_admission()` in the SIGINT/SIGTERM handler, cutting off new WebSocket admissions before socket listeners drain or services stop.
+- **Client Fault Recovery:**
+  - `-32003` (`STALE_VERSION`): Document version divergence triggers client full `didChange` resynchronization (`TextDocumentSyncKind.Full`), restoring overlay alignment without restarting the session.
+  - `-32005` (`AUTH_REVOKED`): Admission revocation triggers client transition to `disconnected` and schedules exponential auto-reconnect backoff (1.5s–10s with timer hygiene); reconnect currently checks target key equality without full endpoint/root/actor provenance matching (subject to open security review item R1). Terminal failures (removed project `-32002`, disabled service `-32000`, revoked auth) fail closed.
+  - `-32800` (`REQUEST_CANCELLED`): Returned when in-flight navigation requests are cancelled via `$/cancelRequest` or session interruption.
+
+See [Semantic WebSocket Gateway Architecture](../architecture/semantic-websocket-gateway.md#lifecycle-invalidation-and-client-recovery-phase-08) for authoritative trigger and recovery matrices.
 
 - Close Codes: `1000` (Normal), `1008` (Policy Violation), `1011` (Internal Error), `1013` (Auth Unavailable), `4401` (Full Login Required / Revoked / Expired), `4403` (MFA Required).
 - JSON-RPC Error Codes: `-32700` (Parse error), `-32600` (Invalid request), `-32601` (Method not found), `-32602` (Invalid params), `-32603` (Internal error), `-32000` (`SEMANTIC_DISABLED`), `-32001` (`UNSUPPORTED_DESCRIPTOR`), `-32002` (`TARGET_NOT_FOUND`), `-32003` (`STALE_VERSION`), `-32004` (`IN_FLIGHT_FULL` / `RATE_LIMIT_EXCEEDED`), `-32005` (`AUTH_REVOKED`), `-32800` (`REQUEST_CANCELLED`).

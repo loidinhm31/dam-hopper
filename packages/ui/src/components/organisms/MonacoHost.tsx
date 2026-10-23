@@ -176,8 +176,9 @@ export function MonacoHost({
     }
   }, [onRefreshBlame, hookResult]);
 
+  const tabProfileId = effectiveTab?.target?.profileId;
   const semanticEnabled = useSemanticNavigationStore(
-    (s) => s.globalSemanticEnabled,
+    (s) => tabProfileId ? s.isSemanticEnabledForProfile(tabProfileId) : s.globalSemanticEnabled,
   );
   const clientStatuses = useSemanticNavigationStore((s) => s.clientStatuses);
 
@@ -185,6 +186,7 @@ export function MonacoHost({
     if (
       !semanticEnabled ||
       !effectiveTab ||
+      !effectiveTab.target?.profileId ||
       !isSupportedSemanticPath(effectiveTab.path)
     ) {
       return;
@@ -192,7 +194,7 @@ export function MonacoHost({
 
     defaultSemanticModelRegistry.registerModel({
       tabKey,
-      profileId: effectiveTab.target?.profileId ?? "default",
+      profileId: effectiveTab.target.profileId,
       project: effectiveTab.project,
       targetKey: effectiveTab.targetKey,
       relativePath: effectiveTab.path,
@@ -218,12 +220,12 @@ export function MonacoHost({
     (s) => s.activeRevealIntent,
   );
   useEffect(() => {
-    if (!activeRevealIntent || !effectiveTab || !editorInstance) return;
+    if (!activeRevealIntent || !effectiveTab || !editorInstance || !effectiveTab.target?.profileId) return;
 
     const intent = useSemanticNavigationStore
       .getState()
       .consumeRevealIntent(
-        effectiveTab.target?.profileId ?? "default",
+        effectiveTab.target.profileId,
         effectiveTab.project,
         effectiveTab.targetKey,
         effectiveTab.path,
@@ -332,11 +334,11 @@ export function MonacoHost({
       }
 
       // Semantic navigation reveal intent handling
-      if (effectiveTab && isSupportedSemanticPath(effectiveTab.path)) {
+      if (effectiveTab && isSupportedSemanticPath(effectiveTab.path) && effectiveTab.target?.profileId) {
         const revealIntent = useSemanticNavigationStore
           .getState()
           .consumeRevealIntent(
-            effectiveTab.target?.profileId ?? "default",
+            effectiveTab.target.profileId,
             effectiveTab.project,
             effectiveTab.targetKey,
             effectiveTab.path,

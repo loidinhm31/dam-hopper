@@ -762,9 +762,11 @@ export const useEditorStore = create<EditorState>()(
         // close
         // ---------------------------------------------------------------------------
         close: (key: string) => {
+          let wasRemoved = false;
           set((s) => {
             const tab = s.tabs.find((t) => t.key === key);
             if (!tab) return s;
+            wasRemoved = true;
             const project = tab.project;
             const target = targetForTab(tab);
             const scopeKey = editorTargetScopeKey(target);
@@ -783,27 +785,30 @@ export const useEditorStore = create<EditorState>()(
             }
             const requestGenerations = { ...s.requestGenerations };
             requestGenerations[key] = (requestGenerations[key] ?? 0) + 1;
-            const client = useSemanticNavigationStore
-              .getState()
-              .findClientForTab(key);
-            client?.notifyDidClose(key);
-            defaultSemanticModelRegistry.unregisterModel(key);
             return {
               tabs: nextTabs,
               activeKeys: { ...s.activeKeys, [scopeKey]: nextActive },
               requestGenerations,
             };
           });
+          if (wasRemoved) {
+            const client = useSemanticNavigationStore
+              .getState()
+              .findClientForTab(key);
+            client?.notifyDidClose(key);
+            defaultSemanticModelRegistry.unregisterModel(key);
+          }
         },
 
         closeOthers: (project: string, key: string) => {
+          let removedKeys: string[] = [];
           set((s) => {
             const keepTab = s.tabs.find(
               (tab) => tab.project === project && tab.key === key,
             );
             if (!keepTab) return s;
             const scopeKey = editorTargetScopeKey(targetForTab(keepTab));
-            const removedKeys = s.tabs
+            removedKeys = s.tabs
               .filter(
                 (tab) =>
                   tab.project === project &&
@@ -815,11 +820,6 @@ export const useEditorStore = create<EditorState>()(
             for (const removedKey of removedKeys) {
               requestGenerations[removedKey] =
                 (requestGenerations[removedKey] ?? 0) + 1;
-              const client = useSemanticNavigationStore
-                .getState()
-                .findClientForTab(removedKey);
-              client?.notifyDidClose(removedKey);
-              defaultSemanticModelRegistry.unregisterModel(removedKey);
             }
             return {
               tabs: s.tabs.filter(
@@ -832,23 +832,26 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations,
             };
           });
+          for (const removedKey of removedKeys) {
+            const client = useSemanticNavigationStore
+              .getState()
+              .findClientForTab(removedKey);
+            client?.notifyDidClose(removedKey);
+            defaultSemanticModelRegistry.unregisterModel(removedKey);
+          }
         },
 
         closeAll: (project: string, target?: ProjectTargetInput) => {
+          let removedKeys: string[] = [];
           set((s) => {
             if (target == null) {
-              const removedKeys = s.tabs
+              removedKeys = s.tabs
                 .filter((tab) => tab.project === project)
                 .map((tab) => tab.key);
               const requestGenerations = { ...s.requestGenerations };
               for (const removedKey of removedKeys) {
                 requestGenerations[removedKey] =
                   (requestGenerations[removedKey] ?? 0) + 1;
-                const client = useSemanticNavigationStore
-                  .getState()
-                  .findClientForTab(removedKey);
-                client?.notifyDidClose(removedKey);
-                defaultSemanticModelRegistry.unregisterModel(removedKey);
               }
               const activeKeys = Object.fromEntries(
                 Object.entries(s.activeKeys).filter(
@@ -863,7 +866,7 @@ export const useEditorStore = create<EditorState>()(
               };
             }
             const scopeKey = editorTargetScopeKey(target);
-            const removedKeys = s.tabs
+            removedKeys = s.tabs
               .filter(
                 (tab) =>
                   tab.project === project &&
@@ -874,11 +877,6 @@ export const useEditorStore = create<EditorState>()(
             for (const removedKey of removedKeys) {
               requestGenerations[removedKey] =
                 (requestGenerations[removedKey] ?? 0) + 1;
-              const client = useSemanticNavigationStore
-                .getState()
-                .findClientForTab(removedKey);
-              client?.notifyDidClose(removedKey);
-              defaultSemanticModelRegistry.unregisterModel(removedKey);
             }
             return {
               tabs: s.tabs.filter(
@@ -890,6 +888,13 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations,
             };
           });
+          for (const removedKey of removedKeys) {
+            const client = useSemanticNavigationStore
+              .getState()
+              .findClientForTab(removedKey);
+            client?.notifyDidClose(removedKey);
+            defaultSemanticModelRegistry.unregisterModel(removedKey);
+          }
         },
 
         setActive: (target: ProjectTargetInput, key: string | null) =>

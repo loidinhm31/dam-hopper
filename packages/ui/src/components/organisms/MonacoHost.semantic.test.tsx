@@ -348,4 +348,50 @@ describe("MonacoHost Semantic Integration", () => {
 
     expect(replacementClient.notifyDidChange).toHaveBeenCalled();
   });
+  it("model-scoped coexistence: does not route edits to semantic client for unsupported file paths", () => {
+    const tabKey = "tab-md-1";
+    const mdTab: Tab = {
+      key: tabKey,
+      name: "README.md",
+      path: "README.md",
+      project: "my-project",
+      target: { project: "my-project", profileId: "prof-test" },
+      targetKey: "my-project",
+      content: "# Hello\n",
+      originalContent: "# Hello\n",
+      dirty: false,
+      stale: false,
+      conflicted: false,
+      loading: false,
+      tier: "code",
+      readOnly: false,
+      targetAvailable: true,
+    };
+
+    act(() => {
+      root?.render(
+        <MonacoHost
+          tabKey={tabKey}
+          path={mdTab.path}
+          content={mdTab.content}
+          tier={mdTab.tier}
+          tabProp={mdTab}
+          onChange={() => {}}
+          onContentChange={() => {}}
+        />,
+      );
+    });
+
+    const onChangeFn = lastEditorProps?.onChange as (
+      val: string,
+      ev?: { changes: Array<unknown> },
+    ) => void;
+    expect(onChangeFn).toBeDefined();
+
+    act(() => {
+      onChangeFn("# Updated Markdown\n", { changes: [] });
+    });
+
+    expect(mockClient.notifyDidChange).not.toHaveBeenCalled();
+  });
 });

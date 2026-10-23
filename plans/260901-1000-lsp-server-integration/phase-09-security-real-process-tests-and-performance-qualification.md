@@ -78,6 +78,7 @@ Rollback boundary: failed protocol/version/sync, project-code denial, authorizat
 
 ## Todo list
 
+### Core Qualification Gates
 - [ ] Require existing finite initial bounds and closed Phase 01 stop/go gates.
 - [ ] Complete deterministic real-process and packaged TSLS matrices.
 - [ ] Prove project-code denial, bundled-only rejection, trust disclosure, and URI/result containment.
@@ -87,6 +88,20 @@ Rollback boundary: failed protocol/version/sync, project-code denial, authorizat
 - [ ] Select measured final threshold/limits; qualify forced portable-only and record observed hard-mode qualification or explicit unavailable/unqualified status.
 - [ ] Publish safe repeatable aggregate evidence with limitations; remove only disposable raw output.
 
+### Receiving Checklist: Carried Forward Items from Phase 08 and Prior Phases
+- [ ] Remediate Phase 08 C2: Synchronous revocation token fence on session/target before actor drain and result publication; prevent old results surviving prepare.
+- [ ] Remediate Phase 08 R1: Foreign-binding dirty replay guard validating endpoint/root/actor provenance before replaying unsaved local models.
+- [ ] Remediate Phase 08 W2: Socket handshake attempt isolation preventing mutable `this.ws` race during asynchronous error cleanup.
+- [ ] Remediate Phase 08 W3: Per-instance Monaco manager registration tokens and unified destination target resolver.
+- [ ] Remediate Phase 08 R2: Client attach `target.worktree` vs gateway `target.worktreePath` wire alignment and unopened target propagation.
+- [ ] Remediate Phase 08 R3: Terminal child exit on invalidated actor before reap acknowledgment, preventing crash restart during retirement.
+- [ ] Remediate Phase 08 W5: Target-scoped git worktree invalidation in git route operations (currently project-wide).
+- [ ] Remediate Phase 07 W-1 / G5: Destination coordinate-to-content freshness validation before cross-tab reveal of unopened files.
+- [ ] Remediate Phase 07 C-2 / G8: Live web browser Monaco definition action verification across owned/non-owned models with clean restore on OFF.
+- [ ] Verify Phase 05 gateway carryovers (W-A reader loop on writer death, W-B cancelled request null id, W-C invalid id echo, W-D pre-actor overlay rejection).
+- [ ] Verify Phase 06 toggle carryovers (W1 cancellation safety, W2 child leak detection, W3 re-enable block, W4 teardown timeout margin, W5 failure regression tests, W6 transition error sanitization).
+- [ ] Live auth revocation harness across SQLite and MongoDB real backends.
+- [ ] Non-reading socket backpressure bounds and cancellation-first teardown under slow consumers.
 ## Success Criteria
 
 - Real tuple identity and malicious-project canaries show no project-controlled executable/plugin/preload/alternate SDK execution. Unproven required restriction fails the gate, not a disclaimer substituting for denial.

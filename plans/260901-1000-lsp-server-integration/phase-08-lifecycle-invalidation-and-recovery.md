@@ -12,9 +12,9 @@
 - Date: 2026-10-23
 - Description: Retire exact semantic owner/target/document bindings at every lifecycle boundary; recover only through fresh authorization without losing or leaking dirty local models.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Plan reconciliation completed; implementation and runtime qualification not run.
-- Effort: 20h, provisional; increase covers live auth/backpressure, document-versus-session scope, and replacement-owner/dirty-replay races.
+- Implementation status: DONE (2026-10-23) — Administratively complete under user-approved exceptions; core correctness findings and release qualification carried forward into Phase 09.
+- Review status: Reviewed across Cycles 1 and 2 (Cycle 2 score 6/10; see `plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`). QA report records 174/174 passing automated tests across test tiers (61 backend integration across 6 suites, 38 backend unit, 73 frontend unit across 8 suites, 2 browser component tests in Chromium) with 0 typecheck errors (`tsc --noEmit` and `cargo check`). Core correctness findings (C2, R1, W2, W3, R2, R3, W5) and runtime qualification (G5/G8, live auth, non-reading socket backpressure) tracked for Phase 09 qualification.
+- Effort: 20h completed (cumulative 196/264h planned effort accounting, 74.2%).
 
 ## Key Insights
 
@@ -72,19 +72,20 @@ Failure boundary: semantic teardown failure cannot keep old authority alive or b
 
 ## Todo list
 
-- [ ] Implement scoped admission stop/invalidation/drain with exact-resource cleanup.
-- [ ] Wire workspace/config/import/cache/worktree/OFF/shutdown boundaries.
-- [ ] Separate document didClose from session/tree teardown.
-- [ ] Integrate fail-closed live auth and current-role mutation policy without send-dependent cancellation.
-- [ ] Preserve stable dirty models and replay only newly authorized matching owners/targets.
-- [ ] Prove old results/callbacks/timers/cleanup cannot affect replacement owners/incarnations.
-- [ ] Remediate Phase 07 C-1: Resolve semantic client dynamically at call time (`findClientForTab(tabKey)` in `onChange`/`notifyDidClose`) rather than caching `semanticClientRef`, preventing stale references across reconnect and generation changes; add `MonacoHost` generation-bump test.
-- [ ] Remediate Phase 07 W-3: Add direct unit tests for `EditorTabs.tsx` semantic connection effects (connection gating, generation change teardown, disabled state).
-- [ ] Remediate Phase 07 W-2/W-4: Surface visible status indicators from `clientStatuses` for starting, disconnected, and error states; define reconnect/backoff policy without silent worker fallback.
-- [ ] Remediate Phase 07 W-5: Issue `$/cancelRequest` on query timeout; separate language server handshake timeout from navigation timeout.
-- [ ] Remediate Phase 07 W-9: Implement full resync on version divergence and increment session generation.
-- [ ] Clean up Phase 07 W-6/W-7/W-8/W-10: Eliminate `"default"` fallbacks in MonacoHost/EditorTabs, clean singleton manager options on unmount, scope enabled state per profile/owner, and move side-effects out of zustand updaters.
-- [ ] Verify G8 model-scoped coexistence in live web browser (C-2) and destination freshness (Phase 07 W-1 / G5) under lifecycle transitions.
+- [x] Implement scoped admission stop/invalidation/drain with exact-resource cleanup. (Done: two-phase prepare/reap API + concurrent `join_all` reaping; Phase 08 C2 synchronous revocation token fence before actor drain/publication tracked for Phase 09).
+- [x] Wire workspace/config/import/cache/worktree/OFF/shutdown boundaries. (Done: two-phase across workspace/config/import/cache, config project-set diff, non-blocking `spawn_reap_sessions` in `state.rs` and settings restore, profile OFF listener notification; Phase 08 W5 git route worktree scoping tracked for Phase 09).
+- [x] Separate document didClose from session/tree teardown.
+- [~] Integrate fail-closed live auth and current-role mutation policy without send-dependent cancellation. (Epoch/tombstone cutoff and `-32005` handling done; live MongoDB auth revocation harness and non-reading socket backpressure pending Phase 09).
+- [~] Preserve stable dirty models and replay only newly authorized matching owners/targets. (Local model and unsaved text preserved; Phase 08 R1 foreign-binding dirty replay guard validating endpoint/root/actor provenance before replay tracked for Phase 09).
+- [~] Prove old results/callbacks/timers/cleanup cannot affect replacement owners/incarnations. (Done for session/document fences and callback identity checks; Phase 08 W2 handshake attempt isolation, Phase 08 W3 per-instance Monaco manager registration tokens, and Phase 08 R3 terminal child exit on invalidated actor tracked for Phase 09).
+- [x] Remediate Phase 07 C-1: Resolve semantic client dynamically at call time (`findClientForTab(tabKey)` in `onChange`/`notifyDidClose`) rather than caching `semanticClientRef`, preventing stale references across reconnect and generation changes; add `MonacoHost` generation-bump test.
+- [x] Remediate Phase 07 W-3: Add direct unit tests for `EditorTabs.tsx` semantic connection effects (connection gating, generation change teardown, disabled state; 3 tests passing in `EditorTabs.semantic.test.tsx`).
+- [x] Remediate Phase 07 W-2/W-4: Surface visible status indicators from `clientStatuses` in `EditorStatusBar` for starting, disconnected, error, ready, and unsupported states; define reconnect/backoff policy without silent worker fallback.
+- [x] Remediate Phase 07 W-5: Issue `$/cancelRequest` on query timeout; separate language server handshake timeout (10s) from navigation query timeout (5s).
+- [x] Remediate Phase 07 W-9: Implement full resync on version divergence and increment session generation. (Per-document wire version bump + full `didChange` resync on `-32003` verified with follow-up definition query).
+- [x] Clean up Phase 07 W-6/W-7/W-8/W-10: Eliminate `"default"` fallbacks in MonacoHost/EditorTabs, clean singleton manager options on unmount, scope enabled state per profile/owner with reference-counted clients, and move side-effects out of zustand updaters.
+- [ ] Tracked for Phase 09/10: Live web browser Monaco definition action verification across owned/non-owned models with clean restore on OFF (Phase 07 C-2 / G8) and unopened destination file freshness (Phase 07 W-1 / G5).
+- [ ] Tracked for Phase 09: Core correctness items Phase 08 C2, R1, W2, W3, R2, R3, W5 and live auth/backpressure qualification.
 
 ## Success Criteria
 
@@ -111,6 +112,20 @@ Failure boundary: semantic teardown failure cannot keep old authority alive or b
 - Retain unsaved text only in existing local editor memory; semantic layer adds no source persistence or sensitive invalidation diagnostics.
 
 ## Next steps
-
-- Phase 09 measures teardown/auth/backpressure/core responsiveness with real deterministic processes and packaged TSLS; Phase 10 drives actual authenticated Linux server + built web only.
+- Phase 08 is administratively complete under user-approved exceptions (196/264h planned effort accounting, 74.2%). Proceed to Phase 09 (Security, real-process tests, and performance qualification). Phase 09 owns:
+  1. Core correctness remediation carried forward from Phase 08:
+     - C2: Synchronous revocation token fence on session/target before actor drain and result publication.
+     - R1: Foreign-binding dirty replay guard validating endpoint/root/actor provenance.
+     - W2: Handshake attempt isolation preventing mutable `this.ws` races during asynchronous error handling.
+     - W3: Per-instance Monaco manager registration tokens and unified destination target resolver.
+     - R2: Client attach `target.worktree` vs gateway `target.worktreePath` wire contract alignment.
+     - R3: Terminal child exit on invalidated actor before reap acknowledgment, preventing crash restart during retirement.
+     - W5: Target-scoped git worktree invalidation in git route operations.
+  2. Preserved qualification gates and warnings:
+     - Phase 07 C-2 / G8 (live browser Monaco action verification) and Phase 07 W-1 / G5 (destination file freshness).
+     - Phase 05 gateway items (W-A..W-D) and Phase 06 toggle items (W1..W6).
+     - Live MongoDB auth revocation test harness.
+     - Non-reading socket backpressure bounds and cancellation-first teardown.
+     - Linux cgroup v2 vs portable degradation qualification.
+     - Final numeric resource tuning (adaptive sync threshold, memory and request limits).
 - Unresolved spike gates: Phase 01 must prove source-version/destination freshness and stable local/wire identity recovery. Phase 09 supplies final measured timing/resource values; no runtime result is asserted in this revision.

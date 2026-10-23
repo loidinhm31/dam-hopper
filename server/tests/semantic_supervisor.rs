@@ -803,3 +803,130 @@ async fn test_epoch_mismatch_rejects_admission() {
         ))
     ));
 }
+#[tokio::test]
+async fn test_two_phase_invalidation_prepare_and_reap() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-two-phase".into());
+    let ep = supervisor.register_connection(&conn).await;
+
+    let handle = supervisor
+        .get_or_create_session(
+            conn.clone(),
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("session created");
+
+    assert_eq!(supervisor.get_aggregate_status().await.active_sessions, 1);
+
+    // Phase 1: prepare_invalidate_all synchronously detaches sessions
+    let detached = supervisor.prepare_invalidate_all().await;
+    assert_eq!(detached.len(), 1);
+    assert_eq!(supervisor.get_aggregate_status().await.active_sessions, 0);
+
+    // Immediately, new admissions with old epoch fail
+    let res = supervisor
+        .get_or_create_session(
+            conn.clone(),
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await;
+    assert!(res.is_err());
+
+    // Phase 2: reap detached sessions outside the lock
+    supervisor.reap_sessions(detached).await;
+    assert_eq!(handle.get_state().await, SemanticState::Invalidated);
+}
+
+#[tokio::test]
+async fn test_scoped_project_invalidation_preserves_other_projects() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir_a = tempfile::tempdir().unwrap();
+    let target_dir_b = tempfile::tempdir().unwrap();
+    let conn_a = ConnectionId("conn-scoped-a".into());
+    let ep_a = supervisor.register_connection(&conn_a).await;
+    let conn_b = ConnectionId("conn-scoped-b".into());
+    let ep_b = supervisor.register_connection(&conn_b).await;
+
+    let handle_a = supervisor
+        .get_or_create_session(
+            conn_a,
+            "project-a",
+            None,
+            target_dir_a.path().to_path_buf(),
+            ep_a,
+        )
+        .await
+        .expect("session a created");
+
+    let handle_b = supervisor
+        .get_or_create_session(
+            conn_b,
+            "project-b",
+            None,
+            target_dir_b.path().to_path_buf(),
+            ep_b,
+        )
+        .await
+        .expect("session b created");
+    assert_eq!(supervisor.get_aggregate_status().await.active_sessions, 2);
+
+    // Invalidate project-a only
+    supervisor.invalidate_project("project-a").await;
+
+    // Project-a session is reaped; project-b session remains alive
+    assert_eq!(handle_a.get_state().await, SemanticState::Invalidated);
+    assert_ne!(handle_b.get_state().await, SemanticState::Invalidated);
+    assert_eq!(supervisor.get_aggregate_status().await.active_sessions, 1);
+
+    // Cleanup
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_admission_revocation_during_shutdown_blocks_new_registrations() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    assert!(!supervisor.is_admission_revoked());
+    assert!(supervisor.is_effective_enabled());
+
+    // Signal shutdown: revoke admission immediately
+    supervisor.revoke_admission();
+    assert!(supervisor.is_admission_revoked());
+    assert!(!supervisor.is_effective_enabled());
+
+    // Any attempt to register returns 0 and is tombstoned
+    let conn = ConnectionId("conn-shutdown-attempt".into());
+    let ep = supervisor.register_connection(&conn).await;
+    assert_eq!(ep, 0);
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let res = supervisor
+        .get_or_create_session(
+            conn,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await;
+    assert!(matches!(res, Err(SupervisorError::Disabled)));
+}

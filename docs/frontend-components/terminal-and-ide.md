@@ -675,14 +675,15 @@ snapshot.
 
 ### Monaco Semantic Navigation Integration
 
-**Locations:** `packages/ui/src/components/organisms/MonacoHost.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`, `packages/ui/src/api/semantic-client.ts`, `packages/ui/src/lib/semantic-model-uri.ts`, `packages/ui/src/lib/semantic-monaco.ts`
+**Locations:** `packages/ui/src/components/organisms/MonacoHost.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`, `packages/ui/src/components/organisms/EditorStatusBar.tsx`, `packages/ui/src/api/semantic-client.ts`, `packages/ui/src/lib/semantic-model-uri.ts`, `packages/ui/src/lib/semantic-monaco.ts`, `packages/ui/src/stores/semantic-navigation.ts`
 
-**Purpose:** Integrates model-scoped TypeScript and JavaScript LSP Definition and Implementation navigation into Monaco editor without mutating model identity or discarding dirty state.
+**Purpose:** Integrates model-scoped TypeScript and JavaScript LSP Definition and Implementation navigation into Monaco editor without mutating model identity or discarding dirty state, with active status visibility and resilient fault recovery.
 
 - **Stable Identity Mapping:** `MonacoHost` binds models to `SemanticModelRegistry` using local `inmemory://dam-hopper/...` URIs. Reconnects and profile generation updates preserve local dirty text, view state, and undo stacks.
-- **Adaptive Wire Sync:** Content changes push edits via `SemanticClient.notifyDidChange`, applying 64 KiB adaptive thresholding (range-less full sync below, incremental changes at or above).
-- **Reveal Coordination:** Ephemeral `NavigationRevealIntent` coordinates cross-file navigation jumps, consumed atomically upon destination editor mount. See [Semantic WebSocket Gateway Architecture](../architecture/semantic-websocket-gateway.md#client-integration-shared-monaco-semantic-client-phase-07).
-
+- **Active Model Status:** `EditorStatusBar` renders live semantic status for the active file (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded indicators and descriptive tooltips.
+- **Dynamic Resolution & Lifecycle:** `MonacoHost` resolves `SemanticClient` at call time via `findClientForTab(tabKey)` on keystrokes and document close notifications. Clients are reference-counted (`releaseClient`) across editor tabs and panes, with profile-scoped enablement (`setProfileSemanticEnabled`).
+- **Adaptive Wire Sync & Recovery:** Pushes edits via 64 KiB adaptive sync, cancels slow queries via `$/cancelRequest`, recovers from version divergence via full `didChange` resync (`-32003`), and handles admission invalidation via auto-reconnect backoff (`-32005`).
+- **Reveal Coordination:** Ephemeral `NavigationRevealIntent` coordinates cross-file navigation jumps, consumed atomically upon destination editor mount. See [Semantic WebSocket Gateway Architecture](../architecture/semantic-websocket-gateway.md#lifecycle-invalidation-and-client-recovery-phase-08).
 ### Git Blame Annotations in Editor
 
 **Locations:** `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx`, `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/stores/editor.ts`

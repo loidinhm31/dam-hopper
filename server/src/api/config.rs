@@ -714,13 +714,38 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 }
 
 pub(crate) async fn reload_config(state: &AppState) -> Result<(), ApiError> {
-    let _workspace_context = state.workspace_context_guard.write().await;
-    reload_config_locked(state).await
+    let handles = {
+        let _workspace_context = state.workspace_context_guard.write().await;
+        reload_config_locked(state).await?
+    };
+    state.semantic_supervisor.reap_sessions(handles).await;
+    Ok(())
 }
 
-pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn reload_config_locked(
+    state: &AppState,
+) -> Result<Vec<crate::semantic::session::SemanticSessionHandle>, ApiError> {
     let config_path = state.config.read().await.config_path.clone();
     let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    let old_projects: std::collections::HashSet<_> = state
+        .config
+        .read()
+        .await
+        .projects
+        .iter()
+        .map(|p| (p.name.clone(), p.path.clone()))
+        .collect();
+    let new_projects: std::collections::HashSet<_> = new_cfg
+        .projects
+        .iter()
+        .map(|p| (p.name.clone(), p.path.clone()))
+        .collect();
+
+    let semantic_handles = if old_projects != new_projects {
+        state.semantic_supervisor.prepare_invalidate_all().await
+    } else {
+        Vec::new()
+    };
     {
         let timing = state.idle_suspend_timing.read().await;
         state
@@ -735,5 +760,5 @@ pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiErro
         .reconfigure(new_cfg.server.host_resources.clone())
         .await;
     *state.config.write().await = new_cfg;
-    Ok(())
+    Ok(semantic_handles)
 }

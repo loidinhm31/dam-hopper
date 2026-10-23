@@ -523,7 +523,14 @@ async fn handle_semantic_socket(
 
     gateway.teardown().await;
 
-    // Bounded wait for writer task to finish sending close frame
-    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, writer_task).await;
+    // Bounded wait for writer task to finish sending close frame; abort on timeout
+    let mut writer_task = writer_task;
+    if tokio::time::timeout(SOCKET_SEND_TIMEOUT, &mut writer_task)
+        .await
+        .is_err()
+    {
+        writer_task.abort();
+        let _ = writer_task.await;
+    }
     drop(presence_guard);
 }

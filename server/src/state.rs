@@ -192,6 +192,20 @@ impl AppState {
         self.workspace_target_resolver
             .invalidate(project_root)
             .await;
+        let project_name = {
+            let cfg = self.config.read().await;
+            cfg.projects
+                .iter()
+                .find(|p| std::path::Path::new(&p.path) == project_root)
+                .map(|p| p.name.clone())
+        };
+        if let Some(project) = project_name {
+            let handles = self.semantic_supervisor.prepare_invalidate_project(&project).await;
+            self.semantic_supervisor.spawn_reap_sessions(handles);
+        } else {
+            let handles = self.semantic_supervisor.prepare_invalidate_all().await;
+            self.semantic_supervisor.spawn_reap_sessions(handles);
+        }
     }
 
     pub async fn workspace_target_project_path(&self, name: &str) -> Result<StdPathBuf, AppError> {

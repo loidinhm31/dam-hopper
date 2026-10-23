@@ -31,4 +31,37 @@ describe("EditorStatusBar", () => {
     expect(markup).toContain("42 lines");
     expect(markup).toContain("? +4 -0");
   });
+  it("renders semantic status indicator when semanticStatus is provided", () => {
+    const editor = {
+      getPosition: () => ({ lineNumber: 1, column: 1 }),
+      getModel: () => ({ getLineCount: () => 10 }),
+    } as unknown as monacoNs.editor.IStandaloneCodeEditor;
+
+    const readyMarkup = renderToStaticMarkup(
+      <EditorStatusBar
+        editor={editor}
+        language="typescript"
+        semanticStatus="ready"
+      />,
+    );
+    expect(readyMarkup).toContain("TS/JS Ready");
+
+    const startingMarkup = renderToStaticMarkup(
+      <EditorStatusBar
+        editor={editor}
+        language="typescript"
+        semanticStatus="initializing"
+      />,
+    );
+    expect(startingMarkup).toContain("TS/JS Starting");
+
+    const errorMarkup = renderToStaticMarkup(
+      <EditorStatusBar
+        editor={editor}
+        language="typescript"
+        semanticStatus="error"
+      />,
+    );
+    expect(errorMarkup).toContain("TS/JS Error");
+  });
 });

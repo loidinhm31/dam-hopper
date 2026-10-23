@@ -166,15 +166,21 @@ pub async fn init_workspace(
         state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
     }
 
-    let _workspace_context = state.workspace_context_guard.write().await;
-    state.media_tickets.revoke_all();
-    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
-    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
-    state
-        .host_resource_monitor
-        .reconfigure(cfg.server.host_resources.clone())
-        .await;
-    *state.config.write().await = cfg;
+    let detached_semantic = {
+        let _workspace_context = state.workspace_context_guard.write().await;
+        let handles = state.semantic_supervisor.prepare_invalidate_all().await;
+        state.media_tickets.revoke_all();
+        state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+        state.workspace_target_resolver.invalidate_all().await;
+        *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
+        state
+            .host_resource_monitor
+            .reconfigure(cfg.server.host_resources.clone())
+            .await;
+        *state.config.write().await = cfg;
+        handles
+    };
+    state.semantic_supervisor.reap_sessions(detached_semantic).await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -194,16 +200,22 @@ pub async fn switch_workspace(
     }
     state.pty_manager.dispose().map_err(ApiError::from_app)?;
 
-    let _workspace_context = state.workspace_context_guard.write().await;
-    state.media_tickets.revoke_all();
-    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+    let detached_semantic = {
+        let _workspace_context = state.workspace_context_guard.write().await;
+        let handles = state.semantic_supervisor.prepare_invalidate_all().await;
+        state.media_tickets.revoke_all();
+        state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+        state.workspace_target_resolver.invalidate_all().await;
 
-    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
-    state
-        .host_resource_monitor
-        .reconfigure(cfg.server.host_resources.clone())
-        .await;
-    *state.config.write().await = cfg;
+        *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
+        state
+            .host_resource_monitor
+            .reconfigure(cfg.server.host_resources.clone())
+            .await;
+        *state.config.write().await = cfg;
+        handles
+    };
+    state.semantic_supervisor.reap_sessions(detached_semantic).await;
 
     state.event_sink.broadcast(
         "workspace:changed",
@@ -212,7 +224,6 @@ pub async fn switch_workspace(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
-
 fn load_config_from_workspace_or_file(
     path: &std::path::Path,
 ) -> Result<DamHopperConfig, crate::error::AppError> {

@@ -13,6 +13,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
 } from "react";
 import type * as monacoNs from "monaco-editor";
@@ -51,6 +52,7 @@ import {
 import { buildGitFileStateIndex } from "@/lib/git-file-state.js";
 import {
   normalizeProjectTarget,
+  projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
@@ -67,7 +69,10 @@ import {
   buildSemanticScopeKey,
 } from "@/stores/semantic-navigation.js";
 
-import { defaultSemanticModelRegistry } from "@/lib/semantic-model-uri.js";
+import {
+  defaultSemanticModelRegistry,
+  isSupportedSemanticPath,
+} from "@/lib/semantic-model-uri.js";
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
     default: m.MonacoHost,
@@ -142,18 +147,20 @@ export function EditorTabs({
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const { data: gitDiff } = useGitDiff(targetRef, "*");
 
-  const connectionProfileId = targetRef.profileId ?? "default";
-  const connection = useConnectionSnapshot(connectionProfileId);
+  const connectionProfileId = targetRef.profileId;
+  const connection = useConnectionSnapshot(connectionProfileId ?? "");
   const { data: semanticSettings } = useSemanticSettings(
     targetRef.profileId ? { profileId: targetRef.profileId } : undefined,
   );
   const semanticEnabled = semanticSettings?.runtimeEnabled ?? false;
 
   useEffect(() => {
-    useSemanticNavigationStore
-      .getState()
-      .setGlobalSemanticEnabled(semanticEnabled);
-  }, [semanticEnabled]);
+    if (targetRef.profileId) {
+      useSemanticNavigationStore
+        .getState()
+        .setProfileSemanticEnabled(targetRef.profileId, semanticEnabled);
+    }
+  }, [targetRef.profileId, semanticEnabled]);
 
   useEffect(() => {
     let disposed = false;
@@ -172,12 +179,12 @@ export function EditorTabs({
     const wsUrl = serverUrl.replace(/^http/, "ws") + "/ws/semantic/v1";
     const token = getAuthToken(profileId);
     const connectionGen = connection.owner.generation;
-
+    const targetKey = projectTargetCacheKey(targetRef);
     const scopeKey = buildSemanticScopeKey(
       profileId,
       serverUrl,
       project,
-      targetScopeKey,
+      targetKey,
       connectionGen,
     );
 
@@ -188,7 +195,7 @@ export function EditorTabs({
       profileId,
       project,
       worktree: targetRef.worktreePath ?? null,
-      targetKey: targetScopeKey,
+      targetKey,
       connectionGeneration: connectionGen,
       targetGeneration: 1,
       getModelText: (modelKey) => {
@@ -206,17 +213,11 @@ export function EditorTabs({
       ({ defaultSemanticMonacoManager }) => {
         if (disposed) return;
         defaultSemanticMonacoManager.setOptions({
+          ownerId: scopeKey,
           getClientForModel: (modelTabKey) => {
-            const model = defaultSemanticModelRegistry.getByTabKey(modelTabKey);
-            if (!model) return null;
-            const sKey = buildSemanticScopeKey(
-              model.identity.profileId,
-              serverUrl,
-              model.identity.project,
-              model.identity.targetKey,
-              connectionGen,
-            );
-            return useSemanticNavigationStore.getState().getClient(sKey);
+            return useSemanticNavigationStore
+              .getState()
+              .findClientForTab(modelTabKey);
           },
           onOpenCodeEditor: ({ tabKey, range }) => {
             const currentTabs = useEditorStore.getState().tabs;
@@ -274,7 +275,12 @@ export function EditorTabs({
 
     return () => {
       disposed = true;
-      useSemanticNavigationStore.getState().disconnectClient(scopeKey);
+      useSemanticNavigationStore.getState().releaseClient(scopeKey);
+      void import("@/lib/semantic-monaco.js").then(
+        ({ defaultSemanticMonacoManager }) => {
+          defaultSemanticMonacoManager.resetOptions(scopeKey);
+        },
+      );
     };
   }, [
     semanticEnabled,
@@ -524,6 +530,14 @@ export function EditorTabs({
     anchor.click();
     URL.revokeObjectURL(url);
   }, []);
+  const clientStatuses = useSemanticNavigationStore((s) => s.clientStatuses);
+  const activeSemanticStatus = useMemo(() => {
+    if (!activeTab || !isSupportedSemanticPath(activeTab.path)) return null;
+    const client = useSemanticNavigationStore
+      .getState()
+      .findClientForTab(activeTab.key);
+    return client?.getStatus() ?? null;
+  }, [activeTab, clientStatuses]);
 
   if (!project || (projectTabs.length === 0 && unavailableTabs.length === 0)) {
     return (
@@ -841,6 +855,7 @@ export function EditorTabs({
               language={mimeToLanguage(activeTab.mime, activeTab.path)}
               gitState={activeGitState}
               onGitIndicatorClick={openActiveDiff}
+              semanticStatus={activeSemanticStatus}
             />
           )}
       </div>

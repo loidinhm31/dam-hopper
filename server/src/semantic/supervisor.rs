@@ -55,6 +55,7 @@ pub enum SupervisorError {
 /// Inner state of the semantic supervisor.
 struct SupervisorInner {
     enabled: AtomicBool,
+    admission_revoked: AtomicBool,
     toolchain_verified: AtomicBool,
     runtime_epoch: std::sync::atomic::AtomicU64,
     next_connection_epoch: std::sync::atomic::AtomicU64,
@@ -66,6 +67,7 @@ struct SupervisorInner {
     transition_lock: tokio::sync::Mutex<()>,
     safe_disabled: AtomicBool,
     last_transition_error: RwLock<Option<String>>,
+    active_reap_tasks: tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 /// Global semantic session supervisor managing session lifecycles and admission.
@@ -82,6 +84,7 @@ impl SemanticSupervisor {
 
         let inner = Arc::new(SupervisorInner {
             enabled: AtomicBool::new(false),
+            admission_revoked: AtomicBool::new(false),
             toolchain_verified: AtomicBool::new(false),
             runtime_epoch: std::sync::atomic::AtomicU64::new(1),
             next_connection_epoch: std::sync::atomic::AtomicU64::new(1),
@@ -93,6 +96,7 @@ impl SemanticSupervisor {
             transition_lock: tokio::sync::Mutex::new(()),
             safe_disabled: AtomicBool::new(false),
             last_transition_error: RwLock::new(None),
+            active_reap_tasks: tokio::sync::Mutex::new(Vec::new()),
         });
 
         let supervisor = Self { inner };
@@ -125,7 +129,23 @@ impl SemanticSupervisor {
 
     /// Check if the semantic subsystem is effectively active and admitting requests.
     pub fn is_effective_enabled(&self) -> bool {
-        self.is_enabled() && !self.is_safe_disabled()
+        self.is_enabled() && !self.is_safe_disabled() && !self.is_admission_revoked()
+    }
+
+    /// Check whether admission has been globally revoked (e.g. during server shutdown).
+    pub fn is_admission_revoked(&self) -> bool {
+        self.inner.admission_revoked.load(Ordering::Acquire)
+    }
+
+    /// Revoke all new admissions immediately (e.g. on shutdown signal).
+    pub fn revoke_admission(&self) {
+        self.inner.admission_revoked.store(true, Ordering::Release);
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Reset admission revocation (e.g. after enable or for tests).
+    pub fn reset_admission_revocation(&self) {
+        self.inner.admission_revoked.store(false, Ordering::Release);
     }
 
     /// Get any recorded transition error.
@@ -264,6 +284,10 @@ impl SemanticSupervisor {
     /// Register a new connection and allocate a unique monotonic admission epoch.
     pub async fn register_connection(&self, connection_id: &ConnectionId) -> u64 {
         let mut epochs = self.inner.connection_epochs.write().await;
+        if self.is_admission_revoked() {
+            epochs.insert(connection_id.clone(), None);
+            return 0;
+        }
         if let Some(existing) = epochs.get(connection_id) {
             return existing.unwrap_or(0);
         }
@@ -489,18 +513,23 @@ impl SemanticSupervisor {
             epochs.insert(connection_id.clone(), None); // Tombstone: None means closed/invalidated
         }
 
-        let to_close: Vec<SessionKey> = {
-            let guard = self.inner.sessions.read().await;
-            guard
+        let handles: Vec<SemanticSessionHandle> = {
+            let mut guard = self.inner.sessions.write().await;
+            let keys_to_remove: Vec<SessionKey> = guard
                 .keys()
                 .filter(|k| &k.connection_id == connection_id)
                 .cloned()
-                .collect()
+                .collect();
+            let mut out = Vec::with_capacity(keys_to_remove.len());
+            for k in keys_to_remove {
+                if let Some(h) = guard.remove(&k) {
+                    out.push(h);
+                }
+            }
+            out
         };
 
-        for key in to_close {
-            self.close_session(&key).await;
-        }
+        self.reap_sessions(handles).await;
     }
 
     /// Release tracking state for a disconnected connection, preventing memory growth.
@@ -509,20 +538,124 @@ impl SemanticSupervisor {
         epochs.remove(connection_id);
     }
 
-    /// Invalidate and reap all sessions associated with a specific project/target root.
-    pub async fn invalidate_project(&self, project: &str) {
-        let to_close: Vec<SessionKey> = {
-            let guard = self.inner.sessions.read().await;
-            guard
-                .keys()
-                .filter(|k| k.project == project)
-                .cloned()
-                .collect()
-        };
-
-        for key in to_close {
-            self.close_session(&key).await;
+    /// Phase 1: Synchronously revoke admission and detach all sessions across all connections and targets.
+    /// Caller can execute this while holding outer configuration/workspace locks.
+    pub async fn prepare_invalidate_all(&self) -> Vec<SemanticSessionHandle> {
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut epochs = self.inner.connection_epochs.write().await;
+            for val in epochs.values_mut() {
+                *val = None; // Tombstone all connections
+            }
         }
+        let mut guard = self.inner.sessions.write().await;
+        let handles: Vec<SemanticSessionHandle> = guard.drain().map(|(_, h)| h).collect();
+        for h in &handles {
+            h.invalidate().await;
+        }
+        handles
+    }
+
+    /// Phase 1: Synchronously revoke admission and detach sessions for a specific project.
+    pub async fn prepare_invalidate_project(&self, project: &str) -> Vec<SemanticSessionHandle> {
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+        let mut guard = self.inner.sessions.write().await;
+        let keys_to_remove: Vec<SessionKey> = guard
+            .keys()
+            .filter(|k| k.project == project)
+            .cloned()
+            .collect();
+        let mut handles = Vec::with_capacity(keys_to_remove.len());
+        for key in keys_to_remove {
+            if let Some(h) = guard.remove(&key) {
+                handles.push(h);
+            }
+        }
+        for h in &handles {
+            h.invalidate().await;
+        }
+        handles
+    }
+
+    /// Phase 1: Synchronously revoke admission and detach sessions for a specific project and worktree.
+    pub async fn prepare_invalidate_target(
+        &self,
+        project: &str,
+        worktree: Option<&str>,
+    ) -> Vec<SemanticSessionHandle> {
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+        let mut guard = self.inner.sessions.write().await;
+        let keys_to_remove: Vec<SessionKey> = guard
+            .keys()
+            .filter(|k| k.project == project && k.worktree.as_deref() == worktree)
+            .cloned()
+            .collect();
+        let mut handles = Vec::with_capacity(keys_to_remove.len());
+        for key in keys_to_remove {
+            if let Some(h) = guard.remove(&key) {
+                handles.push(h);
+            }
+        }
+        for h in &handles {
+            h.invalidate().await;
+        }
+        handles
+    }
+
+    /// Phase 2: Await graceful shutdown and bounded SIGKILL reaping for detached session handles.
+    /// Should be called OUTSIDE any outer workspace/configuration locks.
+    pub async fn reap_sessions(&self, handles: Vec<SemanticSessionHandle>) {
+        if handles.is_empty() {
+            return;
+        }
+        let reap_futures = handles.into_iter().map(|handle| async move {
+            let res = tokio::time::timeout(
+                crate::semantic::resources::TOTAL_TEARDOWN_BUDGET,
+                handle.shutdown(),
+            )
+            .await;
+            if res.is_err() {
+                tracing::warn!("Session teardown timed out during reap");
+            } else if let Ok(Err(err)) = res {
+                tracing::warn!(error = %err, "Session shutdown returned error during reap");
+            }
+        });
+        futures_util::future::join_all(reap_futures).await;
+    }
+
+    /// Spawn asynchronous reaping of detached session handles in a tracked background task.
+    pub fn spawn_reap_sessions(&self, handles: Vec<SemanticSessionHandle>) {
+        if handles.is_empty() {
+            return;
+        }
+        let this = self.clone();
+        let inner = self.inner.clone();
+        let task = tokio::spawn(async move {
+            this.reap_sessions(handles).await;
+        });
+        tokio::spawn(async move {
+            let mut guard = inner.active_reap_tasks.lock().await;
+            guard.retain(|t| !t.is_finished());
+            guard.push(task);
+        });
+    }
+
+    /// Full two-phase invalidation of all sessions (convenience method).
+    pub async fn invalidate_all(&self) {
+        let handles = self.prepare_invalidate_all().await;
+        self.reap_sessions(handles).await;
+    }
+
+    /// Full two-phase invalidation of project sessions (convenience method).
+    pub async fn invalidate_project(&self, project: &str) {
+        let handles = self.prepare_invalidate_project(project).await;
+        self.reap_sessions(handles).await;
+    }
+
+    /// Full two-phase invalidation of target sessions (convenience method).
+    pub async fn invalidate_target(&self, project: &str, worktree: Option<&str>) {
+        let handles = self.prepare_invalidate_target(project, worktree).await;
+        self.reap_sessions(handles).await;
     }
 
     /// Query aggregate runtime metrics for diagnostics and administration.
@@ -582,8 +715,10 @@ impl SemanticSupervisor {
         }
     }
 
-    /// Clean shutdown of all running semantic child processes and sessions.
+    /// Clean shutdown of all running semantic child processes and sessions,
+    /// also awaiting any in-flight background reap tasks.
     pub async fn shutdown(&self) {
+        self.revoke_admission();
         let handles: Vec<(SessionKey, SemanticSessionHandle)> = {
             let mut guard = self.inner.sessions.write().await;
             guard.drain().collect()
@@ -591,6 +726,14 @@ impl SemanticSupervisor {
 
         for (_, handle) in handles {
             let _ = handle.shutdown().await;
+        }
+
+        let tasks = {
+            let mut reap_guard = self.inner.active_reap_tasks.lock().await;
+            std::mem::take(&mut *reap_guard)
+        };
+        for task in tasks {
+            let _ = task.await;
         }
     }
 }

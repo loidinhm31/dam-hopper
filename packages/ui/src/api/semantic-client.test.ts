@@ -420,4 +420,233 @@ describe("SemanticClient", () => {
       expect(reply?.result).toEqual([{}, {}]);
     });
   });
+  it("cancels pending navigation locally and sends $/cancelRequest", async () => {
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      registry,
+    });
+
+    const connectPromise = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("damHopper/attachTarget")!.id,
+      result: { targetId: "target-42" },
+    });
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("initialize")!.id,
+      result: { capabilities: {} },
+    });
+    await connectPromise;
+
+    const tabKey = "tab-editor-cancel";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      relativePath: "src/cancel.ts",
+    });
+    await client.notifyDidOpen(tabKey, "const x = 1;");
+
+    let cancelCb: (() => void) | null = null;
+    const token = {
+      isCancellationRequested: false,
+      onCancellationRequested: (cb: () => void) => {
+        cancelCb = cb;
+      },
+    };
+
+    const queryPromise = client.getDefinition(
+      tabKey,
+      { line: 0, character: 6 },
+      token,
+    );
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("textDocument/definition")).toBeDefined(),
+    );
+    const reqId = ws.lastSent("textDocument/definition")!.id;
+
+    // Trigger cancellation
+    cancelCb?.();
+
+    // Query resolves immediately with empty locations
+    const res = await queryPromise;
+    expect(res).toEqual({ locations: [] });
+
+    // $/cancelRequest was sent
+    const cancelNotif = ws.lastSent("$/cancelRequest");
+    expect(cancelNotif?.params).toEqual({ id: reqId });
+
+    // Late response arriving after cancellation does not throw or mutate
+    ws.receive({
+      jsonrpc: "2.0",
+      id: reqId,
+      result: [{ uri: "dam-hopper://semantic/target-42/src/cancel.ts", range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } } }],
+    });
+  });
+
+  it("triggers full resync on version divergence (RPC error -32003)", async () => {
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      getModelText: () => "const full = 'recovered';",
+      registry,
+    });
+
+    const connectPromise = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("damHopper/attachTarget")!.id,
+      result: { targetId: "target-42" },
+    });
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("initialize")!.id,
+      result: { capabilities: {} },
+    });
+    await connectPromise;
+
+    const tabKey = "tab-resync-1";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      relativePath: "src/resync.ts",
+    });
+    await client.notifyDidOpen(tabKey, "const initial = 1;");
+
+    const queryPromise = client.getDefinition(tabKey, { line: 0, character: 6 });
+    await vi.waitFor(() =>
+      expect(ws.lastSent("textDocument/definition")).toBeDefined(),
+    );
+    const reqId = ws.lastSent("textDocument/definition")!.id;
+
+    // Server answers with -32003 (StaleDocumentVersion / Version divergence)
+    ws.receive({
+      jsonrpc: "2.0",
+      id: reqId,
+      error: { code: -32003, message: "Stale document version" },
+    });
+
+    const result = await queryPromise;
+    expect(result).toEqual({ locations: [] });
+
+    // Verify client sent full didChange resync
+    await vi.waitFor(() => {
+      const didChange = ws.lastSent("textDocument/didChange");
+      expect(didChange).toBeDefined();
+      expect(didChange?.params.contentChanges).toEqual([
+        { text: "const full = 'recovered';" },
+      ]);
+    });
+
+    // Query again post-resync to prove navigation remains alive (C-1 fix)
+    const query2Promise = client.getDefinition(tabKey, { line: 0, character: 6 });
+    await vi.waitFor(() => {
+      const defMsg = ws.lastSent("textDocument/definition");
+      expect(defMsg?.id).not.toBe(reqId);
+    });
+    const req2Id = ws.lastSent("textDocument/definition")!.id;
+    ws.receive({
+      jsonrpc: "2.0",
+      id: req2Id,
+      result: [
+        {
+          uri: "dam-hopper://semantic/target-42/src/resync.ts",
+          range: {
+            start: { line: 0, character: 6 },
+            end: { line: 0, character: 10 },
+          },
+        },
+      ],
+    });
+    const result2 = await query2Promise;
+    expect(result2.locations.length).toBe(1);
+  });
+
+  it("handles server admission invalidation (-32005) by resetting connection state (C-2)", async () => {
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      registry,
+    });
+
+    const connectPromise = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("damHopper/attachTarget")!.id,
+      result: { targetId: "target-42" },
+    });
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("initialize")!.id,
+      result: { capabilities: {} },
+    });
+    await connectPromise;
+
+    const tabKey = "tab-inval-1";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      relativePath: "src/inval.ts",
+    });
+    await client.notifyDidOpen(tabKey, "const a = 1;");
+
+    const queryPromise = client.getDefinition(tabKey, { line: 0, character: 6 });
+    await vi.waitFor(() =>
+      expect(ws.lastSent("textDocument/definition")).toBeDefined(),
+    );
+    const reqId = ws.lastSent("textDocument/definition")!.id;
+
+    // Server returns -32005 (auth / admission invalidated)
+    ws.receive({
+      jsonrpc: "2.0",
+      id: reqId,
+      error: { code: -32005, message: "Admission epoch invalidated" },
+    });
+
+    const result = await queryPromise;
+    expect(result).toEqual({ locations: [] });
+    expect(client.getStatus()).toBe("disconnected");
+    client.disconnect();
+  });
 });

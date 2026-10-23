@@ -297,7 +297,7 @@ To prevent dirty editor state, undo stacks, or cursor positions from being destr
 
 - **Local Model URI:** Follows Monaco's existing in-memory scheme: `inmemory://dam-hopper/${encodeURIComponent(tabKey)}`.
 - **Virtual Wire URI:** Follows the gateway's RFC 3986 virtual URI scheme: `dam-hopper://semantic/<target-id>/<encoded-relative-path>`.
-- **Reconnection Invariant:** On reconnect or target re-attach, the local model object is retained in memory. Only the wire binding is updated, and current editor text is replayed to the new language server session before transitioning to `ready` (subsequent edit dispatch across generation shifts is governed by active client resolution; open review item C-1 in `plans/reports/code-reviewer-261023-2030-phase-07-monaco-client-cycle-3.md` tracks client-ref updates across generation changes).
+- **Reconnection Invariant:** On reconnect or target re-attach, the local model object is retained in memory. Only the wire binding is updated, and current editor text is replayed to the new language server session before transitioning to `ready` (subsequent edit dispatch across generation shifts is governed by dynamic client resolution at call time via `findClientForTab`, remediating Phase 07 C-1 in Phase 08).
 
 ### 3. Adaptive Document Synchronization
 
@@ -329,6 +329,68 @@ Cross-document navigation utilizes `useSemanticNavigationStore`:
 
 - **Request Cancellation:** Client cancellation via `$/cancelRequest` completes the original in-flight request with its original request ID and returns standard JSON-RPC error `-32800 REQUEST_CANCELLED` (notifications themselves do not return responses).
 - **Malformed Change Protection:** If a client submits malformed `contentChange` items in `didChange`, the gateway closes the document overlay (`handle.did_close`) to prevent desynchronization between the client and language server process.
+
+## Lifecycle Invalidation and Client Recovery (Phase 08)
+
+Phase 08 delivers comprehensive lifecycle invalidation and client-side fault recovery across server operations and frontend editor surfaces.
+
+### 1. Authoritative Trigger, Ordering, and Teardown Matrix
+
+Different system events enforce distinct invalidation and reaping guarantees to prevent deadlocks, data corruption, or denial-of-service:
+
+| Trigger / Boundary | Admission Cutoff | Process Tree Reaping | Lock Scope & Ordering | Client Recovery Path |
+|---|---|---|---|---|
+| **Live Auth Invalidation** (5s poll, 2s DB lookup) | Immediate revocation of connection admission epoch | Reaped **before** socket close delivery (`TOTAL_TEARDOWN_BUDGET = 5s`) | Out-of-band watcher; no workspace lock held | Socket closes with `4401 CLOSE_FULL_LOGIN_REQUIRED`. Client fails closed; no reconnect unless fresh valid credentials supplied. |
+| **Admin Hot Toggle OFF** (`PATCH /api/semantic/settings`) | Synchronous revocation on supervisor | Reaped **before** committing durable configuration | `global_config_mutation_lock` -> `transition_lock`; supervisor sessions drained | Ongoing queries fail with `-32005` or socket drops; client transitions to `disconnected`. New handshakes fail `initialize` with `-32000 SEMANTIC_DISABLED`. |
+| **Workspace Switch / Init** (`switch_workspace`, `init_workspace`) | Synchronous Phase 1 detachment from registry under write lock; actor invalidation enqueued | Asynchronous Phase 2 non-blocking reap outside write lock (subject to R3 child exit race checks) | `workspace_context_guard.write()` acquires lock -> detaches sessions (`prepare_invalidate_all`) -> drops lock -> reaps trees (`spawn_reap_sessions`) | In-flight requests fail with `-32005 AUTH_REVOKED` (result fencing tracked under C2). Client enters auto-reconnect backoff (1.5s–10s) and attaches to new workspace targets. |
+| **Config Reload with Project Diffing** (`reload_config_locked`) | Synchronous Phase 1 detachment of removed projects only | Asynchronous Phase 2 non-blocking reap of removed projects outside write lock | `workspace_context_guard.write()` -> diffs project sets -> detaches removed (`prepare_invalidate_project`) -> drops lock -> reaps (`spawn_reap_sessions`) | Clients on removed project roots fail with `-32005` / `-32002 TARGET_NOT_FOUND` and fail closed. Clients on surviving projects remain undisturbed. |
+| **Settings Cache Clear** (`clear_cache`) | Synchronous Phase 1 detachment from registry under write lock | Asynchronous Phase 2 non-blocking reap outside write lock | `workspace_context_guard.write()` -> detaches all sessions -> drops lock -> reaps (`spawn_reap_sessions`) | In-flight requests fail with `-32005`. Client enters auto-reconnect backoff and re-establishes session wire bindings. |
+| **Settings Import Rollback** (`import_workspace_settings`) | Synchronous detachment on reload attempt and on restore | Asynchronous non-blocking reap on reload and on restore | `workspace_context_guard.write()` during atomic restore; reaps detached handles on both attempt and rollback | Clients detached during invalid import or rollback fail with `-32005` and recover via auto-reconnect backoff. |
+| **Worktree Removal / Target Refresh** (`invalidate_project_root`) | Synchronous Phase 1 detachment for matching project root | Asynchronous Phase 2 non-blocking reap | Resolves project name under `config.read()` -> `prepare_invalidate_project` -> `spawn_reap_sessions` | Associated sessions invalidated; client reconnect fails with `-32002 TARGET_NOT_FOUND` if root no longer exists (worktree wire alignment tracked under R2, git route invalidation under W5). |
+| **Early Daemon Shutdown** (SIGINT / SIGTERM) | Synchronous `revoke_admission()` in shutdown signal handler | Managed supervisor `shutdown()` reaps all session trees | Signal handler executes cutoff before socket listener drain or graceful service teardown | New connection attempts rejected immediately at admission check (`is_admission_revoked()`). Existing sessions reaped cleanly. |
+
+### 2. Client-Side Fault Recovery State Machine
+
+The frontend `SemanticClient` (`packages/ui/src/api/semantic-client.ts`) and navigation store (`packages/ui/src/stores/semantic-navigation.ts`) implement resilient recovery protocols:
+
+1. **Local Cancellation via `$/cancelRequest`:**
+   - Navigation requests (`textDocument/definition`, `textDocument/implementation`) accept `AbortSignal` and enforce client-side timeouts (`NAVIGATION_TIMEOUT_MS = 5000`).
+   - On timeout or external abort, the client immediately emits a JSON-RPC notification `$/cancelRequest` with `{ id: clientRequestId }` to release server and language server resources.
+   - The client locally resolves the query with empty locations and gracefully catches server `-32800 REQUEST_CANCELLED` responses without surfacing errors to the user.
+
+2. **Full `didChange` Resync on Version Divergence (`-32003 STALE_VERSION`):**
+   - If the server detects a version mismatch between incoming edits and its authoritative `SessionOverlayMap`, it returns JSON-RPC error `-32003`.
+   - Instead of breaking navigation permanently, `SemanticClient` invokes `resyncDocument(tabKey, currentText)`.
+   - Resync increments the wire version (`wireVersion++`) and sends a full `TextDocumentSyncKind.Full` replacement notification containing the complete editor buffer text, realigning the language server overlay before subsequent queries.
+
+3. **Auto-Reconnect Backoff on Admission Invalidation (`-32005 AUTH_REVOKED`):**
+   - When the server returns `-32005` (indicating session invalidation during workspace changes, config reloads, or token rotation), or when the socket closes unexpectedly, the client transitions to `disconnected`.
+   - The client cancels in-flight request timers and schedules exponential auto-reconnect backoff (initial delay 1,500 ms, doubling up to a 10,000 ms ceiling with randomized jitter).
+   - **Backoff Hygiene:** The backoff timer is immediately cleared on explicit `connect()`, `disconnect()`, owner replacement, or final reference release.
+   - **Replay Provenance Boundary (Open Finding R1):** Reconnection re-attaches and full-replays dirty local models matching target keys. Local model retention preserves unsaved text, but replay matching currently checks target key equality without validating that the local draft's captured endpoint, project root, and actor provenance match the newly authorized connection. This foreign-binding replay gate is tracked under open security finding R1 for Phase 09.
+   - **Terminal Failures:** If reconnection attempts encounter permanent errors (such as target project removed `-32002`, subsystem disabled `-32000`, profile disabled, or credentials revoked), the client aborts backoff and remains `disconnected`.
+4. **Reference-Counted Client Lifetimes & Profile Enablement:**
+   - `useSemanticNavigationStore` maintains reference counts (`clientRefCounts: Map<string, number>`) across mounted editor panes and tabs.
+   - Multiple tabs targeting the same semantic scope share a single `SemanticClient` connection.
+   - When a tab unmounts, it invokes `releaseClient(scopeKey)`. The client connection is disconnected and pruned only when all references reach zero.
+   - Profile-scoped enablement (`setProfileSemanticEnabled(profileId, enabled)`) tracks enabled state per profile; disabling a profile disconnects only that profile's active clients while leaving sibling profile sessions unaffected.
+
+5. **Active Model Status Presentation (`EditorStatusBar.tsx`):**
+   - `EditorStatusBar` inspects the active model's semantic client status from `useSemanticNavigationStore` (`clientStatuses`).
+   - Displays live status: `ready` (emerald dot), `starting` / `replaying` (amber dot), `error` (rose dot), `disconnected` (muted dot), or `unsupported` (muted label), accompanied by descriptive tooltips.
+
+### 3. Open Review Items and Acceptance Boundaries
+
+Static review of Phase 08 implementation (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`, score 6/10) identifies the following tracked boundaries carried forward into the Phase 09 receiving checklist:
+
+- **C2 (Actor Invalidation Fence):** `SemanticSessionHandle::invalidate()` dispatches `SessionCommand::Invalidate` over a bounded mpsc channel. Invalidation is enqueued rather than acting as a synchronous execution barrier if the session actor is blocked during startup or backoff. Gateway result publishing fencing is tracked for Phase 09.
+- **R1 (Foreign-Binding Dirty Replay Gate):** `replayMatchingModels` filters models by target key equality without validating that the local draft's captured endpoint, project root, and actor provenance match the newly authorized connection. Mismatched draft upload protection is tracked for Phase 09.
+- **W2 (Handshake Socket Identity Race):** Asynchronous WebSocket close events that clear `this.ws` before `performHandshake()` rejection continuations execute could strand pending connect promises or tear down replacement sockets.
+- **W3 (Monaco Opener Target Derivation):** Opener callback registration and fallback routing across linked worktree destinations rather than assuming project root.
+- **R2 (Worktree Wire Parameter Alignment):** Client attach sends `target.worktree` while gateway expects `target.worktreePath`; wire alignment tracked for Phase 09.
+- **R3 (Invalidated Actor Exit / Reap Race):** Child termination during the prepare/reap gap could trigger restart before shutdown acknowledgment; terminal exit verification before reap completion tracked for Phase 09.
+- **W5 (Git Route Worktree Invalidation):** Target-scoped worktree invalidation across Git mutation routes.
+- **Full Browser Qualification (G8 Gate):** Headless Chromium component tests verify client recovery, cancellation, and status bar rendering; full end-to-end multi-tab application journeys and live language server process qualification against containerized server environments remain deferred to Phase 10.
 
 ## Related Documentation
 

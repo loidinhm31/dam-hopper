@@ -22,8 +22,8 @@ import {
 
 export const SEMANTIC_SUBPROTOCOL = "dam-hopper.semantic.lsp.v1";
 export const ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 * 1024; // 64 KiB UTF-8 byte threshold
+export const HANDSHAKE_TIMEOUT_MS = 15000;
 export const NAVIGATION_TIMEOUT_MS = 5000;
-
 export type SemanticClientStatus =
   | "disconnected"
   | "connecting"
@@ -97,11 +97,11 @@ export class SemanticClient {
   private readonly registry: SemanticModelRegistry;
   private readonly documentQueues = new Map<string, Promise<void>>();
   private textEncoder = new TextEncoder();
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
   constructor(private readonly options: SemanticClientOptions) {
     this.registry = options.registry ?? defaultSemanticModelRegistry;
   }
-
   getStatus(): SemanticClientStatus {
     return this.status;
   }
@@ -121,6 +121,8 @@ export class SemanticClient {
    * Connect and execute the handshake sequence.
    */
   async connect(): Promise<void> {
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     if (
       this.ws &&
       (this.ws.readyState === WebSocket.OPEN ||
@@ -145,11 +147,14 @@ export class SemanticClient {
         this.ws = ws;
 
         ws.onopen = async () => {
+          if (this.ws !== ws) return;
           try {
             await this.performHandshake();
+            if (this.ws !== ws) return;
             settled = true;
             resolve();
           } catch (e) {
+            if (this.ws !== ws) return;
             if (!settled) {
               settled = true;
               reject(e);
@@ -158,10 +163,12 @@ export class SemanticClient {
         };
 
         ws.onmessage = (event) => {
+          if (this.ws !== ws) return;
           this.handleMessage(event.data);
         };
 
         ws.onerror = (event) => {
+          if (this.ws !== ws) return;
           const errText = "WebSocket connection error";
           this.setStatus("error", errText);
           if (!settled) {
@@ -171,6 +178,7 @@ export class SemanticClient {
         };
 
         ws.onclose = () => {
+          if (this.ws !== ws) return;
           this.handleClose();
           if (!settled) {
             settled = true;
@@ -532,16 +540,73 @@ export class SemanticClient {
 
       return this.normalizeNavigationResult(raw);
     } catch (e) {
-      if (e && typeof e === "object" && "code" in e && e.code === -32800) {
-        return { locations: [] };
+      if (e && typeof e === "object" && "code" in e) {
+        if (e.code === -32800) {
+          return { locations: [] };
+        }
+        if (e.code === -32003) {
+          void this.resyncDocument(tabKey);
+          return { locations: [] };
+        }
+        if (e.code === -32005) {
+          this.handleServerInvalidation();
+          return { locations: [] };
+        }
       }
       return { locations: [] };
     }
   }
 
+  private handleServerInvalidation(): void {
+    if (this.status === "disconnected") return;
+    this.setStatus("disconnected");
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // ignore
+      }
+      this.ws = null;
+    }
+    this.handleClose();
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.status === "disconnected") {
+        void this.connect().catch((err) => {
+          console.warn("Semantic auto-reconnect failed:", err);
+        });
+      }
+    }, 1000);
+  }
+
+  /**
+   * Perform full resync of an open document when version divergence is detected.
+   */
+  async resyncDocument(tabKey: string): Promise<void> {
+    const model = this.registry.getByTabKey(tabKey);
+    if (!model || !model.wireBinding) return;
+
+    const fullText = this.options.getModelText?.(tabKey);
+    if (typeof fullText !== "string") return;
+
+    const resyncVersion = this.registry.bumpWireVersion(tabKey);
+    this.sendNotification("textDocument/didChange", {
+      textDocument: {
+        uri: model.wireBinding.wireUri,
+        version: resyncVersion,
+      },
+      contentChanges: [{ text: fullText }],
+    });
+  }
+
   private cancelRequest(id: number | string): void {
     const pending = this.pendingRequests.get(id);
     if (!pending) return;
+
+    this.pendingRequests.delete(id);
+    clearTimeout(pending.timer);
+    pending.reject({ code: -32800, message: "Request cancelled" });
 
     this.sendNotification("$/cancelRequest", { id });
   }
@@ -634,15 +699,20 @@ export class SemanticClient {
     }
   }
 
-  private sendRequest(method: string, params: unknown): Promise<unknown> {
+  private sendRequest(
+    method: string,
+    params: unknown,
+    timeoutMs = HANDSHAKE_TIMEOUT_MS,
+  ): Promise<unknown> {
     const id = this.nextRequestId++;
-    return this.sendRequestWithId(id, method, params);
+    return this.sendRequestWithId(id, method, params, timeoutMs);
   }
 
   private sendRequestWithId(
     id: number | string,
     method: string,
     params: unknown,
+    timeoutMs = NAVIGATION_TIMEOUT_MS,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -652,12 +722,15 @@ export class SemanticClient {
 
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
+        if (method !== "initialize" && method !== "attachTarget") {
+          this.sendNotification("$/cancelRequest", { id });
+        }
         reject(
           new Error(
-            `Semantic request ${method} (id ${id}) timed out after ${NAVIGATION_TIMEOUT_MS}ms`,
+            `Semantic request ${method} (id ${id}) timed out after ${timeoutMs}ms`,
           ),
         );
-      }, NAVIGATION_TIMEOUT_MS);
+      }, timeoutMs);
 
       this.pendingRequests.set(id, { id, method, resolve, reject, timer });
 
@@ -709,6 +782,8 @@ export class SemanticClient {
    * Graceful disconnect and teardown.
    */
   disconnect(): void {
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     if (this.ws) {
       try {
         if (this.ws.readyState === WebSocket.OPEN && this.status === "ready") {
