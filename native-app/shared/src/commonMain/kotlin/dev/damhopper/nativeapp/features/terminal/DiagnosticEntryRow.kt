@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.DiagnosticEntry
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -80,14 +81,14 @@ fun DiagnosticEntryRow(entry: DiagnosticEntry) {
                     color = DamHopperColors.TextPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JetBrainsMonoFontFamily,
                 )
             }
             Text(
                 text = formatTimestamp(entry.timestampMs),
                 color = DamHopperColors.TextSecondary,
                 fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JetBrainsMonoFontFamily,
             )
         }
 
@@ -97,7 +98,7 @@ fun DiagnosticEntryRow(entry: DiagnosticEntry) {
             text = entry.message,
             color = indicatorColor,
             fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = JetBrainsMonoFontFamily,
         )
 
         if (entry.metadata != null && entry.metadata.isNotEmpty()) {
@@ -107,7 +108,7 @@ fun DiagnosticEntryRow(entry: DiagnosticEntry) {
                 text = metaString,
                 color = DamHopperColors.TextSecondary,
                 fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JetBrainsMonoFontFamily,
             )
         }
     }

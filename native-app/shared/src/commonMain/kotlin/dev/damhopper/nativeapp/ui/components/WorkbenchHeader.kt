@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.model.WorkbenchState
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 
 @Composable
 fun WorkbenchHeader(
@@ -66,7 +67,7 @@ fun WorkbenchHeader(
                             text = targetLabel,
                             color = DamHopperColors.TextPrimary,
                             fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = JetBrainsMonoFontFamily
                         )
                     }
                 }
@@ -75,7 +76,7 @@ fun WorkbenchHeader(
                         text = "· [WS]",
                         color = DamHopperColors.TextSecondary,
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = JetBrainsMonoFontFamily,
                         modifier = Modifier.clickable { onOpenWorkspaceSwitcher() }
                     )
                 }
@@ -91,7 +92,7 @@ fun WorkbenchHeader(
                 text = state.connectionStatus,
                 color = DamHopperColors.Warning,
                 fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace
+                fontFamily = JetBrainsMonoFontFamily
             )
         }
     }

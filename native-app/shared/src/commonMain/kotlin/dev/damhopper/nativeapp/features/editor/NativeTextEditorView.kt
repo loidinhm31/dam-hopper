@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 
 /**
  * Text editor view rendering synchronized line number gutters and editable monospace buffer,
@@ -58,7 +59,7 @@ fun NativeTextEditorView(
                 lines.forEachIndexed { idx, _ ->
                     Text(
                         text = (idx + 1).toString(),
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = JetBrainsMonoFontFamily,
                         fontSize = 12.sp,
                         color = DamHopperColors.TextSecondary,
                         modifier = Modifier.fillMaxWidth()
@@ -81,7 +82,7 @@ fun NativeTextEditorView(
                 onValueChange = onContentChange,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 textStyle = TextStyle(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JetBrainsMonoFontFamily,
                     fontSize = fontSize.sp,
                     color = DamHopperColors.TextPrimary,
                     lineHeight = (fontSize * 1.35f).sp

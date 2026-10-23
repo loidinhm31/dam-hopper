@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 
 /**
  * Strips ANSI CSI sequences (colors, formatting, cursor movement), OSC sequences,
@@ -543,14 +544,14 @@ fun TerminalPanelScreen(
                             text = "[${activeSession.displayName} | ${activeSession.id} | Inc:${controller?.incarnation ?: 0u}]",
                             color = DamHopperColors.TextSecondary,
                             fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = JetBrainsMonoFontFamily
                         )
                         Text(
                             text = if (controller?.isReplayCompleted == true) "READY" else "REPLAYING",
                             color = if (controller?.isReplayCompleted == true) DamHopperColors.Success else DamHopperColors.Warning,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = JetBrainsMonoFontFamily
                         )
                     }
 
@@ -565,7 +566,7 @@ fun TerminalPanelScreen(
                                 text = "$ ${activeSession.command}",
                                 color = DamHopperColors.Success,
                                 fontSize = fontSize.sp,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = JetBrainsMonoFontFamily
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -576,7 +577,7 @@ fun TerminalPanelScreen(
                                 },
                                 color = DamHopperColors.TextSecondary,
                                 fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = JetBrainsMonoFontFamily
                             )
                         }
                     } else {
@@ -592,7 +593,7 @@ fun TerminalPanelScreen(
                                     text = if (line.isEmpty()) AnnotatedString(" ") else line,
                                     color = DamHopperColors.TextPrimary,
                                     fontSize = fontSize.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = JetBrainsMonoFontFamily,
                                     lineHeight = (fontSize + 3).sp
                                 )
                             }
@@ -690,7 +691,7 @@ fun TerminalPanelScreen(
                         panelCommandInput = ""
                     }),
                     textStyle = TextStyle(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = JetBrainsMonoFontFamily,
                         fontSize = 12.sp,
                         color = DamHopperColors.TextPrimary
                     ),

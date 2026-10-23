@@ -81,6 +81,7 @@ import dev.damhopper.nativeapp.features.terminal.TerminalViewportEffects
 import dev.damhopper.nativeapp.features.terminal.terminalGeometry
 import dev.damhopper.nativeapp.features.terminal.TerminalDisplaySnapshot
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -1041,7 +1042,8 @@ fun ProjectTerminalScreen(
             TextStyle(
                 color = DamHopperColors.TextPrimary,
                 fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontFeatureSettings = "calt 0",
                 lineHeight = 16.sp,
                 lineHeightStyle = LineHeightStyle(
                     alignment = LineHeightStyle.Alignment.Center,
@@ -1175,7 +1177,7 @@ fun ProjectTerminalScreen(
                         text = "$ ${activeSession.command}",
                         color = DamHopperColors.Success,
                         fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = JetBrainsMonoFontFamily
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -1186,7 +1188,7 @@ fun ProjectTerminalScreen(
                         },
                         color = DamHopperColors.TextSecondary,
                         fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = JetBrainsMonoFontFamily
                     )
                 }
             } else {
@@ -1276,7 +1278,7 @@ fun ProjectTerminalScreen(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { sendCommand() }),
                     textStyle = TextStyle(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = JetBrainsMonoFontFamily,
                         fontSize = 13.sp,
                         color = DamHopperColors.TextPrimary
                     ),
@@ -1505,7 +1507,7 @@ private fun AccessoryKeyButton(
             color = DamHopperColors.TextPrimary,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
-            fontFamily = FontFamily.Monospace
+            fontFamily = JetBrainsMonoFontFamily
         )
     }
 }
