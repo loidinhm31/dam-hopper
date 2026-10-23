@@ -7,6 +7,7 @@ import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.FsEventDto
 import dev.damhopper.nativeapp.core.transport.WsConnection
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.cancel
 import java.net.InetSocketAddress
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -21,11 +22,14 @@ import kotlin.test.assertTrue
 class FileTreeStateTest {
 
     private var server: HttpServer? = null
+    private var serverExecutor: java.util.concurrent.ExecutorService? = null
     private var serverPort: Int = 0
 
     @BeforeTest
     fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        serverExecutor = java.util.concurrent.Executors.newCachedThreadPool()
+        server!!.executor = serverExecutor
         serverPort = server!!.address.port
         server!!.start()
     }
@@ -33,6 +37,7 @@ class FileTreeStateTest {
     @AfterTest
     fun tearDown() {
         server?.stop(0)
+        serverExecutor?.shutdownNow()
     }
 
     private fun createRepository(): FileRepository {
@@ -144,5 +149,99 @@ class FileTreeStateTest {
 
         // State surfaces explicit status without crashing or throwing
         assertNotNull(state.error.value)
+    }
+
+    @Test
+    fun testCollapseDuringInFlightLoadDirectoryPreventsStaleExpansion() = runTest {
+        val listEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        server!!.createContext("/api/fs/list") { exchange ->
+            val query = exchange.requestURI.query ?: ""
+            if (query.contains("path=src")) {
+                listEntered.complete(Unit)
+                kotlinx.coroutines.runBlocking { listGate.await() }
+                val json = """{"entries":[{"name":"Main.kt","kind":"file","size":42,"mtime":10,"isSymlink":false}]}"""
+                exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(json.toByteArray()) }
+            } else {
+                val json = """{"entries":[{"name":"src","kind":"dir","size":0,"mtime":1,"isSymlink":false}]}"""
+                exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(json.toByteArray()) }
+            }
+        }
+
+        val repo = createRepository()
+        val target = ProjectTargetRef(project = "demo")
+        val state = FileTreeState(target, repo)
+        state.initTreeAndSubscription()
+
+        val srcBefore = FileTreeHelpers.findNode(state.root.value, "src")
+        assertNotNull(srcBefore)
+        assertFalse(srcBefore.isExpanded)
+
+        // Start expanding "src"
+        state.toggleFolder("src")
+        listEntered.await()
+
+        // Collapse "src" while the HTTP listing is still in flight
+        state.toggleFolder("src")
+        val srcCollapsed = FileTreeHelpers.findNode(state.root.value, "src")!!
+        assertFalse(srcCollapsed.isExpanded)
+        assertFalse(srcCollapsed.isLoading)
+
+        // Let the delayed HTTP response complete
+        listGate.complete(Unit)
+        kotlinx.coroutines.delay(50)
+
+        // Delayed listing must NOT re-expand "src"
+        val srcAfter = FileTreeHelpers.findNode(state.root.value, "src")!!
+        assertFalse(srcAfter.isExpanded)
+        assertNull(state.watchCoordinator.getDemand("src"))
+        state.dispose()
+    }
+
+    @Test
+    fun testScrollAndSelectionPreservedAcrossOverflowAndRefresh() = runTest {
+        server!!.createContext("/api/fs/list") { exchange ->
+            val json = """{"entries":[{"name":"src","kind":"dir","size":0,"mtime":1,"isSymlink":false},{"name":"README.md","kind":"file","size":12,"mtime":2,"isSymlink":false}]}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val repo = createRepository()
+        val target = ProjectTargetRef(project = "demo")
+        val state = FileTreeState(target, repo)
+        state.initTreeAndSubscription()
+
+        state.selectPath("README.md")
+        state.updateScrollPosition(firstVisibleItemIndex = 5, firstVisibleItemScrollOffset = 120)
+
+        state.handleFsOverflow("Simulated watcher overflow")
+        assertEquals("README.md", state.selectedPath.value)
+        assertEquals(5, state.scrollIndex.value)
+        assertEquals(120, state.scrollOffset.value)
+        state.dispose()
+    }
+
+    @Test
+    fun testTreeSubscriptionManagerRejectsNullOriginSocket() = runTest {
+        val repo = createRepository()
+        val target = ProjectTargetRef(project = "demo")
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined + kotlinx.coroutines.SupervisorJob())
+        val manager = TreeSubscriptionManager(repo.wsConnection, scope) { 1uL }
+
+        // wsConnection is disconnected (activeSocketRef() == null): must reject rather than fallback
+        assertFailsWith<dev.damhopper.nativeapp.core.model.ConnectionOwnerError> {
+            manager.subscribe(
+                target = target,
+                path = "",
+                onSnapshot = {},
+                onEvent = {},
+                onOverflow = {},
+            )
+        }
+        manager.dispose()
+        scope.cancel()
     }
 }

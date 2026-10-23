@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -26,6 +27,7 @@ fun FileTreeNodeRow(
     onToggleFolder: (path: String) -> Unit,
     onSelectNode: (path: String) -> Unit,
     modifier: Modifier = Modifier,
+    isUnresolved: Boolean = false,
 ) {
     val bgColor = if (isSelected) DamHopperColors.SurfaceVariant else DamHopperColors.Surface
     val indent = (depth * 16).dp
@@ -34,16 +36,28 @@ fun FileTreeNodeRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 40.dp)
             .background(bgColor)
             .clickable {
                 onSelectNode(node.path)
-                if (node.isDirectory) {
+                if (node.isDirectory && isSelected) {
                     onToggleFolder(node.path)
                 }
             }
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .padding(start = indent),
     ) {
+        if (node.isDirectory) {
+            val chevron = if (node.isExpanded) "▼" else "▶"
+            Text(
+                text = chevron,
+                style = DamHopperTypography.labelSmall,
+                color = DamHopperColors.TextSecondary,
+                modifier = Modifier
+                    .clickable { onToggleFolder(node.path) }
+                    .padding(end = 4.dp),
+            )
+        }
         val icon = when {
             node.isDirectory && node.isLoading -> "⏳"
             node.isDirectory && node.isExpanded -> "📂"
@@ -52,7 +66,17 @@ fun FileTreeNodeRow(
             else -> "📄"
         }
 
-        Text(icon, style = DamHopperTypography.bodyMedium)
+        Text(
+            text = icon,
+            style = DamHopperTypography.bodyMedium,
+            modifier = Modifier.clickable {
+                if (node.isDirectory) {
+                    onToggleFolder(node.path)
+                } else {
+                    onSelectNode(node.path)
+                }
+            },
+        )
         Spacer(modifier = Modifier.width(6.dp))
 
         Text(
@@ -61,6 +85,15 @@ fun FileTreeNodeRow(
             color = if (node.isDirectory) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
             modifier = Modifier.weight(1f),
         )
+
+        if (isUnresolved) {
+            Text(
+                text = "Unresolved",
+                style = DamHopperTypography.labelSmall,
+                color = DamHopperColors.Warning,
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+        }
 
         if (node.error != null) {
             Text("⚠️", style = DamHopperTypography.labelSmall)

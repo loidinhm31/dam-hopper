@@ -1,10 +1,10 @@
 # Phase 04 — Explorer actions and shared watch demand
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: Explorer worker.
+- Priority P2. Status: Complete (2026-10-24). Recorded verification: 24/24 Phase 04 tests; 478/478 `:shared:jvmTest`; 4/4 `FileScreensPhase08Test`; `:androidApp:compileDebugKotlin` passed. User-approved Cycle 2 review: 9.5/10, 0 critical issues. Owner: Explorer worker.
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
-- Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
+- Source anchors and current gaps in those evidence reports are read-only historical baseline; implementation and verification are recorded in [Closure and downstream carryovers](#closure-and-downstream-carryovers). Root for every literal path: `G:/ws/sharing/dam-hopper/`.
 
 ## Insights
 Server subscriptions are nonrecursive and overflow drops them. Current root-only watch and unlimited early queue miss expanded folders and socket retirement. Existing virtualized tree/dialogs reusable; focused Files must hide dormant project-wide search UI without deleting its module.
@@ -23,7 +23,7 @@ Implement C5/C6, lazy hidden-file tree, refresh/selection/create file/folder/ren
 ## Ordered task implementation and related files
 
 ### `implement-shared-directory-watchers` — Implement demand-shared watches with ordered listing recovery
-- [ ] <!-- evcrate-task:implement-shared-directory-watchers --> Implement demand-shared watches with ordered listing recovery
+- [x] <!-- evcrate-task:implement-shared-directory-watchers --> Implement demand-shared watches with ordered listing recovery
 - Dependencies: `freeze-document-and-watch-facades`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileTreeSubscription.kt`.
@@ -40,11 +40,10 @@ Implement C5/C6, lazy hidden-file tree, refresh/selection/create file/folder/ren
   - Nested events update all demanded directories/open parents without duplicate subscriptions; collapsed tree releases only its reference.
   - Delayed list/early event/reused subId on new socket cannot corrupt baseline; overflow invalidates and recreates.
   - Queues and event history finite; background/foreground reconciliation current before writes enabled.
-- Planned checks / observable evidence (not executed):
-  - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.files.FileTreeStateTest" --tests "dev.damhopper.nativeapp.features.files.FileWatchCoordinatorTest"; control event/list order, subId reuse, finite buffer overflow and lifecycle transitions.
+- Recorded verification (2026-10-24): the Phase 04 test set passed 24/24; full `:shared:jvmTest` passed 478/478.
 
 ### `implement-focused-explorer-actions` — Expose complete inline touch explorer actions
-- [ ] <!-- evcrate-task:implement-focused-explorer-actions --> Expose complete inline touch explorer actions
+- [x] <!-- evcrate-task:implement-focused-explorer-actions --> Expose complete inline touch explorer actions
 - Dependencies: `implement-shared-directory-watchers`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileScreens.kt`.
@@ -64,9 +63,8 @@ Implement C5/C6, lazy hidden-file tree, refresh/selection/create file/folder/ren
   - All approved explorer actions have touch-friendly reachable inline UI; focused Files exposes no project-wide search/transfer.
   - Definite failure keeps tree/tab identity and dialog input; no optimistic path rekey before confirmed server success.
   - Root/protected paths remain rejected with visible error; no force_git bypass.
-- Planned checks / observable evidence (not executed):
-  - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.files.FileMutationCoordinatorTest"; verify create/move validation, confirmation, definite reject and unresolved outcome presentation.
-  - Final active-root device journey exercises clipboard remote path, hidden files, empty/disconnected states and real server mutation bytes.
+- Recorded verification (2026-10-24): `FileScreensPhase08Test` passed 4/4; `:androidApp:compileDebugKotlin` passed.
+- The final active-root device journey (clipboard, hidden files, empty/disconnected states, and real server mutation bytes) remains for Phase 08 integrated qualification; no pass is recorded here.
 
 ## Durable tasks
 ```evcrate-tasks
@@ -130,6 +128,22 @@ Implement C5/C6, lazy hidden-file tree, refresh/selection/create file/folder/ren
 ]
 ```
 
+## Closure and downstream carryovers
+
+- **Disposition:** Complete on 2026-10-24; user-approved Cycle 2 review scored 9.5/10 with 0 Critical issues.
+- **Recorded test evidence:**
+  - 24/24 Phase 04 tests passed: `FileTreeStateTest` (10 tests), `FileWatchCoordinatorTest` (7 tests), `FileMutationCoordinatorTest` (7 tests).
+  - 478/478 `:shared:jvmTest` passing across full suite.
+  - 4/4 `FileScreensPhase08Test` passing.
+  - Android compile passed (`:androidApp:compileDebugKotlin` and `:shared:compileDebugKotlinAndroid` succeeded).
+- **Phase 02 / Phase 03 carryovers addressed:**
+  - **W3 (typed outcomes and reservations):** `FileOperationArbiter` enforces owner- and path-qualified reservations with generation-fenced tokens; `FileMutationCoordinator` dispatches typed `FileOperationOutcome` results (`Success`, `DefiniteFailure`, `Unknown`, `Cancelled`) and checks `EditorDirtyGuardPort`. Retained modal action state prevents optimistic path rekeying.
+  - **W4 (exact event origin and subscription routing):** `FileWatchCoordinator` and `TreeSubscriptionManager` enforce origin socket and subscription-incarnation fencing, monotonic listing request epochs, watermark-ordered event replay, and target-relative path routing. Dropped/reconnected subscriptions recreate safely without baseline corruption.
+- **Downstream carryovers and gates:**
+  - **Phase 06 (Save/mutation identity + uncertain reconciliation):** Consumes `FileMutationCoordinator`, arbiter reservation token lifecycle, and tree/dialog state for cross-feature file identity transactions and dirty editor buffer coordination.
+  - **Phase 07 (Retained active workspace):** Consumes stable watch demand coordinator and lifecycle foreground/background pause/resume reconciliation.
+  - **Phase 08 (Integrated qualification):** Active-root device journey (clipboard remote path, hidden files, empty/disconnected states, and real server mutation bytes) remains an open release qualification gate.
+
 ## Failure, rollback and security
 No recursive watcher assumption or refetch-only recovery after dropped subscription. Watcher state never grants write authority itself. Client path validation improves UX, not server security. Rollback detaches demand cleanly from origin sockets; retain uncertain mutation state and dirty buffers.
 - Preserve original target/buffers on failure; never use exception suppression, unconditional writes, blind retry, force_git bypass or remote inverse operations as rollback. Authentication/connection retirement revokes authority before UI transitions.
@@ -137,7 +151,7 @@ No recursive watcher assumption or refetch-only recovery after dropped subscript
 
 ## Completion and next dependencies
 Concurrent with phases03/05 after phase02. Phase06 takes mutation/tree/dialog state only after all three complete. Phase07 consumes stable watch-demand and lifecycle ports. No edits to editor/widget files from this phase.
-- Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+- Exit evidence: acceptance, verification, and user-approved review are recorded above. Phase 04 is complete (2026-10-24); integrated runtime/device/distribution qualification remains a Phase 08 gate.
 
 ## Unresolved questions
-- No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.
+- No new product decision. Phase 04 completed 2026-10-24 on the recorded verification above. Phase 01 feasibility is qualified; integrated runtime/device/distribution gates remain open under Phase 08. The active-root device journey is still pending.

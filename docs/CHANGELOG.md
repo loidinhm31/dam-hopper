@@ -1,3 +1,8 @@
+# 2026-10-24
+
+- **Native editor and file explorer: Phase 04 — Explorer actions and shared watch demand.** Completed [Phase 04](../plans/261023-1429-native-editor-file-explorer/phase-04-explorer-and-shared-watchers.md), closing demand-shared directory watchers and focused explorer actions.
+  - **Verification:** 24/24 Phase 04 tests, 478/478 `:shared:jvmTest`, 4/4 `FileScreensPhase08Test`, and `:androidApp:compileDebugKotlin` passed; user-approved review scored 9.5/10. Phases 05–08 remain pending, including integrated runtime/device/distribution qualification.
+
 # 2026-10-18
 
 - **Traditional terminal: worktree selection persistence across page refresh.** Added narrow, resilient Zustand persistence for active worktree selections (`packages/ui/src/stores/project-target.ts`):

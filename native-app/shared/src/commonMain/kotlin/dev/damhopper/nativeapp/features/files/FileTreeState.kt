@@ -10,24 +10,36 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /**
- * Observable controller managing lazy directory tree expansion, selection,
- * WebSocket subscription lifecycle, event invalidations, and overflow recovery.
+ * High-level connection and authority readiness state for the file explorer.
+ */
+enum class ExplorerConnectionStatus {
+    CONNECTED,
+    CONNECTING,
+    DISCONNECTED,
+    TARGET_UNAVAILABLE,
+}
+
+/**
+ * Observable controller managing lazy directory tree expansion, selection, scroll retention,
+ * demand-shared WebSocket watch subscriptions, watermark-fenced listings, and overflow recovery.
  */
 class FileTreeState(
     val target: ProjectTargetRef,
     private val repository: FileRepository,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    val watchCoordinator: FileWatchCoordinator = FileWatchCoordinator(
+        target = target,
+        repository = repository,
+        coroutineScope = coroutineScope,
+    ),
 ) {
-    private val mutex = Mutex()
-    @Volatile
-    private var subscriptionGeneration: ULong = 0uL
     @Volatile
     private var isDisposed: Boolean = false
-    private var activeSubscription: FileTreeSubscription? = null
+
+    @Volatile
+    private var initialLoadJob: kotlinx.coroutines.Job? = null
 
     private val initialRoot = FileTreeNode(target, "", target.project, isDirectory = true, isExpanded = true)
     private val _root = MutableStateFlow(initialRoot)
@@ -45,113 +57,305 @@ class FileTreeState(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _refreshWarning = MutableStateFlow<String?>(null)
+    val refreshWarning: StateFlow<String?> = _refreshWarning.asStateFlow()
+
+    private val _connectionStatus = MutableStateFlow(resolveInitialConnectionStatus())
+    val connectionStatus: StateFlow<ExplorerConnectionStatus> = _connectionStatus.asStateFlow()
+
+    val isWriteReady: StateFlow<Boolean>
+        get() = watchCoordinator.isWriteReady
+
+    private val _scrollIndex = MutableStateFlow(0)
+    val scrollIndex: StateFlow<Int> = _scrollIndex.asStateFlow()
+
+    private val _scrollOffset = MutableStateFlow(0)
+    val scrollOffset: StateFlow<Int> = _scrollOffset.asStateFlow()
+
     init {
+        watchCoordinator.onRefetchExplorerDirectory = { dirPath ->
+            refreshDirectoryOrdered(dirPath)
+        }
+        watchCoordinator.onOverflowNotice = { _, _ ->
+            _error.value = "Watcher overflow recovered"
+        }
+        initialLoadJob = coroutineScope.launch {
+            initTreeAndSubscriptionInternal()
+        }
         coroutineScope.launch {
-            initTreeAndSubscription()
             observeConnectionState()
+        }
+    }
+
+    private fun resolveInitialConnectionStatus(): ExplorerConnectionStatus {
+        if (!repository.owner.matchesTarget(target)) {
+            return ExplorerConnectionStatus.TARGET_UNAVAILABLE
+        }
+        return when (repository.wsConnection.state.value) {
+            is WsState.Connected -> ExplorerConnectionStatus.CONNECTED
+            is WsState.Connecting -> ExplorerConnectionStatus.CONNECTING
+            else -> ExplorerConnectionStatus.DISCONNECTED
         }
     }
 
     private suspend fun observeConnectionState() {
         repository.wsConnection.state.collect { wsState ->
-            if (!isDisposed && wsState is WsState.Connected && activeSubscription == null) {
-                try { resubscribeLocked() } catch (_: Throwable) { _error.value = "Directory watcher offline" }
+            if (isDisposed) return@collect
+            if (!repository.owner.matchesTarget(target)) {
+                _connectionStatus.value = ExplorerConnectionStatus.TARGET_UNAVAILABLE
+                return@collect
+            }
+            _connectionStatus.value = when (wsState) {
+                is WsState.Connected -> ExplorerConnectionStatus.CONNECTED
+                is WsState.Connecting -> ExplorerConnectionStatus.CONNECTING
+                else -> ExplorerConnectionStatus.DISCONNECTED
             }
         }
     }
 
     suspend fun initTreeAndSubscription() {
         if (isDisposed) return
+        val runningInit = initialLoadJob
+        if (runningInit != null && runningInit.isActive) {
+            runningInit.cancel()
+            try { runningInit.join() } catch (_: Throwable) {}
+        }
+        initTreeAndSubscriptionInternal()
+    }
+
+    private suspend fun initTreeAndSubscriptionInternal() {
+        if (isDisposed) return
+        if (!repository.owner.matchesTarget(target)) {
+            _connectionStatus.value = ExplorerConnectionStatus.TARGET_UNAVAILABLE
+            _error.value = "Target does not match workspace owner"
+            return
+        }
         _isLoading.value = true
         _error.value = null
+        _refreshWarning.value = null
         try {
-            resubscribeLocked()
-            val rootEntries = repository.listDirectory(target, "")
-            _root.value = FileTreeHelpers.updateChildren(_root.value, "", rootEntries, target)
+            watchCoordinator.acquireExplorerDemand("")
+            when (val result = watchCoordinator.fetchDirectoryOrdered("")) {
+                is OrderedDirectoryListingResult.Published -> {
+                    _root.value = FileTreeHelpers.updateChildren(_root.value, "", result.entries, target)
+                    _error.value = null
+                    _isLoading.value = false
+                }
+                is OrderedDirectoryListingResult.Failed -> {
+                    _error.value = result.error.message ?: "Failed to load directory"
+                    _isLoading.value = false
+                }
+                is OrderedDirectoryListingResult.Superseded -> {
+                    // A newer request owns the loading/error state
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            _error.value = e.message ?: "Failed to load directory"
-        } finally {
-            _isLoading.value = false
-        }
-    }
-
-    private suspend fun resubscribeLocked() = mutex.withLock {
-        if (isDisposed) return@withLock
-        activeSubscription?.cancel()
-        activeSubscription = null
-        val currentGen = ++subscriptionGeneration
-
-        try {
-            activeSubscription = repository.subscribeTree(
-                target = target,
-                path = "",
-                watchOnly = true,
-                onSnapshot = { /* Baseline loaded via REST */ },
-                onEvent = { event ->
-                    if (subscriptionGeneration == currentGen && !isDisposed) handleFsEvent(event)
-                },
-                onOverflow = { message ->
-                    if (subscriptionGeneration == currentGen && !isDisposed) handleFsOverflow(message)
-                },
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            _error.value = "Directory watcher offline"
+            if (!isDisposed) {
+                _error.value = e.message ?: "Failed to load directory"
+                _isLoading.value = false
+            }
         }
     }
 
     fun toggleFolder(path: String) {
-        val node = FileTreeHelpers.findNode(_root.value, path) ?: return
+        if (isDisposed) return
+        val cleanPath = watchCoordinator.normalizeDirectoryPath(path)
+        val node = FileTreeHelpers.findNode(_root.value, cleanPath) ?: return
         if (!node.isDirectory) return
 
-        if (node.isExpanded) {
-            _root.value = FileTreeHelpers.updateNode(_root.value, path) { it.copy(isExpanded = false) }
+        if (node.isExpanded || node.isLoading) {
+            // Collapse: invalidate in-flight listing for this folder and release only explorer demand
+            _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                it.copy(isExpanded = false, isLoading = false, error = null)
+            }
+            if (cleanPath.isNotEmpty()) {
+                watchCoordinator.releaseExplorerDemandImmediate(cleanPath)
+            }
         } else {
-            loadDirectory(path)
+            loadDirectory(cleanPath)
         }
     }
 
     fun loadDirectory(path: String) {
         if (isDisposed) return
+        val cleanPath = watchCoordinator.normalizeDirectoryPath(path)
+        if (cleanPath.isEmpty()) {
+            _isLoading.value = true
+        } else {
+            _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                it.copy(isLoading = true, error = null)
+            }
+        }
         coroutineScope.launch {
-            _root.value = FileTreeHelpers.updateNode(_root.value, path) { it.copy(isLoading = true, error = null) }
-            try {
-                val entries = repository.listDirectory(target, path)
-                _root.value = FileTreeHelpers.updateChildren(_root.value, path, entries, target)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                _root.value = FileTreeHelpers.updateNode(_root.value, path) {
-                    it.copy(isLoading = false, error = e.message ?: "Failed to read folder")
+            loadDirectorySuspending(cleanPath, isPostMutationRefresh = false)
+        }
+    }
+
+    /**
+     * Suspends until the ordered directory load completes.
+     * When [isPostMutationRefresh] is true, failures surface as a non-fatal [refreshWarning]
+     * so an already-confirmed server mutation is never reported as a failed mutation.
+     */
+    suspend fun loadDirectorySuspending(
+        path: String,
+        isPostMutationRefresh: Boolean = false,
+    ): Boolean {
+        if (isDisposed) return false
+        val cleanPath = watchCoordinator.normalizeDirectoryPath(path)
+        if (cleanPath.isEmpty()) {
+            _isLoading.value = true
+        } else {
+            _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                it.copy(isLoading = true, error = null)
+            }
+        }
+        return try {
+            watchCoordinator.acquireExplorerDemand(cleanPath)
+            when (val result = watchCoordinator.fetchDirectoryOrdered(cleanPath)) {
+                is OrderedDirectoryListingResult.Published -> {
+                    _root.value = FileTreeHelpers.updateChildren(_root.value, cleanPath, result.entries, target)
+                    if (cleanPath.isEmpty()) {
+                        _isLoading.value = false
+                        _error.value = null
+                    }
+                    _refreshWarning.value = null
+                    true
+                }
+                is OrderedDirectoryListingResult.Failed -> {
+                    val msg = result.error.message ?: "Failed to read folder"
+                    if (isPostMutationRefresh) {
+                        _refreshWarning.value = "Operation succeeded, but directory refresh failed: $msg"
+                        if (cleanPath.isEmpty()) _isLoading.value = false
+                        else _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) { it.copy(isLoading = false) }
+                    } else if (cleanPath.isEmpty()) {
+                        _isLoading.value = false
+                        _error.value = msg
+                    } else {
+                        _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                            it.copy(isLoading = false, error = msg)
+                        }
+                    }
+                    false
+                }
+                is OrderedDirectoryListingResult.Superseded -> true
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (!isDisposed) {
+                val msg = e.message ?: "Failed to read folder"
+                if (isPostMutationRefresh) {
+                    _refreshWarning.value = "Operation succeeded, but directory refresh failed: $msg"
+                } else if (cleanPath.isEmpty()) {
+                    _error.value = msg
+                } else {
+                    _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                        it.copy(isLoading = false, error = msg)
+                    }
+                }
+                if (cleanPath.isEmpty()) _isLoading.value = false
+            }
+            false
+        }
+    }
+
+    private suspend fun refreshDirectoryOrdered(dirPath: String): Boolean {
+        val cleanDir = watchCoordinator.normalizeDirectoryPath(dirPath)
+        val node = FileTreeHelpers.findNode(_root.value, cleanDir)
+        if (node == null || (!node.isExpanded && cleanDir.isNotEmpty())) {
+            return true
+        }
+        return loadDirectorySuspending(cleanDir, isPostMutationRefresh = false)
+    }
+
+    fun selectPath(path: String?) {
+        _selectedPath.value = path?.let { watchCoordinator.normalizeDirectoryPath(it) }
+    }
+
+    fun setShowHidden(show: Boolean) {
+        _showHidden.value = show
+    }
+
+    fun setError(err: String?) {
+        _error.value = err
+    }
+
+    fun clearRefreshWarning() {
+        _refreshWarning.value = null
+    }
+
+    fun updateScrollPosition(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int) {
+        _scrollIndex.value = firstVisibleItemIndex.coerceAtLeast(0)
+        _scrollOffset.value = firstVisibleItemScrollOffset.coerceAtLeast(0)
+    }
+
+    fun refresh() {
+        if (isDisposed) return
+        coroutineScope.launch {
+            initTreeAndSubscription()
+            refreshExpandedSubdirectories(_root.value)
+        }
+    }
+
+    private suspend fun refreshExpandedSubdirectories(node: FileTreeNode) {
+        for (child in node.children) {
+            if (child.isDirectory && child.isExpanded) {
+                loadDirectorySuspending(child.path, isPostMutationRefresh = false)
+                val updatedChild = FileTreeHelpers.findNode(_root.value, child.path)
+                if (updatedChild != null) {
+                    refreshExpandedSubdirectories(updatedChild)
                 }
             }
         }
     }
 
-    fun selectPath(path: String?) { _selectedPath.value = path }
-    fun setShowHidden(show: Boolean) { _showHidden.value = show }
-    fun setError(err: String?) { _error.value = err }
-
-    fun refresh() {
-        coroutineScope.launch { initTreeAndSubscription() }
-    }
-
     fun handleFsEvent(event: FsEventDto) {
         if (isDisposed) return
         coroutineScope.launch {
-            val targetRel = event.targetRelativePath?.trim('/') ?: ""
-            val relPath = if (targetRel == "." || targetRel.isEmpty()) "" else targetRel
-            val parentPath = if (relPath.isEmpty()) "" else FileTreeHelpers.resolveParentPath(relPath)
+            val activeSocket = repository.wsConnection.activeSocketRef()
+            val activeSub = watchCoordinator.activeSubscriptions.value[""]
+            if (activeSocket != null && activeSub != null && activeSub.socketRef == activeSocket) {
+                val qualified = QualifiedWatchEvent.fromRaw(
+                    owner = watchCoordinator.owner,
+                    target = target,
+                    watchedDirectoryPath = "",
+                    originSocket = activeSocket,
+                    subId = activeSub.subId.toULongOrNull() ?: 0uL,
+                    requestId = 0uL,
+                    subscribeIncarnation = activeSub.subscribeIncarnation,
+                    sequenceNumber = 0L,
+                    event = event,
+                )
+                watchCoordinator.handleQualifiedEvent(qualified)
+                return@launch
+            }
+
+            // Fallback when invoked directly in unit tests without an active WS subscription:
+            // strictly enforce target-relative routing (never fall back to raw event.path/from).
+            val safeRelPath = QualifiedWatchEvent.extractSafeTargetRelativePath(event.targetRelativePath)
+            val requiresFrom = event.from != null || event.targetRelativeFrom != null
+            val safeRelFrom = if (requiresFrom) {
+                QualifiedWatchEvent.extractSafeTargetRelativePath(event.targetRelativeFrom)
+            } else {
+                null
+            }
+            if (safeRelPath == null || (requiresFrom && safeRelFrom == null)) {
+                // Missing relative routing: invalidate and refetch loaded directories
+                refreshDirectoryIfLoaded("")
+                refreshExpandedSubdirectories(_root.value)
+                return@launch
+            }
+
+            val parentPath = if (safeRelPath.isEmpty()) "" else FileTreeHelpers.resolveParentPath(safeRelPath)
             refreshDirectoryIfLoaded(parentPath)
 
-            event.targetRelativeFrom?.let { fromRaw ->
-                val fromClean = fromRaw.trim('/')
-                val fromPath = if (fromClean == "." || fromClean.isEmpty()) "" else fromClean
-                val fromParent = if (fromPath.isEmpty()) "" else FileTreeHelpers.resolveParentPath(fromPath)
-                if (fromParent != parentPath) refreshDirectoryIfLoaded(fromParent)
+            if (safeRelFrom != null) {
+                val fromParent = if (safeRelFrom.isEmpty()) "" else FileTreeHelpers.resolveParentPath(safeRelFrom)
+                if (fromParent != parentPath) {
+                    refreshDirectoryIfLoaded(fromParent)
+                }
             }
         }
     }
@@ -162,6 +366,8 @@ class FileTreeState(
             try {
                 val entries = repository.listDirectory(target, dirPath)
                 _root.value = FileTreeHelpers.updateChildren(_root.value, dirPath, entries, target)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Throwable) {}
         }
     }
@@ -170,28 +376,27 @@ class FileTreeState(
         if (isDisposed) return
         _error.value = "Watcher overflow recovered"
         coroutineScope.launch {
-            resubscribeLocked()
-            refreshLoadedDirectories(_root.value)
+            val activeSocket = repository.wsConnection.activeSocketRef()
+            if (activeSocket != null && watchCoordinator.activeSubscriptions.value.isNotEmpty()) {
+                for (dirPath in watchCoordinator.activeSubscriptions.value.keys.toList()) {
+                    watchCoordinator.handleSubscriptionOverflow(dirPath, activeSocket, message)
+                }
+            } else {
+                refreshDirectoryIfLoaded("")
+                refreshExpandedSubdirectories(_root.value)
+            }
         }
     }
 
-    private suspend fun refreshLoadedDirectories(node: FileTreeNode) {
-        if (node.isDirectory && node.isExpanded) {
-            try {
-                val entries = repository.listDirectory(target, node.path)
-                _root.value = FileTreeHelpers.updateChildren(_root.value, node.path, entries, target)
-            } catch (_: Throwable) {}
-            node.children.forEach { refreshLoadedDirectories(it) }
-        }
+    suspend fun pauseWatching() {
+        watchCoordinator.pause()
     }
+
+    suspend fun resumeWatching(): Boolean =
+        watchCoordinator.resume()
 
     fun dispose() {
         isDisposed = true
-        coroutineScope.launch {
-            mutex.withLock {
-                activeSubscription?.cancel()
-                activeSubscription = null
-            }
-        }
+        watchCoordinator.dispose()
     }
 }

@@ -446,11 +446,12 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Target-Qualified Filesystem Repository (`features/files/`):**
   - `FileRepository` provides target-qualified operations (`listDirectory`, `stat`, `readFile`, `writeFile`, `executeFsOp`). Requests forward the specified `ProjectTargetRef` through `ApiClient` and `WsConnection` without independent in-client `target.profileId` validation against captured generation.
   - `FsWriteCoordinator` serializes chunked writes (`fs:write_begin` with `expected_mtime` CAS, chunk frames, `fs:write_commit`) under coroutine `Mutex` with monotonic `reqId` allocated by `WsConnection`.
-  - `TreeSubscriptionManager` buffers incoming `fs:event` and `fs:overflow` messages via an in-memory channel before the subscribe request completes, filtering events by `subId` and protecting unsubscriptions with generation fencing (unbounded buffering carries memory risk under high event volume).
+  - `TreeSubscriptionManager` implements origin-socket and subscription-incarnation fencing with pre-snapshot `UNDISPATCHED` listener activation, finite early buffering (bounded to 128 events and 65,536 bytes), and post-snapshot `subId` filtering to drop mismatched events.
+  - `FileWatchCoordinator` coordinates demand-shared reference-counted nonrecursive directory subscriptions per `(owner, directoryPath)` for root, expanded folders, and open-document parents; enforces subscribe-before-list ordering, monotonic listing request epochs, watermark-ordered event replay or invalidation on overflow / missing relative routing, and lifecycle pause/reconciliation.
 - **File Tree State & Virtualized Explorer:**
-  - `FileTreeState` manages lazy directory expansion, virtualized node flattening (`FileTreeItemView`), selection highlight, and hidden file visibility toggle.
-  - Handles server `fs:event` path mapping (including root `.` relative paths) and `fs:overflow` by re-subscribing and reloading loaded folders. Live directory watching is currently bounded to the root directory without automatic per-subfolder subscription.
-  - Destructive mutations (`create_file`, `create_dir`, `rename`, `delete`) execute via `FileMutationCoordinator` with inline Compose dialogs (`FileModalsHost`), preserving input on error with zero FABs.
+  - `FileTreeState` manages lazy directory expansion, virtualized node flattening (`FileTreeItemView`), selection highlight, hidden file visibility toggle, and dispatches events and overflow recovery via `FileWatchCoordinator`.
+  - `FileMutationCoordinator` validates and executes mutating `fs:op` actions (create file, create directory, rename, move, delete) producing typed `FileOperationOutcome`, owner- and path-qualified reservations via `FileOperationArbiter`, `EditorDirtyGuardPort` unsaved dirty buffer checks, confirmed deletion, and retained modal state (`FileModalsHost`, `FileActionDialogs`) preventing optimistic path rekeys before server confirmation.
+  - Focused file explorer UI (`FocusedFilesExplorerScreen`, `FilesTopBar`, `FileTreeItemView`) provides inline touch actions, clipboard remote path copying, minHeight 40dp touch targets, dedicated folder chevron toggles, and suppresses dormant search/replace tabs with zero FABs.
 - **Search & Federated Search:**
   - `SearchRepository` executes REST content search (`/api/fs/search`) and filename path search (`/api/fs/search-paths`).
   - `FederatedSearchCoordinator` launches parallel searches across provided connected profile bindings via coroutine `async` (without desktop 4-request concurrency throttling), enforcing an aggregate 500-match cap, isolating partial profile errors, and projecting workspace-scope matches to their originating project target.
@@ -460,7 +461,7 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against changes between preview and apply.
   - Dirty-buffer checks run in preview and before each batch-file read; the provider is wired through `WorkbenchScreen` to `EditorTabsState`.
 - **Recorded Limitations & Open Gates:**
-  - Remaining limitations include permissive UTF-8 decode in fallback paths, generic-cancellation batch abort, root-only directory watcher without subfolder re-subscription, secondary-profile display-name target resolution, and partial failure/outcome UI detail. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
+  - Remaining limitations include permissive UTF-8 decode in fallback paths, generic-cancellation batch abort, secondary-profile display-name target resolution, and partial failure/outcome UI detail; Phase 04 resolved root-only watching via `FileWatchCoordinator` and bounded early buffering. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
 
 
 ### Native Editor Language Services & Safe Saves (Phase 09)
