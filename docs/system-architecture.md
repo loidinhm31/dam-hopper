@@ -435,7 +435,7 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 ## TypeScript and JavaScript LSP Semantic Navigation
 
 <a id="lsp-semantic-navigation-architecture"></a>
-Development progresses under the [LSP server integration plan](../plans/260901-1000-lsp-server-integration/plan.md). The semantic navigation subsystem provides high-performance, secure code navigation (Go to Definition, Go to Implementation) for TypeScript and JavaScript within Monaco Editor without IDE bloat, cloud dependencies, or unvetted third-party services.
+Development progresses under the [LSP server integration plan](../plans/260901-1000-lsp-server-integration/plan.md). The semantic navigation subsystem is designed to provide high-performance, secure code navigation (Go to Definition, Go to Implementation) for TypeScript and JavaScript within Monaco Editor without IDE bloat, cloud dependencies, or unvetted third-party services.
 
 The Phase 01 feasibility spike (`scripts/spike-lsp-test.mjs`, `plans/260901-1000-lsp-server-integration/reports/`) empirically verified feasibility gates G0–G7 on real operating-system processes, with Gate G8 tracked for in-browser qualification in Phases 07 and 10.
 
@@ -449,7 +449,58 @@ The Phase 01 feasibility spike (`scripts/spike-lsp-test.mjs`, `plans/260901-1000
 - **Vite Web Bundle Baseline (G2):** Evaluated pinned `vscode-ws-jsonrpc@3.5.0` + `vscode-jsonrpc@8.2.1`. Vite build benchmark demonstrated that Monaco's lazy chunk boundary is preserved: 0 bytes added to the initial application chunk (`index.js`), with ~14.2 KiB gzip impact (+0.34%) measured on the dynamic `monaco.js` chunk.
 - **Web Provider Coexistence Boundary (G8):** Formally assigned **STOP (Pending Web Browser Qualification)**. Monaco's built-in TypeScript provider is configured globally; model-scoped coexistence requires live browser DOM execution with active Monaco web workers, deferred to Phase 07 implementation and Phase 10 qualification.
 
-### Planned Production Architecture & Invariants (Phases 02–06)
+### Implemented Primitives: Phase 02 Child Process Owner, LSP Framing Codec & Reaper Controls
+
+Phase 02 delivers the backend foundation for isolated child language servers (`server/src/semantic/`), accompanied by a deterministic Node.js test harness (`server/tests/fixtures/lsp-test-server.mjs`, `server/tests/semantic_child_process.rs`):
+
+- **LSP Stdio Framing Codec (`server/src/semantic/framing.rs`):**
+  - Implements the standard JSON-RPC 2.0 framing format: `Content-Length: <len>\r\n\r\n<payload>`.
+  - Enforces `MAX_HEADER_SIZE = 8 * 1024` (8 KiB) to guard against unbounded memory growth from malformed or delimiter-less header streams.
+  - Enforces `MAX_BODY_SIZE = 4 * 1024 * 1024` (4 MiB) on frame payloads, matching gateway transmission policies.
+  - Validates UTF-8 encoding and valid JSON syntax before publishing extracted frame bytes; rejects duplicate or missing `Content-Length` headers, negative or non-digit values, and malformed header lines via typed `FramingError`.
+  - `AsyncLspReader<R>`: asynchronous streaming reader wrapping `AsyncRead` with 8 KiB chunk reads and an internal buffer ceiling (`MAX_HEADER_SIZE + MAX_BODY_SIZE + 1024`), returning `Ok(None)` on clean EOF when empty or `UnexpectedEof` on truncated streams.
+  - `AsyncLspWriter<W>`: asynchronous streaming writer wrapping `AsyncWrite` that encodes payloads and ensures complete writes and flushes.
+
+- **Bounded Buffer Accounting & Queue Limits (`server/src/semantic/types.rs`):**
+  - `ByteBudgetCounter`: atomic byte tracking using a compare-and-swap (CAS) loop with `try_reserve(bytes)` and `release(bytes)` up to `MAX_QUEUE_BYTES = 4 * 1024 * 1024` (4 MiB).
+  - `BoundedMessage`: RAII byte-accounting guard wrapping payload bytes that automatically releases reserved bytes from `ByteBudgetCounter` on drop or explicit `into_bytes()`.
+  - Queue limits and timeouts:
+    - Outbound mpsc channel bound: `MAX_QUEUE_COUNT = 32`.
+    - Inbound and outbound byte accounting ceiling: `MAX_QUEUE_BYTES = 4 * 1024 * 1024` (4 MiB). Outbound reservation is claimed on submission and released as the message is dequeued for writing; inbound reservation is claimed by the reader before channel send. These limits provide channel backpressure and payload accounting; they do not place an absolute ceiling on total process memory.
+    - Stderr ring buffer ceiling: `MAX_STDERR_RING_BYTES = 64 * 1024` (64 KiB).
+    - Timeout invariants: `STDIN_WRITE_TIMEOUT = 2,000 ms`, `GRACEFUL_SHUTDOWN_TIMEOUT = 2,000 ms`, `FORCED_KILL_GRACE = 3,000 ms`.
+  - Typed event stream: `ChildEvent::Message(BoundedMessage)`, `ChildEvent::StderrSummary { total_lines, total_bytes, recent_snippet }`, `ChildEvent::Terminated(ChildStatus)`.
+  - Lifecycle statuses: `ChildStatus::Starting`, `Running`, `ShuttingDown`, `Exited(Option<i32>)`, `Crashed(String)`.
+
+- **Bundled Launch Specification (`server/src/semantic/launch.rs`):**
+  - `BundledLaunchSpec`: strictly verified invocation parameters: absolute executable path (verified as existing file; zero `PATH` resolution), absolute entrypoint script path, existing working directory, and existing home directory.
+  - V8 heap cap configured via `--max-old-space-size=<mb>` (default 256 MiB).
+  - Sanitized execution environment: `env_clear()` strips all inherited environment variables; minimal allowlist configures `PATH="/usr/bin:/bin"`, `HOME`, and `NODE_ENV="production"`, stripping `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, and `LD_LIBRARY_PATH`.
+  - Subprocess isolation: `process_group(0)` on Unix isolates the child into a new process group (`pgid = pid`); stdio streams are piped; `kill_on_drop(true)` serves as an emergency fallback guard.
+
+- **Process Tree Reaper Controls (`server/src/semantic/reaper.rs`):**
+  - Addresses multi-process descendant tracking for background child processes spawned by language servers (such as `typingsWorker.js`) via snapshot-based `/proc` discovery and group signal escalation:
+  - Linux `/proc/<pid>/task/<pid>/children` discovery: `get_proc_children(pid)` and recursive BFS traversal `get_all_descendants(root_pid)` snapshot known descendant PIDs before teardown begins.
+  - Group signal dispatch: `signal_pgid(pgid, signal)` targets `-pgid` via POSIX `kill`.
+  - Process group emptiness verification: `is_pgid_empty(pgid)` verifies `kill(-pgid, 0)` returns `ESRCH`.
+  - `terminate_and_reap_tree(child, pgid, term_grace, kill_grace)`:
+    1. Sends `SIGTERM` to `-pgid` and recorded descendant PIDs; awaits direct child exit within `term_grace`.
+    2. If processes persist, escalates with `SIGKILL` to `-pgid` and recorded descendant PIDs; awaits direct child exit with fallback `child.kill()`.
+    3. Verifies process group emptiness and deceased PIDs within `kill_grace` (`verify_pgid_reaped`), returning `ReaperError::DescendantLeak(pgid)` if surviving descendants are detected.
+
+- **Process Tree Owner & Lifecycle Actor (`server/src/semantic/child.rs`):**
+  - `SemanticChildOwner::spawn(&BundledLaunchSpec)` spawns the child and starts three concurrent Tokio tasks:
+    1. *Stderr Drain Task:* reads stderr bytes non-blocking into a `VecDeque` circular buffer capped at 64 KiB (`MAX_STDERR_RING_BYTES`), counts lines and bytes, applies keyword-based redaction (`sanitize_text` redacting lines containing `authorization`, `bearer`, `token`, `password`), and emits a single `ChildEvent::StderrSummary` upon EOF without blocking stdout/stdin pipelines.
+    2. *Stdout Reader Task:* reads framed messages via `AsyncLspReader`, reserves inbound byte budget via `ByteBudgetCounter`, packages frames as `BoundedMessage`, and forwards `ChildEvent::Message` over the event channel; emits internal signals (`StdoutEof`, `StdoutError`, `InboundFull`) on EOF, framing errors, or budget exhaustion.
+    3. *Owner Actor Task:* single authority managing the child process lifecycle using `tokio::select!`:
+       - Biased selection prioritizes stop signals and internal stream failure signals over pending outbound commands.
+       - Dispatches outbound commands from `cmd_rx` to child stdin via `AsyncLspWriter` with a 2,000 ms write timeout (`STDIN_WRITE_TIMEOUT`), releasing the byte reservation upon dequeue.
+       - Spontaneous child exit: `child.wait()` detects termination, dispatches fallback group cleanup, and publishes `ChildEvent::Terminated(ChildStatus)`.
+       - Teardown sequencing: governed by a 5,000 ms teardown-operation budget (`TOTAL_TEARDOWN_BUDGET`), followed by bounded final cleanup and notification. When graceful, sends LSP `shutdown` RPC (300 ms timeout), waits for voluntary exit (500 ms), sends LSP `exit` notification (200 ms), and waits for exit (300 ms). If the child persists, escalates to `terminate_and_reap_tree` (800 ms term grace, 1,200 ms kill grace). An unconditional `SIGKILL` to `-pgid` and up to 500 ms PGID verification run outside the teardown timeout as final safety.
+       - Attempts bounded publication of `ChildEvent::Terminated(status)` (with a 500 ms timeout; send failure or receiver drop does not prevent shutdown) and marks `terminal_published` atomically (`is_terminated()` reflects owner task completion rather than verified client receipt).
+  - `SemanticChildHandle`: exposes `send_message(payload)`, `shutdown()`, and `is_terminated()`, with `Drop` invoking `shutdown()` for clean handle drop semantics.
+
+### Planned Production Architecture & Invariants (Phases 03–06)
 
 - **Process Topology & Group Isolation (G0, G7):**
   - The backend supervisor spawns `typescript-language-server` in an isolated process group (`Command::process_group(0)` on Unix), preventing signal leakage to the parent daemon or sibling PTY processes.

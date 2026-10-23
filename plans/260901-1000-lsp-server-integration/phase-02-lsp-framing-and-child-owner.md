@@ -12,8 +12,8 @@
 - Date: 2026-10-23
 - Description: Implement byte-correct bounded LSP framing and exclusive ownership, shutdown, and reaping of the complete semantic process tree.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Pending
+- Implementation status: DONE (2026-10-23)
+- Review status: Approved by user under noted exceptions (Cycle 3 score: 7/10, 0 critical issues; non-blocking warnings W1–W11 tracked for Phase 04 / Phase 09)
 - Effort: 16h
 - Direct dependencies: 01.
 - Estimate rationale: retain 16h; Phase 01 must first resolve Linux descendant ownership feasibility, while Phase 03 owns packaging/hard resource integration.
@@ -68,12 +68,12 @@ Rollback boundary: no public route or child-creation exposure. Framing/tree fail
 
 ## Todo list
 
-- [ ] Consume all passed Phase 01 contracts and finite bounds.
-- [ ] Implement bounded byte-correct codec.
-- [ ] Implement private bundled-only tree owner and one terminal transition.
-- [ ] Drain stderr and bound all channels/writes independently.
-- [ ] Implement cancellation-priority full-tree shutdown/kill/reap.
-- [ ] Cover panic/drop/startup failure and descendant cleanup with real fixtures.
+- [x] Consume all passed Phase 01 contracts and finite bounds.
+- [x] Implement bounded byte-correct codec (`server/src/semantic/framing.rs`).
+- [x] Implement private bundled-only tree owner and one terminal transition (`server/src/semantic/child.rs`; crate visibility/seal W6 tracked for Phase 03/09).
+- [x] Drain stderr and bound all channels/writes independently (`server/src/semantic/child.rs`).
+- [x] Implement cancellation-priority full-tree shutdown/kill/reap (`server/src/semantic/reaper.rs`; in-group SIGKILL escalation verified for tested process groups; setsid/escape tracking deferred to Phase 04/09).
+- [x] Cover panic/drop/startup failure and descendant cleanup with real fixtures (Approved exception: basic drop/startup failure and stubborn descendant SIGKILL covered by 24/24 tests in `server/tests/semantic_child_process.rs`; owner-panic/runtime-drop descendant cleanup transfer deferred to Phase 04 supervisor per Cycle 3 review W1).
 
 ## Success Criteria
 
@@ -100,5 +100,5 @@ Rollback boundary: no public route or child-creation exposure. Framing/tree fail
 
 - Phase 03 supplies the packaged immutable launch artifact and enforced initial policy, plus optional child-only hard controls; complete tree lifecycle already exists here.
 - Phase 04 adds semantic session admission/version/overlay ownership. No public exposure until authenticated admission and admin control prerequisites are complete.
-- Validation status: documentation revision only; no build, lint, test, formatter, fixture process or qualification run.
-- Unresolved gates: Phase 01 G7 cleanup strategy and exact tuple remain unexecuted prerequisites; no direct-child-only fallback. Phase 09 later tunes measured limits without creating a dependency cycle.
+- Validation status: Administratively complete under approved exceptions (2026-10-23). Targeted suites report 24/24 tests passing (13 unit framing tests + 11 real-process integration tests in `server/tests/semantic_child_process.rs`). Clippy clean in `semantic/`. Cycle 3 code review scored 7/10 with 0 critical issues, approved by user. Reports: `plans/reports/tester-261023-1027-lsp-phase-02-framing-and-child-owner-cycle3.md` and `plans/reports/code-reviewer-261023-1031-lsp-phase-02-framing-and-child-owner-cycle3.md`.
+- Next phase: Phase 03 — Pinned tool provisioning and resource controls.

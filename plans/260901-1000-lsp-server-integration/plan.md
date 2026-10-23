@@ -13,12 +13,12 @@ created: 2026-09-01
 
 ## Implementation status — 2026-10-23
 
-**Phase 01 spike completed; workflow approved by user with noted issues (in-progress 9% - 24/264h).** Basic process launch, handshake (G3), adaptive sync (G4), and process-group signal escalation (G7) were demonstrated on real Node v24/TSLS 6/TS 5 processes (`scripts/spike-lsp-test.mjs`). Gate G8 is marked STOP (pending live web browser qualification in Phases 07 and 10). Per user approval on 2026-10-23, proceeding to Phase 02 is an authorized plan exception while technical qualification gaps (freshness fencing, full hostile-loading controls, and tuple/bundle release provenance) remain tracked for completion in their owning implementation phases.
+**Phase 02 LSP framing and child owner completed under authorized exceptions; approved by user (in-progress 15% - 40/264h).** Phase 01 spike (24h) and Phase 02 framing and child owner (16h, 100%) delivered. Bounded framing codec, queue memory budgets, independent stderr drain, and process-group lifecycle owner/reaper implemented in `server/src/semantic/`. Verified by 24/24 tests (13 unit framing + 11 real-process integration in `server/tests/semantic_child_process.rs`, clean in `semantic/`). Cycle 3 review scored 7/10 with 0 critical issues and explicit user approval on 2026-10-23. Proceeding to Phase 03 is an authorized plan exception while open lifecycle/launch-isolation qualification gates (supervisor panic/runtime-drop cleanup transfer, setsid/escape tracking, crate visibility seal) and Phase 01 technical qualification gaps (freshness fencing, full hostile-loading controls, and tuple/bundle release provenance; G8 live browser qualification in Phases 07 & 10) remain tracked for completion in their owning implementation phases. Next phase: Phase 03 (Pinned tool provisioning and resource controls).
 
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-lsp-server-integration`.
 - Base: local `main`, `60b07c1423fd5b3536632f3c3735c7f658b9fc59`.
-- Review Verdict: Cycle 3 review scored 4/10 (NOT APPROVED); approved by user with noted issues.
-- Reports & Harness: 12 reports in `plans/260901-1000-lsp-server-integration/reports/` and reproducible test harness in `scripts/spike-lsp-test.mjs`.
+- Review Verdict: Phase 02 Cycle 3 review scored 7/10 (0 criticals); approved by user on 2026-10-23 under noted exceptions (reports: `plans/reports/tester-261023-1027-lsp-phase-02-framing-and-child-owner-cycle3.md`, `plans/reports/code-reviewer-261023-1031-lsp-phase-02-framing-and-child-owner-cycle3.md`).
+- Reports & Harness: Phase 01/02 reports in `plans/reports/` and `plans/260901-1000-lsp-server-integration/reports/`. Automated test suite in `server/tests/semantic_child_process.rs` and fixture `server/tests/fixtures/lsp-test-server.mjs`.
 ## Outcome
 
 First supported release: shared Monaco Definition and Implementation for `.ts`, `.tsx`, `.js`, and `.jsx` through authenticated `/ws/semantic/v1`, filtered LSP JSON-RPC, and bounded bundled TSLS children on a Linux x64 server, consumed by the web client. Runtime ships OFF. Native-client qualification (including Linux Tauri), Windows-server qualification, and Android support are deferred and non-blocking; native origin policy remains unchanged. Java/Rust require separate integration, qualification, and release work.
@@ -40,7 +40,7 @@ First supported release: shared Monaco Definition and Implementation for `.ts`, 
 | # | Phase | Status | Progress | Effort | Direct dependencies |
 |---|---|---|---|---|---|
 | 01 | [Protocol, dependency, and real-process spike](./phase-01-protocol-dependency-real-process-spike.md) | DONE (2026-10-23) | 100% | 24h | Reconciled policy + partially superseded ADR |
-| 02 | [LSP framing and child owner](./phase-02-lsp-framing-and-child-owner.md) | Pending | 0% | 16h | 01 |
+| 02 | [LSP framing and child owner](./phase-02-lsp-framing-and-child-owner.md) | DONE (2026-10-23) | 100% | 16h | 01 |
 | 03 | [Pinned tool provisioning and resource controls](./phase-03-pinned-tool-provisioning-and-resource-controls.md) | Pending | 0% | 28h | 02 |
 | 04 | [Semantic session supervisor](./phase-04-semantic-session-supervisor.md) | Pending | 0% | 28h | 03 |
 | 05 | [Authenticated semantic WebSocket gateway](./phase-05-authenticated-semantic-websocket-gateway.md) | Pending | 0% | 28h | 04 |
@@ -119,9 +119,10 @@ These supersede September decisions requiring Linux Tauri remote qualification, 
 - [x] Reconcile all 11 phase files, `cmd-plan.md`, requested `evc-cmd-plan.md`, and superseded ADR decisions with this ledger in place.
 - [x] Re-estimate every phase and dependency contract; replace inherited 198h with provisional 264h and per-phase rationale.
 - [x] Run the revised Phase 01 dependency and real-process spike before committing to implementation feasibility (completed 2026-10-23: G0–G7 proven on real processes, G8 tracked for in-browser qualification in Phases 07 & 10 per explicit user approval).
+- [x] Implement Phase 02 LSP framing and child owner (completed 2026-10-23: bounded framing codec, process tree owner, signal escalation, and descendant reaping verified by 24/24 tests; user-approved Cycle 3 review).
 - [ ] Complete subsequent implementation and qualification gates before claiming release support; static review and copied research are not runtime proof.
 
 ### Recommendation and Remaining Gates
 
-**Phase 01 completed; proceed to Phase 02 (LSP framing and child owner).** Feasibility gates G0–G7 proven with real process execution, zero orphan processes, hostile hook suppression, and adaptive single-kind sync. Gate G8 is tracked for in-browser qualification in Phases 07 & 10 per approved plan exception. Backend implementation unblocked.
+**Phase 02 completed under approved exceptions; proceed to Phase 03 (Pinned tool provisioning and resource controls).** Bounded framing codec, process-group child owner, stderr drain, and in-group signal-escalated descendant reaping implemented and verified with real processes (24/24 tests passing, clean in `semantic/`). Cycle 3 review approved by user with non-blocking warnings (W1–W11, including supervisor panic/drop cleanup transfer and crate seal) tracked for Phase 04 / Phase 09 integration.
 
