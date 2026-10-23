@@ -64,7 +64,8 @@ impl SemanticChildHandle {
         if msg_len > super::framing::MAX_BODY_SIZE {
             return Err(ChildError::Framing(FramingError::BodyTooLarge(msg_len)));
         }
-        std::str::from_utf8(&payload).map_err(|e| ChildError::Framing(FramingError::InvalidUtf8(e)))?;
+        std::str::from_utf8(&payload)
+            .map_err(|e| ChildError::Framing(FramingError::InvalidUtf8(e)))?;
         serde_json::from_slice::<serde_json::Value>(&payload)
             .map_err(|e| ChildError::Framing(FramingError::InvalidJson(e)))?;
 
@@ -183,7 +184,11 @@ impl SemanticChildOwner {
                         }
 
                         let bounded = BoundedMessage::new(msg, in_budget_clone.clone());
-                        if event_tx_stdout.send(ChildEvent::Message(bounded)).await.is_err() {
+                        if event_tx_stdout
+                            .send(ChildEvent::Message(bounded))
+                            .await
+                            .is_err()
+                        {
                             // Event receiver dropped by consumer
                             break;
                         }
@@ -289,20 +294,28 @@ impl SemanticChildOwner {
             let teardown_result = timeout(TOTAL_TEARDOWN_BUDGET, async {
                 if graceful {
                     // Phase 01 graceful LSP handshake: send shutdown RPC then exit notification
-                    let shutdown_rpc = br#"{"jsonrpc":"2.0","id":999999,"method":"shutdown","params":null}"#;
-                    let _ = timeout(Duration::from_millis(300), writer.write_message(shutdown_rpc)).await;
+                    let shutdown_rpc =
+                        br#"{"jsonrpc":"2.0","id":999999,"method":"shutdown","params":null}"#;
+                    let _ = timeout(
+                        Duration::from_millis(300),
+                        writer.write_message(shutdown_rpc),
+                    )
+                    .await;
 
                     // Await voluntary exit within grace window
-                    if let Ok(Ok(status)) = timeout(Duration::from_millis(500), child.wait()).await {
+                    if let Ok(Ok(status)) = timeout(Duration::from_millis(500), child.wait()).await
+                    {
                         if super::reaper::is_pgid_empty(pgid) {
                             return ChildStatus::Exited(status.code());
                         }
                     }
 
                     let exit_notif = br#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
-                    let _ = timeout(Duration::from_millis(200), writer.write_message(exit_notif)).await;
+                    let _ =
+                        timeout(Duration::from_millis(200), writer.write_message(exit_notif)).await;
 
-                    if let Ok(Ok(status)) = timeout(Duration::from_millis(300), child.wait()).await {
+                    if let Ok(Ok(status)) = timeout(Duration::from_millis(300), child.wait()).await
+                    {
                         if super::reaper::is_pgid_empty(pgid) {
                             return ChildStatus::Exited(status.code());
                         }
@@ -310,11 +323,19 @@ impl SemanticChildOwner {
                 }
 
                 // Forceful tree escalation
-                match terminate_and_reap_tree(&mut child, pgid, Duration::from_millis(800), Duration::from_millis(1200)).await {
+                match terminate_and_reap_tree(
+                    &mut child,
+                    pgid,
+                    Duration::from_millis(800),
+                    Duration::from_millis(1200),
+                )
+                .await
+                {
                     Ok(status) => ChildStatus::Exited(status.code()),
                     Err(e) => ChildStatus::Crashed(e.to_string()),
                 }
-            }).await;
+            })
+            .await;
 
             // Unconditional final cleanup safety outside timeout (C1)
             #[cfg(unix)]
@@ -336,14 +357,22 @@ impl SemanticChildOwner {
                 }
                 Err(_) => {
                     if !super::reaper::is_pgid_empty(pgid) {
-                        ChildStatus::Crashed(format!("Teardown timed out; descendant leak in PGID {pgid}"))
+                        ChildStatus::Crashed(format!(
+                            "Teardown timed out; descendant leak in PGID {pgid}"
+                        ))
                     } else {
-                        ChildStatus::Crashed("Teardown overall deadline exceeded (5s budget)".into())
+                        ChildStatus::Crashed(
+                            "Teardown overall deadline exceeded (5s budget)".into(),
+                        )
                     }
                 }
             };
 
-            let _ = timeout(Duration::from_millis(500), event_tx.send(ChildEvent::Terminated(final_status))).await;
+            let _ = timeout(
+                Duration::from_millis(500),
+                event_tx.send(ChildEvent::Terminated(final_status)),
+            )
+            .await;
             terminal_for_owner.store(true, Ordering::Release);
         });
 
@@ -364,7 +393,11 @@ fn sanitize_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("authorization") || lower.contains("bearer") || lower.contains("token") || lower.contains("password") {
+        if lower.contains("authorization")
+            || lower.contains("bearer")
+            || lower.contains("token")
+            || lower.contains("password")
+        {
             out.push_str("[REDACTED SECRETS]\n");
         } else {
             out.push_str(line);

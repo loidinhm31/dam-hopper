@@ -137,6 +137,8 @@ pub struct AppState {
     pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
     /// Shared in-memory LRU cache retaining historical git blame baselines.
     pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
+    /// Semantic session supervisor coordinating isolated language server sessions.
+    pub semantic_supervisor: Arc<crate::semantic::supervisor::SemanticSupervisor>,
 }
 
 impl AppState {
@@ -427,11 +429,22 @@ impl AppState {
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
             git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
+            semantic_supervisor: Arc::new(crate::semantic::supervisor::SemanticSupervisor::new(
+                Some(crate::semantic::tool_profile::SemanticToolProfile::discover()),
+            )),
         })
     }
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
         self.auth_service = auth_service;
+        self
+    }
+    /// Override the semantic supervisor handle (used for testing or custom tool profile injection).
+    pub fn with_semantic_supervisor(
+        mut self,
+        semantic_supervisor: Arc<crate::semantic::supervisor::SemanticSupervisor>,
+    ) -> Self {
+        self.semantic_supervisor = semantic_supervisor;
         self
     }
     /// Override the client presence registry handle (used for testing or custom capacity injection).

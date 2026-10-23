@@ -1,7 +1,11 @@
 pub mod child;
 pub mod framing;
 pub mod launch;
+pub mod overlay;
+pub mod protocol;
 pub mod reaper;
 pub mod resources;
+pub mod session;
+pub mod supervisor;
 pub mod tool_profile;
 pub mod types;

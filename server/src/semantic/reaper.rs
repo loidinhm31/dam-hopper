@@ -16,7 +16,10 @@ pub enum ReaperError {
 
 /// Dispatches a POSIX signal to an entire process group.
 #[cfg(unix)]
-pub fn signal_pgid(pgid: u32, signal: Option<nix::sys::signal::Signal>) -> Result<(), nix::errno::Errno> {
+pub fn signal_pgid(
+    pgid: u32,
+    signal: Option<nix::sys::signal::Signal>,
+) -> Result<(), nix::errno::Errno> {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
 
@@ -125,7 +128,11 @@ pub async fn terminate_and_reap_tree(
     let status = match status_res {
         Ok(Ok(st)) => st,
         Ok(Err(e)) => return Err(ReaperError::KillFailed(e.to_string())),
-        Err(_) => return Err(ReaperError::KillFailed("Child wait timed out during forced kill".into())),
+        Err(_) => {
+            return Err(ReaperError::KillFailed(
+                "Child wait timed out during forced kill".into(),
+            ))
+        }
     };
 
     #[cfg(unix)]

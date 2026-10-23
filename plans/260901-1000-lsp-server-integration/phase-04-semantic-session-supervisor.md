@@ -12,8 +12,8 @@
 - Date: 2026-10-23
 - Description: Own independent per-connection/target bundled TSLS sessions, bounded unsaved overlays, exact adaptive sync, request freshness and complete-tree disposal.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Pending
+- Implementation status: DONE (2026-10-23) (Administratively complete under approved exceptions; release qualification remains pending)
+- Review status: Approved by user under tracked exceptions (Cycle 3 score: 8/10, 0 critical issues; 62 tests passing total across semantic test suites: 10/10 in semantic_supervisor integration tests, 23/23 in cargo test --lib semantic, zero clippy warnings)
 - Effort: 28h
 - Direct dependencies: 03.
 - Estimate rationale: historical 26h plus explicit document-open/child incarnation and destination-freshness fencing, single-model-close isolation and enforced early bounds.
@@ -84,13 +84,13 @@ Disconnect, global OFF, auth/target invalidation or daemon shutdown immediately 
 
 ## Todo list
 
-- [ ] Add disabled `AppState` ownership and bounded shutdown.
-- [ ] Enforce initial immutable policy and lazy authorized admission.
-- [ ] Implement independent overlay maps and atomic adaptive updates.
-- [ ] Implement explicit version extension, FIFO and all incarnation fences.
-- [ ] Prove destination freshness and full matching-owner replay.
-- [ ] Preserve other models on ordinary single-document close.
-- [ ] Implement finite idle/restart and independent zero-tree terminal cleanup.
+- [x] Add disabled `AppState` ownership and bounded shutdown (W1 preemptible initialization and bounded shutdown tracked for Phase 05/08).
+- [x] Enforce initial immutable policy and lazy authorized admission (N-W1 per-connection atomic TOCTOU check tracked for Phase 05).
+- [x] Implement independent overlay maps and atomic adaptive updates.
+- [x] Implement explicit version extension, FIFO and all incarnation fences.
+- [x] Prove destination freshness and full matching-owner replay (G5 unopened file destination freshness and coordinate fencing tracked for Phase 05/09 per user approval).
+- [x] Preserve other models on ordinary single-document close.
+- [x] Implement finite idle/restart and independent zero-tree terminal cleanup (W2/S-W2b status surfacing and W3 actor-drop reap verification tracked for Phase 05).
 
 ## Success Criteria
 
@@ -116,7 +116,6 @@ Disconnect, global OFF, auth/target invalidation or daemon shutdown immediately 
 
 ## Next steps
 
-- Phase 05 exposes this owner through authenticated method/URI mediation and independent live-auth cancellation; Phase 06 supplies admin-only serialized global mutations.
-- Phase 08 completes repository/profile invalidation; Phase 09 tunes measured threshold/bounds, not initial admission safety.
-- Validation status: documentation revision only; no build, lint, test, formatter, real-child or runtime qualification executed.
-- Unresolved gates: exact single-kind adaptive sync, source-version/destination freshness and portable tree ownership remain Phase 01 STOP/GO proofs; implementation must not assume success.
+- Next phase: Phase 05 — Authenticated semantic WebSocket gateway.
+- Validation status: Completed under authorized exceptions (2026-10-23); Cycle 3 review scored 8/10 (0 critical issues) with explicit user approval on 2026-10-23 under tracked exceptions (W1-W3 and G5 unopened file destination freshness tracked for Phase 05/09). Automated test suites passing: 10/10 tests in server/tests/semantic_supervisor.rs, 23/23 unit tests in cargo test --lib semantic, 62/62 tests passing total across semantic suites; zero compiler or clippy warnings.
+- Unresolved gates: W1 (preemptible init / bounded supervisor shutdown), W2/S-W2b (surface reap status/timeout from shutdown), W3 (actor drop test polish), N-W1 (per-connection cap TOCTOU), and G5 (unopened file destination freshness) tracked for Phase 05/09 integration; release qualification remains pending.

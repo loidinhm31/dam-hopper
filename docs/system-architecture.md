@@ -542,7 +542,49 @@ Phase 03 establishes immutable tool provisioning, passive zero-child integrity v
   - Records SPDX package relationships: `SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-dam-hopper`, and `SPDXRef-Package-dam-hopper CONTAINS SPDXRef-Package-typescript`, `CONTAINS SPDXRef-Package-typescript-language-server`, `CONTAINS SPDXRef-Package-nodejs`.
   - Classifies inventory file licenses: files within `lib/semantic-engine/tsls/node_modules/typescript*` are assigned `Apache-2.0`; core files remain `MIT`.
 
-### Planned Production Architecture & Invariants (Phases 04–06)
+### Implemented Primitives: Phase 04 Semantic Session Supervisor
+
+Phase 04 implements the session supervision layer, isolated per-connection session actors, in-memory authoritative overlay tracking with adaptive synchronization, sliding-window crash recovery with replay, and complete-tree teardown (`server/src/semantic/supervisor.rs`, `session.rs`, `overlay.rs`, `protocol.rs`, `state.rs`, `main.rs`):
+
+- **AppState-Owned Supervisor & Lifecycle Integration (`server/src/semantic/supervisor.rs`, `server/src/state.rs`, `server/src/main.rs`):**
+  - `SemanticSupervisor` is owned directly by `AppState` (`state.semantic_supervisor`), initialized in disabled state (`is_enabled() == false`) without spawning child processes.
+  - Daemon startup logs passive toolchain integrity (`tool_integrity_status()`) without launching Node or executing shell probes.
+  - On first session request, toolchain SHA-256 integrity is checked off-thread via `tokio::task::spawn_blocking` and cached in an `AtomicBool` (`toolchain_verified`) to prevent repetitive filesystem reads.
+  - Server graceful shutdown (`server/src/main.rs`) calls `state.semantic_supervisor.shutdown().await` after idle-suspend teardown, terminating all active sessions. Setting `set_enabled(false)` similarly drains and reaps all active sessions.
+
+- **Session Admission & Multi-Tier Capacity Limits:**
+  - Enforces finite resource limits defined in `resources.rs`: global tree concurrency (`MAX_GLOBAL_SEMANTIC_TREES = 2`), per-connection concurrency (`MAX_TREES_PER_CONNECTION = 1`), global overlay memory (`MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`), per-session overlay memory (`MAX_SESSION_OVERLAY_BYTES = 4 MiB`), and open document count (`MAX_OPEN_DOCUMENTS_PER_SESSION = 16`).
+  - Pre-admission queries active session overlay byte counts across existing handles before permitting a new session; write-lock acquisition rechecks `enabled`, key uniqueness, and global tree capacity to protect against concurrent creation races (per-connection limits are validated under read lock; atomic write-lock recheck is tracked for Phase 05).
+
+- **Isolated Target-Scoped Session Actor (`server/src/semantic/session.rs`, `protocol.rs`):**
+  - Each session is keyed by `SessionKey(connection_id, project, worktree)` and isolated within a dedicated `SemanticSessionActor` task spawned via `SemanticSessionActor::spawn(...)`.
+  - External communication passes through `SemanticSessionHandle` over a bounded mpsc channel (`cmd_tx`). Dropping all handles closes `cmd_rx`, causing the actor run loop to break and trigger teardown.
+  - Tracks composite identity fences (`SessionIdentityFence`): `connection_id`, `connection_generation`, `project`, `worktree`, `target_generation`, `session_generation`, and `child_incarnation`.
+  - Client-to-child communication maintains strict FIFO ordering. Child-initiated `workspace/configuration` requests are intercepted by the actor and immediately resolved with `[{}]` to satisfy TSLS initialization without deadlocks or environment leakage.
+  - In-flight navigation requests are capped (`MAX_IN_FLIGHT_REQUESTS = 8`) with a 5-second deadline ticker (`NAVIGATION_REQUEST_TIMEOUT = 5.0s`) sweeping expired requests.
+
+- **Authoritative In-Memory SessionOverlayMap & Adaptive Synchronization (`server/src/semantic/overlay.rs`):**
+  - `SessionOverlayMap` maintains authoritative in-memory document buffers, tracking aggregate bytes against `MAX_SESSION_OVERLAY_BYTES` (4 MiB) and per-document size limits (`MAX_DOCUMENT_BYTES = 1 MiB`).
+  - UTF-16 code unit position translation: `position_to_byte_offset` converts LSP line and UTF-16 character offsets to UTF-8 byte offsets, strictly validating line bounds, CRLF stripping, and surrogate pair boundaries.
+  - Speculative atomic multi-change batch editing: `apply_changes` clones document state before applying change events sequentially (`apply_ranged_edit_internal`, `apply_full_replacement_internal`), validating monotonic versions and byte budgets before committing atomically, preserving prior state on any edit failure.
+  - Adaptive wire sync: checks threshold `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`. Below 64 KiB, forwards range-less full text replacements (`{ range: None, text }`); at or above 64 KiB, forwards the incoming change batch directly without re-synthesizing ranged edits.
+
+- **Freshness Validation & Document-Scoped Invalidation:**
+  - Source freshness validates both document `open_incarnation` and `version` before resolving navigation responses, returning `Value::Null` if the document was modified or closed while in flight.
+  - Destination freshness takes a snapshot of open overlay versions at request dispatch and verifies that destination overlays have not advanced, discarding stale cross-file navigation responses.
+  - Closing a document (`textDocument/didClose`) immediately evicts the overlay, recovers its byte budget, cancels and resolves all pending navigation requests for that URI with `Value::Null`, and forwards `didClose` to TSLS.
+
+- **Crash Resilience, Bounded Restart & Document Replay:**
+  - Detects child exit (`ChildEvent::Terminated`) and transitions session state to `SemanticState::Crashed`, failing in-flight requests immediately with `SessionError::ChildCrashed`.
+  - Enforces restart budget: maximum 2 restarts (`MAX_RESTARTS_PER_WINDOW = 2`) within a 60-second sliding window (`RESTART_WINDOW = 60s`) with two-stage exponential backoff (`RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`).
+  - Upon successful child respawn and handshake re-initialization, initiates bounded restart attempts with best-effort full-text `didOpen` replay of all tracked open document overlays (`SessionOverlayMap::all_documents()`).
+
+- **Process Group Teardown, Descendant Reaping & Idle Eviction:**
+  - Distinguishes child teardown budget (`TOTAL_TEARDOWN_BUDGET = 5.0s`, where `reaper.rs` escalates SIGTERM to SIGKILL against process group `-pgid` and procfs-discovered descendants) from the session actor wait allowance (5.5s timeout awaiting child termination).
+  - Teardown is triggered uniformly by explicit `close_session`, server shutdown, session invalidation, or dropping all `SemanticSessionHandle` references (shutdown sequentially awaits handles with unstarted children bounded by `STARTUP_TIMEOUT = 30s`; cleanup best-effort awaits exit, with reap-error status surfacing tracked for Phase 05 hardening).
+  - Background idle session eviction: when open document count and in-flight requests both drop to zero, an idle timer token schedules an eviction notification after 60s (`IDLE_SHUTDOWN_TIMEOUT = 60s`); if still idle, the supervisor reaps the session.
+
+### Planned Production Architecture & Invariants (Phases 05–06)
 
 - **Transport-Only Client Bundle & Lazy Chunk Partitioning (G2):**
   - **Dependency Boundary:** Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1` (permissive MIT licenses). Full TypeFox `monaco-languageclient` (30+ packages, >5 MiB raw bloat) and unreleased Microsoft `@vscode/monaco-lsp-client` alpha are explicitly rejected.
