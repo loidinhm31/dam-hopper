@@ -112,6 +112,7 @@ data class EditorTab(
     val markdownPreviewMode: Boolean = false,
     val encryptedSessionRequired: Boolean = false,
     val diagnostics: List<Diagnostic> = emptyList(),
+    val rangeWindow: BoundedRangeWindow? = null,
 ) {
     val displayName: String
         get() = if (isDirty) "$name *" else name

@@ -1,10 +1,10 @@
 # Phase 03 — Shared documents bounded loading and safe saves
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: EditorCore worker.
+- Priority P2. Status: work cycle closed by user approval (2026-10-23; Cycle 4 review 8/10, zero Critical findings); full technical acceptance remains gated by W-P03-1..W-P03-4 and unresolved Phase 02 carryovers W1–W6. Owner: EditorCore worker.
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
-- Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
+- Historical source anchors in the evidence reports remain background; this phase's implementation and recorded verification are summarized in [Cycle 4 closure and downstream carryovers](#cycle-4-closure-and-downstream-carryovers). Work-cycle closure is not full technical acceptance. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
 
 ## Insights
 EditorSession currently duplicates text/undo; EditorTab content/saved/submitted strings mirror it. Existing submitted-save behavior correctly preserves newer edits but callback-by-key is unsafe. File ranges skip split UTF-8 bytes; binary preview can overread. Reuse metadata/race patterns, not competing authority.
@@ -24,7 +24,7 @@ Implement C1-C4 against frozen facade, with normal/degraded/range tiers and boun
 ## Ordered task implementation and related files
 
 ### `implement-document-backed-sessions` — Move shared sessions to one injected document authority
-- [ ] <!-- evcrate-task:implement-document-backed-sessions --> Move shared sessions to one injected document authority
+- [x] <!-- evcrate-task:implement-document-backed-sessions --> Move shared sessions to one injected document authority
 - Dependencies: `freeze-document-and-watch-facades`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorSession.kt`.
@@ -49,7 +49,7 @@ Implement C1-C4 against frozen facade, with normal/degraded/range tiers and boun
   - Inspect allocation tracing in final device gate for native document copies; unit double does not prove widget retention.
 
 ### `implement-bounded-tiered-loading` — Implement strict tiered loads and range boundaries
-- [ ] <!-- evcrate-task:implement-bounded-tiered-loading --> Implement strict tiered loads and range boundaries
+- [x] <!-- evcrate-task:implement-bounded-tiered-loading --> Implement strict tiered loads and range boundaries
 - Dependencies: `implement-document-backed-sessions`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorContentLoader.kt`.
@@ -72,7 +72,7 @@ Implement C1-C4 against frozen facade, with normal/degraded/range tiers and boun
   - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.editor.EditorRepositoryTest" --tests "dev.damhopper.nativeapp.features.editor.FileTierPolicyTest" --tests "dev.damhopper.nativeapp.features.editor.EncryptedSaveCoordinatorTest"; include growth and invalid text fixtures.
 
 ### `implement-incarnation-safe-tabs-saves` — Fence tabs reloads diagnostics and submitted saves
-- [ ] <!-- evcrate-task:implement-incarnation-safe-tabs-saves --> Fence tabs reloads diagnostics and submitted saves
+- [x] <!-- evcrate-task:implement-incarnation-safe-tabs-saves --> Fence tabs reloads diagnostics and submitted saves
 - Dependencies: `implement-bounded-tiered-loading`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt`.
@@ -187,14 +187,25 @@ Implement C1-C4 against frozen facade, with normal/degraded/range tiers and boun
 ]
 ```
 
+## Cycle 4 closure and downstream carryovers
+
+- **Disposition:** Work cycle closed by user approval on 2026-10-23 after Cycle 4 review scored 8/10 with zero Critical findings. Cycle 1 critical findings C1–C3 and later critical findings C01–C05 are closed and regression-tested. These are review-finding labels, not a claim that all contracts C1–C7 have full technical acceptance.
+- **Recorded verification:** `:shared:jvmTest` passed 458/458 tests, including 45 tests across the seven Phase 03 test classes; `:shared:compileDebugKotlinAndroid` and `:androidApp:compileDebugKotlin` succeeded. These are recorded Cycle 4 results, not checks run during this documentation update; they do not establish native runtime or release qualification.
+- **W-P03-1 — retention:** 64 MiB / 8-document / 2-degraded admission and eviction remain gated to the Phase 05/06 retention gate. The DEGRADED 50-undo cap is wired.
+- **W-P03-2 — document events/UI:** remove remaining EditorTab full-text mirroring and per-edit `getText()` snapshots; attach a DocumentEvent flow collector to publish `openTabs` metadata. Gated to Phase 05 UI/caller migration.
+- **W-P03-3 — unknown save:** preserve the arbiter reservation token, submitted snapshot, and original stage/opId quarantine through save reconciliation. Gated to Phase 06 mutation/save integration.
+- **W-P03-4 — completion fencing:** add open/reload/range error watermarks and disposed-session save cleanup fencing. Gated to Phase 06 save/mutation integration.
+- **Phase 02 carryovers:** W1–W6 remain open until their assigned Phase 04/05/06 gates settle; Phase 03 closure does not resolve them. Full technical acceptance remains gated on downstream correction and evidence for all carryovers.
+
 ## Failure, rollback and security
+
 A test document double proves coordination only, never native IME/undo memory. Do not repair stale callbacks by broad exception suppression. Rollback preserves detached buffers and unknown reservations; no automatic draft retarget/retry. Per-edit diagnostics copying is incompatible with selected contract.
 - Preserve original target/buffers on failure; never use exception suppression, unconditional writes, blind retry, force_git bypass or remote inverse operations as rollback. Authentication/connection retirement revokes authority before UI transitions.
 - Escalate missing writable path, unsupported native API, threshold change or severe safety defect to Main; keep gate blocked until explicit scoped revision. No automatic Git/dependency execution is authorized by this plan.
 
 ## Completion and next dependencies
-Concurrent with phases04 and05 after freeze only. Phase06 receives session/tabs/save/repository/test ownership after this phase and both other workers complete; phase05 owns all shared presentation caller migration.
-- Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+Work cycle closed by user approval on 2026-10-23; full technical acceptance remains gated by the carryovers recorded above. Phase 05 owns remaining UI/caller migration and document-event publication; Phase 05/06 jointly settle retention; Phase 06 owns unknown-save and completion-fencing integration. Phases 04–08 remain pending. Recorded focused JVM and Android compile results are not integrated runtime/device or release qualification.
+- Exit evidence: source changes and recorded verification are listed above. Planned command text is not a pass; downstream carryover acceptance and coherent integration evidence remain required.
 
 ## Unresolved questions
-- No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.
+- No new product decision. W-P03-1..W-P03-4 and Phase 02 W1–W6 remain open downstream gates; acceptance/readiness requires their assigned Phase 04/05/06 corrections and evidence. Phase 01 feasibility is qualified on x86_64/API 36; Phase 08 runtime/device/distribution gates, including API 29, arm64-v8a, and LGPL-2.1 compliance, remain open.

@@ -37,7 +37,7 @@ class EditorTabsStateTest {
         )
         val fileRepo = FileRepository(owner, client, ws)
         val editorRepo = EditorRepository(fileRepo, profileId = "p1")
-        return EditorTabsState("p1", editorRepo)
+        return EditorTabsState("p1", editorRepo, documentFactory = TestEditorDocumentFactory())
     }
 
     @Test
@@ -58,6 +58,8 @@ class EditorTabsStateTest {
         state.openTab(target, "a.txt")
         assertEquals(1, state.tabs.value.size)
         assertEquals("a.txt", state.activeTab?.name)
+        assertEquals(1, state.openTabs.value.size)
+        assertEquals("a.txt", state.openTabs.value[0].title)
 
         state.openTab(target, "b.txt")
         assertEquals(2, state.tabs.value.size)
@@ -88,11 +90,57 @@ class EditorTabsStateTest {
         val state = createTabsState()
         val target = ProjectTargetRef(project = "demo")
         state.openTab(target, "foo.txt")
-        assertFalse(state.isDirtyFile(target, "foo.txt"))
+        assertFalse(state.isFileDirty(target, "foo.txt"))
 
         val session = state.getSession(state.activeTab!!.key)!!
         session.setText("hello universe\n")
-        assertTrue(state.isDirtyFile(target, "foo.txt"))
+        assertTrue(state.isFileDirty(target, "foo.txt"))
+        assertTrue(state.hasDirtyDescendants(target, ""))
+        assertEquals(1, state.getDirtyDocumentIds(target, "foo.txt").size)
+    }
+
+    @Test
+    fun testCloseIntentGuardsDirtyTabs() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "clean text\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "notes.txt")
+        val docId = state.activeTabId.value!!
+
+        // Clean close returns null and immediately closes tab
+        val cleanIntent = state.requestCloseTab(docId)
+        assertNull(cleanIntent)
+        assertEquals(0, state.tabs.value.size)
+
+        // Reopen and dirty tab
+        state.openTab(target, "notes.txt")
+        val newDocId = state.activeTabId.value!!
+        val session = state.getSession(state.activeTab!!.key)!!
+        session.setText("modified text\n")
+
+        // Dirty close requires intent
+        val dirtyIntent = state.requestCloseTab(newDocId)
+        assertNotNull(dirtyIntent)
+        assertEquals(CloseDecision.SAVE, dirtyIntent.decision)
+        assertEquals(1, state.tabs.value.size)
+
+        // Cancel decision keeps tab open
+        state.confirmClose(dirtyIntent.copy(decision = CloseDecision.CANCEL))
+        assertEquals(1, state.tabs.value.size)
+
+        // Discard decision closes tab and discards edits
+        state.confirmClose(dirtyIntent.copy(decision = CloseDecision.DISCARD))
+        assertEquals(0, state.tabs.value.size)
     }
 
     @Test
@@ -141,7 +189,7 @@ class EditorTabsStateTest {
         session.setText("local unsaved edits\n")
         state.handleRemoteFileModified(target, "doc.txt")
 
-        assertEquals("local unsaved edits\n", state.activeTab?.content)
+        assertEquals("local unsaved edits\n", session.getText())
         assertTrue(state.activeTab?.isStale ?: false)
     }
 
@@ -169,7 +217,7 @@ class EditorTabsStateTest {
         assertTrue(state.activeTab?.isDirty ?: false)
 
         state.discardAndReloadTab(state.activeTab!!.key)
-        assertEquals("server copy 2\n", state.activeTab?.content)
+        assertEquals("server copy 2\n", session.getText())
         assertFalse(state.activeTab?.isDirty ?: true)
         assertFalse(state.activeTab?.isConflicted ?: true)
     }
@@ -197,5 +245,145 @@ class EditorTabsStateTest {
         assertTrue(state.tabs.value.isEmpty())
         assertNull(state.activeTabKey.value)
         assertTrue(session.isDisposed)
+    }
+
+    @Test
+    fun testDiscardIntentProtectsNewerEdits() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "original text\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "protected.txt")
+        val docId = state.activeTabId.value!!
+        val session = state.getSession(state.activeTab!!.key)!!
+
+        session.setText("user edit 1\n")
+        val intent = state.requestCloseTab(docId)!!
+        assertEquals(CloseDecision.SAVE, intent.decision)
+
+        // User types another keystroke AFTER intent created
+        session.setText("user edit 1 plus newer keystroke\n")
+
+        // Confirming discard with stale intent is rejected!
+        state.confirmClose(intent.copy(decision = CloseDecision.DISCARD))
+        assertEquals(1, state.tabs.value.size, "Tab must not be closed when newer edits occurred after consent")
+    }
+
+    @Test
+    fun testReloadAfterGrowthToLargeReplacesAuthorityWithReadOnlyPreview() = runTest {
+        var large = false
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val size = if (large) 6_000_000L else 50L
+            val json = """{"kind":"file","size":$size,"mtime":${if (large) 200 else 100},"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val len = Regex("len=(\\d+)").find(exchange.requestURI.query.orEmpty())?.groupValues?.get(1)?.toInt() ?: 0
+            val text = if (large) "P".repeat(len) else "small\n"
+            val bytes = text.toByteArray()
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "grow.log")
+        val key = state.activeTab!!.key
+        val oldSession = state.getSession(key)!!
+        assertFalse(oldSession.isReadOnly)
+
+        large = true
+        state.reloadTab(key)
+
+        val tab = state.activeTab!!
+        assertEquals(FileTier.LARGE, tab.tier)
+        val newSession = state.getSession(key)!!
+        assertTrue(oldSession.isDisposed)
+        assertTrue(newSession.isReadOnly)
+        assertNull(newSession.beginSave(), "read-only preview must never be saveable")
+        val saved = state.saveTab(key)
+        assertTrue(saved is EditorSaveResult.Error)
+    }
+
+    @Test
+    fun testAuthorityReplaceOnTierChangeInvalidatesPriorCloseIntent() = runTest {
+        var degraded = false
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val size = if (degraded) 2_000_000L else 50L
+            val json = """{"kind":"file","size":$size,"mtime":${if (degraded) 200 else 100},"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val bytes = (if (degraded) "D".repeat(2_000_000) else "small\n").toByteArray()
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "tier.txt")
+        val key = state.activeTab!!.key
+        val oldId = state.activeTabId.value!!
+        val s1 = state.getSession(key)!!
+        s1.setText("e1")
+        s1.setText("e2")
+        s1.setText("e3")
+        val staleIntent = state.requestCloseTab(oldId)!!
+        assertEquals(4L, staleIntent.dirtyRevision)
+
+        // Forced reload across NORMAL -> DEGRADED replaces authority (new revision counter starts at 1).
+        degraded = true
+        state.discardAndReloadTab(key)
+        val s2 = state.getSession(key)!!
+        s2.setText("post-reload edit")
+        assertEquals(2L, s2.revision)
+        assertNotEquals(oldId, state.activeTabId.value)
+
+        // Stale intent from the replaced authority must NOT close the new dirty buffer even though 2 <= 4.
+        state.confirmClose(staleIntent.copy(decision = CloseDecision.DISCARD))
+        assertEquals(1, state.tabs.value.size)
+        assertEquals("post-reload edit", state.getSession(key)!!.getText())
+    }
+
+    @Test
+    fun testSaveDocumentPortDeniesEncryptedRequiredTabAndForceOverwriteHonorsPrivacy() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":10,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val bytes = "secret\n".toByteArray()
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "sec.txt")
+        val key = state.activeTab!!.key
+        val id = state.activeTabId.value!!
+        state.getSession(key)!!.setText("updated secret\n")
+
+        state.toggleEncryptedSession(key)
+        val outcome = state.editorRepository.saveDocument(id)
+        assertTrue(outcome is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted)
+        assertTrue(outcome.reason.contains("Encrypted"))
+
+        state.toggleEncryptedSession(key)
+        state.isInputAllowed = { false }
+        val ow = state.forceOverwriteTab(key)
+        assertTrue(ow is EditorSaveResult.Error)
     }
 }

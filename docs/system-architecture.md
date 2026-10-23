@@ -1,6 +1,6 @@
 # System Architecture
 
-**Status:** Current architecture overview, updated 2026-10-15. Detailed subsystem contracts are linked below; source code is authoritative.
+**Status:** Current architecture overview, updated 2026-10-23. Detailed subsystem contracts are linked below; source code is authoritative.
 
 ## Runtime Overview
 
@@ -458,15 +458,22 @@ Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
   - `ReplaceCoordinator` generates previews retaining match counts per enumerated file, not exact match positions.
   - `applyBatch` executes sequential replacements using the frozen search spec; it checks only that some occurrence remains in current content, then replaces all occurrences literally.
   - Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against changes between preview and apply.
-  - Dirty-state checking is evaluated before the async read; an authoritative dirty-buffer provider interface remains unwired pending the Phase 09 editor implementation.
+  - Dirty-buffer checks run in preview and before each batch-file read; the provider is wired through `WorkbenchScreen` to `EditorTabsState`.
 - **Recorded Limitations & Open Gates:**
-  - Permissive UTF-8 decode in fallback path, timeout treated as generic cancellation aborting batches, root-only directory watcher without subfolder re-subscription, secondary-profile display-name target resolution, dirty-buffer provider unwired pending Phase 09, and partial failure/outcome UI detail. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
+  - Remaining limitations include permissive UTF-8 decode in fallback paths, generic-cancellation batch abort, root-only directory watcher without subfolder re-subscription, secondary-profile display-name target resolution, and partial failure/outcome UI detail. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
 
 
 ### Native Editor Language Services & Safe Saves (Phase 09)
+
+#### Phase 03 Shared Editor State (2026-10-23)
+
+  - **Document authority:** `EditorSession` delegates text, undo/redo, and save-point tracking to injected `EditorDocument`. Obsolete `EditorUndoManager`, `EditorFindReplaceHelper`, and `EditorPositionHelper` were removed; `TestEditorDocument` is the `jvmTest` double.
+  - **Bounded reads and saves:** `EditorRepository` implements `EditorRangeRequestPort` and fail-closed `EditorSavePort`. `saveDocument` requires `documentProvider` and an installed `saveGate`; saturated `loadEditableText` reads escalate `NORMAL → DEGRADED → LARGE` and fall back to 64 KiB `BoundedRangeWindow`s.
+  - **Tab ports and identity:** `EditorTabsState` implements `EditorTabLifecyclePort`, `EditorDirtyGuardPort`, `EditorDocumentAccessPort`, `EditorCommandPort`, and `EditorSaveOutcomePort`. A reload changing tier rotates `tabIncarnation` and `DocumentId`; `CloseIntent.DISCARD` is rejected if document revision advanced after consent.
+  - **Open carryovers:** W-P03-1 (Phases 05/06): 64 MiB / 8-document / 2-degraded retention budget admission and eviction; DEGRADED 50-undo cap is wired. W-P03-2 (Phase 05): remove remaining full-text `EditorTab` mirrors and per-edit `getText()` snapshots; collect `DocumentEvent` to publish `openTabs` metadata.
+  - **Open carryovers, continued:** W-P03-3 (Phase 06): Unknown-save arbiter token, submitted snapshot preservation, and original stage/opId quarantine. W-P03-4 (Phase 06): open/reload/range error watermarks and disposed-session save-cleanup fencing.
+  - **Disposition:** Cycle 4 user approval (2026-10-23, 8/10, 0 Critical) closed the work cycle; full technical acceptance remains gated on W-P03-1..4. Phase 02 W1–W6 remain open through their assigned Phase 04/05/06 gates. Reported verification: `:shared:jvmTest` 458/458 passed (45 across seven Phase 03 test classes); `:shared:compileDebugKotlinAndroid` and `:androidApp:compileDebugKotlin` succeeded.
 - **File Tier Policy (`FileTierPolicy`):** Enforces exact size boundaries: normal (< 1 MiB editable), degraded (≥ 1 MiB and < 5 MiB editable), large (≥ 5 MiB read-only 64 KiB range pager), binary (raw hex view), and media (preview-only card). `decodeUtf8Safe` safely drops incomplete trailing multi-byte sequences at 64 KiB chunk boundaries.
-- **Editor Session & Baseline Tracking (`EditorSession`):** Retains text buffer, monotonic `modelVersion`, `editEpoch`, and bounded undo/redo. `beginSave()` captures submitted snapshot and epoch; `completeSave()` updates `serverMtime` and recalculates `isDirty = (getText() != savedContent)` so edits typed while saving in flight are preserved.
-- **Atomic Transforms & Safe Saves (`EditorTabSaveCoordinator`, `EditorRepository`):** Applies functional state transforms to latest tab state; CAS mtime protection; `UnknownOutcome` on in-flight commit timeout; clean auto-reload vs dirty tab stale flag; `discardAndReloadTab`. Authoritative `isDirtyFile` wired into `ReplaceCoordinator` to skip dirty buffers.
 - **Language Services:** Offline `JsonLanguageService` (AST diagnostics & symbols) and `TsJsLanguageService` (delimiter scanner with quote-before-comment precedence). Formal `TypeScriptLanguageServiceAudit` records TS semantic analysis blocker pending QuickJS/Hermes engine or server LSP decision.
 
 ### Native Diff, 3-Way Merge & Git Blame (Phase 10)

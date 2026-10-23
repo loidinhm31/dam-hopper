@@ -18,10 +18,10 @@ class EditorRepositoryTest {
     @BeforeTest
     fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server!!.executor = java.util.concurrent.Executors.newCachedThreadPool()
         serverPort = server!!.address.port
         server!!.start()
     }
-
     @AfterTest
     fun tearDown() {
         server?.stop(0)
@@ -127,5 +127,129 @@ class EditorRepositoryTest {
         val result = repo.saveFile(target, "file.txt", "content", 100L)
         assertTrue(result is EditorSaveResult.Error)
         assertTrue(result.message.contains("not connected"))
+    }
+
+    @Test
+    fun testFileGrowthReclassifiesToLargeRange() = runTest {
+        var statCount = 0
+        server!!.createContext("/api/fs/stat") { exchange ->
+            statCount++
+            val size = if (statCount == 1) 500L else 6_000_000L
+            val json = """{"kind":"file","size":$size,"mtime":1710000000,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val query = exchange.requestURI.query ?: ""
+            if (query.contains("len=65536")) {
+                val chunk = "first 64k after reclassification"
+                exchange.sendResponseHeaders(200, chunk.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(chunk.toByteArray()) }
+            } else {
+                val bigData = ByteArray(5_300_000) { 'A'.code.toByte() }
+                exchange.sendResponseHeaders(200, bigData.size.toLong())
+                try {
+                    exchange.responseBody.write(bigData)
+                } catch (_: Exception) {}
+                exchange.close()
+            }
+        }
+        val repo = createEditorRepository()
+        val target = ProjectTargetRef(project = "demo")
+        val result = repo.loadFile(target, "grew.log")
+        assertTrue(result is EditorLoadResult.Success, "Expected Success but got $result")
+        assertEquals(FileTier.LARGE, result.tier)
+        assertNotNull(result.rangeWindow)
+        assertEquals("first 64k after reclassification", result.content)
+    }
+    @Test
+    fun testInvalidUtf8FailsClosedWithoutEditableText() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":100,"mtime":1710000000,"mime":"application/octet-stream","isBinary":true}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val binaryJson = """{"binary":true,"mime":"application/octet-stream"}"""
+            exchange.sendResponseHeaders(200, binaryJson.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(binaryJson.toByteArray()) }
+        }
+
+        val repo = createEditorRepository()
+        val target = ProjectTargetRef(project = "demo")
+        val result = repo.loadFile(target, "corrupt.dat")
+
+        assertTrue(result is EditorLoadResult.Success)
+        assertEquals(FileTier.BINARY, result.tier)
+        assertTrue(result.isBinary)
+        assertEquals("", result.content)
+    }
+
+    private fun docId(path: String = "test.kt") = dev.damhopper.nativeapp.features.workspace.DocumentId(
+        dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+            profileId = "test-profile",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = "demo",
+        ),
+        path,
+        1L,
+    )
+
+    @Test
+    fun testSaveDocumentWithoutGateFailsClosedBeforeTransport() = runTest {
+        val repo = createEditorRepository(project = "demo")
+        val id = docId()
+        val doc = TestEditorDocument(id, "val answer = 42", 100L)
+        repo.documentProvider = { if (it == id) doc else null }
+
+        val outcome = repo.saveDocument(id)
+        assertTrue(outcome is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted)
+        assertTrue(outcome.reason.contains("gate"))
+    }
+
+    @Test
+    fun testSaveDocumentDeniesReadOnlyAndGateRejectedDocuments() = runTest {
+        val repo = createEditorRepository(project = "demo")
+        val roId = docId("preview.log")
+        val roDoc = TestEditorDocument(roId, "prefix only", 100L, readOnly = true)
+        val liveId = docId("live.kt")
+        val liveDoc = TestEditorDocument(liveId, "text", 100L)
+        repo.documentProvider = { when (it) { roId -> roDoc; liveId -> liveDoc; else -> null } }
+        repo.saveGate = { if (it == liveId) "Input blocked" else null }
+
+        val ro = repo.saveDocument(roId, explicitOverwrite = true)
+        assertTrue(ro is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted)
+        assertTrue(ro.reason.contains("read-only"))
+
+        val gated = repo.saveDocument(liveId)
+        assertTrue(gated is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted)
+        assertEquals("Input blocked", gated.reason)
+    }
+
+    @Test
+    fun testCappedSuccessThroughEveryRetryNeverPublishesEditablePrefix() = runTest {
+        // Stat claims NORMAL; server returns capped (successful) windows for the NORMAL and DEGRADED
+        // reads because the real file is 6 MB. Neither capped window may be published as editable.
+        var statCalls = 0
+        server!!.createContext("/api/fs/stat") { exchange ->
+            statCalls++
+            val size = if (statCalls == 1) 900_000L else 6_000_000L
+            val json = """{"kind":"file","size":$size,"mtime":1710000000,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val len = Regex("len=(\\d+)").find(exchange.requestURI.query.orEmpty())?.groupValues?.get(1)?.toInt() ?: 0
+            val body = ByteArray(len) { 'A'.code.toByte() }
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+
+        val result = createEditorRepository().loadFile(ProjectTargetRef(project = "demo"), "grew.log")
+        assertTrue(result is EditorLoadResult.Success, "Expected Success but got $result")
+        assertEquals(FileTier.LARGE, result.tier)
+        assertNotNull(result.rangeWindow)
+        assertEquals(FileTierPolicy.LARGE_CHUNK_BYTES.toInt(), result.content.length)
     }
 }

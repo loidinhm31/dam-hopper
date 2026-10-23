@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.features.editor
 
 /**
  * Handles language service dispatch and fenced diagnostic updates for editor sessions.
+ * Disables active per-edit full-text semantic snapshots while preserving dormant completion fencing.
  */
 class EditorDiagnosticsManager(
     private val coordinator: LanguageServiceCoordinator,
@@ -29,11 +30,14 @@ class EditorDiagnosticsManager(
             modelVersion = session.modelVersion,
             editEpoch = session.editEpoch
         )
+
+        // Bounded diagnostic invocation without allocating unbounded per-edit strings
+        val previewContent = if (session.length <= 65_536) session.getText() else ""
         val req = LanguageServiceRequest(
             requestId = reqId,
             filePath = session.path,
             languageId = service.languageId,
-            content = session.getText(),
+            content = previewContent,
             modelVersion = session.modelVersion,
             documentKey = session.key,
             sessionIncarnation = session.sessionIncarnation,

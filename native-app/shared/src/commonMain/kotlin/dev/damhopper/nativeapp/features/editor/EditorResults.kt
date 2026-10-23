@@ -25,10 +25,11 @@ sealed class EditorLoadResult {
         val binaryBase64: String? = null,
         val isEof: Boolean = true,
         val bytesRead: Int = 0,
+        val rangeWindow: BoundedRangeWindow? = null,
     ) : EditorLoadResult()
 
     data class TargetUnavailable(val message: String) : EditorLoadResult()
-    data class Error(val message: String) : EditorLoadResult()
+    data class Error(val message: String, val code: String? = null, val opId: String? = null) : EditorLoadResult()
 }
 
 private val PROJECT_TARGET_ERROR_CODES = listOf(

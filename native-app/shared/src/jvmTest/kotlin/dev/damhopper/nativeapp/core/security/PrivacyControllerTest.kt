@@ -3,8 +3,11 @@ package dev.damhopper.nativeapp.core.security
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.editor.EditorSession
+import dev.damhopper.nativeapp.features.editor.TestEditorDocument
 import dev.damhopper.nativeapp.features.settings.CognitoModeStyle
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
+import dev.damhopper.nativeapp.features.workspace.DocumentId
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -133,13 +136,16 @@ class PrivacyControllerTest {
     @Test
     fun testEditorInputIsolationUnderPrivacyMask() {
         val privacy = PrivacyController()
+        val owner = WorkspaceFileOwner(profileId = "profile-1", baseUrl = "http://127.0.0.1:4803", accountUser = "dev-user", project = "proj", worktreePath = null)
+        val docId = DocumentId(owner = owner, relativePath = "main.kt", tabIncarnation = 1L)
+        val doc = TestEditorDocument(id = docId, initialText = "val a = 1", initialMtime = 1000L, readOnly = false)
         val session = EditorSession(
+            document = doc,
             key = "editor-1",
             profileId = "profile-1",
             target = ProjectTargetRef(project = "proj"),
             path = "main.kt",
             sessionIncarnation = 1L,
-            initialContent = "val a = 1",
             initialMtime = 1000L,
             isReadOnly = false,
         )
