@@ -71,12 +71,17 @@ dependencies {
     implementation(compose.material3)
 
     implementation(libs.androidx.security.crypto)
+    implementation(libs.sora.editor)
+    implementation(libs.sora.editor.language.java)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlin.test.junit)
 
     androidTestImplementation(libs.kotlin.test)
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }
 
 tasks.withType<Test> {
