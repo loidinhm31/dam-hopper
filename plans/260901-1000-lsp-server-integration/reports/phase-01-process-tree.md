@@ -3,16 +3,17 @@
 **Artifact:** `plans/260901-1000-lsp-server-integration/reports/phase-01-process-tree.md`  
 **Phase:** 01 — Protocol, Dependency, and Real-Process Spike  
 **Gate:** G7 — Process Tree Lifecycle & Descendant Reaping  
-**Status:** **REAL-PROCESS VERIFIED (PASS)**  
-**Date:** 2026-10-23 (Updated with Hardened Harness Results)  
+**Status:** **BOUNDED PASS (Tested Runs Verified; Crash/Reparenting Scenarios Deferred)**  
+**Date:** 2026-10-23  
 
 ---
 
 ## 1. Executive Summary
 
 This report establishes the process ownership, descendant tree tracking, and multi-stage termination contracts for the semantic engine. Real-process observations in `scripts/spike-lsp-test.mjs` confirm:
-- TSLS spawns multiple background child processes (`tsserver.js` and dynamic worker threads/subprocesses).
-- Both graceful protocol shutdown (`shutdown` -> `exit`) and forceful two-phase signal escalation (`SIGTERM` -> `SIGKILL` to PGID) leave **zero zombie processes and zero orphaned descendants** in pure portable mode.
+- TSLS spawns multiple background child processes (specifically `tsserver.js` instances, including partialSemantic workers).
+- In the tested Linux x86_64 environment, auditing pre-recorded descendant PIDs verified **zero surviving descendants and zero test-generated zombies** across both graceful protocol exit and forced process-group signal escalation.
+- Advanced lifecycle scenarios (abrupt supervisor crash, reparenting under hung parents, and SIGSTOP resistance) remain to be qualified in the Rust backend implementation under Phase 02.
 
 ---
 
@@ -20,10 +21,10 @@ This report establishes the process ownership, descendant tree tracking, and mul
 
 During our hardened real-process spike test:
 ```
-[Harness Parent PID: 926620]
-  └── [TSLS PID: 926647] (Node.js cli.mjs --stdio) [PGID: 926647]
-        ├── [Child PID 926710]: node .../typescript/lib/tsserver.js
-        └── [Child PID 926711]: node .../tsserver-helper/typingsWorker.js
+[Harness Parent PID: 1133750]
+  └── [TSLS PID: 1133775] (Node.js cli.mjs --stdio) [PGID: 1133775]
+        ├── [Child PID 1133798]: node .../typescript/lib/tsserver.js
+        └── [Child PID 1133799]: node .../typescript/lib/tsserver.js
 ```
 
 ### Process Group Isolation
@@ -50,32 +51,17 @@ If any process remains alive after Stage 1 or if the child is uncooperative:
 
 ### Real-Process Test Results
 1. **Graceful Shutdown**:
-   - `shutdown` RPC + `exit` notification sent to PID 926647.
-   - Descendants [926710, 926711] exited cleanly.
-   - Leftover descendant count: **0**.
+   - `shutdown` RPC + `exit` notification sent to active TSLS PID.
+   - Pre-recorded descendant PIDs audited via `kill(pid, 0)`: **0 survivors**.
 2. **Forced Signal Escalation**:
-   - Independent child process spawned in separate PGID (PID 927320).
+   - Independent child process spawned in separate PGID with verified active `tsserver` workers.
    - Signals `SIGTERM` followed by `SIGKILL` sent to `-forcedPgid`.
-   - Alive descendants after escalation: **0**. Zero orphans, zero zombies.
+   - Pre-recorded descendant PIDs audited via `kill(pid, 0)`: **0 survivors**.
 
 ---
 
-## 4. Failure Mode & Daemon Death Handling
+## 4. Phase 02 Implementation Requirements
 
-| Failure Scenario | Threat | Implemented Defense in Tokio Supervisor |
-|---|---|---|
-| **Daemon Crash / Abrupt Termination** | TSLS & tsserver become orphaned | On Linux, supervisor sets parent-death signal on the initial process fork (`prctl(PR_SET_PDEATHSIG, SIGTERM)`), backed by supervisor cleanup guards during Tokio runtime shutdown. |
-| **Stdio Pipe Saturation** | Stderr or stdout buffer fills, blocking child event loop | Supervisor spawns dedicated non-blocking reader tasks continuously draining stderr into a bounded 64 KiB circular buffer and stdout into the framed parser. |
-| **Blocked Socket Consumer** | Slow remote browser blocks WS writes | Outgoing WS channel has bounded buffer (32 messages); on channel full with backpressure timeout (2,000 ms), supervisor closes session and tears down child immediately. |
-| **Child Crash / Hang** | Infinite restart loops or resource leak | Supervisor watchdog monitors exit events; max 2 restarts per 5 minutes with exponential backoff (1s then 3s). |
-
----
-
-## 5. Gate G7 Evaluation
-
-- [x] Descendant processes (`tsserver` and workers) successfully observed and tracked.
-- [x] Clean zero-descendant termination verified on graceful shutdown.
-- [x] Forced signal escalation (`SIGTERM` -> `SIGKILL` to PGID) verified with 0 surviving descendants.
-- [x] Zero zombie processes left in OS process table.
-- [x] Tokio reaper task contract defined without global `waitpid(-1)` collision.
-- [x] Gate G7 status: **GO / PASSED**.
+1. Implement Tokio `Command::process_group(0)` for child isolation.
+2. Ensure dedicated child task reap loops avoid global `waitpid(-1)`.
+3. Test abrupt parent failure and hung process (SIGSTOP) recovery in Rust unit tests.

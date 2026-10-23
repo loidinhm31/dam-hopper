@@ -13,13 +13,12 @@ created: 2026-09-01
 
 ## Implementation status — 2026-10-23
 
-**Phase 01 real-process spike complete; implementation in-progress (9% - 24/264h).** Phase 01 gates G0–G7 are empirically proven on real processes (`scripts/spike-lsp-test.mjs`), with gate G8 tracked for in-browser qualification in Phases 07 and 10 per explicit user approval. Downstream backend implementation phases (Phases 02–06) are unblocked.
+**Phase 01 spike completed; workflow approved by user with noted issues (in-progress 9% - 24/264h).** Basic process launch, handshake (G3), adaptive sync (G4), and process-group signal escalation (G7) were demonstrated on real Node v24/TSLS 6/TS 5 processes (`scripts/spike-lsp-test.mjs`). Gate G8 is marked STOP (pending live web browser qualification in Phases 07 and 10). Per user approval on 2026-10-23, proceeding to Phase 02 is an authorized plan exception while technical qualification gaps (freshness fencing, full hostile-loading controls, and tuple/bundle release provenance) remain tracked for completion in their owning implementation phases.
 
 - Worktree: `/home/loidinh/WS/worktrees/dam-hopper-lsp-server-integration`.
 - Base: local `main`, `60b07c1423fd5b3536632f3c3735c7f658b9fc59`.
-- Phase 01 Spike Verdict: G0–G7 GO; G8 STOP (tracked for in-browser qualification in Phases 07 & 10). User explicitly approved Phase 01 with noted issues on 2026-10-23.
-- Reports & Harness: 12 comprehensive reports and hardened test harness in `plans/260901-1000-lsp-server-integration/reports/` and `scripts/spike-lsp-test.mjs`.
-
+- Review Verdict: Cycle 3 review scored 4/10 (NOT APPROVED); approved by user with noted issues.
+- Reports & Harness: 12 reports in `plans/260901-1000-lsp-server-integration/reports/` and reproducible test harness in `scripts/spike-lsp-test.mjs`.
 ## Outcome
 
 First supported release: shared Monaco Definition and Implementation for `.ts`, `.tsx`, `.js`, and `.jsx` through authenticated `/ws/semantic/v1`, filtered LSP JSON-RPC, and bounded bundled TSLS children on a Linux x64 server, consumed by the web client. Runtime ships OFF. Native-client qualification (including Linux Tauri), Windows-server qualification, and Android support are deferred and non-blocking; native origin policy remains unchanged. Java/Rust require separate integration, qualification, and release work.
