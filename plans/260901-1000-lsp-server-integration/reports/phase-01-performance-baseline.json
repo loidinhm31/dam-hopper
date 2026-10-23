@@ -1,0 +1,11 @@
+{
+  "latencies": {
+    "handshakeMs": 69.48
+  },
+  "memory": {},
+  "counts": {
+    "totalGates": 6,
+    "passed": 5,
+    "stopped": 1
+  }
+}

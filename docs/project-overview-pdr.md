@@ -40,6 +40,7 @@ The workbench must make ownership explicit: a browser profile and its current co
 | PR-022–025 | Former trusted plugin platform and plugin runner/API/management | **Retired.** Do not implement or depend on the old SDK, runner, plugin APIs, or host bridges. See [Retired Plugin Platform Archive Record](./archive/retired-plugin-platform.md). |
 | PR-026 | Agent Status and notification ownership | Implemented and Linux-qualified for the documented OMP/Codex/Claude versions; other versions/platforms remain unqualified. |
 | PR-028 | Cognito Mode in-app privacy mask | Delivered. Ephemeral activation, configurable shortcut/style, overlay, and input isolation; it is not authentication, redaction, or OS-wide privacy. |
+| PR-029 | TypeScript/JavaScript LSP Semantic Navigation | Spike completed (Phase 01); G0–G7 contracts proven on real processes (pinned tuple, single incremental sync, PGID tree reaping, hostile hook suppression); G8 web provider coexistence tracked for Phase 07/10 browser qualification. Backend implementation (Phases 02–06) underway. See [LSP Plan](../plans/260901-1000-lsp-server-integration/plan.md). |
 
 ## Acceptance criteria for critical behavior
 
@@ -71,6 +72,16 @@ See [Git history architecture](./architecture/git-history-search.md) and [Git AP
 - Cognito activation is ephemeral. The app overlays the rendered UI and isolates input; content remains in the app and operating-system captures are outside this feature's guarantee.
 - Current Heavy Blur CSS is `blur(16px) saturate(180%)` with `rgba(148, 163, 184, 0.12)` where supported; unsupported and reduced-transparency cases use opaque black. See `packages/ui/src/index.css` for the checked-in implementation.
 
+
+### Semantic code navigation
+
+- **Engine provenance and immutability:** Pinned offline tuple (Node.js v24.16.0, TypeScript 5.9.3, TSLS 6.0.2 under `/opt/dam-hopper/lib/semantic-engine/`). Absolutely no `PATH` lookup or project-local `node_modules` fallback.
+- **Transport and lazy boundary:** Transport-only client pairing (`vscode-ws-jsonrpc@3.5.0` + `vscode-jsonrpc@8.2.1`). Initial application bundle delta must be 0 bytes; Monaco lazy chunk impact must remain below the 50 KiB gzip delta ceiling (baseline measured at +14.2 KiB gzip).
+- **Synchronization and fresh coordinates:** Single negotiated `Incremental = 2` sync kind; range-less full update below 64 KiB, ranged edits at/above 64 KiB. UTF-16 character coordinate alignment preserved across non-BMP astral characters on the same line.
+- **Freshness fencing:** Gateway version fence (`damHopperDocumentVersion`, `damHopperModelGeneration`) discards stale responses; FIFO stdio ordering preserves sequence.
+- **Hostile loading suppression:** Pinned supervisor settings force `plugins: []` and `disableAutomaticTypingAcquisition: true` with stripped `NODE_OPTIONS`/`NODE_PATH` and absolute `--tsserver-path`, suppressing repository tsconfig plugins, local decoys, and ATA queries.
+- **Process tree lifecycle and reaping:** Child process group isolation (`Command::process_group(0)`); two-phase termination (graceful RPC then `SIGTERM` -> `SIGKILL` to PGID); dedicated child reaper task (`Child::wait`) reaps the direct child process group leader, preventing zombie `<defunct>` accumulation.
+- **Model-scoped provider coexistence (G8):** Coexistence between Monaco's built-in TypeScript service and DamHopper's LSP provider must be proven in a live browser DOM environment during Phase 07 and qualified in Phase 10 without global disabling collateral.
 
 ### Testing architecture
 

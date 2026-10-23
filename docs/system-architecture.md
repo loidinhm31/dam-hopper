@@ -432,6 +432,65 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
+## TypeScript and JavaScript LSP Semantic Navigation
+
+<a id="lsp-semantic-navigation-architecture"></a>
+Development progresses under the [LSP server integration plan](../plans/260901-1000-lsp-server-integration/plan.md). The semantic navigation subsystem provides high-performance, secure code navigation (Go to Definition, Go to Implementation) for TypeScript and JavaScript within Monaco Editor without IDE bloat, cloud dependencies, or unvetted third-party services.
+
+The Phase 01 feasibility spike (`scripts/spike-lsp-test.mjs`, `plans/260901-1000-lsp-server-integration/reports/`) empirically verified feasibility gates G0–G7 on real operating-system processes, with Gate G8 tracked for in-browser qualification in Phases 07 and 10.
+
+### Feasibility Spike Empirical Findings (Phase 01)
+
+- **Real-Process Latency & Handshake (G3):** Measured real-process `initialize`/`initialized` handshake in 66.98 ms against pinned Node v24.16.0 / TS 5.9.3 / TSLS 6.0.2. Capabilities advertised and parsed include `textDocumentSync: 2` (Incremental), `definitionProvider: true`, and `implementationProvider: true`.
+- **Single-Kind Adaptive Sync Verification (G4):** Confirmed that TSLS operates under a single negotiated `textDocumentSync: 2` (Incremental) mode and natively accepts range-less full-document text updates (`{ text: newContent }`) below 64 KiB without protocol errors. Verified bidirectional 64 KiB threshold crossing (<64 KiB -> >=64 KiB -> <64 KiB), empty document lifecycle (`""` didOpen -> edit -> didClose -> reopen), and exact same-line UTF-16 code unit offset alignment across non-BMP characters (astral emoji `🚀`, 2 UTF-16 code units / 4 UTF-8 bytes).
+- **Version Fencing & Unopened File Navigation (G5):** Proved FIFO stdio ordering and verified that definition queries resolve symbols imported from unopened on-disk files (`UNOPENED_SYMBOL`), returning accurate `file://` URIs without requiring prior `didOpen` calls.
+- **Hostile Hook & Plugin Suppression Controls (G6):** Active positive controls verified that canary scripts execute when directly invoked by Node. When spawned against a hostile workspace containing malicious tsconfig plugins and a local `node_modules/typescript` decoy, supervisor settings (`"plugins": []`, `"disableAutomaticTypingAcquisition": true`, absolute `--tsserver-path`, and stripped `NODE_OPTIONS`/`NODE_PATH`) completely bypassed local decoys and suppressed tsconfig plugin execution.
+- **Process Tree Observation & Reaping (G7):** Pre-recorded descendant audits in `scripts/spike-lsp-test.mjs` observed multi-process trees (`tsserver.js` + `typingsWorker.js`) under the child PGID. Both graceful RPC shutdown (`shutdown` -> `exit`) and forced signal escalation (`kill(-pgid, SIGTERM)` -> `kill(-pgid, SIGKILL)`) resulted in 0 surviving descendants and 0 zombie processes in the OS process table in the tested Linux x86_64 environment.
+- **Vite Web Bundle Baseline (G2):** Evaluated pinned `vscode-ws-jsonrpc@3.5.0` + `vscode-jsonrpc@8.2.1`. Vite build benchmark demonstrated that Monaco's lazy chunk boundary is preserved: 0 bytes added to the initial application chunk (`index.js`), with ~14.2 KiB gzip impact (+0.34%) measured on the dynamic `monaco.js` chunk.
+- **Web Provider Coexistence Boundary (G8):** Formally assigned **STOP (Pending Web Browser Qualification)**. Monaco's built-in TypeScript provider is configured globally; model-scoped coexistence requires live browser DOM execution with active Monaco web workers, deferred to Phase 07 implementation and Phase 10 qualification.
+
+### Planned Production Architecture & Invariants (Phases 02–06)
+
+- **Process Topology & Group Isolation (G0, G7):**
+  - The backend supervisor spawns `typescript-language-server` in an isolated process group (`Command::process_group(0)` on Unix), preventing signal leakage to the parent daemon or sibling PTY processes.
+  - TSLS communicates via standard JSON-RPC 2.0 over framed stdio pipes. Dedicated non-blocking Tokio reader tasks drain stderr into a bounded 64 KiB circular buffer and parse stdout frames.
+  - **Parent-Death Defense:** `prctl(PR_SET_PDEATHSIG, SIGTERM)` is configured for the direct child process on Linux fork, signaling the child process leader if the parent daemon dies abruptly (noting that `PDEATHSIG` does not propagate automatically to descendant grandchildren).
+  - **Two-Phase Termination Contract:**
+    1. *Stage 1 (Graceful RPC):* Supervisor issues LSP `shutdown` request (1,500 ms timeout), followed by `exit` notification and stdin closure (500 ms wait, total 2,000 ms budget).
+    2. *Stage 2 (Forceful Escalation):* If processes persist, supervisor issues `kill(-pgid, SIGTERM)` (1,000 ms wait), escalating to `kill(-pgid, SIGKILL)` targeting the entire process group (total 3,000 ms budget).
+  - **Reaper Ownership:** A dedicated Tokio child reaper task (`Child::wait`) reaps the direct child process group leader and collects its exit status. Global `waitpid(-1)` is strictly prohibited to avoid intercepting exit statuses from PTY or helper processes.
+
+- **Pinned Offline Engine Tuple & Packaging Layout (G1):**
+  - **Zero PATH or Project Lookup:** The server never queries `PATH` for `node`, `npm`, or `pnpm`, and never loads `typescript` or language servers from project-local `node_modules` or `package.json`.
+  - **Pinned Versions & Integrity:** Node.js Linux x64 `v24.16.0` (direct ELF64 binary, SHA-256 `b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd`), TypeScript `5.9.3` (Apache-2.0), and `typescript-language-server` `6.0.2` (Apache-2.0).
+  - **Installation Layout:** Bundled engine artifacts reside under `/opt/dam-hopper/lib/semantic-engine/` and are assigned role `["server"]` in `deploy/release/generate-release-manifest.mjs` and the SPDX 2.3 SBOM.
+  - **Absolute Invocation:** Launched with absolute binary path `/opt/dam-hopper/lib/semantic-engine/node`, `--max-old-space-size=256`, absolute CLI entrypoint, `--stdio`, and `--tsserver-path` pointing directly to the bundled `tsserver.js`.
+
+- **Transport-Only Client Bundle & Lazy Chunk Partitioning (G2):**
+  - **Dependency Boundary:** Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1` (permissive MIT licenses). Full TypeFox `monaco-languageclient` (30+ packages, >5 MiB raw bloat) and unreleased Microsoft `@vscode/monaco-lsp-client` alpha are explicitly rejected.
+  - **Chunk Partitioning Acceptance Criteria:** Semantic client code must remain isolated to the dynamic lazy Monaco chunk (`monaco.js`). Adding bytes to the initial application entry chunk (`index.js`) is prohibited (0 bytes delta required); Monaco lazy chunk impact must remain below the 50 KiB gzip delta ceiling.
+
+- **Handshake, Capabilities & Configuration Replies (G3):**
+  - Supervisor mediates the protocol handshake, parsing capabilities and advertising client support.
+  - **Server-Owned Configuration Replies:** TSLS issues `workspace/configuration` requests upon initialization; the supervisor immediately replies with safe empty configuration objects matching the requested items (e.g. `[{}, {}]` for requested `typescript` and `javascript` sections), resolving the child without deadlock and never exposing client env, host paths, or unvalidated user settings.
+  - **Gateway Method Allowlist:** Mediated client methods are restricted to navigation and document lifecycle (`initialize`, `initialized`, `textDocument/didOpen`, `textDocument/didChange`, `textDocument/didClose`, `textDocument/definition`, `textDocument/implementation`, `$/cancelRequest`, `shutdown`, `exit`). Workspace edits (`workspace/applyEdit`) and command executions (`workspace/executeCommand`) are rejected.
+
+- **Single Negotiated Adaptive Synchronization (G4):**
+  - Uniformly negotiates `textDocumentSync: 2` (Incremental) across client, gateway, and TSLS.
+  - **Adaptive Payload Strategy:** Documents `< 64 KiB` transmit full-document replacement via a single range-less `TextDocumentContentChangeEvent` (`{ text: newContent }`); documents `>= 64 KiB` transmit ranged incremental edits (`{ range, rangeLength, text }`) to minimize wire and memory transfer.
+
+- **Freshness, Invalidation & Version Fencing (G5):**
+  - **FIFO Stdio Stream Ordering:** Serialized writes guarantee document edits for version $V$ reach TSLS before subsequent definition queries for version $V$.
+  - **Gateway Version Fence:** Client queries include `damHopperDocumentVersion` and `damHopperModelGeneration`. The gateway strips custom fields before stdio dispatch, tracks in-flight request IDs, and discards responses if the client document version advanced before the child replied.
+  - **Target Generation Fencing:** Reconnection or workspace switches increment `sessionGeneration`, discarding late responses from prior sessions.
+
+- **Hostile Hook & Plugin Suppression Invariants (G6):**
+  - **Threat Model:** Protects the server daemon account against arbitrary code execution embedded in untrusted repositories.
+  - **Supervisor Invariants:** Forced `initializationOptions` with `"plugins": []` (suppresses `compilerOptions.plugins` in `tsconfig.json`) and `"disableAutomaticTypingAcquisition": true` (suppresses TSLS automatic typings acquisition queries); absolute `--tsserver-path` prevents local `node_modules/typescript` replacement decoys; sanitized environment strips `NODE_OPTIONS` and `NODE_PATH` and clears dynamic loader overrides (`LD_PRELOAD`, `LD_LIBRARY_PATH`).
+
+- **Web Provider Coexistence & Browser Qualification Boundary (G8):**
+  - **Disposition:** **STOP / Pending Web Browser Qualification in Phase 07 & Phase 10**.
+  - **Execution Policy:** Approved plan exception permits backend implementation phases (Phases 02–06: framing, provisioning, supervisor, gateway, toggle) to proceed based on proven G0–G7 contracts. Model-scoped coexistence is deferred to Phase 07 (evaluating an authoritative delegating provider or custom semantic language mode) and qualified in Phase 10 via Vitest browser mode and Playwright E2E testing in real browser DOMs.
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.
