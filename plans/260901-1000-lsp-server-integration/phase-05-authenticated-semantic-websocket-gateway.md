@@ -12,8 +12,8 @@
 - Date: 2026-10-23
 - Description: Expose the isolated filtered semantic protocol with exact current auth/Origin policy, live fail-closed invalidation, bounded independent cleanup and bidirectional URI containment.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Pending
+- Implementation status: Administratively complete under approved exceptions (2026-10-23); release qualification pending
+- Review status: Approved by user under tracked exceptions (2026-10-23)
 - Effort: 28h
 - Direct dependencies: 04.
 - Estimate rationale: historical 20h omitted complete live-auth parity, slow-consumer-independent cleanup, precise version-extension/one-kind sync and hardened URI/result mediation.
@@ -86,13 +86,13 @@ Rollback boundary: one route can be removed without changing `/ws`. During imple
 
 ## Todo list
 
-- [ ] Reuse exact current upgrade and Origin decisions.
-- [ ] Match live account/session/version/MFA/deadline/backend policy.
-- [ ] Cancel admission/tree independently before bounded socket close delivery.
-- [ ] Enforce finite dedicated framing/rate/queue/in-flight bounds.
-- [ ] Implement immutable attach + one-kind sync + stripped version extension.
-- [ ] Implement input/result URI/range containment and child request allowlist.
-- [ ] Prove real-socket slow-consumer, revocation and zero-tree cleanup cases.
+- [x] Reuse exact current upgrade and Origin decisions.
+- [x] Match live account/session/version/MFA/deadline/backend policy.
+- [x] Cancel admission/tree independently before bounded socket close delivery.
+- [x] Enforce finite dedicated framing/rate/queue/in-flight bounds.
+- [x] Implement immutable attach + one-kind sync + stripped version extension.
+- [x] Implement input/result URI/range containment and child request allowlist.
+- [x] Prove real-socket slow-consumer, revocation and zero-tree cleanup cases (empirically probe-verified in Cycle 3 review under C1/C2 fixes; automated test harness coverage tracked for Phase 09 qualification per user approval).
 
 ## Success Criteria
 
@@ -120,5 +120,5 @@ Rollback boundary: one route can be removed without changing `/ws`. During imple
 
 - Phase 06 completes current-admin global ON/OFF authorization across every write path before external release exposure; it does not gate ordinary enabled navigation on Admin.
 - Phase 07 consumes the exact filtered protocol; Phase 08 binds repository/owner invalidation. Phase 09 qualifies observed auth cutoff/resource behavior and tunes numbers, not prerequisite safety.
-- Validation status: documentation revision only; no build, lint, test, formatter, socket/process execution or auth timing qualification run.
-- Unresolved gates: required TSLS replies, exact adaptive/version/destination contract and portable descendant cleanup remain explicit Phase 01 STOP/GO prerequisites.
+- Validation status: Administratively complete under user-approved review cycle (2026-10-23); release qualification remains pending. 64 scoped unit and integration tests passing across semantic targets (38 unit tests in `server/src/semantic/`, 10 in `server/tests/semantic_supervisor.rs`, 7 in `server/tests/semantic_websocket.rs`, 8 in `server/tests/semantic_resources.rs`, 1 in `server/tests/common/semantic_fixtures.rs`) as reported by tester and reviewer reports. High-severity protocol defects (W-B cancelled request answering null id, W-C invalid request id echo / notification navigation response) and W-D pre-actor rejection overlay invalidation must be remediated before Phase 07 Monaco client integration.
+- Unresolved gates: G0–G2, G6–G7 proven in earlier phases; G3–G4 and slow-consumer/revocation tree cleanup verified via integration tests and Cycle 3 empirical probes; G5 unopened file destination freshness and G8 live browser navigation remain open gates tracked for Phase 07 and Phase 09–10 qualification.

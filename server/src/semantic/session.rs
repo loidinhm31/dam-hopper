@@ -98,6 +98,7 @@ pub enum SessionCommand {
         reply: oneshot::Sender<Result<(), SessionError>>,
     },
     Navigation {
+        request_id: Option<Value>,
         method: String,
         params: NavigationParams,
         reply: oneshot::Sender<Result<Value, SessionError>>,
@@ -123,6 +124,7 @@ pub enum SessionCommand {
 #[derive(Clone)]
 pub struct SemanticSessionHandle {
     pub key: SessionKey,
+    pub fence: SessionIdentityFence,
     cmd_tx: mpsc::Sender<SessionCommand>,
 }
 
@@ -185,20 +187,31 @@ impl SemanticSessionHandle {
         rx.await.map_err(|_| SessionError::Invalidated)?
     }
 
-    pub async fn navigation(
+    pub async fn submit_navigation(
         &self,
+        request_id: Value,
         method: &str,
         params: NavigationParams,
-    ) -> Result<Value, SessionError> {
+    ) -> Result<oneshot::Receiver<Result<Value, SessionError>>, SessionError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(SessionCommand::Navigation {
+                request_id: Some(request_id),
                 method: method.to_string(),
                 params,
                 reply: tx,
             })
             .await
             .map_err(|_| SessionError::Invalidated)?;
+        Ok(rx)
+    }
+
+    pub async fn navigation(
+        &self,
+        method: &str,
+        params: NavigationParams,
+    ) -> Result<Value, SessionError> {
+        let rx = self.submit_navigation(Value::Null, method, params).await?;
         rx.await.map_err(|_| SessionError::Invalidated)?
     }
 
@@ -282,6 +295,7 @@ impl SemanticSessionActor {
         idle_notify_tx: mpsc::Sender<SessionKey>,
     ) -> SemanticSessionHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let handle_fence = fence.clone();
         let actor = Self {
             key: key.clone(),
             fence,
@@ -301,7 +315,11 @@ impl SemanticSessionActor {
 
         tokio::spawn(actor.run());
 
-        SemanticSessionHandle { key, cmd_tx }
+        SemanticSessionHandle {
+            key,
+            fence: handle_fence,
+            cmd_tx,
+        }
     }
 
     async fn run(mut self) {
@@ -376,11 +394,12 @@ impl SemanticSessionActor {
                 false
             }
             SessionCommand::Navigation {
+                request_id,
                 method,
                 params,
                 reply,
             } => {
-                let res = self.do_navigation(&method, params, reply).await;
+                let res = self.do_navigation(request_id, &method, params, reply).await;
                 if let Err(_e) = res {
                     // Immediate error (e.g. queue full or stale version)
                     // If res was Ok, the reply sender is stored in in_flight_requests
@@ -628,6 +647,7 @@ impl SemanticSessionActor {
 
     async fn do_navigation(
         &mut self,
+        request_id: Option<Value>,
         method: &str,
         params: NavigationParams,
         reply: oneshot::Sender<Result<Value, SessionError>>,
@@ -667,9 +687,14 @@ impl SemanticSessionActor {
 
         self.cancel_idle_timer();
 
-        let req_id_num = self.next_req_id;
-        self.next_req_id += 1;
-        let req_id = Value::from(req_id_num);
+        let req_id = match request_id {
+            Some(val) if !val.is_null() => val,
+            _ => {
+                let req_id_num = self.next_req_id;
+                self.next_req_id += 1;
+                Value::from(req_id_num)
+            }
+        };
         // Snapshot versions of currently open destination overlays
         let destination_versions_snapshot = self.overlays.document_versions_snapshot();
 
@@ -677,7 +702,7 @@ impl SemanticSessionActor {
         let std_params = params.to_standard_lsp_params();
         let lsp_req = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": req_id_num,
+            "id": req_id,
             "method": method,
             "params": std_params
         });

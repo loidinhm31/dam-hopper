@@ -19,8 +19,8 @@ flowchart LR
 
 ### Code Boundaries
 
-- `server/src/api/` registers protected HTTP, REST-backed client operations, and authenticated WebSocket routes. `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
+- `server/src/api/` registers protected HTTP, REST-backed client operations, the core multiplexed WebSocket (`/ws`), and the dedicated authenticated semantic gateway (`/ws/semantic/v1`). `server/src/state.rs` contains shared application state.
+- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, `tunnel`, and `semantic` (language server session supervision, process tree reaper, Linux cgroups, adaptive overlays, and filtered JSON-RPC gateway; see [Semantic WebSocket Gateway Architecture](./architecture/semantic-websocket-gateway.md)).
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; `apps/native/` is the Tauri 2 desktop host. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - The former DamHopper plugin platform, runner, SDK, plugin APIs, and plugin iframe bridge are retired.

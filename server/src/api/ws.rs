@@ -259,7 +259,7 @@ pub async fn ws_handler(
     upgrade.on_upgrade(move |socket| handle_socket(socket, state, actor, pending_guard))
 }
 
-fn websocket_origin_allowed(
+pub(crate) fn websocket_origin_allowed(
     no_auth: bool,
     has_origin: bool,
     origin_is_allowed: bool,

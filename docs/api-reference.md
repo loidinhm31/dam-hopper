@@ -20,7 +20,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Client-side profiles](./api/client-side-profiles.md) | Profile metadata, connection contracts, and client-side persistence breakdown |
 | [Filesystem and media](./api/filesystem-and-media.md) | File explorer/search, media tickets, stream authorization |
 | [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health |
-| [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
+| [WebSocket](./api/websocket.md) | Core multiplexed WebSocket (`/ws`) and dedicated semantic gateway (`/ws/semantic/v1`) |
 
 ## Authentication
 

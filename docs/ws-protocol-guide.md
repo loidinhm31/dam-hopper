@@ -2,9 +2,9 @@
 
 Real-time message envelope for terminal I/O, file watching, and file operations.
 
-## Message Format
+## Core Multiplexed Route (/ws) Message Format
 
-All messages use JSON with the `kind` tag. The legacy `type` envelope is not supported.
+Core multiplexed WebSocket connections (`/ws`) for terminal I/O, file watching, and file operations use JSON with the `kind` tag. The legacy `type` envelope is not supported.
 
 ```json
 { "kind": "command:action", ...payload }
@@ -12,6 +12,7 @@ All messages use JSON with the `kind` tag. The legacy `type` envelope is not sup
 
 **Direction:** Bidirectional (client↔server).
 
+*Note on Semantic Protocol:* The dedicated language server endpoint (`/ws/semantic/v1`) does not use the `{ kind: ... }` envelope. It uses standard JSON-RPC 2.0 frames with the `dam-hopper.semantic.lsp.v1` subprotocol. See [Semantic WebSocket Gateway Architecture](./architecture/semantic-websocket-gateway.md) and [WebSocket API](./api/websocket.md#semantic-websocket-gateway-wssemanticv1).
 ## Retired plugin epoch protocol
 
 The historical D03 trusted-plugin platform used socket epochs and messages such

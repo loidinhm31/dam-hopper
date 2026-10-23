@@ -32,7 +32,7 @@ use super::{
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
     resource_events, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
-    workspace, ws,
+    semantic_ws, workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -85,7 +85,8 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))
         .merge(mfa_routes)
-        .route("/ws", get(ws::ws_handler));
+        .route("/ws", get(ws::ws_handler))
+        .route("/ws/semantic/v1", get(semantic_ws::semantic_ws_handler));
     let workflow_routes = Router::new()
         .route("/api/workflow/overview", get(workflow::overview))
         .route("/api/workflow/events", get(workflow::events))

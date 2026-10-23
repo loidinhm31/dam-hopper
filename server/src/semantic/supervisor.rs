@@ -54,6 +54,9 @@ pub enum SupervisorError {
 struct SupervisorInner {
     enabled: AtomicBool,
     toolchain_verified: AtomicBool,
+    runtime_epoch: std::sync::atomic::AtomicU64,
+    next_connection_epoch: std::sync::atomic::AtomicU64,
+    connection_epochs: RwLock<HashMap<ConnectionId, Option<u64>>>,
     sessions: RwLock<HashMap<SessionKey, SemanticSessionHandle>>,
     tool_profile: Option<SemanticToolProfile>,
     idle_notify_tx: mpsc::Sender<SessionKey>,
@@ -75,6 +78,9 @@ impl SemanticSupervisor {
         let inner = Arc::new(SupervisorInner {
             enabled: AtomicBool::new(false),
             toolchain_verified: AtomicBool::new(false),
+            runtime_epoch: std::sync::atomic::AtomicU64::new(1),
+            next_connection_epoch: std::sync::atomic::AtomicU64::new(1),
+            connection_epochs: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             tool_profile,
             idle_notify_tx,
@@ -107,10 +113,37 @@ impl SemanticSupervisor {
     /// Enable or disable the semantic subsystem.
     pub async fn set_enabled(&self, enabled: bool) {
         let was_enabled = self.inner.enabled.swap(enabled, Ordering::AcqRel);
-        if was_enabled && !enabled {
-            // Turning OFF: tear down all active sessions and reap descendants
-            self.shutdown().await;
+        if was_enabled != enabled {
+            self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+            if was_enabled && !enabled {
+                // Turning OFF: tear down all active sessions and reap descendants
+                self.shutdown().await;
+            }
         }
+    }
+
+    /// Get current runtime epoch.
+    pub fn runtime_epoch(&self) -> u64 {
+        self.inner.runtime_epoch.load(Ordering::Acquire)
+    }
+    /// Register a new connection and allocate a unique monotonic admission epoch.
+    pub async fn register_connection(&self, connection_id: &ConnectionId) -> u64 {
+        let mut epochs = self.inner.connection_epochs.write().await;
+        if let Some(existing) = epochs.get(connection_id) {
+            return existing.unwrap_or(0);
+        }
+        let epoch = self
+            .inner
+            .next_connection_epoch
+            .fetch_add(1, Ordering::SeqCst);
+        epochs.insert(connection_id.clone(), Some(epoch));
+        epoch
+    }
+
+    /// Get current admission epoch for a connection. Returns None if invalidated or released.
+    pub async fn get_connection_epoch(&self, connection_id: &ConnectionId) -> Option<u64> {
+        let epochs = self.inner.connection_epochs.read().await;
+        epochs.get(connection_id).copied().flatten()
     }
 
     /// Retrieve toolchain integrity status without launching a child process.
@@ -128,11 +161,16 @@ impl SemanticSupervisor {
         project: &str,
         worktree: Option<String>,
         target_root: PathBuf,
+        expected_epoch: u64,
     ) -> Result<SemanticSessionHandle, SupervisorError> {
         if !self.is_enabled() {
             return Err(SupervisorError::Disabled);
         }
-
+        let start_runtime_epoch = self.inner.runtime_epoch.load(Ordering::Acquire);
+        match self.get_connection_epoch(&connection_id).await {
+            Some(e) if e == expected_epoch => e,
+            _ => return Err(SupervisorError::Session(SessionError::Invalidated)),
+        };
         // Verify toolchain integrity passively (cached to prevent repeated SHA-256 computation)
         if !self.inner.toolchain_verified.load(Ordering::Acquire) {
             if let Some(profile) = &self.inner.tool_profile {
@@ -160,10 +198,18 @@ impl SemanticSupervisor {
             if !matches!(state, SemanticState::Crashed | SemanticState::Invalidated) {
                 return Ok(existing);
             }
-            // Shut down old handle before removing
+            // Shut down old handle before removing, comparing session generation
             let old_opt = {
                 let mut guard = self.inner.sessions.write().await;
-                guard.remove(&key)
+                if let Some(cur) = guard.get(&key) {
+                    if cur.fence.session_generation == existing.fence.session_generation {
+                        guard.remove(&key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             };
             if let Some(old) = old_opt {
                 let _ = old.shutdown().await;
@@ -238,15 +284,40 @@ impl SemanticSupervisor {
             self.inner.idle_notify_tx.clone(),
         );
         let mut guard = self.inner.sessions.write().await;
-        if !self.is_enabled() {
+        if !self.is_enabled()
+            || self.inner.runtime_epoch.load(Ordering::Acquire) != start_runtime_epoch
+        {
+            drop(guard);
             let _ = handle.shutdown().await;
             return Err(SupervisorError::Disabled);
         }
-        if let Some(existing) = guard.get(&key) {
+        let current_conn_epoch = {
+            let epochs = self.inner.connection_epochs.read().await;
+            epochs.get(&connection_id).copied().flatten()
+        };
+        if current_conn_epoch != Some(expected_epoch) {
+            drop(guard);
             let _ = handle.shutdown().await;
-            return Ok(existing.clone());
+            return Err(SupervisorError::Session(SessionError::Invalidated));
+        }
+        if let Some(existing) = guard.get(&key).cloned() {
+            drop(guard);
+            let _ = handle.shutdown().await;
+            return Ok(existing);
+        }
+        let conn_count = guard
+            .keys()
+            .filter(|k| k.connection_id == connection_id)
+            .count();
+        if conn_count >= MAX_TREES_PER_CONNECTION {
+            drop(guard);
+            let _ = handle.shutdown().await;
+            return Err(SupervisorError::ConnectionTreeLimitExceeded(
+                MAX_TREES_PER_CONNECTION,
+            ));
         }
         if guard.len() >= MAX_GLOBAL_SEMANTIC_TREES {
+            drop(guard);
             let _ = handle.shutdown().await;
             return Err(SupervisorError::GlobalTreeLimitExceeded(
                 MAX_GLOBAL_SEMANTIC_TREES,
@@ -276,7 +347,13 @@ impl SemanticSupervisor {
     }
 
     /// Invalidate and reap all sessions associated with a specific connection.
+    /// Also increments the connection's admission epoch to cancel pending admissions.
     pub async fn invalidate_connection(&self, connection_id: &ConnectionId) {
+        {
+            let mut epochs = self.inner.connection_epochs.write().await;
+            epochs.insert(connection_id.clone(), None); // Tombstone: None means closed/invalidated
+        }
+
         let to_close: Vec<SessionKey> = {
             let guard = self.inner.sessions.read().await;
             guard
@@ -289,6 +366,12 @@ impl SemanticSupervisor {
         for key in to_close {
             self.close_session(&key).await;
         }
+    }
+
+    /// Release tracking state for a disconnected connection, preventing memory growth.
+    pub async fn release_connection(&self, connection_id: &ConnectionId) {
+        let mut epochs = self.inner.connection_epochs.write().await;
+        epochs.remove(connection_id);
     }
 
     /// Invalidate and reap all sessions associated with a specific project/target root.

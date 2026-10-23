@@ -144,9 +144,15 @@ async fn test_supervisor_default_off_starts_zero_children() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn_id = ConnectionId("conn-1".into());
-
+    let ep = supervisor.register_connection(&conn_id).await;
     let result = supervisor
-        .get_or_create_session(conn_id, "project-1", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn_id,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await;
 
     assert!(matches!(result, Err(SupervisorError::Disabled)));
@@ -167,14 +173,27 @@ async fn test_multi_connection_isolation() {
     let target_dir = tempfile::tempdir().unwrap();
     let conn1 = ConnectionId("conn-1".into());
     let conn2 = ConnectionId("conn-2".into());
-
+    let ep1 = supervisor.register_connection(&conn1).await;
+    let ep2 = supervisor.register_connection(&conn2).await;
     let session1 = supervisor
-        .get_or_create_session(conn1, "project-1", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn1,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep1,
+        )
         .await
         .expect("create session 1");
 
     let session2 = supervisor
-        .get_or_create_session(conn2, "project-1", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn2,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep2,
+        )
         .await
         .expect("create session 2");
 
@@ -231,9 +250,15 @@ async fn test_document_scoped_close_isolation() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-doc-scope".into());
-
+    let ep = supervisor.register_connection(&conn).await;
     let session = supervisor
-        .get_or_create_session(conn, "project-doc", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-doc",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -337,9 +362,15 @@ async fn test_version_extension_staleness_fence() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-fence".into());
-
+    let ep = supervisor.register_connection(&conn).await;
     let session = supervisor
-        .get_or_create_session(conn, "project-fence", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-fence",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -399,7 +430,9 @@ async fn test_concurrency_limits_admission() {
     let conn1 = ConnectionId("conn-1".into());
     let conn2 = ConnectionId("conn-2".into());
     let conn3 = ConnectionId("conn-3".into());
-
+    let ep1 = supervisor.register_connection(&conn1).await;
+    let ep2 = supervisor.register_connection(&conn2).await;
+    let ep3 = supervisor.register_connection(&conn3).await;
     // 1. First tree (conn1) succeeds
     let _s1 = supervisor
         .get_or_create_session(
@@ -407,19 +440,32 @@ async fn test_concurrency_limits_admission() {
             "project-1",
             None,
             target_dir.path().to_path_buf(),
+            ep1,
         )
         .await
         .expect("session 1");
 
     // 2. Second tree (conn2) succeeds
     let _s2 = supervisor
-        .get_or_create_session(conn2, "project-1", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn2,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep2,
+        )
         .await
         .expect("session 2");
 
     // 3. Third tree globally (conn3) should exceed MAX_GLOBAL_SEMANTIC_TREES (2)
     let res3 = supervisor
-        .get_or_create_session(conn3, "project-1", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn3,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep3,
+        )
         .await;
     assert!(matches!(
         res3,
@@ -428,7 +474,13 @@ async fn test_concurrency_limits_admission() {
 
     // 4. Second tree for same connection (conn1) on different project should exceed MAX_TREES_PER_CONNECTION (1)
     let res_conn1_dup = supervisor
-        .get_or_create_session(conn1, "project-2", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn1,
+            "project-2",
+            None,
+            target_dir.path().to_path_buf(),
+            ep1,
+        )
         .await;
     assert!(matches!(
         res_conn1_dup,
@@ -447,9 +499,15 @@ async fn test_clean_shutdown_and_tree_reap() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-reap".into());
-
+    let ep = supervisor.register_connection(&conn).await;
     let session = supervisor
-        .get_or_create_session(conn, "project-reap", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-reap",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -490,9 +548,15 @@ async fn test_multi_change_batch_integration() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-batch".into());
-
+    let ep = supervisor.register_connection(&conn).await;
     let session = supervisor
-        .get_or_create_session(conn, "project-batch", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-batch",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -556,9 +620,15 @@ async fn test_child_crash_and_automatic_restart_with_replay() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-crash".into());
-
+    let ep = supervisor.register_connection(&conn).await;
     let session = supervisor
-        .get_or_create_session(conn, "project-crash", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-crash",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -609,10 +679,17 @@ async fn test_drop_handles_triggers_actor_exit_and_reap() {
 
     let target_dir = tempfile::tempdir().unwrap();
     let conn = ConnectionId("conn-drop".into());
+    let ep = supervisor.register_connection(&conn).await;
     let key = SessionKey::new(conn.clone(), "project-drop", None);
 
     let session = supervisor
-        .get_or_create_session(conn, "project-drop", None, target_dir.path().to_path_buf())
+        .get_or_create_session(
+            conn,
+            "project-drop",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
         .await
         .expect("create session");
 
@@ -636,4 +713,93 @@ async fn test_drop_handles_triggers_actor_exit_and_reap() {
     // Await reap
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(dam_hopper_server::semantic::reaper::is_pgid_empty(pgid));
+}
+
+#[tokio::test]
+async fn test_invalidated_connection_rejects_admission_and_spawns_zero_children() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-invalidated".into());
+
+    // Register connection then invalidate it immediately
+    let ep = supervisor.register_connection(&conn).await;
+    supervisor.invalidate_connection(&conn).await;
+
+    // Attempt admission on invalidated connection must be rejected
+    let res = supervisor
+        .get_or_create_session(conn, "project-1", None, target_dir.path().to_path_buf(), ep)
+        .await;
+    assert!(matches!(
+        res,
+        Err(SupervisorError::Session(
+            dam_hopper_server::semantic::session::SessionError::Invalidated
+        ))
+    ));
+
+    let status = supervisor.get_aggregate_status().await;
+    assert_eq!(
+        status.active_sessions, 0,
+        "Zero sessions must exist after invalidated admission"
+    );
+}
+
+#[tokio::test]
+async fn test_tombstoned_connection_cannot_be_resurrected_by_register() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-tombstone".into());
+
+    let ep = supervisor.register_connection(&conn).await;
+    supervisor.invalidate_connection(&conn).await;
+
+    // Subsequent register must not revive tombstone
+    let ep2 = supervisor.register_connection(&conn).await;
+    assert_eq!(ep2, 0);
+
+    let res = supervisor
+        .get_or_create_session(conn, "project-1", None, target_dir.path().to_path_buf(), ep)
+        .await;
+    assert!(matches!(
+        res,
+        Err(SupervisorError::Session(
+            dam_hopper_server::semantic::session::SessionError::Invalidated
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn test_epoch_mismatch_rejects_admission() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-mismatch".into());
+
+    let ep = supervisor.register_connection(&conn).await;
+    // Pass stale epoch (ep + 999)
+    let res = supervisor
+        .get_or_create_session(
+            conn,
+            "project-1",
+            None,
+            target_dir.path().to_path_buf(),
+            ep + 999,
+        )
+        .await;
+    assert!(matches!(
+        res,
+        Err(SupervisorError::Session(
+            dam_hopper_server::semantic::session::SessionError::Invalidated
+        ))
+    ));
 }
