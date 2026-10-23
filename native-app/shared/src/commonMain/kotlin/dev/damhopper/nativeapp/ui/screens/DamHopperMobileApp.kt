@@ -195,6 +195,7 @@ fun DamHopperMobileApp(
                             navigation.selectSession(sessionId)
                         },
                         profileId = activeProfileId,
+                        preferencesStore = preferencesStore,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

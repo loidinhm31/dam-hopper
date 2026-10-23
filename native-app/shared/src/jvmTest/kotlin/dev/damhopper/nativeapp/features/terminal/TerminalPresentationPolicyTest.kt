@@ -103,6 +103,35 @@ class TerminalPresentationPolicyTest {
     }
 
     @Test
+    fun terminalFontSizePoliciesClampStepAndScaleCleanly() {
+        assertEquals(14, terminalLineHeightSp(10))
+        assertEquals(16, terminalLineHeightSp(12))
+        assertEquals(17, terminalLineHeightSp(13))
+        assertEquals(36, terminalLineHeightSp(32))
+        assertEquals(14, terminalLineHeightSp(4))
+        assertEquals(36, terminalLineHeightSp(64))
+
+        assertEquals(11, stepTerminalFontSize(12, -1))
+        assertEquals(13, stepTerminalFontSize(12, 1))
+        assertEquals(10, stepTerminalFontSize(10, -1))
+        assertEquals(32, stepTerminalFontSize(32, 1))
+
+        assertEquals(18, pinchedTerminalFontSize(12, 1.5f))
+        assertEquals(10, pinchedTerminalFontSize(20, 0.5f))
+        assertEquals(13, pinchedTerminalFontSize(13, 1.0f))
+        assertEquals(20, pinchedTerminalFontSize(13, 1.5f))
+        assertEquals(10, pinchedTerminalFontSize(13, 0.2f))
+        assertEquals(32, pinchedTerminalFontSize(13, 5.0f))
+        assertEquals(10, pinchedTerminalFontSize(13, Float.MIN_VALUE))
+        assertEquals(32, pinchedTerminalFontSize(13, Float.MAX_VALUE))
+        assertEquals(13, pinchedTerminalFontSize(13, Float.NaN))
+        assertEquals(13, pinchedTerminalFontSize(13, Float.POSITIVE_INFINITY))
+        assertEquals(13, pinchedTerminalFontSize(13, Float.NEGATIVE_INFINITY))
+        assertEquals(13, pinchedTerminalFontSize(13, 0f))
+        assertEquals(13, pinchedTerminalFontSize(13, -1.25f))
+    }
+
+    @Test
     fun ordinaryAttachClosesGateBeforeSuspendingAndSendsCapturedNotLaterOffset() = runTest {
         val ctrl = controller()
         ctrl.handleBufferReplay("OLD".encodeToByteArray(), 3uL, true, false, 1uL)

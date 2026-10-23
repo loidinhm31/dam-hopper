@@ -1,7 +1,7 @@
 ---
 title: "Reuse icon and font from apps/native for native-app Android"
 description: "Migrate DamHopper branded launcher icons and JetBrains Mono typography from apps/native and packages/ui to the Android application."
-status: in_progress
+status: completed
 priority: P2
 branch: feat/android-native-app
 tags: [android, assets, icons, fonts, compose, typography]

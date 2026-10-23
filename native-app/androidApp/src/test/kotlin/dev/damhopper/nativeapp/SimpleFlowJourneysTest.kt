@@ -135,4 +135,55 @@ class SimpleFlowJourneysTest {
             "Must not unconditionally navigate on activeProfileId without authentication check"
         )
     }
+
+    @Test
+    fun testTerminalFontSizeControlsAndPinchWiringStructuralGuard() {
+        val appFile = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/DamHopperMobileApp.kt")
+        assertTrue(appFile.exists(), "DamHopperMobileApp.kt must exist")
+        val appContent = appFile.readText()
+        assertTrue(
+            appContent.contains("preferencesStore = preferencesStore"),
+            "DamHopperMobileApp must pass preferencesStore to ProjectTerminalScreen"
+        )
+
+        val terminalFile = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/ProjectTerminalScreen.kt")
+        assertTrue(terminalFile.exists(), "ProjectTerminalScreen.kt must exist")
+        val terminalContent = terminalFile.readText().replace("\r\n", "\n")
+
+        assertTrue(
+            terminalContent.contains("preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() }"),
+            "ProjectTerminalScreen must accept preferencesStore parameter"
+        )
+        assertTrue(
+            terminalContent.contains("WorkbenchPreferences.clampFont(preferencesStore.loadPreferences().terminalFontSize)"),
+            "ProjectTerminalScreen must initialize clamped terminalFontSize from preferencesStore"
+        )
+        val normalizedWhitespace = terminalContent.replace(Regex("\\s+"), " ")
+        assertTrue(
+            normalizedWhitespace.contains("preferencesStore.savePreferences( preferencesStore.loadPreferences().copy(terminalFontSize = clamped) )"),
+            "ProjectTerminalScreen must persist updated terminalFontSize via fresh load/copy/save"
+        )
+
+        val idxMinus = terminalContent.indexOf("text = \"A-\"")
+        val idxReadout = terminalContent.indexOf("text = \"\${terminalFontSize}sp\"")
+        val idxPlus = terminalContent.indexOf("text = \"A+\"")
+        val idxDiag = terminalContent.indexOf("text = \"Diag\"")
+        val idxNewTerm = terminalContent.indexOf("text = \"+ New Terminal\"")
+        assertTrue(idxMinus > 0 && idxMinus < idxReadout, "A- must precede font size readout")
+        assertTrue(idxReadout < idxPlus, "Font size readout must precede A+")
+        assertTrue(idxPlus < idxDiag, "A+ must precede Diag")
+        assertTrue(idxDiag < idxNewTerm, "Diag must precede + New Terminal")
+
+        assertTrue(
+            terminalContent.contains("val terminalTextStyle = remember(terminalFontSize)") &&
+                terminalContent.contains("fontSize = terminalFontSize.sp") &&
+                terminalContent.contains("lineHeight = terminalLineHeightSp(terminalFontSize).sp"),
+            "terminalTextStyle must be keyed by terminalFontSize and use terminalLineHeightSp"
+        )
+        assertTrue(
+            terminalContent.contains("if (pressedCount >= 2)") &&
+                terminalContent.contains("event.calculateZoom()"),
+            "Pinch zoom calculation must be gated by pressedCount >= 2"
+        )
+    }
 }

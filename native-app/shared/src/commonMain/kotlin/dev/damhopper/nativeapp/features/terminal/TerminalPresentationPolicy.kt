@@ -1,6 +1,8 @@
 package dev.damhopper.nativeapp.features.terminal
 
+import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 internal data class TerminalScrollTarget(val index: Int, val offset: Int = 0)
 
@@ -60,4 +62,20 @@ internal fun terminalGeometry(
         columns = floor(contentWidthPx.coerceAtLeast(0f) / glyphAdvancePx).toInt().coerceIn(1, 200),
         rows = floor(contentHeightPx.coerceAtLeast(0f) / lineHeightPx).toInt().coerceIn(1, 80),
     )
+}
+
+internal fun terminalLineHeightSp(fontSizeSp: Int): Int =
+    WorkbenchPreferences.clampFont(fontSizeSp) + 4
+
+internal fun stepTerminalFontSize(currentSp: Int, delta: Int): Int =
+    WorkbenchPreferences.clampFont(currentSp + delta)
+
+internal fun pinchedTerminalFontSize(startFontSizeSp: Int, zoomFactor: Float): Int {
+    val clampedStart = WorkbenchPreferences.clampFont(startFontSizeSp)
+    if (!zoomFactor.isFinite() || zoomFactor <= 0f) return clampedStart
+    val scaled = (clampedStart.toDouble() * zoomFactor.toDouble()).coerceIn(
+        WorkbenchPreferences.FONT_MIN.toDouble(),
+        WorkbenchPreferences.FONT_MAX.toDouble(),
+    )
+    return WorkbenchPreferences.clampFont(scaled.roundToInt())
 }

@@ -2,6 +2,9 @@ package dev.damhopper.nativeapp.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.alpha
@@ -48,15 +52,21 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +78,9 @@ import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
+import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
 import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.VtTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
@@ -78,7 +91,10 @@ import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
 import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
 import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
 import dev.damhopper.nativeapp.features.terminal.TerminalViewportEffects
+import dev.damhopper.nativeapp.features.terminal.pinchedTerminalFontSize
+import dev.damhopper.nativeapp.features.terminal.stepTerminalFontSize
 import dev.damhopper.nativeapp.features.terminal.terminalGeometry
+import dev.damhopper.nativeapp.features.terminal.terminalLineHeightSp
 import dev.damhopper.nativeapp.features.terminal.TerminalDisplaySnapshot
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
@@ -141,6 +157,7 @@ fun ProjectTerminalScreen(
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
     profileId: String? = null,
+    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
 ) {
     // Resolve authoritative connection reference
     val connectionRef = terminalRepo?.apiClient?.connection
@@ -205,6 +222,19 @@ fun ProjectTerminalScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     var directInputState by remember { mutableStateOf(TextFieldValue("")) }
     var cursorVisible by remember { mutableStateOf(true) }
+    var terminalFontSize by remember(preferencesStore) {
+        mutableIntStateOf(WorkbenchPreferences.clampFont(preferencesStore.loadPreferences().terminalFontSize))
+    }
+    fun updateTerminalFontSize(newSize: Int) {
+        val clamped = WorkbenchPreferences.clampFont(newSize)
+        if (clamped == terminalFontSize) return
+        terminalFontSize = clamped
+        preferencesStore.savePreferences(
+            preferencesStore.loadPreferences().copy(terminalFontSize = clamped)
+        )
+    }
+    val currentTerminalFontSize by rememberUpdatedState(terminalFontSize)
+    val currentUpdateTerminalFontSize by rememberUpdatedState<(Int) -> Unit>(::updateTerminalFontSize)
 
     LaunchedEffect(activeSessionId) {
         while (true) {
@@ -686,41 +716,84 @@ fun ProjectTerminalScreen(
                 .background(DamHopperColors.Surface)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                Text(
-                    text = "← Projects",
-                    color = DamHopperColors.Primary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            selectSession(null)
-                            onBackToProjects()
-                        }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                )
+            Text(
+                text = "← Projects",
+                color = DamHopperColors.Primary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                        selectSession(null)
+                        onBackToProjects()
+                    }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            )
 
-                Text(
-                    text = projectName,
-                    color = DamHopperColors.TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Text(
+                text = projectName,
+                color = DamHopperColors.TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(0.35f)
+            )
 
+            val canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN
+            val canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX
             Row(
+                modifier = Modifier
+                    .weight(0.65f, fill = false)
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Text(
+                    text = "A-",
+                    color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .semantics { contentDescription = "Decrease terminal font size" }
+                        .clickable(enabled = canDecreaseFont) {
+                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "${terminalFontSize}sp",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    modifier = Modifier
+                        .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
+                        .padding(horizontal = 2.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "A+",
+                    color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .semantics { contentDescription = "Increase terminal font size" }
+                        .clickable(enabled = canIncreaseFont) {
+                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+
                 Text(
                     text = "Diag",
                     color = DamHopperColors.Warning,
@@ -1038,13 +1111,13 @@ fun ProjectTerminalScreen(
         val readingState = readingStates.forController(activeController)
         TerminalViewportEffects(readingState, lineIds, snapshot.revision)
         val density = LocalDensity.current
-        val terminalTextStyle = remember {
+        val terminalTextStyle = remember(terminalFontSize) {
             TextStyle(
                 color = DamHopperColors.TextPrimary,
-                fontSize = 12.sp,
+                fontSize = terminalFontSize.sp,
                 fontFamily = JetBrainsMonoFontFamily,
                 fontFeatureSettings = "calt 0",
-                lineHeight = 16.sp,
+                lineHeight = terminalLineHeightSp(terminalFontSize).sp,
                 lineHeightStyle = LineHeightStyle(
                     alignment = LineHeightStyle.Alignment.Center,
                     trim = LineHeightStyle.Trim.None,
@@ -1063,6 +1136,45 @@ fun ProjectTerminalScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .background(DamHopperColors.Background)
+                .pointerInput(preferencesStore) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var segmentStartSp = 0
+                        var continuousSize = 0f
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            var pressedCount = 0
+                            for (i in 0 until event.changes.size) {
+                                if (event.changes[i].pressed) pressedCount++
+                            }
+                            if (pressedCount >= 2) {
+                                if (segmentStartSp == 0) {
+                                    segmentStartSp = currentTerminalFontSize
+                                    continuousSize = segmentStartSp.toFloat()
+                                }
+                                val zoomChange = event.calculateZoom()
+                                if (zoomChange.isFinite() && zoomChange > 0f && zoomChange != 1f) {
+                                    continuousSize = (continuousSize * zoomChange).coerceIn(
+                                        WorkbenchPreferences.FONT_MIN.toFloat(),
+                                        WorkbenchPreferences.FONT_MAX.toFloat(),
+                                    )
+                                    val nextSize = pinchedTerminalFontSize(
+                                        startFontSizeSp = segmentStartSp,
+                                        zoomFactor = continuousSize / segmentStartSp.toFloat(),
+                                    )
+                                    currentUpdateTerminalFontSize(nextSize)
+                                }
+                                for (i in 0 until event.changes.size) {
+                                    event.changes[i].consume()
+                                }
+                            } else {
+                                segmentStartSp = 0
+                                continuousSize = 0f
+                            }
+                            if (pressedCount == 0) break
+                        }
+                    }
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -1451,6 +1563,7 @@ fun ProjectTerminalScreen(
     modifier: Modifier = Modifier,
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
+    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
 ) {
     val profiles by profileRepository.profiles.collectAsState()
     val activeProfile = profiles.find { it.id == profileId }
@@ -1485,6 +1598,7 @@ fun ProjectTerminalScreen(
         initialSessionId = initialSessionId,
         onSessionSelected = onSessionSelected,
         profileId = profileId,
+        preferencesStore = preferencesStore,
     )
 }
 
