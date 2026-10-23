@@ -61,6 +61,11 @@ open class WsConnection(
 
     private val _incomingMessages = MutableSharedFlow<ServerMsg>(extraBufferCapacity = 64)
     open val incomingMessages: SharedFlow<ServerMsg> = _incomingMessages.asSharedFlow()
+    private val _socketBoundMessages = MutableSharedFlow<SocketBoundMessage>(extraBufferCapacity = 64)
+    open val socketBoundMessages: SharedFlow<SocketBoundMessage> = _socketBoundMessages.asSharedFlow()
+
+    open fun activeSocketRef(): SocketInstanceRef? = activeSocketRef
+
 
     private val correlator = WsRequestCorrelator()
     private var activeSocketRef: SocketInstanceRef? = null
@@ -192,6 +197,81 @@ open class WsConnection(
             throw t
         }
     }
+    /**
+     * Atomically binds expected socket, captures writer against socket replacement,
+     * and transmits a single text ClientMsg.
+     */
+    open suspend fun sendOnSocket(expectedSocketRef: SocketInstanceRef, msg: ClientMsg) {
+        registry?.assertCurrentOwner(connection, "WsConnection.sendOnSocket")
+        val writer = lifecycleMutex.withLock {
+            if (activeSocketRef != expectedSocketRef) {
+                throw ConnectionOwnerError(
+                    "Socket mismatch: expected $expectedSocketRef, active is $activeSocketRef",
+                    ConnectionErrorReason.STALE
+                )
+            }
+            activeWriter ?: throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
+        }
+        val preSendCheck: suspend () -> Unit = {
+            registry?.assertCurrentOwner(connection, "WsConnection.sendOnSocket post-queue")
+            if (activeSocketRef != expectedSocketRef) {
+                throw ConnectionOwnerError(
+                    "Socket replaced while waiting in writer queue: expected $expectedSocketRef, active is $activeSocketRef",
+                    ConnectionErrorReason.STALE
+                )
+            }
+        }
+        writer.sendText(msg, preSendCheck)
+    }
+
+    /**
+     * Atomically binds expected socket, captures writer and request correlation
+     * against socket replacement, and awaits the correlated response.
+     * Response is awaited outside lifecycleMutex to prevent deadlock.
+     */
+    open suspend fun requestOnSocket(
+        expectedSocketRef: SocketInstanceRef,
+        reqId: ULong,
+        msg: ClientMsg,
+        timeoutMillis: Long = 30_000,
+    ): ServerMsg {
+        registry?.assertCurrentOwner(connection, "WsConnection.requestOnSocket")
+
+        val deferred = CompletableDeferred<ServerMsg>()
+        val writer = lifecycleMutex.withLock {
+            if (activeSocketRef != expectedSocketRef) {
+                throw ConnectionOwnerError(
+                    "Socket mismatch: expected $expectedSocketRef, active is $activeSocketRef",
+                    ConnectionErrorReason.STALE
+                )
+            }
+            correlator.register(reqId, deferred, expectedSocketRef)
+            activeWriter ?: throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
+        }
+
+        try {
+            val preSendCheck: suspend () -> Unit = {
+                registry?.assertCurrentOwner(connection, "WsConnection.requestOnSocket post-queue")
+                if (activeSocketRef != expectedSocketRef) {
+                    throw ConnectionOwnerError(
+                        "Socket replaced while waiting in writer queue: expected $expectedSocketRef, active is $activeSocketRef",
+                        ConnectionErrorReason.STALE
+                    )
+                }
+            }
+            writer.sendText(msg, preSendCheck)
+            return withTimeout(timeoutMillis) {
+                deferred.await()
+            }
+        } catch (t: Throwable) {
+            correlator.unregister(reqId)
+            deferred.completeExceptionally(t)
+            throw t
+        }
+    }
+
+    fun subscribeSocketBound(predicate: (SocketBoundMessage) -> Boolean = { true }): Flow<SocketBoundMessage> =
+        socketBoundMessages.filter(predicate)
 
     /**
      * Subscribes to incoming ServerMsg matching the predicate.
@@ -270,8 +350,9 @@ open class WsConnection(
             }
         }
 
-        correlator.dispatch(msg)
+        correlator.dispatch(msg, socketRef)
         _incomingMessages.emit(msg)
+        _socketBoundMessages.emit(SocketBoundMessage(socketRef, msg))
     }
 
     private suspend fun handleCloseReason(reason: CloseReason?, socketRef: SocketInstanceRef) {

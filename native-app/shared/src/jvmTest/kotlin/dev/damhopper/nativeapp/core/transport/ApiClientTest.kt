@@ -186,4 +186,31 @@ class ApiClientTest {
         assertFalse(loopbackClient.shouldAttachBearerToken(null, "https://api.example.com/api/test"))
         assertFalse(loopbackClient.shouldAttachBearerToken("", "https://api.example.com/api/test"))
     }
+
+    @Test
+    fun testGetBytesBoundedEnforcesLimitAndSucceedsWithinBound() = runTest {
+        server!!.createContext("/api/small-file") { exchange ->
+            val data = "Small content within limit".encodeToByteArray()
+            exchange.sendResponseHeaders(200, data.size.toLong())
+            exchange.responseBody.use { it.write(data) }
+        }
+
+        server!!.createContext("/api/large-file") { exchange ->
+            val data = ByteArray(20_000) { 0x41 }
+            exchange.sendResponseHeaders(200, data.size.toLong())
+            exchange.responseBody.use { it.write(data) }
+        }
+
+        val conn = ConnectionRef("test-p", 1L)
+        val client = ApiClient(conn, "http://127.0.0.1:$serverPort")
+
+        // 1. Success within limit
+        val bytes = client.getBytesBounded("/api/small-file", maxBytes = 1024L)
+        assertEquals("Small content within limit", bytes.decodeToString())
+
+        // 2. Failure when exceeding maxBytes
+        assertFailsWith<IllegalStateException> {
+            client.getBytesBounded("/api/large-file", maxBytes = 1000L)
+        }
+    }
 }

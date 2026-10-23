@@ -13,6 +13,9 @@ import io.ktor.client.request.post
 import io.ktor.client.request.patch
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.http.encodeURLPathPart
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -70,6 +73,77 @@ class ApiClient(
 
         return handleResponse(response, "GET", fullUrl)
     }
+    suspend fun getBytesBounded(
+        path: String,
+        queryParams: Map<String, String> = emptyMap(),
+        maxBytes: Long = 5_242_880L,
+    ): ByteArray {
+        assertActiveOwner("GET_BOUNDED $path")
+        val fullUrl = buildFullUrl(path)
+        val token = authTokenProvider()
+
+        try {
+            return httpClient.prepareGet(fullUrl) {
+                if (shouldAttachBearerToken(token, fullUrl)) {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                queryParams.forEach { (k, v) -> parameter(k, v) }
+            }.execute { response ->
+                assertActiveOwner("GET_BOUNDED $path execution")
+                val status = response.status.value
+                val channel = response.bodyAsChannel()
+                if (!response.status.isSuccess()) {
+                    val errorBuf = ByteArray(8192)
+                    var errorRead = 0
+                    while (!channel.isClosedForRead && errorRead < errorBuf.size) {
+                        val read = channel.readAvailable(errorBuf, errorRead, errorBuf.size - errorRead)
+                        if (read <= 0) break
+                        errorRead += read
+                    }
+                    val responseText = errorBuf.decodeToString(0, errorRead)
+                    assertActiveOwner("GET_BOUNDED $path error completion")
+                    val retryAfterSeconds = response.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
+                    val parsedError = parseServerError(responseText)
+                    val safeUrl = redactUrl(fullUrl)
+                    val message = parsedError.message ?: "HTTP $status error for GET_BOUNDED $safeUrl"
+                    throw ApiRequestError(
+                        message = message,
+                        status = status,
+                        code = parsedError.code,
+                        retryAfterSeconds = retryAfterSeconds,
+                        details = parsedError.details,
+                        rawBody = responseText,
+                    )
+                }
+
+                val chunks = mutableListOf<ByteArray>()
+                var totalBytes = 0L
+                val buffer = ByteArray(8192)
+                while (!channel.isClosedForRead) {
+                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    if (read <= 0) break
+                    totalBytes += read
+                    if (totalBytes > maxBytes) {
+                        throw IllegalStateException("Response body exceeded bounded limit of $maxBytes bytes")
+                    }
+                    chunks.add(buffer.copyOf(read))
+                }
+                assertActiveOwner("GET_BOUNDED $path post-body completion")
+                val result = ByteArray(totalBytes.toInt())
+                var offset = 0
+                for (c in chunks) {
+                    c.copyInto(result, offset)
+                    offset += c.size
+                }
+                result
+            }
+        } catch (e: Throwable) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is ConnectionOwnerError || e is ApiRequestError || e is IllegalStateException) throw e
+            throw wrapNetworkError(e, "GET_BOUNDED", fullUrl)
+        }
+    }
+
 
     suspend fun postJson(path: String, body: String): String {
         assertActiveOwner("POST $path")

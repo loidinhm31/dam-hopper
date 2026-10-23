@@ -60,8 +60,11 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
     suspend fun loadFullText(target: ProjectTargetRef, path: String, size: Long, tier: FileTier, mtime: Long): EditorLoadResult {
         val readResult = fileRepository.readFile(target, path)
         if (!readResult.ok) return EditorLoadResult.Error(readResult.errorCode ?: "Read failed")
+        if (readResult.isBinary || readResult.textContent == null) {
+            return EditorLoadResult.Error("File contains invalid UTF-8 or binary characters and cannot be opened as editable text")
+        }
         return EditorLoadResult.Success(
-            content = readResult.textContent ?: "",
+            content = readResult.textContent,
             mtime = readResult.mtime?.toLong() ?: mtime,
             size = size,
             tier = tier,

@@ -27,7 +27,7 @@ class EditorRepositoryTest {
         server?.stop(0)
     }
 
-    private fun createEditorRepository(): EditorRepository {
+    private fun createEditorRepository(project: String = "demo"): EditorRepository {
         val conn = ConnectionRef("test-profile", 1L)
         val client = ApiClient(
             connection = conn,
@@ -35,7 +35,13 @@ class EditorRepositoryTest {
             authTokenProvider = { "test-token" }
         )
         val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "test-token" })
-        val fileRepo = FileRepository(client, ws)
+        val owner = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+            profileId = "test-profile",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = project,
+        )
+        val fileRepo = FileRepository(owner, client, ws)
         return EditorRepository(fileRepo, profileId = "test-profile")
     }
 
@@ -107,10 +113,19 @@ class EditorRepositoryTest {
             exchange.responseBody.use { it.write(err.toByteArray()) }
         }
 
-        val repo = createEditorRepository()
+        val repo = createEditorRepository(project = "missing")
         val target = ProjectTargetRef(project = "missing")
         val result = repo.loadFile(target, "file.txt")
 
         assertTrue(result is EditorLoadResult.TargetUnavailable)
+    }
+
+    @Test
+    fun testSaveFileReturnsErrorWhenWsNotConnected() = runTest {
+        val repo = createEditorRepository(project = "demo")
+        val target = ProjectTargetRef(project = "demo")
+        val result = repo.saveFile(target, "file.txt", "content", 100L)
+        assertTrue(result is EditorSaveResult.Error)
+        assertTrue(result.message.contains("not connected"))
     }
 }

@@ -1,10 +1,10 @@
 # Phase 02 — Freeze identity, document and repository boundaries
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: Main (architecture/integration owner).
+- Priority P2. Status complete (2026-10-23; user-approved after Cycle 3 with noted issues). Cycle 3 tester reported 85/85 focused JVM tests passing; downstream scheduling remains gated by carryover findings W1–W6 below. Owner: Main (architecture/integration owner).
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
-- Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
+- Cycle 3 implementation and evidence are recorded below. The tester report is peer-reported; the Cycle 3 reviewer recorded unresolved findings W1–W6. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
 
 ## Insights
 Existing ProjectTargetRef owner assertions and ConnectionRef/SocketInstanceRef are reusable. FileRepository currently accepts mixed owners, decodes UTF-8 lossily and widens fallback. FsWriteCoordinator and fs:op do not coordinate. Shared document interfaces must freeze before disjoint workers touch core/widget callers.
@@ -23,7 +23,7 @@ Implement C1/C3/C4/C5 repository seams using existing transport, then freeze C2/
 ## Ordered task implementation and related files
 
 ### `freeze-file-owner-and-operation-boundary` — Establish owner-safe bounded file and operation boundary
-- [ ] <!-- evcrate-task:freeze-file-owner-and-operation-boundary --> Establish owner-safe bounded file and operation boundary
+- [ ] <!-- evcrate-task:freeze-file-owner-and-operation-boundary --> Establish owner-safe bounded file and operation boundary (work cycle closed by user approval; technical freeze blocked by W1–W6)
 - Dependencies: `qualify-retained-native-document`.
 - Exact writable files/actions:
   - Create: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workspace/WorkspaceFileOwner.kt`.
@@ -62,12 +62,12 @@ Implement C1/C3/C4/C5 repository seams using existing transport, then freeze C2/
   - Operation outcome distinguishes no mutating submission, definite rejection, confirmed result and ambiguous dispatch without new server messages.
   - Path/subtree reservations do not serialize unrelated owners or confuse a with ab; existing changed callers compile together after the freeze group.
   - File event origin and expected-socket dispatch are transport-qualified; old events cannot be relabeled, and replacement between check/writer selection/queue/dispatch cannot redirect file actions to new socket. Identified changed production/test callers compile before02 gate; implementation must audit actual full caller set.
-- Planned checks / observable evidence (not executed):
-  - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.files.FileRepositoryTest" --tests "dev.damhopper.nativeapp.features.files.SearchAndReplaceTest" --tests "dev.damhopper.nativeapp.features.files.FileOperationArbiterTest" --tests "dev.damhopper.nativeapp.core.transport.ApiClientTest" --tests "dev.damhopper.nativeapp.core.transport.WsConnectionTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalSessionControllerTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalReplayGateTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalReplayRenderingTest"; all test sources must compile, including later phase fixture consumers. Terminal suites guard the shared WsConnection dispatch change against PTY regressions.
-  - Use protocol behavior tests for payload casing, stream order, old-socket/reused-subId origin and replacement between authority check/writer selection/queue/dispatch; no redirect to new writer, conservative submission classification and no source-string assertions.
+- Cycle 3 tester-reported focused JVM suite: `:shared:jvmTest` with FileRepositoryTest, SearchAndReplaceTest, FileOperationArbiterTest, ApiClientTest, WsConnectionTest, TerminalSessionControllerTest, TerminalReplayGateTest, TerminalReplayRenderingTest, EditorRepositoryTest, and EditorTabsStateTest (`--rerun-tasks`): **85 passed, 0 failed, 0 skipped; BUILD SUCCESSFUL in 27s**.
+- Cycle 3 tester-reported `:shared:compileKotlinJvm`: **BUILD SUCCESSFUL; UP-TO-DATE in 1s**.
+- Evidence is focused JVM coverage only, not full-suite, Android/device, live-server, or release qualification. The Cycle 3 reviewer did not rerun checks; see [review report](../reports/code-review-261023-2031-phase-02-frozen-contracts-cycle-3.md).
 
 ### `freeze-document-and-watch-facades` — Freeze document factory events and integration signatures
-- [ ] <!-- evcrate-task:freeze-document-and-watch-facades --> Freeze document factory events and integration signatures
+- [ ] <!-- evcrate-task:freeze-document-and-watch-facades --> Freeze document factory events and integration signatures (work cycle closed by user approval; technical freeze blocked by W1–W6)
 - Dependencies: `freeze-file-owner-and-operation-boundary`.
 - Exact writable files/actions:
   - Create: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorDocument.kt`.
@@ -165,14 +165,27 @@ Implement C1/C3/C4/C5 repository seams using existing transport, then freeze C2/
 ]
 ```
 
+## Cycle 3 closure and downstream carryovers
+
+- **Disposition:** Complete by user approval on 2026-10-23 after Cycle 3, with noted issues. This closes the Phase 02 work cycle; it does not claim that the reviewer accepted a clean interface freeze or that findings W1–W6 are resolved.
+- The reviewer recorded no critical issues, four High warnings (W1–W4), and two Medium warnings (W5–W6). These remain open and must be assigned to explicit downstream task ownership, acceptance, and verification; affected behavior is not ready until its correction and evidence are accepted:
+  - **W1 — owner construction:** fabricated `authenticated-user` / wildcard project ownership and missing exact worktree identity remain in legacy production construction. Carry into Phase 03 repository-boundary work and Phase 05 Workbench caller migration; require authenticated account, endpoint, exact project, and worktree ownership, with ordinary-project/worktree/account/endpoint behavior coverage.
+  - **W2 — bounded wire reads:** nullable or excessive read bounds can reach WS/REST before local rejection; offset-only WS reads may be unbounded. Carry into Phase 03 bounded loading and explicitly transfer FileRepository/read-test ownership as needed; test omitted, offset-only, excessive, and limit-boundary requests on both transports using safe unsigned arithmetic.
+  - **W3 — reservation and typed outcomes:** optional reservation tokens permit unquarantined dispatch, while legacy mutation/replacement callers flatten uncertainty or CAS conflicts. Carry into Phase 04 mutation boundaries and Phase 06 transaction integration; explicitly assign any missing caller files, require owner/path-qualified reservations at dispatch, and cover rejection, ambiguity, cancellation, and blocked conflicts.
+  - **W4 — exact event origin:** null-origin subscription fallbacks and raw Workbench event handling remain. Carry into Phase 04 subscription migration and Phase 05 Workbench migration; require captured-socket dispatch, exact subscription/incarnation routing, and target-relative paths.
+  - **W5 — behavioral evidence gaps:** add boundary tests for padded exact-limit reads, editor CAS/Unknown mapping, queued socket replacement, reused subscription IDs/stale cleanup, owner/endpoint denial, and cancellation/quarantine/ancestor-reservation cases. Assign each test to a downstream task that owns its boundary; no source-string assertions.
+  - **W6 — arbiter token identity:** cross-arbiter numeric token collisions can manipulate local reservations; operation owner/path coverage is not validated. Carry into Phase 06 arbiter integration with foreign-token release/quarantine/child and wrong-operation coverage.
+- Main must assign each carryover, revise any incomplete downstream ownership/dependency/check lists, and gate affected behavior until acceptance; these notes do not grant unlisted file ownership or waive findings. Phase work outside an affected behavior may proceed only under its explicit revised task contract.
+
+
 ## Failure, rollback and security
 No architecture guessing delegated to concurrent workers. Frozen signatures are a handoff boundary, not a shim layer. Backend .git mutation/write discrepancy is preserved/documented, not strengthened here. Cancellation cannot release quarantined reservations. If freeze changes, stop affected workers and re-author exact caller/ownership edges before restart.
 - Preserve original target/buffers on failure; never use exception suppression, unconditional writes, blind retry, force_git bypass or remote inverse operations as rollback. Authentication/connection retirement revokes authority before UI transitions.
 - Escalate missing writable path, unsupported native API, threshold change or severe safety defect to Main; keep gate blocked until explicit scoped revision. No automatic Git/dependency execution is authorized by this plan.
 
 ## Completion and next dependencies
-After both phase01/02 gates settle, phases03/04/05 are the sole concurrent group. Their code may converge before integrated compilation; no worker runs competing whole-tree checks mid-flight. Main owns group integration and future checks.
-- Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+Phase 02's work cycle is closed by explicit user approval on 2026-10-23, with test results and W1–W6 carryovers recorded above. Phases 03/04/05 remain pending. Before launching them, Main must assign carryovers to explicit downstream task ownership/checks and revise any missing file scope; work may proceed only within unaffected/safe boundaries, and affected behavior remains gated until its corrections and evidence are accepted. Carryover notes do not grant unlisted file ownership or waive gates. After the revised gates settle, phases03/04/05 are the sole concurrent group; Main owns integration and future checks.
+- Exit evidence: Phase 02 source changes, peer-reported focused JVM results (85/85) and shared JVM compilation result are recorded above. User approval closes this phase with noted issues; it does not establish a clean freeze, full-suite/device/runtime qualification, or resolution of W1–W6.
 
 ## Unresolved questions
-- No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.
+- No product decision remains. Cycle 3 reviewer findings W1–W6 are open downstream follow-ups with affected behavior gated on explicit ownership, correction, and acceptance; Phase 08 integrated runtime/device/distribution gates also remain open.

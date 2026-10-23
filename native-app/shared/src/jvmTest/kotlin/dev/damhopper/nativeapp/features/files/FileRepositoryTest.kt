@@ -31,15 +31,26 @@ class FileRepositoryTest {
         server?.stop(0)
     }
 
-    private fun createRepository(): FileRepository {
-        val conn = ConnectionRef("test-profile", 1L)
+    private fun createRepository(
+        profileId: String = "test-profile",
+        project: String = "demo-proj",
+        worktreePath: String? = null,
+    ): FileRepository {
+        val conn = ConnectionRef(profileId, 1L)
         val client = ApiClient(
             connection = conn,
             baseUrl = "http://127.0.0.1:$serverPort",
             authTokenProvider = { "test-token" }
         )
         val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "test-token" })
-        return FileRepository(client, ws)
+        val owner = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+            profileId = profileId,
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = project,
+            worktreePath = worktreePath,
+        )
+        return FileRepository(owner, client, ws)
     }
 
     @Test
@@ -72,7 +83,7 @@ class FileRepositoryTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
 
-        val repo = createRepository()
+        val repo = createRepository(worktreePath = "/tmp/wt")
         val target = ProjectTargetRef(project = "demo-proj", worktreePath = "/tmp/wt")
         val stat = repo.stat(target, "README.md")
 
@@ -115,5 +126,70 @@ class FileRepositoryTest {
         assertTrue(result.ok)
         assertTrue(result.isBinary)
         kotlin.test.assertNull(result.textContent)
+    }
+
+    @Test
+    fun testCrossOwnerTargetRejected() = runTest {
+        val repo = createRepository(project = "demo-proj")
+        val mismatchedTarget = ProjectTargetRef(project = "other-proj")
+
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.listDirectory(mismatchedTarget, "")
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.stat(mismatchedTarget, "README.md")
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.readFile(mismatchedTarget, "README.md")
+        }
+    }
+
+    @Test
+    fun testPathTraversalRejected() = runTest {
+        val repo = createRepository(project = "demo-proj")
+        val target = ProjectTargetRef(project = "demo-proj")
+
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.readFile(target, "../escaped_secret.txt")
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.executeFsOp(target, "delete", "../escaped_secret.txt")
+        }
+    }
+
+    @Test
+    fun testStrictUtf8DecodeRejectsMalformedBytes() = runTest {
+        server!!.createContext("/api/fs/read") { exchange ->
+            // Invalid UTF-8 sequence (continuation byte without start)
+            val malformedBytes = byteArrayOf(0x80.toByte(), 0x81.toByte(), 0xFF.toByte())
+            exchange.sendResponseHeaders(200, malformedBytes.size.toLong())
+            exchange.responseBody.use { it.write(malformedBytes) }
+        }
+
+        val repo = createRepository()
+        val target = ProjectTargetRef(project = "demo-proj")
+        val result = repo.readFile(target, "malformed.txt")
+
+        assertTrue(result.ok)
+        // Must be classified as binary when UTF-8 decoding fails; never lossy decoded into text
+        assertTrue(result.isBinary)
+        kotlin.test.assertNull(result.textContent)
+    }
+
+    @Test
+    fun testEditorContentLoaderRejectsInvalidUtf8() = runTest {
+        server!!.createContext("/api/fs/read") { exchange ->
+            val malformedBytes = byteArrayOf(0x80.toByte(), 0x81.toByte(), 0xFF.toByte())
+            exchange.sendResponseHeaders(200, malformedBytes.size.toLong())
+            exchange.responseBody.use { it.write(malformedBytes) }
+        }
+
+        val repo = createRepository()
+        val target = ProjectTargetRef(project = "demo-proj")
+        val loader = dev.damhopper.nativeapp.features.editor.EditorContentLoader(repo)
+        val loadResult = loader.loadFullText(target, "malformed.txt", 3L, dev.damhopper.nativeapp.features.editor.FileTier.NORMAL, 100L)
+
+        assertTrue(loadResult is dev.damhopper.nativeapp.features.editor.EditorLoadResult.Error)
+        assertFalse(loadResult is dev.damhopper.nativeapp.features.editor.EditorLoadResult.Success)
     }
 }

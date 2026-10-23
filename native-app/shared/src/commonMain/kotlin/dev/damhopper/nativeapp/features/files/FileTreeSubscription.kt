@@ -24,6 +24,7 @@ interface FileTreeSubscription {
     val subId: ULong
     val target: ProjectTargetRef
     val path: String
+    val originSocket: dev.damhopper.nativeapp.core.model.SocketInstanceRef?
     fun cancel()
 }
 
@@ -37,7 +38,7 @@ class TreeSubscriptionManager(
     private val nextReqId: () -> ULong,
 ) {
     private val mutex = Mutex()
-    private val activeSubscriptions = mutableMapOf<ULong, Job>()
+    private val activeSubscriptions = mutableMapOf<Pair<dev.damhopper.nativeapp.core.model.SocketInstanceRef?, ULong>, Job>()
     @Volatile
     private var isDisposed = false
 
@@ -54,13 +55,17 @@ class TreeSubscriptionManager(
         }
 
         val reqId = nextReqId()
+        val activeSocket = wsConnection.activeSocketRef()
         val earlyBuffer = Channel<ServerMsg>(capacity = Channel.UNLIMITED)
 
         // Pre-activate event buffer IMMEDIATELY (UNDISPATCHED) before sending subscribe request
         val collectorJob = coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            wsConnection.incomingMessages.collect { msg ->
-                if (msg is ServerMsg.FsEventMsg || msg is ServerMsg.FsOverflow) {
-                    earlyBuffer.trySend(msg)
+            wsConnection.socketBoundMessages.collect { bound ->
+                if (activeSocket == null || bound.socketRef == activeSocket) {
+                    val msg = bound.message
+                    if (msg is ServerMsg.FsEventMsg || msg is ServerMsg.FsOverflow) {
+                        earlyBuffer.trySend(msg)
+                    }
                 }
             }
         }
@@ -74,7 +79,11 @@ class TreeSubscriptionManager(
         )
 
         val response = try {
-            wsConnection.request(reqId, subMsg)
+            if (activeSocket != null) {
+                wsConnection.requestOnSocket(activeSocket, reqId, subMsg)
+            } else {
+                wsConnection.request(reqId, subMsg)
+            }
         } catch (e: CancellationException) {
             collectorJob.cancel()
             earlyBuffer.close()
@@ -127,32 +136,46 @@ class TreeSubscriptionManager(
         mutex.withLock {
             if (isDisposed) {
                 combinedJob.cancel()
-                try { wsConnection.send(ClientMsg.FsUnsubscribeTree(subId)) } catch (_: Throwable) {}
+                try {
+                    val cancelMsg = ClientMsg.FsUnsubscribeTree(subId)
+                    if (activeSocket != null) wsConnection.sendOnSocket(activeSocket, cancelMsg)
+                    else wsConnection.send(cancelMsg)
+                } catch (_: Throwable) {}
                 throw ConnectionOwnerError("TreeSubscriptionManager was disposed during subscription", ConnectionErrorReason.UNAVAILABLE)
             }
-            activeSubscriptions[subId] = combinedJob
+            activeSubscriptions[Pair(activeSocket, subId)] = combinedJob
         }
 
         return object : FileTreeSubscription {
             override val subId: ULong = snapshot.subId
             override val target: ProjectTargetRef = target
             override val path: String = path
+            override val originSocket: dev.damhopper.nativeapp.core.model.SocketInstanceRef? = activeSocket
 
             override fun cancel() {
-                unsubscribe(subId)
+                unsubscribe(originSocket, subId)
+            }
+        }
+    }
+
+    fun unsubscribe(originSocket: dev.damhopper.nativeapp.core.model.SocketInstanceRef?, subId: ULong) {
+        coroutineScope.launch {
+            val key = Pair(originSocket, subId)
+            val job = mutex.withLock { activeSubscriptions.remove(key) }
+            job?.cancel()
+
+            if (originSocket != null) {
+                try {
+                    val cancelMsg = ClientMsg.FsUnsubscribeTree(subId)
+                    wsConnection.sendOnSocket(originSocket, cancelMsg)
+                } catch (_: Throwable) {}
             }
         }
     }
 
     fun unsubscribe(subId: ULong) {
-        coroutineScope.launch {
-            val job = mutex.withLock { activeSubscriptions.remove(subId) }
-            job?.cancel()
-
-            try {
-                wsConnection.send(ClientMsg.FsUnsubscribeTree(subId))
-            } catch (_: Throwable) {}
-        }
+        val currentSocket = wsConnection.activeSocketRef()
+        unsubscribe(currentSocket, subId)
     }
 
     fun dispose() {
@@ -163,11 +186,15 @@ class TreeSubscriptionManager(
                 activeSubscriptions.clear()
                 copy
             }
-            subs.forEach { (subId, job) ->
+            subs.forEach { (key, job) ->
+                val (originSocket, subId) = key
                 job.cancel()
-                try {
-                    wsConnection.send(ClientMsg.FsUnsubscribeTree(subId))
-                } catch (_: Throwable) {}
+                if (originSocket != null) {
+                    try {
+                        val cancelMsg = ClientMsg.FsUnsubscribeTree(subId)
+                        wsConnection.sendOnSocket(originSocket, cancelMsg)
+                    } catch (_: Throwable) {}
+                }
             }
         }
     }

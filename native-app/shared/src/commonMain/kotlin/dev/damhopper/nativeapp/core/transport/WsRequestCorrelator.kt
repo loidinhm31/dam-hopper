@@ -45,7 +45,17 @@ class WsRequestCorrelator(
         boundSocket = socketRef
     }
 
-    suspend fun register(reqId: ULong, deferred: CompletableDeferred<ServerMsg>) = mutex.withLock {
+    suspend fun register(
+        reqId: ULong,
+        deferred: CompletableDeferred<ServerMsg>,
+        expectedSocket: SocketInstanceRef? = null,
+    ) = mutex.withLock {
+        if (expectedSocket != null && boundSocket != null && boundSocket != expectedSocket) {
+            throw ConnectionOwnerError(
+                "Socket mismatch on register: expected $expectedSocket, bound is $boundSocket",
+                ConnectionErrorReason.STALE
+            )
+        }
         if (pendingRequests.size >= maxInFlight) {
             throw ConnectionOwnerError(
                 "In-flight WebSocket request capacity ($maxInFlight) exceeded",
@@ -59,9 +69,12 @@ class WsRequestCorrelator(
         pendingRequests.remove(reqId)
     }
 
-    suspend fun dispatch(msg: ServerMsg): Boolean {
+    suspend fun dispatch(msg: ServerMsg, socketRef: SocketInstanceRef? = null): Boolean {
         val reqId = msg.extractReqId() ?: return false
         val deferred = mutex.withLock {
+            if (socketRef != null && boundSocket != null && boundSocket != socketRef) {
+                return false
+            }
             pendingRequests.remove(reqId)
         } ?: return false
 

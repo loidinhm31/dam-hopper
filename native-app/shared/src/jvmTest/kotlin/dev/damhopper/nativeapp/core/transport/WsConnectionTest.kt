@@ -232,6 +232,34 @@ class WsConnectionTest {
         assertEquals("sock-2", sock2.socketId)
     }
 
+    @Test
+    fun testWsRequestCorrelatorSocketFencing() = runTest {
+        val correlator = WsRequestCorrelator()
+        val conn = ConnectionRef("test-p", 1L)
+        val sock1 = SocketInstanceRef(conn, "sock-1")
+        val sock2 = SocketInstanceRef(conn, "sock-2")
+
+        correlator.bindSocket(sock1)
+        val deferred = CompletableDeferred<ServerMsg>()
+        correlator.register(1001uL, deferred, expectedSocket = sock1)
+
+        // Registering with mismatched socket fails
+        assertFailsWith<ConnectionOwnerError> {
+            correlator.register(1002uL, CompletableDeferred(), expectedSocket = sock2)
+        }
+
+        // Dispatching response with mismatched socket does NOT complete request
+        val resp = ServerMsg.FsOpResult(reqId = 1001uL, ok = true)
+        val dispatchedWrong = correlator.dispatch(resp, socketRef = sock2)
+        assertFalse(dispatchedWrong)
+        assertFalse(deferred.isCompleted)
+
+        // Dispatching with matching socket succeeds
+        val dispatchedRight = correlator.dispatch(resp, socketRef = sock1)
+        assertTrue(dispatchedRight)
+        assertTrue(deferred.isCompleted)
+    }
+
     private open class MockWebSocketSession(
         val sent: MutableList<Frame>,
         override val outgoing: Channel<Frame> = Channel(Channel.UNLIMITED),

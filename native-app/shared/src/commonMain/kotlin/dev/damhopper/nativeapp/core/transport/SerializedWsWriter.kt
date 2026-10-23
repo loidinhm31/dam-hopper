@@ -26,9 +26,10 @@ class SerializedWsWriter(
     /**
      * Serializes and transmits a single ClientMsg text frame.
      */
-    suspend fun sendText(msg: ClientMsg) {
+    suspend fun sendText(msg: ClientMsg, preSendCheck: (suspend () -> Unit)? = null) {
         val jsonText = ProtocolJson.encodeToString(ClientMsg.serializer(), msg)
         writeMutex.withLock {
+            preSendCheck?.invoke()
             session.send(Frame.Text(jsonText))
         }
     }

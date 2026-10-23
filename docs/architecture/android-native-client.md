@@ -48,6 +48,43 @@ The following constraints describe the separate `WorkbenchScreen` subsystem and 
 - Validated panel body: one content area on every phone/tablet/foldable size. Selecting a panel replaces the terminal visually, not its controllers/sessions; no wide-screen dock beside the terminal. Internal diff/merge panes remain content of their selected panel.
 - The active panel alone receives input; hidden terminal/editor surfaces retain state but cannot receive keystrokes or steal IME focus. [Validation answers](../../plans/261015-1647-android-native-app/validation-answers.md) bind these decisions.
 
+### Intended focused Files/Editor increment — not implemented
+
+The [approved design](../../plans/reports/brainstorm-261023-1351-native-editor-file-explorer.md) and [implementation plan](../../plans/261023-1429-native-editor-file-explorer/plan.md) define a future focused project workspace. Phase 02 records the shared contract baseline with W1–W6 acceptance gates still open; the active root remains the three-screen flow described above, and editor/explorer UI or downstream integration is not reachable.
+
+### Phase 02 common contract baseline (2026-10-23)
+
+Phase 02 work-cycle closure was approved by the user after Cycle 3; the tester reported 85/85 focused JVM tests passing. The interface-freeze ledger records the approved common boundary, but the Cycle 3 reviewer still has W1–W6 open, so Phases 03/04/05 remain gated until Main assigns explicit ownership and the required fixes and behavioral evidence are accepted. See the [Phase 02 closeout](../../plans/261023-1429-native-editor-file-explorer/phase-02-frozen-common-contracts.md) for each finding. This is not integrated-workspace, API 29/arm64-v8a, or release qualification.
+
+**Identity and authority**
+- `WorkspaceFileOwner` binds optional `profileId`, normalized endpoint, account identity, project, and optional worktree. Authenticated identity is `AuthSession.user`, not a profile username or display label; loopback `devMode` uses the fixed `dev-user` identity.
+- `DocumentId` is `(owner, normalized relative path, tabIncarnation)`. The incarnation is monotonic per owner across reconnects and close/reopen; path rekey preserves it. Length-prefixed presentation keys avoid delimiter collisions, and path normalization rejects absolute paths, drive letters, and root escape.
+- `FileAuthority` binds that logical owner to a connection generation, optional exact socket reference, retirement token, and retired state. Validation rejects retired or mismatched targets and can require a socket reference; transport dispatch separately verifies that it is still active. Retirement revokes write authority without requiring the retained document buffer to be discarded.
+
+**Transport and file-operation boundaries**
+- `SocketBoundMessage` carries the socket instance that delivered each server message. `sendOnSocket` checks the expected socket while capturing its writer and again immediately before transmission; `requestOnSocket` registers correlation against that socket and awaits the response outside the lifecycle lock. The correlator rejects responses from a replaced socket.
+- `ApiClient.getBytesBounded` streams at most the requested byte limit, cancels/rejects an oversized response body, and caps error bodies at 8 KiB. File responses apply decoded-size and strict UTF-8 checks; binary or invalid UTF-8 input cannot be published by `EditorContentLoader` as an empty editable document. Cycle 3 W2 remains open because nullable/excessive request bounds can reach WS/REST before local rejection.
+- `FileOperationOutcome` separates `NotSubmitted`, authoritative `Rejected`, `Confirmed`, and ambiguous dispatched `Unknown`. With an owner and reservation, the outcome-aware write path retains uncertain state before commit; W3 remains open because legacy mutation/replacement callers can flatten uncertainty or dispatch without a retained reservation.
+- `FileOperationArbiter` reserves source and destination subtrees atomically with segment-aware conflicts (`a` does not conflict with `ab`, but does with `a/b`). Child-save tokens require directional containment; quarantined tokens cannot be released through ordinary release. W6 remains open: numeric token-ID collisions across arbiter instances can affect local reservations.
+
+**Document/session ports and retention**
+- `EditorDocument` is the sole interactive document authority in the common contract. Phase 01 mapped and qualified its Android candidate using a Sora `0.23.4` `Content` subclass on Main; production session/widget integration remains downstream. Revisions, dirty/undo state, edits, save snapshots, view state, detach, and close are exposed through the common facade.
+- `EditorSessionPorts` keeps full document text out of tab metadata, caps range windows at 64 KiB, and freezes revision-captured close intent, conflict choices, save outcomes, document access, and explorer dirty guards. `EditorContentLoader` fails binary or invalid-UTF-8 full-text loads rather than creating an empty editable buffer.
+- Undo bounds: normal files (`<1 MiB`) retain at most 200 actions; degraded files (`1 MiB .. <5 MiB`) retain at most 50. Both cap logical UTF-16 undo payload at 2 MiB; degraded mode uses plain-text language and disables bracket matching and auto-complete. Files `>=5 MiB` use read-only range windows.
+- Accounted document memory is `estimatedRetainedBytes = (utf8Length × 4) + undoStackBytes + (inFlightSnapshotBytes × 2)`. The workspace policy caps this estimate at 64 MiB, with at most 8 retained documents and 2 degraded documents. Exceeding the budget permits clean inactive eviction while preserving metadata/view state; if all candidates are dirty or in flight, opening is refused rather than silently discarding work.
+
+The memory estimate and workspace caps are a conservative policy derived from Phase 01 x86_64/API 36 measurements, not an integrated-device heap guarantee. API 29/arm64-v8a profiling, mounted editor behavior, and release compliance remain downstream gates.
+
+- Add project-local Terminal / Files / Editor to the active root, not the dormant 12-panel workbench. Keep one inline row below the project header, visible above IME, and one visible content area. Preserve current terminal rendering, replay, font controls, selected PTY and input fencing.
+- A retained non-Activity workspace owner holds documents/navigation independently of panel composition and configuration recreation. Android widgets/listeners release their Activity context at destruction. Process-death draft recovery is excluded.
+- One editor document owns interactive edits and undo; shared state owns target, baseline, revision and save metadata. Incremental callbacks never trigger whole-document replacement during recomposition; explicit load/reload resets undo under a revision fence.
+- Retain logical buffers while immediately revoking retired transport authority. Rebind only after exact profile endpoint/account/project/worktree identity and current metadata reconcile; matching display names alone never authorizes writes. Every completion also checks tab incarnation and revision.
+- Target behavior shares nonrecursive directory watches for expanded directories/open-file parents; events and cleanup bind to owner/socket/subscription. Phase 02 defines demand and origin contracts; the current unbounded early channel and root-scoped behavior are documented below, while Phase 04 owns bounded shared-watcher integration.
+- Conditional saves and rename/move/delete share affected-path/subtree sequencing. Resolve dirty departures before changing selection. Dispatched uncertain outcomes retain edits/original identities and require source/destination reconciliation, never automatic retry. Forced auth loss disables writes without discarding drafts.
+- Preserve normal `<1 MiB`, degraded `1–<5 MiB`, and read-only range `>=5 MiB` tiers with binary/media precedence; bound received bytes and retained memory, reject lossy editable decoding, and preserve split UTF-8 range bytes.
+- Sora `0.23.4` remains the pinned candidate, with the version-specific Maven POM group `io.github.Rosemoe.sora-editor` (capital `Rosemoe`). Phase 01 qualified retained document/undo behavior and widget reattachment on x86_64/API 36; API 29/arm64-v8a execution, integrated IME/device behavior, and LGPL distribution/relinking remain open gates. Historical lowercase coordinates/model-only adapter descriptions below do not qualify the widget.
+- No backend/API changes, WebView, semantic-language-service claim, new crypto enrollment, rich previews or unrelated panel cutover. Explicit encrypted requests remain fail-closed. Existing server `.git` mutation rejection is preserved; streamed-write protections differ and client checks are not a server security guarantee. Broader approved release obligations remain open.
+
 ## Components
 
 ```mermaid
@@ -130,9 +167,9 @@ The remediation retains the Kotlin VT engine and existing remote PTY protocol; i
 ## Editor and data safety
 
 - Retain current editing/language-service behavior, tabs/view state, mtime conflict safety, diff/revert, three-way merge, blame and commit reveal; only the explicit browser-preview exception is deferred.
-- Native editor candidate must expose model edits/version, line geometry, decorations, selection, undo and navigation seams. Missing behavior is an implementation/release gate, not permission to remove it.
+- The common `EditorDocument`/factory and `EditorSessionPorts` baseline is recorded. The Android Sora adapter must preserve their edit, revision, selection, undo, detach, and close semantics; the x86_64/API 36 feasibility result does not establish integrated app behavior.
 - JSON and TS/JS worker-backed behavior needs an evidenced non-browser implementation. No new server language service or Node sidecar is assumed. If local candidate proof fails, stop dependent work and request an explicit architecture decision.
-- File tiers remain normal below 1 MiB, degraded below 5 MiB, and read-only range view from 5 MiB, with media/binary precedence. Bound client caches separately from remote file size.
+- File tiers remain normal below 1 MiB, degraded from 1 MiB to below 5 MiB, and read-only range view from 5 MiB, with media/binary precedence. Undo and workspace retention budgets, including clean-only eviction, are specified in the Phase 02 contract section above; integrated device profiling remains open.
 - Dirty tabs keep edits when remote content changes; unavailable/stale owners cannot save. Force overwrite remains explicit against the original target.
 - OPAQUE uses exact server suite and HKDF domain separation. Missing/failed crypto cannot downgrade encrypted save/upload to plaintext.
 - Media clients preserve ticket purpose, exact-origin paths and per-profile namespaced cookies; Android player/image loaders must use the same captured owner and revoke only their capabilities.
@@ -162,17 +199,17 @@ The remediation retains the Kotlin VT engine and existing remote PTY protocol; i
 
 ## Filesystem, watchers, search and replace (Phase 08)
 
-The native Android client introduces filesystem navigation, live directory events, search federation, and bulk replacement within the solitary TERMINAL shell, adhering to the single top navigation row (`FILES` panel) and zero FABs:
+The separate retained panel subsystem contains filesystem navigation, live directory events, search federation, and bulk replacement. It is not reachable from the current three-screen root flow.
 
 ### Target-Qualified File Operations & Mutex Writes
-- **Repository Wire Contracts (`FileRepository.kt`):** Interfaces with REST `/api/fs/list` (`DirEntryDto`), `/api/fs/stat` (`FileStatDto`), and WebSocket messages (`ClientMsg.FsRead`, `ClientMsg.FsOp`). Operations forward the supplied `ProjectTargetRef` through `ApiClient` and `WsConnection`; independent in-client `target.profileId` validation against captured generation is not enforced in commonMain.
-- **Serialized Write Coordinator (`FsWriteCoordinator.kt`):** Mutex-guarded chunked file writes (`fs:write_begin` with `expected_mtime` CAS, binary/text frames, `fs:write_commit`) using monotonic `reqId` allocated by `WsConnection`.
-- **Mutation Coordinator & Modals (`FileMutationCoordinator.kt`, `FileModalsHost.kt`):** Coordinates `create_file`, `create_dir`, `rename`, and `delete` operations. Compose modals preserve user input upon failure with zero floating action buttons.
+- **Repository and bounded-read boundary (`FileRepository.kt`):** Explicit-owner construction binds API and WebSocket clients to the same profile/generation/endpoint and rejects mismatched project/worktree targets. The legacy constructor still supplies a fabricated `authenticated-user` and wildcard project; Cycle 3 W1 requires exact authenticated account, endpoint, project, and worktree identity at production callsites. REST fallback streams through `getBytesBounded`; WebSocket responses are size-checked and strictly decoded, but request bounds still need pre-dispatch validation (W2). These client guards do not replace server authorization.
+- **Operation outcomes and reservations:** The common outcome and subtree-reservation seams exist, but Cycle 3 W3 remains open: legacy mutation routes flatten outcome details or allow dispatch without owner/path-qualified reservations. Phase 06 owns the migration and behavioral coverage.
+- **Serialized writes and mutations (`FsWriteCoordinator.kt`, `FileMutationCoordinator.kt`):** Chunked writes preserve begin/chunk/commit ordering on the existing WebSocket protocol. Expected-socket dispatch prevents a queued file action from being redirected to a replacement socket; server wire DTOs are unchanged.
 
 ### Live Watcher Lifecycle & Subscription Management
-- **Early-Buffered Tree Subscriptions (`TreeSubscriptionManager` in `FileTreeSubscription.kt`):** Subscribes via `ClientMsg.FsSubscribeTree` (`watchOnly = true`). Buffers incoming `fs:event` and `fs:overflow` messages through an in-memory channel before the subscribe request completes, filtering events by `subId` and protecting unsubscriptions with generation fencing (the current unbounded channel carries memory risk under high event volume).
-- **Observable Tree State (`FileTreeState.kt`):** Manages lazy directory expansion, virtualized rows (`FileTreeItemView`), selection highlight, and hidden file visibility toggle. Server `fs:event` path mapping handles root `.` and project-relative paths. `fs:overflow` triggers re-subscription and refetches loaded directories.
-- **Watcher Scope Boundary:** Live directory watching is currently bounded to the root directory without automatic per-subfolder subscriptions. Rebind on reconnect triggers only when `activeSubscription == null`.
+- **Watch contracts and current implementation boundary:** `FileWatchContracts.kt` defines nonrecursive per-directory demand (`EXPLORER_EXPANDED_DIRECTORY`, `OPEN_DOCUMENT_PARENT`), exact socket/subscription incarnations, and limits of 128 early events, 65,536 early-event bytes, and 256 history events. `TreeSubscriptionManager` filters against the socket captured at subscription time when available, but its current early buffer remains `Channel.UNLIMITED`; the constants do not enforce a bounded queue. Cycle 3 W4 remains open for null-origin fallbacks and raw Workbench event consumers. Phase 04 owns subscription-origin cutover, bounded buffering, and shared demand; Phase 05 owns raw Workbench consumer migration. Both require their assigned behavioral coverage.
+- **Observable tree state (`FileTreeState.kt`):** Manages lazy directory expansion, virtualized rows (`FileTreeItemView`), selection highlight, and hidden-file visibility toggle. Server `fs:event` path mapping handles root `.` and project-relative paths. `fs:overflow` triggers resubscription and refetches loaded directories.
+- **Watcher scope boundary:** The existing tree implementation remains root-scoped rather than a completed shared per-directory watcher system. Full expanded-directory demand and reconnect reconciliation transfer to Phase 04.
 
 ### Search & Federated Multi-Profile Queries
 - **Search Repository (`SearchRepository.kt`):** Executes REST content search (`/api/fs/search`) and path search (`/api/fs/search-paths`).
@@ -185,7 +222,10 @@ The native Android client introduces filesystem navigation, live directory event
 - **CAS Safety Boundary:** Concurrency safety uses a read-to-write CAS: write commit uses the freshly read mtime, which does not guard against external changes occurring between preview and apply.
 - **Dirty-State Provider Gate:** Dirty state is checked before the asynchronous read; the authoritative dirty-buffer provider interface (`ReplaceCoordinator.isDirtyFile`) was wired in Phase 09 via `EditorTabsState` to skip in-memory dirty buffers.
 
-### Recorded Open Limitations (Cycle 2 Review 6/10)
+### Historical Cycle 2 review findings (pre-Phase 02)
+
+These findings describe the earlier Phase 08 review baseline and were not all requalified by freezing common contracts. Do not treat their presence here as a new Phase 02 failure report; downstream implementation and integration dispositions belong to the owning phase records.
+
 1. **Lossy UTF-8 Replace Fallback:** Permissive `decodeToString()` in fallback paths can corrupt files with invalid sequences past the server binary probe boundary.
 2. **Timeout as Cancellation:** Timeout in read/write aborts the entire batch and can report indeterminate writes as generic cancellation.
 3. **Root-Only Directory Watcher:** Expanded subdirectories do not receive live watcher events; rebind on reconnect does not trigger on socket instance replacement when a stale subscription reference remains.

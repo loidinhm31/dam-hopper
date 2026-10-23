@@ -25,11 +25,17 @@ class EditorTabsStateTest {
     @AfterTest
     fun tearDown() { server?.stop(0) }
 
-    private fun createTabsState(): EditorTabsState {
+    private fun createTabsState(project: String = "demo"): EditorTabsState {
         val conn = ConnectionRef("p1", 1L)
         val client = ApiClient(conn, "http://127.0.0.1:$serverPort", { "test-token" })
         val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "test-token" })
-        val fileRepo = FileRepository(client, ws)
+        val owner = dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner(
+            profileId = "p1",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-user",
+            project = project,
+        )
+        val fileRepo = FileRepository(owner, client, ws)
         val editorRepo = EditorRepository(fileRepo, profileId = "p1")
         return EditorTabsState("p1", editorRepo)
     }

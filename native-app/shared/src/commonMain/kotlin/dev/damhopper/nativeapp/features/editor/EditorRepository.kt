@@ -69,39 +69,45 @@ class EditorRepository(
             return encryptedSaveCoordinator.saveEncrypted(target, path, submittedContent, expectedMtime, session, expectedOwner = expectedOwner)
         }
 
-        try {
-            val writeResult = fileRepository.writeFile(
-                target = target,
-                relativePath = path,
-                content = submittedContent,
-                expectedMtime = expectedMtime,
-            )
+        val outcome = fileRepository.writeFileWithOutcome(
+            target = target,
+            relativePath = path,
+            content = submittedContent,
+            expectedMtime = expectedMtime,
+        )
 
-            if (writeResult.ok) {
-                return EditorSaveResult.Success(writeResult.newMtime ?: expectedMtime)
-            } else if (writeResult.conflict) {
-                return EditorSaveResult.Conflict(
-                    serverMtime = null,
-                    message = writeResult.error ?: "File modified on server"
-                )
-            } else {
-                val err = writeResult.error ?: "Save failed"
-                if (isProjectTargetError(err)) return EditorSaveResult.TargetUnavailable(err)
-                return EditorSaveResult.Error(err)
+        return when (outcome) {
+            is dev.damhopper.nativeapp.features.files.FileOperationOutcome.Confirmed -> {
+                EditorSaveResult.Success(outcome.result.newMtime ?: expectedMtime)
             }
-        } catch (e: TimeoutCancellationException) {
-            return EditorSaveResult.UnknownOutcome(
-                "Save outcome unknown: timeout occurred after commit transmission. Check server state before retrying."
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            val msg = e.message ?: "Save error"
-            if (isProjectTargetError(msg)) return EditorSaveResult.TargetUnavailable(msg)
-            return EditorSaveResult.Error(msg)
+            is dev.damhopper.nativeapp.features.files.FileOperationOutcome.Rejected -> {
+                if (outcome.code == "CAS_CONFLICT") {
+                    EditorSaveResult.Conflict(
+                        serverMtime = null,
+                        message = outcome.message,
+                    )
+                } else {
+                    if (isProjectTargetError(outcome.message)) {
+                        EditorSaveResult.TargetUnavailable(outcome.message)
+                    } else {
+                        EditorSaveResult.Error(outcome.message)
+                    }
+                }
+            }
+            is dev.damhopper.nativeapp.features.files.FileOperationOutcome.Unknown -> {
+                EditorSaveResult.UnknownOutcome(
+                    "Save outcome unknown: ${outcome.message}. Check server state before retrying."
+                )
+            }
+            is dev.damhopper.nativeapp.features.files.FileOperationOutcome.NotSubmitted -> {
+                if (isProjectTargetError(outcome.reason)) {
+                    EditorSaveResult.TargetUnavailable(outcome.reason)
+                } else {
+                    EditorSaveResult.Error(outcome.reason)
+                }
+            }
         }
     }
-
     suspend fun forceOverwrite(
         target: ProjectTargetRef,
         path: String,
