@@ -27,9 +27,20 @@ pub fn parse_config_str_at_path(
     content: &str,
     file_path: &Path,
 ) -> Result<DamHopperConfig, AppError> {
-    let raw: DamHopperConfigRaw = toml::from_str(content)
+    let toml_val: toml::Value = toml::from_str(content)
         .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
 
+    if toml_val.get("semantic").is_some()
+        || toml_val.get("server").and_then(|s| s.get("semantic")).is_some()
+    {
+        return Err(AppError::InvalidInput(
+            "Semantic configuration is server-global only and forbidden in workspace configuration".to_string(),
+        ));
+    }
+
+    let raw: DamHopperConfigRaw = toml_val
+        .try_into()
+        .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?;
     validate_config(&raw)?;
 
     let canonical = dunce::canonicalize(file_path)

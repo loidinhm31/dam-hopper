@@ -73,6 +73,8 @@ import type {
   DiscoverResponse,
   ApiClient,
   GitCommitDetails,
+  SemanticSettingsResponse,
+  PatchSemanticSettingsRequest,
 } from "./client.js";
 import type { SessionInfo } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
@@ -2349,6 +2351,39 @@ export function useUpdateUsageSettings(options?: OwnerInput) {
       void qc.invalidateQueries({
         queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
       }),
+  });
+}
+
+export function useSemanticSettings(options?: OwnerInput) {
+  const owner = resolveTargetOwner(options);
+  const queryKey = owner
+    ? profileQueryKey(owner, "semantic", "settings")
+    : (["semantic", "settings"] as const);
+  return useQuery<SemanticSettingsResponse>({
+    queryKey,
+    queryFn: ({ signal }) => getBoundApiClient(owner).semantic.settings(signal),
+    staleTime: 5_000,
+  });
+}
+
+export function useUpdateSemanticSettings(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  return useMutation<
+    SemanticSettingsResponse,
+    Error,
+    PatchSemanticSettingsRequest
+  >({
+    mutationFn: (patch: PatchSemanticSettingsRequest) =>
+      getBoundApiClient(owner).semantic.updateSettings(patch),
+    retry: false,
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: owner
+          ? profileQueryKey(owner, "semantic", "settings")
+          : (["semantic", "settings"] as const),
+      });
+    },
   });
 }
 

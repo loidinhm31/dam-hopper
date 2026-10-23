@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::config::{
-    add_known_workspace_at,
     discovery::{discover_projects, DiscoveredProject},
     global_config_path, list_known_workspaces_at, load_workspace_config,
     parser::write_config,
-    read_config, remove_known_workspace_at,
+    read_config,
     schema::{
-        DamHopperConfig, FeaturesConfig, ProjectConfig, WorkspaceInfo as WorkspaceInfoSchema,
+        DamHopperConfig, FeaturesConfig, KnownWorkspace, ProjectConfig, WorkspaceInfo as WorkspaceInfoSchema,
     },
     CONFIG_FILENAME,
 };
@@ -257,10 +256,9 @@ pub struct AddKnownBody {
 }
 
 pub async fn add_known(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<AddKnownBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
     // Derive workspace name from path if not provided
     let name = body.name.clone().unwrap_or_else(|| {
         std::path::Path::new(&body.path)
@@ -269,7 +267,23 @@ pub async fn add_known(
             .unwrap_or("workspace")
             .to_string()
     });
-    add_known_workspace_at(&gc_path, &name, &body.path).map_err(ApiError::from_app)?;
+    state
+        .mutate_global_config(|gc| {
+            let workspaces = gc.workspaces.get_or_insert_with(Vec::new);
+            if let Some(existing) = workspaces.iter_mut().find(|w| w.path == body.path) {
+                if existing.name != name {
+                    existing.name = name.clone();
+                }
+            } else {
+                workspaces.push(KnownWorkspace {
+                    name: name.clone(),
+                    path: body.path.clone(),
+                });
+            }
+            Ok(())
+        })
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -278,11 +292,18 @@ pub async fn add_known(
 // ---------------------------------------------------------------------------
 
 pub async fn remove_known(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<PathBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
-    remove_known_workspace_at(&gc_path, &body.path).map_err(ApiError::from_app)?;
+    state
+        .mutate_global_config(|gc| {
+            if let Some(workspaces) = gc.workspaces.as_mut() {
+                workspaces.retain(|w| w.path != body.path);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

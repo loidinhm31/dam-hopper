@@ -31,8 +31,8 @@ use super::{
     agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
-    resource_events, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
-    semantic_ws, workspace, ws,
+    resource_events, semantic_settings, semantic_ws, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
+    workspace, ws,
 };
 
 /// Build the full Axum router without cross-origin browser access and without static web serving.
@@ -134,6 +134,10 @@ pub fn build_router_with_web_dir_and_origins(
             post(config::update_global_defaults),
         )
         .route("/api/global-config/ui", post(config::update_global_ui))
+        .route(
+            "/api/semantic/settings",
+            get(semantic_settings::get_settings).patch(semantic_settings::patch_settings),
+        )
         // Projects
         .route("/api/projects", get(config::list_projects))
         .route("/api/projects/{name}", get(config::get_project))

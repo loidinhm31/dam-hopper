@@ -18,6 +18,7 @@ import { SettingsKeyboardShortcutsSection } from "@/components/organisms/Setting
 import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
+import { SettingsSemanticNavigationSection } from "@/components/organisms/SettingsSemanticNavigationSection.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
 import { SettingsMaintenancePanel } from "@/components/pages/settings-page/SettingsMaintenancePanel.js";
 import { SettingsImportExportPanel } from "@/components/pages/settings-page/SettingsImportExportPanel.js";
@@ -331,6 +332,13 @@ export function SettingsPage() {
           description="Configure quiet duration and scheduled RTC wake timer for server-authoritative suspend."
         >
           <SettingsIdleSuspendTimingSection owner={targetOwner} />
+        </SettingsSectionAccordion>
+
+        <SettingsSectionAccordion
+          title="Semantic Navigation"
+          description="Manage server-global TypeScript and JavaScript semantic definition and implementation."
+        >
+          <SettingsSemanticNavigationSection owner={targetOwner} />
         </SettingsSectionAccordion>
 
         <SettingsSectionAccordion

@@ -35,6 +35,13 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.get("semantic").is_some()
+        || body.get("server").and_then(|s| s.get("semantic")).is_some()
+    {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration is server-global only and forbidden in workspace configuration".to_string(),
+        )));
+    }
     let current = state.config.read().await.clone();
     preserve_and_reject_telemetry_mutation(&mut body, &current)?;
     preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
@@ -217,20 +224,23 @@ pub async fn update_global_defaults(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
-    let mut gc = read_global_config_at(&gc_path)
-        .map_err(ApiError::from_app)?
-        .unwrap_or_default();
-
-    if let Some(defaults_val) = body.get("defaults") {
-        let new_defaults: crate::config::schema::GlobalDefaults =
-            serde_json::from_value(defaults_val.clone())
-                .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-        gc.defaults = Some(new_defaults);
+    if body.get("semantic").is_some() {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration must be updated via PATCH /api/semantic/settings".to_string(),
+        )));
     }
-
-    write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
-    *state.global_config.write().await = gc;
+    state
+        .mutate_global_config(|gc| {
+            if let Some(defaults_val) = body.get("defaults") {
+                let new_defaults: crate::config::schema::GlobalDefaults =
+                    serde_json::from_value(defaults_val.clone())
+                        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+                gc.defaults = Some(new_defaults);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "updated": true })))
 }
 
@@ -242,6 +252,11 @@ pub async fn update_global_ui(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.get("semantic").is_some() {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration must be updated via PATCH /api/semantic/settings".to_string(),
+        )));
+    }
     let gc_path = global_config_path();
     update_global_ui_at_path(&state, &gc_path, body.get("ui"))
         .await
@@ -315,6 +330,11 @@ pub(crate) async fn update_global_ui_at_path(
     gc_path: &FsPath,
     incoming_ui: Option<&Value>,
 ) -> Result<(), AppError> {
+    let _guard = if gc_path == &global_config_path() {
+        Some(state.global_config_mutation_lock.lock().await)
+    } else {
+        None
+    };
     let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
 
     if let Some(ui_val) = incoming_ui {

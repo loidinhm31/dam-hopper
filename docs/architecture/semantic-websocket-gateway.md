@@ -22,7 +22,7 @@ flowchart TD
 
 - **Dedicated Route & Protocol Isolation:** The `/ws/semantic/v1` endpoint is isolated from the core `/ws` multiplexed connection. It uses standard JSON-RPC 2.0 frames instead of the `{ kind: ... }` message envelope and shares zero channel budgets, message queues, or event dispatchers with terminal PTY or filesystem operations.
 - **Required Subprotocol:** Handshakes require exact negotiation of the `dam-hopper.semantic.lsp.v1` subprotocol via `Sec-WebSocket-Protocol`. Requests omitting or offering differing subprotocols fail with HTTP 400 Bad Request.
-- **Default-Disabled Subsystem:** The semantic supervisor defaults to disabled (`is_enabled() == false`). There is no public administrative toggle in Phase 05; administrative enablement is implemented in Phase 06. Upgrades succeed at the HTTP layer, but initialization attempts return JSON-RPC error `-32000 SEMANTIC_DISABLED` in the current build.
+- **Server-Global Hot Toggle & Default-Disabled State:** The semantic supervisor defaults to disabled (`is_enabled() == false`). Server administrators can enable or disable the subsystem dynamically at runtime via `PATCH /api/semantic/settings` without daemon restart. When disabled, WebSocket connections may upgrade at the HTTP layer, but initialization attempts return JSON-RPC error `-32000 SEMANTIC_DISABLED`. When toggled OFF by an administrator, active sessions are immediately revoked and their process trees reaped before updating persisted configuration.
 - **Cancellation-First Teardown:** Live authentication invalidation terminates supervisor admission and reaps the child process tree *before* socket-level close delivery, preventing slow network consumers from delaying resource reclamation.
 
 ---

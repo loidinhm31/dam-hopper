@@ -228,6 +228,11 @@ pub async fn atomic_write_with_check(
     bytes: &[u8],
     fsync: bool,
 ) -> Result<i64, FsError> {
+    if crate::fs::secure_path::is_protected_global_config_path(abs) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     // Mtime guard — stat the current file
     let meta = fs::metadata(abs).await.map_err(map_io)?;
     let current_mtime = meta
@@ -301,6 +306,11 @@ pub async fn atomic_persist_with_check(
     temp: tempfile::NamedTempFile,
     fsync: bool,
 ) -> Result<i64, FsError> {
+    if crate::fs::secure_path::is_protected_global_config_path(abs) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     // Mtime guard — stat the current file
     let meta = fs::metadata(abs).await.map_err(map_io)?;
     let current_mtime = meta

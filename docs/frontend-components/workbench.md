@@ -256,6 +256,21 @@ The UI coordinates host resource streams across seven distinct operational modes
 
 See the [host-resource SSE architecture](../architecture/host-resource-sse.md)
 for source arbitration. The [Preferences, Settings, and Host Resources architecture](../architecture/preferences-settings-and-host-resources.md) documents the underlying owner boundary.
+### Semantic Navigation Settings Section
+
+**Locations:**
+- `packages/ui/src/components/organisms/SettingsSemanticNavigationSection.tsx`
+- `packages/ui/src/components/pages/SettingsPage.tsx`
+- `packages/ui/src/api/queries.ts` (`useSemanticSettings`, `useUpdateSemanticSettings`)
+
+The "Semantic Navigation" section in `SettingsPage` provides server-global management of TypeScript and JavaScript language server navigation:
+
+- **Admin Actionable Toggle:** When the authenticated session holds the `Admin` role (`canMutate: true`), the toggle switch is actionable. Toggling triggers `useUpdateSemanticSettings` with optimistic pending lockout.
+- **Read-Only Non-Admin State:** When connected with an ordinary `user` role or in development `--no-auth` mode (`canMutate: false`), the switch is disabled and an explanatory note informs the user that administrator credentials are required to modify server-global semantic settings.
+- **Advisory Portable Mode Banner:** When running in `portable-only` resource mode (i.e. Linux cgroup v2 controllers are missing or on non-Linux hosts), a warning banner alerts operators that advisory portable resource limits are active instead of kernel cgroups.
+- **Configuration / Runtime Mismatch Banner:** If the configured intent (`configuredEnabled`) diverges from the effective runtime admission (`runtimeEnabled`), or if the runtime entered safe-disabled mode following a failed transition, a prominent danger-toned banner displays the mismatch and the last transition error.
+- **Status Metrics Grid:** Displays current reported metrics: Runtime State (`disabled`, `enabled`, `safe-disabled`), Bundled Toolchain (`Verified` / `Unverified`), Active Trees count, Open Documents count, and immutable Engine Tuple identifier.
+
 
 ## Floating Git Conflict Resolver Panel
 

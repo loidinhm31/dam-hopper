@@ -2029,6 +2029,27 @@ export interface UsageSessionExecutorModel {
   tokens: UsageTokens;
 }
 
+export interface SemanticSettingsResponse {
+  configuredEnabled: boolean;
+  runtimeEnabled: boolean;
+  runtimeState: string;
+  integrityStatus?: string;
+  toolchainReady: boolean;
+  tupleIdentifier?: string;
+  policyCapability: string;
+  resourceWarning?: string;
+  activeTrees: number;
+  openDocuments: number;
+  totalOverlayBytes: number;
+  generation: number;
+  transitionError?: string;
+  canMutate: boolean;
+}
+
+export interface PatchSemanticSettingsRequest {
+  enabled: boolean;
+}
+
 export interface UsageSessionSummary {
   id: string;
   startedAtUtcMs: number;
@@ -3537,6 +3558,19 @@ export function createApiClient(
       deleteRange: (from: number, to: number) =>
         usageDelete({ confirmation: "delete-usage-data", from, to }),
     },
+    semantic: {
+      settings: (signal?: AbortSignal) =>
+        transport.invoke<SemanticSettingsResponse>(
+          "semantic:settings",
+          undefined,
+          signal ? { signal } : undefined,
+        ),
+      updateSettings: (patch: PatchSemanticSettingsRequest) =>
+        transport.invoke<SemanticSettingsResponse>(
+          "semantic:updateSettings",
+          patch,
+        ),
+    },
     fs: {
       list: (target: ProjectTargetInput, path: string) =>
         transport.invoke<FsListResponse>("fs:list", {
@@ -4249,6 +4283,12 @@ export interface ApiClient {
     }) => Promise<{ deleted: true }>;
     deleteAll: () => Promise<{ deleted: true }>;
     deleteRange: (from: number, to: number) => Promise<{ deleted: true }>;
+  };
+  semantic: {
+    settings: (signal?: AbortSignal) => Promise<SemanticSettingsResponse>;
+    updateSettings: (
+      patch: PatchSemanticSettingsRequest,
+    ) => Promise<SemanticSettingsResponse>;
   };
   fs: {
     list: (target: ProjectTargetInput, path: string) => Promise<FsListResponse>;

@@ -15,7 +15,7 @@ use crate::fs::error::FsError;
 /// operation start and supplied to the commit helper, which verifies that the
 /// directory handle it opens still refers to the same filesystem object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DirectoryIdentity {
+pub struct DirectoryIdentity {
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -1514,6 +1514,12 @@ pub(crate) async fn persist_temp(
     expected_root: Option<DirectoryIdentity>,
     fsync: bool,
 ) -> Result<i64, FsError> {
+    let target = root.join(&relative);
+    if is_protected_global_config_path(&target) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     tokio::task::spawn_blocking(move || {
         unix::persist_temp(&root, &relative, temp, expected_mtime, expected_root, fsync)
     })
@@ -1521,7 +1527,53 @@ pub(crate) async fn persist_temp(
     .map_err(|error| FsError::Io(std::io::Error::other(error.to_string())))?
 }
 
-pub(crate) fn persist_temp_sync(
+/// Check if a path refers to the server's canonical global config file or an alias/hardlink to it.
+pub fn is_protected_global_config_path(path: &Path) -> bool {
+    let global_path = crate::config::global_config_path();
+    // 1. Direct path equivalence (canonicalized if existing, or lexical if new)
+    if let (Ok(can_a), Ok(can_b)) = (dunce::canonicalize(path), dunce::canonicalize(&global_path)) {
+        if can_a == can_b {
+            return true;
+        }
+    } else if path == global_path {
+        return true;
+    }
+
+    // Check parent directory and filename if target does not exist yet
+    if let (Some(parent_a), Some(parent_b)) = (path.parent(), global_path.parent()) {
+        if let (Ok(can_pa), Ok(can_pb)) = (dunce::canonicalize(parent_a), dunce::canonicalize(parent_b)) {
+            if can_pa == can_pb && path.file_name() == global_path.file_name() {
+                return true;
+            }
+        }
+    }
+
+    // 2. Hardlink / inode identity check on existing files
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(path), std::fs::metadata(&global_path)) {
+            if meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino() {
+                return true;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let (Ok(id_a), Ok(id_b)) = (
+            crate::utils::fs::windows_file_identity(path),
+            crate::utils::fs::windows_file_identity(&global_path),
+        ) {
+            if id_a.volume_serial == id_b.volume_serial && id_a.file_index == id_b.file_index {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn persist_temp_sync(
     root: &Path,
     relative: &Path,
     temp: tempfile::NamedTempFile,
@@ -1529,10 +1581,16 @@ pub(crate) fn persist_temp_sync(
     expected_root: Option<DirectoryIdentity>,
     fsync: bool,
 ) -> Result<i64, FsError> {
+    let target = root.join(relative);
+    if is_protected_global_config_path(&target) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     unix::persist_temp(root, relative, temp, expected_mtime, expected_root, fsync)
 }
 
-pub(crate) fn write_bytes(
+pub fn write_bytes(
     root: &Path,
     relative: &Path,
     bytes: &[u8],
@@ -1540,6 +1598,12 @@ pub(crate) fn write_bytes(
     expected_root: Option<DirectoryIdentity>,
     fsync: bool,
 ) -> Result<i64, FsError> {
+    let target = root.join(relative);
+    if is_protected_global_config_path(&target) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     unix::write_bytes(root, relative, bytes, expected_mtime, expected_root, fsync)
 }
 

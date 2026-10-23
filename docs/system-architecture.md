@@ -19,8 +19,8 @@ flowchart LR
 
 ### Code Boundaries
 
-- `server/src/api/` registers protected HTTP, REST-backed client operations, the core multiplexed WebSocket (`/ws`), and the dedicated authenticated semantic gateway (`/ws/semantic/v1`). `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, `tunnel`, and `semantic` (language server session supervision, process tree reaper, Linux cgroups, adaptive overlays, and filtered JSON-RPC gateway; see [Semantic WebSocket Gateway Architecture](./architecture/semantic-websocket-gateway.md)).
+- `server/src/api/` registers protected HTTP, REST-backed client operations, the core multiplexed WebSocket (`/ws`), the dedicated authenticated semantic gateway (`/ws/semantic/v1`), and semantic settings routes (`/api/semantic/settings`). `server/src/state.rs` contains shared application state.
+- `server/src/` domains include `auth`, `config` (global and workspace schema, serialized read-modify-write), `crypto`, `fs` (sandboxed operations, canonical config protection), `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, `tunnel`, and `semantic` (language server session supervision, process tree reaper, Linux cgroups, adaptive overlays, filtered JSON-RPC gateway, and global admin hot toggle; see [Semantic WebSocket Gateway Architecture](./architecture/semantic-websocket-gateway.md)).
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; `apps/native/` is the Tauri 2 desktop host. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - The former DamHopper plugin platform, runner, SDK, plugin APIs, and plugin iframe bridge are retired.
@@ -581,36 +581,58 @@ Phase 04 implements the session supervision layer, isolated per-connection sessi
 
 - **Process Group Teardown, Descendant Reaping & Idle Eviction:**
   - Distinguishes child teardown budget (`TOTAL_TEARDOWN_BUDGET = 5.0s`, where `reaper.rs` escalates SIGTERM to SIGKILL against process group `-pgid` and procfs-discovered descendants) from the session actor wait allowance (5.5s timeout awaiting child termination).
-  - Teardown is triggered uniformly by explicit `close_session`, server shutdown, session invalidation, or dropping all `SemanticSessionHandle` references (shutdown sequentially awaits handles with unstarted children bounded by `STARTUP_TIMEOUT = 30s`; cleanup best-effort awaits exit, with reap-error status surfacing tracked for Phase 05 hardening).
+  - Teardown is triggered uniformly by explicit `close_session`, server shutdown, session invalidation, or dropping all `SemanticSessionHandle` references (shutdown sequentially awaits handles with unstarted children bounded by `STARTUP_TIMEOUT = 30s`; child reap operations apply SIGTERM then SIGKILL to `-pgid` and procfs descendants within `TOTAL_TEARDOWN_BUDGET = 5.0s` per session actor, with reap-error status recorded for supervisor failure handling).
   - Background idle session eviction: when open document count and in-flight requests both drop to zero, an idle timer token schedules an eviction notification after 60s (`IDLE_SHUTDOWN_TIMEOUT = 60s`); if still idle, the supervisor reaps the session.
 
-### Planned Production Architecture & Invariants (Phases 05–06)
+### Implemented Primitives: Phase 05 Authenticated Semantic WebSocket Gateway
+
+Phase 05 establishes a dedicated, isolated transport gateway for language server JSON-RPC traffic (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`):
+
+- **Dedicated Route & Subprotocol Isolation:** Exposed strictly at `/ws/semantic/v1` with mandatory subprotocol `dam-hopper.semantic.lsp.v1`. Operates on independent reader/writer tasks, sharing zero channel budgets or message queues with core `/ws`. Upgrades enforce Origin allowlist parity (`websocket_origin_allowed`) and reserve presence slots (`reserve_pending_upgrade`).
+- **Cancellation-First Live Auth Invalidation:** Live authentication is monitored every 5 seconds with a bounded 2-second store lookup. Upon credential invalidation or expiration, supervisor admission is immediately revoked and the child process tree reaped before socket close delivery, preventing stalled clients from pinning resources.
+- **Framing, Rate Limiting & In-Flight Bounds:** Axum WebSocket frames are capped at 4 MiB (`MAX_FRAME_BODY_BYTES`). Incoming traffic is metered by a token-bucket rate limiter (40 tokens/s refill, burst 80 tokens, cost 1 token/message; exceeding limits returns JSON-RPC `-32004 RATE_LIMIT_EXCEEDED`). In-flight navigation requests are capped at 8 (`MAX_IN_FLIGHT_REQUESTS`).
+- **Filtered JSON-RPC Profile & Configuration Replies (G3):** Enforces a strict method allowlist (`damHopper/attachTarget`, `initialize`, `initialized`, `textDocument/didOpen`, `textDocument/didChange`, `textDocument/didClose`, `textDocument/definition`, `textDocument/implementation`, `$/cancelRequest`, `shutdown`, `exit`). Intercepts child-initiated `workspace/configuration` requests and replies immediately with safe empty configurations (`[{}]`), resolving TSLS without deadlock or client environment leakage.
+- **FIFO Ordering, Version Fencing & Document Freshness (G5):** Serialized stdio dispatch ensures document changes reach TSLS before subsequent queries. Navigation requests require the `damHopperDocumentVersion` extension matching the in-memory overlay version (stripped before stdio dispatch), and the gateway discards late child responses if the client document version has advanced.
+- **Hostile Plugin & Decoy Suppression (G6):** Pinned launch specifications force `initializationOptions` with `"plugins": []` and `"disableAutomaticTypingAcquisition": true`, use absolute `--tsserver-path` to bypass workspace `node_modules` replacement decoys, and sanitize the execution environment by stripping `NODE_OPTIONS` and `NODE_PATH`.
+- **Bidirectional Virtual URI Containment:** Client URIs use `dam-hopper://semantic/<target-id>/<encoded-path>` grammar. Paths are split before decoding, percent-decoded once, and checked against target root boundaries lexically and via `dunce::canonicalize`. Results outside target roots return `{ "outsideTarget": true }`, preventing host path disclosure.
+
+### Implemented Primitives: Phase 06 Admin-Only Global Hot Toggle and Configuration Protection
+
+Phase 06 delivers server-global administrative enablement without daemon restart, serialized config mutation boundaries, and canonical config file protection (`server/src/api/semantic_settings.rs`, `server/src/config/schema.rs`, `server/src/fs/secure_path.rs`, `packages/ui/src/components/organisms/SettingsSemanticNavigationSection.tsx`):
+
+- **Dedicated REST Endpoints (`server/src/api/semantic_settings.rs`):**
+  - `GET /api/semantic/settings`: Safe inspection of configured intent (`configuredEnabled`), effective runtime admission (`runtimeEnabled`, `runtimeState`), passive toolchain verification (`toolchainReady`, `integrityStatus`), engine tuple (`tupleIdentifier`), resource capability (`policyCapability`, `resourceWarning`), active trees, open documents, total overlay bytes, runtime generation, transition errors, and caller mutation authority (`canMutate`). Accessible by any authenticated caller or development session.
+  - `PATCH /api/semantic/settings`: Accepts typed `{ "enabled": bool }` to hot-toggle semantic navigation. Strictly requires signed administrator credentials and fresh role evaluation; `--no-auth` and non-admin dev/user accounts are rejected with stable 403.
+- **Strict Schema & Tampering Prevention (`server/src/config/schema.rs`, `parser.rs`):**
+  - Global configuration persists `GlobalConfig.semantic.enabled` (default `false`) with `#[serde(deny_unknown_fields)]`. Custom commands, arguments, environment variables, paths, or shadow workspace sections are strictly denied.
+  - Workspace configurations (`dam-hopper.toml`) and project imports reject any misplaced `[semantic]` or `[server.semantic]` sections.
+- **Bounded Fresh Current-Admin Authorization (`server/src/api/auth.rs`):**
+  - `evaluate_current_admin` evaluates `AuthService.evaluate_claims` within a bounded 2-second store timeout (`AUTH_STORE_LOOKUP_TIMEOUT`) against active session and user store state.
+  - Rejects `state.no_auth`, `CredentialMechanism::NoAuthDev`, missing verified claims, actor/claim mismatches, demoted users, or non-admin roles with stable 403.
+  - Evaluates authority first before taking locks, and re-evaluates immediately before durable disk/runtime commit (especially post-teardown or post-integrity I/O). If demotion occurs during teardown, the system fails closed into a safe-disabled state with an explicit configuration/runtime mismatch.
+- **Dual-Layer Serialized Transitions & Invariant Lock Ordering:**
+  - Mutating global semantic settings requires acquiring `global_config_mutation_lock` followed by `transition_lock`. No reverse acquisition is permitted.
+  - Serialized read-modify-write patterns (`mutate_global_config`) preserve unrelated global configuration keys and current semantic intent across concurrent writers.
+- **Passive Zero-Child ON vs Complete-Tree OFF Teardown:**
+  - *Transitioning ON:* Validates bundled toolchain integrity passively (`verify_integrity`, zero child processes spawned), re-evaluates current-admin authority immediately prior to commit, atomically persists `enabled: true`, and commits enabled status on the supervisor. Startup sync initializes runtime state according to persisted intent with zero children.
+  - *Transitioning OFF:* Supervisor revokes admission, drains sessions, and reaps child process groups within teardown budgets (`TOTAL_TEARDOWN_BUDGET = 5.0s` per session actor). Upon successful cleanup, re-verifies admin authority immediately preceding commit, atomically persists `enabled: false`, and publishes disabled status with zero children. If teardown fails, failed handles are retained, safe-disabled status is recorded with transition error, durable false intent is withheld, and re-enable is blocked until clean.
+- **Canonical Config Protection Across Raw FS Mutation Sinks (`server/src/fs/`):**
+  - `is_protected_global_config_path` resolves canonical paths, parent directory and filename equivalence, and dev/inode hardlinks on Unix.
+  - Guarded sinks: `fs::ops::atomic_write_with_check`, `atomic_persist_with_check`, `fs::secure_path::persist_temp`, `persist_temp_sync`, `write_bytes`, `fs::mutate::assert_safe_mutation` (create, rename, move, delete), and WebSocket chunked upload (`fs:write_commit`). All refuse direct mutation of the global config file, directing operators to authorized configuration and semantic settings APIs.
+- **Shared React Settings UI (`packages/ui/src/components/pages/SettingsPage.tsx`):**
+  - Mounts `SettingsSemanticNavigationSection` under `SettingsSectionAccordion` ("Semantic Navigation").
+  - Admin sessions render an actionable switch with pending lockout and global-impact explanation.
+  - Non-admin and development sessions render a read-only state with an informative explanation of admin requirements.
+  - Advisory portable mode banner alerts operators when Linux cgroup v2 controllers are missing, confirming fallback to portable resource limits.
+  - Configuration / runtime mismatch alert displays if configured intent differs from runtime state or if the runtime entered safe-disabled mode following a transition failure.
+
+### Planned Production Architecture & Browser Qualification (Phases 07 & 10)
 
 - **Transport-Only Client Bundle & Lazy Chunk Partitioning (G2):**
-  - **Dependency Boundary:** Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1` (permissive MIT licenses). Full TypeFox `monaco-languageclient` (30+ packages, >5 MiB raw bloat) and unreleased Microsoft `@vscode/monaco-lsp-client` alpha are explicitly rejected.
-  - **Chunk Partitioning Acceptance Criteria:** Semantic client code must remain isolated to the dynamic lazy Monaco chunk (`monaco.js`). Adding bytes to the initial application entry chunk (`index.js`) is prohibited (0 bytes delta required); Monaco lazy chunk impact must remain below the 50 KiB gzip delta ceiling.
-
-- **Handshake, Capabilities & Configuration Replies (G3):**
-  - Supervisor mediates the protocol handshake, parsing capabilities and advertising client support.
-  - **Server-Owned Configuration Replies:** TSLS issues `workspace/configuration` requests upon initialization; the supervisor immediately replies with safe empty configuration objects matching the requested items (e.g. `[{}, {}]` for requested `typescript` and `javascript` sections), resolving the child without deadlock and never exposing client env, host paths, or unvalidated user settings.
-  - **Gateway Method Allowlist:** Mediated client methods are restricted to navigation and document lifecycle (`initialize`, `initialized`, `textDocument/didOpen`, `textDocument/didChange`, `textDocument/didClose`, `textDocument/definition`, `textDocument/implementation`, `$/cancelRequest`, `shutdown`, `exit`). Workspace edits (`workspace/applyEdit`) and command executions (`workspace/executeCommand`) are rejected.
-
-- **Single Negotiated Adaptive Synchronization (G4):**
-  - Uniformly negotiates `textDocumentSync: 2` (Incremental) across client, gateway, and TSLS.
-  - **Adaptive Payload Strategy:** Documents `< 64 KiB` transmit full-document replacement via a single range-less `TextDocumentContentChangeEvent` (`{ text: newContent }`); documents `>= 64 KiB` transmit ranged incremental edits (`{ range, rangeLength, text }`) to minimize wire and memory transfer.
-
-- **Freshness, Invalidation & Version Fencing (G5):**
-  - **FIFO Stdio Stream Ordering:** Serialized writes guarantee document edits for version $V$ reach TSLS before subsequent definition queries for version $V$.
-  - **Gateway Version Fence:** Client queries include `damHopperDocumentVersion` and `damHopperModelGeneration`. The gateway strips custom fields before stdio dispatch, tracks in-flight request IDs, and discards responses if the client document version advanced before the child replied.
-  - **Target Generation Fencing:** Reconnection or workspace switches increment `sessionGeneration`, discarding late responses from prior sessions.
-
-- **Hostile Hook & Plugin Suppression Invariants (G6):**
-  - **Threat Model:** Protects the server daemon account against arbitrary code execution embedded in untrusted repositories.
-  - **Supervisor Invariants:** Forced `initializationOptions` with `"plugins": []` (suppresses `compilerOptions.plugins` in `tsconfig.json`) and `"disableAutomaticTypingAcquisition": true` (suppresses TSLS automatic typings acquisition queries); absolute `--tsserver-path` prevents local `node_modules/typescript` replacement decoys; sanitized environment strips `NODE_OPTIONS` and `NODE_PATH` and clears dynamic loader overrides (`LD_PRELOAD`, `LD_LIBRARY_PATH`).
-
-- **Web Provider Coexistence & Browser Qualification Boundary (G8):**
+  - Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1`. Semantic client code must remain isolated to the dynamic lazy Monaco chunk (`monaco.js`), with 0 bytes delta added to the initial entry chunk (`index.js`) and Monaco lazy chunk impact below 50 KiB gzip delta ceiling.
+- **Model-Scoped Provider Coexistence & Browser Qualification Boundary (G8):**
   - **Disposition:** **STOP / Pending Web Browser Qualification in Phase 07 & Phase 10**.
-  - **Execution Policy:** Approved plan exception permits backend implementation phases (Phases 02–06: framing, provisioning, supervisor, gateway, toggle) to proceed based on proven G0–G7 contracts. Model-scoped coexistence is deferred to Phase 07 (evaluating an authoritative delegating provider or custom semantic language mode) and qualified in Phase 10 via Vitest browser mode and Playwright E2E testing in real browser DOMs.
+  - Coexistence between Monaco's built-in TypeScript service and DamHopper's LSP provider is evaluated in Phase 07 and qualified in Phase 10 via Vitest browser mode and Playwright E2E testing in real browser DOMs.
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

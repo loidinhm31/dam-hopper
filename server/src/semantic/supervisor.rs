@@ -48,6 +48,8 @@ pub enum SupervisorError {
 
     #[error("Launch configuration error: {0}")]
     Launch(#[from] LaunchError),
+    #[error("Session shutdown error: {0}")]
+    Shutdown(String),
 }
 
 /// Inner state of the semantic supervisor.
@@ -61,6 +63,9 @@ struct SupervisorInner {
     tool_profile: Option<SemanticToolProfile>,
     idle_notify_tx: mpsc::Sender<SessionKey>,
     session_generation_counter: std::sync::atomic::AtomicU64,
+    transition_lock: tokio::sync::Mutex<()>,
+    safe_disabled: AtomicBool,
+    last_transition_error: RwLock<Option<String>>,
 }
 
 /// Global semantic session supervisor managing session lifecycles and admission.
@@ -85,6 +90,9 @@ impl SemanticSupervisor {
             tool_profile,
             idle_notify_tx,
             session_generation_counter: std::sync::atomic::AtomicU64::new(1),
+            transition_lock: tokio::sync::Mutex::new(()),
+            safe_disabled: AtomicBool::new(false),
+            last_transition_error: RwLock::new(None),
         });
 
         let supervisor = Self { inner };
@@ -109,6 +117,133 @@ impl SemanticSupervisor {
     pub fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Acquire)
     }
+
+    /// Check if the semantic subsystem is in a safe-disabled state due to a failed transition.
+    pub fn is_safe_disabled(&self) -> bool {
+        self.inner.safe_disabled.load(Ordering::Acquire)
+    }
+
+    /// Check if the semantic subsystem is effectively active and admitting requests.
+    pub fn is_effective_enabled(&self) -> bool {
+        self.is_enabled() && !self.is_safe_disabled()
+    }
+
+    /// Get any recorded transition error.
+    pub async fn last_transition_error(&self) -> Option<String> {
+        self.inner.last_transition_error.read().await.clone()
+    }
+
+    /// Reference to the bundled tool profile, if configured.
+    pub fn tool_profile(&self) -> Option<&SemanticToolProfile> {
+        self.inner.tool_profile.as_ref()
+    }
+
+    /// Transition lock guarding semantic lifecycle mutations.
+    pub fn transition_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.inner.transition_lock
+    }
+
+    /// Prepare to disable semantic navigation:
+    /// - Revokes admission immediately (enabled = false, bump epoch).
+    /// - Closes connection epochs.
+    /// - Reaps all active child process trees and sessions.
+    ///
+    /// Drops internal write locks before awaiting session teardowns.
+    pub async fn prepare_disable(&self) -> Result<(), SupervisorError> {
+        self.inner.enabled.store(false, Ordering::Release);
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+
+        {
+            let mut epochs = self.inner.connection_epochs.write().await;
+            for val in epochs.values_mut() {
+                *val = None;
+            }
+        }
+
+        let drained: Vec<(SessionKey, SemanticSessionHandle)> = {
+            let mut guard = self.inner.sessions.write().await;
+            guard.drain().collect()
+        };
+
+        let mut failed_sessions = Vec::new();
+        let mut first_error = None;
+
+        for (key, handle) in drained {
+            let res = tokio::time::timeout(
+                crate::semantic::resources::TOTAL_TEARDOWN_BUDGET,
+                handle.shutdown(),
+            )
+            .await;
+
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, session_key = ?key, "Failed to cleanly shut down session during disable");
+                    if first_error.is_none() {
+                        first_error = Some(err.to_string());
+                    }
+                    failed_sessions.push((key, handle));
+                }
+                Err(_) => {
+                    tracing::warn!(session_key = ?key, "Session teardown timed out during disable");
+                    if first_error.is_none() {
+                        first_error = Some("Session shutdown timed out".to_string());
+                    }
+                    failed_sessions.push((key, handle));
+                }
+            }
+        }
+
+        if !failed_sessions.is_empty() {
+            // Re-insert failed sessions so ownership/reaping is preserved
+            let mut guard = self.inner.sessions.write().await;
+            for (key, handle) in failed_sessions {
+                guard.insert(key, handle);
+            }
+            let err_msg = first_error.unwrap_or_else(|| "Failed to tear down child session".into());
+            return Err(SupervisorError::Shutdown(err_msg));
+        }
+
+        Ok(())
+    }
+
+    /// Commit disabled state after persistence succeeds.
+    pub async fn commit_disable(&self) {
+        self.inner.safe_disabled.store(false, Ordering::Release);
+        *self.inner.last_transition_error.write().await = None;
+    }
+
+    /// Record a failure during disable (e.g. teardown error or persist error).
+    /// Enforces safe-disabled state so admission remains revoked.
+    pub async fn record_disable_failure(&self, reason: String) {
+        self.inner.enabled.store(false, Ordering::Release);
+        self.inner.safe_disabled.store(true, Ordering::Release);
+        *self.inner.last_transition_error.write().await = Some(reason);
+    }
+
+    /// Passive integrity and configuration verification for turning ON.
+    /// Spawns ZERO child processes.
+    pub fn prepare_enable(&self) -> Result<(), SupervisorError> {
+        if let Some(profile) = &self.inner.tool_profile {
+            let integrity = profile.verify_integrity();
+            if !integrity.is_valid() {
+                return Err(SupervisorError::ToolProfile(format!("{:?}", integrity)));
+            }
+        } else {
+            return Err(SupervisorError::ToolProfile("No tool profile configured".into()));
+        }
+        Ok(())
+    }
+
+    /// Commit enabled state after persistence succeeds.
+    /// Spawns ZERO child processes.
+    pub async fn commit_enable(&self) {
+        self.inner.enabled.store(true, Ordering::Release);
+        self.inner.safe_disabled.store(false, Ordering::Release);
+        self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+        *self.inner.last_transition_error.write().await = None;
+    }
+
 
     /// Enable or disable the semantic subsystem.
     pub async fn set_enabled(&self, enabled: bool) {
@@ -163,7 +298,7 @@ impl SemanticSupervisor {
         target_root: PathBuf,
         expected_epoch: u64,
     ) -> Result<SemanticSessionHandle, SupervisorError> {
-        if !self.is_enabled() {
+        if !self.is_effective_enabled() {
             return Err(SupervisorError::Disabled);
         }
         let start_runtime_epoch = self.inner.runtime_epoch.load(Ordering::Acquire);
@@ -392,7 +527,7 @@ impl SemanticSupervisor {
 
     /// Query aggregate runtime metrics for diagnostics and administration.
     pub async fn get_aggregate_status(&self) -> SemanticAggregateStatus {
-        let enabled = self.is_enabled();
+        let enabled = self.is_effective_enabled();
         let handles: Vec<SemanticSessionHandle> = {
             let guard = self.inner.sessions.read().await;
             guard.values().cloned().collect()
@@ -410,14 +545,15 @@ impl SemanticSupervisor {
 
         let tool_integrity = self.tool_integrity_status().map(|s| format!("{:?}", s));
 
-        let state = if !enabled {
+        let state = if self.is_safe_disabled() {
+            SemanticState::SafeDisabled
+        } else if !enabled {
             SemanticState::Disabled
         } else if active_sessions == 0 {
             SemanticState::Idle
         } else {
             SemanticState::Ready
         };
-
         SemanticAggregateStatus {
             state,
             enabled,

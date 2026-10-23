@@ -22,6 +22,7 @@ use crate::auth::policy::{
 use crate::auth::totp::TotpEngine;
 use crate::auth::{AuthService, AuthStore, StoreError};
 use crate::state::AppState;
+use crate::api::error::ApiError;
 
 pub const AUTH_COOKIE: &str = "damhopper-auth";
 
@@ -247,6 +248,113 @@ pub(crate) async fn authenticate_request(
             format!("Authentication backend unavailable: {reason}"),
             None,
         )),
+    }
+}
+
+/// Decision and verified session produced by fresh current-admin re-evaluation.
+#[derive(Debug, Clone)]
+pub struct CurrentAdminSession {
+    pub user: crate::auth::UserRecord,
+    pub session: crate::auth::AuthSession,
+}
+
+/// Evaluates current-admin authority for a request.
+///
+/// Bounded by `AUTH_STORE_LOOKUP_TIMEOUT` (2s).
+/// Rejects `state.no_auth`, `CredentialMechanism::NoAuthDev`, missing verified claims,
+/// actor/claim mismatches, demoted users, or non-admin roles with stable 403.
+pub async fn evaluate_current_admin(
+    state: &AppState,
+    actor: Option<&AuthenticatedActor>,
+    mechanism: Option<&CredentialMechanism>,
+    claims: Option<&VerifiedAuthClaims>,
+) -> Result<CurrentAdminSession, ApiError> {
+    if state.no_auth {
+        return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+            "Global semantic settings mutation requires signed administrator credentials (disabled in --no-auth mode)".to_string(),
+        )));
+    }
+
+    let Some(mech) = mechanism else {
+        return Err(ApiError::from_app(crate::error::AppError::Unauthorized(
+            "Authentication credentials required".to_string(),
+        )));
+    };
+
+    if *mech == CredentialMechanism::NoAuthDev {
+        return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+            "Development actor cannot perform global semantic mutations".to_string(),
+        )));
+    }
+
+    let (Some(act), Some(verified_claims)) = (actor, claims) else {
+        return Err(ApiError::from_app(crate::error::AppError::Unauthorized(
+            "Signed session credentials required".to_string(),
+        )));
+    };
+
+    let claims = &verified_claims.0;
+
+    if act.subject != claims.sub {
+        return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+            "Actor and credential subject mismatch".to_string(),
+        )));
+    }
+
+    if let Some(act_session_id) = &act.session_id {
+        if act_session_id != &claims.sid {
+            return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+                "Actor and credential session mismatch".to_string(),
+            )));
+        }
+    }
+
+    let eval_res = tokio::time::timeout(
+        crate::semantic::resources::AUTH_STORE_LOOKUP_TIMEOUT,
+        state.auth_service.evaluate_claims(claims),
+    )
+    .await;
+
+    let decision = match eval_res {
+        Ok(d) => d,
+        Err(_) => {
+            return Err(ApiError::from_app(crate::error::AppError::Unavailable(
+                "Auth store evaluation timed out".to_string(),
+            )));
+        }
+    };
+
+    match decision {
+        AuthDecision::Authenticated { user, session } => {
+            if user.username != claims.sub || session.id != claims.sid {
+                return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+                    "Session identity mismatch".to_string(),
+                )));
+            }
+            if user.role != crate::auth::UserRole::Admin {
+                return Err(ApiError::from_app(crate::error::AppError::Forbidden(
+                    "Administrator role required".to_string(),
+                )));
+            }
+            Ok(CurrentAdminSession { user, session })
+        }
+        AuthDecision::MfaRequired { .. } => {
+            Err(ApiError::from_app(crate::error::AppError::Unauthorized(
+                "MFA verification required".to_string(),
+            )))
+        }
+        AuthDecision::FullLoginRequired { reason } => {
+            Err(ApiError::from_app(crate::error::AppError::Unauthorized(format!(
+                "Authentication required: {}",
+                reason
+            ))))
+        }
+        AuthDecision::Unavailable { reason } => {
+            Err(ApiError::from_app(crate::error::AppError::Unavailable(format!(
+                "Auth backend unavailable: {}",
+                reason
+            ))))
+        }
     }
 }
 

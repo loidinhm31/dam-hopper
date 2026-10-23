@@ -13,8 +13,8 @@
 - Date: 2026-10-23
 - Description: Add current-admin-only server-global no-restart ON/OFF, protect every semantic config mutation path and keep engine selection immutable/bundled-only.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Pending
+- Implementation status: DONE (2026-10-23) — Administratively complete under approved exceptions; release qualification pending
+- Review status: Approved by user on 2026-10-23 under tracked exceptions (Score: 7.5/10, Cycle 2, 0 critical issues)
 - Effort: 20h
 - Direct dependencies: 05.
 - Estimate rationale: removes unsafe override work but adds real current-role reauthorization, import/raw/shared-writer closure, serialized read–modify–write and explicit disk/runtime failure semantics beyond historical 16h.
@@ -108,13 +108,13 @@ Workspace import and JSON PUT retain existing protected-setting guards and rejec
 
 ## Todo list
 
-- [ ] Add strict enabled-only global config and truthful runtime status.
-- [ ] Implement bounded fresh-current-admin helper and no-auth denial.
-- [ ] Protect dedicated/import/raw/reset/alias/shared mutation paths.
-- [ ] Serialize all global read–modify–write operations without lost semantic updates.
-- [ ] Implement passive zero-child ON and cancellation-first complete-tree OFF.
-- [ ] Define/test safe intent/runtime mismatch and explicit retry recovery.
-- [ ] Add owner-bound Admin/User/dev Settings states with no command/profile controls.
+- [x] Add strict enabled-only global config and truthful runtime status.
+- [x] Implement bounded fresh-current-admin helper and no-auth denial.
+- [x] Protect dedicated/import/raw/reset/alias/shared mutation paths.
+- [x] Serialize all global read–modify–write operations without lost semantic updates.
+- [x] Implement passive zero-child ON and cancellation-first complete-tree OFF.
+- [x] Define/test safe intent/runtime mismatch and explicit retry recovery.
+- [x] Add owner-bound Admin/User/dev Settings states with no command/profile controls.
 
 ## Success Criteria
 
@@ -144,5 +144,5 @@ Workspace import and JSON PUT retain existing protected-setting guards and rejec
 
 - Phase 07 consumes owner-bound status and exact semantic client protocol; Phase 08 wires global/owner/target invalidation and stale callback fencing.
 - Phase 09 attacks role/import/raw/shared-write races and measures auth/cleanup/resource bounds. Phase 11 documents only qualified Admin control, trusted workspace and bundled release-update behavior.
-- Validation status: documentation revision only; no build, lint, test, formatter, auth-store mutation, process execution or runtime qualification performed.
-- Unresolved technical gates: Phase 01 tuple/hook/sync/provider/version/tree proofs remain unexecuted; exact protected-file sink coverage and config-lock integration require implementation discovery/tests, not assumed existing authorization helpers. No unresolved user policy choices.
+- Validation status: Implementation administratively complete under authorized exceptions; release qualification remains pending. Verified across 115 focused tests per QA execution report (`plans/reports/tester-261023-1819-phase-06-toggle.md`: 7 integration tests in `tests/semantic_settings.rs`, 50 regression integration tests in `tests/semantic_*.rs`, 42 semantic/config unit tests in `server/src/`, and 16 frontend component tests) with 3,140/3,140 tests passing in the full UI suite. Code reviewer Cycle 2 report (`plans/reports/code-reviewer-261023-1845-phase-06-toggle-cycle-2.md`) reported 7/7 semantic_settings, 43/43 semantic lib, 108/108 config::tests, and 8/8 semantic_resources tests passing with score 7.5/10 and 0 critical issues; approved by user on 2026-10-23 under tracked items. Six tracked review warnings (W1 cancellation safety during detached transition, W2 child terminal status and leak propagation in shutdown, W3 re-enable block while unclean sessions exist, W4 teardown timeout margin, W5 failure regression tests, W6 transition error sanitization) carried into Phase 08/09.
+- Unresolved technical gates: Phase 01 spike demonstrated G0–G7 in tested spike configuration; Phase 06 sink guards and serialized config-lock integration implemented across wired filesystem mutation paths (`persist_temp`, `persist_temp_sync`, `write_bytes`, `atomic_write_with_check`, `atomic_persist_with_check`, `assert_safe_mutation`). Open items include W1 cancellation safety, W2 terminal child status/leak detection, W3 re-enable block while unclean sessions exist, W4 teardown timeout margin, W5 failure regression tests, W6 transition error sanitization, `decrypt_and_write` sink hardening (S1), production hook suppression (G6), unopened destination freshness G5 (tracked for Phase 07/09), and G8 live web navigation (tracked for Phases 07 & 10). Release qualification remains pending.

@@ -45,6 +45,29 @@ future approved design, but authentication, re-authentication, helper
 enrollment, lifecycle/audit, IPC, and host mutation are deferred together. Do
 not configure or call those deferred routes for monitoring; no current setting
 enables them.
+### Semantic Navigation Configuration
+
+Server-global TypeScript and JavaScript semantic definition and implementation settings live under the `[semantic]` table in the global configuration file (`~/.config/dam-hopper/config.toml` or `$XDG_CONFIG_HOME/dam-hopper/config.toml`).
+
+Semantic navigation is opt-in and disabled by default:
+
+```toml
+[semantic]
+enabled = false
+```
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Master toggle for server-global language server navigation. |
+
+**Configuration Invariants:**
+
+- **Strict Schema (`deny_unknown_fields`):** The `[semantic]` section accepts only `enabled`. Custom executables, launch arguments, environment variables, custom paths, or external engine selectors are strictly rejected by the parser.
+- **Server-Global Scope Only:** Semantic navigation is server-global. Placing `[semantic]` or `[server.semantic]` inside project workspace files (`dam-hopper.toml`) or workspace imports is forbidden and fails parsing with `InvalidInput`.
+- **Hot Toggle Without Daemon Restart:** Server administrators can toggle semantic navigation dynamically at runtime via `PATCH /api/semantic/settings` without restarting the server daemon.
+- **Raw Filesystem Protection:** The server actively protects the canonical global configuration file (and hardlinks) against raw filesystem writes, chunked WebSocket uploads, renames, and deletions. Configuration updates must occur through authorized configuration APIs.
+- **Passive Zero-Child Initialization:** When `enabled = true` on server startup, the server validates release-bundled toolchain integrity passively (checking SHA-256 digests and permissions without spawning Node, npm, or shell processes). Child language servers are spawned lazily per active connection and target workspace only when an authorized client attaches.
+
 
 ### Telemetry Configuration
 

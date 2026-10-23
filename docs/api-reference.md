@@ -19,7 +19,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Git operation lifecycle](./api/git-operation-lifecycle.md) | Sequencer state machine, operation continuation/abort, stage role labels, and truthful outcomes |
 | [Client-side profiles](./api/client-side-profiles.md) | Profile metadata, connection contracts, and client-side persistence breakdown |
 | [Filesystem and media](./api/filesystem-and-media.md) | File explorer/search, media tickets, stream authorization |
-| [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health |
+| [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health, semantic navigation settings |
 | [WebSocket](./api/websocket.md) | Core multiplexed WebSocket (`/ws`) and dedicated semantic gateway (`/ws/semantic/v1`) |
 
 ## Authentication
@@ -73,6 +73,10 @@ See [workspace and settings APIs](./api/workspace-settings.md#settings-health).
 ## WebSocket Endpoint
 
 See the [WebSocket API reference](./api/websocket.md).
+## Semantic Navigation Settings
+
+See [Semantic Navigation Settings](./api/workspace-settings.md#semantic-navigation-settings). Covers `GET /api/semantic/settings` (safe inspection of configured intent, runtime admission, integrity status, and caller mutation authority) and `PATCH /api/semantic/settings` (server-global hot toggle without daemon restart, requiring fresh current-admin authorization and rejecting `--no-auth`).
+
 
 ## Retired plugin API anchors
 

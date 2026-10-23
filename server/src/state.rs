@@ -46,6 +46,8 @@ pub struct AppState {
     pub config: Arc<RwLock<DamHopperConfig>>,
     /// Global config (known workspaces, defaults).
     pub global_config: Arc<RwLock<GlobalConfig>>,
+    /// Serializes global configuration read-modify-write mutations.
+    pub global_config_mutation_lock: Arc<tokio::sync::Mutex<()>>,
     /// PTY session manager — internally Arc<Mutex<Inner>>, Clone is cheap.
     pub pty_manager: PtySessionManager,
     /// Central agent store service.
@@ -399,6 +401,7 @@ impl AppState {
             video_stream_tickets,
             image_stream_tickets,
             workspace_context_guard: Arc::new(RwLock::new(())),
+            global_config_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             no_auth,
             cors_origins: Arc::new(Vec::new()),
             tunnel_manager,
@@ -545,6 +548,26 @@ impl AppState {
             .telemetry
             .write()
             .expect("telemetry state lock poisoned") = telemetry;
+    }
+
+    /// Execute a serialized read-modify-write mutation on the global configuration.
+    /// Under the `global_config_mutation_lock`, reads the current on-disk global config
+    /// (falling back to in-memory state if unreadable), passes it to `mutate_fn`, writes the
+    /// modified config atomically to disk, and updates the in-memory `global_config`.
+    pub async fn mutate_global_config<F, R>(&self, mutate_fn: F) -> Result<R, crate::error::AppError>
+    where
+        F: FnOnce(&mut crate::config::schema::GlobalConfig) -> Result<R, crate::error::AppError>,
+    {
+        let _guard = self.global_config_mutation_lock.lock().await;
+        let gc_path = crate::config::global_config_path();
+        let mut gc = match crate::config::read_global_config_at(&gc_path)? {
+            Some(c) => c,
+            None => self.global_config.read().await.clone(),
+        };
+        let result = mutate_fn(&mut gc)?;
+        crate::config::write_global_config_at(&gc_path, &gc)?;
+        *self.global_config.write().await = gc;
+        Ok(result)
     }
 }
 

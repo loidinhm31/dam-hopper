@@ -63,6 +63,7 @@ pub enum SemanticState {
     Crashed,
     Invalidated,
     ShuttingDown,
+    SafeDisabled,
 }
 
 impl fmt::Display for SemanticState {
@@ -80,6 +81,7 @@ impl fmt::Display for SemanticState {
             Self::Crashed => write!(f, "crashed"),
             Self::Invalidated => write!(f, "invalidated"),
             Self::ShuttingDown => write!(f, "shutting-down"),
+            Self::SafeDisabled => write!(f, "safe-disabled"),
         }
     }
 }

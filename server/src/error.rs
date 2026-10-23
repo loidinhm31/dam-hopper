@@ -82,6 +82,10 @@ pub enum AppError {
     Plans(#[from] crate::plans::PlansError),
     #[error(transparent)]
     GitBlame(#[from] GitBlameError),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
 }
 
 #[derive(Debug, Error)]
@@ -168,6 +172,8 @@ impl AppError {
             | AppError::NotFound(_)
             | AppError::SessionNotFound(_)
             | AppError::GitNotFound(_) => 404,
+            AppError::Unauthorized(_) => 401,
+            AppError::Forbidden(_) => 403,
             AppError::GitUnavailable
             | AppError::WorktreeDirty(_)
             | AppError::IdleSuspendHandoffInProgress(_) => 409,
@@ -213,6 +219,8 @@ impl AppError {
             AppError::IdleSuspendHandoffInProgress(_) => Some("idleSuspendHandoffInProgress"),
             AppError::ConflictStateChanged => Some("REFRESH_REQUIRED"),
             AppError::LegacyPayloadRejected => Some("LEGACY_PAYLOAD_REJECTED"),
+            AppError::Unauthorized(_) => Some("UNAUTHORIZED"),
+            AppError::Forbidden(_) => Some("FORBIDDEN"),
             AppError::WorkspaceTarget(error) => Some(match error {
                 WorkspaceTargetError::UnknownProject => "WORKSPACE_PROJECT_NOT_FOUND",
                 WorkspaceTargetError::UnregisteredTarget => "WORKSPACE_TARGET_UNREGISTERED",

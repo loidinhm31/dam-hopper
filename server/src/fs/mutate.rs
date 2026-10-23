@@ -22,6 +22,12 @@ pub fn assert_safe_mutation(
             "cannot mutate the project root".into(),
         ));
     }
+    if crate::fs::secure_path::is_protected_global_config_path(abs) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
+
 
     if !force_git {
         let in_git = abs
@@ -74,7 +80,7 @@ pub async fn create_dir(abs: &Path, project_root: &Path) -> Result<(), FsError> 
 /// Works for both files and directories; behaves like `mv`.
 pub async fn rename(src: &Path, dst: &Path, project_root: &Path) -> Result<(), FsError> {
     assert_safe_mutation(src, project_root, false)?;
-
+    assert_safe_mutation(dst, project_root, false)?;
     if !src.exists() {
         return Err(FsError::NotFound);
     }
@@ -116,7 +122,7 @@ pub async fn delete(abs: &Path, project_root: &Path, force_git: bool) -> Result<
 /// Move `src` to `dst` — semantic alias for `rename` (different UI intent).
 pub async fn move_path(src: &Path, dst: &Path, project_root: &Path) -> Result<(), FsError> {
     assert_safe_mutation(src, project_root, false)?;
-
+    assert_safe_mutation(dst, project_root, false)?;
     if !src.exists() {
         return Err(FsError::NotFound);
     }

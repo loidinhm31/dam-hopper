@@ -40,6 +40,9 @@ pub const DEFAULT_RELEASE_ROOT: &str = "/opt/dam-hopper";
 
 /// Canonical tool descriptor identifier for TypeScript/JavaScript language services.
 pub const TYPESCRIPT_DESCRIPTOR: &str = "typescript";
+/// Canonical immutable tuple identifier for the pinned bundled toolchain.
+pub const BUNDLED_TUPLE_ID: &str = "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64";
+
 
 /// Supported language identifiers for the TypeScript tool profile.
 pub const SUPPORTED_LANGUAGE_IDS: &[&str] = &[
@@ -194,6 +197,11 @@ impl SemanticToolProfile {
     pub fn package_json_path(&self) -> &Path {
         &self.package_json_path
     }
+    /// Canonical tuple identifier for this bundled toolchain.
+    pub fn tuple_id(&self) -> &'static str {
+        BUNDLED_TUPLE_ID
+    }
+
 
     /// Perform a passive, zero-child integrity check of the bundled toolchain.
     ///
