@@ -1,0 +1,31 @@
+{
+  "title": "DamHopperSemanticEngineProvenance",
+  "description": "Cryptographic provenance and pinned versions for immutable Linux x64 semantic engine",
+  "target": "linux-x86_64",
+  "components": {
+    "node": {
+      "version": "v24.16.0",
+      "binary": "node",
+      "sha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+      "license": "MIT",
+      "source": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz"
+    },
+    "typescript": {
+      "version": "5.9.3",
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "sha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb",
+      "license": "Apache-2.0",
+      "entrypoint": "lib/tsserver.js"
+    },
+    "typescriptLanguageServer": {
+      "version": "6.0.2",
+      "integrity": "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q==",
+      "sha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+      "license": "Apache-2.0",
+      "entrypoint": "lib/cli.mjs"
+    },
+    "packageJson": {
+      "sha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c"
+    }
+  }
+}

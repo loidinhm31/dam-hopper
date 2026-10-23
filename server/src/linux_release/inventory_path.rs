@@ -38,8 +38,8 @@ pub fn check_disallowed_files(path: &str) -> Result<(), ReleaseError> {
         || lower.ends_with(".sqlite")
         || lower.ends_with(".sqlite-wal")
         || lower.ends_with(".sqlite-shm")
-        || lower.ends_with(".db");
-
+        || lower.ends_with(".db")
+        || lower.ends_with(".tsbuildinfo");
     if is_disallowed {
         return Err(ReleaseError::DisallowedRuntimeFile {
             path: path.to_string(),
@@ -79,6 +79,7 @@ mod tests {
         assert!(check_disallowed_files("dam-hopper.toml").is_err());
         assert!(check_disallowed_files("state/data.sqlite").is_err());
         assert!(check_disallowed_files("db/test.db").is_err());
+        assert!(check_disallowed_files("build/app.tsbuildinfo").is_err());
         assert!(check_disallowed_files("bin/safe-file").is_ok());
     }
 }

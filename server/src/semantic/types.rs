@@ -2,12 +2,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const MAX_QUEUE_COUNT: usize = 32;
-pub const MAX_QUEUE_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-pub const MAX_STDERR_RING_BYTES: usize = 64 * 1024; // 64 KiB
+use super::resources::{
+    FORCE_KILL_REAP_BUDGET, GRACEFUL_SHUTDOWN_TIMEOUT as RES_GRACEFUL_SHUTDOWN, MAX_QUEUED_BYTES,
+    MAX_QUEUED_MESSAGES, MAX_RETAINED_STDERR_BYTES,
+};
+
+pub const MAX_QUEUE_COUNT: usize = MAX_QUEUED_MESSAGES;
+pub const MAX_QUEUE_BYTES: usize = MAX_QUEUED_BYTES;
+pub const MAX_STDERR_RING_BYTES: usize = MAX_RETAINED_STDERR_BYTES;
 pub const STDIN_WRITE_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const FORCED_KILL_GRACE: Duration = Duration::from_millis(3000);
+pub const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = RES_GRACEFUL_SHUTDOWN;
+pub const FORCED_KILL_GRACE: Duration = FORCE_KILL_REAP_BUDGET;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChildStatus {

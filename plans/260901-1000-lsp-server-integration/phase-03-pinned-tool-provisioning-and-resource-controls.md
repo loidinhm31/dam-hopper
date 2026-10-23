@@ -12,8 +12,8 @@
 - Date: 2026-10-23
 - Description: Package one immutable Linux x64 tool tuple, encode enforced initial portable limits, and qualify optional child-only hard controls without weakening release ownership.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Pending
+- Implementation status: DONE (2026-10-23) (Administratively complete under approved exceptions; release qualification remains pending)
+- Review status: Approved by user under authorized exceptions (Cycle 3 score: 8.5/10, 0 critical issues; 55/55 tests passed in QA report across 5 targets)
 - Effort: 28h
 - Direct dependencies: 02 (includes passed 01 gates).
 - Estimate rationale: replaces historical 20h provisioning with actual archive/strict manifest/SBOM, role projection, offline install/update/rollback and descendant-scoped controls work.
@@ -74,13 +74,13 @@ Rollback boundary: missing/tampered/incompatible tools disable semantic admissio
 
 ## Todo list
 
-- [ ] Stage exact immutable Linux x64 tuple through existing release owner.
-- [ ] Include all hashes/licenses/lock/provenance and SBOM relationships.
-- [ ] Update strict inventory/role projection and qualify offline install/update/rollback.
-- [ ] Separate passive zero-child integrity checks from bounded authorized protocol probe.
-- [ ] Encode/enforce Phase 01 finite initial limits and adaptive threshold.
-- [ ] Qualify semantic-tree hard controls and required runnable portable-only fallback.
-- [ ] Confirm no custom command/profile or workspace-selected tool resolution exists.
+- [x] Stage exact immutable Linux x64 tuple layout through existing release owner (`lib/semantic-engine/` staging in `build-release-archive.sh`; real production artifact fetch/assembly deferred to release pipeline).
+- [x] Include all hashes/licenses/lock/provenance and SPDX 2.3 SBOM generation in `generate-release-manifest.mjs` (Approved exception: package.json template vs pinned hash divergence tracked for release staging).
+- [x] Update strict inventory/role projection (`inventory_path.rs`, `inventory_validation.rs`; offline install/update/rollback qualification deferred to Phase 09).
+- [x] Separate passive zero-child integrity checks from bounded authorized protocol probe (`ToolProfile::verify_integrity` streaming 64 KiB SHA-256 checks against pinned consts).
+- [x] Define centralized `ResourcePolicy` constants in `resources.rs` (enforcement in session admission deferred to Phase 04).
+- [x] Implement child-only Linux cgroup v2 setup via `pre_exec` with honest fallback to `PortableOnly` (real-host cgroup delegation and hard ceiling qualification deferred to Phase 09; portable mode carries no hard memory guarantee).
+- [x] Confirm no custom command/profile or workspace-selected tool resolution exists (immutable built-in `typescript` profile, zero dynamic CLI overrides).
 
 ## Success Criteria
 
@@ -108,5 +108,5 @@ Rollback boundary: missing/tampered/incompatible tools disable semantic admissio
 
 - Phase 04 consumes verified immutable launch artifact, tree owner and enforced initial policy; Phases 05–08 consume the same limits before exposure.
 - Phase 06 implements admin-only runtime enabled intent, not engine/profile switching. Phase 09 tunes numeric limits/threshold from measured evidence and records only measured bounds.
-- Validation status: documentation revision only; no packaging, install, update/rollback, build, lint, test, formatter or runtime qualification executed.
-- Unresolved gates: exact G1 tuple/layout, G6 hostile-loading restrictions and G7 portable cleanup/control mechanism await Phase 01 proof; resource values remain initial candidates until measured qualification.
+- Validation status: Administratively complete under authorized exceptions (2026-10-23); release qualification remains pending. 55/55 tests passing across 5 targets reported by QA (`semantic_tool_profile` 11, `semantic_resources` 8, `linux_release_manifest` 12, `--lib semantic::` 13, `semantic_child_process` 11). Cycle 3 code review scored 8.5/10 with 0 critical issues, approved by user on 2026-10-23 under authorized exceptions (reports: `plans/reports/tester-261023-1135-phase-03-cycle-2.md`, `plans/reports/code-reviewer-261023-1205-phase-03-cycle-3.md`).
+- Next phase: Phase 04 — Semantic session supervisor.

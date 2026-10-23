@@ -2,11 +2,13 @@ use std::io;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::resources::{MAX_FRAME_BODY_BYTES, MAX_STDIO_HEADER_BYTES};
+
 /// Maximum allowed header size (8 KiB) to prevent memory exhaustion from runaway headers.
-pub const MAX_HEADER_SIZE: usize = 8 * 1024;
+pub const MAX_HEADER_SIZE: usize = MAX_STDIO_HEADER_BYTES;
 
 /// Maximum allowed LSP body size (4 MiB) matching gateway and framing policy.
-pub const MAX_BODY_SIZE: usize = 4 * 1024 * 1024;
+pub const MAX_BODY_SIZE: usize = MAX_FRAME_BODY_BYTES;
 
 #[derive(Debug, Error)]
 pub enum FramingError {
@@ -39,7 +41,9 @@ pub enum FramingError {
     #[error("Unexpected EOF while reading LSP frame (incomplete frame)")]
     UnexpectedEof,
 
-    #[error("Truncated LSP body: expected {expected} bytes, but stream ended after {actual} bytes")]
+    #[error(
+        "Truncated LSP body: expected {expected} bytes, but stream ended after {actual} bytes"
+    )]
     TruncatedBody { expected: usize, actual: usize },
 }
 
@@ -211,7 +215,9 @@ mod tests {
         // "🚀" is 4 bytes in UTF-8
         let payload = r#"{"msg":"🚀"}"#.as_bytes();
         let encoded = encode_frame(payload).unwrap();
-        assert!(encoded.starts_with(format!("Content-Length: {}\r\n\r\n", payload.len()).as_bytes()));
+        assert!(
+            encoded.starts_with(format!("Content-Length: {}\r\n\r\n", payload.len()).as_bytes())
+        );
         let mut buf = encoded;
         let parsed = parse_frame(&mut buf).unwrap();
         assert_eq!(parsed, Some(payload.to_vec()));

@@ -500,22 +500,49 @@ Phase 02 delivers the backend foundation for isolated child language servers (`s
        - Attempts bounded publication of `ChildEvent::Terminated(status)` (with a 500 ms timeout; send failure or receiver drop does not prevent shutdown) and marks `terminal_published` atomically (`is_terminated()` reflects owner task completion rather than verified client receipt).
   - `SemanticChildHandle`: exposes `send_message(payload)`, `shutdown()`, and `is_terminated()`, with `Drop` invoking `shutdown()` for clean handle drop semantics.
 
-### Planned Production Architecture & Invariants (Phases 03–06)
+### Implemented Primitives: Phase 03 Pinned Tool Provisioning and Resource Controls
 
-- **Process Topology & Group Isolation (G0, G7):**
-  - The backend supervisor spawns `typescript-language-server` in an isolated process group (`Command::process_group(0)` on Unix), preventing signal leakage to the parent daemon or sibling PTY processes.
-  - TSLS communicates via standard JSON-RPC 2.0 over framed stdio pipes. Dedicated non-blocking Tokio reader tasks drain stderr into a bounded 64 KiB circular buffer and parse stdout frames.
-  - **Parent-Death Defense:** `prctl(PR_SET_PDEATHSIG, SIGTERM)` is configured for the direct child process on Linux fork, signaling the child process leader if the parent daemon dies abruptly (noting that `PDEATHSIG` does not propagate automatically to descendant grandchildren).
-  - **Two-Phase Termination Contract:**
-    1. *Stage 1 (Graceful RPC):* Supervisor issues LSP `shutdown` request (1,500 ms timeout), followed by `exit` notification and stdin closure (500 ms wait, total 2,000 ms budget).
-    2. *Stage 2 (Forceful Escalation):* If processes persist, supervisor issues `kill(-pgid, SIGTERM)` (1,000 ms wait), escalating to `kill(-pgid, SIGKILL)` targeting the entire process group (total 3,000 ms budget).
-  - **Reaper Ownership:** A dedicated Tokio child reaper task (`Child::wait`) reaps the direct child process group leader and collects its exit status. Global `waitpid(-1)` is strictly prohibited to avoid intercepting exit statuses from PTY or helper processes.
+Phase 03 establishes immutable tool provisioning, passive zero-child integrity verification, centralized resource policy definitions, Linux child-only cgroups attachment with honest portable degradation, and SPDX 2.3 SBOM generation (`server/src/semantic/tool_profile.rs`, `resources.rs`, `resources/linux.rs`, `deploy/release/`):
 
-- **Pinned Offline Engine Tuple & Packaging Layout (G1):**
-  - **Zero PATH or Project Lookup:** The server never queries `PATH` for `node`, `npm`, or `pnpm`, and never loads `typescript` or language servers from project-local `node_modules` or `package.json`.
-  - **Pinned Versions & Integrity:** Node.js Linux x64 `v24.16.0` (direct ELF64 binary, SHA-256 `b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd`), TypeScript `5.9.3` (Apache-2.0), and `typescript-language-server` `6.0.2` (Apache-2.0).
-  - **Installation Layout:** Bundled engine artifacts reside under `/opt/dam-hopper/lib/semantic-engine/` and are assigned role `["server"]` in `deploy/release/generate-release-manifest.mjs` and the SPDX 2.3 SBOM.
-  - **Absolute Invocation:** Launched with absolute binary path `/opt/dam-hopper/lib/semantic-engine/node`, `--max-old-space-size=256`, absolute CLI entrypoint, `--stdio`, and `--tsserver-path` pointing directly to the bundled `tsserver.js`.
+- **Immutable Bundled Toolchain Layout (`lib/semantic-engine`):**
+  - Canonical layout resides at `<release-root>/lib/semantic-engine/` (default `/opt/dam-hopper/lib/semantic-engine`).
+  - Contains the pinned Linux x64 Node.js runtime (`node`, v24.16.0, pinned SHA-256 `b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd`), `tsls/package.json` (`1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c`), `tsls/node_modules/typescript-language-server/lib/cli.mjs` (v6.0.2, pinned SHA-256 `192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb`), and `tsls/node_modules/typescript/lib/tsserver.js` (v5.9.3, pinned SHA-256 `e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb`).
+  - Staging in `deploy/release/build-release-archive.sh` uses `--semantic-engine-dir <dir>` and dereferences symlinks via `cp -rL`, guaranteeing the release archive contains only regular files and directories.
+  - Release manifest generator (`deploy/release/generate-release-manifest.mjs`) and release validator (`server/src/linux_release/inventory_validation.rs`) recognize `lib/semantic-engine` entries, require role `server` (omitted from `web`-only installations), prohibit group/world-writable bits (`mode & 0o022 == 0`), and enforce execute permissions on `lib/semantic-engine/node` (`mode & 0o111 != 0`).
+  - Filesystem permissions and ownership prevent workspace tampering; the daemon never resolves Node or language servers from `PATH`, global `npm`/`pnpm`/`npx`, workspace `node_modules`, or environment overrides.
+
+- **Passive Zero-Child Integrity Verification (`server/src/semantic/tool_profile.rs`):**
+  - `SemanticToolProfile`: Built-in descriptor bound to the active release root (`from_release_root`, `discover`). Discovers installation root relative to the running server binary (`dam-hopper-server`) or falls back to `/opt/dam-hopper`.
+  - `verify_integrity(&self) -> ToolIntegrityStatus`: Purely passive filesystem check that spawns zero child processes (`node`, `npm`, or shell commands are never invoked). Verifies directory existence, checks each component via `symlink_metadata` to enforce regular-file kind and strictly reject symlinks, validates permission bits (Node executable `mode 0755`, no group/world-writable files), and streams 64 KiB chunks to verify SHA-256 digests against `PinnedDigests`.
+  - Strict boundary separation: Passive artifact integrity readiness is strictly decoupled from executable protocol qualification. Integrity validation verifies on-disk layout and checksums at configuration time without running the binary; protocol compatibility is lazily verified inside the managed child owner on first session use.
+  - Language support boundaries: Only TypeScript and JavaScript (`ts`, `tsx`, `js`, `jsx`) are supported; unsupported language queries (such as Rust or Java) fail immediately with `ToolProfileError::UnsupportedLanguage` without third-party plugin search.
+
+- **Centralized Resource Policy Constants (`server/src/semantic/resources.rs`):**
+  - Centralizes the finite production policy constants selected in Phase 01 into `ResourcePolicy` (version `RESOURCE_POLICY_VERSION = "1.0.0"`).
+  - *Directly wired constants:* Protocol and queue constants are imported by `framing.rs` and `types.rs`: `MAX_STDIO_HEADER_BYTES = 8 KiB`, `MAX_FRAME_BODY_BYTES = 4 MiB`, `MAX_QUEUED_MESSAGES = 32`, `MAX_QUEUED_BYTES = 4 MiB`, `MAX_RETAINED_STDERR_BYTES = 64 KiB`, `GRACEFUL_SHUTDOWN_TIMEOUT = 2,000 ms`, `FORCE_KILL_REAP_BUDGET = 3,000 ms`, `TOTAL_TEARDOWN_BUDGET = 5,000 ms`.
+  - *Supervisor and gateway candidate constants:* Defined centrally with validation helpers (`validate_document_size`, `validate_frame_size`, `validate_header_size`, `is_incremental_sync_recommended`) awaiting active wiring in downstream Phases 04–05:
+    - Concurrency and trees: `MAX_GLOBAL_SEMANTIC_TREES = 2`, `MAX_TREES_PER_CONNECTION = 1`, `MAX_PROCESSES_PER_TREE = 8`, `MAX_IN_FLIGHT_REQUESTS = 8`.
+    - Rate limits: `MESSAGE_RATE_PER_SEC = 40`, `MESSAGE_RATE_BURST = 80`.
+    - Document and overlay budgets: `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`, `MAX_DOCUMENT_BYTES = 1 MiB`, `MAX_OPEN_DOCUMENTS_PER_SESSION = 16`, `MAX_SESSION_OVERLAY_BYTES = 4 MiB`, `MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`.
+    - Timeouts: `STARTUP_TIMEOUT = 30s`, `NAVIGATION_REQUEST_TIMEOUT = 10s`, `IDLE_SHUTDOWN_TIMEOUT = 60s`, `SOCKET_SEND_TIMEOUT = 2s`, `AUTH_STORE_LOOKUP_TIMEOUT = 2s`.
+    - Restart backoff: `MAX_RESTARTS_PER_WINDOW = 2` within `RESTART_WINDOW = 300s`, backoffs `RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`.
+    - V8 old space hint: `V8_MAX_OLD_SPACE_MB = 256` passed as `--max-old-space-size=256`.
+
+- **Linux Child-Only Cgroups Attachment & Honest Portable Degradation (`server/src/semantic/resources/linux.rs` & `launch.rs`):**
+  - *Strict Child Scoping:* Applies cgroup controls strictly to an isolated child subcgroup (`dam-hopper-semantic-<session_id>`) beneath the current process's cgroup (discovered via `/proc/self/cgroup`). Never modifies, throttles, or applies limits to the parent API daemon's cgroup, ensuring core Git, PTY, and filesystem services are never starved.
+  - *Zero-Race Pre-Exec Attachment:* `BundledLaunchSpec::build_command` attaches the child process in `cmd.pre_exec` by writing the child's own PID (`libc::getpid()`) to `cgroup.procs` between `fork` and `execve`, ensuring zero-race containment before Node or TSLS can execute or spawn worker threads (noting async-signal-safety considerations for stdlib file operations post-fork in Rust).
+  - *Candidate Limits:* Configures `memory.max = 768 MiB` (`LINUX_CGROUP_MEMORY_MAX_BYTES`), `cpu.max = "50000 100000"` (50% quota over 100 ms period), and `pids.max = 64` (`LINUX_CGROUP_PIDS_MAX`, accommodating Node libuv and V8 compiler threads).
+  - *Honest PortableOnly Degradation:* `LinuxResourceController::prepare_child_scope` checks for cgroup v2 hierarchy at `/sys/fs/cgroup/cgroup.controllers` and verifies write access. If cgroup v2 is not mounted, delegation is disabled (`PermissionDenied`), or any required controller (`memory.max`, `cpu.max`, `pids.max`) is missing from the parent subtree, it removes any partially created directory and cleanly returns `ResourceMode::PortableOnly` with an explicit reason (`degraded: true`, `v8_heap_hint_mb: 256`, `monitored_tree_limit: 8`). It never panics, never leaks partial cgroup directories, and does not falsely claim hard RSS containment in portable mode.
+  - *Scoped RAII Lifecycle:* `ChildCgroupScope` writes `1` to `cgroup.kill` (if available) and removes the cgroup directory upon drop or explicit `cleanup()`.
+
+- **SPDX 2.3 SBOM Integration & Provenance (`deploy/release/generate-release-manifest.mjs` & `provenance.json`):**
+  - Release metadata and cryptographic digests are recorded in `deploy/release/semantic-engine/provenance.json` (components: `node`, `typescript`, `typescriptLanguageServer`, `packageJson`).
+  - During Linux release packaging, `generate-release-manifest.mjs` detects `lib/semantic-engine/` in the inventory and generates a formal SPDX 2.3 JSON Software Bill of Materials (`dam-hopper-<tag>.spdx.json`).
+  - Defines package entries: `dam-hopper` (MIT), `typescript` (Apache-2.0, v5.9.3), `typescript-language-server` (Apache-2.0, v6.0.2), and `nodejs` (MIT, v24.16.0 with source URL and SHA-256).
+  - Records SPDX package relationships: `SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-dam-hopper`, and `SPDXRef-Package-dam-hopper CONTAINS SPDXRef-Package-typescript`, `CONTAINS SPDXRef-Package-typescript-language-server`, `CONTAINS SPDXRef-Package-nodejs`.
+  - Classifies inventory file licenses: files within `lib/semantic-engine/tsls/node_modules/typescript*` are assigned `Apache-2.0`; core files remain `MIT`.
+
+### Planned Production Architecture & Invariants (Phases 04–06)
 
 - **Transport-Only Client Bundle & Lazy Chunk Partitioning (G2):**
   - **Dependency Boundary:** Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1` (permissive MIT licenses). Full TypeFox `monaco-languageclient` (30+ packages, >5 MiB raw bloat) and unreleased Microsoft `@vscode/monaco-lsp-client` alpha are explicitly rejected.

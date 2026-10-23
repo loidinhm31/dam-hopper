@@ -239,7 +239,9 @@ fn test_installed_release_accepts_v1_manifest_with_root_identity() {
     manifest.schema_version = 1;
     manifest.services.api.identity = Some("root".to_string());
     // Real v0.2.0 manifests did not contain idle-suspend helper assets
-    manifest.inventory.retain(|e| !e.path.contains("idle-suspend-helper"));
+    manifest
+        .inventory
+        .retain(|e| !e.path.contains("idle-suspend-helper"));
     let bytes = serde_json::to_vec(&manifest).unwrap();
 
     // Strict parser rejects v1
@@ -307,4 +309,124 @@ fn test_installed_release_rejects_unsupported_schemas() {
             }) if got == unsupported_version
         ));
     }
+}
+
+#[test]
+fn test_manifest_accepts_valid_semantic_engine_entries() {
+    let mut manifest = create_valid_manifest();
+    let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine".to_string(),
+        kind: EntryKind::Dir,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o755,
+        size: None,
+        sha256: None,
+    });
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine/node".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o755,
+        size: Some(95_000_000),
+        sha256: Some(sha.clone()),
+    });
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine/tsls/package.json".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o644,
+        size: Some(1024),
+        sha256: Some(sha),
+    });
+
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(ReleaseManifest::parse_and_validate(&bytes).is_ok());
+}
+
+#[test]
+fn test_manifest_rejects_non_executable_semantic_node() {
+    let mut manifest = create_valid_manifest();
+    let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine/node".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o644, // Non-executable!
+        size: Some(95_000_000),
+        sha256: Some(sha),
+    });
+
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::InvalidRequiredPath {
+            path: "lib/semantic-engine/node"
+        })
+    ));
+}
+
+#[test]
+fn test_manifest_rejects_group_writable_semantic_node() {
+    let mut manifest = create_valid_manifest();
+    let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine/node".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o777, // Unsafe group/world-writable!
+        size: Some(95_000_000),
+        sha256: Some(sha),
+    });
+
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::InvalidMode { .. })
+    ));
+}
+
+#[test]
+fn test_manifest_rejects_unknown_lib_path() {
+    let mut manifest = create_valid_manifest();
+    let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/unapproved-tool".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o755,
+        size: Some(1024),
+        sha256: Some(sha),
+    });
+
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::InvalidRequiredPath { path: "lib" })
+    ));
+}
+
+#[test]
+fn test_manifest_rejects_tsbuildinfo_disallowed_file() {
+    let mut manifest = create_valid_manifest();
+    let sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+
+    manifest.inventory.push(InventoryEntry {
+        path: "lib/semantic-engine/tsls/tsconfig.tsbuildinfo".to_string(),
+        kind: EntryKind::File,
+        roles: vec![ReleaseRole::Server],
+        mode: 0o644,
+        size: Some(512),
+        sha256: Some(sha),
+    });
+
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(matches!(
+        ReleaseManifest::parse_and_validate(&bytes),
+        Err(ReleaseError::DisallowedRuntimeFile { .. })
+    ));
 }

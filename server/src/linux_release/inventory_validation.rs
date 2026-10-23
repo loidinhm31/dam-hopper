@@ -192,6 +192,30 @@ impl RequiredPathsTracker {
                     self.has_web_payload = true;
                 }
             }
+            p if p == "lib" || p.starts_with("lib/") => {
+                if p == "lib/semantic-engine" || p.starts_with("lib/semantic-engine/") {
+                    if !entry.roles.contains(&ReleaseRole::Server) {
+                        return Err(ReleaseError::InvalidRequiredPath {
+                            path: "lib/semantic-engine",
+                        });
+                    }
+                    if entry.mode & 0o022 != 0 {
+                        return Err(ReleaseError::InvalidMode {
+                            path: entry.path.clone(),
+                            mode: entry.mode,
+                        });
+                    }
+                    if p == "lib/semantic-engine/node"
+                        && (entry.kind != EntryKind::File || entry.mode & 0o111 == 0)
+                    {
+                        return Err(ReleaseError::InvalidRequiredPath {
+                            path: "lib/semantic-engine/node",
+                        });
+                    }
+                } else if p != "lib" {
+                    return Err(ReleaseError::InvalidRequiredPath { path: "lib" });
+                }
+            }
             _ => {}
         }
         Ok(())

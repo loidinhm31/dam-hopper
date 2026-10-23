@@ -1,3 +1,4 @@
+use super::resources::V8_MAX_OLD_SPACE_MB;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use thiserror::Error;
@@ -36,6 +37,7 @@ pub struct BundledLaunchSpec {
     pub home_dir: PathBuf,
     pub tsserver_path: Option<PathBuf>,
     pub v8_max_old_space_mb: usize,
+    pub cgroup_procs_path: Option<PathBuf>,
 }
 
 impl BundledLaunchSpec {
@@ -74,7 +76,8 @@ impl BundledLaunchSpec {
             cwd: cwd_buf,
             home_dir: home_dir.as_ref().to_path_buf(),
             tsserver_path: None,
-            v8_max_old_space_mb: 256,
+            v8_max_old_space_mb: V8_MAX_OLD_SPACE_MB,
+            cgroup_procs_path: None,
         })
     }
 
@@ -87,6 +90,12 @@ impl BundledLaunchSpec {
     #[doc(hidden)]
     pub fn with_extra_args(mut self, args: Vec<String>) -> Self {
         self.extra_args = args;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_cgroup_procs_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.cgroup_procs_path = Some(path.as_ref().to_path_buf());
         self
     }
 
@@ -124,6 +133,21 @@ impl BundledLaunchSpec {
         // Process group isolation on Unix
         #[cfg(unix)]
         cmd.process_group(0);
+
+        // Pre-exec attachment to dedicated child cgroup if configured
+        #[cfg(unix)]
+        if let Some(cgroup_procs) = &self.cgroup_procs_path {
+            let procs_file = cgroup_procs.clone();
+            unsafe {
+                cmd.pre_exec(move || {
+                    let pid = libc::getpid();
+                    let mut f = std::fs::OpenOptions::new().write(true).open(&procs_file)?;
+                    use std::io::Write;
+                    f.write_all(format!("{pid}\n").as_bytes())?;
+                    Ok(())
+                });
+            }
+        }
 
         // Emergency fallback guard
         cmd.kill_on_drop(true);

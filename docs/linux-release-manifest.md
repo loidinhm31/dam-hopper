@@ -19,7 +19,7 @@ outside this specification:
 
 The central publisher's Linux profile emits four external, attested assets: the
 executable `dam-hopper-install.sh`, one profile archive, `release-manifest.json`,
-and the tag-specific SPDX 2.3 SBOM. The manifest stays outside the archive
+and the tag-specific SPDX 2.3 JSON SBOM (`dam-hopper-<tag>.spdx.json`). The manifest stays outside the archive
 because it declares the archive's own size and SHA-256. The publisher assembles
 the archive with normalized modes, sorted paths, fixed ownership/mtime, POSIX tar
 headers, and timestamp-free gzip, then runs the Rust validator before publication.
@@ -164,6 +164,25 @@ execute bit.
 The helper socket unit is a separate optional server-role archive asset. The
 release manager directly manages the helper service and must not enable both
 direct-binding service mode and socket activation for the same socket path.
+
+### Bundled Semantic Engine Layout and Role Isolation
+
+When the archive packages the bundled semantic language server toolchain, the inventory validator enforces strict role and permission constraints:
+- All paths matching `lib/semantic-engine` or `lib/semantic-engine/*` must include the `server` role (omitted from `web`-only installations).
+- Entries must not have group- or world-writable permissions (`mode & 0o022 == 0`).
+- `lib/semantic-engine/node` must be a regular file with execute permissions (`mode & 0o111 != 0`).
+- All symlinks are dereferenced during staging (`cp -rL`); symlinks in the release engine payload are rejected fail-closed.
+
+### SPDX 2.3 Software Bill of Materials (SBOM) Integration
+
+`deploy/release/generate-release-manifest.mjs` generates an SPDX 2.3 JSON document (`dam-hopper-<tag>.spdx.json`) during release assembly:
+- **Described Package:** `dam-hopper` (MIT license, archive SHA-256).
+- **Contained Tool Packages:** When `lib/semantic-engine` is present, provenance metadata (`deploy/release/semantic-engine/provenance.json`) declares pinned tool packages:
+  - `typescript` (v5.9.3, Apache-2.0)
+  - `typescript-language-server` (v6.0.2, Apache-2.0)
+  - `nodejs` (v24.16.0, MIT, with download source and SHA-256)
+- **Relationships:** `SPDXRef-Package-dam-hopper CONTAINS SPDXRef-Package-typescript`, `CONTAINS SPDXRef-Package-typescript-language-server`, and `CONTAINS SPDXRef-Package-nodejs`.
+- **File-Level Attribution:** Packaged files under `lib/semantic-engine/tsls/node_modules/typescript*` are concluded `Apache-2.0`, while base DamHopper files are concluded `MIT`.
 
 
 The publisher must compute exact inventory set equality for each projection; a

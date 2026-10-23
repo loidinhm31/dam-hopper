@@ -13,6 +13,7 @@ TARGET_DIR=""
 WEB_DIST=""
 OUTPUT_DIR="${REPO_ROOT}/artifacts/release"
 EPOCH="${SOURCE_DATE_EPOCH:-}"
+SEMANTIC_ENGINE_DIR="${SEMANTIC_ENGINE_DIR:-}"
 
 usage() {
     cat <<EOF
@@ -24,6 +25,7 @@ Options:
   --web-dist <dir>        Directory containing built apps/web/dist
   --output-dir <dir>      Output directory for release archive (default: artifacts/release)
   --source-date-epoch <n> Deterministic Unix timestamp for file mtimes
+  --semantic-engine-dir <dir> Staged directory containing lib/semantic-engine payload
   -h, --help              Show this help message
 EOF
     exit 1
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --source-date-epoch)
             EPOCH="$2"
+            shift 2
+            ;;
+        --semantic-engine-dir)
+            SEMANTIC_ENGINE_DIR="$2"
             shift 2
             ;;
         -h|--help)
@@ -207,17 +213,43 @@ chmod 0644 "${TMP_STAGE}/LICENSE"
 # Copy web assets
 cp -r "${WEB_DIST}/." "${TMP_STAGE}/web/"
 
+# Copy semantic engine assets if provided
+if [[ -n "${SEMANTIC_ENGINE_DIR}" ]]; then
+    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/node" ]]; then
+        echo "Error: Semantic engine node binary not found in '${SEMANTIC_ENGINE_DIR}'" >&2
+        exit 1
+    fi
+    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/package.json" ]]; then
+        echo "Error: Semantic engine tsls/package.json not found in '${SEMANTIC_ENGINE_DIR}'" >&2
+        exit 1
+    fi
+    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/node_modules/typescript-language-server/lib/cli.mjs" ]]; then
+        echo "Error: Semantic engine TSLS cli.mjs not found in '${SEMANTIC_ENGINE_DIR}'" >&2
+        exit 1
+    fi
+    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/node_modules/typescript/lib/tsserver.js" ]]; then
+        echo "Error: Semantic engine tsserver.js not found in '${SEMANTIC_ENGINE_DIR}'" >&2
+        exit 1
+    fi
+    mkdir -p "${TMP_STAGE}/lib/semantic-engine"
+    # Dereference symlinks so release archive contains only regular files and directories
+    cp -rL "${SEMANTIC_ENGINE_DIR}/." "${TMP_STAGE}/lib/semantic-engine/"
+fi
+
 # Fix directory and file permissions throughout
 find "${TMP_STAGE}" -type d -exec chmod 0755 {} +
 find "${TMP_STAGE}" -type f ! -path "${TMP_STAGE}/bin/*" -exec chmod 0644 {} +
 find "${TMP_STAGE}/bin" -type f -exec chmod 0755 {} +
+if [[ -f "${TMP_STAGE}/lib/semantic-engine/node" ]]; then
+    chmod 0755 "${TMP_STAGE}/lib/semantic-engine/node"
+fi
 
 # Normalize mtimes deterministically
 find "${TMP_STAGE}" -exec touch -h -d "@${EPOCH}" {} +
 
 # Generate sorted file list
 FILE_LIST="${TMP_STAGE}/_filelist.txt"
-(cd "${TMP_STAGE}" && find . -mindepth 1 ! -name "_filelist.txt" \( -type f -o -path "./web*" -type d \) | sed 's|^\./||' | LC_ALL=C sort) > "${FILE_LIST}"
+(cd "${TMP_STAGE}" && find . -mindepth 1 ! -name "_filelist.txt" \( -type f -o -path "./web*" -type d -o -path "./lib*" -type d \) | sed 's|^\./||' | LC_ALL=C sort) > "${FILE_LIST}"
 
 TMP_TAR="${TMP_STAGE}/archive.tar"
 tar --sort=name \

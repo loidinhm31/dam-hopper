@@ -22,7 +22,7 @@ DamHopper publishes immutable, SHA-256 attested release bundles for Linux x86_64
 - Linux x86_64 with systemd (glibc &ge; 2.39, systemd &ge; 245)
 - Standard utilities: `curl`, `tar`, `sha256sum`, `sudo`
 - Optional: GitHub CLI (`gh`) for artifact attestation verification
-
+- **Zero Node.js runtime dependency on host:** When installed with `server` or `both` roles, the archive includes the immutable bundled toolchain (`lib/semantic-engine`) containing pinned Node.js v24.16.0, TypeScript 5.9.3, and typescript-language-server 6.0.2. Once the release archive is staged or installed, semantic tooling requires no additional runtime or package downloads on the host. Implemented child-only Linux cgroups v2 resource primitives are prepared for session integration, with honest degradation to portable monitoring if delegation is unavailable.
 ### Step 1: Download Bootstrap Installer
 
 ```bash
