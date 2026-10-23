@@ -445,6 +445,10 @@ async fn handle_semantic_socket(
             _ = cancel_rx.changed() => {
                 break;
             }
+            _ = outbound_tx.closed() => {
+                debug!("Outbound writer channel closed; terminating reader loop");
+                break;
+            }
             msg_res = tokio::time::timeout(Duration::from_secs(60), ws_stream.next()) => {
                 match msg_res {
                     Ok(Some(Ok(Message::Text(text)))) => {
@@ -514,6 +518,7 @@ async fn handle_semantic_socket(
 
     if let Some(task) = auth_watcher_task {
         task.abort();
+        let _ = task.await;
     }
 
     gateway.teardown().await;

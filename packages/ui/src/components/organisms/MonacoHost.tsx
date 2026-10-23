@@ -39,7 +39,12 @@ import {
 } from "@/hooks/use-editor-git-blame.js";
 import { EditorGitBlameGutter } from "./EditorGitBlameGutter.js";
 import { EditorGitBlameContextMenu } from "./EditorGitBlameContextMenu.js";
-
+import {
+  isSupportedSemanticPath,
+  defaultSemanticModelRegistry,
+  monacoPositionToLsp,
+} from "@/lib/semantic-model-uri.js";
+import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 interface MonacoHostProps {
   tabKey: string;
   path?: string;
@@ -171,6 +176,72 @@ export function MonacoHost({
     }
   }, [onRefreshBlame, hookResult]);
 
+  const semanticEnabled = useSemanticNavigationStore(
+    (s) => s.globalSemanticEnabled,
+  );
+  const clientStatuses = useSemanticNavigationStore((s) => s.clientStatuses);
+
+  useEffect(() => {
+    if (
+      !semanticEnabled ||
+      !effectiveTab ||
+      !isSupportedSemanticPath(effectiveTab.path)
+    ) {
+      return;
+    }
+
+    defaultSemanticModelRegistry.registerModel({
+      tabKey,
+      profileId: effectiveTab.target?.profileId ?? "default",
+      project: effectiveTab.project,
+      targetKey: effectiveTab.targetKey,
+      relativePath: effectiveTab.path,
+    });
+
+    const client = useSemanticNavigationStore
+      .getState()
+      .findClientForTab(tabKey);
+    if (client && client.getStatus() === "ready") {
+      void client.notifyDidOpen(tabKey, content);
+    }
+  }, [
+    semanticEnabled,
+    tabKey,
+    effectiveTab?.path,
+    effectiveTab?.project,
+    effectiveTab?.targetKey,
+    effectiveTab?.target?.profileId,
+    clientStatuses,
+  ]);
+
+  const activeRevealIntent = useSemanticNavigationStore(
+    (s) => s.activeRevealIntent,
+  );
+  useEffect(() => {
+    if (!activeRevealIntent || !effectiveTab || !editorInstance) return;
+
+    const intent = useSemanticNavigationStore
+      .getState()
+      .consumeRevealIntent(
+        effectiveTab.target?.profileId ?? "default",
+        effectiveTab.project,
+        effectiveTab.targetKey,
+        effectiveTab.path,
+      );
+
+    if (intent) {
+      editorInstance.revealRangeInCenter(intent.range);
+      editorInstance.setSelection(intent.range);
+      editorInstance.focus();
+    }
+  }, [
+    activeRevealIntent,
+    effectiveTab?.project,
+    effectiveTab?.path,
+    effectiveTab?.targetKey,
+    effectiveTab?.target?.profileId,
+    editorInstance,
+  ]);
   useEffect(() => {
     effectiveBlameDataRef.current = effectiveBlameData;
     effectiveBlameStatusRef.current = effectiveBlameStatus;
@@ -260,6 +331,22 @@ export function MonacoHost({
         if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
 
+      // Semantic navigation reveal intent handling
+      if (effectiveTab && isSupportedSemanticPath(effectiveTab.path)) {
+        const revealIntent = useSemanticNavigationStore
+          .getState()
+          .consumeRevealIntent(
+            effectiveTab.target?.profileId ?? "default",
+            effectiveTab.project,
+            effectiveTab.targetKey,
+            effectiveTab.path,
+          );
+        if (revealIntent) {
+          editor.revealRangeInCenter(revealIntent.range);
+          editor.setSelection(revealIntent.range);
+          editor.focus();
+        }
+      }
       // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
         isAndroidChromeNativeInputSuppressed || readOnly
@@ -527,9 +614,35 @@ export function MonacoHost({
           value={content}
           language={language}
           theme="vs-dark"
-          onChange={(val) => {
-            if (!isAndroidChromeNativeInputSuppressed && !readOnly)
-              onChange(val ?? "");
+          onChange={(val, ev) => {
+            if (!isAndroidChromeNativeInputSuppressed && !readOnly) {
+              const newText = val ?? "";
+              onChange(newText);
+              if (effectiveTab && isSupportedSemanticPath(effectiveTab.path)) {
+                const changes = (ev?.changes ?? []).map((change) => ({
+                  range: {
+                    start: monacoPositionToLsp({
+                      lineNumber: change.range.startLineNumber,
+                      column: change.range.startColumn,
+                    }),
+                    end: monacoPositionToLsp({
+                      lineNumber: change.range.endLineNumber,
+                      column: change.range.endColumn,
+                    }),
+                  },
+                  rangeLength: change.rangeLength,
+                  text: change.text,
+                }));
+                const client = useSemanticNavigationStore
+                  .getState()
+                  .findClientForTab(tabKey);
+                void client?.notifyDidChange(
+                  tabKey,
+                  newText,
+                  changes.length > 0 ? changes : undefined,
+                );
+              }
+            }
           }}
           onMount={handleMount}
           options={{

@@ -32,6 +32,8 @@ import {
   type ProjectTargetRef,
 } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import { defaultSemanticModelRegistry } from "@/lib/semantic-model-uri.js";
+import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 export type FileTier = FT | "diff";
 
 const EDITOR_PERSIST_VERSION = 2;
@@ -326,10 +328,12 @@ function persistedTarget(
         : null;
   return normalizeProjectTarget(
     worktreePath == null
-      ? (profileId ? { profileId, project } : { project })
-      : (profileId
-          ? { profileId, project, worktreePath }
-          : { project, worktreePath }),
+      ? profileId
+        ? { profileId, project }
+        : { project }
+      : profileId
+        ? { profileId, project, worktreePath }
+        : { project, worktreePath },
   );
 }
 function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
@@ -656,7 +660,9 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
-          const { transport: t, connectionRef } = resolveTabTransport({ target: targetRef });
+          const { transport: t, connectionRef } = resolveTabTransport({
+            target: targetRef,
+          });
           try {
             const result = await t.fsRead(targetRef, node.id);
             if (!isCurrentRequest(key, requestGeneration)) return;
@@ -777,6 +783,11 @@ export const useEditorStore = create<EditorState>()(
             }
             const requestGenerations = { ...s.requestGenerations };
             requestGenerations[key] = (requestGenerations[key] ?? 0) + 1;
+            const client = useSemanticNavigationStore
+              .getState()
+              .findClientForTab(key);
+            client?.notifyDidClose(key);
+            defaultSemanticModelRegistry.unregisterModel(key);
             return {
               tabs: nextTabs,
               activeKeys: { ...s.activeKeys, [scopeKey]: nextActive },
@@ -804,8 +815,12 @@ export const useEditorStore = create<EditorState>()(
             for (const removedKey of removedKeys) {
               requestGenerations[removedKey] =
                 (requestGenerations[removedKey] ?? 0) + 1;
+              const client = useSemanticNavigationStore
+                .getState()
+                .findClientForTab(removedKey);
+              client?.notifyDidClose(removedKey);
+              defaultSemanticModelRegistry.unregisterModel(removedKey);
             }
-
             return {
               tabs: s.tabs.filter(
                 (tab) =>
@@ -829,6 +844,11 @@ export const useEditorStore = create<EditorState>()(
               for (const removedKey of removedKeys) {
                 requestGenerations[removedKey] =
                   (requestGenerations[removedKey] ?? 0) + 1;
+                const client = useSemanticNavigationStore
+                  .getState()
+                  .findClientForTab(removedKey);
+                client?.notifyDidClose(removedKey);
+                defaultSemanticModelRegistry.unregisterModel(removedKey);
               }
               const activeKeys = Object.fromEntries(
                 Object.entries(s.activeKeys).filter(
@@ -854,6 +874,11 @@ export const useEditorStore = create<EditorState>()(
             for (const removedKey of removedKeys) {
               requestGenerations[removedKey] =
                 (requestGenerations[removedKey] ?? 0) + 1;
+              const client = useSemanticNavigationStore
+                .getState()
+                .findClientForTab(removedKey);
+              client?.notifyDidClose(removedKey);
+              defaultSemanticModelRegistry.unregisterModel(removedKey);
             }
             return {
               tabs: s.tabs.filter(
@@ -1200,8 +1225,7 @@ export const useEditorStore = create<EditorState>()(
                   content: decoded,
                   savedContent: decoded,
                   mtime: result.mtime,
-                  size:
-                    typeof result.size === "number" ? result.size : t.size,
+                  size: typeof result.size === "number" ? result.size : t.size,
                   dirty: false,
                   stale: false,
                   binaryBase64: result.binary ? result.content : undefined,
@@ -1589,9 +1613,7 @@ export const useEditorStore = create<EditorState>()(
           if (!snapshot || snapshot.status !== "connected") return;
           const tabs = get().tabs.filter(
             (t) =>
-              t.target.profileId === profileId &&
-              !t.dirty &&
-              t.targetAvailable,
+              t.target.profileId === profileId && !t.dirty && t.targetAvailable,
           );
           for (const tab of tabs) {
             if (

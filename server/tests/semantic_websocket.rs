@@ -887,3 +887,168 @@ async fn test_active_session_reap_on_client_disconnect() {
         "Active session must be completely reaped on client disconnect"
     );
 }
+
+#[tokio::test]
+async fn test_cancellation_response_id_and_malformed_change() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("cancel-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("src/main.ts"),
+        "export const answer: number = 42;\n",
+    )
+    .unwrap();
+
+    let (state, _tc) = make_test_app(&tmp, vec![("cancel-project", project_dir.clone())]).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    // Attach
+    let attach_ts = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "damHopper/attachTarget",
+        "params": {
+            "target": { "project": "cancel-project" },
+            "descriptor": "typescript"
+        }
+    });
+    ws.send(Message::Text(attach_ts.to_string().into()))
+        .await
+        .unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Initialize
+    let init_req = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "initialize",
+        "params": {}
+    });
+    ws.send(Message::Text(init_req.to_string().into()))
+        .await
+        .unwrap();
+    let _ = read_next_json(&mut ws).await.unwrap();
+
+    let initialized_notif = json!({
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+    });
+    ws.send(Message::Text(initialized_notif.to_string().into()))
+        .await
+        .unwrap();
+    // didOpen
+    let virtual_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    let open_notif = json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": virtual_uri,
+                "languageId": "typescript",
+                "version": 1,
+                "text": "const x: number = 42;\n"
+            }
+        }
+    });
+    ws.send(Message::Text(open_notif.to_string().into()))
+        .await
+        .unwrap();
+
+    // Send definition request with id: 100
+    let def_req = json!({
+        "jsonrpc": "2.0",
+        "id": 100,
+        "method": "textDocument/definition",
+        "params": {
+            "textDocument": { "uri": virtual_uri },
+            "position": { "line": 0, "character": 6 },
+            "damHopperDocumentVersion": 1
+        }
+    });
+    ws.send(Message::Text(def_req.to_string().into()))
+        .await
+        .unwrap();
+
+    // Immediately cancel request 100
+    let cancel_notif = json!({
+        "jsonrpc": "2.0",
+        "method": "$/cancelRequest",
+        "params": { "id": 100 }
+    });
+    ws.send(Message::Text(cancel_notif.to_string().into()))
+        .await
+        .unwrap();
+
+    // Read definition response: either cancelled (-32800) or completed with id: 100
+    let def_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(def_res["id"], 100, "Response ID must match request ID 100");
+    if let Some(err) = def_res.get("error") {
+        assert_eq!(err["code"], -32800, "Cancelled error code must be -32800");
+    }
+
+    // Send malformed didChange (malformed contentChanges element)
+    let malformed_change = json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": {
+                "uri": virtual_uri,
+                "version": 2
+            },
+            "contentChanges": ["not-an-object"]
+        }
+    });
+    ws.send(Message::Text(malformed_change.to_string().into()))
+        .await
+        .unwrap();
+
+    // Give actor a moment to close document
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Now navigation should fail or report document closed/stale because document was closed
+    let def_req2 = json!({
+        "jsonrpc": "2.0",
+        "id": 101,
+        "method": "textDocument/definition",
+        "params": {
+            "textDocument": { "uri": virtual_uri },
+            "position": { "line": 0, "character": 6 },
+            "damHopperDocumentVersion": 2
+        }
+    });
+    ws.send(Message::Text(def_req2.to_string().into()))
+        .await
+        .unwrap();
+
+    let def_res2 = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(def_res2["id"], 101);
+    assert!(
+        def_res2.get("error").is_some(),
+        "Document closed on malformed change must reject subsequent request"
+    );
+
+    // Cleanup
+    drop(ws);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let snap_after = state.semantic_supervisor.get_aggregate_status().await;
+    assert_eq!(snap_after.active_sessions, 0);
+}

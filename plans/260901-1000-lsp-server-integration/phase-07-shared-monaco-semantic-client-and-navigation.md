@@ -12,8 +12,8 @@
 - Date: 2026-10-23
 - Description: Integrate the narrow shared Monaco TS/JS client into actual editor ownership/model lifecycle; qualify the web surface only.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Plan reconciliation completed; implementation and runtime qualification not run.
+- Implementation status: DONE (2026-10-23) — Administratively complete under approved exceptions; release qualification pending
+- Review status: Approved by user on 2026-10-23 under tracked exceptions (Score: 6/10, Cycle 3; C-1, C-2/G8, W1–W10 tracked for Phase 08/09/10)
 - Effort: 32h, provisional until Phase 01 stop/go; increase covers stable local/wire identity separation, real host integration, and freshness fences.
 
 ## Key Insights
@@ -75,13 +75,13 @@ Failure boundary: revoke only the obsolete semantic binding; preserve local edit
 
 ## Todo list
 
-- [ ] Close Phase 01 identity/sync/version/freshness prerequisites.
-- [ ] Integrate stable local model registry and replaceable owner/session wire bindings.
-- [ ] Implement bounded ordered adaptive sync, full replay/resync, and exact UTF-8/UTF-16 handling.
-- [ ] Register only TS/JS Definition/Implementation without duplicate results.
-- [ ] Open/focus/reveal through exact-owner target-aware editor lifecycle.
-- [ ] Preserve dirty models and fence cancellation/result/reveal/cleanup across replacements.
-- [ ] Cover changed observable contracts; keep all implementation progress at 0% until executed.
+- [ ] Close Phase 01 identity/sync/version/freshness prerequisites (adaptive sync, version fencing, and model rebind delivered; destination freshness G5 and live-browser G8 coexistence remain open gates).
+- [x] Integrate stable local model registry and replaceable owner/session wire bindings (`semantic-model-uri.ts`, `semantic-client.ts`).
+- [ ] Implement bounded ordered adaptive sync, full replay/resync, and exact UTF-8/UTF-16 handling (adaptive sync and initial replay delivered; resync path W-9 and timeout $/cancelRequest W-5 remain open).
+- [ ] Register only TS/JS Definition/Implementation without duplicate results (providers delivered; live-browser model-scoped coexistence G8/C-2 remains open).
+- [x] Open/focus/reveal through exact-owner target-aware editor lifecycle (`MonacoHost.tsx`, `EditorTabs.tsx`, `semantic-navigation.ts`).
+- [ ] Preserve dirty models and fence cancellation/result/reveal/cleanup across replacements (disconnect teardown and scoped cleanup delivered; C-1 stale client ref across reconnect and W-7 singleton options remain open).
+- [x] Cover changed observable contracts; keep all implementation progress at 0% until executed (128/128 target & regression tests passing per QA report; full UI 3,167/3,167 passing).
 
 ## Success Criteria
 
@@ -109,5 +109,5 @@ Failure boundary: revoke only the obsolete semantic binding; preserve local edit
 
 ## Next steps
 
+- Phase 07 complete under user approval on 2026-10-23. Tracked items C-1 (call-time client resolution in `onChange`/`notifyDidClose` across reconnect and generation changes), C-2/G8 (live web browser Monaco definition action verification across owned and non-owned models with clean restore on OFF), W-1 (destination freshness G5), W-2/W-4 (typed errors and visible status indicators), W-3 (direct EditorTabs effect tests), W-5 (`$/cancelRequest` timeout and handshake margin), and W-6 to W-10 (ambient defaults, singleton options, global boolean switch, resync path, zustand side-effects) are carried forward into Phase 08 (Lifecycle invalidation and recovery), Phase 09, and Phase 10.
 - Phase 08 completes lifecycle reauthorization/invalidation; Phase 09 measures final threshold/limits and security/resource behavior; Phase 10 qualifies the actual built web app.
-- Unresolved spike gates: exact adaptive single-capability contract, source-version fence plus destination freshness, stable local/wire identity, and supported built-in/custom provider coexistence belong to Phase 01. No resolution or runtime evidence is claimed here.

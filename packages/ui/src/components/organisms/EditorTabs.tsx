@@ -7,7 +7,14 @@
  * - MonacoHost / MarkdownHost are lazy-loaded (dynamic import) to keep the main chunk clean.
  * - ConflictDialog is shown when save returns a conflict.
  */
-import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+} from "react";
 import type * as monacoNs from "monaco-editor";
 import { AlertTriangle, FileCode, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -39,6 +46,7 @@ import {
   invalidateGitFileOperation,
   useGitDiff,
   useGitFileDiff,
+  useSemanticSettings,
 } from "@/api/queries.js";
 import { buildGitFileStateIndex } from "@/lib/git-file-state.js";
 import {
@@ -48,11 +56,18 @@ import {
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { useConnectionSnapshot } from "@/api/connections.js";
 import type { GitCommitRevealRequest } from "@/lib/git-commit-reveal.js";
+import { getAuthToken } from "@/api/server-config.js";
+import type { FsArborNode } from "@/api/fs-types.js";
 import {
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
 } from "@/components/organisms/EditorTabContextMenu.js";
+import {
+  useSemanticNavigationStore,
+  buildSemanticScopeKey,
+} from "@/stores/semantic-navigation.js";
 
+import { defaultSemanticModelRegistry } from "@/lib/semantic-model-uri.js";
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
     default: m.MonacoHost,
@@ -126,6 +141,151 @@ export function EditorTabs({
   const [activeEditor, setActiveEditor] =
     useState<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const { data: gitDiff } = useGitDiff(targetRef, "*");
+
+  const connectionProfileId = targetRef.profileId ?? "default";
+  const connection = useConnectionSnapshot(connectionProfileId);
+  const { data: semanticSettings } = useSemanticSettings(
+    targetRef.profileId ? { profileId: targetRef.profileId } : undefined,
+  );
+  const semanticEnabled = semanticSettings?.runtimeEnabled ?? false;
+
+  useEffect(() => {
+    useSemanticNavigationStore
+      .getState()
+      .setGlobalSemanticEnabled(semanticEnabled);
+  }, [semanticEnabled]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (
+      !semanticEnabled ||
+      !project ||
+      !connection ||
+      connection.status !== "connected" ||
+      !targetRef.profileId
+    ) {
+      return;
+    }
+
+    const profileId = targetRef.profileId;
+    const serverUrl = connection.serverUrl;
+    const wsUrl = serverUrl.replace(/^http/, "ws") + "/ws/semantic/v1";
+    const token = getAuthToken(profileId);
+    const connectionGen = connection.owner.generation;
+
+    const scopeKey = buildSemanticScopeKey(
+      profileId,
+      serverUrl,
+      project,
+      targetScopeKey,
+      connectionGen,
+    );
+
+    const client = useSemanticNavigationStore.getState().getOrCreateClient({
+      wsUrl,
+      serverUrl,
+      token,
+      profileId,
+      project,
+      worktree: targetRef.worktreePath ?? null,
+      targetKey: targetScopeKey,
+      connectionGeneration: connectionGen,
+      targetGeneration: 1,
+      getModelText: (modelKey) => {
+        const currentTabs = useEditorStore.getState().tabs;
+        const currentTab = currentTabs.find((t) => t.key === modelKey);
+        return currentTab?.content;
+      },
+    });
+
+    if (client.getStatus() === "disconnected") {
+      void client.connect().catch(() => {});
+    }
+
+    void import("@/lib/semantic-monaco.js").then(
+      ({ defaultSemanticMonacoManager }) => {
+        if (disposed) return;
+        defaultSemanticMonacoManager.setOptions({
+          getClientForModel: (modelTabKey) => {
+            const model = defaultSemanticModelRegistry.getByTabKey(modelTabKey);
+            if (!model) return null;
+            const sKey = buildSemanticScopeKey(
+              model.identity.profileId,
+              serverUrl,
+              model.identity.project,
+              model.identity.targetKey,
+              connectionGen,
+            );
+            return useSemanticNavigationStore.getState().getClient(sKey);
+          },
+          onOpenCodeEditor: ({ tabKey, range }) => {
+            const currentTabs = useEditorStore.getState().tabs;
+            const existingTab = currentTabs.find((t) => t.key === tabKey);
+            if (existingTab) {
+              useEditorStore.getState().setActive(targetRef, tabKey);
+              if (range) {
+                useSemanticNavigationStore.getState().setRevealIntent({
+                  targetId: "",
+                  profileId: existingTab.target.profileId ?? profileId,
+                  project: existingTab.project,
+                  targetKey: existingTab.targetKey,
+                  relativePath: existingTab.path,
+                  range,
+                  createdAt: Date.now(),
+                });
+              }
+              return true;
+            }
+
+            try {
+              const parsedKey = JSON.parse(tabKey);
+              const relativePath = parsedKey[parsedKey.length - 1];
+              if (typeof relativePath !== "string") return false;
+              const fileName = relativePath.split("/").pop() ?? relativePath;
+              const fileNode: FsArborNode = {
+                id: relativePath,
+                name: fileName,
+                kind: "file",
+                size: 0,
+                mtime: 0,
+                isSymlink: false,
+                children: null,
+              };
+              if (range) {
+                useSemanticNavigationStore.getState().setRevealIntent({
+                  targetId: "",
+                  profileId,
+                  project,
+                  targetKey: targetScopeKey,
+                  relativePath,
+                  range,
+                  createdAt: Date.now(),
+                });
+              }
+              void useEditorStore.getState().open(targetRef, fileNode);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        });
+      },
+    );
+
+    return () => {
+      disposed = true;
+      useSemanticNavigationStore.getState().disconnectClient(scopeKey);
+    };
+  }, [
+    semanticEnabled,
+    project,
+    targetScopeKey,
+    targetRef.profileId,
+    targetRef.worktreePath,
+    connection?.status,
+    connection?.serverUrl,
+    connection?.owner.generation,
+  ]);
 
   const handleSave = useCallback(
     async (key: string) => {

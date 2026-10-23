@@ -87,9 +87,10 @@ vi.mock("@/api/connections.js", () => ({
 }));
 
 vi.mock("@/stores/editor.js", async () => {
-  const actual = await vi.importActual<typeof import("@/stores/editor.js")>(
-    "@/stores/editor.js",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/stores/editor.js")>(
+      "@/stores/editor.js",
+    );
   return {
     ...actual,
     useEditorStore: (selector?: (s: unknown) => unknown) => {
@@ -126,6 +127,11 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useGitFileDiff: () => ({ data: undefined }),
+  useSemanticSettings: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@/api/transport.js", () => ({
@@ -193,7 +199,9 @@ afterEach(() => {
 
 const defaultTarget = { project: "alpha", profileId: "profile-1" } as const;
 
-async function mount(props: Partial<React.ComponentProps<typeof EditorTabs>> = {}) {
+async function mount(
+  props: Partial<React.ComponentProps<typeof EditorTabs>> = {},
+) {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -223,7 +231,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     await mount({ sourceActive: true, onRevealGitCommit, onRevealCommit });
 
     expect(capturedMonacoHostProps.length).toBeGreaterThan(0);
-    const lastProps = capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
+    const lastProps =
+      capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
     expect(lastProps.sourceActive).toBe(true);
     expect(typeof lastProps.onRevealCommit).toBe("function");
 
@@ -233,7 +242,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     });
 
     expect(onRevealGitCommit).toHaveBeenCalledTimes(1);
-    const request = onRevealGitCommit.mock.calls[0]?.[0] as GitCommitRevealRequest;
+    const request = onRevealGitCommit.mock
+      .calls[0]?.[0] as GitCommitRevealRequest;
     expect(request.hash).toBe("deadbeef1234");
     expect(request.rootId).toBe("root-1");
     expect(request.owner.profileId).toBe("profile-1");
@@ -252,7 +262,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     await mount({ sourceActive: false });
 
     expect(capturedMonacoHostProps.length).toBeGreaterThan(0);
-    const lastProps = capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
+    const lastProps =
+      capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
     expect(lastProps.sourceActive).toBe(false);
   });
 
@@ -270,7 +281,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     const onRevealGitCommit = vi.fn();
     await mount({ onRevealGitCommit });
 
-    const lastProps = capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
+    const lastProps =
+      capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
     act(() => {
       lastProps.onRevealCommit?.("deadbeef1234", "root-1");
     });
@@ -296,7 +308,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     const onRevealGitCommit = vi.fn();
     await mount({ onRevealGitCommit });
 
-    const lastProps = capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
+    const lastProps =
+      capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
     act(() => {
       lastProps.onRevealCommit?.("deadbeef1234", "root-1");
     });
@@ -312,7 +325,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     const onRevealGitCommit = vi.fn();
     await mount({ onRevealGitCommit });
 
-    const lastProps = capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
+    const lastProps =
+      capturedMonacoHostProps[capturedMonacoHostProps.length - 1];
     act(() => {
       lastProps.onRevealCommit?.("deadbeef1234", "root-1");
     });
@@ -329,7 +343,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     await mount({ sourceActive: true, onRevealGitCommit });
 
     expect(capturedMarkdownHostProps.length).toBeGreaterThan(0);
-    const lastProps = capturedMarkdownHostProps[capturedMarkdownHostProps.length - 1];
+    const lastProps =
+      capturedMarkdownHostProps[capturedMarkdownHostProps.length - 1];
     expect(lastProps.sourceActive).toBe(true);
 
     act(() => {
@@ -337,7 +352,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     });
 
     expect(onRevealGitCommit).toHaveBeenCalledTimes(1);
-    const request = onRevealGitCommit.mock.calls[0]?.[0] as GitCommitRevealRequest;
+    const request = onRevealGitCommit.mock
+      .calls[0]?.[0] as GitCommitRevealRequest;
     expect(request.hash).toBe("mdcommit1234");
     expect(request.rootId).toBe("root-md");
   });
@@ -359,7 +375,8 @@ describe("EditorTabs Blame and Reveal Integration", () => {
     });
 
     expect(onRevealGitCommit).toHaveBeenCalledTimes(1);
-    const request = onRevealGitCommit.mock.calls[0]?.[0] as GitCommitRevealRequest;
+    const request = onRevealGitCommit.mock
+      .calls[0]?.[0] as GitCommitRevealRequest;
     expect(request.hash).toBe("htmlcommit1234");
     expect(request.rootId).toBe("root-html");
   });

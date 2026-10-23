@@ -78,6 +78,13 @@ Failure boundary: semantic teardown failure cannot keep old authority alive or b
 - [ ] Integrate fail-closed live auth and current-role mutation policy without send-dependent cancellation.
 - [ ] Preserve stable dirty models and replay only newly authorized matching owners/targets.
 - [ ] Prove old results/callbacks/timers/cleanup cannot affect replacement owners/incarnations.
+- [ ] Remediate Phase 07 C-1: Resolve semantic client dynamically at call time (`findClientForTab(tabKey)` in `onChange`/`notifyDidClose`) rather than caching `semanticClientRef`, preventing stale references across reconnect and generation changes; add `MonacoHost` generation-bump test.
+- [ ] Remediate Phase 07 W-3: Add direct unit tests for `EditorTabs.tsx` semantic connection effects (connection gating, generation change teardown, disabled state).
+- [ ] Remediate Phase 07 W-2/W-4: Surface visible status indicators from `clientStatuses` for starting, disconnected, and error states; define reconnect/backoff policy without silent worker fallback.
+- [ ] Remediate Phase 07 W-5: Issue `$/cancelRequest` on query timeout; separate language server handshake timeout from navigation timeout.
+- [ ] Remediate Phase 07 W-9: Implement full resync on version divergence and increment session generation.
+- [ ] Clean up Phase 07 W-6/W-7/W-8/W-10: Eliminate `"default"` fallbacks in MonacoHost/EditorTabs, clean singleton manager options on unmount, scope enabled state per profile/owner, and move side-effects out of zustand updaters.
+- [ ] Verify G8 model-scoped coexistence in live web browser (C-2) and destination freshness (Phase 07 W-1 / G5) under lifecycle transitions.
 
 ## Success Criteria
 

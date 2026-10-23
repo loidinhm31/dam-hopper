@@ -59,6 +59,9 @@ pub enum SessionError {
     #[error("Request timed out")]
     Timeout,
 
+    #[error("Request cancelled")]
+    Cancelled,
+
     #[error("Session invalidated")]
     Invalidated,
 }
@@ -730,7 +733,7 @@ impl SemanticSessionActor {
 
     async fn do_cancel_request(&mut self, id: Value) {
         if let Some(req) = self.in_flight_requests.remove(&id) {
-            let _ = req.response_tx.send(Ok(Value::Null));
+            let _ = req.response_tx.send(Err(SessionError::Cancelled));
 
             let cancel_notif = serde_json::json!({
                 "jsonrpc": "2.0",

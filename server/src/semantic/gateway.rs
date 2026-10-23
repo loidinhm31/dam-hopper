@@ -53,6 +53,7 @@ pub const RPC_ERR_TARGET_NOT_FOUND: i64 = -32002;
 pub const RPC_ERR_STALE_VERSION: i64 = -32003;
 pub const RPC_ERR_IN_FLIGHT_FULL: i64 = -32004;
 pub const RPC_ERR_AUTH_INVALIDATED: i64 = -32005;
+pub const RPC_ERR_REQUEST_CANCELLED: i64 = -32800;
 
 #[derive(Debug, Error)]
 pub enum GatewayError {
@@ -641,27 +642,6 @@ impl SemanticGateway {
             None => return Ok(()),
         };
 
-        let version = match text_doc.get("version").and_then(|v| v.as_i64()) {
-            Some(v) => v,
-            None => return Ok(()),
-        };
-
-        let content_changes_val = match params.get("contentChanges").and_then(|c| c.as_array()) {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-
-        let mut changes = Vec::with_capacity(content_changes_val.len());
-        for c in content_changes_val {
-            match serde_json::from_value::<TextDocumentContentChangeEvent>(c.clone()) {
-                Ok(change) => changes.push(change),
-                Err(e) => {
-                    warn!(error = %e, "Rejecting malformed contentChange item; dropping entire didChange");
-                    return Ok(());
-                }
-            }
-        }
-
         let parsed_uri = match parse_virtual_uri(uri_str, &binding.target_id) {
             Ok(p) => p,
             Err(e) => {
@@ -677,6 +657,36 @@ impl SemanticGateway {
                 return Ok(());
             }
         };
+
+        let version = match text_doc.get("version").and_then(|v| v.as_i64()) {
+            Some(v) => v,
+            None => {
+                warn!("Missing version in didChange; closing document to prevent desync");
+                let _ = handle.did_close(file_url.to_string()).await;
+                return Ok(());
+            }
+        };
+
+        let content_changes_val = match params.get("contentChanges").and_then(|c| c.as_array()) {
+            Some(c) => c,
+            None => {
+                warn!("Missing contentChanges in didChange; closing document to prevent desync");
+                let _ = handle.did_close(file_url.to_string()).await;
+                return Ok(());
+            }
+        };
+
+        let mut changes = Vec::with_capacity(content_changes_val.len());
+        for c in content_changes_val {
+            match serde_json::from_value::<TextDocumentContentChangeEvent>(c.clone()) {
+                Ok(change) => changes.push(change),
+                Err(e) => {
+                    warn!(error = %e, "Rejecting malformed contentChange item; closing document to prevent desync");
+                    let _ = handle.did_close(file_url.to_string()).await;
+                    return Ok(());
+                }
+            }
+        }
 
         if let Err(e) = handle
             .did_change(file_url.to_string(), version, changes)
@@ -984,7 +994,10 @@ impl SemanticGateway {
             let raw_res = rx.await;
             let c_id = {
                 let mut map = internal_map.lock().await;
-                let cid = map.remove(&internal_id).unwrap_or(Value::Null);
+                let cid = match map.remove(&internal_id) {
+                    Some(id) => id,
+                    None => return,
+                };
                 client_map.lock().await.remove(&cid);
                 cid
             };
@@ -1024,6 +1037,16 @@ impl SemanticGateway {
                         RPC_ERR_INTERNAL_ERROR,
                         "Navigation request timed out",
                         Some("TIMEOUT"),
+                    );
+                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
+                        .await;
+                }
+                Ok(Err(SessionError::Cancelled)) => {
+                    let err = json_rpc_error(
+                        c_id,
+                        RPC_ERR_REQUEST_CANCELLED,
+                        "Request cancelled",
+                        Some("REQUEST_CANCELLED"),
                     );
                     let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
                         .await;
@@ -1072,6 +1095,14 @@ impl SemanticGateway {
         };
 
         if let Some(cancel_id) = params.get("id") {
+            let is_valid = match cancel_id {
+                Value::Number(n) => n.is_i64() || n.is_u64(),
+                Value::String(s) => !s.is_empty() && s.len() <= 64,
+                _ => false,
+            };
+            if !is_valid {
+                return Ok(());
+            }
             let internal_id_opt = {
                 let map = self.client_to_internal.lock().await;
                 map.get(cancel_id).copied()
@@ -1138,14 +1169,14 @@ impl SemanticGateway {
     /// Send formatted JSON-RPC message to the outbound channel within SOCKET_SEND_TIMEOUT.
     async fn send_outbound(&mut self, msg: Value) {
         let text = msg.to_string();
-        if tokio::time::timeout(SOCKET_SEND_TIMEOUT, self.outbound_tx.send(text))
-            .await
-            .is_err()
-        {
-            warn!(
-                "Outbound queue send timed out or closed; terminating gateway and releasing session"
-            );
-            self.teardown().await;
+        match tokio::time::timeout(SOCKET_SEND_TIMEOUT, self.outbound_tx.send(text)).await {
+            Ok(Ok(())) => {}
+            _ => {
+                warn!(
+                    "Outbound queue send timed out or closed; terminating gateway and releasing session"
+                );
+                self.teardown().await;
+            }
         }
     }
 }

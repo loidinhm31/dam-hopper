@@ -11,9 +11,10 @@ const reconcileTabFreshnessMock = vi.fn().mockResolvedValue(undefined);
 const loadContentMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/stores/editor.js", async () => {
-  const actual = await vi.importActual<typeof import("@/stores/editor.js")>(
-    "@/stores/editor.js",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/stores/editor.js")>(
+      "@/stores/editor.js",
+    );
   return {
     ...actual,
     useEditorStore: (selector?: (s: unknown) => unknown) => {
@@ -50,6 +51,11 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useGitFileDiff: () => ({ data: undefined }),
+  useSemanticSettings: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({
