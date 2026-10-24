@@ -312,12 +312,12 @@ class AndroidEditorDocument(
         if (total == 0) return false
         val cur = attachedEditor?.cursor
         val curLine = (cur?.leftLine ?: _viewState.value.cursorLine).coerceIn(0, total - 1)
-        val curCol = (cur?.leftColumn ?: _viewState.value.cursorColumn).coerceIn(0, content.getColumnCount(curLine))
+        val matchStart = cur?.leftColumn ?: _viewState.value.selectionStart
 
         for (step in 0 until total) {
             val idx = (curLine - step + total * 2) % total
             val line = content.getLine(idx)
-            val limit = if (step == 0) (curCol - lastQuery.length).coerceAtLeast(-1) else line.length
+            val limit = if (step == 0) (matchStart - 1).coerceAtLeast(-1) else line.length
             var lastMatch = -1
             var pos = 0
             while (pos <= limit) {
