@@ -101,6 +101,8 @@ jobs:
     if: needs.validate-version.outputs.is_debug_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Checkout Tagged Commit
         uses: actions/checkout@v4
@@ -259,13 +261,54 @@ jobs:
           echo "Staged Android Release APK:"
           ls -lh final-android/
 
-      - name: Upload Android Release APK
+      - name: Upload Android Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: damhopper-android-release-apk
           path: final-android/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Attach Android Release APK to GitHub Release
+        if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/android-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')) && needs.validate-version.outputs.is_debug_only != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-version.outputs.tag_name }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "No release tag resolved, skipping release attachment."
+            exit 0
+          fi
+
+          echo "Target release tag: $TAG"
+
+          # If this is a unified repository release (v*), wait for release-linux workflow to publish the release
+          if [[ "$TAG" == v* ]]; then
+            echo "Waiting for GitHub release $TAG to be published..."
+            for i in {1..30}; do
+              STATUS=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "not_found")
+              if [ "$STATUS" = "false" ]; then
+                echo "Release $TAG is published!"
+                break
+              fi
+              echo "Release $TAG status is '$STATUS', waiting 30s (attempt $i/30)..."
+              sleep 30
+            done
+          fi
+
+          # If release does not exist yet (e.g. android-v* tag), create it
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG does not exist. Creating release for $TAG..."
+            gh release create "$TAG" final-android/*.apk \
+              --title "DamHopper Android $TAG" \
+              --notes "DamHopper Android Native App release for $TAG."
+          else
+            echo "Uploading APK to release $TAG..."
+            gh release upload "$TAG" final-android/*.apk --clobber
+          fi
+
+          echo "✓ Successfully attached Android Release APK to GitHub release $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | {name, size, url}'
 
   build-android-debug:
     name: Build Un-signed Android Debug APK (Diagnostic)
