@@ -24,6 +24,7 @@ use crate::auth::model::{AuthChallenge, AuthSession, ChallengePurpose, MfaConfir
 use crate::auth::policy::{
     ACCOUNT_ATTEMPT_WINDOW_SECS, ACCOUNT_COOLDOWN_SECS, ACCOUNT_MAX_FAILED_ATTEMPTS,
 };
+use crate::auth::session_inventory::{SessionCursor, SESSION_FETCH_LIMIT};
 
 /// Expired rows removed per create call. No background sweeper: request-time
 /// policy stays the authority and pruning only bounds table growth.
@@ -362,7 +363,7 @@ impl SqliteAuthStore {
             tx.execute(
                 &format!(
                     "INSERT INTO auth_sessions ({SESSION_COLUMNS}) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
                 ),
                 params![
                     session.id,
@@ -373,6 +374,7 @@ impl SqliteAuthStore {
                     to_ms(session.expires_at),
                     to_ms(session.mfa_verified_at),
                     session.revoked_at.map(to_ms),
+                    session.user_agent,
                 ],
             )?;
             tx.commit()?;
@@ -429,6 +431,58 @@ impl SqliteAuthStore {
             .transpose()
         })
         .await
+    }
+
+    pub(super) async fn list_active_sessions(
+        &self,
+        username: &str,
+        auth_version: i64,
+        now: DateTime<Utc>,
+        cursor: Option<&SessionCursor>,
+    ) -> Result<Vec<AuthSession>, StoreError> {
+        let username = username.to_owned();
+        let cursor = cursor.cloned();
+        self.run(move |conn| {
+            let mut statement = conn.prepare(&format!(
+                "SELECT {SESSION_COLUMNS} FROM auth_sessions \
+                 WHERE username = ?1 AND auth_version = ?2 AND revoked_at_ms IS NULL \
+                   AND expires_at_ms > ?3 \
+                   AND (?4 IS NULL OR issued_at_ms < ?4 OR (issued_at_ms = ?4 AND id < ?5)) \
+                 ORDER BY issued_at_ms DESC, id DESC LIMIT ?6"
+            ))?;
+            let rows = statement.query_map(params![
+                username, auth_version, now.timestamp_millis(),
+                cursor.as_ref().map(|cursor| cursor.issued_at_ms),
+                cursor.as_ref().map(|cursor| cursor.id.as_str()),
+                SESSION_FETCH_LIMIT as i64,
+            ], |row| Ok(decode_session(row)))?;
+            let mut sessions = Vec::with_capacity(SESSION_FETCH_LIMIT);
+            for row in rows {
+                sessions.push(row??);
+            }
+            Ok(sessions)
+        }).await
+    }
+
+    pub(super) async fn revoke_owned_session(
+        &self,
+        username: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        let username = username.to_owned();
+        let session_id = session_id.to_owned();
+        self.run(move |conn| {
+            // RETURNING distinguishes owned existing rows from foreign/missing,
+            // without relying on changed-row count. COALESCE preserves first revoke.
+            let found = conn.query_row(
+                "UPDATE auth_sessions SET revoked_at_ms = COALESCE(revoked_at_ms, ?3) \
+                 WHERE username = ?1 AND id = ?2 RETURNING id",
+                params![username, session_id, now.timestamp_millis()],
+                |row| row.get::<_, String>(0),
+            ).optional()?;
+            Ok(found.is_some())
+        }).await
     }
 
     /// Mark an unrevoked session revoked; an already revoked one is untouched.

@@ -1342,6 +1342,9 @@ pub async fn checkout_branch(
     strategy: CheckoutStrategy,
 ) -> Result<GitActionResult, AppError> {
     let repo = open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     cli_fallback::validate_branch_name(branch)?;
     if start_point.is_some() && !create {
         return Err(AppError::InvalidInput(
@@ -1474,6 +1477,10 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
         let repo = open_repo(project_path)?;
         validate_commit_hash(&repo, hash)?;
     }
+    let repo = open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
 
     match cli_fallback::run_git(&["cherry-pick", hash], project_path).await {
         Ok(_) => Ok(GitActionResult {
@@ -1522,6 +1529,10 @@ pub async fn reset_to_commit(
         let repo = open_repo(project_path)?;
         validate_commit_hash(&repo, hash)?;
     }
+    let repo = open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
 
     let mode_flag = match mode {
         ResetMode::Soft => "--soft",
@@ -1548,8 +1559,12 @@ pub async fn reset_to_commit(
 }
 
 pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, AppError> {
+    let repo = open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
+
     let (head_hash, parent_count) = {
-        let repo = open_repo(project_path)?;
         let head = repo
             .head()
             .map_err(|e| AppError::Git(e.message().to_string()))?;

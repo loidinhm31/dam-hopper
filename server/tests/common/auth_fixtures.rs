@@ -437,6 +437,7 @@ impl AuthTestFixture {
             expires_at: chrono_to_bson(expires_at),
             mfa_verified_at: chrono_to_bson(mfa_verified_at),
             revoked_at: None,
+            user_agent: None,
         };
         self.store
             .create_session(session.clone())

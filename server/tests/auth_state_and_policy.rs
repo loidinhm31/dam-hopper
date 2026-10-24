@@ -54,6 +54,7 @@ fn test_pure_timing_policy_decisions_with_mock_clock() {
         expires_at: chrono_to_bson(expires_at),
         mfa_verified_at: chrono_to_bson(base_time),
         revoked_at: None,
+        user_agent: None,
     };
 
     let claims = AuthClaims {
@@ -562,6 +563,7 @@ async fn test_mongodb_auth_store_cas_and_indexes() {
         expires_at: chrono_to_bson(now + Duration::days(30)),
         mfa_verified_at: chrono_to_bson(now),
         revoked_at: None,
+        user_agent: None,
     };
     store.create_session(session).await.unwrap();
 
@@ -703,4 +705,29 @@ async fn test_mongodb_create_user_generates_id_and_reports_username_conflict_onl
     assert!(matches!(unrelated, Err(StoreError::Mongo(_))), "got {unrelated:?}");
 
     let _ = db.drop().await;
+}
+
+#[test]
+fn legacy_mongo_session_without_client_metadata_deserializes_as_unknown() {
+    let now = chrono_to_bson(Utc::now());
+    let session: AuthSession = mongodb::bson::from_document(mongodb::bson::doc! {
+        "_id": "legacy-session", "username": "alice", "authVersion": 1_i64,
+        "credentialVersion": 1_i64, "issuedAt": now, "expiresAt": now,
+        "mfaVerifiedAt": now,
+    }).unwrap();
+    assert_eq!(session.user_agent, None);
+    assert_eq!(session.revoked_at, None);
+}
+
+#[test]
+fn legacy_session_requires_auth_version_even_when_account_version_is_zero() {
+    let now = chrono_to_bson(Utc::now());
+    let mut record = mongodb::bson::doc! {
+        "_id": "missing-version", "username": "alice",
+        "credentialVersion": 1_i64, "issuedAt": now, "expiresAt": now,
+        "mfaVerifiedAt": now,
+    };
+    assert!(mongodb::bson::from_document::<AuthSession>(record.clone()).is_err());
+    record.insert("authVersion", mongodb::bson::Bson::Null);
+    assert!(mongodb::bson::from_document::<AuthSession>(record).is_err());
 }

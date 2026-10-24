@@ -1063,6 +1063,7 @@ pub(crate) mod tests {
                 expires_at: chrono_to_bson(exp),
                 mfa_verified_at: chrono_to_bson(now),
                 revoked_at: None,
+                user_agent: None,
             };
             let _ = db.collection::<AuthSession>("authSessions").insert_one(&session).await;
 

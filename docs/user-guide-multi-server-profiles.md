@@ -77,6 +77,33 @@ profile is configured, and a connected/total count when multiple profiles are
 present. Focus, route changes, and project selection do not reconnect or
 disconnect profiles.
 
+## Manage login devices
+
+The **Server Settings** dialog includes a dedicated **Login devices** section for saved, authenticated server profiles. This interface lets you inspect active login sessions and revoke access across your account.
+
+### Scope & Presentation
+
+- **Server-wide & Account-wide:** Active sessions apply across the entire selected server for your account and span all projects on that server. They do not represent per-project access controls.
+- **Untrusted Client Hints:** Each card displays the client/browser hint reported during login, falling back to `Unknown browser/client` if absent or created before version 2 migration. Hints are unverified client strings bounded to 512 UTF-8 bytes; they are not verified hardware identities.
+- **Active Session Indicator:** The current session is highlighted with a **This session** badge.
+- **Timestamps:** Shows login creation (`Logged in`) and absolute expiry (`Expires`) formatted in your local browser timezone.
+
+### Controls & Actions
+
+- **Refresh:** Re-queries the active sessions list from the server without closing the dialog.
+- **Load more:** Available when more than 50 sessions exist, loading the next keyset page.
+- **Revoke access:** Prompts with an explicit confirmation dialog before contacting the server:
+  - **Revoking another session:** Invalidates that remote session across all projects on the server while keeping your current session and connection active.
+  - **Self-revocation (current session):** Presents a high-visibility warning confirming that ending this login will disconnect the current profile. When acknowledged, the server invalidates the session and the UI clears only the local profile's token.
+
+### Security Invariants & Draft Protection
+
+- **HTTPS or Loopback HTTP Only:** Device session management enforces secure transport. Remote plain HTTP URLs are blocked with an unsafe transport warning, and ambient browser cookies are never used as a mutation fallback (`credentials: "omit"`).
+- **Owner Fencing:** Requests, query results, and self-revocation cleanup capture the exact `{ profileId, generation }` owner. Stale responses or superseded connection generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile.
+- **Revoked-Draft Save Guard:** Acknowledging self-revocation immediately marks the dialog's credential draft as revoked. Clicking **Save** in the settings dialog will not re-save the dead token or overwrite a newer login established in another window.
+- **Cookie Isolation:** The server never emits cookie headers on revocation. Revoking a session does not clear unrelated or replacement cookies in your browser cookie jar.
+- **No-Auth Notice:** On servers running in `--no-auth` development mode, the section displays an informative status message indicating that login device management is unavailable.
+
 ## Navigate from profile to project
 
 The **Project Switcher** groups discovered projects as:

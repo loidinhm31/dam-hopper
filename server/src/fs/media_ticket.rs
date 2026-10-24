@@ -1733,6 +1733,20 @@ mod tests {
             issued_rotated.session.token.as_str(),
             "Rotated credentialVersion must not reuse old session token"
         );
+        let sibling_client = MediaClientId::parse("33333333-3333-4333-8333-333333333333").unwrap();
+        let sibling_auth = MediaAuthContext {
+            session_id: Some("sess-sibling".into()),
+            auth_version: Some(1),
+            credential_version: Some(1),
+            auth_deadline: Some(short_deadline),
+        };
+        let sibling = match store.issue_bound_with_context(
+            store.generation(), "actor", &sibling_client, None,
+            record(MediaTicketKind::Video), Some(&sibling_auth),
+        ) {
+            MediaTicketBoundIssue::Issued(lease) => lease,
+            _ => panic!("sibling media session issue failed"),
+        };
 
         // Revoking by session revokes tickets and sessions
         store.revoke_by_actor_or_session("actor", Some("sess-1"));
@@ -1744,5 +1758,12 @@ mod tests {
                 false
             )
             .is_none());
+        assert!(store.authorize_stream(
+            &issued_rotated.ticket.ticket, MediaTicketKind::Video, &HeaderMap::new(), true,
+        ).is_none());
+        assert!(store.authorize_stream(
+            &sibling.ticket.ticket, MediaTicketKind::Video, &HeaderMap::new(), true,
+        ).is_some(), "revoking one login must preserve another login's media");
+        assert_eq!(store.live_session_count(), 1);
     }
 }

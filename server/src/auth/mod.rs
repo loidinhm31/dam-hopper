@@ -2,6 +2,7 @@ pub mod config;
 pub mod model;
 pub mod policy;
 pub mod secret;
+pub mod session_inventory;
 pub mod store;
 pub mod totp;
 
@@ -84,6 +85,7 @@ impl AuthService {
             expires_at: chrono_to_bson(exp_chrono),
             mfa_verified_at: chrono_to_bson(now),
             revoked_at: None,
+            user_agent: None,
         };
         let claims = AuthClaims {
             v: AUTH_PROTOCOL_VERSION,

@@ -14,12 +14,14 @@ import {
   AlertTriangle,
   RefreshCw,
   Check,
+  GitMerge,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import {
   invalidateGitFileOperation,
   markTargetUnavailableIfNeeded,
   useGitDiff,
+  useGitOperationStatus,
   useGitUntracked,
 } from "@/api/queries.js";
 import { api, normalizeProjectTarget } from "@/api/client.js";
@@ -37,6 +39,8 @@ export interface ChangedFilesListProps {
   target?: ProjectTargetRef;
   selectedFile: string | null;
   onSelectFile: (selection: ChangedFileSelection) => void;
+  onSelectConflict?: (selection: ChangedFileSelection) => void;
+  onOpenOperationResolver?: () => void;
 }
 
 export interface ChangedFileSelection {
@@ -143,9 +147,9 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
     ref,
   ) {
     const filename = entry.path.split("/").pop() ?? entry.path;
+    const isConflicted = entry.status === "conflicted";
     const color = gitStatusColor(entry.status, checked);
     const badge = gitStatusBadge(entry.status, checked);
-
     return (
       <div
         {...props}
@@ -165,13 +169,29 @@ const GitFileRow = forwardRef<HTMLDivElement, GitFileRowProps>(
           <input
             type="checkbox"
             checked={checked}
+            disabled={isConflicted}
             readOnly
             onClick={(e) => {
               e.stopPropagation();
+              if (isConflicted) return;
               onToggle();
             }}
-            className="h-3 w-3 shrink-0 cursor-pointer accent-[var(--color-primary)]"
-            aria-label={checked ? `Unstage ${filename}` : `Stage ${filename}`}
+            className={cn(
+              "h-3 w-3 shrink-0 accent-[var(--color-primary)]",
+              isConflicted ? "cursor-not-allowed opacity-30" : "cursor-pointer",
+            )}
+            aria-label={
+              isConflicted
+                ? `Conflict in ${filename} must be resolved before staging`
+                : checked
+                  ? `Unstage ${filename}`
+                  : `Stage ${filename}`
+            }
+            title={
+              isConflicted
+                ? `Conflict in ${filename} must be resolved before staging`
+                : undefined
+            }
           />
         )}
         <span
@@ -206,6 +226,7 @@ export function GitContextMenuPopover({
   onStage,
   onUnstage,
   onDiscard,
+  onResolveConflict,
   children,
 }: {
   entry: DiffFileEntry;
@@ -213,25 +234,29 @@ export function GitContextMenuPopover({
   onStage: () => void;
   onUnstage: () => void;
   onDiscard: () => void;
+  onResolveConflict?: () => void;
   children: React.ReactElement;
 }) {
   type Action = { label: string; onClick: () => void; danger?: boolean };
   const actions: Action[] = [];
 
-  if (section === "unversioned" || !entry.staged) {
+  const isConflicted = entry.status === "conflicted";
+  if (!isConflicted && (section === "unversioned" || !entry.staged)) {
     actions.push({ label: "Add to commit", onClick: onStage });
   }
-  if (entry.staged) {
+  if (!isConflicted && entry.staged) {
     actions.push({ label: "Remove from commit", onClick: onUnstage });
   }
-  if (section !== "unversioned" && entry.status !== "conflicted") {
+  if (isConflicted && onResolveConflict) {
+    actions.push({ label: "Resolve conflict…", onClick: onResolveConflict });
+  }
+  if (section !== "unversioned" && !isConflicted) {
     actions.push({
       label: "Discard changes",
       onClick: onDiscard,
       danger: true,
     });
   }
-
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger>{children}</ContextMenu.Trigger>
@@ -320,6 +345,8 @@ export function ChangedFilesList({
   target,
   selectedFile,
   onSelectFile,
+  onSelectConflict,
+  onOpenOperationResolver,
 }: ChangedFilesListProps) {
   const targetRef = normalizeProjectTarget(target ?? project);
   const queryClient = useQueryClient();
@@ -343,6 +370,7 @@ export function ChangedFilesList({
     targetRef,
     AGGREGATE_ROOT_ID,
   );
+  const { data: operation } = useGitOperationStatus(targetRef);
 
   // Guard against stale cache holding old DiffFileEntry[] shape before response format changed
   const isLegacyShape = Array.isArray(data);
@@ -442,6 +470,12 @@ export function ChangedFilesList({
   }, []);
 
   async function handleStage(entry: DiffFileEntry) {
+    if (entry.status === "conflicted") {
+      setMutationError(
+        `Cannot stage conflicted file ${entry.path.split("/").pop()}; resolve conflict first`,
+      );
+      return;
+    }
     const key = projectPathForEntry(entry);
     const untrack = trackMutating(key);
     setMutationError(null);
@@ -509,11 +543,12 @@ export function ChangedFilesList({
   }
 
   async function handleStageAll(files: DiffFileEntry[]) {
-    if (files.length === 0) return;
+    const stageableFiles = files.filter((f) => f.status !== "conflicted");
+    if (stageableFiles.length === 0) return;
     setMutationError(null);
     try {
       const results = await Promise.all(
-        groupedByRoot(files).map(([rootId, group]) =>
+        groupedByRoot(stageableFiles).map(([rootId, group]) =>
           api.git.stage(
             targetRef,
             group.entries.map((entry) => entry.path),
@@ -643,6 +678,34 @@ export function ChangedFilesList({
         </button>
       </div>
 
+      {/* Active git operation banner */}
+      {operation && operation.operation !== "none" && (
+        <div
+          role="status"
+          className="shrink-0 flex items-center justify-between gap-2 px-2.5 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-xs text-amber-300"
+        >
+          <div className="flex items-center gap-1.5 min-w-0 truncate">
+            <GitMerge className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span className="font-semibold uppercase">{operation.operation}</span>
+            <span className="text-[var(--color-text-muted)] truncate text-2xs">
+              {operation.stoppedReason === "conflicts"
+                ? "in progress (conflicts)"
+                : operation.stoppedReason === "messageEditRequired"
+                  ? "message edit required"
+                  : "in progress"}
+            </span>
+          </div>
+          {onOpenOperationResolver && (
+            <button
+              type="button"
+              onClick={onOpenOperationResolver}
+              className="shrink-0 rounded border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-2xs font-medium text-amber-200 hover:bg-amber-500/20"
+            >
+              Open Resolver
+            </button>
+          )}
+        </div>
+      )}
       {/* Error banner */}
       {mutationError && (
         <div
@@ -740,6 +803,15 @@ export function ChangedFilesList({
                       {changesOpen &&
                         group.entries.map((f) => {
                           const projectPath = projectPathForEntry(f);
+                          const isConflicted = f.status === "conflicted";
+                          const handleSelection = () => {
+                            const selection = createChangedFileSelection(f);
+                            if (isConflicted && onSelectConflict) {
+                              onSelectConflict(selection);
+                            } else {
+                              onSelectFile(selection);
+                            }
+                          };
                           return (
                             <GitContextMenuPopover
                               key={projectPath}
@@ -748,20 +820,22 @@ export function ChangedFilesList({
                               onStage={() => void handleStage(f)}
                               onUnstage={() => void handleUnstage(f)}
                               onDiscard={() => setDiscardConfirm(f)}
+                              onResolveConflict={
+                                isConflicted ? handleSelection : undefined
+                              }
                             >
                               <GitFileRow
                                 entry={{ ...f, path: projectPath }}
                                 isSelected={selectedFile === projectPath}
                                 checked={f.staged}
                                 isMutating={mutatingPaths.has(projectPath)}
-                                onSelect={() =>
-                                  onSelectFile(createChangedFileSelection(f))
-                                }
-                                onToggle={() =>
+                                onSelect={handleSelection}
+                                onToggle={() => {
+                                  if (isConflicted) return;
                                   void (f.staged
                                     ? handleUnstage(f)
-                                    : handleStage(f))
-                                }
+                                    : handleStage(f));
+                                }}
                               />
                             </GitContextMenuPopover>
                           );

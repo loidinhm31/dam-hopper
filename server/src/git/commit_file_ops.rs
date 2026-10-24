@@ -225,6 +225,10 @@ pub async fn cherry_pick_commit_files(
     hash: &str,
     paths: &[String],
 ) -> Result<GitActionResult, AppError> {
+    let repo_lock = crate::git::diff::open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let path_refs = validate_paths(paths)?;
     let parent = {
         let repo = git2::Repository::open(project_path)
@@ -281,6 +285,10 @@ pub async fn drop_commit_files(
     hash: &str,
     paths: &[String],
 ) -> Result<GitActionResult, AppError> {
+    let repo_lock = crate::git::diff::open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let path_refs = validate_paths(paths)?;
     if let Some(mut blocked) = preflight_history_rewrite(
         project_path,
@@ -409,6 +417,10 @@ pub async fn drop_commit_files(
 }
 
 pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionResult, AppError> {
+    let repo_lock = crate::git::diff::open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     {
         let repo = git2::Repository::open(project_path)
             .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -484,6 +496,10 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
 }
 
 pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionResult, AppError> {
+    let repo_lock = crate::git::diff::open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     {
         let repo = git2::Repository::open(project_path)
             .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -544,6 +560,10 @@ pub async fn revert_commit_files(
     hash: &str,
     paths: &[String],
 ) -> Result<GitActionResult, AppError> {
+    let repo_lock = crate::git::diff::open_repo(project_path)?;
+    let _guard = crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+        .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let path_refs = validate_paths(paths)?;
     let parent = {
         let repo = git2::Repository::open(project_path)

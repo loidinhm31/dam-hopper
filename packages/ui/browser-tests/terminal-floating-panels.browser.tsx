@@ -1,4 +1,4 @@
-import { act, useRef, useState } from "react";
+import { act, useCallback, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalWorkspaceShell } from "@/components/templates/TerminalWorkspaceShell.js";
@@ -9,7 +9,11 @@ import {
   TERMINAL_FILE_PANEL_TOP_KEY,
   TERMINAL_FILE_PANEL_WIDTH_KEY,
 } from "@/lib/terminal-floating-file-panel-state.js";
-import type { TerminalWorkspacePanelRequest } from "@/lib/terminal-workspace-panel.js";
+import {
+  updateFloatingPanelStack,
+  type TerminalFloatingPanelId,
+  type TerminalWorkspacePanelRequest,
+} from "@/lib/terminal-workspace-panel.js";
 import "@/index.css";
 
 vi.mock("@/components/organisms/TopNav.js", () => ({
@@ -125,6 +129,97 @@ function FloatingPanelHarness() {
         activatePanelRequest={toolRequest}
         workspaceMode="terminal"
         onWorkspaceModeChange={() => undefined}
+      />
+    </>
+  );
+}
+
+function StatefulStackFloatingPanelHarness({
+  initialFilesOpen = true,
+  initialStack = ["files"] as TerminalFloatingPanelId[],
+  initialToolRequest = null as TerminalWorkspacePanelRequest | null,
+}: {
+  initialFilesOpen?: boolean;
+  initialStack?: TerminalFloatingPanelId[];
+  initialToolRequest?: TerminalWorkspacePanelRequest | null;
+}) {
+  const [filesOpen, setFilesOpen] = useState(initialFilesOpen);
+  const [stack, setStack] = useState<TerminalFloatingPanelId[]>(initialStack);
+  const [toolRequest, setToolRequest] =
+    useState<TerminalWorkspacePanelRequest | null>(initialToolRequest);
+  const [, setRerenderCount] = useState(0);
+  const requestNonce = useRef(1);
+
+  const bringToFront = useCallback((panelId: TerminalFloatingPanelId) => {
+    setStack((current) =>
+      updateFloatingPanelStack(current, panelId, "bringToFront"),
+    );
+  }, []);
+
+  const removeFromStack = useCallback((panelId: TerminalFloatingPanelId) => {
+    setStack((current) =>
+      updateFloatingPanelStack(current, panelId, "remove"),
+    );
+  }, []);
+
+  const requestReveal = (targetId: TerminalWorkspacePanelRequest["targetId"]) => {
+    requestNonce.current += 1;
+    setToolRequest({ nonce: requestNonce.current, targetId, intent: "reveal" });
+  };
+
+  return (
+    <>
+      <div data-testid="shared-stack-controls">
+        <button
+          type="button"
+          data-testid="reveal-git"
+          onClick={() => requestReveal("git")}
+        >
+          Reveal Git
+        </button>
+        <button
+          type="button"
+          data-testid="unrelated-rerender"
+          onClick={() => setRerenderCount((c) => c + 1)}
+        >
+          Rerender Parent
+        </button>
+        <div data-testid="current-stack">{stack.join(",")}</div>
+      </div>
+      <TerminalWorkspaceShell
+        terminalContent={
+          <div className="h-full" data-testid="terminal-content">
+            Terminal
+          </div>
+        }
+        terminalOverlayOpen={filesOpen}
+        terminalOverlayContent={({ onActivate, zIndex }) => (
+          <TerminalFloatingFilePanel
+            open={filesOpen}
+            treeWidth={280}
+            explorerContent={
+              <button type="button" data-testid="shared-file-content">
+                Files content
+              </button>
+            }
+            changesContent={<div>Changes content</div>}
+            editorContent={<div>Editor content</div>}
+            treeResizeHandleProps={{ onMouseDown: () => undefined }}
+            onActivate={onActivate}
+            zIndex={zIndex}
+            onClose={() => setFilesOpen(false)}
+          />
+        )}
+        fleetContent={<button type="button" data-testid="shared-fleet-content">Fleet</button>}
+        gitContent={<button type="button" data-testid="shared-git-content">Git</button>}
+        projectContent={<button type="button" data-testid="shared-project-content">Project</button>}
+        portsContent={<button type="button" data-testid="shared-ports-content">Ports</button>}
+        activatePanelRequest={toolRequest}
+        workspaceMode="terminal"
+        onWorkspaceModeChange={() => undefined}
+        floatingPanelStack={stack}
+        onActivateFloatingPanel={bringToFront}
+        onDeactivateFloatingPanel={removeFromStack}
       />
     </>
   );
@@ -333,5 +428,113 @@ describe("terminal floating panels in Chromium", () => {
 
     await act(async () => panel("file-content").click());
     expect(document.elementFromPoint(point.x, point.y)).toBe(probe);
+  });
+
+  it("synchronizes shared-stack ownership on reveal, raises tool above files, and survives rerenders", async () => {
+    await act(async () => {
+      root.render(
+        <StatefulStackFloatingPanelHarness
+          initialFilesOpen={true}
+          initialStack={["files"]}
+          initialToolRequest={null}
+        />,
+      );
+    });
+
+    // 1. Files is open and is the only item in stack -> zIndex 22. Tool is not open.
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+    expect(container.querySelector(`[data-testid="${testId("tool")}"]`)).toBeNull();
+
+    // 2. Dispatch reveal request for Git
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=reveal-git]")
+        ?.click();
+    });
+
+    // Tool should now be open, stack is ["files", "tool"].
+    // resolveFloatingPanelStackZIndex: Files = 20 + 2 = 22, Tool = 20 + 4 = 24.
+    expect(container.querySelector(`[data-testid="${testId("tool")}"]`)).not.toBeNull();
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("24");
+
+    const { file, tool, overlap } = arrangeOverlap();
+    const point = overlapPoint(overlap);
+    // Tool is topmost: elementFromPoint in overlap area resolves to tool
+    expect(tool.contains(document.elementFromPoint(point.x, point.y))).toBe(true);
+
+    // 3. Bring Files back to front by pointerdown on Files content
+    const fileContent = panel("shared-file-content");
+    await act(async () => {
+      fileContent.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    // Stack is now ["tool", "files"] -> Tool = 22, Files = 24
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("24");
+    expect(file.contains(document.elementFromPoint(point.x, point.y))).toBe(true);
+
+    // 4. Unrelated parent rerender while Files is topmost: must NOT steal focus or re-elevate Tool
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=unrelated-rerender]")
+        ?.click();
+    });
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("24");
+    expect(file.contains(document.elementFromPoint(point.x, point.y))).toBe(true);
+
+    // 5. Repeated reveal for Git: should promote Tool back to topmost
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=reveal-git]")
+        ?.click();
+    });
+    // Stack is now ["files", "tool"] -> Files = 22, Tool = 24
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("24");
+    expect(tool.contains(document.elementFromPoint(point.x, point.y))).toBe(true);
+
+    // 6. Unrelated parent rerender while Tool is topmost: Tool stays topmost
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=unrelated-rerender]")
+        ?.click();
+    });
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("24");
+    expect(tool.contains(document.elementFromPoint(point.x, point.y))).toBe(true);
+
+    // 7. Closing Tool panel removes it from shared stack; Files becomes topmost again
+    const closeToolBtn = panel(testId("tool")).querySelector<HTMLButtonElement>(
+      'button[aria-label="Close Git panel"]',
+    );
+    expect(closeToolBtn).not.toBeNull();
+    await act(async () => {
+      closeToolBtn?.click();
+    });
+    expect(container.querySelector(`[data-testid="${testId("tool")}"]`)).toBeNull();
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+
+    // 8. Unrelated rerender while Tool is closed: Tool stays closed, Files stays open
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=unrelated-rerender]")
+        ?.click();
+    });
+    expect(container.querySelector(`[data-testid="${testId("tool")}"]`)).toBeNull();
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+
+    // 9. Legitimate new reveal with fresh nonce after close: cleanly re-opens and promotes Tool
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid=reveal-git]")
+        ?.click();
+    });
+    expect(container.querySelector(`[data-testid="${testId("tool")}"]`)).not.toBeNull();
+    expect(getComputedStyle(panelRoot(testId("file"))).zIndex).toBe("22");
+    expect(getComputedStyle(panelRoot(testId("tool"))).zIndex).toBe("24");
+    const reopened = arrangeOverlap();
+    const reopenedPoint = overlapPoint(reopened.overlap);
+    expect(reopened.tool.contains(document.elementFromPoint(reopenedPoint.x, reopenedPoint.y))).toBe(true);
   });
 });

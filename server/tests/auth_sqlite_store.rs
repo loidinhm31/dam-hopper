@@ -50,6 +50,7 @@ fn session(id: &str, name: &str, issued: DateTime<Utc>, expires: DateTime<Utc>) 
         expires_at: chrono_to_bson(expires),
         mfa_verified_at: chrono_to_bson(issued),
         revoked_at: None,
+        user_agent: None,
     }
 }
 
@@ -986,4 +987,46 @@ mod unix_file_safety {
             .expect("0777 parent");
         assert!(matches!(err, StoreError::Unavailable(_)), "{err:?}");
     }
+}
+
+#[tokio::test]
+async fn version_one_upgrade_preserves_user_and_session_and_reopens_idempotently() {
+    let (_dir, path) = db_path();
+    let raw = Connection::open(&path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    raw.execute_batch(include_str!("../src/auth/store/migrations/001-auth.sql")).unwrap();
+    raw.pragma_update(None, "application_id", 0x4448_4155_i64).unwrap();
+    raw.pragma_update(None, "user_version", 1).unwrap();
+    raw.execute(
+        "INSERT INTO auth_users (id, username, password_hash, is_enabled, role) \
+         VALUES ('111111111111111111111111', 'legacy', 'original-hash', 1, 'admin')", [],
+    ).unwrap();
+    raw.execute(
+        "INSERT INTO auth_sessions VALUES ('legacy-session', 'legacy', 0, 1, ?1, ?2, ?1, NULL)",
+        rusqlite::params![t0().timestamp_millis(), (t0() + Duration::days(30)).timestamp_millis()],
+    ).unwrap();
+    drop(raw);
+
+    for _ in 0..2 {
+        let store = AuthStore::open_sqlite(&path).await.unwrap();
+        let user = store.get_user("legacy").await.unwrap().unwrap();
+        assert_eq!(user.password_hash, "original-hash");
+        assert_eq!(user.role, UserRole::Admin);
+        let original = store.get_session("legacy-session").await.unwrap().unwrap();
+        assert_eq!(original.user_agent, None);
+        assert_eq!(original.issued_at, chrono_to_bson(t0()));
+        assert!(original.revoked_at.is_none());
+        let version: i64 = Connection::open(&path).unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 2);
+    }
+    let store = AuthStore::open_sqlite(&path).await.unwrap();
+    let mut added = session("new-session", "legacy", t0(), t0() + Duration::days(30));
+    added.user_agent = Some("Browser 界".into());
+    store.create_session(added.clone()).await.unwrap();
+    assert_eq!(store.get_session("new-session").await.unwrap(), Some(added));
 }

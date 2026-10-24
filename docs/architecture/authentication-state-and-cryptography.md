@@ -24,6 +24,8 @@ Session issuance and every protected REST admission enforce the 30-day absolute 
 | `server/src/auth/store/sqlite/open.rs` | Secure SQLite file preparation (0600 file / 0700 dir, symlink rejection), WAL pragmas, application ID header check, and versioned schema migrations |
 | `server/src/auth/store/sqlite/records.rs` | Row-to-model checked mapping, UTC millisecond conversions, and fail-closed `InconsistentState` decoding |
 | `server/src/auth/store/migrations/001-auth.sql` | Version 1 SQLite schema: STRICT `auth_users`, `auth_sessions`, and `auth_challenges` tables, indexes, and immutable ID trigger |
+| `server/src/auth/store/migrations/002-session-user-agent.sql` | Version 2 SQLite schema: bounded nullable `user_agent TEXT` column and `auth_sessions_inventory` index |
+| `server/src/auth/session_inventory.rs` | Session cursor encoding/decoding, pagination boundary (50 rows/page), and bounded user-agent text normalization (<= 512 UTF-8 bytes) |
 | `server/src/auth/policy.rs` | Injectable clock, deadline calculation, session decision table, challenge readiness, and throttle constants |
 | `server/src/auth/secret.rs` | MFA key-file loading and AES-256-GCM secret encryption/decryption |
 | `server/src/auth/totp.rs` | Secret generation/encoding, `otpauth://` URI construction, TOTP verification, and replay check |
@@ -32,6 +34,11 @@ Session issuance and every protected REST admission enforce the 30-day absolute 
 | `server/src/state.rs`, `server/src/main.rs` | `AppState` ownership of the selected store via `AuthService`, key loading, production/`--no-auth` guards, and one-time store initialization (`init_auth_store`) |
 | `server/src/api/auth.rs` | Password login challenges, full-policy protected-route middleware, status/logout |
 | `server/src/api/auth_mfa.rs` | Challenge-gated TOTP enrollment, login verification, and step-up handlers |
+| `server/src/api/auth_sessions.rs` | Account-scoped session inventory (`GET /api/auth/sessions`) and bearer-only revocation (`DELETE /api/auth/sessions/{id}`) |
+| `server/tests/auth_device_sessions.rs` | Device session listing, keyset pagination, bearer-only DELETE denial matrix, and cookie isolation coverage |
+| `server/tests/auth_device_session_failures.rs` | Device session storage error mapping and edge cases |
+| `server/tests/auth_device_session_store.rs` | SQLite & MongoDB session inventory query, cursor tie-breaking, and idempotent revocation store tests |
+| `server/tests/auth_session_metadata.rs` | User-agent normalization, character-boundary truncation, and control-character filtering tests |
 | `server/tests/auth_mfa_api.rs` | HTTP lifecycle coverage for enrollment, login MFA, session step-up/status/logout, and edge cases |
 | `server/tests/auth_state_and_policy.rs` | Focused policy, encryption, TOTP/replay, throttle, and MongoDB-store coverage |
 | `server/tests/auth_sqlite_store.rs` | Dedicated file-backed SQLite store test suite: migrations, concurrency, CAS semantics, throttling, pruning, and security constraints |
@@ -45,7 +52,7 @@ Collections and tables persist user, session, and challenge records. JWT claims 
 | State | Contract |
 | --- | --- |
 | User | Retains username, password hash, enablement, and role. `authVersion` defaults to `0` when absent in legacy documents; optional `mfa` stores the confirmed encrypted factor and last accepted TOTP step. Failed-attempt window/count/cooldown are account fields. |
-| Session | Binds one username to `authVersion`, `credentialVersion`, issue time, absolute expiry, most recent MFA time, and optional revocation time. |
+| Session | Binds one username to `authVersion`, `credentialVersion`, issue time, absolute expiry, most recent MFA time, optional revocation time, and optional `user_agent` hint (bounded to <= 512 UTF-8 bytes; null for legacy sessions). |
 | Challenge | Stores the SHA-256 digest of the client-facing random token as its ID, account/version, purpose (`enroll`, `loginMfa`, or `stepUp`), issue/expiry times, attempts/consumption state, and purpose-specific encrypted enrollment or session binding data. |
 | Session decision | Requires enabled account, V2 claims, matching account/session/claim identity and versions, non-revoked session, and exact JWT/session expiry agreement. At `now >= expiresAt`, full login is required; before expiry, at `now >= mfaDueAt`, MFA step-up is required; otherwise access is allowed. |
 
@@ -78,18 +85,22 @@ The SQLite adapter (`server/src/auth/store/sqlite.rs`) is fully implemented and 
 - **Construction and Migration:** Opened asynchronously via `AuthStore::open_sqlite(path)`. Schema migrations run synchronously during open; `init_indexes()` is an intentional no-op.
 - **Tables and Schema (`001-auth.sql`):** Dedicated authentication database with STRICT tables and UTC timestamps stored as integer milliseconds (`_ms`):
   - `auth_users`: Primary key `id` (24-hex lowercase ObjectId, protected against modification by `auth_users_id_immutable` trigger); `username` (`TEXT NOT NULL UNIQUE COLLATE BINARY`); `password_hash`; `is_enabled` (0 or 1); `role` (`user` or `admin`); `auth_version` (`>= 0`); MFA columns (`mfa_secret_ciphertext`, `mfa_nonce`, `mfa_key_id`, `mfa_enrolled_at_ms`, `mfa_last_accepted_step`) enforced all NULL or all non-NULL by a table `CHECK` constraint; attempt throttling columns (`mfa_attempt_window_started_at_ms`, `mfa_attempt_count`, `mfa_blocked_until_ms`).
-  - `auth_sessions`: Primary key `id`; `username`; `auth_version`; `credential_version`; `issued_at_ms`; `expires_at_ms`; `mfa_verified_at_ms`; nullable `revoked_at_ms`. Indexes on `username` and `expires_at_ms`.
+  - `auth_sessions`: Primary key `id`; `username`; `auth_version`; `credential_version`; `issued_at_ms`; `expires_at_ms`; `mfa_verified_at_ms`; nullable `revoked_at_ms`. Migration `002-session-user-agent.sql` adds nullable `user_agent` (`CHECK (user_agent IS NULL OR (length(CAST(user_agent AS BLOB)) BETWEEN 1 AND 512))`). Indexed on `username`, `expires_at_ms`, and compound index `auth_sessions_inventory` on `(username, auth_version, issued_at_ms DESC, id DESC)`.
   - `auth_challenges`: Primary key `id` (hex SHA-256 digest of client token); `username`; `auth_version`; `purpose` (`enroll`, `loginMfa`, `stepUp`); `created_at_ms`; `expires_at_ms`; `attempts` (`0..u32::MAX`); nullable `consumed_at_ms`; purpose payload columns (`pending_secret_ciphertext`, `pending_secret_nonce`, `pending_secret_key_id`, `session_id`, `credential_version`). Indexes on `username` and `expires_at_ms`.
 - **File Security and Open Invariants (`sqlite/open.rs`):**
   - Unix parent directory created with mode `0700`; existing parent directories writable by group or others (`mode & 0o022 != 0`) are rejected.
   - Database file opened/created with mode `0600`, `O_NOFOLLOW`, and `SQLITE_OPEN_NOFOLLOW`; existing files with any group or other bits (`mode & 0o077 != 0`) or symlinks are rejected. Sidecars (`-wal`, `-shm`) inherit `0600` permissions.
   - Pragmas: WAL journaling (`PRAGMA journal_mode = WAL`), full durability (`PRAGMA synchronous = FULL` ensuring power-loss durability for revocations and consumptions), 2-second busy timeout (`PRAGMA busy_timeout = 2000`), and foreign key enforcement (`PRAGMA foreign_keys = ON`).
-  - Header & Version Gate: Validates `PRAGMA application_id = 0x44484155` ("DHAU") and `PRAGMA user_version = 1`. A brand-new empty database initializes from 0 to 1 inside an `IMMEDIATE` transaction; a foreign database or newer schema version fails with `StoreError::Unavailable` before any mutation, and an unreadable/corrupt file fails open with a SQLite error. A failed open never selects another backend.
+  - Header & Version Gate: Validates `PRAGMA application_id = 0x44484155` ("DHAU") and `PRAGMA user_version`. Schema migration runs atomically in an `IMMEDIATE` transaction: a brand-new database initializes schema versions 0 to 2 sequentially applying `001-auth.sql` and `002-session-user-agent.sql`, while an existing version 1 database upgrades 1 to 2 upon applying `002-session-user-agent.sql`. A foreign database or newer schema version fails with `StoreError::Unavailable` before any mutation, and an unreadable/corrupt file fails open with a SQLite error. A failed open never selects another backend.
 - **Concurrency and Execution Model:** Uses an `Arc<Mutex<rusqlite::Connection>>`. All operations execute inside `tokio::task::spawn_blocking`, holding the lock only synchronously for the duration of the closure and never across an async `.await`.
 - **Compare-And-Swap (CAS) & Mutation Semantics:**
   - Exact parameterized queries prevent injection and ambiguity.
   - `create_user` is INSERT-only; SQLite `UNIQUE` conflict on `auth_users.username` maps exclusively to `StoreError::DuplicateUsername`.
   - Atomic CAS mutations use single conditional `UPDATE` statements: `confirm_enrollment` (requires matching `auth_version` and NULL factor), `advance_totp_step` (requires enrolled factor and strictly greater step), `consume_challenge`, `advance_session_mfa`, and `revoke_*`.
+  - `revoke_owned_session` executes `UPDATE auth_sessions SET revoked_at_ms = COALESCE(revoked_at_ms, ?) WHERE username = ? AND id = ?`, returning `Ok(true)` if the session exists for that user and `Ok(false)` if missing or foreign. The operation is idempotent and preserves the initial `revoked_at_ms` timestamp on subsequent calls when requested by a surviving active session. Repeating a self-revocation request with the now-revoked token fails authentication at the middleware layer (`401 Unauthorized`) before reaching the handler.
+  - `list_active_sessions` queries `auth_sessions` filtering by `username = ? AND auth_version = ? AND revoked_at_ms IS NULL AND expires_at_ms > ?`, ordering by `issued_at_ms DESC, id DESC` with a limit of 51 rows. A stable keyset cursor encodes `(issued_at_ms, id)` to avoid offset-pagination drift using a deterministic keyset boundary.
+  - Authentication and rejection ordering: `require_auth` validates credentials first. Invalid or expired explicit Bearer credentials return `401 Unauthorized` without cookie fallback. Cookie-authenticated requests (including fallback from a non-Bearer header) are rejected by the revocation handler with `403 Forbidden` (`BearerRequired`) before any revocation write; authentication may already have read account/session state. DELETE never emits `Set-Cookie`.
+  - Revoking a session immediately triggers `media_tickets.revoke_by_actor_or_session`, terminating all active media capability tickets bound to that session while leaving sibling active sessions' media tickets unaffected.
   - Account throttling (`record_failed_attempt`) runs in an `IMMEDIATE` transaction sharing policy constants (10 attempts, 600s window, 600s cooldown), so concurrent failures never lose an increment. `clear_failed_attempts` resets attempt state; `increment_challenge_attempt` is a single `UPDATE ... RETURNING`.
 - **Opportunistic Pruning:** `create_session` and `create_challenge` prune up to 256 expired rows (`expires_at_ms <= issue_time`) in the same transaction as row creation. No background sweeper thread is used; request-time policy checks remain authoritative.
 - **Fail-Closed Decoding (`sqlite/records.rs`):** Row decoding validates constraints strictly; unknown roles, unknown challenge purposes, out-of-range counters, partial MFA factor tuples, or malformed ObjectIds map directly to `StoreError::InconsistentState`, failing closed to deny access.
@@ -123,7 +134,7 @@ SQLite Lite Mode provides a zero-external-dependency authentication store within
 - **Storage Isolation and Path Resolution**: `DAM_HOPPER_AUTH_SQLITE_PATH` selects the database file path. When omitted or empty, it defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux). Startup checks enforce that `auth.db` does not collide with PTY/IDE session state (`sessions.db`) or telemetry state (`telemetry.db`).
 - **Independent State**: Switching between MongoDB and SQLite uses fresh, independent datastores. No data migration is performed; existing accounts in MongoDB remain intact if the operator reverts to MongoDB.
 - **Strict Security Parity**:
-  - Passwords hashed via Argon2id with identical parameters.
+  - Password hashes use the existing bcrypt implementation in both stores; storage backend selection does not alter password verification.
   - MFA secrets encrypted at rest via AES-256-GCM using `DAM_HOPPER_MFA_KEY_FILE` (mandatory in production).
   - Monotonic TOTP step verification and atomic replay protection via single conditional SQL updates.
   - Account failure throttling enforced within serialized `IMMEDIATE` transactions (10 failed attempts trigger a 10-minute lockout).

@@ -41,6 +41,7 @@ interface TerminalFloatingFilePanelProps {
   treeResizeHandleProps: ResizeHandleProps;
   onClose: () => void;
   zIndex?: number;
+  isTopmost?: boolean;
   onActivate?: () => void;
 }
 
@@ -76,6 +77,7 @@ function TerminalFloatingFilePanelContent({
   treeResizeHandleProps,
   onClose,
   zIndex = TERMINAL_FLOATING_PANEL_BASE_Z_INDEX,
+  isTopmost = true,
   onActivate,
 }: TerminalFloatingFilePanelContentProps) {
   const boundsRef = useRef<HTMLDivElement>(null);
@@ -90,11 +92,13 @@ function TerminalFloatingFilePanelContent({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (isTopmost === false) return;
       handleTerminalFloatingFilePanelKeyDown(event, onClose);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [isTopmost, onClose]);
 
   useEffect(() => {
     if (focusEditorSignal <= 0) return;

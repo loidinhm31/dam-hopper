@@ -7711,6 +7711,7 @@ async fn idle_suspend_timing_patch_agent_free_policy_enforcement() {
             expires_at: chrono_to_bson(expires_at),
             mfa_verified_at: chrono_to_bson(now),
             revoked_at: None,
+            user_agent: None,
         };
         (format!("damhopper-auth={token}"), session)
     };
@@ -8372,6 +8373,7 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
             expires_at: chrono_to_bson(expires_at),
             mfa_verified_at: chrono_to_bson(now),
             revoked_at: None,
+            user_agent: None,
         };
         (format!("damhopper-auth={token}"), session)
     };

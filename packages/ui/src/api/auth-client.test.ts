@@ -7,6 +7,8 @@ import {
   requestMfaStepUpChallenge,
   checkAuthStatus,
   logout,
+  listAuthSessions,
+  revokeAuthSession,
   AUTH_PROTOCOL_VERSION,
   AUTH_ERROR_CODES,
   AuthClientError,
@@ -324,5 +326,64 @@ describe("auth-client", () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new Error("network failure"));
       await expect(logout("http://localhost:4801", "tok")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("device session boundary", () => {
+  const row = { id: "owned", userAgent: null, issuedAt: "2026-10-22T00:00:00Z",
+    expiresAt: "2026-11-22T00:00:00+00:00", mfaVerifiedAt: "2026-10-22T00:00:00Z", current: false };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps a selected bearer authoritative, omits cookies and escapes cursor/session IDs", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [row], nextCursor: "next" })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    const signal = new AbortController().signal;
+    expect((await listAuthSessions("https://selected.test/", "selected-token", "a+/=?", signal)).sessions).toEqual([row]);
+    await revokeAuthSession("https://selected.test", "selected-token", "a/b?", signal);
+    expect(fetch.mock.calls[0]).toEqual(["https://selected.test/api/auth/sessions?cursor=a%2B%2F%3D%3F",
+      expect.objectContaining({ credentials: "omit", signal, headers: { Accept: "application/json", Authorization: "Bearer selected-token" } })]);
+    expect(fetch.mock.calls[1][0]).toBe("https://selected.test/api/auth/sessions/a%2Fb%3F");
+  });
+
+  it.each(["https://user:secret@server.test", "ftp://server.test", "javascript:alert(1)"])(
+    "rejects invalid or unsafe target URL %s", async (url) => {
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      await expect(listAuthSessions(url, "token")).rejects.toMatchObject({ code: "UNSAFE_AUTH_TRANSPORT" });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+  it.each(["http://localhost:4800", "http://127.0.0.1:4800", "http://192.168.1.50:4800", "http://remote.test:4800"])(
+    "supports http and https target %s without cookies", async (url) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ sessions: [], nextCursor: null }))));
+      await expect(listAuthSessions(url, "token")).resolves.toEqual({ sessions: [], nextCursor: null });
+    });
+
+  it.each([
+    { ...row, current: "true" }, { ...row, userAgent: undefined },
+    { ...row, issuedAt: "2026-02-30T00:00:00Z" }, { ...row, expiresAt: "tomorrow" },
+    { ...row, mfaVerifiedAt: null }, { ...row, id: "" },
+  ])("rejects malformed rows instead of exposing partial session inventory", async (invalid) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ sessions: [row, invalid], nextCursor: null }))));
+    await expect(listAuthSessions("https://server.test", "token")).rejects.toMatchObject({ code: "INCOMPATIBLE_PROTOCOL" });
+  });
+
+  it.each([undefined, 42, "", {}])("rejects malformed cursor %s", async (nextCursor) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ sessions: [], nextCursor }))));
+    await expect(listAuthSessions("https://server.test", "token")).rejects.toMatchObject({ code: "INCOMPATIBLE_PROTOCOL" });
+  });
+
+  it("surfaces unsupported and authorization failures and requires exact DELETE acknowledgement", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "DEVICE_SESSIONS_UNAVAILABLE" }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "AUTH_REQUIRED" }), { status: 401 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(listAuthSessions("https://server.test", null)).rejects.toMatchObject({ code: "DEVICE_SESSIONS_UNAVAILABLE", status: 409 });
+    await expect(listAuthSessions("https://server.test", "old")).rejects.toMatchObject({ status: 401 });
+    await expect(revokeAuthSession("https://server.test", "token", "id")).rejects.toMatchObject({ code: "INCOMPATIBLE_PROTOCOL" });
+    await expect(revokeAuthSession("https://server.test", "token", "foreign")).rejects.toMatchObject({ status: 404 });
   });
 });

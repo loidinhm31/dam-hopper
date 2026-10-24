@@ -238,52 +238,169 @@ pub async fn discard_hunk(
 // GET /api/git/{project}/conflicts
 // ---------------------------------------------------------------------------
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictsSummaryQuery {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+}
+
 pub async fn list_conflicts(
     State(state): State<AppState>,
     Path(project): Path<String>,
-    Query(q): Query<RootQuery>,
+    Query(q): Query<ConflictsSummaryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = resolve_target_path(&state, &project, q.worktree_path).await?;
-    let conflicts = tokio::task::spawn_blocking(move || {
+    let summary = tokio::task::spawn_blocking(move || {
         let root = resolve_git_request_root(&path, q.root.as_deref())?;
-        git::get_conflicts(&root.root_path)
+        git::get_conflicts_summary(&root.root_path, q.cursor.as_deref(), q.limit)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
     .map_err(ApiError::from_app)?;
-    Ok(Json(conflicts))
+    Ok(Json(summary))
 }
-
-// ---------------------------------------------------------------------------
-// POST /api/git/{project}/resolve  — { path: string, content: string }
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolveBody {
-    pub path: String,
-    pub content: String,
+pub struct ConflictFileQuery {
+    pub conflict_id: String,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
 }
 
-pub async fn resolve(
+pub async fn get_conflict_file(
     State(state): State<AppState>,
     Path(project): Path<String>,
-    Json(body): Json<ResolveBody>,
+    Query(q): Query<ConflictFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let proj_path = resolve_target_path(&state, &project, body.worktree_path).await?;
-    let rel = body.path;
-    let content = body.content;
-    let root = body.root;
-    tokio::task::spawn_blocking(move || {
-        let (root, paths) = resolve_git_path_root(&proj_path, root.as_deref(), &[rel])?;
-        git::resolve_conflict(&root.root_path, &paths[0], &content)
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
+    let snapshot = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        git::get_conflict_snapshot(&root.root_path, &q.conflict_id)
     })
     .await
     .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
     .map_err(ApiError::from_app)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(snapshot))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/git/{project}/resolve  — fails closed for legacy payloads
+// ---------------------------------------------------------------------------
+
+pub async fn resolve(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let has_conflict_id = body.get("conflictId").and_then(|v| v.as_str()).is_some();
+    let has_snapshot_version = body
+        .get("snapshotVersion")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_legacy_content = body.get("content").is_some();
+
+    if !has_conflict_id || !has_snapshot_version || has_legacy_content {
+        return Err(ApiError::from_app(
+            crate::error::AppError::LegacyPayloadRejected,
+        ));
+    }
+
+    let req: git::ResolveRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                format!("Invalid resolve request: {e}"),
+            )));
+        }
+    };
+
+    let proj_path = resolve_target_path(&state, &project, req.worktree_path.clone()).await?;
+    let root_arg = req.root.clone();
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&proj_path, root_arg.as_deref())?;
+        git::apply_conflict_resolution(&root.root_path, &req)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
+
+    Ok(Json(outcome))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/git/{project}/operation & POST /api/git/{project}/operation
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationQuery {
+    pub worktree_path: Option<String>,
+    pub root: Option<String>,
+}
+
+pub async fn get_operation(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<OperationQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = resolve_target_path(&state, &project, q.worktree_path).await?;
+    let status = tokio::task::spawn_blocking(move || {
+        let root = resolve_git_request_root(&path, q.root.as_deref())?;
+        git::get_authoritative_operation_status(&root.root_path)
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?
+    .map_err(ApiError::from_app)?;
+    Ok(Json(status))
+}
+
+pub async fn execute_operation(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let has_precondition = body
+        .get("operationPrecondition")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_index = body
+        .get("fullIndexFingerprint")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_action = body.get("action").and_then(|v| v.as_str()).is_some();
+
+    if !has_precondition || !has_index || !has_action {
+        return Err(ApiError::from_app(
+            crate::error::AppError::LegacyPayloadRejected,
+        ));
+    }
+
+    let req: git::OperationActionRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
+                format!("Invalid operation request: {e}"),
+            )));
+        }
+    };
+
+    let proj_path = resolve_target_path(&state, &project, req.worktree_path.clone()).await?;
+    let root =
+        resolve_git_request_root(&proj_path, req.root.as_deref()).map_err(ApiError::from_app)?;
+    let root_path = root.root_path.clone();
+    let outcome = tokio::spawn(async move {
+        git::execute_operation_action(&root_path, &req).await
+    })
+    .await
+    .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(format!("Operation task execution failed: {e}"))))?
+    .map_err(ApiError::from_app)?;
+
+    Ok(Json(outcome))
 }
 
 // ---------------------------------------------------------------------------

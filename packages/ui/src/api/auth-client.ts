@@ -12,6 +12,8 @@ import {
   type LoginChallengeResponse,
   type MfaChallengeResponse,
   type MfaSetupResponse,
+  type AuthSessionInfo,
+  type AuthSessionList,
 } from "./auth-types.js";
 
 export * from "./auth-types.js";
@@ -526,5 +528,94 @@ export async function logout(
     });
   } catch {
     // Logout is best-effort and idempotent
+  }
+}
+
+/** Normalize session request URL while omitting cookies. */
+function sessionRequestUrl(baseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new AuthClientError("Invalid saved server URL", AUTH_ERROR_CODES.UNSAFE_AUTH_TRANSPORT);
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username || url.password || url.search || url.hash) {
+    throw new AuthClientError(
+      "Invalid saved server URL",
+      AUTH_ERROR_CODES.UNSAFE_AUTH_TRANSPORT,
+    );
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
+async function sessionRequest(
+  baseUrl: string, token: string | null, path: string,
+  method: "GET" | "DELETE", signal?: AbortSignal,
+): Promise<Response> {
+  const url = `${sessionRequestUrl(baseUrl)}/api/auth/sessions${path}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method, signal, credentials: "omit", cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new AuthClientError("Unable to reach the selected server", AUTH_ERROR_CODES.NETWORK_ERROR, 0);
+  }
+  if (!response.ok) throw await parseErrorResponse(response, "Login devices request failed");
+  return response;
+}
+
+function isSessionDate(value: unknown): value is string {
+  if (typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(value)) return false;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 19) === value.slice(0, 19);
+}
+
+function isSessionInfo(value: unknown): value is AuthSessionInfo {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.id === "string" && row.id.length > 0 &&
+    (row.userAgent === null || typeof row.userAgent === "string") &&
+    isSessionDate(row.issuedAt) && isSessionDate(row.expiresAt) &&
+    isSessionDate(row.mfaVerifiedAt) && typeof row.current === "boolean";
+}
+
+export async function listAuthSessions(
+  baseUrl: string, token: string | null, cursor?: string | null, signal?: AbortSignal,
+): Promise<AuthSessionList> {
+  const response = await sessionRequest(baseUrl, token,
+    cursor == null ? "" : `?cursor=${encodeURIComponent(cursor)}`, "GET", signal);
+  const data: unknown = await response.json().catch(() => null);
+  if (response.status !== 200 || !data || typeof data !== "object") {
+    throw new AuthClientError("Invalid login devices response", AUTH_ERROR_CODES.INCOMPATIBLE_PROTOCOL, response.status);
+  }
+  const page = data as Record<string, unknown>;
+  if (!Array.isArray(page.sessions) || !page.sessions.every(isSessionInfo) ||
+      !(page.nextCursor === null || (typeof page.nextCursor === "string" && page.nextCursor.length > 0))) {
+    throw new AuthClientError("Invalid login devices response", AUTH_ERROR_CODES.INCOMPATIBLE_PROTOCOL, response.status);
+  }
+  return {
+    sessions: page.sessions.map((row) => ({
+      id: row.id, userAgent: row.userAgent, issuedAt: row.issuedAt,
+      expiresAt: row.expiresAt, mfaVerifiedAt: row.mfaVerifiedAt, current: row.current,
+    })),
+    nextCursor: page.nextCursor as string | null,
+  };
+}
+
+export async function revokeAuthSession(
+  baseUrl: string, token: string | null, id: string, signal?: AbortSignal,
+): Promise<void> {
+  if (!id) throw new AuthClientError("Missing session ID", AUTH_ERROR_CODES.INCOMPATIBLE_PROTOCOL);
+  const response = await sessionRequest(baseUrl, token, `/${encodeURIComponent(id)}`, "DELETE", signal);
+  if (response.status !== 204) {
+    throw new AuthClientError("Server did not acknowledge session revocation", AUTH_ERROR_CODES.INCOMPATIBLE_PROTOCOL, response.status);
   }
 }

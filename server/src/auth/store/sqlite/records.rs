@@ -18,7 +18,7 @@ pub(super) const USER_COLUMNS: &str = "id, username, password_hash, is_enabled, 
      mfa_blocked_until_ms";
 
 pub(super) const SESSION_COLUMNS: &str = "id, username, auth_version, credential_version, \
-     issued_at_ms, expires_at_ms, mfa_verified_at_ms, revoked_at_ms";
+     issued_at_ms, expires_at_ms, mfa_verified_at_ms, revoked_at_ms, user_agent";
 
 pub(super) const CHALLENGE_COLUMNS: &str = "id, username, auth_version, purpose, created_at_ms, \
      expires_at_ms, attempts, consumed_at_ms, pending_secret_ciphertext, pending_secret_nonce, \
@@ -125,6 +125,13 @@ pub(super) fn decode_user(row: &Row<'_>) -> Result<UserRecord, StoreError> {
 /// Decode a row selected with [`SESSION_COLUMNS`].
 pub(super) fn decode_session(row: &Row<'_>) -> Result<AuthSession, StoreError> {
     let revoked_at: Option<i64> = row.get("revoked_at_ms")?;
+    let user_agent: Option<String> = row.get("user_agent")?;
+    if user_agent.as_ref().is_some_and(|value| {
+        value.is_empty() || value.len() > crate::auth::session_inventory::MAX_USER_AGENT_BYTES
+            || value.chars().any(char::is_control)
+    }) {
+        return Err(inconsistent("invalid session user_agent"));
+    }
     Ok(AuthSession {
         id: row.get("id")?,
         username: row.get("username")?,
@@ -134,6 +141,7 @@ pub(super) fn decode_session(row: &Row<'_>) -> Result<AuthSession, StoreError> {
         expires_at: from_ms(row.get("expires_at_ms")?),
         mfa_verified_at: from_ms(row.get("mfa_verified_at_ms")?),
         revoked_at: revoked_at.map(from_ms),
+        user_agent,
     })
 }
 

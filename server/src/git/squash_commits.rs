@@ -77,6 +77,10 @@ pub async fn squash_commits(
         if fail_publication {
             super::commit_message_rewrite::inject_publication_failure();
         }
+        let repo = super::diff::open_repo(&path)?;
+        let _guard = super::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+            .try_acquire_for_repo(&repo, &path)
+            .map_err(|e| AppError::Unavailable(e.to_string()))?;
         match squash_objects(&path, &selected, &unique, &message, &captured, allow_signature_removal) {
             Ok(action) => Ok(action),
             Err(RewriteFailure::Error(error)) => Err(error),

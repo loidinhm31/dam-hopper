@@ -131,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         expires_at: expires_at_bson,
         mfa_verified_at: mfa_verified_at_bson,
         revoked_at: None,
+        user_agent: None,
     };
 
     let database = if let Some(sqlite_path) = sqlite_path.filter(|s| !s.trim().is_empty()) {
