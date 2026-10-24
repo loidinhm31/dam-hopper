@@ -1060,6 +1060,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_reject_dangling_and_outside_symlinks() {
         let temp = tempdir().unwrap();
         let canonical_root = dunce::canonicalize(temp.path()).unwrap();

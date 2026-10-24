@@ -21,23 +21,110 @@ const KNOWN_PINNED_NODE_MODULES_DIRS: &[&str] = &[
     "/tmp/dam-hopper-spike-tuple/node_modules",
     "/opt/dam-hopper/lib/semantic-engine/tsls/node_modules",
 ];
+fn sha_matches(path: &Path, expected: &str) -> bool {
+    compute_file_sha256(path).ok().as_deref() == Some(expected)
+}
+
+fn check_node_bin(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_file() {
+        return Err(format!("Candidate node path {:?} is not a file", path));
+    }
+    let actual = compute_file_sha256(path).map_err(|e| format!("hash {:?}: {e}", path))?;
+    if actual.eq_ignore_ascii_case(PINNED_NODE_SHA256) {
+        Ok(path.to_path_buf())
+    } else {
+        Err(format!(
+            "Node binary at {:?} has SHA-256 {}, expected {}",
+            path, actual, PINNED_NODE_SHA256
+        ))
+    }
+}
+
+pub fn check_node_modules_dir(dir: &Path) -> bool {
+    sha_matches(
+        &dir.join("typescript-language-server/lib/cli.mjs"),
+        PINNED_TSLS_ENTRYPOINT_SHA256,
+    ) && sha_matches(
+        &dir.join("typescript/lib/tsserver.js"),
+        PINNED_TSSERVER_SHA256,
+    ) && sha_matches(
+        &dir.join("typescript/lib/_tsserver.js"),
+        PINNED_TSSERVER_IMPL_SHA256,
+    ) && sha_matches(
+        &dir.join("typescript/lib/typescript.js"),
+        PINNED_TYPESCRIPT_JS_SHA256,
+    )
+}
 
 /// Resolves the pinned Linux x64 Node.js v24.16.0 binary strictly by SHA-256 verification.
+/// If `DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR` is set, resolution is authoritative from that directory.
 pub fn resolve_pinned_node_bin() -> Result<PathBuf, String> {
-    for candidate in KNOWN_PINNED_NODE_PATHS {
-        let path = PathBuf::from(candidate);
-        if path.is_file() {
-            if let Ok(actual) = compute_file_sha256(&path) {
-                if actual.eq_ignore_ascii_case(PINNED_NODE_SHA256) {
-                    return Ok(path);
-                }
-            }
+    if let Some(dir) = std::env::var_os("DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR") {
+        let path = PathBuf::from(&dir).join("node");
+        return check_node_bin(&path).map_err(|e| {
+            format!(
+                "DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR set to {:?} but node binary invalid: {e}",
+                dir
+            )
+        });
+    }
+
+    let repo_cached_node = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join("artifacts/semantic-qualification/staged-engine/node"));
+    if let Some(path) = repo_cached_node {
+        if let Ok(valid_path) = check_node_bin(&path) {
+            return Ok(valid_path);
         }
     }
+
+    for candidate in KNOWN_PINNED_NODE_PATHS {
+        let path = PathBuf::from(candidate);
+        if let Ok(valid_path) = check_node_bin(&path) {
+            return Ok(valid_path);
+        }
+    }
+
     Err(format!(
-        "Pinned Node.js v24.16.0 matching SHA-256 {} not found in {:?}",
+        "Pinned Node.js v24.16.0 matching SHA-256 {} not found in repo artifacts or {:?}",
         PINNED_NODE_SHA256, KNOWN_PINNED_NODE_PATHS
     ))
+}
+
+/// Resolves the pinned TS 5.9.3 + TSLS 6.0.2 node_modules directory strictly by SHA-256 verification.
+/// If `DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR` is set, resolution is authoritative from that directory.
+pub fn resolve_pinned_node_modules_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR") {
+        let path = PathBuf::from(&dir).join("tsls/node_modules");
+        if check_node_modules_dir(&path) {
+            return Ok(path);
+        }
+        return Err(format!(
+            "DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR set to {:?} but tsls/node_modules does not match pinned digests",
+            dir
+        ));
+    }
+
+    let repo_cached_nm = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join("artifacts/semantic-qualification/staged-engine/tsls/node_modules"));
+    if let Some(path) = repo_cached_nm {
+        if check_node_modules_dir(&path) {
+            return Ok(path);
+        }
+    }
+
+    for candidate in KNOWN_PINNED_NODE_MODULES_DIRS {
+        let path = PathBuf::from(candidate);
+        if check_node_modules_dir(&path) {
+            return Ok(path);
+        }
+    }
+
+    Err(
+        "Pinned TS 5.9.3 + TSLS 6.0.2 node_modules not found in repo artifacts or known locations"
+            .to_string(),
+    )
 }
 
 pub fn resolve_node_bin() -> PathBuf {
@@ -146,32 +233,10 @@ pub struct PackagedToolchain {
     pub root: PathBuf,
 }
 
-fn sha_matches(path: &Path, expected: &str) -> bool {
-    compute_file_sha256(path).ok().as_deref() == Some(expected)
-}
-
 impl PackagedToolchain {
     pub fn try_new() -> Result<Self, String> {
         let node_bin = resolve_pinned_node_bin()?;
-        let node_modules_dir = KNOWN_PINNED_NODE_MODULES_DIRS
-            .iter()
-            .map(PathBuf::from)
-            .find(|dir| {
-                sha_matches(
-                    &dir.join("typescript-language-server/lib/cli.mjs"),
-                    PINNED_TSLS_ENTRYPOINT_SHA256,
-                ) && sha_matches(
-                    &dir.join("typescript/lib/tsserver.js"),
-                    PINNED_TSSERVER_SHA256,
-                ) && sha_matches(
-                    &dir.join("typescript/lib/_tsserver.js"),
-                    PINNED_TSSERVER_IMPL_SHA256,
-                ) && sha_matches(
-                    &dir.join("typescript/lib/typescript.js"),
-                    PINNED_TYPESCRIPT_JS_SHA256,
-                )
-            })
-            .ok_or_else(|| "Pinned TS 5.9.3 + TSLS 6.0.2 node_modules not found".to_string())?;
+        let node_modules_dir = resolve_pinned_node_modules_dir()?;
 
         let temp_dir = TempDir::new().map_err(|e| format!("tempdir: {e}"))?;
         let root = temp_dir.path().to_path_buf();
