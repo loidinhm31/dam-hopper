@@ -198,6 +198,79 @@ The "Show Commit in Git" action transitions from the Monaco gutter annotation to
   - **Data Fetching:** Commit details are queried via `useGitCommitDetails(target, hash, root, enabled)` with `staleTime: Infinity` (immutable commits). File entries are queried via `useGitCommitFiles(target, hash, root)`. Raw commit payloads are bounded at 5 MiB before decoding; this does not bound referenced trees, file-list output or engine history/rename computation.
   - **Rendering:** Displays full commit subject/body as escaped React text, copyable full SHA-1/SHA-256 OID, author name/email/date/timezone and committer name/email/date/timezone. Double-clicking a file opens its historical diff. SHA-256 details/files/diffs and supporting status/log reads use read-only Git CLI paths (requiring `git` on PATH, provided in the runtime Dockerfile; no configuration migration); native blame and mutation support are not expanded.
 
+
+## Android Native Review, Diff, Merge, and Git Blame Architecture
+
+The native Android client (`native-app/`) integrates review workflows directly into the single-content Traditional terminal shell without web views, secondary docks, or floating action buttons (FABs). Dedicated panel destinations (`DIFF`, `MRG`, and `EDIT`) interact through target-bound controllers:
+
+### Native Diff Review & Hunk Operations
+- **Diff Computation & Presentation:** `DiffCalculator` and `LcsDiffEngine` compute deterministic line differences over server-provided `FileDiffContent` (`GET /api/git/{project}/diff/file` or `GET /api/git/{project}/commit/{hash}/diff`), bounded by a 10,000-line safety cap (`MAX_DIFF_LINES`). Lines are projected into `DiffRow` models supporting both side-by-side (`DiffLayoutMode.SIDE_BY_SIDE`) and inline (`DiffLayoutMode.INLINE`) layouts.
+- **Server Hunk Mapping:** Calculated diff rows correlate with server `HunkInfo` (`newStart`, `newLines`, `oldStart`, `oldLines`), assigning `hunkIndex` to corresponding rows for inline hunk navigation (`nextHunk()`, `prevHunk()`) and hunk-targeted operations.
+- **Hunk Discard Execution & Mutation Guards:** `DiffReviewController.discardHunk(hunkIndex)` resolves the mapped server hunk and dispatches `DiscardHunkRequest` to `POST /api/git/{project}/discard-hunk`. Discard is fail-closed and strictly rejected if:
+  1. The diff is read-only (`isReadOnly = true`, applicable to historical commit diffs, deleted-only files, or binary files).
+  2. Unsaved local diff modifications are present in the controller draft (`isModifiedDirty = true`).
+  3. The active editor session holds unsaved in-memory buffer edits (`isDirtyBufferProvider(target, path) == true`).
+- **Baseline mtime CAS Saves:** Modifying working-tree diff drafts updates `modifiedDraft` and sets `isModifiedDirty = true`. Saving dispatches `saveModified(fileRepo)` with compare-and-swap expected mtime protection (`baselineMtime` captured from `/api/fs/stat` on current `loadDiffSeq`). Server mtime conflicts abort the write to prevent silent overwrites. *(Known data-safety limitations: saves currently dispatch against `target` without `query.root` specialization, and post-save reload resets edits typed while a save is in flight; see [Acceptance Ledger](../android-native-acceptance.md) Section 7.13).*
+- **Historical Commit Diff & Return:** Inspecting commits loads the diff in read-only mode (`commitHash != null`). `DiffReviewController.exitCommitDiff()` returns directly to the working-tree diff.
+
+### Three-Way Merge Conflict Resolution
+- **Conflict Marker Parsing:** `ConflictParser.parseConflictRegions` detects and parses both standard 2-way (`<<<<<<<`, `=======`, `>>>>>>>`) and 3-way/diff3 (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`) markers into structured `ConflictRegion` spans preserving custom labels (`ourLabel`, `ancestorLabel`, `theirLabel`).
+- **Targeted & Batch Conflict Resolution:** `MergeConflictController` supports resolving individual conflict blocks or all blocks via `ConflictSide`: `OURS`, `THEIRS`, `ANCESTOR`, `BOTH_OURS_FIRST`, and `BOTH_THEIRS_FIRST`.
+- **Integrity Validation & Resolution Submission:**
+  - `hasMalformedConflicts` guards against malformed conflict blocks (unmatched delimiters, missing separators, or excess ancestor markers).
+  - `hasRemainingConflicts` confirms that no opening markers (`<<<<<<<`) remain before allowing resolution.
+  - `markResolved()` strictly validates `allResolved && !isMalformed` before dispatching `ResolveConflictRequest` to `POST /api/git/{project}/resolve`. On server acceptance, the conflict list reloads automatically.
+
+### Native Git Blame & Commit Inspection
+- **Buffer Safety & Metrics:** Blame inputs enforce a 5 MiB threshold (`GIT_BLAME_MAX_BUFFER_BYTES = 5 * 1024 * 1024`) via `BlameValidator.isBufferOverLimit`. `computeBufferLineCount` preserves CRLF and LF layout metrics for exact editor display alignment.
+- **Keystroke Debouncing & Coroutine Cancellation:** `BlameRepository.requestBlameDebounced` applies a 250 ms debounce (`GIT_BLAME_DEBOUNCE_MS`), cancelling previous in-flight client coroutine jobs for the target file key (`"${target.project}:${target.worktreePath ?: ""}:$path"`). Visible gutter annotations are immediately wiped on buffer changes (`lineAttributions = null`).
+- **Partition Validation:** `BlameValidator.validateBlameResponse` enforces structural invariants:
+  - Echoed `snapshotId` and `modelVersion` match request parameters.
+  - Response `bufferLineCount` matches client-calculated display line count.
+  - `ranges` form a contiguous, non-overlapping partition covering exactly `1..bufferLineCount`.
+  - Range commit indices point to valid `commits` entries, with `null` indices designated as uncommitted lines.
+- **Bounded LRU Cache:** `BlameCache` retains up to 64 completed blame responses within a 32 MiB memory budget. Cache keys (`BlameCacheKey`) incorporate profile ID, generation, project, worktree path, root ID, HEAD OID, repository epoch, relative path, and SHA-256 buffer fingerprint (`computeSha256`). Target epoch advancement (`advanceTargetEpoch`) and owner retirement (`retireOwner`) provide lifecycle invalidation capability interfaces (caller integration wired across repository lifecycle events in Phase 12).
+- **Gutter Presentation & Commit Inspection:** `EditorBlameGutter` renders compact 6-character commit hashes and 8-character author names (or "Not Committed"). Clicking an attributed commit triggers `onInspectCommit`, which routes to `diffController.loadDiff(project, target, path, commitHash)` and navigates to the `DIFF` panel without clobbering dirty editor buffers. Standalone `CommitRevealRequest` and `CommitRevealCoordinator` provide nonce-bound coordination models for cross-surface commit reveal; the active `WorkbenchScreen` integration routes directly to `DIFF` using the current navigation target snapshot.
+
+### UI Integration and Zero FABs
+All diff review, merge conflict, and blame gutter controls are docked inline within their respective Compose panel surfaces (`DiffReviewScreen`, `MergeConflictScreen`, `EditorPanelScreen`). The workbench provides zero floating action buttons (FABs); navigation is driven exclusively via the single horizontally scrolling top navigation row (`PanelNavigationRow`). Platform metadata and review surface candidate records are documented in `NativeReviewSurfaces`.
+### Native Android Git Workflows & Leased Publication Architecture (Phase 12)
+
+The native Android client (`native-app/`) completes non-browser Git operations within the single-content Traditional terminal shell:
+
+- **Target-Bound Facade & Repositories (`features/git/`):**
+  - `GitRepository` aggregates domain repositories: `GitQueryRepository`, `GitMutationRepository`, `GitBranchWorktreeRepository`, `GitHistoryMutationRepository`, and `GitPublishRepository`.
+  - Operations execute against `GitOperationScope(profileId, generation, project, worktreePath)` to ensure target isolation and generation fencing across all asynchronous requests.
+- **Working Tree Changes, Staging & Commits:**
+  - `GitChangesController` drives working tree status (`GET /api/git/{project}/diff`), staging (`POST /stage`), unstaging (`POST /unstage`), file discard (`POST /discard`), and commits (`POST /commit`).
+  - Gated by `isCommitting` and `isRefreshing` states. Undo last commit is gated by user confirmation dialog and server ref checks.
+- **Branch and Worktree Mutation Prechecks:**
+  - `GitBranchController` provides branch creation, checkout, deletion, and tracking branch updates (`/api/git/{project}/branches`).
+  - `WorktreeMutationController` prechecks worktree removal via `validateRemovalPrecheck(target)`:
+    1. Rejects removal if target has active PTY terminal sessions (`hasActiveTerminal(target)`).
+    2. Rejects removal if target has dirty in-memory editor buffers (`isTargetDirty(target)` wired from `EditorTabsState.isDirtyTarget`).
+- **Safe History Rewrites & Action Controllers:**
+  - `GitHistoryController` manages commit log pagination, branch selection, and commit inspection.
+  - Eligibility invariants:
+    1. Inactive local branches (`isViewingLocalBranch` = `refs/heads/*` and `!isRemote`): allows commit message editing (`GitCommitMessageEditDialog` with `CommitMessageSnapshot` CAS) and contiguous squash (`GitSquashDialog` requiring unbroken parent chain and producing `SquashReceipt`).
+    2. Checked-out active branch (`isViewingActiveBranch`): required for working-tree mutations (`cherryPick`, `revert`) and destructive actions (`reset`, `drop`, `undoLastCommit`) via `GitHistoryActionController`.
+- **Leased Push Publication Safety Gate:**
+  - Local rewrites never publish automatically. `LeasedPublishController` executes leased push as a separate user-confirmed step (`LeasedPushDialog`).
+  - `prepareWithReceipt` or `prepare` captures `PrepareLeasedPushRequest` with exact `expectedRemoteOid` and `sourceOid`.
+  - Publication enforces `snap.branch == branch && snap.sourceOid == sourceOid`; stale remote tips abort with blocked status (`isStaleRemote`); explicit exact-OID leased publication with zero blind `--force` push fallback.
+- **Zero-FAB Presentation Invariants:**
+  - `GitPanelScreen` hosts docked `Changes`, `History`, and `Branches & Worktrees` sections with inline top action bars.
+  - Dialogs are rendered inline via `GitModalsHost` (`GitCommitMessageEditDialog`, `GitSquashDialog`, `LeasedPushDialog`, `AddWorktreeDialog`, `RemoveWorktreeDialog`, `GitCommitDetailsDialog`, `GitConfirmSimpleDialog`, `GitErrorDialog`).
+  - No `FloatingActionButton` or `ExtendedFloatingActionButton` components are permitted.
+- **Documented Limitations & Defect Ledger (Cycle 3 Review 6/10, NOT Accepted):**
+  - H1: Branch checkout scope sync defect (`refreshBranches()` cancels in-flight reload; history entries not reloaded on checkout).
+  - H2: Repeated identical action failures are suppressed after first dismissal due to un-reset `modalState.actionErrorResult`.
+  - H3: File-variant mutations in commit details dialog (cherry-pick-files, revert-files, drop-files) bypass invalidation hooks and error handling.
+  - H4: Discard invalidation hook executes immediately before async request completes and fires on failure.
+  - H5: Query parameter encoding via default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
+  - Real disposable multi-root/worktree repository verification deferred to Phase 18.
+
+
 ## Federated Search
 
 Search has two explicit scopes in `SearchPanel`:
@@ -290,5 +363,15 @@ Phase 08 integrates the floating conflict resolver across the workspace and clos
 | Git conflict floating Monaco surface and stacking | `packages/ui/src/components/organisms/ConflictResolverPanel.tsx`, `ConflictResolverToolbar.tsx`, `ConflictRegionNav.tsx`, `MergeConflictEditor.tsx`, `packages/ui/src/hooks/use-floating-panel-geometry.ts`, `packages/ui/src/lib/terminal-workspace-panel.ts`, `packages/ui/src/lib/conflict-resolver-panel-state.ts`, `packages/ui/src/lib/conflict-editor-decorations.ts` |
 | Git conflict browser component tests | `packages/ui/browser-tests/git-conflict-resolver.browser.tsx`, `packages/ui/browser-tests/conflict-monaco-history.browser.tsx` |
 | Git conflict workspace integration and reveal routing | `packages/ui/src/components/organisms/ChangedFilesList.tsx`, `packages/ui/src/components/pages/WorkspacePage.tsx`, `packages/ui/src/hooks/use-conflict-resolver.ts`, `packages/ui/src/components/organisms/ConflictResolverPanel.tsx` |
+| Android native diff engine and review controller | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/DiffReviewController.kt`, `DiffCalculator.kt`, `LcsDiffEngine.kt`, `DiffModels.kt` |
+| Android native 3-way merge conflict editor | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/MergeConflictController.kt`, `ConflictParser.kt`, `MergeConflictModels.kt`, `MergeConflictScreen.kt` |
+| Android native Git blame repository, debounce & validator | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/BlameRepository.kt`, `BlameValidator.kt`, `BlameModels.kt` |
+| Android native Git blame cache & SHA-256 digest | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/BlameCache.kt`, `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/crypto/Sha256Digest.kt`, `native/android-app/shared/src/jvmMain/.../Sha256Digest.jvm.kt`, `native/android-app/shared/src/androidMain/.../Sha256Digest.android.kt` |
+| Android native commit reveal & blame gutter UI | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/CommitRevealRequest.kt`, `EditorBlameGutter.kt`, `EditorScreens.kt`, `EditorTopBar.kt` |
+| Android native review surfaces bridge & workbench integration | `native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/NativeReviewSurfaces.kt`, `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt` |
+| Android native Git repository facade & domain clients | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitRepository.kt`, `GitQueryRepository.kt`, `GitMutationRepository.kt`, `GitBranchWorktreeRepository.kt`, `GitHistoryMutationRepository.kt`, `GitPublishRepository.kt` |
+| Android native Git controllers & operation scope | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitChangesController.kt`, `GitBranchController.kt`, `GitHistoryController.kt`, `GitHistoryActionController.kt`, `GitRewriteActionController.kt`, `WorktreeMutationController.kt`, `LeasedPublishController.kt`, `GitSyncController.kt`, `GitOperationScope.kt` |
+| Android native Git panel UI & zero-FAB modals | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitPanelScreen.kt`, `GitChangesView.kt`, `GitHistoryView.kt`, `GitBranchesWorktreesView.kt`, `GitCommitRow.kt`, `GitModalsHost.kt`, `GitModalState.kt`, `GitCommitDetailsDialog.kt`, `GitErrorDialog.kt`, `LeasedPushDialog.kt` |
+| Android native editor dirty target provider | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

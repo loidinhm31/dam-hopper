@@ -134,6 +134,5 @@ Synchronized Release Locations (13):
  11. server/Cargo.lock
  12. scripts/run-uat.sh
  13. tests/deploy/linux-release-rootless-smoke.sh
- (optional: apps/native/src-tauri/gen/android/app/tauri.properties)
 `);
 }

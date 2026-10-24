@@ -53,43 +53,6 @@ try {
   writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
   console.log("✓ Updated tauri.conf.json");
 
-  // Update Android version (tauri.properties)
-  const tauriPropertiesPath = join(
-    process.cwd(),
-    "src-tauri",
-    "gen",
-    "android",
-    "app",
-    "tauri.properties",
-  );
-
-  try {
-    let tauriProperties = readFileSync(tauriPropertiesPath, "utf8");
-
-    // Calculate versionCode from semantic version
-    // Formula: (major * 10000) + (minor * 1000) + patch
-    const [major, minor, patch] = newVersion.split(".").map(Number);
-    const versionCode = major * 10000 + minor * 1000 + patch;
-
-    // Update versionName
-    tauriProperties = tauriProperties.replace(
-      /tauri\.android\.versionName=.*/,
-      `tauri.android.versionName=${newVersion}`,
-    );
-
-    // Update versionCode
-    tauriProperties = tauriProperties.replace(
-      /tauri\.android\.versionCode=.*/,
-      `tauri.android.versionCode=${versionCode}`,
-    );
-
-    writeFileSync(tauriPropertiesPath, tauriProperties);
-    console.log(`✓ Updated tauri.properties (versionCode: ${versionCode})`);
-  } catch (error) {
-    console.warn(
-      "⚠ Could not update Android version (gen/android may not exist yet)",
-    );
-  }
 
   console.log(`\nVersion updated to ${newVersion}`);
   console.log("\nNext steps:");

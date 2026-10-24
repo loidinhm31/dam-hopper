@@ -1,0 +1,24 @@
+# Design gate decisions
+
+Status: coordinator design review complete; actual dependency/device qualification outstanding. Advisor consulted before phase authoring; recommendations below accepted. This is planning evidence, not proof of implementation.
+
+## Decisions
+1. Preserve the approved focused native architecture; no second implementation approach needed. Current common state/repositories/screens provide reusable foundations but do not make Files/Editor reachable or Sora mounted. Existing TextField plus Android model prototype cannot certify native-widget behavior.
+2. Put version-pinned feasibility before frozen contracts and concurrent work. Exact core artifact is `io.github.Rosemoe.sora-editor:editor:0.23.4`; no language coordinates/APIs are presumed. Required proof: compatible Java17/minSdk29 build, document text/undo/view-state surviving widget destruction and Activity recreation without retaining Activity context, incremental editing and one undo authority. If unsupported, explicit design revision; no fallback/upgrade/scope shrink. Dependent phases remain blocked pending this gate.
+3. Concurrent editor core / explorer-watchers / Android-widget work is allowed only after exact shared signatures, authority, threading, incremental events, save snapshots, reload/reset and disposal contracts freeze. Disjoint files alone are insufficient. One integration owner coordinates sequential cross-feature mutation and active-root cutover.
+4. Separate logical identity from transport authority. Exact endpoint/account/project/worktree context, not profile/project names, governs rebind eligibility; generation/socket retirement revokes writes immediately. Retain non-Activity buffers during reconnect and forced auth loss; reconcile metadata before enabling writes, never retarget drafts.
+5. Local affected-path/subtree sequencing covers saves and mutations. Definitely-unsent/server-rejected/dispatched-unknown are distinct local states. No uncertain auto-retry or optimistic identity publication. Source and destination reconciliation must not claim existence alone proves an uncertain rename/move effect; unresolved remains blocked with drafts intact.
+6. Watch overflow may destroy server subscription: recovery requires recreate plus refetch. Bind subscription/listing/event state to owner/socket/subId and directory watermarks. Bounded early buffer marks invalid rather than silently dropping. Background releases demand; foreground reconciles.
+7. Bound read bytes at transport, not only stat tiering. Strict full-text UTF8 validation, correct carried/consumed range offsets and bounded binary/media notices; preserve exact tier thresholds. No accidental full-file read on fallback or growing file.
+8. Preserve current terminal path. Visibility gates apply to every attachment/recovery/session-switch reactivation and final queued-send guard, not just focus or one isPanelActive assignment. Dirty Back guard precedes session clearing and every voluntary navigation mutation. Forced auth loss cannot require a save that no longer has authority.
+9. `.git` protections differ between existing mutation and streamed-write paths. Preserve server authority, do not bypass mutation rejection with force_git, do not represent client validation as server enforcement. No backend strengthening added to scope; existing distinction documented.
+10. Broader approved native release remains distinct. No claim this increment qualifies semantic TS/language services, previews, crypto enrollment/transfers, signed-release or physical-device obligations.
+
+## Architecture gate
+`docs/architecture/android-native-client.md` now has an explicitly **not implemented** intended increment section. Current behavior descriptions remain current; the section links approved brainstorm and selected plan and names unqualified gates. No product code changed. Advisor suggested keeping intended design only in plan unless clearly segregated; installed architecture-first workflow requires a pre-plan design section, so segregation is explicit.
+
+## Planned validation
+Installed task source parser read-only load (not hydrate), exact task fields/paths/DAG, marker/link checks, overview <80 lines, unordered write-overlap analysis. Independent report-only reviewer required for deletion, sensitive buffers, ownership/lifecycle/concurrency and compatibility. Follow-up limited to one targeted pass. Parent owns triage and final optional prompt validation policy; no take provenance or mandatory take validation.
+
+## Unresolved questions
+No outstanding product-scope choice. Version-specific native document/language/build facts and executable qualification remain hard technical gates. This plan cannot be handed off as unconditionally ready while those facts are unresolved. Runtime/build/test/device/license checks are future work, not planning results.

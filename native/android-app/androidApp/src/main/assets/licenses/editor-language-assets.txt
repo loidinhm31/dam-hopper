@@ -1,0 +1,19 @@
+DamHopper Editor Language Assets & Grammar Licensing Notice
+
+1. Java Incremental Grammar
+- Coordinate: io.github.Rosemoe.sora-editor:language-java:0.23.4
+- SHA-256: ce092684e47ded1ac610aef753612f6bbdb7aaac3e970a4e6b5c764b84415dd3
+- Origin: Upstream Rosemoe sora-editor project (https://github.com/Rosemoe/sora-editor)
+- License: GNU Lesser General Public License version 2.1 or later (LGPL-2.1-or-later)
+- Description: Pure bytecode incremental Java lexer and tokenizer (`io.github.rosemoe.sora.langs.java.JavaLanguage`). Contains zero external TextMate asset files, zero native JNI `.so` libraries, and zero runtime network dependencies.
+
+2. Plain Text Fallback Mode
+- Implementation: `io.github.rosemoe.sora.lang.EmptyLanguage`
+- Package: io.github.Rosemoe.sora-editor:editor:0.23.4
+- License: LGPL-2.1-or-later
+- Description: Built-in minimal language implementation used for non-Java files and degraded file tiers.
+
+3. External Grammar Assets Inventory (Excluded from 0.23.4 Increment)
+- `language-textmate:0.23.4`: Excluded. Requires third-party TextMate plist/json grammar bundles and TextMate theme assets with disparate licensing.
+- `language-treesitter:0.23.4`: Excluded. Requires per-architecture native `.so` shared libraries.
+- `editor-lsp:0.23.4`: Excluded. Server hosts no LSP; no semantic/LSP features enabled in this native client increment.

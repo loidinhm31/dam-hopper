@@ -250,6 +250,8 @@ evidence. Do not re-enable a v1 media path during version skew: deploy or roll
 back a matched frontend/backend pair with `workbenchProtocol: 2` and
 `session-cookie-v2`.
 
+The Android native client provides partial `session-cookie-v2` scaffolding via `AndroidMediaClient` and `LeaseMediaDataSource`; production integration, fail-closed cookie capture, bounded range reads, and end-to-end device/server playback qualification remain open qualification gates deferred to Phase 18.
+
 **GET /api/fs/language-files?project=NAME[&worktreePath=PATH]**
 Scan the selected project target for supported language files. The endpoint is
 authenticated and target-scoped; it does not accept a caller-supplied root or

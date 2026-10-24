@@ -1,6 +1,6 @@
 /**
  * Version synchronization manifest and file modifiers for DamHopper release files.
- * Manages the 13 required repository release files and optional Android config.
+ * Manages the 13 required repository release files.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -123,31 +123,6 @@ export function updateSmokeScriptVersion(filePath, currentVersion, newVersion, d
   return { oldVersion: currentVersion, newVersion, modified: true };
 }
 
-/**
- * Optionally update Android tauri.properties if present.
- */
-export function updateAndroidTauriProperties(filePath, newVersion, dryRun = false) {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const content = readFileSync(filePath, "utf8");
-  const [major, minor, patch] = parseSemver(newVersion);
-  const versionCode = major * 10000 + minor * 1000 + patch;
-
-  let updated = content.replace(
-    /tauri\.android\.versionName=.*/,
-    `tauri.android.versionName=${newVersion}`,
-  );
-  updated = updated.replace(
-    /tauri\.android\.versionCode=.*/,
-    `tauri.android.versionCode=${versionCode}`,
-  );
-
-  if (!dryRun) {
-    writeFileSync(filePath, updated, "utf8");
-  }
-  return { newVersion, versionCode };
-}
 
 /**
  * Update all non-lockfile synchronized version locations.
@@ -184,11 +159,5 @@ export function updateAllSynchronizedLocations(repoRoot, currentVersion, newVers
     processedFiles.push(target.rel);
   }
 
-  // Optional Android properties: updated locally for builds but not staged (gitignored)
-  const androidPropRel = "apps/native/src-tauri/gen/android/app/tauri.properties";
-  const androidPropFull = resolve(repoRoot, androidPropRel);
-  if (existsSync(androidPropFull)) {
-    updateAndroidTauriProperties(androidPropFull, newVersion, dryRun);
-  }
   return processedFiles;
 }

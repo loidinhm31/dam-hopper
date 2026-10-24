@@ -1,0 +1,142 @@
+# First Android Release — Scope and Acceptance Ledger
+
+Authority: [user decisions](./research/decision-context.md), [proposed architecture](../../docs/architecture/android-native-client.md). Baseline server0.13.2 / workbenchProtocol2 / authProtocol2; exact supported build/schema matrix frozen in Phase01. This ledger is a planned contract, not passed acceptance.
+
+## Included behavior
+
+| ID | Feature / required behavior | Owning phase | Observable acceptance |
+| --- | --- | --- | --- |
+| A01 | Per-server profiles, endpoint/account edits, independent connection state and secure credentials | 03–04 | Two equal-name servers stay isolated through reconnect/profile replacement/logout |
+| A02 | Registration-disabled notice, password login, TOTP setup/verify, step-up/rotation, expiry/revocation | 04 | Real authenticated flows and denial codes; no signing-secret login or synthetic refresh API |
+| C01 | TERMINAL-only Traditional shell, project/global workspace discovery/known registry/init/switch, commands/profiles | 06 | No IDE/Runtime mode or mode switchers; correct target labels and remote PTY lifetime |
+| NAV01 | One top panel-button row below server/project header; icon + short text; single-line horizontal scroll; always visible with IME; one selected content area on all sizes; no floating buttons | 06,17–18 | Reach every panel without wrapping, More menu or secondary navigation; panel selection retains terminal/controllers but only active content accepts input; no wide-screen terminal/panel docking |
+| C02 | Project config/global config/defaults/UI preferences; separate settings target and preference source | 06,17 | Change selected owner only; server validation/conflicts visible |
+| T01 | List/create/rename/kill/remove terminal sessions, process restart and command lifecycle | 07 | Actual remote PTY; identity/incarnation retained; uncertain create/input not replayed |
+| T02 | Attach/replay/reset/truncated tail, lag recovery, grid resize, search/scroll/select/copy/paste | 05,07 | UTF8-byte continuity and TUI/input/rotation/lifecycle proof; no duplicate PTY or keystrokes |
+| T03 | Agent roster/status filters, exact session activation, integration settings/status/install/uninstall | 07 | Server-authoritative epochs/leases; silence never success; no private ingress from Android |
+| F01 | Lazy file tree, CRUD/move/rename, exact-owner subscriptions/overflow/invalidation | 08 | Mutations/watch events never reach wrong profile or root; original-owner cleanup |
+| F02 | Filename/content search, federated results, current replace semantics and navigation | 08–09 | Qualified results, 500-match aggregation cap, visible truncation; safe target-bound edits |
+| E01 | Native code editor/languages, undo/redo, selection/find/replace, folding/minimap/gutters, zoom and view state | 05,09 | Current behavioral inventory reproduced; native IME and JSON/TS service proof |
+| E02 | Dirty/stale/unavailable tabs, mtime save conflict/reload/explicit overwrite, metadata-only persistence | 09 | Concurrent remote changes cannot silently overwrite local edits or another target |
+| E03 | Editable inline/side-by-side diff, hunk navigation/revert, three-way conflict acceptance/resolution | 10 | Actual Git files change as intended; read-only/history and mutation gates preserved |
+| E04 | Dirty-buffer blame/cache, line-change gutters, current-version commit reveal | 10 | Correct EOL/uncommitted mapping; stale result/reveal rejected; exact root/OID shown |
+| X01 | OPAQUE encrypted save/upload, binary/plain transfer contracts, bounded progress/cancellation | 05,11 | Native/current-server interop, mismatch/tamper rejection, no plaintext downgrade |
+| M01 | Native Markdown/GFM, image/video preview/download, binary view and range large-file viewer | 09,11 | Ticket purpose/cookie/owner cleanup, seek/range/errors, size-tier boundaries |
+| G01 | Roots/branches/history/literal search/commit details, stage/unstage/discard/commit/fetch/pull/normal push | 12 | Real disposable Git repositories; dirty/active-target/read-only guards and progress |
+| G02 | Branch mutations/worktrees, edit/squash/drop/cherry-pick/revert/reset/undo and file variants | 06,12 | Server CAS/active-vs-inactive/foreign-worktree protection and signature warnings preserved |
+| G03 | Separate leased rewrite publication | 12 | Preview exact expected OIDs; stale remote rejects; never force-push fallback |
+| W01 | Manual plan/phase/task workflow, sessions/links/notes/events/history purge | 13 | Strict request identity/CAS; terminal incarnation validation; no inferred completion |
+| W02 | Folder-first project plans, overview/timeline and read-only linked documents/watch state | 13 | Declared status not execution evidence; strict bounded reads; explicit unsupported Mermaid render |
+| S01 | Agent Store catalog/content/matrix/health/scan/ship/unship/absorb/bulk operations | 14 | Captured server catalog/project distribution only; correct partial failures |
+| S02 | Agent import remote/local scans and confirmation; memory templates/read/write/apply | 14 | Server-local scan meaning; preview/selection owner isolation; safe memory saves |
+| H01 | Fleet snapshots/detail metrics/alerts/SSE and REST fallback | 15 | Epoch and exact revision pairing; admission, staleness and visibility-lifecycle tests |
+| U01 | Aggregate usage/session views, setup/settings/health, retention and confirmed deletion | 15 | Scoped cursors, no raw prompts/commands, real delete barrier and explicit confirmation |
+| P01 | Detected ports; server Cloudflared install/create/list/stop/reminders | 16 | Origin/PTy loss does not auto-stop tunnel; reconnect REST catch-up and exposure warning |
+| H02 | Idle-suspend status/timing/force/consent; host-action capability presentation | 16 | Live-socket capability and revisions; no automatic suspend retry or privileged fallback |
+| C03 | Remote SSH key/agent/credential status/load/forget; diagnostics/cache/reset/TOML import-export | 16–17 | Server-local actions and target-labelled confirmations; no private-key/body logging |
+| N01 | Server-observed notifications, sound/vibration preferences and exact-target navigation | 07,17 | Permission denied/offline/stale target safe; privacy-safe lock-screen payloads |
+| V01 | Cognito mask/input isolation, font/theme/shortcuts, accessibility, process recreation | 17–18 | Terminal/editor/IME cannot receive input under mask; app font independent of terminal/editor font |
+
+Remaining current UI behaviors are enumerated against actual source in Phase01, not assumed absent because this table is grouped. A discovered included behavior gets a ledger row and phase owner; no silent feature narrowing.
+
+## Explicit first-release exceptions
+
+| ID | Excluded behavior | Approved treatment |
+| --- | --- | --- |
+| B01 | Embedded interactive HTML/CSS/JS browser preview | HTML source editable; no embedded browser, external-browser substitute or fake screenshot parity |
+| B02 | Mermaid rendered through browser/DOM | Source/code fence and clear render-unavailable state; no hidden renderer/service |
+| B03 | Browser debug, extension, DOM/postMessage selection bridge | No Android browser-debug product; existing web/extension unchanged |
+| B04 | Local Android PTY/Git/agents/SSH forwarding/Linux runtime | Remote server performs execution; remote server SSH credential management remains included |
+| B05 | Desktop host/installer, Play release, always-on push/foreground-service stack | Future decisions; no dummy modules or unsupported guarantees |
+| B06 | New remote updater/restart/user-admin/LSP/privileged-executor APIs | Not invented as native parity; preserve available remote capabilities only |
+| B07 | IDE workspace, Runtime terminal presentation and their mode selectors | TERMINAL + Traditional is the sole supported shell; included editor/management functions remain panels |
+| B08 | Floating navigation/actions, FABs and draggable panel launchers | Inline controls in the sole panel row or active panel; no floating shortcut replacement |
+| B09 | Additional panel-navigation rows, rail, drawer or overflow-only destinations | One horizontally scrollable button row exposes all included panel destinations |
+
+## Hard gates
+
+- **GATE-A (Phase01–02):** complete scope/behavior ledger, explicit compatible dependency/license/toolchain decisions, reproducible app launch.
+- **GATE-B (Phase05):** real device native-terminal/input/replay, native editor/model/language-service path, exact OPAQUE ABI/interop proof. Failure blocks dependent feature implementation; new design or explicit scope approval required.
+- **GATE-C (Phase18):** all included rows exercised on real server/native app; no unresolved consumer-visible parity/security issue masked by preview exceptions.
+- **GATE-D (Phase19):** installed signed release APK + upgrade/security/license/docs evidence; public compatibility claims limited to tested matrix.
+
+Only GATE-B subpaths that fail block their dependents; unrelated domain design may proceed, but the release cannot bypass the failed retained requirement. No phase completion by scaffold compilation alone.
+
+## Acceptance evidence format
+
+Record per row: requirement ID, source baseline, tested app/server versions, device/model/API/ABI/page size, auth mode/role, fixture targets, command/journey, expected and observed state, artifact references and limitations. Screenshots are redacted full-app captures; terminal/private content and credentials excluded. Human visual review uses explicit ACCEPTED/REJECTED; green CI never fabricates it.
+
+## Open questions / defaults
+
+- Dependency pins and editor service realization are gated work, not presumed facts.
+- Freeze named hardware and latency/memory thresholds in Phase01 before performance results; no invented schedule.
+- Server baseline starts at0.13.2/protocol2; older/newer builds need explicit compatibility proof.
+- Private APK app version is independent (initial proposal0.1.0/versionCode1); existing13-file server/web/Tauri alignment remains intact. If release ownership later unifies versions, deliberately update the checker/invariant rather than silently adding an untracked version source.
+
+## Phase 08 Acceptance Ledger Status (2026-10-16)
+
+- **F01 (Lazy file tree, CRUD/move/rename, exact-owner subscriptions/overflow/invalidation):**
+  - **Status:** Host implementation delivered; automated test suites passed (100%); user authorized proceeding to Phase 09 with recorded limitations. Technical code review: CHANGES REQUESTED (6/10). Physical device runtime acceptance pending Phase 18.
+  - **Automated Verification:** 194 unit test executions passed (`:shared:jvmTest`, `:androidApp:testDebugUnitTest`, `:androidApp:testReleaseUnitTest`), 57 Phase 08 static assertions in `tests/test-phase-08-filesystem-watchers.sh`, 327 regression checks passed, `:androidApp:assembleDebug` clean.
+  - **Documented Limitations:** Server watcher is non-recursive; live events cover root directory (`path=""`). Expanded subfolders rely on client re-fetch upon expand. Socket reconnect rebind requires identity trigger on `Connected(socketRef)`.
+- **F02 (Filename/content search, federated results, current replace semantics and navigation):**
+  - **Status:** Host implementation delivered; automated test suites passed (100%); user authorized proceeding to Phase 09 with recorded limitations. Technical code review: CHANGES REQUESTED (6/10). Downstream editor integration in Phase 09; full runtime acceptance pending Phase 18.
+  - **Automated Verification:** Federated search coordinator, case/literal options, 500-result cap truncation, preview generation, and batch CAS replacement tested and passed.
+  - **Documented Limitations:**
+    - H1: Permissive UTF-8 decode in `FileRepository.readFile` past 8 KiB boundary risks lossy replace on non-UTF8 files; strict decode / binary handling required.
+    - H3: `TimeoutCancellationException` treated as `CancellationException` in batch operations; requires isolating timeout failure from parent job cancellation.
+    - H4: Multi-profile federated search resolves secondary profile targets by display name instead of active project/workspace target.
+    - H5: Authoritative dirty-buffer provider interface pending Phase 09 native editor implementation; Replace All currently defaults to `isDirtyFile = { false }`.
+    - H6: Outcome UI displays counts only; per-file failure/conflict breakdown and multi-server project badges to be surfaced.
+    - H7: Mocked WebSocket event integration tests to be expanded in Phase 18 qualification.
+
+## Phase 13 Acceptance Ledger Status (2026-10-16)
+
+- **W01 (Manual plan/phase/task workflow, sessions/links/notes/events/history purge):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification (per `plans/reports/qa-261016-1534-phase-13-cycle-3.md` and `plans/reports/code-reviewer-261016-1440-phase-13-workflow-plans-cycle2.md`). Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 274 unit tests passed (224 in `:shared:jvmTest`, 50 in `:androidApp:testDebugUnitTest`), 854 static invariant assertions across 12 suites passed (including 100 assertions in `tests/test-phase-13-workflow-plans.sh`), clean `:androidApp:assembleDebug` APK build (65 tasks).
+  - **Deliverables & Verification:** Manual workflow item lifecycle (create, patch, delete with optimistic concurrency / CAS token support and UUIDv4 client mutation IDs), session management (create, end, abandon, link, unlink), note management, paginated event log, and explicit workspace-wide history purge with RFC3339 timestamp validation and descriptive destructive warnings ("Purge All Workspace History"). Zero FABs and zero WebViews verified.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Live terminal/agent session picker currently implemented as manual identifier input rather than dynamic session picker dialog; deferred to Phase 18 qualification.
+    - Qualification task: Physical device runtime gestures and Compose recomposition behavior under long sessions pending Phase 18.
+- **W02 (Folder-first project plans, overview/timeline and read-only linked documents/watch state):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 274 unit tests passed, 854 static invariant assertions passed across 12 suites, clean `:androidApp:assembleDebug` build.
+  - **Deliverables & Verification:** Folder-first browsing of plan directories, file-declared plan metadata parsing (`ProjectPlanModels.kt` phases, tasks, completion percentage, reported status), timeline visualization, bounded document reads strictly enforced at 64 KiB ceiling (`MAX_DOCUMENT_BYTES`), path containment rejecting `..` traversal and absolute/external paths, auto-open on `PLAN` folders without re-entry loops, Markdown preview via `MarkdownPreviewView` with explicit unsupported Mermaid render exception.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Direct navigation from plan evidence chips to editor/viewer not yet wired; deferred to Phase 18 qualification.
+    - Qualification task: Reconnection rebind lifecycle across project targets and live server watcher installation against dynamic files deferred to Phase 18 qualification.
+
+## Phase 14 Acceptance Ledger Status (2026-10-16)
+
+- **S01 (Agent Store catalog/content/matrix/health/scan/ship/unship/absorb/bulk operations):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 2 review (score 7/10 per `plans/reports/code-reviewer-261016-1730-phase-14-cycle-2.md`) with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 252 shared JVM unit tests passed (`:shared:jvmTest`), 51 Android unit tests passed (`:androidApp:testDebugUnitTest :androidApp:testReleaseUnitTest`), 99 Phase 14 static invariant assertions passed (`tests/test-phase-14-agent-store-memory.sh`), 953 total regression assertions passed across 13 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Agent Store catalog, category filtering, search, markdown item detail viewing, cross-project distribution matrix with per-cell state representation (shipped symlink/copy, unmanaged, uninstalled), project health check, project scan dialog, reviewed mutation actions (`CellActionDialog`) for ship symlink/copy, unship, force-unship, absorb, bulk distribution, and item deletion. Fenced mutations with `AgentStoreController` preventing cross-server distribution fallback. Single content area in unified `AGENTS` panel, zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Absorb action currently presented from matrix cell modal rather than project scan results; `getItem` repo method unused; deferred to Phase 18 qualification.
+    - Qualification task: Live remote server filesystem symlink creation, removal, and conflict validation across real filesystems deferred to Phase 18.
+- **S02 (Agent import remote/local scans and confirmation; memory templates/read/write/apply):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 2 review with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 252 shared JVM unit tests passed, 51 Android unit tests passed, 99 Phase 14 static invariant assertions passed, 953 total regression assertions passed across 13 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Import scanning for remote Git repositories and server-local paths (explicitly documented as server-local paths, not Android device storage), candidate review with deduplicated keys (`category:name:relativePath`), selection toggles, import confirmation with cleanup flag derivation (`cleanup = source == REPO`); Agent memory template listing, content preview with diff modal, template application, safe memory editing with snapshot saves, dirty draft preservation across target navigation (`setProjects`), and connection owner fencing (`{profileId, generation}`). Zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Unused `listProjectMemory` repo method; memory editor save re-enablement on action error (H1) and revision fencing on in-flight confirm results (H3) deferred to Phase 18 qualification.
+    - Qualification task: Live server temporary directory cleanup after remote git clone and live memory file persistence deferred to Phase 18.
+
+## Phase 15 Acceptance Ledger Status (2026-10-16)
+
+- **H01 (Fleet snapshots/detail metrics/alerts/SSE and REST fallback):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review (score 7/10 per `plans/reports/code-reviewer-261016-2049-phase-15-cycle-3.md`) with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 272 shared JVM unit tests passed (`:shared:jvmTest`), 63 Android debug unit tests passed (`:androidApp:testDebugUnitTest`), 63 Android release unit tests passed (`:androidApp:testReleaseUnitTest`), 81 Phase 15 static invariant assertions passed (`tests/test-phase-15-host-resources-usage.sh`), 1034 total regression assertions passed across 14 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Authenticated SSE streaming client (`HostResourceSseClient.kt`) with Bearer token authorization, revision pairing, reconnect backoff, and lifecycle evaluation; typed DTOs for host resources, hardware metrics, and active alerts (`HostResourceModels.kt`, `HostMetricsModels.kt`, `HostResourceAlertModels.kt`); owner-scoped `ResourceStreamCoordinator.kt` enforcing 32 global / 4 subject stream budgets, visible demand tracking, fallback polling with documented visibility cadence, and lifecycle-aware teardown; Compose UI in `FleetScreens.kt`, `FleetDetailComponents.kt`, and `ResourcesUnifiedPanelScreen.kt` under `WorkbenchPanel.RESOURCES` single content area, zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: SSE/REST payload decoding on background dispatcher, explicit Activity foreground lifecycle bindings, and fine-grained HTTP 401-403 error distinction deferred to Phase 18 qualification.
+    - Qualification task: Real physical device SSE streaming verification, HTTP proxy buffering resilience, 32/4 admission denial behavior, and real server reconnect loops deferred to Phase 18.
+- **U01 (Aggregate usage/session views, setup/settings/health, retention and confirmed deletion):**
+  - **Status:** Implementation baseline delivered; automated test suites passed (100%); User approved Cycle 3 review with noted limitations deferred to Phase 18 qualification. Physical device and live server runtime acceptance pending Phase 18.
+  - **Automated Verification:** 272 shared JVM unit tests passed, 63 Android debug unit tests passed, 63 Android release unit tests passed, 81 Phase 15 static invariant assertions passed, 1034 total regression assertions passed across 14 test suites, clean `:androidApp:assembleDebug` APK build.
+  - **Deliverables & Verification:** Aggregate telemetry summaries, session lists with opaque cursor pagination omitting from/to on page 2 (`cursor != null`), range boundary helper (`UsageBoundsHelper`), health/setup/settings models, Pause/Resume toggle, and confirmed deletion with UTC-day aligned boundaries (`calculateUtcDayRange`). Reactive `UsageController.kt` with connection owner binding (`ConnectionRef`), loading states, delete failure safety, and re-entrancy gating. Native Compose UI in `UsageScreens.kt`, `UsageSettingsSection.kt`, and `UsageDialogs.kt` with honest `--` indicators for null/unconfigured states and destructive delete confirmation. Zero FABs, zero WebViews.
+  - **Documented Limitations (Deferred to Phase 18):**
+    - Implementation gap: Settings controls for enable/exporter/retention/retry currently read-only (Pause/Resume wired); model filter chips hardcoded rather than dynamically derived from session/summary models; range delete `[from, to)` uses `to = todayUtc` with epoch ms dialog representation; deferred to Phase 18 qualification.
+    - Qualification task: Live server usage deletion barrier semantics, session pagination against large production telemetry datasets, and real retention policy execution deferred to Phase 18.

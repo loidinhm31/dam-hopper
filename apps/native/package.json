@@ -17,13 +17,6 @@
     "smoke:evidence": "node scripts/smoke-browser-debug.mjs --validate-evidence",
     "smoke:ssh-forward": "node scripts/smoke-ssh-forward.mjs",
     "test:e2e:ssh-forward": "cargo test --manifest-path src-tauri/Cargo.toml --test ssh_forward_e2e -- --ignored --nocapture",
-    "tauri:android:init": "tauri android init --ci --skip-targets-install",
-    "tauri:android:dev": "tauri android dev --host",
-    "tauri:android:build": "tauri android build",
-    "tauri:android:run": "tauri android run",
-    "tauri:android:studio": "tauri android dev --open --host",
-    "tauri:ios:init": "tauri ios init",
-    "tauri:ios:dev": "tauri ios dev",
     "version": "node scripts/bump-version.js"
   },
   "dependencies": {

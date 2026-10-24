@@ -1,0 +1,1729 @@
+package dev.damhopper.nativeapp.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import kotlinx.coroutines.delay
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.core.logging.AppLogger
+import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
+import dev.damhopper.nativeapp.features.profiles.ProfileRepository
+import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
+import dev.damhopper.nativeapp.features.terminal.VtTerminalSurface
+import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
+import dev.damhopper.nativeapp.features.terminal.TerminalModifier
+import dev.damhopper.nativeapp.features.terminal.TerminalRepository
+import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
+import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
+import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
+import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
+import dev.damhopper.nativeapp.features.terminal.TerminalViewportEffects
+import dev.damhopper.nativeapp.features.terminal.pinchedTerminalFontSize
+import dev.damhopper.nativeapp.features.terminal.stepTerminalFontSize
+import dev.damhopper.nativeapp.features.terminal.terminalGeometry
+import dev.damhopper.nativeapp.features.terminal.terminalLineHeightSp
+import dev.damhopper.nativeapp.features.terminal.TerminalDisplaySnapshot
+import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.datetime.Clock
+
+/**
+ * Standalone Mobile Terminal Display & Input Screen for a selected project.
+ *
+ * Flow stage: Profile Login -> Project List -> [ProjectTerminalScreen]
+ *
+ * Invariants:
+ * 1. Output streams and historical replay MUST be routed through [TerminalSessionController]
+ *    and [TerminalReplayGate] (no parallel unfenced buffers).
+ * 2. Keystrokes, commands, and accessory shortcuts are strictly gated by [TerminalSessionController.sendInput]
+ *    respecting [TerminalSessionController.isPanelActive] and privacy settings.
+ * 3. Renders bounded VT rows with stable identities and user-controlled output following.
+ *    Client-side "Clear" actions clear only the local display surface without affecting server stream offsets.
+ * 4. Leaving the screen ("← Projects" back button) deactivates input fencing and cleans up local controllers
+ *    without killing or removing the remote server PTY session.
+ * 5. Input and accessory rows observe imePadding to stay docked above the IME.
+ * 6. Zero WebView and zero floating action buttons.
+ */
+@Composable
+fun ProjectTerminalScreen(
+    projectName: String,
+    terminalRepo: TerminalRepository?,
+    onBackToProjects: () -> Unit,
+    modifier: Modifier = Modifier,
+    initialSessionId: String? = null,
+    onSessionSelected: ((String?) -> Unit)? = null,
+    profileId: String? = null,
+    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+    retainedState: ProjectTerminalState? = null,
+    showHeader: Boolean = true,
+) {
+    // Resolve authoritative connection reference
+    val connectionRef = terminalRepo?.apiClient?.connection
+
+    // If repository or connection is not yet ready, render loading state
+    if (terminalRepo == null || connectionRef == null) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(DamHopperColors.Background),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator(color = DamHopperColors.Primary)
+                Text(
+                    text = "Connecting to terminal service...",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 14.sp
+                )
+            }
+        }
+        return
+    }
+
+    val connectionKey = "${connectionRef.profileId}:${connectionRef.generation}:$projectName"
+
+    // State scoped strictly to the active repository, connection, and project
+    var sessions by remember(terminalRepo, connectionKey) { mutableStateOf<List<TerminalSessionDetailed>>(emptyList()) }
+    var isLoadingSessions by remember(terminalRepo, connectionKey) { mutableStateOf(true) }
+    var fallbackActiveSessionId by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var fallbackActiveSessionEpoch by remember(terminalRepo, connectionKey) { mutableStateOf(0L) }
+    fun currentActiveSessionId(): String? = retainedState?.activeSessionId ?: fallbackActiveSessionId
+    fun currentActiveSessionEpoch(): Long = retainedState?.activeSessionEpoch ?: fallbackActiveSessionEpoch
+    val activeSessionId = currentActiveSessionId()
+    val activeSessionEpoch = currentActiveSessionEpoch()
+    var showCreateDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var sessionToKill by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var commandInput by remember(terminalRepo, connectionKey) { mutableStateOf("") }
+    var uiErrorBanner by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var attachError by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var isDestructiveOpInProgress by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var isSyncFailure by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var pendingReconciliationId by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var fallbackAttachmentRevision by remember(terminalRepo, connectionKey) { mutableStateOf(0L) }
+    var fallbackAttachmentAttemptToken by remember(terminalRepo, connectionKey) { mutableStateOf(0L) }
+    fun currentAttachmentRevision(): Long = retainedState?.attachmentRevision ?: fallbackAttachmentRevision
+    fun currentAttachmentAttemptToken(): Long = retainedState?.attachmentAttemptToken ?: fallbackAttachmentAttemptToken
+    val attachmentRevision = currentAttachmentRevision()
+    val attachmentAttemptToken = currentAttachmentAttemptToken()
+
+    val fallbackOwnerScope = remember(terminalRepo, connectionKey) { CoroutineScope(Dispatchers.Main.immediate) }
+    val ownerScope = retainedState?.ownerScope ?: fallbackOwnerScope
+
+    val fallbackWriteChannel = remember(terminalRepo, connectionKey) { Channel<QueuedWrite>(capacity = 64) }
+    val writeChannel = retainedState?.writeChannel ?: fallbackWriteChannel
+
+    val fallbackControllers = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, TerminalSessionController>() }
+    val controllers = retainedState?.controllers ?: fallbackControllers
+
+    val fallbackSurfaces = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, NativeTerminalSurface>() }
+    val surfaces = retainedState?.surfaces ?: fallbackSurfaces
+
+    val fallbackAttachQueues = remember(terminalRepo, connectionKey) { mutableMapOf<TerminalSessionController, TerminalAttachQueue>() }
+    val attachQueues = retainedState?.attachQueues ?: fallbackAttachQueues
+
+    val fallbackReadingStates = remember(terminalRepo, connectionKey) { TerminalReadingStates() }
+    val readingStates = retainedState?.readingStates ?: fallbackReadingStates
+
+    val fallbackDestroyingSessionIds = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, Boolean>() }
+    val destroyingSessionIds = retainedState?.destroyingSessionIds ?: fallbackDestroyingSessionIds
+
+    val fallbackFailedRecords = remember(terminalRepo, connectionKey) { mutableStateListOf<FailedCommandRecord>() }
+    val failedRecords = retainedState?.failedRecords ?: fallbackFailedRecords
+
+    val fallbackSessionDrafts = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, String>() }
+    val sessionDrafts = retainedState?.sessionDrafts ?: fallbackSessionDrafts
+    val terminalFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var directInputState by remember { mutableStateOf(TextFieldValue("")) }
+    var cursorVisible by remember { mutableStateOf(true) }
+    var terminalFontSize by remember(preferencesStore, retainedState) {
+        mutableIntStateOf(
+            retainedState?.terminalFontSize
+                ?: WorkbenchPreferences.clampFont(preferencesStore.loadPreferences().terminalFontSize)
+        )
+    }
+    fun updateTerminalFontSize(newSize: Int) {
+        val clamped = WorkbenchPreferences.clampFont(newSize)
+        if (clamped == terminalFontSize) return
+        terminalFontSize = clamped
+        retainedState?.updateTerminalFontSize(clamped)
+        preferencesStore.savePreferences(
+            preferencesStore.loadPreferences().copy(terminalFontSize = clamped)
+        )
+    }
+
+    fun isEligibleForInput(sessionId: String): Boolean {
+        if (retainedState != null) {
+            return retainedState.isInputAllowedForSession(sessionId)
+        }
+        return (sessionId == activeSessionId && destroyingSessionIds[sessionId] != true)
+    }
+
+    fun bumpActiveSessionEpoch() {
+        if (retainedState != null) {
+            retainedState.selectSession(retainedState.activeSessionId)
+        } else {
+            fallbackActiveSessionEpoch++
+        }
+    }
+    val currentTerminalFontSize by rememberUpdatedState(terminalFontSize)
+    val currentUpdateTerminalFontSize by rememberUpdatedState<(Int) -> Unit>(::updateTerminalFontSize)
+
+    LaunchedEffect(activeSessionId) {
+        while (true) {
+            delay(500)
+            cursorVisible = !cursorVisible
+        }
+    }
+
+    var lastSinkAdmitted by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var lastSubmittedCommandText by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+
+    fun isSessionForProject(session: TerminalSessionDetailed): Boolean {
+        return session.project == projectName
+    }
+
+    fun isSessionSelectable(session: TerminalSessionDetailed): Boolean {
+        return isSessionForProject(session) && destroyingSessionIds[session.id] != true
+    }
+
+    fun removeSessionLocal(id: String) {
+        controllers.remove(id)?.let { controller ->
+            attachQueues.remove(controller)
+            readingStates.remove(controller)
+            controller.close()
+        }
+        surfaces.remove(id)?.close()
+    }
+
+    fun selectSession(newSessionId: String?) {
+        if (newSessionId != null && destroyingSessionIds[newSessionId] == true) return
+        if (activeSessionId == newSessionId) return
+
+        val prevId = activeSessionId
+        if (prevId != null) {
+            controllers[prevId]?.isPanelActive = false
+            sessionDrafts[prevId] = commandInput
+        }
+
+        if (retainedState != null) {
+            retainedState.selectSession(newSessionId, onSessionSelected)
+        } else {
+            fallbackActiveSessionEpoch++
+            fallbackActiveSessionId = newSessionId
+            onSessionSelected?.invoke(newSessionId)
+        }
+
+        if (newSessionId != null) {
+            controllers[newSessionId]?.isPanelActive = isEligibleForInput(newSessionId)
+            commandInput = sessionDrafts[newSessionId] ?: ""
+        } else {
+            commandInput = ""
+        }
+    }
+
+    // Single background worker strictly serializing writes with epoch and boundary gating
+    LaunchedEffect(terminalRepo, connectionKey) {
+        launch(Dispatchers.Main.immediate) {
+            for (item in writeChannel) {
+                try {
+                    val curEpoch = currentActiveSessionEpoch()
+                    val curSession = currentActiveSessionId()
+                    val isCurrent = (item.epoch == curEpoch) &&
+                        (item.sessionId == curSession) &&
+                        (terminalRepo.apiClient.connection == connectionRef) &&
+                        (controllers[item.sessionId] === item.controller) &&
+                        (destroyingSessionIds[item.sessionId] != true)
+
+                    val isEligible = isCurrent &&
+                        item.controller.isPanelActive &&
+                        item.controller.isReplayCompleted &&
+                        item.controller.gate.shouldForwardTerminalData() &&
+                        item.controller.isInputAllowed() &&
+                        isEligibleForInput(item.sessionId) &&
+                        (item.controller.incarnation.toLong() == item.incarnation)
+
+                    if (isEligible) {
+                        val payload = item.bytes.decodeToString()
+                        val capturedEpoch = item.epoch
+                        val capturedCtrl = item.controller
+
+                        val writeOutcome = withContext(Dispatchers.Default) {
+                                if (capturedEpoch == currentActiveSessionEpoch() &&
+                                terminalRepo.apiClient.connection == connectionRef &&
+                                capturedCtrl.isPanelActive &&
+                                isEligibleForInput(item.sessionId)
+                            ) {
+                                try {
+                                    terminalRepo.writeTerminal(item.sessionId, payload)
+                                    true
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    false
+                                }
+                            } else {
+                                null
+                            }
+                        }
+
+                        when (writeOutcome) {
+                            true -> item.onResult(true, false, null)
+                            false -> item.onResult(false, true, "Write failed during network transport (delivery uncertain)")
+                            null -> item.onResult(false, false, "Input dropped: session changed or inactive before submission (unsent)")
+                        }
+                    } else {
+                        item.onResult(false, false, "Input dropped: session inactive or preparing (unsent)")
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    item.onResult(false, true, "Write error: ${e.message ?: "unknown"}")
+                }
+            }
+        }
+    }
+
+    fun getOrCreateController(id: String, incarnation: Long): TerminalSessionController {
+        val existing = controllers[id]
+        if (existing != null) {
+            if (existing.incarnation.toLong() < incarnation) {
+                // Incarnation bumped on server: clean up stale controller immediately
+                removeSessionLocal(id)
+            } else {
+                return existing
+            }
+        }
+
+        val surface = surfaces.getOrPut(id) {
+            VtTerminalSurface()
+        }
+
+        val ctrl = TerminalSessionController(
+            sessionId = id,
+            initialIncarnation = incarnation,
+            connectionRef = connectionRef,
+            surface = surface,
+            terminalRepository = terminalRepo
+        )
+
+        ctrl.onResizeBroadcast = { cols, rows ->
+            ownerScope.launch {
+                try {
+                    terminalRepo.resizeTerminal(id, cols, rows)
+                } catch (_: Throwable) {}
+            }
+        }
+
+        ctrl.setRawInputSink { bytes ->
+            val capturedCmd = lastSubmittedCommandText
+            val item = QueuedWrite(
+                sessionId = id,
+                controller = ctrl,
+                bytes = bytes,
+                epoch = currentActiveSessionEpoch(),
+                incarnation = ctrl.incarnation.toLong(),
+                commandText = capturedCmd,
+                onResult = { success, isDeliveryUncertain, error ->
+                    if (!success) {
+                        if (error != null) {
+                            uiErrorBanner = error
+                        }
+                        if (capturedCmd != null) {
+                            failedRecords.add(
+                                FailedCommandRecord(
+                                    sessionId = id,
+                                    command = capturedCmd,
+                                    isDeliveryUncertain = isDeliveryUncertain,
+                                    reason = error ?: "Delivery failure"
+                                )
+                            )
+                        }
+                    }
+                }
+            )
+            val admitted = writeChannel.trySend(item).isSuccess
+            lastSinkAdmitted = admitted
+            if (!admitted) {
+                uiErrorBanner = "Terminal input buffer full"
+                if (capturedCmd != null) {
+                    failedRecords.add(
+                        FailedCommandRecord(
+                            sessionId = id,
+                            command = capturedCmd,
+                            isDeliveryUncertain = false,
+                            reason = "Input buffer full"
+                        )
+                    )
+                }
+            }
+        }
+
+        ctrl.onRequestReattach = recovery@{ sId, offset ->
+            if (sId != currentActiveSessionId() || controllers[sId] !== ctrl ||
+                destroyingSessionIds[sId] == true || !ctrl.isPanelActive
+            ) return@recovery
+            val requestEpoch = currentActiveSessionEpoch()
+            val requestIncarnation = ctrl.incarnation
+            val requestToken = if (retainedState != null) ++retainedState.attachmentAttemptToken else ++fallbackAttachmentAttemptToken
+            attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.recover(
+                capturedOffset = offset,
+                isCurrent = {
+                    terminalRepo.apiClient.connection == connectionRef &&
+                        ctrl.isPanelActive && controllers[sId] === ctrl &&
+                        destroyingSessionIds[sId] != true && sId == currentActiveSessionId() &&
+                        requestEpoch == currentActiveSessionEpoch() && requestIncarnation == ctrl.incarnation &&
+                        requestToken == currentAttachmentAttemptToken()
+                },
+                connect = { terminalRepo.wsConnection?.connect() },
+                send = { capturedOffset -> terminalRepo.attachTerminal(sId, capturedOffset) },
+                onResult = { error ->
+                    if (error != null) {
+                        uiErrorBanner = "Reattach failed: ${error.message ?: "network error"}"
+                    }
+                },
+            )
+        }
+
+        ctrl.isPanelActive = isEligibleForInput(id)
+        controllers[id] = ctrl
+        return ctrl
+    }
+
+    suspend fun refreshSessions(): Boolean {
+        return try {
+            val detailed = withContext(Dispatchers.Default) {
+                terminalRepo.listDetailed()
+            }
+            if (terminalRepo.apiClient.connection != connectionRef) return false
+
+            // Immediately invalidate any local controllers with stale incarnation BEFORE updating state
+            for (s in detailed) {
+                val existing = controllers[s.id]
+                if (existing != null && existing.incarnation.toLong() < s.incarnation.toLong()) {
+                    removeSessionLocal(s.id)
+                }
+            }
+
+            sessions = detailed
+
+            // Prune vanished sessions strictly based on server existence, not temporary destruction lock
+            val projectIds = detailed.filter { isSessionForProject(it) }.map { it.id }.toSet()
+            val vanishedIds = controllers.keys.filter { it !in projectIds }
+            vanishedIds.forEach { removeSessionLocal(it) }
+
+            // Validate selectable sessions
+            val selectable = detailed.filter { isSessionSelectable(it) }
+
+            // Handle pending reconciliation
+            val pendingId = pendingReconciliationId
+            if (pendingId != null) {
+                if (selectable.any { it.id == pendingId }) {
+                    pendingReconciliationId = null
+                    isSyncFailure = false
+                    uiErrorBanner = null
+                    if (activeSessionId == null) {
+                        selectSession(pendingId)
+                    }
+                } else {
+                    uiErrorBanner = "Session created on server but reconciliation was missing new session ID. Tap Retry Sync."
+                    isSyncFailure = true
+                }
+            } else {
+                val currentActive = activeSessionId
+                if (currentActive == null || selectable.none { it.id == currentActive }) {
+                    val candidate = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
+                        ?: selectable.firstOrNull()?.id
+                    selectSession(candidate)
+                }
+                isSyncFailure = false
+            }
+
+            if (retainedState != null) retainedState.attachmentRevision++ else fallbackAttachmentRevision++
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            uiErrorBanner = "Session sync failed: ${e.message ?: "network error"}. Tap to retry."
+            isSyncFailure = true
+            false
+        } finally {
+            isLoadingSessions = false
+        }
+    }
+
+    // Establish WebSocket stream listeners with UNDISPATCHED startup to guarantee subscription before attachment
+    LaunchedEffect(terminalRepo, connectionKey) {
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            terminalRepo.terminalOutput.collect { msg ->
+                controllers[msg.id]?.handleLiveChunk(
+                    msg.data.encodeToByteArray(),
+                    msg.offset,
+                    msg.incarnation
+                )
+            }
+        }
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            terminalRepo.terminalBuffer.collect { msg ->
+                controllers[msg.id]?.handleBufferReplay(
+                    msg.data.encodeToByteArray(),
+                    msg.offset,
+                    msg.reset,
+                    msg.truncated,
+                    msg.incarnation
+                )
+            }
+        }
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            terminalRepo.terminalExit.collect { msg ->
+                controllers[msg.id]?.handleExit(
+                    msg.exitCode,
+                    msg.willRestart,
+                    msg.restartCount,
+                    msg.incarnation
+                )
+            }
+        }
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            terminalRepo.terminalLagged.collect { msg ->
+                activeSessionId?.let { id ->
+                    controllers[id]?.handleLagged(msg.dropped)
+                }
+            }
+        }
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            terminalRepo.processRestarted.collect { msg ->
+                controllers[msg.id]?.handleProcessRestarted(
+                    msg.restartCount,
+                    msg.previousExitCode
+                )
+            }
+        }
+
+        refreshSessions()
+    }
+
+    val eligibleSessions = remember(sessions, projectName, destroyingSessionIds.size) {
+        sessions.filter { isSessionSelectable(it) }
+    }
+
+    val activeSession = eligibleSessions.find { it.id == activeSessionId }
+
+    // This effect does not own the send job: per-controller ordering survives effect replacement.
+    LaunchedEffect(activeSessionId, activeSession?.incarnation, attachmentRevision, terminalRepo, connectionKey) {
+        val session = activeSession ?: return@LaunchedEffect
+        if (destroyingSessionIds[session.id] == true) return@LaunchedEffect
+        val ctrl = getOrCreateController(session.id, session.incarnation.toLong())
+        ctrl.isPanelActive = isEligibleForInput(session.id)
+        val requestToken = if (retainedState != null) ++retainedState.attachmentAttemptToken else ++fallbackAttachmentAttemptToken
+        val requestEpoch = currentActiveSessionEpoch()
+        val requestIncarnation = ctrl.incarnation
+        attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.attach(
+            isCurrent = {
+                requestToken == currentAttachmentAttemptToken() && session.id == currentActiveSessionId() &&
+                    requestEpoch == currentActiveSessionEpoch() && ctrl.incarnation == requestIncarnation &&
+                    terminalRepo.apiClient.connection == connectionRef &&
+                    destroyingSessionIds[session.id] != true && controllers[session.id] === ctrl
+            },
+            connect = { terminalRepo.wsConnection?.connect() },
+            send = { capturedOffset -> terminalRepo.attachTerminal(session.id, capturedOffset) },
+            onResult = { error ->
+                attachError = if (error == null) null else "Failed to attach terminal to server"
+                AppLogger.recordDiagnostic(
+                    type = "transport",
+                    scope = "terminal-panel",
+                    message = if (error == null) "terminal.attach_succeeded" else "terminal.attach_failed",
+                    profileId = connectionRef.profileId,
+                    generation = connectionRef.generation,
+                    sessionId = session.id,
+                )
+            },
+        )
+    }
+
+    // Clean detachment on unmount or connection invalidation: deactivate input, close local controllers and surfaces
+    DisposableEffect(terminalRepo, connectionKey, retainedState) {
+        if (retainedState != null) {
+            retainedState.setPanelVisible(true)
+        }
+        onDispose {
+            if (retainedState != null) {
+                retainedState.detachWidgets()
+            } else {
+                ownerScope.cancel()
+                writeChannel.close()
+                controllers.values.forEach { ctrl ->
+                    ctrl.isPanelActive = false
+                    ctrl.close()
+                }
+                controllers.clear()
+                surfaces.values.forEach { surf ->
+                    surf.detachView()
+                    surf.close()
+                }
+                surfaces.clear()
+                attachQueues.clear()
+                readingStates.clear()
+                destroyingSessionIds.clear()
+                failedRecords.clear()
+                sessionDrafts.clear()
+            }
+        }
+    }
+
+    val activeController = activeSession?.let { controllers[it.id] }
+    val activeSurface = activeSession?.let { surfaces[it.id] }
+    LaunchedEffect(cursorVisible, activeSurface) {
+        (activeSurface as? VtTerminalSurface)?.updateCursorBlink(cursorVisible)
+    }
+
+    fun sendCommand() {
+        val cmd = commandInput
+        val ctrl = activeController
+        if (ctrl == null) {
+            uiErrorBanner = "Cannot send command: no active terminal session"
+            return
+        }
+        if (destroyingSessionIds[ctrl.sessionId] == true) {
+            uiErrorBanner = "Cannot send command: session is being closed"
+            return
+        }
+        if (!ctrl.isPanelActive) {
+            uiErrorBanner = "Cannot send command: session is inactive"
+            return
+        }
+        if (!ctrl.isReplayCompleted) {
+            uiErrorBanner = "Cannot send command: terminal buffer is replaying"
+            return
+        }
+        if (!ctrl.isInputAllowed()) {
+            bumpActiveSessionEpoch()
+            uiErrorBanner = "Cannot send command: input blocked by privacy settings"
+            return
+        }
+
+        lastSinkAdmitted = false
+        lastSubmittedCommandText = cmd
+        try {
+            // Strictly routes through controller.sendInput, invoking rawInputSink
+            ctrl.sendInput("$cmd\r".encodeToByteArray())
+            if (lastSinkAdmitted) {
+                commandInput = ""
+                uiErrorBanner = null
+            } else if (uiErrorBanner == null) {
+                uiErrorBanner = "Command rejected: input queue full or dropped"
+            }
+        } finally {
+            lastSubmittedCommandText = null
+        }
+    }
+
+    fun sendSpecialKey(keyName: String) {
+        val ctrl = activeController ?: return
+        if (destroyingSessionIds[ctrl.sessionId] == true) return
+        lastSubmittedCommandText = null
+        lastSinkAdmitted = false
+        ctrl.sendInput(ctrl.encodeSpecialKey(keyName))
+        if (!lastSinkAdmitted && uiErrorBanner == null) {
+            uiErrorBanner = "Accessory key dropped: input queue full or inactive"
+        }
+    }
+
+    fun sendCtrlChar(char: Char) {
+        val ctrl = activeController ?: return
+        if (destroyingSessionIds[ctrl.sessionId] == true) return
+        lastSubmittedCommandText = null
+        lastSinkAdmitted = false
+        ctrl.toggleModifier(TerminalModifier.CTRL)
+        ctrl.sendInput(ctrl.encodeKey(char))
+        if (!lastSinkAdmitted && uiErrorBanner == null) {
+            uiErrorBanner = "Accessory key dropped: input queue full or inactive"
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(DamHopperColors.Background)
+            .imePadding()
+    ) {
+        // 1. Top Navigation & Project Header
+        if (showHeader) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "← Projects",
+                    color = DamHopperColors.Primary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            onBackToProjects()
+                        }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                )
+
+                Text(
+                    text = projectName,
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(0.35f)
+                )
+
+                val canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN
+                val canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX
+                Row(
+                    modifier = Modifier
+                        .weight(0.65f, fill = false)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "A-",
+                        color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .semantics { contentDescription = "Decrease terminal font size" }
+                            .clickable(enabled = canDecreaseFont) {
+                                updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
+                            }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+
+                    Text(
+                        text = "${terminalFontSize}sp",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        modifier = Modifier
+                            .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
+                            .padding(horizontal = 2.dp, vertical = 6.dp)
+                    )
+
+                    Text(
+                        text = "A+",
+                        color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .semantics { contentDescription = "Increase terminal font size" }
+                            .clickable(enabled = canIncreaseFont) {
+                                updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
+                            }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+
+                    Text(
+                        text = "Diag",
+                        color = DamHopperColors.Warning,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .clickable { showDiagnosticsDialog = true }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+
+                    Text(
+                        text = "+ New Terminal",
+                        color = DamHopperColors.Primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .clickable { showCreateDialog = true }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN
+                val canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX
+                Text(
+                    text = "A-",
+                    color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .semantics { contentDescription = "Decrease terminal font size" }
+                        .clickable(enabled = canDecreaseFont) {
+                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "${terminalFontSize}sp",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    modifier = Modifier
+                        .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
+                        .padding(horizontal = 2.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "A+",
+                    color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .semantics { contentDescription = "Increase terminal font size" }
+                        .clickable(enabled = canIncreaseFont) {
+                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "Diag",
+                    color = DamHopperColors.Warning,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .clickable { showDiagnosticsDialog = true }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+
+                Text(
+                    text = "+ New Terminal",
+                    color = DamHopperColors.Primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .clickable { showCreateDialog = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        // 2. Session Picker Tab Bar (strictly for this project's eligible sessions)
+        if (eligibleSessions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.SurfaceVariant)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                eligibleSessions.forEach { session ->
+                    val isSelected = session.id == activeSessionId
+                    val statusColor = when {
+                        !session.alive -> DamHopperColors.Error
+                        session.restartCount > 0u -> DamHopperColors.Warning
+                        else -> DamHopperColors.Success
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.Surface)
+                            .clickable {
+                                selectSession(session.id)
+                            }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(8.dp)
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(statusColor)
+                        )
+                        Text(
+                            text = session.displayName,
+                            color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                        if (isSelected) {
+                            Text(
+                                text = "✕",
+                                color = DamHopperColors.TextSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .clickable { sessionToKill = session.id }
+                                    .padding(horizontal = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Attach Error Banner
+        attachError?.let { err ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Error)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = err, color = DamHopperColors.TextPrimary, fontSize = 11.sp)
+                Text(
+                    text = "Retry",
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { if (retainedState != null) retainedState.attachmentRevision++ else fallbackAttachmentRevision++ }
+                )
+            }
+        }
+
+        // Failed Command History / Unsent Recovery Banner (rendered independently of transient error banner)
+        val pendingFailedRecord = activeSessionId?.let { sId -> failedRecords.lastOrNull { it.sessionId == sId } }
+        if (pendingFailedRecord != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(if (pendingFailedRecord.isDeliveryUncertain) DamHopperColors.SurfaceVariant else DamHopperColors.Warning)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (pendingFailedRecord.isDeliveryUncertain) {
+                        "Uncertain delivery (may execute twice): \"${pendingFailedRecord.command}\""
+                    } else {
+                        "Unsent command: \"${pendingFailedRecord.command}\""
+                    },
+                    color = if (pendingFailedRecord.isDeliveryUncertain) DamHopperColors.Warning else DamHopperColors.Background,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Restore",
+                        color = if (pendingFailedRecord.isDeliveryUncertain) DamHopperColors.Primary else DamHopperColors.Background,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            if (commandInput.isEmpty()) {
+                                commandInput = pendingFailedRecord.command
+                                failedRecords.remove(pendingFailedRecord)
+                            } else {
+                                uiErrorBanner = "Draft \"${pendingFailedRecord.command}\" retained. Clear input field to restore."
+                            }
+                        }
+                    )
+                    Text(
+                        text = "Discard",
+                        color = if (pendingFailedRecord.isDeliveryUncertain) DamHopperColors.TextSecondary else DamHopperColors.Background,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { failedRecords.remove(pendingFailedRecord) }
+                    )
+                }
+            }
+        }
+
+        // Transient Error / Sync Recovery Banner
+        uiErrorBanner?.let { err ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Warning)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = err, color = DamHopperColors.Background, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isSyncFailure) {
+                        Text(
+                            text = "Retry Sync",
+                            color = DamHopperColors.Background,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { ownerScope.launch { refreshSessions() } }
+                        )
+                    }
+                    Text(
+                        text = "✕",
+                        color = DamHopperColors.Background,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { uiErrorBanner = null }
+                    )
+                }
+            }
+        }
+
+        // 3. Status & Exit Banner
+        if (activeController?.isExited == true) {
+            val exitCode = activeController.exitCode
+            val willRestart = activeController.willRestart
+            val bannerColor = if (exitCode == 0) DamHopperColors.SurfaceVariant else DamHopperColors.Error
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bannerColor)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Process exited with code ${exitCode ?: "unknown"}${if (willRestart) " (restarting...)" else ""}",
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Restart",
+                        color = DamHopperColors.Primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                if (isDestructiveOpInProgress) return@clickable
+                                val targetId = activeSessionId ?: return@clickable
+                                val oldSession = sessions.find { it.id == targetId }
+                                val cmd = oldSession?.command ?: "sh"
+                                val name = oldSession?.name
+                                ownerScope.launch {
+                                    isDestructiveOpInProgress = true
+                                    destroyingSessionIds[targetId] = true
+                                    controllers[targetId]?.isPanelActive = false
+                                    bumpActiveSessionEpoch()
+                                    try {
+                                        withContext(Dispatchers.Default) {
+                                            terminalRepo.removeSession(targetId)
+                                        }
+                                        removeSessionLocal(targetId)
+                                        sessions = sessions.filter { it.id != targetId }
+                                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                                        if (activeSessionId == targetId) {
+                                            selectSession(next)
+                                        }
+
+                                        val newId = withContext(Dispatchers.Default) {
+                                            val id = "term-${Clock.System.now().toEpochMilliseconds()}"
+                                            terminalRepo.createSession(
+                                                CreateSessionRequest(
+                                                    id = id,
+                                                    command = cmd,
+                                                    name = name,
+                                                    project = projectName
+                                                )
+                                            )
+                                            id
+                                        }
+                                        pendingReconciliationId = newId
+                                        refreshSessions()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        uiErrorBanner = "Restart failed: ${e.message ?: "remote error"}"
+                                    } finally {
+                                        destroyingSessionIds.remove(targetId)
+                                        isDestructiveOpInProgress = false
+                                        val syncSuccess = refreshSessions()
+                                        if (!syncSuccess && activeSessionId == targetId) {
+                                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                    Text(
+                        text = "Remove",
+                        color = DamHopperColors.Error,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                if (isDestructiveOpInProgress) return@clickable
+                                val targetId = activeSessionId ?: return@clickable
+                                ownerScope.launch {
+                                    isDestructiveOpInProgress = true
+                                    destroyingSessionIds[targetId] = true
+                                    controllers[targetId]?.isPanelActive = false
+                                    bumpActiveSessionEpoch()
+                                    try {
+                                        withContext(Dispatchers.Default) {
+                                            terminalRepo.removeSession(targetId)
+                                        }
+                                        removeSessionLocal(targetId)
+                                        sessions = sessions.filter { it.id != targetId }
+                                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                                        if (activeSessionId == targetId) {
+                                            selectSession(next)
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        uiErrorBanner = "Removal failed: ${e.message ?: "remote error"}"
+                                    } finally {
+                                        destroyingSessionIds.remove(targetId)
+                                        isDestructiveOpInProgress = false
+                                        val syncSuccess = refreshSessions()
+                                        if (!syncSuccess && activeSessionId == targetId) {
+                                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        // 4. Main Console Output Area. Each retained controller keeps its own reading intent.
+        val vtSurface = activeSurface as? VtTerminalSurface
+        val snapshot = vtSurface?.displaySnapshot ?: TerminalDisplaySnapshot()
+        val lines = snapshot.lines
+        val lineIds = snapshot.lineIds
+        val readingState = readingStates.forController(activeController)
+        TerminalViewportEffects(readingState, lineIds, snapshot.revision)
+        val density = LocalDensity.current
+        val terminalTextStyle = remember(terminalFontSize) {
+            TextStyle(
+                color = DamHopperColors.TextPrimary,
+                fontSize = terminalFontSize.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontFeatureSettings = "calt 0",
+                lineHeight = terminalLineHeightSp(terminalFontSize).sp,
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
+            )
+        }
+        val textMeasurer = rememberTextMeasurer()
+        val cellMetrics = remember(textMeasurer, terminalTextStyle, density.density, density.fontScale) {
+            textMeasurer.measure("M", style = terminalTextStyle, softWrap = false, maxLines = 1)
+        }
+        val glyphAdvancePx = cellMetrics.multiParagraph.getLineRight(0) - cellMetrics.multiParagraph.getLineLeft(0)
+        val lineHeightPx = cellMetrics.size.height.toFloat()
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(DamHopperColors.Background)
+                .pointerInput(preferencesStore) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var segmentStartSp = 0
+                        var continuousSize = 0f
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            var pressedCount = 0
+                            for (i in 0 until event.changes.size) {
+                                if (event.changes[i].pressed) pressedCount++
+                            }
+                            if (pressedCount >= 2) {
+                                if (segmentStartSp == 0) {
+                                    segmentStartSp = currentTerminalFontSize
+                                    continuousSize = segmentStartSp.toFloat()
+                                }
+                                val zoomChange = event.calculateZoom()
+                                if (zoomChange.isFinite() && zoomChange > 0f && zoomChange != 1f) {
+                                    continuousSize = (continuousSize * zoomChange).coerceIn(
+                                        WorkbenchPreferences.FONT_MIN.toFloat(),
+                                        WorkbenchPreferences.FONT_MAX.toFloat(),
+                                    )
+                                    val nextSize = pinchedTerminalFontSize(
+                                        startFontSizeSp = segmentStartSp,
+                                        zoomFactor = continuousSize / segmentStartSp.toFloat(),
+                                    )
+                                    currentUpdateTerminalFontSize(nextSize)
+                                }
+                                for (i in 0 until event.changes.size) {
+                                    event.changes[i].consume()
+                                }
+                            } else {
+                                segmentStartSp = 0
+                                continuousSize = 0f
+                            }
+                            if (pressedCount == 0) break
+                        }
+                    }
+                }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    terminalFocusRequester.requestFocus()
+                    keyboardController?.show()
+                }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            // Box constraints already exclude the actual 8dp/4dp content padding above.
+            val geometry = remember(maxWidth, maxHeight, glyphAdvancePx, lineHeightPx, density.density) {
+                terminalGeometry(
+                    contentWidthPx = with(density) { maxWidth.toPx() },
+                    contentHeightPx = with(density) { maxHeight.toPx() },
+                    glyphAdvancePx = glyphAdvancePx,
+                    lineHeightPx = lineHeightPx,
+                )
+            }
+            LaunchedEffect(geometry, activeController) {
+                if (activeController != null && readingState.geometry.update(geometry)) {
+                    activeController.resize(geometry.columns, geometry.rows)
+                }
+            }
+
+            // Invisible direct IME input receiver for real-time keystroke interaction
+            BasicTextField(
+                value = directInputState,
+                onValueChange = { newValue ->
+                    val newText = newValue.text
+                    val oldText = directInputState.text
+                    if (newText.length > oldText.length) {
+                        val added = newText.substring(oldText.length)
+                        for (ch in added) {
+                            if (ch == '\n') {
+                                activeController?.sendInput(byteArrayOf(0x0D))
+                            } else {
+                                activeController?.sendInput(ch.toString().encodeToByteArray())
+                            }
+                        }
+                    } else if (newText.length < oldText.length) {
+                        val deletedCount = oldText.length - newText.length
+                        repeat(deletedCount) {
+                            activeController?.sendInput(byteArrayOf(0x7F))
+                        }
+                    }
+                    directInputState = if (newText.length > 50) TextFieldValue("") else newValue
+                },
+                keyboardOptions = KeyboardOptions(
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.None,
+                ),
+                keyboardActions = KeyboardActions(
+                    onAny = {
+                        activeController?.sendInput(byteArrayOf(0x0D))
+                    }
+                ),
+                modifier = Modifier
+                    .focusRequester(terminalFocusRequester)
+                    .size(1.dp)
+                    .alpha(0.01f)
+            )
+            if (eligibleSessions.isEmpty() && !isLoadingSessions) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "No active terminal session for $projectName",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            ownerScope.launch {
+                                try {
+                                    val newId = withContext(Dispatchers.Default) {
+                                        val id = "term-${Clock.System.now().toEpochMilliseconds()}"
+                                        terminalRepo.createSession(
+                                            CreateSessionRequest(
+                                                id = id,
+                                                command = "sh",
+                                                name = "$projectName Shell",
+                                                project = projectName
+                                            )
+                                        )
+                                        id
+                                    }
+                                    pendingReconciliationId = newId
+                                    refreshSessions()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    uiErrorBanner = "Failed to start terminal: ${e.message}"
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                    ) {
+                        Text("Start Terminal Session")
+                    }
+                }
+            } else if (activeSession == null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = DamHopperColors.Primary)
+                }
+            } else if (lines.isEmpty()) {
+                Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+                    Text(
+                        text = "$ ${activeSession.command}",
+                        color = DamHopperColors.Success,
+                        fontSize = 13.sp,
+                        fontFamily = JetBrainsMonoFontFamily
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (activeController?.isReplayCompleted == true) {
+                            "Terminal connected. Interactive session ready."
+                        } else {
+                            "Replaying stream buffer..."
+                        },
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontFamily = JetBrainsMonoFontFamily
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = readingState.list,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(
+                        items = lines,
+                        // IDs carry the surface namespace and survive row movement/eviction.
+                        key = { index, _ -> lineIds[index] }
+                    ) { _, line ->
+                        Text(
+                            text = if (line.isEmpty()) AnnotatedString(" ") else line,
+                            style = terminalTextStyle,
+                            softWrap = false,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier.height(with(density) { lineHeightPx.toDp() }),
+                        )
+                    }
+                }
+            }
+        }
+
+        // 5. Inline Accessory Control Bar
+        // Strictly inline above IME, ZERO floating action buttons!
+        if (activeController != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                AccessoryKeyButton(label = "⌨", onClick = {
+                    terminalFocusRequester.requestFocus()
+                    keyboardController?.show()
+                })
+                AccessoryKeyButton(label = "Ctrl+C", onClick = { sendCtrlChar('c') })
+                AccessoryKeyButton(label = "Ctrl+D", onClick = { sendCtrlChar('d') })
+                AccessoryKeyButton(label = "Tab", onClick = { sendSpecialKey("TAB") })
+                AccessoryKeyButton(label = "Esc", onClick = { sendSpecialKey("ESC") })
+                AccessoryKeyButton(label = "▲", onClick = { sendSpecialKey("UP") })
+                AccessoryKeyButton(label = "▼", onClick = { sendSpecialKey("DOWN") })
+                AccessoryKeyButton(label = "◀", onClick = { sendSpecialKey("LEFT") })
+                AccessoryKeyButton(label = "▶", onClick = { sendSpecialKey("RIGHT") })
+                AccessoryKeyButton(label = "Enter", onClick = { sendSpecialKey("ENTER") })
+                AccessoryKeyButton(
+                    label = "Clear",
+                    onClick = {
+                        AppLogger.recordDiagnostic(
+                            type = "terminal",
+                            scope = "terminal-panel",
+                            message = "terminal.local_buffer_cleared",
+                            profileId = connectionRef.profileId,
+                            generation = connectionRef.generation,
+                            sessionId = activeSessionId
+                        )
+                        (activeSurface as? VtTerminalSurface)?.clearDisplayBuffer()
+                    }
+                )
+            }
+
+            // 6. Interactive Command Input Field
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = commandInput,
+                    onValueChange = { commandInput = it },
+                    placeholder = {
+                        Text(
+                            text = "Enter command (e.g. ls -la)...",
+                            fontSize = 12.sp,
+                            color = DamHopperColors.TextSecondary
+                        )
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { sendCommand() }),
+                    textStyle = TextStyle(
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontSize = 13.sp,
+                        color = DamHopperColors.TextPrimary
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = DamHopperColors.Primary,
+                        unfocusedBorderColor = DamHopperColors.SurfaceVariant,
+                        focusedContainerColor = DamHopperColors.Background,
+                        unfocusedContainerColor = DamHopperColors.Background,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                )
+
+                Button(
+                    onClick = { sendCommand() },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Text("Send", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+    // Diagnostics Viewer Dialog
+    if (showDiagnosticsDialog) {
+        TerminalDiagnosticsDialog(
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = activeSessionId,
+            onDismiss = { showDiagnosticsDialog = false }
+        )
+    }
+
+    // Create New Session Dialog
+    if (showCreateDialog) {
+        var commandText by remember { mutableStateOf("sh") }
+        var nameText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("New Terminal Session", color = DamHopperColors.TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = nameText,
+                        onValueChange = { nameText = it },
+                        label = { Text("Session Name (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = commandText,
+                        onValueChange = { commandText = it },
+                        label = { Text("Command") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCreateDialog = false
+                        val finalCmd = if (commandText.isNotBlank()) commandText else "sh"
+                        val finalName = if (nameText.isNotBlank()) nameText else null
+                        ownerScope.launch {
+                            try {
+                                val newId = withContext(Dispatchers.Default) {
+                                    val id = "term-${Clock.System.now().toEpochMilliseconds()}"
+                                    terminalRepo.createSession(
+                                        CreateSessionRequest(
+                                            id = id,
+                                            command = finalCmd,
+                                            name = finalName,
+                                            project = projectName
+                                        )
+                                    )
+                                    id
+                                }
+                                pendingReconciliationId = newId
+                                refreshSessions()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                uiErrorBanner = "Failed to create session: ${e.message}"
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Kill / Close Session Dialog
+    if (sessionToKill != null) {
+        AlertDialog(
+            onDismissRequest = { sessionToKill = null },
+            title = { Text("Close Terminal Session", color = DamHopperColors.TextPrimary) },
+            text = { Text("Are you sure you want to close and remove this terminal session?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (isDestructiveOpInProgress) return@Button
+                        val targetId = sessionToKill
+                        sessionToKill = null
+                        if (targetId != null) {
+                            ownerScope.launch {
+                                isDestructiveOpInProgress = true
+                                destroyingSessionIds[targetId] = true
+                                controllers[targetId]?.isPanelActive = false
+                                bumpActiveSessionEpoch()
+                                try {
+                                    withContext(Dispatchers.Default) {
+                                        terminalRepo.removeSession(targetId)
+                                    }
+                                    removeSessionLocal(targetId)
+                                    sessions = sessions.filter { it.id != targetId }
+                                    val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                                    if (activeSessionId == targetId) {
+                                        selectSession(next)
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    uiErrorBanner = "Failed to remove session: ${e.message}"
+                                } finally {
+                                    destroyingSessionIds.remove(targetId)
+                                    isDestructiveOpInProgress = false
+                                    val syncSuccess = refreshSessions()
+                                    if (!syncSuccess && activeSessionId == targetId) {
+                                        controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
+                ) {
+                    Text("Close Session")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToKill = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+/**
+ * Convenient overload resolving [TerminalRepository] from [ProfileRepository].
+ */
+@Composable
+fun ProjectTerminalScreen(
+    projectName: String,
+    profileRepository: ProfileRepository,
+    profileId: String,
+    onBackToProjects: () -> Unit,
+    modifier: Modifier = Modifier,
+    initialSessionId: String? = null,
+    onSessionSelected: ((String?) -> Unit)? = null,
+    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+) {
+    val profiles by profileRepository.profiles.collectAsState()
+    val activeProfile = profiles.find { it.id == profileId }
+    val connections by profileRepository.registry.connectionsState.collectAsState()
+    val currentConn = connections[profileId]
+
+    var terminalRepo by remember(profileRepository, profileId, activeProfile?.baseUrl, currentConn?.generation) {
+        mutableStateOf<TerminalRepository?>(null)
+    }
+
+    LaunchedEffect(profileRepository, profileId, activeProfile?.baseUrl, currentConn?.generation) {
+        try {
+            val client = profileRepository.getOrCreateApiClient(profileId)
+            val ws = try {
+                profileRepository.getOrCreateWsConnection(profileId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            terminalRepo = TerminalRepository(client, ws)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
+    }
+
+    ProjectTerminalScreen(
+        projectName = projectName,
+        terminalRepo = terminalRepo,
+        onBackToProjects = onBackToProjects,
+        modifier = modifier,
+        initialSessionId = initialSessionId,
+        onSessionSelected = onSessionSelected,
+        profileId = profileId,
+        preferencesStore = preferencesStore,
+    )
+}
+
+@Composable
+private fun AccessoryKeyButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(DamHopperColors.SurfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = DamHopperColors.TextPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = JetBrainsMonoFontFamily
+        )
+    }
+}
