@@ -1,0 +1,680 @@
+{
+  "version": 1,
+  "project_root": "G:\\ws\\sharing\\dam-hopper",
+  "plan": "plans/261024-1627-native-editor-ide-enhancements/plan.md",
+  "source_fingerprint": "107891d9542ddbed2f267aa688ddb05a24e1e25efe5dd2388e8e3356f374b11c",
+  "tasks": [
+    {
+      "id": "implement-universal-language-and-decorators",
+      "title": "Implement UniversalLanguage table-driven lexer and Sora dark theme decorators",
+      "blocked_by": [],
+      "allowed_files": [
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/UniversalLanguage.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorDocument.kt",
+        "native-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurfaceTest.kt"
+      ],
+      "constraints": [
+        "Zero new third-party dependencies; pure DEX bytecode extending AsyncIncrementalAnalyzeManager.",
+        "Degradation evaluated first: any file exceeding NORMAL_MAX_BYTES (>1 MiB UTF-8 bytes) must return EmptyLanguage.",
+        "Retain JavaLanguage for normal-tier .java files; unknown extensions must return EmptyLanguage.",
+        "Lines exceeding 10,000 characters must scan state only without per-character spans; brackets inside comments/strings must not be matched.",
+        "Decorators must include SchemeDarcula, setPinLineNumber(true), isHighlightCurrentLine, isHighlightBracketPair, isBlockLineEnabled."
+      ],
+      "acceptance": [
+        "Kotlin, Python, JS/TS, Rust, JSON, Shell, TOML, YAML, Markdown, and Dockerfile display distinct token colors under SchemeDarcula.",
+        "Bracket pairs match correctly excluding strings/comments, block line indent guides render, and line numbers remain visible during horizontal scrolling.",
+        "Degraded files (>1 MiB UTF-8) and unknown extensions fallback to EmptyLanguage without throwing exceptions.",
+        "Outgoing lexer state is preserved across lines exceeding 10,000 characters.",
+        "Language reassessment swaps to EmptyLanguage when UTF-8 bytes cross the 1 MiB threshold even if character count stays constant."
+      ],
+      "verification": [
+        "Run ./gradlew.bat :androidApp:testDebugUnitTest --tests dev.damhopper.nativeapp.platform.editor.AndroidEditorSurfaceTest",
+        "Verify clean compilation of :androidApp:compileDebugKotlin"
+      ],
+      "source_phase": "plans/261024-1627-native-editor-ide-enhancements/phase-01-syntax-highlighting-and-editor-decorators.md",
+      "spec_fingerprint": "21c63a704f25a1e820c0c9907dd54482715797a40ee85b6587a5480dd9362ff3",
+      "status": "stale",
+      "owner": null,
+      "reason": "Source contract or dependency revision changed",
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-24T09:49:16.524Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:49:37.192Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:51:11.310Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:51:22.445Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:54:11.859Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:54:18.209Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Synchronized phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:57:00.390Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:57:08.957Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:59:04.229Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:59:11.123Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T10:01:21.626Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:01:30.214Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Finalized phase contract"
+        },
+        {
+          "at": "2026-10-24T10:05:01.776Z",
+          "event": "claimed",
+          "owner": "phase-01-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:05:01.945Z",
+          "event": "in_progress",
+          "owner": "phase-01-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:22:11.875Z",
+          "event": "stale",
+          "owner": "phase-01-worker",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:26:19.256Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reopen"
+        },
+        {
+          "at": "2026-10-24T10:38:53.414Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        }
+      ]
+    },
+    {
+      "id": "implement-markdown-and-html-previews",
+      "title": "Implement Markdown and zero-WebView HTML rich previews in focused workspace",
+      "blocked_by": [],
+      "allowed_files": [
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/HtmlPreviewView.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidHtmlSurface.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTopBar.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorModels.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt",
+        "native-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsStateTest.kt"
+      ],
+      "constraints": [
+        "Strict zero-WebView invariant: zero imports of android.webkit.WebView or androidx.webkit.",
+        "No second text authority: preview consumes immutable document snapshot, never mutates tab.content, revision, or CAS metadata.",
+        "Single preview mode state: previewMode aliases markdownPreviewMode for full backward compatibility.",
+        "Accurate code-unit limits: snapshot and HTML reader parsing both capped at 262,144 characters (UTF-16 code units) with truncation notice."
+      ],
+      "acceptance": [
+        "Preview/Source toggle button is visible in focused workspace for Markdown and HTML files.",
+        "Markdown renders parsed Compose blocks (headings, lists, code fences); HTML renders AnnotatedString.fromHtml.",
+        "Toggling preview preserves document dirty state, revision number, and undo stack.",
+        "Stale asynchronous parse results for superseded revisions are dropped."
+      ],
+      "verification": [
+        "Run ./gradlew.bat :shared:jvmTest --tests dev.damhopper.nativeapp.features.editor.EditorTabsStateTest",
+        "Run ./gradlew.bat :androidApp:testDebugUnitTest --tests dev.damhopper.nativeapp.WorkbenchJourneysUnitTest.testZeroWebViewsAcrossEntireApplication"
+      ],
+      "source_phase": "plans/261024-1627-native-editor-ide-enhancements/phase-02-markdown-and-html-rich-previews.md",
+      "spec_fingerprint": "e51d5fd80745518bf04b109a498cf076b2018c84015dd9e2118d40cfc6ce13c6",
+      "status": "stale",
+      "owner": null,
+      "reason": "Source contract or dependency revision changed",
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-24T09:49:16.525Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:49:37.365Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:51:11.310Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:51:22.616Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:54:11.860Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:54:18.385Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Synchronized phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:57:00.391Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:57:09.134Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:59:04.230Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:59:11.295Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T10:05:02.120Z",
+          "event": "claimed",
+          "owner": "phase-02-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:05:02.302Z",
+          "event": "in_progress",
+          "owner": "phase-02-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:22:11.875Z",
+          "event": "stale",
+          "owner": "phase-02-worker",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:26:19.437Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reopen"
+        },
+        {
+          "at": "2026-10-24T10:38:53.415Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        }
+      ]
+    },
+    {
+      "id": "implement-native-media-player-and-image-viewer",
+      "title": "Implement hardened AndroidVideoSurface, AndroidImageSurface, and AndroidMediaClient generation fencing",
+      "blocked_by": [],
+      "allowed_files": [
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/media/MediaSurfaceHost.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidImageSurface.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaSurfaceHost.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaClient.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidVideoSurface.kt",
+        "native-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaClientTest.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/media/MediaModels.kt"
+      ],
+      "constraints": [
+        "MediaLease.assertValidOwner must check connection-scoped owner supplier before and after network operations; cancel only owner-scoped calls synchronously and clear cache on retirement.",
+        "readRangeSync must validate HTTP 206, Content-Range presence, returnedStart == requestedStart, and returnedEnd <= requested interval; return -1 at EOF.",
+        "Image streaming read must cap at 32 MiB; image decoding must cap at 50 MP and use inSampleSize downsampling.",
+        "Video surface must eliminate surface/player creation race in both arrival orders, preserve aspect ratio, use 2 MiB LRU block cache, throttle range seeking, pause on tab disposal and ON_STOP, and synchronously release player with background non-blocking revocation."
+      ],
+      "acceptance": [
+        "MediaClient throws MediaException on generation mismatch, retired connection, HTTP 200 on range offset, or mismatched Content-Range intervals.",
+        "Retirement cancels only the affected owner's calls without canceling unrelated profile traffic.",
+        "Images load and display with pan/pinch-zoom within fitted bounds without exceeding 50 MP decode limit.",
+        "Video plays with correct aspect ratio and inline controls without HTTP range request thrashing.",
+        "Player cleanup synchronously releases MediaPlayer even if ticket revocation fails or times out."
+      ],
+      "verification": [
+        "Run ./gradlew.bat :androidApp:testDebugUnitTest --tests dev.damhopper.nativeapp.platform.media.AndroidMediaClientTest",
+        "Verify clean compilation of :androidApp:compileDebugKotlin"
+      ],
+      "source_phase": "plans/261024-1627-native-editor-ide-enhancements/phase-03-native-media-player-and-image-viewer.md",
+      "spec_fingerprint": "c985cd62bfde1b308ab4e792ea0d4bde95870c652e8d0215d10351874bd1acf7",
+      "status": "stale",
+      "owner": null,
+      "reason": "Source contract or dependency revision changed",
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-24T09:49:16.525Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:49:37.535Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:51:11.310Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:51:22.790Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:54:11.860Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:54:18.557Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Synchronized phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:57:00.391Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:57:09.322Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:59:04.230Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:59:11.470Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T10:01:21.626Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:01:41.419Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Finalized phase contract"
+        },
+        {
+          "at": "2026-10-24T10:05:02.487Z",
+          "event": "claimed",
+          "owner": "phase-03-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:05:02.681Z",
+          "event": "in_progress",
+          "owner": "phase-03-worker",
+          "reason": null
+        },
+        {
+          "at": "2026-10-24T10:22:11.875Z",
+          "event": "stale",
+          "owner": "phase-03-worker",
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:26:19.620Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reopen"
+        },
+        {
+          "at": "2026-10-24T10:38:53.415Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        }
+      ]
+    },
+    {
+      "id": "integrate-editor-sidebar-and-rich-previews",
+      "title": "Integrate collapsible left file-tree sidebar, media playback, and zero-WebView HTML preview into editor workspace",
+      "blocked_by": [
+        "implement-universal-language-and-decorators",
+        "implement-markdown-and-html-previews",
+        "implement-native-media-player-and-image-viewer"
+      ],
+      "allowed_files": [
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/flow/AppFlowNavigation.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/workspace/ProjectWorkspaceState.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/ProjectWorkspaceScreen.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorScreens.kt",
+        "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorPanelScreen.kt",
+        "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/MainActivity.kt",
+        "native-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/FileScreensPhase08Test.kt"
+      ],
+      "constraints": [
+        "Maintain stable CodeEditor view instance during responsive recomposition without swapping drawer components.",
+        "Back button interceptor must use clean register/unregister lambdas that restore prior navigation state.",
+        "Hardware keyboard and IME input must be suppressed in background editor when slide-over sidebar is open independently of previous editability, restoring natural read-only state on close.",
+        "Slide-over sidebar must request focus to ensure Escape key event delivery.",
+        "LocalDocumentSnapshotProvider must be mounted at workspace level above preview consumers and observe revision changes on Main dispatcher."
+      ],
+      "acceptance": [
+        "Editor top bar displays [Files] sidebar toggle; opening it reveals the file tree on the left.",
+        "Selecting a file in the sidebar opens it directly into an editor tab without unmounting the editor.",
+        "Back press and Escape close the compact sidebar without leaving the project workspace.",
+        "Background editor input is completely suppressed while compact sidebar is open, even on read-only documents.",
+        "Markdown and HTML previews receive live document snapshots on revision change without creating a second text authority.",
+        "Actual CodeEditor view instance identity is preserved across 600 dp breakpoint width transitions."
+      ],
+      "verification": [
+        "Run ./gradlew.bat :androidApp:testDebugUnitTest --tests dev.damhopper.nativeapp.FileScreensPhase08Test",
+        "Run ./gradlew.bat :shared:jvmTest --tests dev.damhopper.nativeapp.features.files.FileTreeStateTest"
+      ],
+      "source_phase": "plans/261024-1627-native-editor-ide-enhancements/phase-04-editor-left-sidebar-file-tree.md",
+      "spec_fingerprint": "ad0de883ca839cf1e2f94bc03df573a3f0569f5c2bbc9b47db0e9374da2c9207",
+      "status": "stale",
+      "owner": null,
+      "reason": "Source contract or dependency revision changed",
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-24T09:49:16.525Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:49:37.703Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:51:11.310Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:51:22.958Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:54:11.860Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:54:18.739Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Synchronized phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:57:00.391Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:57:09.504Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:59:04.230Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:59:11.649Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T10:01:21.626Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:01:41.590Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Finalized phase contract"
+        },
+        {
+          "at": "2026-10-24T10:22:11.875Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:26:19.794Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reopen"
+        },
+        {
+          "at": "2026-10-24T10:38:53.415Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        }
+      ]
+    },
+    {
+      "id": "qualify-native-editor-enhancements",
+      "title": "Execute comprehensive unit, Zero-WebView, and connected emulator qualification",
+      "blocked_by": [
+        "integrate-editor-sidebar-and-rich-previews"
+      ],
+      "allowed_files": [
+        "plans/261024-1627-native-editor-ide-enhancements/qualification-report.md",
+        "docs/CHANGELOG.md",
+        "docs/architecture/android-native-client.md"
+      ],
+      "constraints": [
+        "testZeroWebViewsAcrossEntireApplication must pass 100% without exclusion or suppression.",
+        "Evidence must be recorded from actual command runs on workstation and live emulator-5554.",
+        "Documentation must accurately reflect zero-WebView reader fidelity and table-driven lexer scope."
+      ],
+      "acceptance": [
+        "All unit test suites (:shared:jvmTest, :androidApp:testDebugUnitTest) pass 100%.",
+        "Debug APK builds and installs cleanly on emulator-5554.",
+        "Live connected verification proves syntax highlighting, dark theme, markdown/html previews, media playback, and left file tree sidebar."
+      ],
+      "verification": [
+        "Run ./gradlew.bat :shared:jvmTest :androidApp:testDebugUnitTest :androidApp:assembleDebug",
+        "Record observed device UI state and window dump in qualification-report.md"
+      ],
+      "source_phase": "plans/261024-1627-native-editor-ide-enhancements/phase-05-integrated-qualification-and-verification.md",
+      "spec_fingerprint": "874564927113e6b30df8f14e570e975ce6b7884fad64862a3afafb04e8d01755",
+      "status": "stale",
+      "owner": null,
+      "reason": "Source contract or dependency revision changed",
+      "evidence": null,
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-24T09:49:16.525Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:49:37.872Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:51:11.310Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:51:23.129Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Refined spec after advisor consultation"
+        },
+        {
+          "at": "2026-10-24T09:54:11.860Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:54:18.922Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Synchronized phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:57:00.391Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:57:09.694Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T09:59:04.230Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T09:59:11.821Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reconciled phase contract with plan"
+        },
+        {
+          "at": "2026-10-24T10:01:21.626Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:01:41.774Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Finalized phase contract"
+        },
+        {
+          "at": "2026-10-24T10:22:11.875Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-24T10:26:19.965Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reopen"
+        },
+        {
+          "at": "2026-10-24T10:38:53.415Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        }
+      ]
+    }
+  ]
+}

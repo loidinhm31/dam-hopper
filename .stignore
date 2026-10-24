@@ -13,10 +13,6 @@ src-tauri/target/
 *.sln
 *.sw?
 
-src-tauri/gen/android/.gradle/
-src-tauri/gen/android/app/build/
-src-tauri/gen/android/buildSrc/.gradle/
-src-tauri/gen/android/buildSrc/build/
 
 logs
 *.log
@@ -46,6 +42,3 @@ target/
 **/tauri.settings.gradle
 **/.turbo
 **.turbo
-apps/native/src-tauri/gen/android/tauri.settings.gradle
-apps/native/src-tauri/gen/android/tauri.settings.gradle
-apps/native/src-tauri/gen/android/buildSrc/**

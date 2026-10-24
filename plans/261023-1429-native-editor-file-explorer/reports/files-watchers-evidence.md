@@ -1,0 +1,37 @@
+# Files/watchers evidence
+
+Status: terminal scout `FileWatchContracts` completed read-only investigation; parent collected full response. No source changes, external calls, builds/tests/server/device execution. Native source prefix below: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/`.
+
+## Exact existing wire contracts — preserve, no backend edits
+- `features/files/FileRepository.kt:18–180`, `FileModels.kt:1–77`; `server/src/api/fs.rs:45–90,109–157,160–285`, `server/src/fs/ops.rs:11–215`.
+- REST GET `/api/fs/list`, `/api/fs/stat`: project,path, optional camelCase `worktreePath`. List `{entries:[{name,kind,size,mtime,isSymlink}]}`; stat `{kind,size,mtime,mime,isBinary}`. Blank list path becomes `.`.
+- REST GET `/api/fs/read`: project,path,worktreePath,offset,len; range only when BOTH offset and len. Otherwise unrestricted up to100MiB. Text body; binary response is JSON marker, not raw bytes. Never widen bounded read on fallback.
+- WS `fs:read`: snake_case req_id,project,worktree_path,path,offset,len; optional camelCase readMode. `fs:read_result`: req_id,ok,mime,binary,mtime,size,base64 data,optional code. Unranged cap5MiB; ranged bypasses cap, offset without len reads to EOF. Binary probe8KiB. Existing special plan-document read mode irrelevant; do not reuse it for general files.
+- WS `fs:op`: req_id,op,project,worktree_path,path,optional new_path,force_git. Ops create_file/create_dir/rename/delete/move; `fs:op_result` req_id,ok,optional error. No server unknown-outcome field. Client may add phase-aware local result states without wire change.
+- WS `fs:write_begin`: req_id,project,worktree_path,path,expected_mtime,size,encoding; native uses base64. `fs:write_chunk`: write_id,seq,eof,data. `fs:write_commit`: write_id. `fs:write_result`: write_id,ok,new_mtime?,conflict,error?. Begin failure `fs:error` req_id,code,message. Server cap100MiB; stale mtime conflict. Native currently sends one base64 chunk then commit without waiting chunk ACK. Preserve exact existing DTO casing and serialized transport ordering.
+- Sources `core/transport/ClientMsg.kt:43–135`, `ServerMsg.kt:95–172`; `server/src/api/ws_protocol.rs:30–105,210–241,341–410`; `server/src/api/ws.rs:950–1271,2256–2673`.
+
+## Watch lifecycle/order
+- `fs:subscribe_tree`: req_id,project,worktree_path,path, camelCase watchOnly=true. `fs:tree_snapshot` req_id,sub_id,nodes; `fs:event` sub_id,event; `fs:overflow` sub_id,message; `fs:unsubscribe_tree` sub_id. Event fields targetRelativePath/targetRelativeFrom are camelCase; raw path/from absolute. Reuse target-relative routing, no ambient path fallback.
+- Server registers watcher before snapshot; event pump starts after snapshot. Watch-only nodes empty; client separately lists REST. Server nonrecursive watcher, debounce150ms, broadcast256, fs outgoing512; lag/full emits overflow AND drops subscription. Sources `server/src/fs/watcher.rs:14–20,90–200`; `server/src/fs/mod.rs:160–256`; `server/src/api/ws.rs:3287–3465`.
+- `features/files/FileTreeSubscription.kt:56–107,133–166`: early listener before subscribe, but Channel.UNLIMITED and routing only subId. Need bounded early events; queue overflow marks baseline invalid, replace subscription/refetch rather than silent loss.
+- `FileTreeState.kt:56–97,117–160`: root-only subscription; expanded dirs not watched, no request/event watermarks; delayed listing can overwrite newer listing/events. Reconnect misses stale non-null subscription. Must share directory demand for root/expanded dirs/open-file parents, recreate on socket replacement/overflow, pause background and reconcile foreground.
+- `core/transport/WsConnection.kt:39–63,152–180,252–275`: ConnectionRef and live SocketInstanceRef guards exist; incoming SharedFlow buffer64. Consume existing socket identity rather than invent runtime; subscription cleanup bound to origin socket/owner.
+
+## Data/mutation safety gaps
+- `FileRepository` does not assert REST/WS same ConnectionRef or target.profileId match; ProjectTargetRef carries no generation. Existing `core/model/ProjectTargetRef.kt:25–104` has assertOwnerMatch; reuse owner checks before/after suspension.
+- `FileMutationCoordinator.kt:20–132`: convenience rejects traversal/root operations; performs fs:op and directory refresh but no dirty/open-tab/save coordination. Rename/move/delete must reserve affected path/subtree against saves, prompt dirty documents, publish paths/tab keys/selection/watch demand only on confirmed success.
+- `FsWriteCoordinator.kt:20–87`: no mutex; repository owns coordinator, fs:op bypasses it. Reuse a target-qualified local sequencing seam, not global unrelated-project lock or scheduler.
+- `EditorRepository.kt:58–100`: all timeouts called unknown after commit even if begin timed out. `FileRepository.kt:137–165` converts mutation transport exception to ordinary failure; retry can duplicate uncertain operation. Distinguish definitely-unsent vs dispatched uncertain, retain local identity/reservation until explicit reconciliation; check source AND destination; impossible proof stays unresolved.
+- `FileRepository.kt:41–100`: lossy UTF8 decode and broad REST fallback can corrupt/lose bytes. Enforce bounded strict reads before editable publication; stat/read TOCTOU cap and binary/media notices must avoid whole huge payloads.
+- Server containment/root/.git mutation protections remain authoritative: `server/src/fs/sandbox.rs:65–108`, `mutate.rs:11–34,97–110`, `secure_path.rs:179–220,318–343`. Streamed writes do NOT use the fs:op `.git` guard; preserve this backend boundary and document limitation, never describe client checks as security enforcement or use force_git to bypass mutation rejection.
+
+## UI and tests
+- `FileScreens.kt:24–188`, `FilesTopBar.kt:23–108`: current panel exposes project-wide Search & Replace; focused workspace must expose approved explorer only without deleting unrelated dormant search implementation. Reuse virtualization (`FileTreeHelpers.kt:22–120`, `FileTreeItemView.kt:22–55`). Missing move, refresh, copy-path actions need explicit inline/touch UI.
+- `FileModalsHost.kt:17–163`, `FileActionDialogs.kt:32–190`: preserve dialog inputs/errors on failed operations; do not offer retry for unresolved dispatched outcome.
+- Existing `native-app/shared/src/jvmTest/kotlin/dev/damhopper/nativeapp/features/files/FileRepositoryTest.kt:45–113` tests list/stat/REST fallback, not WS ordering. `FileTreeStateTest.kt:49–146` tests helpers/events but not reconnect/listing races/bounds. Editor tests cover ordinary saves, not cross-mutation races. Existing `core/transport/WsConnectionTest.kt:59–110,180–233` tests socket fencing; reuse.
+- Existing server integration files `server/tests/ws_fs_subscribe.rs`, `fs_write_streaming.rs`, `fs_mutate.rs` are evidence of unchanged server contracts, not writable scope or proof executed now.
+- Future focused native commands: `.\native-app\gradlew.bat -p native-app :shared:jvmTest`; no command executed. Meaningful future coverage: nested demand sharing, subId reuse on replaced socket, old listing after newer event, bounded buffer overflow/resubscribe, save vs rename/delete descendants, uncertain operation reconciliation, target isolation.
+
+## Unresolved questions
+No product decision. Shared contracts/ownership settled by coordinator/planner before parallel implementation; actual server/device behavior not qualified. No backend `.git` protection strengthening belongs to this increment.

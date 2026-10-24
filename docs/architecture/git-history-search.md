@@ -164,5 +164,11 @@ the independent writer.
 - `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/components/pages/WorkspacePage.tsx` — Workspace mounts, availability, history presentation, and target/root-scoped actions.
 - Workspace integration regression coverage: `packages/ui/src/components/organisms/WorkspaceGitPanel.test.ts`.
 - Git-page integration and regression coverage: `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/pages/GitPage.test.tsx`, and `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
+## Android Native Git History Implementation (Phase 12)
+
+The Kotlin Multiplatform native Android client (`native-app/`) implements non-browser Git history browsing and search using `GitQueryRepository.getLog` (`/api/git/{project}/log?messageQuery=...`), `GitHistoryController`, `GitRewriteActionController`, and `GitHistoryActionController` in Compose UI (`GitHistoryView`, `GitCommitRow`).
+
+**Qualification Boundary:** The prior end-to-end qualification of Git history search and selection persistence applies strictly to the web and desktop (Tauri) clients. The native Android implementation is verified by 139 static assertions in `tests/test-phase-12-git-history.sh` and targeted JVM unit tests; live device qualification and server integration remain open gates under Phase 18. Documented limitations from Cycle 3 review (score 6/10, not accepted) are recorded in the [Android Native Acceptance Ledger](../android-native-acceptance.md#715-phase-12-complete-git-and-safe-history-workflows-baseline).
+
 
 See the [API Reference: Commit history](../api-reference.md#commit-history) and [Git history search standards](../code-standards.md#git-history-changes).

@@ -357,3 +357,23 @@ jobs:
           gh release edit "${TAG}" --draft=false
           echo "✓ Successfully published release ${TAG}:"
           gh release view "${TAG}" --json url --jq '.url'
+
+      - name: Attach Android APK if available
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-metadata.outputs.release_tag }}
+        run: |
+          echo "Checking for Android release artifact from companion workflow..."
+          ANDROID_RUN_ID=$(gh run list --workflow release-android.yml --commit "${GITHUB_SHA}" --json databaseId,status,conclusion --jq '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId' 2>/dev/null | head -n 1)
+          if [ -n "$ANDROID_RUN_ID" ]; then
+            echo "Found successful Android workflow run $ANDROID_RUN_ID, downloading APK..."
+            mkdir -p /tmp/companion-apk
+            if gh run download "$ANDROID_RUN_ID" -n damhopper-android-release-apk -D /tmp/companion-apk 2>/dev/null; then
+              echo "Uploading Android APK to release ${TAG}..."
+              gh release upload "${TAG}" /tmp/companion-apk/*.apk --clobber
+              echo "✓ Android APK attached to release ${TAG}:"
+              gh release view "${TAG}" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | {name, size, url}'
+            fi
+          else
+            echo "No completed Android release artifact found for commit ${GITHUB_SHA} yet."
+          fi

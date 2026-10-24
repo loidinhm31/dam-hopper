@@ -1,0 +1,22 @@
+[package]
+name = "damhopper-crypto-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Native client OPAQUE PAKE and HKDF AES-256-GCM derivation bridge for DamHopper Android"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+opaque-ke = "4.0.1"
+sha2 = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+jni = { version = "0.21", default-features = false }
+parking_lot = "0.12"
+thiserror = "2"
+aes-gcm = "0.10"
+
+[features]
+default = []

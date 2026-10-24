@@ -1,0 +1,49 @@
+# Code Review — Phase 13 Workflow Tracking & Project Plans (Cycle 2)
+
+Score: **5/10**. Cycle 1 contract defects (planPath, nullable event target, hardcoded timestamps, CAS stale token, split files, back wiring) are fixed and statically/unit verified. New/unresolved defects remain in UI error handling, destructive-action labelling, plan auto-open lifecycle, pagination.
+
+## Critical
+1. **Plan auto-open effect can loop** (`ProjectPlanScreens.kt` `ProjectPlanScreen`, ~L108-113). `LaunchedEffect(foldersResp?.path, kind){ if PLAN -> controller.selectPlan(path) }` sits AFTER the early `return` taken while `state.isLoading`. `selectPlan` sets `isLoading=true` (controller scope, `foldersResponse` untouched) → composable returns early → effect forgotten → load completes → effect re-entered fresh (keys irrelevant) → `selectPlan` again → repeated fetch/spinner flicker for every `kind==PLAN` folder. [INFERENCE: Compose semantics + controller code read; no Compose/runtime test. Advisor: treat as High/P1 release-blocking for Project Plans until runtime-disproved.] Fix: auto-select in `ProjectPlansController.loadFolders` onSuccess (once per path, idempotent) or hoist effect above early return and guard `selectedPlanPath == null`. Add Compose/controller regression asserting request count == 1.
+2. **Purge dialog mislabels destructive scope** (`WorkflowScreens.kt` ~L283-292, `WorkflowModals.kt` `PurgeHistoryDialog`). Title/body "…events in `$targetProject`" uses `state.projectFilter ?: "Workspace"`, but server `purge_history_before(workspace_id, before_ms)` deletes ALL workspace events with `recorded_at < before` + soft-deleted notes, regardless of project. With a project filter chip active the user is told project-scoped. Default `before` = `now` (wipes whole event history on one tap, single-step confirm, free-text RFC3339 unvalidated). Fix: always label "entire workspace (all projects)", show server-scope text, default to a conservative past date or require explicit entry, validate RFC3339 before enabling Purge, show deleted counts from `PurgeDto`.
+
+## Warnings
+- **Failures swallowed / errors invisible**: create/start/purge/link-terminal/link-agent dialogs call `controller.*` then close unconditionally (`WorkflowScreens.kt` L242-285, `WorkflowSessionsAndEventsView.kt` L190-212); `WorkflowState.error` is never rendered anywhere (`grep .error` in screens = 0) → overview load failure shows "No workflow items found". Item delete/note delete/end/abandon/unlink also ignore `Result`. Cycle 1 warning only fixed for Save.
+- **Lost update on conflict retry** (`ItemDetailDialog`): dirty check `editingTitle.takeIf{ it != item.title }` compares draft to the *refreshed* item. After 409 → refresh, an unedited title (original) ≠ new remote title → retry resends stale title, silently reverting remote edit. Track baseline (value at dialog open / per-field edited flag) and send only user-edited fields. Also Save with no change sends empty PATCH (disable Save when clean). Delete confirm calls `onDelete(); onDismiss()` immediately, ignoring result/conflict.
+- **Events pagination duplicates** (`WorkflowController.loadMoreEvents` + `WorkflowEventsView`): `eventsNextCursor==null` ⇒ both "not loaded" and "exhausted"; "Load More" always shown; once exhausted press refetches page 1 and appends (duplicates). Also no request-sequence/refresh fence. Use explicit `eventsLoaded/exhausted` flag; hide button when exhausted; dedupe by `id`; add `key=` to `items`.
+- **Create item cannot build hierarchy** (`CreateItemDialog`): `parentId` always null, project not editable (default `overview.projects.first() ?: "default"` – a literal "default" project likely nonexistent, ignores active Workbench project/worktree), PHASE kind offered without parent → server hierarchy validation rejects → swallowed. `WorkflowDomainHelpers.allowedChildKinds/isValidParentKind` unused by UI (YAGNI-dead). Spec step 1 "hierarchy and strict create".
+- **Kind filter has no UI** (`setKindFilter`/`kindFilter` only read in filter lambda). Filters apply to root nodes only: status/project filter hides a root plan whose children match, descendants never filtered.
+- **Back handler scope** (`WorkbenchScreen.kt` DisposableEffect ~L535-547): active whenever `WORKFLOW` panel is shown, even on "Workflow Tracking" sub-tab → system Back silently pops hidden Project Plans state instead of leaving panel. Handler must know active sub-product (hoist `activeProduct` or expose `isPlansVisible`). No unit test for `panelBackHandler` (`WorkbenchNavigationTest` unchanged; static script has no assertion).
+- **Production document-read path untested**: `ProjectPlansRepositoryAndParsingTest` builds repo without `fileRepository` (REST fallback), but `WorkbenchScreen` always injects `fRepo` (WS `FsRead`). Oversize/binary/NOT_FOUND via `fileRepository` unverified; `Absent` via `errorCode.contains("not found")` string match. REST fallback is thus dead in production and its `body.contains("\"binary\":true")` heuristic would misclassify Markdown containing that text → remove fallback (YAGNI) or test it.
+- **Spec gaps still open (Phase 13 requirements)**: watcher install/rebind/degraded states (`watchPaths` parsed, unused); "undated milestones" (TIMELINE card shows only plan dates, no milestone list); `evidenceLinks` rendered as inert `MetaChip`s – no linked-document navigation; disappeared/replaced root + truncated listing states and explicit retry only partly surfaced; terminal/agent link is free-text ID entry, not selection from live qualified terminals (spec step 2); label limits (64/128 chars) shown but not enforced. Need explicit user approval to defer (no-scope-shrink rule).
+- **Session links only exist client-side**: `sessionLinks` populated solely from link mutation responses (overview `SessionDto` carries no links, server has no list endpoint) → links and `suggestedEndTime`/`observedState` vanish on refresh/reconnect/app restart (`updateContext` resets state). "Apply End Time" thus only reachable right after linking. Document limitation or add server read; confirm with web parity.
+- Eager network from `init` in both controllers + `ProjectPlansController` created with `initialWorktreePath=null` then immediately retargeted → duplicate folder load for worktrees (Cycle 1 item, unchanged). `isCurrentContext()` dead and logically wrong (WorkflowController L56); `workflowRepo`/`projectPlansRepo` state vars write-only in WorkbenchScreen; `workflowController!!` bangs.
+- Closed enums fail whole payload on unknown server values (acceptable only if documented fail-closed).
+
+## Suggestions
+- Inject clock into `WorkflowDomainHelpers.formatIsoNow()` (testable); kotlinx-datetime `Clock.System.now().toString()` output is valid RFC3339 (server uses chrono `parse_from_rfc3339`, any fractional width OK).
+- Client path check: also reject drive-letter (`C:`) and percent-encoded dot segments as defense in depth (server remains authority). Segment check `it==".."||it=="."` correctly fixes `phase..1.md`; add test for it.
+- Static script: add negative assertions (no `plan_path`, no `"default"` literal project, `panelBackHandler` wiring, purge label says workspace); current timestamp assertion greps one literal in one file only.
+- Replace emoji glyphs (📄📁) with project icon convention; WorkflowScreens/ProjectPlanScreens 581/611 LOC (< 800 OK).
+- `ProjectSummaryDto.target` nullable for server `Option` symmetry.
+- Update phase-13 doc/evidence ledger only after device/runtime proof (still "pending/0%").
+
+## Positive
+- planPath camelCase fix + test; `EventDto.target?` + null-target test + safe `?.project` rendering; dynamic timestamps; segment-based traversal check; conflict refresh now updates `selectedItem.updatedAt` (CAS retry loop fixed); draft kept on failed save; WorkflowScreens split into Screens/Modals/SessionsAndEventsView; `findItemInOverview` recursive refresh; UUIDv4 request ids; generation/profile fencing on overview/folders/plan/doc; plan product read-only, 64 KiB `max+1` bounded read.
+- Shell invariants hold: zero `FloatingActionButton`/`WebView` in all features/workflow files (script asserts per file); single `workflowContent` host; `MarkdownPreviewView` reused (Mermaid unavailable path inherited).
+- Security: no secrets/transcripts in payloads or logs; paths encoded by ApiClient; no browser surfaces.
+
+## Validation (reviewer-run)
+- `bash tests/test-phase-13-workflow-plans.sh` → 96 passed, 0 failed.
+- `./gradlew --offline -q :shared:jvmTest --tests 'dev.damhopper.nativeapp.features.workflow.*' --tests 'dev.damhopper.nativeapp.ui.navigation.*'` → exit 0 (no failures; up-to-date, ~2s). QA report (not rerun): 223 jvm + 50 android unit tests, assembleDebug OK.
+- Neither covers Compose lifecycle (Critical 1), dialog failure paths, or on-device back handling.
+- Server cross-check by reading `server/src/api/workflow/{purge,mapping,item}.rs`, `workflow/store/mod.rs::purge_history_before`.
+
+## Reviewed Files
+features/workflow/{ProjectPlanScreens,ProjectPlansRepository,ProjectPlansController,WorkflowModels(helpers/DTOs),WorkflowScreens,WorkflowModals,WorkflowSessionsAndEventsView,WorkflowController,WorkflowPanelScreen}.kt; ui/navigation/WorkbenchNavigation.kt; ui/screens/WorkbenchScreen.kt (diff); tests/test-phase-13-workflow-plans.sh; jvmTest WorkflowAndPlanControllersTest (partial); QA reports 261016-1341/1436.
+
+## Unresolved Questions
+- Is the PLAN-kind auto-open loop reproducible on device/Compose test? (static inference only)
+- Are watcher lifecycle, milestone list, evidence-link navigation, terminal selection (vs free text), kind-filter UI intentionally deferred? Needs explicit approval.
+- Is purge intended to be workspace-wide only (server confirms) — should the native UI also offer no per-project purge?
+- Do web clients also lose session links on refresh (no list endpoint)? Parity decision.
+- Should unknown enum values fail closed or degrade to UNKNOWN?
