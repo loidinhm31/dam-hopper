@@ -21,9 +21,9 @@
 
 import { existsSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
-
 function findSdkTool(toolName) {
   const sdkBases = [
     process.env.ANDROID_HOME,
@@ -101,13 +101,15 @@ export function validateExportedComponents(manifestXml) {
 
     if (exportedValue.toLowerCase() === "true") {
       const isAllowed =
-        componentType.toLowerCase() === "activity" &&
-        (componentName === "dev.damhopper.nativeapp.MainActivity" ||
-          componentName === ".MainActivity");
+        (componentType.toLowerCase() === "activity" &&
+          (componentName === "dev.damhopper.nativeapp.MainActivity" ||
+            componentName === ".MainActivity")) ||
+        (componentType.toLowerCase() === "receiver" &&
+          componentName === "androidx.profileinstaller.ProfileInstallReceiver");
 
       if (!isAllowed) {
         issues.push(
-          `Unexpected exported ${componentType}: '${componentName}' (only MainActivity is permitted to be exported)`
+          `Unexpected exported ${componentType}: '${componentName}' (only MainActivity and ProfileInstallReceiver are permitted to be exported)`
         );
       }
     }
@@ -269,6 +271,8 @@ function runApkAudit(apkPath) {
   return issues === 0;
 }
 
-const args = parseCliArgs();
-const passed = runApkAudit(args.apk);
-process.exit(passed ? 0 : 1);
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const args = parseCliArgs();
+  const passed = runApkAudit(args.apk);
+  process.exit(passed ? 0 : 1);
+}
