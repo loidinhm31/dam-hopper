@@ -282,16 +282,16 @@ jobs:
 
           echo "Target release tag: $TAG"
 
-          # If this is a unified repository release (v*), wait for release-linux workflow to publish the release
+          # If this is a unified repository release (v*), wait for release-linux workflow to finish publishing
           if [[ "$TAG" == v* ]]; then
-            echo "Waiting for GitHub release $TAG to be published..."
-            for i in {1..30}; do
-              STATUS=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "not_found")
-              if [ "$STATUS" = "false" ]; then
-                echo "Release $TAG is published!"
+            echo "Waiting for release-linux companion workflow to publish release $TAG..."
+            for i in {1..40}; do
+              RUN_STATUS=$(gh run list --workflow release-linux.yml --commit "${GITHUB_SHA}" --json status,conclusion --jq '.[0] | select(.status == "completed" and .conclusion == "success") | .status' 2>/dev/null || echo "")
+              if [ "$RUN_STATUS" = "completed" ]; then
+                echo "release-linux companion workflow completed successfully!"
                 break
               fi
-              echo "Release $TAG status is '$STATUS', waiting 30s (attempt $i/30)..."
+              echo "release-linux is still in progress, waiting 30s (attempt $i/40)..."
               sleep 30
             done
           fi
