@@ -22,10 +22,13 @@ fun LargeFileView(
     onPreviousChunk: () -> Unit,
     onNextChunk: () -> Unit,
     modifier: Modifier = Modifier,
+    rangeWindow: BoundedRangeWindow? = tab.rangeWindow,
 ) {
-    val lines = tab.content.lines()
-    val startOffset = tab.largeFileOffset
-    val endOffset = minOf(tab.size, startOffset + FileTierPolicy.LARGE_CHUNK_BYTES)
+    val windowText = rangeWindow?.text ?: tab.content
+    val lines = windowText.lines()
+    val startOffset = rangeWindow?.offset ?: tab.largeFileOffset
+    val isEof = rangeWindow?.isEof ?: tab.largeFileEof
+    val endOffset = if (rangeWindow != null) startOffset + rangeWindow.receivedBytes else minOf(tab.size, startOffset + FileTierPolicy.LARGE_CHUNK_BYTES)
 
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         // Range indicator header
@@ -51,11 +54,11 @@ fun LargeFileView(
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = onNextChunk,
-                    enabled = !tab.largeFileEof,
+                    enabled = !isEof,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Surface)
                 ) {
-                    Text("Next 64K >", fontSize = 11.sp, color = if (!tab.largeFileEof) DamHopperColors.Primary else DamHopperColors.TextSecondary)
+                    Text("Next 64K >", fontSize = 11.sp, color = if (!isEof) DamHopperColors.Primary else DamHopperColors.TextSecondary)
                 }
             }
         }

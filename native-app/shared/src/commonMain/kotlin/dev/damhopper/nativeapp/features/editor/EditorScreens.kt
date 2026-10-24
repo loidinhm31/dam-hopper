@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
 import kotlinx.coroutines.launch
@@ -20,6 +21,8 @@ fun EditorPanelScreen(
     onInspectCommit: (String) -> Unit = {},
     onDownloadMedia: ((EditorTab) -> Unit)? = null,
     fontSize: Int = 14,
+    focusedMode: Boolean = true,
+    nativeSurfaceHost: NativeEditorSurfaceHost? = LocalNativeEditorSurfaceHost.current,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -30,6 +33,30 @@ fun EditorPanelScreen(
     var findState by remember(activeTabKey) { mutableStateOf(session?.findReplaceState ?: FindReplaceState()) }
     var showBlame by remember { mutableStateOf(false) }
     var lineAttributions by remember(activeTabKey, showBlame) { mutableStateOf<Map<Int, BlameLineAttribution>?>(null) }
+    var pendingCloseIntent by remember { mutableStateOf<CloseIntent?>(null) }
+
+    val activeDoc = session?.document ?: tabsState.activeTabId.collectAsState().value?.let { id ->
+        tabsState.getDocument(id)
+    }
+
+    val fallbackFlow = remember { kotlinx.coroutines.flow.MutableStateFlow(false) }
+    val docDirty by (activeDoc?.isDirty ?: fallbackFlow).collectAsState()
+    val docCanUndo by (activeDoc?.canUndo ?: fallbackFlow).collectAsState()
+    val docCanRedo by (activeDoc?.canRedo ?: fallbackFlow).collectAsState()
+
+    val displayTabs = remember(tabs, activeTabKey, docDirty, activeDoc) {
+        if (activeDoc == null) {
+            tabs
+        } else {
+            tabs.map { tab ->
+                if (tab.key == activeTabKey && docDirty != tab.isDirty) {
+                    tab.copy(isDirty = docDirty)
+                } else {
+                    tab
+                }
+            }
+        }
+    }
 
     LaunchedEffect(activeTabKey, showBlame, activeTab?.content) {
         if (!showBlame || activeTab == null || blameRepo == null) {
@@ -55,17 +82,37 @@ fun EditorPanelScreen(
             }
         }
     }
+
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         EditorTopBar(
-            tabs = tabs,
+            tabs = displayTabs,
             activeTabKey = activeTabKey,
             onSelectTab = { tabsState.selectTab(it) },
-            onCloseTab = { tabsState.closeTab(it) },
+            onCloseTab = { key ->
+                val tab = tabs.find { it.key == key }
+                val docId = tabsState.openTabs.value.find { it.target == tab?.target && it.relativePath == tab?.path }?.id
+                if (docId != null) {
+                    val intent = tabsState.requestCloseTab(docId)
+                    if (intent != null) {
+                        pendingCloseIntent = intent
+                    }
+                } else {
+                    tabsState.closeTab(key)
+                }
+            },
             onSave = { activeTabKey?.let { key -> coroutineScope.launch { tabsState.saveTab(key) } } },
-            onUndo = { session?.undo() },
-            onRedo = { session?.redo() },
-            canUndo = session?.canUndo() == true,
-            canRedo = session?.canRedo() == true,
+            onUndo = {
+                tabsState.activeTabId.value?.let { id ->
+                    tabsState.undo(id)
+                } ?: session?.undo()
+            },
+            onRedo = {
+                tabsState.activeTabId.value?.let { id ->
+                    tabsState.redo(id)
+                } ?: session?.redo()
+            },
+            canUndo = docCanUndo || (session?.canUndo() == true),
+            canRedo = docCanRedo || (session?.canRedo() == true),
             onToggleFind = {
                 session?.let {
                     if (it.findReplaceState.isOpen) it.closeFindReplace() else it.openFindReplace()
@@ -75,8 +122,10 @@ fun EditorPanelScreen(
             onToggleMarkdownPreview = { activeTabKey?.let { tabsState.toggleMarkdownPreview(it) } },
             onToggleBlame = { showBlame = !showBlame },
             showBlame = showBlame,
-            onToggleEncrypted = { activeTabKey?.let { tabsState.toggleEncryptedSession(it) } }
+            onToggleEncrypted = { activeTabKey?.let { tabsState.toggleEncryptedSession(it) } },
+            focusedMode = focusedMode
         )
+
         // Find/Replace Bar
         if (session != null && findState.isOpen) {
             Column(modifier = Modifier.fillMaxWidth().background(DamHopperColors.SurfaceVariant).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -180,14 +229,14 @@ fun EditorPanelScreen(
                 BinaryHexView(tab = activeTab)
             }
             else -> {
+                val metadata = tabsState.openTabs.collectAsState().value.find { it.relativePath == activeTab.path }
+                val inputAllowed = session?.isInputAllowed?.invoke() ?: tabsState.isInputAllowed()
                 NativeTextEditorView(
-                    session = session,
-                    content = activeTab.content,
-                    onContentChange = { newText -> session?.setText(newText) },
-                    lineAttributions = lineAttributions,
-                    showBlameGutter = showBlame,
-                    onInspectCommit = onInspectCommit,
-                    fontSize = fontSize
+                    document = activeDoc,
+                    metadata = metadata,
+                    isReadOnly = activeTab.tier.isReadOnly || !inputAllowed,
+                    fontSize = fontSize,
+                    nativeSurfaceHost = nativeSurfaceHost
                 )
             }
         }
@@ -197,8 +246,67 @@ fun EditorPanelScreen(
             SaveConflictDialog(
                 filename = activeTab.name,
                 onReload = { coroutineScope.launch { tabsState.discardAndReloadTab(activeTab.key) } },
-                onForceOverwrite = { coroutineScope.launch { tabsState.forceOverwriteTab(activeTab.key) } },
-                onDismiss = { /* Leaves tab conflicted */ }
+                onExplicitOverwrite = { coroutineScope.launch { tabsState.forceOverwriteTab(activeTab.key) } },
+                onDismiss = { /* Leaves tab conflicted without destroying local text */ }
+            )
+        }
+
+        // Guarded Dirty Close Dialog
+        pendingCloseIntent?.let { intent ->
+            val tab = tabs.find { t -> tabsState.openTabs.value.find { it.id == intent.id }?.let { it.target == t.target && it.relativePath == t.path } == true }
+            val filename = tab?.name ?: intent.id.relativePath
+            AlertDialog(
+                onDismissRequest = {
+                    tabsState.confirmClose(intent.copy(decision = CloseDecision.CANCEL))
+                    pendingCloseIntent = null
+                },
+                title = { Text("Save changes?", style = DamHopperTypography.titleMedium, color = DamHopperColors.Warning) },
+                text = { Text("'$filename' has unsaved changes. Do you want to save them before closing?", style = DamHopperTypography.bodyMedium, color = DamHopperColors.TextPrimary) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val targetTab = tab ?: tabs.find { it.key == activeTabKey }
+                                if (targetTab != null) {
+                                    tabsState.saveTab(targetTab.key)
+                                    val currentTab = tabsState.tabs.value.find { it.key == targetTab.key }
+                                    if (currentTab?.isDirty == false && !currentTab.isSaving) {
+                                        tabsState.confirmClose(intent.copy(decision = CloseDecision.DISCARD))
+                                    }
+                                }
+                                pendingCloseIntent = null
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                    ) {
+                        Text("Save & Close")
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                tabsState.confirmClose(intent.copy(decision = CloseDecision.CANCEL))
+                                pendingCloseIntent = null
+                            }
+                        ) {
+                            Text("Cancel", color = DamHopperColors.TextSecondary)
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Button(
+                            onClick = {
+                                val s = session
+                                if (s == null || s.revision == intent.dirtyRevision) {
+                                    tabsState.confirmClose(intent.copy(decision = CloseDecision.DISCARD))
+                                }
+                                pendingCloseIntent = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
+                        ) {
+                            Text("Discard", color = DamHopperColors.TextPrimary)
+                        }
+                    }
+                }
             )
         }
     }

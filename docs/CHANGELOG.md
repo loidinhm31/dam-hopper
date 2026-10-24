@@ -1,7 +1,9 @@
 # 2026-10-24
+- **Native editor and file explorer: Phase 05 — Android native document and shared editor presentation.** Completed [Phase 05](../plans/261023-1429-native-editor-file-explorer/phase-05-android-native-editor.md).
+  - **Verification (user-reported for Phase 05 completion):** Review 9/10, 0 Critical; 98/98 `:androidApp:testDebugUnitTest`; 478/478 `:shared:jvmTest`; `:androidApp:compileDebugAndroidTestKotlin`, `:shared:compileKotlinJvm`, and `:androidApp:compileDebugKotlin` passed. No connected-device result is claimed in this entry; integrated active-root/server/device/distribution qualification remains open under Phase 08.
 
 - **Native editor and file explorer: Phase 04 — Explorer actions and shared watch demand.** Completed [Phase 04](../plans/261023-1429-native-editor-file-explorer/phase-04-explorer-and-shared-watchers.md), closing demand-shared directory watchers and focused explorer actions.
-  - **Verification:** 24/24 Phase 04 tests, 478/478 `:shared:jvmTest`, 4/4 `FileScreensPhase08Test`, and `:androidApp:compileDebugKotlin` passed; user-approved review scored 9.5/10. Phases 05–08 remain pending, including integrated runtime/device/distribution qualification.
+  - **Verification:** 24/24 Phase 04 tests, 478/478 `:shared:jvmTest`, 4/4 `FileScreensPhase08Test`, and `:androidApp:compileDebugKotlin` passed; user-approved review scored 9.5/10. Phases 05–08 were pending at Phase 04 closeout; see the Phase 05 closeout above. Integrated runtime/device/distribution qualification remains open.
 
 # 2026-10-18
 

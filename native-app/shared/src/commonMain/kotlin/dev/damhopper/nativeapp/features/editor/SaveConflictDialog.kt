@@ -15,8 +15,9 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
 fun SaveConflictDialog(
     filename: String,
     onReload: () -> Unit,
-    onForceOverwrite: () -> Unit,
+    onForceOverwrite: () -> Unit = {},
     onDismiss: () -> Unit,
+    onExplicitOverwrite: () -> Unit = onForceOverwrite,
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -53,10 +54,16 @@ fun SaveConflictDialog(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = onForceOverwrite,
+                        onClick = {
+                            if (onExplicitOverwrite !== onForceOverwrite) {
+                                onExplicitOverwrite()
+                            } else {
+                                onForceOverwrite()
+                            }
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
                     ) {
-                        Text("Force Overwrite", color = DamHopperColors.TextPrimary)
+                        Text("Explicit Overwrite", color = DamHopperColors.TextPrimary)
                     }
                 }
             }

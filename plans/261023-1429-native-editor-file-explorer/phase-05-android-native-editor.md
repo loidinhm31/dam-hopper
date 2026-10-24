@@ -1,13 +1,13 @@
 # Phase 05 — Android native document and shared editor presentation
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: AndroidEditor worker.
+- Priority P2. Status Complete (2026-10-24; user-reported review 9/10, 0 Critical; 98/98 `:androidApp:testDebugUnitTest`, 478/478 `:shared:jvmTest`; Android compile passed). Owner: AndroidEditor worker.
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
-- Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
+- Historical source anchors in the evidence reports describe the pre-implementation baseline; completion evidence and remaining qualification boundaries are recorded below. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
 
 ## Insights
-AndroidEditorSurface currently stores its own StringBuilder/snapshots and contains another EditorSession, and attachView does not mount a widget. Shared NativeTextEditorView is a Compose TextField. Both must cut over to the single document contract, not coexist as editing authorities.
+Pre-implementation baseline: AndroidEditorSurface stored its own StringBuilder/snapshots and another EditorSession, while attachView did not mount a widget; shared NativeTextEditorView was a Compose TextField. This phase owns their cutover to the single document contract and injected native presentation.
 
 ## Requirements and architecture
 Implement qualified exact-version Sora mappings only; mount CodeEditor through AndroidView with Android-only dependencies injected through common UI slot/factory. Line numbers, syntax/plain-text fallback for unknown grammar, selection, undo/redo, in-file find and keyboard/IME are native. No rich media/Markdown/blame/TS service activation or encrypted-readiness claim.
@@ -23,7 +23,7 @@ Implement qualified exact-version Sora mappings only; mount CodeEditor through A
 ## Ordered task implementation and related files
 
 ### `implement-android-native-document` — Replace model prototype with real retained native document
-- [ ] <!-- evcrate-task:implement-android-native-document --> Replace model prototype with real retained native document
+- [x] <!-- evcrate-task:implement-android-native-document --> Replace model prototype with real retained native document
 - Dependencies: `freeze-document-and-watch-facades`.
 - Exact writable files/actions:
   - Modify: `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt`.
@@ -40,12 +40,12 @@ Implement qualified exact-version Sora mappings only; mount CodeEditor through A
   - Mounted real CodeEditor and one native document implement frozen contract with no second text/undo stack or stale Activity.
   - Detach/rebind keeps undo/text/selection/scroll; true close releases resources and rejects late events.
   - Native grammar modules match qualified pin; unknown language is honest plain text, not semantic diagnostics.
-- Planned checks / observable evidence (not executed):
-  - .\native-app\gradlew.bat -p native-app :androidApp:testDebugUnitTest --tests "dev.damhopper.nativeapp.platform.editor.AndroidEditorSurfaceTest"; only use tests meaningful without device and preserve failures.
-  - .\native-app\gradlew.bat -p native-app :androidApp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.damhopper.nativeapp.platform.editor.AndroidEditorDocumentTest; measure real delta/replacement/undo/IME/detach behavior.
+- User-reported verification (2026-10-24):
+  - `:androidApp:testDebugUnitTest`: 98/98 passed.
+  - `:androidApp:compileDebugAndroidTestKotlin`: passed; this confirms instrumentation-source compilation, not a connected-device run.
 
 ### `bridge-shared-editor-presentation` — Route shared editor presentation to injected native surface
-- [ ] <!-- evcrate-task:bridge-shared-editor-presentation --> Route shared editor presentation to injected native surface
+- [x] <!-- evcrate-task:bridge-shared-editor-presentation --> Route shared editor presentation to injected native surface
 - Dependencies: `implement-android-native-document`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/NativeTextEditorView.kt`.
@@ -65,9 +65,9 @@ Implement qualified exact-version Sora mappings only; mount CodeEditor through A
   - Editor toolbar and widget act on same authority; shared code has no Android imports or editable full-text Compose state.
   - Focused editor displays only approved features and complete empty/loading/error/disconnected/conflict/read-only notices.
   - Every changed common editor caller migrated without aliases/shims; dormant workbench remains unmounted.
-- Planned checks / observable evidence (not executed):
-  - After concurrent group merges, .\native-app\gradlew.bat -p native-app :shared:compileKotlinJvm :androidApp:compileDebugKotlin; compilation is planned future evidence, not current result.
-  - Final mounted UI cases verify native line numbers/syntax/plain text, find, selection, hidden-input rejection and read-only notice behavior; no static source/wiring assertions.
+- User-reported verification (2026-10-24):
+  - `:shared:jvmTest`: 478/478 passed.
+  - `:shared:compileKotlinJvm` and `:androidApp:compileDebugKotlin`: passed.
 
 ## Durable tasks
 ```evcrate-tasks
@@ -138,7 +138,7 @@ Native undo/content feasibility must already be proven. Widget reattach is not a
 
 ## Completion and next dependencies
 Concurrent with03/04 after freeze. Phase06 waits for all three. Phase07 receives factory/surface host and transfers WorkbenchScreen ownership only after phase05 complete. Phase08 receives Android build/test files after all prior writers settle.
-- Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+- Exit evidence reported by the user: Phase 05 completed 2026-10-24; review 9/10, 0 Critical; `:androidApp:testDebugUnitTest` 98/98 and `:shared:jvmTest` 478/478 passed; `:androidApp:compileDebugAndroidTestKotlin`, `:shared:compileKotlinJvm`, and `:androidApp:compileDebugKotlin` passed. Phase 08 still owns integrated active-root/server/device/distribution qualification; no connected-device result is claimed here.
 
 ## Unresolved questions
 - No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.

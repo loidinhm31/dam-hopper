@@ -1,100 +1,77 @@
 package dev.damhopper.nativeapp.features.editor
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
-import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 
 /**
- * Text editor view rendering synchronized line number gutters and editable monospace buffer,
- * backed by the Phase 05 Sora Editor adapter candidate contract.
+ * Functional slot for injecting platform-native code editor surfaces into shared Compose UI.
+ */
+typealias NativeEditorSurfaceHost = @Composable (
+    document: EditorDocument,
+    isReadOnly: Boolean,
+    modifier: Modifier
+) -> Unit
+
+/**
+ * Ambient composition local providing the platform-native editor surface host.
+ */
+val LocalNativeEditorSurfaceHost = compositionLocalOf<NativeEditorSurfaceHost?> { null }
+
+/**
+ * Host container for the native code editor surface.
+ *
+ * Replaces the obsolete Compose TextField and eager custom line gutter with an injected
+ * platform surface (e.g. Sora CodeEditor on Android). Passes only the authoritative
+ * [EditorDocument] handle and metadata, never copying full text into Compose state.
  */
 @Composable
 fun NativeTextEditorView(
-    session: EditorSession?,
-    content: String,
-    onContentChange: (String) -> Unit,
-    lineAttributions: Map<Int, BlameLineAttribution>? = null,
-    showBlameGutter: Boolean = false,
-    onInspectCommit: (String) -> Unit = {},
+    document: EditorDocument?,
+    metadata: EditorTabMetadata? = null,
+    isReadOnly: Boolean = false,
     fontSize: Int = 14,
     modifier: Modifier = Modifier,
+    nativeSurfaceHost: NativeEditorSurfaceHost? = LocalNativeEditorSurfaceHost.current,
 ) {
-    val lines = content.lines()
-    val scrollState = rememberScrollState()
-
-    Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
-        // Adapter metadata indicator
-        Box(
-            modifier = Modifier.fillMaxWidth().background(DamHopperColors.SurfaceVariant).padding(horizontal = 12.dp, vertical = 2.dp)
-        ) {
-            Text(
-                text = "Native Workbench Editor (Candidate: Sora Editor 0.23.4 evaluated under Phase 05/18)",
-                style = DamHopperTypography.labelSmall,
-                color = DamHopperColors.TextSecondary
+    Box(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
+        if (document != null && nativeSurfaceHost != null) {
+            nativeSurfaceHost(
+                document,
+                isReadOnly || (metadata?.isReadOnly == true),
+                Modifier.fillMaxSize()
             )
-        }
-
-        Row(
-            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(scrollState)
-        ) {
-            // Line numbers column (synchronized with scroll)
-            Column(
-                modifier = Modifier.width(44.dp).background(DamHopperColors.SurfaceVariant).padding(vertical = 4.dp, horizontal = 4.dp)
+        } else if (document != null) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                contentAlignment = Alignment.Center
             ) {
-                lines.forEachIndexed { idx, _ ->
-                    Text(
-                        text = (idx + 1).toString(),
-                        fontFamily = JetBrainsMonoFontFamily,
-                        fontSize = 12.sp,
-                        color = DamHopperColors.TextSecondary,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-
-            if (showBlameGutter && lineAttributions != null) {
-                VerticalDivider(modifier = Modifier.width(1.dp), color = DamHopperColors.Border)
-                EditorBlameGutter(
-                    lineAttributions = lineAttributions,
-                    totalLines = lines.size,
-                    onInspectCommit = onInspectCommit
+                Text(
+                    text = "Native editor surface attached (${metadata?.relativePath ?: document.id.relativePath})",
+                    style = DamHopperTypography.bodyMedium,
+                    color = DamHopperColors.TextSecondary
                 )
             }
-
-            VerticalDivider(modifier = Modifier.width(1.dp), color = DamHopperColors.Border)
-            TextField(
-                value = content,
-                onValueChange = onContentChange,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                textStyle = TextStyle(
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontSize = fontSize.sp,
-                    color = DamHopperColors.TextPrimary,
-                    lineHeight = (fontSize * 1.35f).sp
-                ),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    cursorColor = DamHopperColors.Primary
+        } else {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No document attached",
+                    style = DamHopperTypography.bodyMedium,
+                    color = DamHopperColors.TextSecondary
                 )
-            )
+            }
         }
     }
 }

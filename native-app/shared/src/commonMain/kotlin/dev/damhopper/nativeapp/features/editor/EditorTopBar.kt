@@ -32,6 +32,7 @@ fun EditorTopBar(
     onToggleBlame: () -> Unit = {},
     showBlame: Boolean = false,
     onToggleEncrypted: () -> Unit = {},
+    focusedMode: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val activeTab = tabs.find { it.key == activeTabKey }
@@ -83,16 +84,18 @@ fun EditorTopBar(
                 Text(if (activeTab?.isSaving == true) "Saving..." else "Save", fontSize = 12.sp)
             }
 
-            Spacer(modifier = Modifier.width(4.dp))
-            Button(
-                onClick = onToggleEncrypted,
-                enabled = activeTab != null,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (activeTab?.encryptedSessionRequired == true) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
-                )
-            ) {
-                Text(if (activeTab?.encryptedSessionRequired == true) "🔒 Encrypted" else "🔓 Plain", fontSize = 12.sp)
+            if (!focusedMode) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Button(
+                    onClick = onToggleEncrypted,
+                    enabled = activeTab != null,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (activeTab?.encryptedSessionRequired == true) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+                    )
+                ) {
+                    Text(if (activeTab?.encryptedSessionRequired == true) "🔒 Encrypted" else "🔓 Plain", fontSize = 12.sp)
+                }
             }
 
             Spacer(modifier = Modifier.width(6.dp))
@@ -124,7 +127,7 @@ fun EditorTopBar(
                 Text("Find", fontSize = 12.sp, color = DamHopperColors.Primary)
             }
 
-            if (activeTab != null && FileTierPolicy.isMarkdownFile(activeTab.path)) {
+            if (!focusedMode && activeTab != null && FileTierPolicy.isMarkdownFile(activeTab.path)) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = onToggleMarkdownPreview,
@@ -135,7 +138,7 @@ fun EditorTopBar(
                 }
             }
 
-            if (activeTab != null && activeTab.tier != FileTier.BINARY && activeTab.tier != FileTier.IMAGE && activeTab.tier != FileTier.LARGE) {
+            if (!focusedMode && activeTab != null && activeTab.tier != FileTier.BINARY && activeTab.tier != FileTier.IMAGE && activeTab.tier != FileTier.LARGE) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = onToggleBlame,
@@ -152,7 +155,7 @@ fun EditorTopBar(
                 Text(
                     text = "$errCount errors",
                     fontSize = 11.sp,
-                    color = DamHopperColors.Error
+                    color = if (errCount > 0) DamHopperColors.Error else DamHopperColors.TextSecondary
                 )
             }
         }
