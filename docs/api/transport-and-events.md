@@ -5,8 +5,9 @@ Reconnect, terminal subscriptions, and transport event contracts moved from the 
 
 **Location:** `packages/ui/src/api/transport.ts`
 
-The `Transport` interface abstracts WebSocket and REST communication. All frontend modules use `getTransport()` to access the singleton instance.
+The `Transport` interface abstracts core multiplexed WebSocket (`/ws`) and REST communication. While legacy modules access `getTransport()` for the ambient connection to the active server target, multi-profile operations require explicit `{ profileId, generation }` scoping to prevent cross-profile leakage.
 
+Dedicated language server semantic operations do not use this ambient singleton; they communicate via the owner-bound `SemanticClient` (`packages/ui/src/api/semantic-client.ts`) directly over `/ws/semantic/v1`.
 ### Core Methods
 
 **invoke<T>(channel: string, data?: unknown): Promise<T>**
@@ -157,4 +158,21 @@ Status values: `"connecting"`, `"connected"`, `"disconnected"`, `"error"`
 
 Returns unsubscribe function.
 
+
+---
+
+## Semantic LSP Client Transport (SemanticClient)
+
+**Location:** `packages/ui/src/api/semantic-client.ts`
+
+TypeScript and JavaScript semantic navigation (Go to Definition, Go to Implementation) bypasses the multiplexed `Transport` singleton. Instead, editor views instantiate an owner-bound, reference-counted `SemanticClient` connecting directly to the dedicated `/ws/semantic/v1` WebSocket route using the `dam-hopper.semantic.lsp.v1` subprotocol.
+
+### Key Distinctions from Core Transport:
+
+1. **Owner & Generation Fencing:** Each client instance is explicitly bound to a `(profileId, generation, project, worktreePath)` tuple. Switching projects, changing workspaces, or disconnecting a server profile cleanly tears down the associated semantic client without affecting other open profiles or editors.
+2. **Protocol Isolation:** Uses standard JSON-RPC 2.0 frames over a dedicated socket connection, completely decoupled from terminal PTY streams and filesystem event dispatchers.
+3. **Local Stable Model & Wire Session Separation:** Local Monaco models (`inmemory://dam-hopper/...`) remain persistent across disconnects. During socket reconnection, `SemanticClient` replays dirty in-memory buffers via full `didOpen` frames before releasing the queue for user navigation queries.
+4. **Cancellation & Resynchronization:** Supports explicit local query cancellation (`$/cancelRequest`), full document resync on `-32003 STALE_VERSION` (returning empty locations without auto-retry), and 1,000 ms auto-reconnect on `-32005 AUTH_REVOKED` with strict provenance validation before dirty buffer replay.
+
+See the [Semantic LSP Protocol Guide](../semantic-lsp-protocol-guide.md) for full wire protocol and lifecycle specifications.
 

@@ -21,6 +21,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Filesystem and media](./api/filesystem-and-media.md) | File explorer/search, media tickets, stream authorization |
 | [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health, semantic navigation settings |
 | [WebSocket](./api/websocket.md) | Core multiplexed WebSocket (`/ws`) and dedicated semantic gateway (`/ws/semantic/v1`) |
+| [Semantic LSP Protocol Guide](./semantic-lsp-protocol-guide.md) | Dedicated filtered JSON-RPC language server protocol, adaptive sync, and recovery |
 
 ## Authentication
 
@@ -77,6 +78,7 @@ See the [WebSocket API reference](./api/websocket.md).
 
 See [Semantic Navigation Settings](./api/workspace-settings.md#semantic-navigation-settings). Covers `GET /api/semantic/settings` (safe inspection of configured intent, runtime admission, integrity status, and caller mutation authority) and `PATCH /api/semantic/settings` (server-global hot toggle without daemon restart, requiring fresh current-admin authorization and rejecting `--no-auth`).
 
+For the dedicated language server WebSocket protocol (`/ws/semantic/v1`), wire lifecycle, adaptive sync threshold (64 KiB), virtual URI containment, and error taxonomy, see the [Semantic LSP Protocol Guide](./semantic-lsp-protocol-guide.md) and [WebSocket API](./api/websocket.md#semantic-websocket-gateway-wssemanticv1).
 
 ## Retired plugin API anchors
 

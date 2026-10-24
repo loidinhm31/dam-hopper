@@ -343,7 +343,12 @@ non-fatal fallback also apply.
 
 ### Manual Rollback
 
-To revert an active release to the recorded `previous` version:
+Before rolling back an active installation where semantic navigation has been in use, operators should perform graceful quiescence:
+
+1. **Quiesce Semantic Sessions:** An administrator disables semantic navigation via the Settings UI or `PATCH http://127.0.0.1:4801/api/semantic/settings` with payload `{ "enabled": false }`.
+2. **Verify Quiescence:** Inspect `GET http://127.0.0.1:4801/api/semantic/settings` ensuring `runtimeEnabled: false`, `activeTrees: 0`, and `openDocuments: 0`.
+3. **Rollback Failure Stop:** If `runtimeEnabled` remains `true`, `activeTrees > 0`, `openDocuments > 0`, or a `transitionError` is reported in the settings response (or if the HTTP GET/PATCH request fails with a connection, non-200, or unreadable response), **STOP the rollback sequence immediately**. The daemon reports safe-disabled state (indicating new session admission is disabled, not that surviving child processes have necessarily been reaped) and withholds durable false intent if session teardown fails. Inspect daemon logs (`journalctl -u dam-hopper-api`) to diagnose and terminate unkillable child processes or resolve transition errors; do not proceed with `dam-hopper rollback` until quiescence is confirmed.
+4. **Execute Rollback:**
 
 ```bash
 sudo dam-hopper rollback
@@ -351,6 +356,8 @@ sudo dam-hopper rollback
 
 The manager executes the rollback transaction using the recorded backup artifacts and verifies health before completing.
 
+**Semantic Toolchain Rollback Invariant:**
+Rollback restores the entire immutable release payload including the bundled language server engine (`<release-root>/lib/semantic-engine`, resolved under `/opt/dam-hopper/releases/<version>/<role>/lib/semantic-engine` for `server` and `both` roles), ensuring semantic engine digests, Node runtime, and language server packages stay strictly synchronized with the restored server binary. Active semantic sessions are terminated during API service shutdown, and the prior release's verified engine layout is restored without runtime downloads or fallback to ambient host packages.
 ### Boot Recovery Service
 
 `dam-hopper-recovery.service` is a root-owned oneshot unit ordered after `local-fs.target` and before `dam-hopper-api.service` and `dam-hopper-web.service`.

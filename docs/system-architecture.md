@@ -450,7 +450,7 @@ The Phase 01 feasibility spike (`scripts/spike-lsp-test.mjs`, `plans/260901-1000
 - **Hostile Hook & Plugin Suppression Controls (G6):** Active positive controls verified that canary scripts execute when directly invoked by Node. When spawned against a hostile workspace containing malicious tsconfig plugins and a local `node_modules/typescript` decoy, supervisor settings (`"plugins": []`, `"disableAutomaticTypingAcquisition": true`, absolute `--tsserver-path`, and stripped `NODE_OPTIONS`/`NODE_PATH`) completely bypassed local decoys and suppressed tsconfig plugin execution.
 - **Process Tree Observation & Reaping (G7):** Pre-recorded descendant audits in `scripts/spike-lsp-test.mjs` observed multi-process trees (`tsserver.js` + `typingsWorker.js`) under the child PGID. Both graceful RPC shutdown (`shutdown` -> `exit`) and forced signal escalation (`kill(-pgid, SIGTERM)` -> `kill(-pgid, SIGKILL)`) resulted in 0 surviving descendants and 0 zombie processes in the OS process table in the tested Linux x86_64 environment.
 - **Vite Web Bundle Baseline (G2):** Evaluated pinned `vscode-ws-jsonrpc@3.5.0` + `vscode-jsonrpc@8.2.1`. Vite build benchmark demonstrated that Monaco's lazy chunk boundary is preserved: 0 bytes added to the initial application chunk (`index.js`), with ~14.2 KiB gzip impact (+0.34%) measured on the dynamic `monaco.js` chunk.
-- **Web Provider Coexistence Boundary (G8):** Formally assigned **STOP (Pending Web Browser Qualification)**. Monaco's built-in TypeScript provider is configured globally; model-scoped coexistence requires live browser DOM execution with active Monaco web workers, deferred to Phase 07 implementation and Phase 10 qualification.
+- **Web Provider Coexistence Boundary (G8):** Evaluated initially in the Phase 01 spike as pending live browser DOM execution. Provider coexistence with Monaco's built-in TypeScript worker was subsequently implemented in Phase 07, verified in Chromium browser component tests (`semantic-navigation.browser.tsx`), and fully qualified in the containerized web application E2E suite under Phase 10 (with visual human review governance in `review.md`).
 
 ### Implemented Primitives: Phase 02 Child Process Owner, LSP Framing Codec & Reaper Controls
 
@@ -523,20 +523,11 @@ Phase 03 establishes immutable tool provisioning, passive zero-child integrity v
 - **Centralized Resource Policy Constants (`server/src/semantic/resources.rs`):**
   - Centralizes the finite production policy constants selected in Phase 01 into `ResourcePolicy` (version `RESOURCE_POLICY_VERSION = "1.0.0"`).
   - _Directly wired constants:_ Protocol and queue constants are imported by `framing.rs` and `types.rs`: `MAX_STDIO_HEADER_BYTES = 8 KiB`, `MAX_FRAME_BODY_BYTES = 4 MiB`, `MAX_QUEUED_MESSAGES = 32`, `MAX_QUEUED_BYTES = 4 MiB`, `MAX_RETAINED_STDERR_BYTES = 64 KiB`, `GRACEFUL_SHUTDOWN_TIMEOUT = 2,000 ms`, `FORCE_KILL_REAP_BUDGET = 3,000 ms`, `TOTAL_TEARDOWN_BUDGET = 5,000 ms`.
-  - _Supervisor and gateway candidate constants:_ Defined centrally with validation helpers (`validate_document_size`, `validate_frame_size`, `validate_header_size`, `is_incremental_sync_recommended`) awaiting active wiring in downstream Phases 04–05:
-    - Concurrency and trees: `MAX_GLOBAL_SEMANTIC_TREES = 2`, `MAX_TREES_PER_CONNECTION = 1`, `MAX_PROCESSES_PER_TREE = 8`, `MAX_IN_FLIGHT_REQUESTS = 8`.
-    - Rate limits: `MESSAGE_RATE_PER_SEC = 40`, `MESSAGE_RATE_BURST = 80`.
-    - Document and overlay budgets: `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`, `MAX_DOCUMENT_BYTES = 1 MiB`, `MAX_OPEN_DOCUMENTS_PER_SESSION = 16`, `MAX_SESSION_OVERLAY_BYTES = 4 MiB`, `MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`.
-    - Timeouts: `STARTUP_TIMEOUT = 30s`, `NAVIGATION_REQUEST_TIMEOUT = 10s`, `IDLE_SHUTDOWN_TIMEOUT = 60s`, `SOCKET_SEND_TIMEOUT = 2s`, `AUTH_STORE_LOOKUP_TIMEOUT = 2s`.
-    - Restart backoff: `MAX_RESTARTS_PER_WINDOW = 2` within `RESTART_WINDOW = 300s`, backoffs `RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`.
-    - V8 old space hint: `V8_MAX_OLD_SPACE_MB = 256` passed as `--max-old-space-size=256`.
-
-- **Linux Child-Only Cgroups Attachment & Honest Portable Degradation (`server/src/semantic/resources/linux.rs` & `launch.rs`):**
-  - _Strict Child Scoping:_ Applies cgroup controls strictly to an isolated child subcgroup (`dam-hopper-semantic-<session_id>`) beneath the current process's cgroup (discovered via `/proc/self/cgroup`). Never modifies, throttles, or applies limits to the parent API daemon's cgroup, ensuring core Git, PTY, and filesystem services are never starved.
-  - _Zero-Race Pre-Exec Attachment:_ `BundledLaunchSpec::build_command` attaches the child process in `cmd.pre_exec` by writing the child's own PID (`libc::getpid()`) to `cgroup.procs` between `fork` and `execve`, ensuring zero-race containment before Node or TSLS can execute or spawn worker threads (noting async-signal-safety considerations for stdlib file operations post-fork in Rust).
-  - _Candidate Limits:_ Configures `memory.max = 768 MiB` (`LINUX_CGROUP_MEMORY_MAX_BYTES`), `cpu.max = "50000 100000"` (50% quota over 100 ms period), and `pids.max = 64` (`LINUX_CGROUP_PIDS_MAX`, accommodating Node libuv and V8 compiler threads).
-  - _Honest PortableOnly Degradation:_ `LinuxResourceController::prepare_child_scope` checks for cgroup v2 hierarchy at `/sys/fs/cgroup/cgroup.controllers` and verifies write access. If cgroup v2 is not mounted, delegation is disabled (`PermissionDenied`), or any required controller (`memory.max`, `cpu.max`, `pids.max`) is missing from the parent subtree, it removes any partially created directory and cleanly returns `ResourceMode::PortableOnly` with an explicit reason (`degraded: true`, `v8_heap_hint_mb: 256`, `monitored_tree_limit: 8`). It never panics, never leaks partial cgroup directories, and does not falsely claim hard RSS containment in portable mode.
-  - _Scoped RAII Lifecycle:_ `ChildCgroupScope` writes `1` to `cgroup.kill` (if available) and removes the cgroup directory upon drop or explicit `cleanup()`.
+  - _Wired supervisor and gateway constants:_ Defined centrally with validation helpers (`validate_document_size`, `validate_frame_size`, `validate_header_size`, `is_incremental_sync_recommended`) and wired across supervisor, gateway, and session actors: concurrency (`MAX_GLOBAL_SEMANTIC_TREES = 2`, `MAX_TREES_PER_CONNECTION = 1`, `MAX_PROCESSES_PER_TREE = 8`, `MAX_IN_FLIGHT_REQUESTS = 8`), rate limits (`MESSAGE_RATE_PER_SEC = 40`, `MESSAGE_RATE_BURST = 80`), document/overlay budgets (`ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`, `MAX_DOCUMENT_BYTES = 1 MiB`, `MAX_OPEN_DOCUMENTS_PER_SESSION = 16`, `MAX_SESSION_OVERLAY_BYTES = 4 MiB`, `MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`), timeouts (`STARTUP_TIMEOUT = 30s`, `NAVIGATION_REQUEST_TIMEOUT = 10s`, `IDLE_SHUTDOWN_TIMEOUT = 60s`, `SOCKET_SEND_TIMEOUT = 2s`, `AUTH_STORE_LOOKUP_TIMEOUT = 2s`), restart backoff (`MAX_RESTARTS_PER_WINDOW = 2` within `RESTART_WINDOW = 300s`, backoffs 1s / 3s), and V8 old space hint (`V8_MAX_OLD_SPACE_MB = 256`).
+- **Linux Child-Only Cgroup Primitives & Unqualified Status (`server/src/semantic/resources/linux.rs` & `launch.rs`):**
+  - _Candidate Cgroup Primitives:_ Implements candidate Linux cgroup v2 controller attachment logic in `resources/linux.rs` targeting child subcgroups (`dam-hopper-semantic-<session_id>`) in `pre_exec` (`cgroup.procs`).
+  - _Unqualified Host Status:_ Production sessions do not wire these controllers; Linux cgroup v2 mode is explicitly unqualified (`status: "NOT_SELECTED"`). Current production sessions run strictly under portable application limits (`PASS_PORTABLE_ONLY`) with in-memory byte accounting, document caps, tree limits, V8 heap bounds (`--max-old-space-size=256`), and sampled procfs RSS monitoring.
+  - _Honest Boundary:_ Portable caps are application-level limits and sampled termination thresholds; they do not provide hard kernel RSS/CPU containment or OS filesystem sandboxing, and no core service starvation guarantees are claimed.
 
 - **SPDX 2.3 SBOM Integration & Provenance (`deploy/release/generate-release-manifest.mjs` & `provenance.json`):**
   - Release metadata and cryptographic digests are recorded in `deploy/release/semantic-engine/provenance.json` (components: `node`, `typescript`, `typescriptLanguageServer`, `packageJson`).
@@ -552,19 +543,19 @@ Phase 04 implements the session supervision layer, isolated per-connection sessi
 - **AppState-Owned Supervisor & Lifecycle Integration (`server/src/semantic/supervisor.rs`, `server/src/state.rs`, `server/src/main.rs`):**
   - `SemanticSupervisor` is owned directly by `AppState` (`state.semantic_supervisor`), initialized in disabled state (`is_enabled() == false`) without spawning child processes.
   - Daemon startup logs passive toolchain integrity (`tool_integrity_status()`) without launching Node or executing shell probes.
-  - On first session request, toolchain SHA-256 integrity is checked off-thread via `tokio::task::spawn_blocking` and cached in an `AtomicBool` (`toolchain_verified`) to prevent repetitive filesystem reads.
+  - Toolchain SHA-256 integrity is verified off-thread via `verify_integrity_off_thread` under an asynchronous permit on each enable and child launch/restart; cached readiness is strictly diagnostic and never authorizes child execution.
   - Server graceful shutdown (`server/src/main.rs`) calls `state.semantic_supervisor.shutdown().await` after idle-suspend teardown, terminating all active sessions. Setting `set_enabled(false)` similarly drains and reaps all active sessions.
 
 - **Session Admission & Multi-Tier Capacity Limits:**
   - Enforces finite resource limits defined in `resources.rs`: global tree concurrency (`MAX_GLOBAL_SEMANTIC_TREES = 2`), per-connection concurrency (`MAX_TREES_PER_CONNECTION = 1`), global overlay memory (`MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`), per-session overlay memory (`MAX_SESSION_OVERLAY_BYTES = 4 MiB`), and open document count (`MAX_OPEN_DOCUMENTS_PER_SESSION = 16`).
-  - Pre-admission queries active session overlay byte counts across existing handles before permitting a new session; write-lock acquisition rechecks `enabled`, key uniqueness, and global tree capacity to protect against concurrent creation races (per-connection limits are validated under read lock; atomic write-lock recheck is tracked for Phase 05).
+  - Pre-admission queries active session overlay byte counts across existing handles before permitting a new session; write-lock acquisition rechecks `enabled`, key uniqueness, and global tree capacity to protect against concurrent creation races.
 
 - **Isolated Target-Scoped Session Actor (`server/src/semantic/session.rs`, `protocol.rs`):**
   - Each session is keyed by `SessionKey(connection_id, project, worktree)` and isolated within a dedicated `SemanticSessionActor` task spawned via `SemanticSessionActor::spawn(...)`.
   - External communication passes through `SemanticSessionHandle` over a bounded mpsc channel (`cmd_tx`). Dropping all handles closes `cmd_rx`, causing the actor run loop to break and trigger teardown.
   - Tracks composite identity fences (`SessionIdentityFence`): `connection_id`, `connection_generation`, `project`, `worktree`, `target_generation`, `session_generation`, and `child_incarnation`.
   - Client-to-child communication maintains strict FIFO ordering. Child-initiated `workspace/configuration` requests are intercepted by the actor and immediately resolved with `[{}]` to satisfy TSLS initialization without deadlocks or environment leakage.
-  - In-flight navigation requests are capped (`MAX_IN_FLIGHT_REQUESTS = 8`) with a 5-second deadline ticker (`NAVIGATION_REQUEST_TIMEOUT = 5.0s`) sweeping expired requests.
+  - In-flight navigation requests are capped (`MAX_IN_FLIGHT_REQUESTS = 8`) with a 10-second server deadline ticker (`NAVIGATION_REQUEST_TIMEOUT = 10s`) sweeping expired requests, distinct from the client's 5-second query cancellation timeout.
 
 - **Authoritative In-Memory SessionOverlayMap & Adaptive Synchronization (`server/src/semantic/overlay.rs`):**
   - `SessionOverlayMap` maintains authoritative in-memory document buffers, tracking aggregate bytes against `MAX_SESSION_OVERLAY_BYTES` (4 MiB) and per-document size limits (`MAX_DOCUMENT_BYTES = 1 MiB`).
@@ -579,7 +570,7 @@ Phase 04 implements the session supervision layer, isolated per-connection sessi
 
 - **Crash Resilience, Bounded Restart & Document Replay:**
   - Detects child exit (`ChildEvent::Terminated`) and transitions session state to `SemanticState::Crashed`, failing in-flight requests immediately with `SessionError::ChildCrashed`.
-  - Enforces restart budget: maximum 2 restarts (`MAX_RESTARTS_PER_WINDOW = 2`) within a 60-second sliding window (`RESTART_WINDOW = 60s`) with two-stage exponential backoff (`RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`).
+  - Enforces restart budget: maximum 2 restarts (`MAX_RESTARTS_PER_WINDOW = 2`) within a 300-second sliding window (`RESTART_WINDOW = 300s` / 5 minutes) with two-stage exponential backoff (`RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`).
   - Upon successful child respawn and handshake re-initialization, initiates bounded restart attempts with best-effort full-text `didOpen` replay of all tracked open document overlays (`SessionOverlayMap::all_documents()`).
 
 - **Process Group Teardown, Descendant Reaping & Idle Eviction:**
@@ -655,8 +646,8 @@ Phase 07 delivers the frontend Monaco editor integration for TypeScript and Java
   - `EditorTabs` synchronizes runtime settings via `useSemanticSettings`, manages `SemanticClient` creation/destruction for active connected targets, and cleans up client instances on generation changes or unmount.
   - `MonacoHost` binds models to `defaultSemanticModelRegistry` on mount and pushes content edits via `notifyDidChange`. `editor.ts` notifies document closure (`notifyDidClose`) on tab close.
 - **Browser Qualification & Coexistence Status (G8 Gate):**
-  - Headless Chromium browser tests (`semantic-navigation.browser.tsx`) verify provider registration, coexistence with non-semantic models, and dirty text preservation across socket reconnections.
-  - Gate G8 disposition: provider coexistence implemented and verified in component browser tests; full multi-model end-to-end qualification and live compiler diagnostic boundaries remain tracked for Phase 10 web qualification.
+  - Headless Chromium browser tests (`semantic-navigation.browser.tsx`) verified provider registration, model-scoped routing, coexistence with non-semantic models (diff editors and scratchpads), and dirty buffer preservation across socket reconnection.
+  - Live web application multi-model qualification was subsequently executed in Phase 10 via Playwright E2E testing against containerized backend staging, capturing visual evidence for Definition jumps, multi-result peek widgets, and restored tab styling.
 
 ### Implemented Primitives: Phase 08 Lifecycle Invalidation and Recovery
 
@@ -664,8 +655,9 @@ Phase 08 implements scoped lifecycle invalidation and resilient client recovery 
 
 - **Two-Phase Scoped Invalidation (`server/src/semantic/supervisor.rs`):**
   - Distinguishes admission cutoff from asynchronous process tree teardown:
-    - _Phase 1 (Admission Revocation & Detachment):_ Executed synchronously while holding `workspace_context_guard.write()`. Methods `prepare_invalidate_all()`, `prepare_invalidate_project(project)`, and `prepare_invalidate_target(target)` remove session handles from the supervisor registry under write lock, detaching them and enqueuing `handle.invalidate().await` to mark the session actor `SemanticState::Invalidated` (actor-level command drain and in-flight result publication fencing remain open under C2).
-    - _Phase 2 (Non-Blocking Process Tree Reaping):_ Executed outside inner configuration/workspace locks via `spawn_reap_sessions(handles)` (background Tokio task) or caller-driven `reap_sessions(handles)` using `futures::future::join_all` (subject to R3 child exit race checks). Escalates SIGTERM to SIGKILL against process groups `-pgid` and procfs descendants without stalling API callers or holding workspace locks.
+    - _Phase 1 (Admission Revocation & Detachment):_ Executed synchronously while holding `workspace_context_guard.write()`. Methods `prepare_invalidate_all()`, `prepare_invalidate_project(project)`, and `prepare_invalidate_target(target)` remove session handles from the supervisor registry under write lock, detaching them and enqueuing actor invalidation commands failing in-flight requests.
+    - _Phase 2 (Non-Blocking Process Tree Reaping):_ Executed outside inner configuration/workspace locks via `spawn_reap_sessions(handles)` (background Tokio task) or caller-driven `reap_sessions(handles)` using `futures::future::join_all`. Escalates SIGTERM to SIGKILL against process groups `-pgid` and procfs descendants without stalling API callers or holding workspace locks.
+
 - **Lifecycle Invalidation Boundaries & Triggers:**
   - _Workspace Switch & Init (`server/src/api/workspace.rs`):_ `init_workspace` and `switch_workspace` prepare invalidation of all active semantic sessions under the write lock, then spawn background tree reaping.
   - _Config Reload with Project Diffing (`server/src/api/config.rs`):_ `reload_config_locked` performs set-difference analysis (`old_projects` vs `new_projects`). Only removed project roots trigger `prepare_invalidate_project`, preserving unaffected project sessions.
@@ -678,13 +670,40 @@ Phase 08 implements scoped lifecycle invalidation and resilient client recovery 
 - **Client-Side Recovery & Lifetime Management (`packages/ui/src/api/semantic-client.ts`, `packages/ui/src/stores/semantic-navigation.ts`):**
   - _Query Cancellation:_ Navigation queries support `AbortSignal` and client timeouts; sends `$/cancelRequest` and locally discards `-32800` (`REQUEST_CANCELLED`) without UI errors.
   - _Full Resync on Version Divergence:_ Receiving `-32003` (`STALE_VERSION`) triggers `resyncDocument(tabKey, text)`, bumping the wire version and transmitting a full `didChange` notification to realign server overlays with current editor text.
-  - _Auto-Reconnect Backoff:_ Receiving `-32005` (`AUTH_REVOKED`) schedules exponential reconnect backoff (1.5s to 10s with jitter) with timer cancellation hygiene on `connect()`, `disconnect()`, and owner replacement; reconnection currently checks target key equality without endpoint/root/actor provenance matching before dirty text replay (open security finding R1). Permanent terminal states (removed target, disabled subsystem, revoked auth) fail closed.
+  - _Auto-Reconnect:_ Receiving `-32005` (`AUTH_REVOKED`) transitions the client to `disconnected` and schedules a single auto-reconnection attempt after 1,000 ms. Reconnection enforces strict provenance matching across endpoint, configured root, actor, profile, and target before dirty model replay. Permanent terminal states (removed target, disabled subsystem, revoked auth) fail closed.
   - _Reference-Counted Client Lifetimes & Profile Enablement:_ `clientRefCounts` tracks active pane and tab consumers; `releaseClient(scopeKey)` disconnects only when all consumers unmount. Disabling a profile via `setProfileSemanticEnabled` disconnects only that profile's clients.
+
   - _Dynamic Client Resolution:_ Remediates Phase 07 C-1 by resolving `findClientForTab(tabKey)` dynamically at call time in `MonacoHost.tsx` (`onChange`, `notifyDidClose`), preventing edits from routing to stale cached references.
 - **Active Model Status Presentation (`packages/ui/src/components/organisms/EditorStatusBar.tsx`):**
   - Renders live semantic status for the active editor model (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded status dots and descriptive tooltips in the editor status bar.
-- **Cycle 2 Review Boundaries & Deferred Qualification:**
-  - Open review items from Cycle 2 (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`) tracked in the Phase 09 receiving checklist: C2 (actor invalidation enqueue fence), R1 (foreign-binding replay provenance matching), W2 (handshake socket race on asynchronous close), W3 (opener target derivation across worktrees), R2 (`worktree` vs `worktreePath` wire alignment), R3 (terminal child exit before reap acknowledgment), and W5 (target-scoped git route invalidation). Full browser qualification against containerized language servers is exercised in Phase 10 via Playwright E2E testing, with visual human review pending.
+- **Phase 08 Review Item Dispositions:**
+  - Open review items from Phase 08 Cycle 2 (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`) were formally verified and resolved in Phase 09: C2 (synchronous session revocation token fencing lock-free before writer delivery), R1 (provenance matching on reconnect before dirty replay), W2 (handshake isolation), W3 (target derivation across worktrees), R2 (`worktreePath` wire alignment), R3 (terminal child exit non-blocking reap), and W5 (target-scoped git route invalidation).
+
+### Implemented Primitives: Phase 09 Security, Real-Process Tests, and Performance Qualification
+
+Phase 09 executed comprehensive real-process security, lifecycle invalidation, backpressure resilience, and fixed-method performance qualification against live SQLite and MongoDB backends (`server/src/semantic/`, `server/tests/`):
+
+- **Adversarial Code Loading Denial:**
+  - Pinned TSLS launches in a strictly sanitized execution environment: `PATH=/usr/bin:/bin`, `NODE_ENV=production`, `NODE_OPTIONS` and `NODE_PATH` stripped; descendant `NODE_PATH` set strictly to bundled `node_modules`.
+  - Arguments strictly enforce `--disableAutomaticTypingAcquisition`, no `--allowLocalPluginLoads`, no `--globalPlugins`, and no `--pluginProbeLocations`.
+  - Active positive controls confirmed canary scripts execute when directly invoked; in production, 0 canary executions occurred across tsconfig plugins (V1), workspace SDK decoys (V2), preload/import hooks (V3), and ATA shims (V4).
+- **Settings & All-Write-Path Authorization:**
+  - Enforces a 2-second admission deadline on settings routes. Safe status inspection (`GET /api/semantic/settings`) is available to all authenticated callers and development sessions, truthfully returning `canMutate: false` when non-admin. Settings mutation (`PATCH /api/semantic/settings`) strictly requires fresh current-Admin verification; non-admin roles, `--no-auth` dev sessions, unauthenticated actors, or demoted admins fail closed with HTTP 403 Forbidden.
+  - Canonical configuration (`dam-hopper.toml` and hardlinks) is protected against raw filesystem write sinks (`atomic_write_with_check`, `persist_temp`, WebSocket chunk uploads). Workspace configuration sections (`[semantic]`, `[server.semantic]`) and raw imports attempting to mutate semantic settings fail closed with HTTP 400.
+- **Cancellation-First Live Auth Invalidation under Saturated Consumers:**
+  - Verified across 20/20 non-reading socket test cases against real SQLite and MongoDB stores.
+  - Under unread sockets and saturated outbound backpressure, admission cutoff is immediate, session revocation tokens revoke shared gateway handles lock-free (0 awaits) before writer delivery, and physical child process tree reap completes in 506–510 ms out-of-band under the 5.0-second teardown budget (`TOTAL_TEARDOWN_BUDGET`).
+  - Real store timeout checks (SQLite WAL reader locks and MongoDB network timeouts) sustained exactly 2,001 ms before failing closed with HTTP 503 / close code 1013 (`CLOSE_AUTH_UNAVAILABLE`).
+- **Frozen Final Resource Policy (`server/src/semantic/resources.rs`):**
+  - Frozen single adaptive wire sync threshold at 64 KiB (`ADAPTIVE_SYNC_THRESHOLD_BYTES = 65,536 bytes`).
+  - Single document text capped at 1 MiB (`MAX_DOCUMENT_BYTES`), session overlay budget at 4 MiB, global overlay budget at 8 MiB, concurrent in-flight requests at 8, and live auth admission lookup timeout at 2.0s (`AUTH_STORE_LOOKUP_TIMEOUT`).
+- **Deterministic Fault Matrix & Child Lifecycle:**
+  - Verified handling of fragmented/coalesced frames, malformed/oversized headers, duplicate replies, stderr ring buffer saturation (64 KiB cap), child crash restart with didOpen replay, stubborn descendant SIGKILL escalation, and non-leader worker-thread child discovery via procfs task scanning.
+- **Performance Acceptance Margins:**
+  - Satisfies all canonical predeclared qualification budgets with wide margins: cold ready p95 1.14s (budget <= 15s), small warm nav p95 10.08 ms (budget <= 500 ms), medium warm nav p95 18.73 ms (budget <= 1,500 ms), large warm nav p95 40.42 ms (budget <= 3,000 ms), core/terminal p95 relative ceiling 40.74 ms (budget <= 121.87 ms relative ceiling; baseline 40.62 ms), 0 terminal drops, 0 stale Monaco reveals, 0 outside-target path disclosures, 0 orphan processes.
+- **Evaluated Scope & Limitations:**
+  - Evaluated status is `PASS_PORTABLE_ONLY`. Linux cgroup v2 mode is explicitly unqualified (`status: "NOT_SELECTED"`); portable application caps and sampled procfs termination are enforced without hard OS RSS/CPU guarantees. Trusted workspaces only (child runs under daemon account OS authority). Native desktop hosts (Tauri, Windows, Android) and non-TS/JS engines remain unqualified and non-blocking.
+
 ### Implemented Primitives: Phase 10 Linux Server and Actual Web Application Qualification
 
 Phase 10 qualifies the shipped built web SPA (`apps/web`) against an authenticated containerized Linux x64 server (`dam-hopper-server`) with real MongoDB authentication and pinned bundled engine (`packages/ui/e2e/semantic-navigation/semantic-navigation.spec.ts`):
@@ -707,6 +726,20 @@ Phase 10 qualifies the shipped built web SPA (`apps/web`) against an authenticat
   - Captures 6 full-viewport (1440x900) checkpoints (`default-off`, `admin-enabled-portable`, `definition-jump`, `multi-result-selection`, `threshold-dirty-edit`, `narrow-layout-dock`) with PNG IHDR verification, machine-readable `evidence.json`, and human review governance in `review.md`. Narrow dock checkpoint records `dockWidth: 320` convention metadata.
   - Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW`; human visual acceptance is required before release sign-off.
   - All native platforms (Linux Tauri, Windows native/desktop, Android) remain explicitly unqualified, deferred, and non-blocking.
+
+### Implemented Primitives: Phase 11 Documentation, Roadmap, Changelog, and Release Cleanup
+
+Phase 11 completes the formal documentation, roadmap reconciliation, and release hygiene across repository publications:
+
+- **Authoritative Protocol Specification:** Published the dedicated [Semantic LSP Protocol Guide](./semantic-lsp-protocol-guide.md) detailing the isolated `/ws/semantic/v1` gateway, `dam-hopper.semantic.lsp.v1` subprotocol, single Incremental sync mode with frozen 64 KiB adaptive wire sync threshold, canonical virtual URI grammar (`dam-hopper://semantic/<target-id>/<encoded-path>`), `damHopperDocumentVersion` extension fence, FIFO stdio sequencing, live auth watcher cancellation-first teardown, and close/error taxonomies.
+- **Claim & Evidence Reconciliation:** Synchronized `README.md`, `system-architecture.md`, `codebase-summary.md`, `code-standards.md`, and `project-overview-pdr.md` to reflect measured, delivered capabilities: supported Linux x64 server + built web TS/JS Definition/Implementation only; release-default OFF; current Admin-only mutation across all write paths (with `--no-auth` dev mode denied); zero-child startup and idle states; and bundled toolchain updates requiring server release updates and normal daemon restarts.
+- **Honest Boundary and Limitation Governance:**
+  - *Trusted Workspaces Only:* Explicitly documented that child language server processes retain daemon OS user authority; virtual URI containment prevents client path escape, but does not provide an OS filesystem sandbox.
+  - *Portable-Only Qualified:* Documented that production operates under `PASS_PORTABLE_ONLY` with portable application limits, sampled procfs process termination, and V8 heap limits, while Linux cgroup v2 controller mode is explicitly unqualified (`status: "NOT_SELECTED"`). No hard kernel RSS/CPU guarantees are made.
+  - *Visual Review Governance:* Preserved visual review governance in `packages/ui/e2e/semantic-navigation/review.md` initialized to `PENDING_HUMAN_REVIEW`. Green automated tests confirm functional assertions only and cannot synthesize human visual acceptance.
+  - *Deferred Platforms & Future Languages:* Native desktop platforms (Linux Tauri, Windows native/desktop, Android) remain explicitly unqualified and non-blocking. Rust is unsupported; future language additions (e.g. Java, Rust) require complete separate integration, security, resource, and platform qualification before inclusion.
+- **Release Packaging Consistency & Cleanup:** Verified release archive builder (`deploy/release/build-release-archive.sh`) and manifest generator (`deploy/release/generate-release-manifest.mjs`) for deterministic bundling of the immutable `lib/semantic-engine` toolchain with SPDX 2.3 SBOM generation, while reconciling documentation, removing obsolete generic LSP documentation sections, and preserving deterministic test fixtures and visual review evidence.
+
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.
