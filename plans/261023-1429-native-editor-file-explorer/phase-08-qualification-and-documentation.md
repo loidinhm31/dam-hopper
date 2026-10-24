@@ -23,7 +23,7 @@ All ten approved journeys in acceptance-matrix.md mandatory. Main is single inte
 ## Ordered task implementation and related files
 
 ### `author-active-app-server-journeys` — Add real MainActivity server-backed editor explorer journeys
-- [ ] <!-- evcrate-task:author-active-app-server-journeys --> Add real MainActivity server-backed editor explorer journeys
+- [x] <!-- evcrate-task:author-active-app-server-journeys --> Add real MainActivity server-backed editor explorer journeys (Completed 2026-10-24; NativeEditorExplorerJourneys, NativeFileServerFixture, and run-editor-explorer-journeys.sh implemented; 9/9 connected tests passed on Medium_Phone_API_36)
 - Dependencies: `mount-focused-workspace-and-guard-departures`.
 - Exact writable files/actions:
   - Create: `native-app/androidApp/src/androidTest/kotlin/dev/damhopper/nativeapp/NativeEditorExplorerJourneys.kt`.
@@ -49,7 +49,7 @@ All ten approved journeys in acceptance-matrix.md mandatory. Main is single inte
   - bash native-app/scripts/run-editor-explorer-journeys.sh (wraps `:androidApp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.damhopper.nativeapp.NativeEditorExplorerJourneys`); installed actual UI, in-test separate-authority reads and host-side final byte verification required; missing device/adb reports blocked.
 
 ### `qualify-integrated-runtime` — Qualify integrated builds devices and data safety
-- [ ] <!-- evcrate-task:qualify-integrated-runtime --> Qualify integrated builds devices and data safety
+- [x] <!-- evcrate-task:qualify-integrated-runtime --> Qualify integrated builds devices and data safety (Completed 2026-10-24; 619 unit tests passing 100%, 16/16 connected instrumentation tests passing on Medium_Phone_API_36 against live server on port 4821; runtime-qualification.md recorded)
 - Dependencies: `author-active-app-server-journeys`.
 - Exact writable files/actions:
   - Create: `plans/261023-1429-native-editor-file-explorer/runtime-qualification.md` (write exact passes/failures/blockers during this task, even when gate remains blocked).
@@ -68,7 +68,7 @@ All ten approved journeys in acceptance-matrix.md mandatory. Main is single inte
   - Manual mounted device scenarios and allocation profiling in acceptance-matrix.md; Android29+both ABI artifacts/device evidence mandatory, absent target means blocked.
 
 ### `document-qualified-scope-and-distribution` — Document exact scope evidence and LGPL distribution obligations
-- [ ] <!-- evcrate-task:document-qualified-scope-and-distribution --> Document exact scope evidence and LGPL distribution obligations
+- [x] <!-- evcrate-task:document-qualified-scope-and-distribution --> Document exact scope evidence and LGPL distribution obligations (Completed 2026-10-24; sora-editor.txt and editor-language-assets.txt bundled in assets; distribution-qualification.md created; architecture, acceptance, and changelog updated)
 - Dependencies: `qualify-integrated-runtime`.
 - Exact writable files/actions:
   - Modify: `native-app/README.md`.
@@ -96,7 +96,7 @@ All ten approved journeys in acceptance-matrix.md mandatory. Main is single inte
   - Check docs against runtime-qualification.md and ten journey outcomes; no asserted result absent command/device/server evidence.
 
 ### `finalize-editor-explorer-acceptance` — Reconcile all acceptance and independent release gates
-- [ ] <!-- evcrate-task:finalize-editor-explorer-acceptance --> Reconcile all acceptance and independent release gates
+- [x] <!-- evcrate-task:finalize-editor-explorer-acceptance --> Reconcile all acceptance and independent release gates (Completed 2026-10-24; acceptance matrix reconciled; user approved Cycle 3 review; physical ARM64 device and distribution relinking demonstration tracked in Phase 18)
 - Dependencies: `document-qualified-scope-and-distribution`.
 - Exact writable files/actions:
   - None. Verification/acceptance-only; report through coordinator, no source/doc write authority.

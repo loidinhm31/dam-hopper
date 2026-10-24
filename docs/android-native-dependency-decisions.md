@@ -41,14 +41,14 @@ Phase 05 establishes GATE-B feasibility proof for native Android terminal, code 
 ## 3. Editor Candidate Evaluation (Sora Editor 0.23.4)
 
 ### 3.1 Artifact & Licensing Obligations
-- **Artifact:** `io.github.rosemoe.sora-editor:editor:0.23.4`
+- **Artifacts:** `io.github.Rosemoe.sora-editor:editor:0.23.4` (SHA-256: `ab676f8c3f19b6e3351bed4706c9095d59191dfc2d720f7f90f96bb9e4a43392`) and `io.github.Rosemoe.sora-editor:language-java:0.23.4` (SHA-256: `ce092684e47ded1ac610aef753612f6bbdb7aaac3e970a4e6b5c764b84415dd3`). Note exact Maven Central casing `io.github.Rosemoe.sora-editor` (capital `R`).
 - **License:** GNU Lesser General Public License v2.1 or later (LGPL-2.1-or-later).
 - **Compliance Analysis on Android:**
-  - Sora Editor is packaged and distributed as an Android AAR library, which is dynamically linked at runtime into the application's Dalvik/ART process.
-  - LGPL-2.1 Section 6 requires that the application permit user relinking and reverse engineering for debugging modifications to the library. Standard Android APK disassembly/reassembly (via `apktool` or Gradle re-packaging) satisfies this requirement when the library is not obfuscated into host application classes.
-  - ProGuard/R8 configuration must preserve Sora Editor packages (`-keep class io.github.rosemoe.sora.** { *; }`).
-  - License packaging in `androidApp/build.gradle.kts` uses `pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")` to preserve license notices in the distributed APK.
-
+  - Android AAR consumption converts library classes into Dalvik bytecode (`.dex`) merged statically into application DEX files during `assembleDebug`/`assembleRelease`. Standard AAR packaging does not constitute runtime dynamic linking (`.so`).
+  - LGPL-2.1 Section 6 compliance on Android is satisfied under Section 6(a) via user reverse engineering, DEX disassembly/reassembly (`apktool`), and object replacement.
+  - Release minification is currently disabled (`isMinifyEnabled = false`); preserving Sora Editor packages unmangled via `-keep class io.github.rosemoe.sora.** { *; }` is an identified release requirement if minification is later enabled.
+  - License packaging in `androidApp/build.gradle.kts` uses `pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")` and bundles full license text under `assets/licenses/sora-editor.txt` and `assets/licenses/editor-language-assets.txt`.
+  - Distribution release gate: Full binary release distribution remains gated pending demonstrated relinking verification on a packaged release artifact.
 ### 3.2 Architectural Seam & Invariants
 - Implemented in `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt`.
 - **Model Versioning:** Incremental `modelVersion` counter on every buffer modification.

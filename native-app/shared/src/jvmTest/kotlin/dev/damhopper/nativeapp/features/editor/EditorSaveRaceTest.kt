@@ -228,4 +228,59 @@ class EditorSaveRaceTest {
         assertEquals("submitted text\nnewer keystrokes\n", session.getText())
         assertEquals(200L, session.serverMtime)
     }
+
+    @Test
+    fun testLostResponsePostCommitSaveDiffersFromRemoteBytesReconcilesToConflictWithoutBlindRetry() = runTest {
+        val submittedText = "locally submitted text\n"
+        val differentRemoteText = "different remote text!\n"
+        assertEquals(submittedText.toByteArray().size, differentRemoteText.toByteArray().size)
+        val exactByteCount = submittedText.toByteArray().size.toLong()
+
+        var readInvoked = false
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":$exactByteCount,"mtime":250,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            readInvoked = true
+            exchange.sendResponseHeaders(200, differentRemoteText.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(differentRemoteText.toByteArray()) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "conflict-unknown.txt")
+        val tabKey = state.activeTabKey.value!!
+        val session = state.getSession(tabKey)!!
+
+        session.setText("locally submitted text\n")
+        val snapshot = session.snapshotSave()!!
+
+        val token = state.editorRepository.fileRepository.arbiter.tryReserveSave(
+            state.editorRepository.fileRepository.owner,
+            "conflict-unknown.txt",
+        )!!
+        val quarantinedOp = dev.damhopper.nativeapp.features.files.QuarantinedOperation(
+            owner = state.editorRepository.fileRepository.owner,
+            path = "conflict-unknown.txt",
+            stage = dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED,
+            opId = "write-99",
+            submittedRevision = snapshot.revision,
+            baselineMtime = 100L,
+            submittedBytes = snapshot.utf8Bytes,
+            timestampMillis = 2000L,
+        )
+        state.editorRepository.fileRepository.arbiter.quarantineToken(token, quarantinedOp)
+        // Reset flag before reconciliation to verify that reconciliation specifically triggers a fresh server read
+        readInvoked = false
+        val result = state.reconcileUnknownSave(tabKey)
+        assertIs<dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Conflicted>(result)
+        assertTrue(readInvoked, "Reconciliation must read server bytes for equal-sized file")
+        assertEquals("Server content differs from submitted bytes", result.message)
+
+        // Reservation remains quarantined; no automatic retry
+        assertTrue(state.editorRepository.fileRepository.arbiter.isPathReserved(state.editorRepository.fileRepository.owner, "conflict-unknown.txt"))
+        assertTrue(session.isDirty)
+    }
 }

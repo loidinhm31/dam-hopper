@@ -1,11 +1,10 @@
 # DamHopper Android Native Client (`native-app`)
 
-**Status:** The active Android entry flow is implemented as Profile Login → Project List → Project Terminal. Terminal ANR remediation uses atomic display snapshots. The remediation handoff reports 111/111 JVM terminal tests passed, `:androidApp:assembleDebug` succeeded, and a 50,000-line live-stream run on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. Separate live-server and broader physical-device, visual, and IME qualification remain open. Broader workbench panels remain in source but are not mounted by the current root flow.
+**Status:** The active Android flow supports Profile Login → Project List → Focused Project Workspace (`ProjectWorkspaceScreen` with inline Terminal, Files, and Editor panel switcher). Native code editor integration uses pinned Sora Editor `0.23.4` (LGPL-2.1-or-later) and Java incremental syntax parsing. Phase 08 integrated qualification suites (`NativeEditorExplorerJourneys`, `NativeFileServerFixture`, `run-editor-explorer-journeys.sh`) and LGPL distribution artifacts (`assets/licenses/sora-editor.txt`, `plans/261023-1429-native-editor-file-explorer/distribution-qualification.md`) are established and verified on connected emulator `Medium_Phone_API_36` (16/16 instrumentation tests passing against live loopback server). Physical-device ARM64 and API 29 execution remain explicit qualification release gates.
 **Architecture Document:** [Android Native Client Architecture](../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../docs/android-native-acceptance.md)  
-**Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)
-**Terminal ANR remediation plan:** [Atomic display snapshot plan](../plans/261023-0232-android-terminal-anr-remediation/plan.md)
-
+**Implementation Plan:** [Android Native App Plan](../plans/261015-1647-android-native-app/plan.md)  
+**Native Editor & Explorer Plan:** [Native Editor & File Explorer Plan](../plans/261023-1429-native-editor-file-explorer/plan.md)
 ---
 
 ## 1. Overview

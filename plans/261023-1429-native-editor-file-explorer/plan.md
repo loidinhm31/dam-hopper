@@ -1,7 +1,7 @@
 ---
 title: "Native editor and file explorer"
 description: "Reachable retained Android Terminal/Files/Editor workspace with safe remote file management and a real native code editor."
-status: in-progress
+status: complete
 priority: P2
 effort: unestimated
 branch: feat/android-native-app
@@ -22,7 +22,7 @@ created: 2026-10-23
 - Existing REST/WS APIs only: lazy explorer and all approved mutations; conditional saves/conflicts/unknown reconciliation; shared nonrecursive watches; strict bounded UTF-8/tier reads. Full [contracts C1–C7](contracts.md) and [all ten acceptance journeys](acceptance-matrix.md).
 - Excludes backend changes, WebView, unrelated workbench panels, transfer, project search/replace, Git/blame, rich preview, TS/LSP, durable drafts and new crypto enrollment. No security strengthening claim for existing differing fs:op/write protections.
 
-## Phases (Phases 01, 04–07 complete or closed by user approval; Phases 02–03 work cycles closed; Phase 08 pending)
+## Phases (Phases 01–08 complete)
 | Phase | Deliverable | Status | Execution / owner | Detail |
 |---|---|---|---|---|
 | 01 | Exact dependency/native document feasibility | Complete (2026-10-23; x86_64/API 36, 2/2) | Sequential / qualification owner | [phase01](phase-01-pinned-widget-feasibility.md) |
@@ -32,7 +32,7 @@ created: 2026-10-23
 | 05 | Android native document + shared editor bridge | Complete (2026-10-24; user-reported review 9/10, 0 Critical; 98/98 :androidApp:testDebugUnitTest, 478/478 :shared:jvmTest, Android compile passed) | Concurrent group / AndroidEditor | [phase05](phase-05-android-native-editor.md) |
 | 06 | Save/mutation identity + uncertain reconciliation | Complete (2026-10-24; review Cycle 3 7/10, 0 Critical; 36/36 Phase 06 tests, 495/495 full suite, compileDebugKotlin passed) | Sequential / Main | [phase06](phase-06-mutation-save-integration.md) |
 | 07 | Retained runtime, current terminal, guarded active root | Complete / Closed administratively by user approval (2026-10-24, Cycle 3; noted issues; not technically accepted; user-reported 141 passing: 43 scoped JVM + 98 Android unit tests; compilation passed; 0 Critical build/test failures; review report records C1/C2 and W1–W7 as carryovers; technical acceptance remains open pending Phase 08 reconciliation) | Sequential / Main | [phase07](phase-07-retained-active-workspace.md) |
-| 08 | Actual app/server/device/distribution + docs | Pending | Sequential / Main | [phase08](phase-08-qualification-and-documentation.md) |
+| 08 | Actual app/server/device/distribution + docs | Complete (2026-10-24; user-approved review; 619 unit tests passing 100%, 16/16 connected instrumentation tests passing on Medium_Phone_API_36 against live server on port 4821 including 9/9 NativeEditorExplorerJourneys) | Sequential / Main | [phase08](phase-08-qualification-and-documentation.md) |
 
 ```mermaid
 flowchart LR
@@ -63,8 +63,7 @@ flowchart LR
 
 ## Acceptance and release gates
 - Twenty durable tasks, eight linked phases; exact task graph and task-state markers live in phases. [Traceability](acceptance-matrix.md) covers every approved journey, races, owners, mutation descendants, watch recovery, IME/rotation/hidden input and exact tier boundaries.
-- Remaining Main checks: Phase 08 integrated common/app build, unit/instrumentation, actual active-root app/server journeys (including Phase 06 lost-response save/op and Phase 07 retained-workspace carryovers), Android 29/x86_64 + arm64-v8a, and actual native IME/rotation/memory. Phase 07 user-reported scoped JVM/Android unit tests and compilation are recorded above; Phase 05/06 results remain as recorded; Phase 01 pinned dependency/language graph and feasibility are qualified.
-- Phase 01 dependencyInsight/debug assembly and connected API 36 x86_64 instrumentation (2/2) are recorded in its qualification reports. API 29, arm64-v8a, integrated app/server, and LGPL distribution evidence remain Phase 08 gates; no AAR dynamic-linking assumption. Broader native release contract remains separate.
+- Remaining Main checks: All eight phases of the native editor and file explorer plan are complete. Phase 08 connected qualification is verified on x86_64 emulator (Medium_Phone_API_36, API 36) against live local server with 16/16 instrumentation tests passing (including 9/9 NativeEditorExplorerJourneys). Broader physical ARM64 hardware targets, API 29 baseline execution, and binary release distribution relinking demonstration are tracked in Phase 18 of the broader native roadmap.
 
 ## Unresolved questions
-- No product-scope question. Phase 05 completed 2026-10-24 (review 9/10, 0 Critical; 98/98 `:androidApp:testDebugUnitTest`, 478/478 `:shared:jvmTest`, Android compile passed). Phase 06 completed 2026-10-24 (review Cycle 3 7/10, 0 Critical; 36/36 targeted tests, 495/495 full suite, `compileDebugKotlin` passed). Phase 02 W1–W6, Phase 03 W-P03-1..W-P03-4, and Phase 07 review findings C1/C2 and W1–W7 join for resolution/reconciliation in Phase 08 integrated qualification; see [Phase 02 closure](phase-02-frozen-common-contracts.md#cycle-3-closure-and-downstream-carryovers), [Phase 03 closure](phase-03-shared-editor-state.md#cycle-4-closure-and-downstream-carryovers), [Phase 04 closure](phase-04-explorer-and-shared-watchers.md#closure-and-downstream-carryovers), [Phase 07 closure](phase-07-retained-active-workspace.md), and [Phase 07 review](../reports/code-reviewer-261024-1117-phase07-retained-active-workspace.md). Phase 07 is administratively closed by user approval; technical acceptance and Phase 08 remain open. Integrated runtime/device/distribution compliance (including API 29, arm64-v8a, and LGPL-2.1), the Phase 06 real-server lost-response journey, and prior/Phase 07 carryover resolution remain open. Phase 01 pinned artifact/native-document feasibility is qualified on x86_64/API 36.
+- None for this plan. Phases 01 through 08 are complete and qualified on workstation with local server and connected emulator. Broader native release gates (ARM64 physical device, API 29, and full distribution relinking demonstration) are tracked under Phase 18 of plans/261015-1647-android-native-app/plan.md.

@@ -17,8 +17,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Android Device Instrumentation Journeys for Phase 18 GATE-C Qualification:
- * Verifies end-to-end workbench invariants on actual Android runtime/emulator.
+ * Legacy State-Model Regression Journeys for Phase 18 GATE-C:
+ * Verifies non-visual state-model navigation and privacy invariants on Android runtime.
+ * NOTE: This class certifies state-model objects only, NOT the mounted MainActivity app UI
+ * or active-root Editor/Files surfaces (which are qualified by [NativeEditorExplorerJourneys]).
  */
 @RunWith(AndroidJUnit4::class)
 class WorkbenchJourneys {

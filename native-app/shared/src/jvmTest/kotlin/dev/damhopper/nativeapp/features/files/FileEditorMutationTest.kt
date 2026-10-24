@@ -495,4 +495,39 @@ class FileEditorMutationTest {
         assertIs<SaveReconciliationResult.Unresolved>(result)
         assertTrue(result.message.contains("incarnation", ignoreCase = true))
     }
+
+    @Test
+    fun testAmbiguousDirectoryMutationWithLostResponseStaysUnresolvedWithoutDuplicateDispatch() = runTest {
+        val f = createFixture()
+        // Dispatch rename for a directory "pkg" -> "pkg_renamed"
+        // Transport drops response after commit to simulate lost network ACK
+        f.ws.opResponder = { op ->
+            throw kotlinx.coroutines.CancellationException("Transport disconnected post-commit")
+        }
+
+        val outcome = f.coordinator.renameWithOutcome(
+            path = "pkg",
+            newName = "pkg_renamed",
+            dirtyDecision = CloseDecision.DISCARD,
+        )
+        assertIs<FileOperationOutcome.Unknown>(outcome)
+        assertEquals(OperationStage.AWAITING_RESULT, outcome.stage)
+        assertTrue(outcome.cause is kotlinx.coroutines.CancellationException)
+        assertTrue(outcome.message.contains("awaiting", ignoreCase = true))
+        // Reservation MUST be quarantined
+        assertTrue(f.arbiter.isPathReserved(f.owner, "pkg"))
+        assertTrue(f.arbiter.isPathReserved(f.owner, "pkg_renamed"))
+
+        // Reconcile unknown mutation: without server inode/opId proof, ambiguous directory stays Unresolved
+        val reconResult = f.repo.reconcileUnknownMutation(f.target, "rename", "pkg", "pkg_renamed")
+        assertIs<MutationReconciliationResult.Unresolved>(reconResult)
+        assertTrue(reconResult.message.contains("quarantine", ignoreCase = true))
+
+        // No duplicate dispatch occurred
+        assertEquals(1, f.ws.dispatchedOps.size)
+
+        // Paths remain quarantined until explicit user abandonment
+        assertTrue(f.arbiter.isPathReserved(f.owner, "pkg"))
+        assertTrue(f.arbiter.isPathReserved(f.owner, "pkg_renamed"))
+    }
 }
