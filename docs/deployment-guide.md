@@ -8,9 +8,9 @@ DamHopper provides multiple installation paths suited for production deployments
 | --- | --- | --- | --- |
 | **Linux Release** | Linux x86_64 systemd | `dam-hopper-install.sh` | Staged release candidate activated via `dam-hopper start` |
 | **Windows Direct** | Windows x86_64 | `dam-hopper-install.ps1` | Standalone console executable in `%LOCALAPPDATA%\Programs\dam-hopper` |
+| **Android Native** | Android 10+ (API 29+) | Signed Release APK | Assembled via `.github/workflows/release-android.yml` or `pnpm android:build` |
 | **Source Build** | Any supported OS | `pnpm` + `cargo` | Compiled release binaries from Git clone |
 | **Local Dev Loopback** | Workstation | `cargo run` (`--no-auth`) | Transient unauthenticated loopback server |
-
 ---
 
 ## 1. Linux Release Installer (x86_64 systemd)
@@ -265,8 +265,109 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 
 ---
 
-## 5. Related Documentation
+## 5. Android Native Client Release & GitHub Actions Signing Setup
 
+DamHopper provides an automated GitHub Actions release workflow for the Kotlin Multiplatform Android client (`native/android-app`).
+Release builds enforce **fail-closed signing custody**: building or packaging a release APK without valid release signing credentials immediately fails the build to prevent distributing unsigned or debug-signed artifacts.
+
+### 5.1 Keystore Generation (Operator Custody)
+
+The production release signing key must be generated and held securely in operator custody outside the git repository. Local keystore files (`*.jks`, `*.keystore`) and base64 exports are ignored by `.gitignore`.
+
+To generate a new release keypair with RSA 3072-bit encryption:
+
+```bash
+keytool -genkeypair \
+  -keystore damhopper-release.jks \
+  -alias damhopper-release \
+  -keyalg RSA \
+  -keysize 3072 \
+  -validity 10000 \
+  -storetype JKS
+```
+
+When prompted, record the keystore store password, key alias, and key password in your secure password manager.
+
+### 5.2 Encoding the Keystore for GitHub Actions
+
+GitHub Actions secrets cannot store binary files directly. Encode the keystore into a single-line base64 string:
+
+**Linux / macOS (Bash):**
+
+```bash
+base64 -w 0 damhopper-release.jks > keystore_base64.txt
+```
+
+**Windows (PowerShell):**
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("damhopper-release.jks")) | Out-File -Encoding ascii keystore_base64.txt
+```
+
+*(Note: `keystore_base64.txt` is explicitly ignored by `.gitignore` to prevent accidental commits).*
+
+### 5.3 Configuring GitHub Repository Secrets
+
+Navigate to your repository settings:
+**GitHub Repository → Settings → Secrets and variables → Actions → New repository secret**
+
+Add the following four mandatory repository secrets:
+
+| Secret Name | Description | Example / Format |
+| :--- | :--- | :--- |
+| `DAMHOPPER_KEYSTORE_BASE64` | Base64-encoded release JKS file | Full content of `keystore_base64.txt` (single-line string) |
+| `DAMHOPPER_KEY_ALIAS` | Key alias name inside the keystore | `damhopper-release` |
+| `DAMHOPPER_STORE_PASSWORD` | Password used to open the keystore file | `<store_password>` |
+| `DAMHOPPER_KEY_PASSWORD` | Password protecting the private key alias | `<key_password>` |
+
+### 5.4 Triggering the Release Workflow
+
+The workflow `.github/workflows/release-android.yml` can be triggered via two methods:
+
+1. **Tag Push (Automatic Production Release)**:
+   Pushing any tag matching `v*` (e.g. `v0.13.2`) or `android-v*` (e.g. `android-v0.1.0`):
+   ```bash
+   git tag android-v0.1.0
+   git push origin android-v0.1.0
+   ```
+   The workflow automatically:
+   - Validates semantic versioning against committed `native/android-app/gradle.properties`.
+   - Cross-compiles the Rust `crypto-bridge` cdylib (`libdamhopper_crypto_bridge.so`) for target ABIs (`arm64-v8a`, `x86_64`) via `cargo-ndk`.
+   - Decodes the release keystore into a secure runner directory with `chmod 600`.
+   - Assembles the signed production APK (`:androidApp:assembleRelease`).
+   - Audits signature and manifest security via `native/android-app/scripts/release-security-check.mjs`.
+   - Securely wipes the temporary keystore using `shred -u`.
+   - Stages and uploads `damhopper-android-<version>.apk` as a release artifact.
+
+2. **Manual Trigger (GitHub Actions UI)**:
+   - Navigate to **Actions → "Release Android Native App" → Run workflow**.
+   - Optional tag override (e.g., `android-v0.1.0`).
+   - Optional diagnostic toggle: `build_debug_only` (set `true` to build and test an unsigned debug APK without requiring release secrets).
+
+### 5.5 Local Manual Signed Release Build
+
+To assemble and verify a signed release APK locally on an operator workstation:
+
+```bash
+export DAMHOPPER_KEYSTORE="/path/to/damhopper-release.jks"
+export DAMHOPPER_KEY_ALIAS="damhopper-release"
+export DAMHOPPER_STORE_PASSWORD="<store_password>"
+export DAMHOPPER_KEY_PASSWORD="<key_password>"
+
+# Build signed release APK
+pnpm android:build
+# or: node scripts/run-gradle.mjs :androidApp:assembleRelease
+
+# Audit APK signature and manifest invariants
+node native/android-app/scripts/release-security-check.mjs \
+  --apk native/android-app/androidApp/build/outputs/apk/release/androidApp-release.apk
+```
+
+---
+
+## 6. Related Documentation
+
+- [Android Native Client Guide](../native/android-app/README.md) — Kotlin Multiplatform architecture, Compose UI, and testing.
 - [Linux Systemd & Operations Guide](./linux-systemd.md) — Production units, cgroups, tmpfiles, and security sandbox.
 - [Windows Release Packaging](./windows-release-packaging.md) — Windows asset structure, deterministic ZIP layout, and attestation.
 - [Configuration Guide Index](./configuration/index.md) — TOML registry schema, server options, and profiles.

@@ -363,4 +363,4 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
 - **Phase 17:** Preferences, privacy, notifications, and lifecycle
 - **Phase 18:** Integrated device security and performance qualification
-- **Phase 19:** Signed APK release and operational handoff (configured in .github/workflows/release-android.yml)
+- **Phase 19:** Signed APK release and operational handoff (see [.github/workflows/release-android.yml](../../.github/workflows/release-android.yml) and the [Android Release & Signing Setup Guide](../../docs/deployment-guide.md#5-android-native-client-release--github-actions-signing-setup))
