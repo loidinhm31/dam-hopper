@@ -1624,4 +1624,17 @@ export class SemanticClient {
       this.setStatus("disconnected");
     }
   }
+  /**
+   * For qualification testing: forcefully closes the active WebSocket connection
+   * without clearing the reconnect timer, triggering automatic reconnection.
+   */
+  forceSocketLoss(): void {
+    if (this.currentAttempt?.ws) {
+      try {
+        this.currentAttempt.ws.close(4000, "Forced socket loss for qualification");
+      } catch {
+        // Ignore close errors
+      }
+    }
+  }
 }

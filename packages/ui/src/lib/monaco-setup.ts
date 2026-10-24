@@ -20,3 +20,6 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+if (typeof window !== "undefined") {
+  (window as unknown as { monaco?: typeof monaco }).monaco = monaco;
+}

@@ -684,14 +684,29 @@ Phase 08 implements scoped lifecycle invalidation and resilient client recovery 
 - **Active Model Status Presentation (`packages/ui/src/components/organisms/EditorStatusBar.tsx`):**
   - Renders live semantic status for the active editor model (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded status dots and descriptive tooltips in the editor status bar.
 - **Cycle 2 Review Boundaries & Deferred Qualification:**
-  - Open review items from Cycle 2 (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`) tracked in the Phase 09 receiving checklist: C2 (actor invalidation enqueue fence), R1 (foreign-binding replay provenance matching), W2 (handshake socket race on asynchronous close), W3 (opener target derivation across worktrees), R2 (`worktree` vs `worktreePath` wire alignment), R3 (terminal child exit before reap acknowledgment), and W5 (target-scoped git route invalidation). Full browser qualification against containerized language servers remains deferred to Phase 10.
-### Remaining Production Qualification (Phase 10)
+  - Open review items from Cycle 2 (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`) tracked in the Phase 09 receiving checklist: C2 (actor invalidation enqueue fence), R1 (foreign-binding replay provenance matching), W2 (handshake socket race on asynchronous close), W3 (opener target derivation across worktrees), R2 (`worktree` vs `worktreePath` wire alignment), R3 (terminal child exit before reap acknowledgment), and W5 (target-scoped git route invalidation). Full browser qualification against containerized language servers is exercised in Phase 10 via Playwright E2E testing, with visual human review pending.
+### Implemented Primitives: Phase 10 Linux Server and Actual Web Application Qualification
 
-- **Transport-Only Client Bundle & Lazy Chunk Partitioning (G2):**
+Phase 10 qualifies the shipped built web SPA (`apps/web`) against an authenticated containerized Linux x64 server (`dam-hopper-server`) with real MongoDB authentication and pinned bundled engine (`packages/ui/e2e/semantic-navigation/semantic-navigation.spec.ts`):
+
+- **Transport-Only Client Bundle & Lazy Chunk Partitioning Gate (G2):**
   - Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1`. Semantic client code must remain isolated to the dynamic lazy Monaco chunk (`monaco.js`), with 0 bytes delta added to the initial entry chunk (`index.js`) and Monaco lazy chunk impact below the 50 KiB gzip delta ceiling.
-- **Model-Scoped Provider Coexistence & Full Browser Qualification (G8):**
-  - Coexistence between Monaco's built-in TypeScript service and DamHopper's LSP provider evaluated in Phase 07 browser component mode; full multi-tab application journeys and live language server process qualification in real browser DOMs are tracked for Phase 10 via Playwright E2E testing against production server containers.
-
+- **Isolated Container Staging & Bundled Engine Deployment (`application-services.ts`):**
+  - Test harness dynamically copies pre-staged, digest-verified semantic engine artifacts into `/opt/dam-hopper/lib/semantic-engine` (`node`, `tsls`, `package.json`).
+  - Container-level user role management provisions distinct `admin` and `user` accounts with real MFA/session state; non-admin mutation attempts (`PATCH /api/semantic/settings`) fail closed with HTTP 403 Forbidden.
+- **Full Monaco Application Journeys across Extensions & Encodings:**
+  - Real browser DOM navigation exercises Go to Definition across `.ts`, `.tsx`, `.js`, and `.jsx` fixtures.
+  - Verifies UTF-16 code unit cursor alignment for astral non-BMP characters (`unicode.ts`), and renders the Monaco peek widget for multi-result declarations (`multi_def.ts`).
+  - Unsupported languages (`unsupported.rs`) fail fast with no active semantic status and zero language server interactions.
+- **In-Memory Dirty Buffer Freshness & Adaptive Sync Crossings:**
+  - In-memory unsaved edits (`StandardSemanticItem.getUnsavedValue`) navigate successfully while verifying container disk files omit unsaved edits (`not.toContain('getUnsavedValue')`). Tab dirtiness is indicated via `data-dirty="true"`.
+  - Exercises Go to Definition navigation in `adaptive_sync.ts` across threshold boundaries (below 64 KiB at ~61.7 KiB, above 64 KiB by inserting ~8 KiB padding comments, and returning below 64 KiB upon undo).
+  - WebSocket loss recovery (`forceSocketLoss`) verifies automatic backoff reconnection, dirty buffer replay, and restored `TS/JS Ready` navigation on the replacement wire session.
+- **Lifecycle Teardown & Six Full-Viewport Visual Checkpoints:**
+  - Admin hot-disable revokes runtime admission and drains sessions, confirming strictly 0 orphan language server processes (`typescript-language-server`, `tsserver`) via container procfs scan.
+  - Captures 6 full-viewport (1440x900) checkpoints (`default-off`, `admin-enabled-portable`, `definition-jump`, `multi-result-selection`, `threshold-dirty-edit`, `narrow-layout-dock`) with PNG IHDR verification, machine-readable `evidence.json`, and human review governance in `review.md`. Narrow dock checkpoint records `dockWidth: 320` convention metadata.
+  - Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW`; human visual acceptance is required before release sign-off.
+  - All native platforms (Linux Tauri, Windows native/desktop, Android) remain explicitly unqualified, deferred, and non-blocking.
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

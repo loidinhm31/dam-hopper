@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { existsSync } from "node:fs";
@@ -6,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
+const execFileAsync = promisify(execFile);
 import {
   copyToContainer,
   execInContainer,
@@ -27,10 +30,45 @@ export interface ApplicationServicesConfig {
   databaseName?: string;
   username?: string;
   additionalUsernames?: string[];
+  userRoles?: Record<string, "admin" | "user">;
   mongoImage?: string;
   appImage?: string;
   port?: number;
   idleSuspendPolicy?: "agent-free";
+  semanticEngine?: boolean;
+  seedSemanticFixtures?: boolean;
+}
+
+const CACHED_SEMANTIC_ENGINE_DIR = path.resolve(
+  REPO_ROOT,
+  "artifacts/semantic-qualification/staged-engine",
+);
+
+async function ensureVerifiedSemanticEngineStaged(): Promise<string> {
+  const stageScript = path.resolve(
+    REPO_ROOT,
+    "deploy/release/semantic-engine/stage-semantic-engine.mjs",
+  );
+
+  if (existsSync(CACHED_SEMANTIC_ENGINE_DIR)) {
+    try {
+      await execFileAsync("node", [
+        stageScript,
+        "--verify-only",
+        CACHED_SEMANTIC_ENGINE_DIR,
+      ]);
+      return CACHED_SEMANTIC_ENGINE_DIR;
+    } catch {
+      // Stale or invalid cache; re-stage below
+    }
+  }
+
+  await execFileAsync("node", [
+    stageScript,
+    "--output-dir",
+    CACHED_SEMANTIC_ENGINE_DIR,
+  ]);
+  return CACHED_SEMANTIC_ENGINE_DIR;
 }
 
 export interface ApplicationServices {
@@ -51,6 +89,7 @@ export interface ApplicationServices {
   writeContainerFile(filePath: string, content: string): Promise<void>;
   statContainerFile(filePath: string): Promise<{ mtime: string; size: number }>;
   fetchApi(endpoint: string, init?: RequestInit): Promise<Response>;
+  execInContainer(command: string[], env?: Record<string, string>): Promise<string>;
   dispose(): Promise<void>;
 }
 
@@ -120,6 +159,7 @@ export async function startApplicationServices(
   try {
     seedTree = await createSeedTree({
       idleSuspendPolicy: config.idleSuspendPolicy,
+      seedSemanticFixtures: config.seedSemanticFixtures,
     });
 
     await runEngine(["network", "create", networkId]);
@@ -168,6 +208,24 @@ export async function startApplicationServices(
     const hostWebDist = path.resolve(REPO_ROOT, "apps/web/dist");
     if (existsSync(hostWebDist)) {
       await copyToContainer(hostWebDist, appContainerId, "/opt/dam-hopper/web");
+    }
+    if (config.semanticEngine) {
+      const stagedEngineDir = await ensureVerifiedSemanticEngineStaged();
+      await execInContainer(appContainerId, [
+        "mkdir",
+        "-p",
+        "/opt/dam-hopper/lib/semantic-engine",
+      ]);
+      await copyToContainer(
+        stagedEngineDir,
+        appContainerId,
+        "/opt/dam-hopper/lib/semantic-engine",
+      );
+      await execInContainer(appContainerId, [
+        "chmod",
+        "0755",
+        "/opt/dam-hopper/lib/semantic-engine/node",
+      ]);
     }
     await execInContainer(appContainerId, [
       "chmod",
@@ -219,6 +277,19 @@ export async function startApplicationServices(
       args[args.length - 1] = additionalUsername;
       const seeded = JSON.parse(await execInContainer(appContainerId, args)) as SeedOutput;
       additionalSessions.push({ username: seeded.username, token: seeded.token, sessionId: seeded.sessionId });
+    }
+    if (config.userRoles) {
+      for (const [u, role] of Object.entries(config.userRoles)) {
+        if (role === "user" && authBackend === "mongo") {
+          await execInContainer(mongoContainerId, [
+            "mongosh",
+            databaseName,
+            "--quiet",
+            "--eval",
+            `db.users.updateOne({ username: "${u}" }, { $set: { role: "user" } })`,
+          ]);
+        }
+      }
     }
 
     const authEnvArgs =
@@ -291,6 +362,9 @@ export async function startApplicationServices(
       additionalSessions,
       readContainerFile(filePath: string): Promise<string> {
         return execInContainer(appContainerId, ["cat", filePath]);
+      },
+      execInContainer(command: string[], env?: Record<string, string>): Promise<string> {
+        return execInContainer(appContainerId, command, env);
       },
       async writeContainerFile(
         filePath: string,

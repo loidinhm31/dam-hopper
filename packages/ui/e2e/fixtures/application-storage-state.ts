@@ -67,6 +67,18 @@ export function createBrowserStorageState(
             name: `damhopper_profile_auth_v2_${options.profileId}`,
             value: JSON.stringify(authRecord),
           },
+          {
+            name: "dam-hopper:explorer-tree-state",
+            value: JSON.stringify({
+              state: {
+                openMapByTarget: {
+                  "fixture-project::root": { src: true },
+                  [`${options.profileId}::fixture-project::root`]: { src: true },
+                },
+              },
+              version: 0,
+            }),
+          },
         ],
       },
     ],

@@ -1703,3 +1703,6 @@ export const useEditorStore = create<EditorState>()(
     },
   ),
 );
+if (typeof window !== "undefined") {
+  (window as unknown as { __dam_hopper_editor_store?: unknown }).__dam_hopper_editor_store = useEditorStore;
+}

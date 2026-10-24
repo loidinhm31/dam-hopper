@@ -73,6 +73,7 @@ import {
   isSupportedSemanticPath,
   captureSemanticProvenance,
   matchesSemanticProvenance,
+  defaultSemanticModelRegistry,
 } from "@/lib/semantic-model-uri.js";
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
@@ -483,13 +484,21 @@ export function EditorTabs({
     URL.revokeObjectURL(url);
   }, []);
   const clientStatuses = useSemanticNavigationStore((s) => s.clientStatuses);
+  const [modelRegistryVersion, setModelRegistryVersion] = useState(0);
+  useEffect(() => {
+    return defaultSemanticModelRegistry.subscribe(() => {
+      setModelRegistryVersion((v) => v + 1);
+    });
+  }, []);
   const activeSemanticStatus = useMemo(() => {
-    if (!activeTab || !isSupportedSemanticPath(activeTab.path)) return null;
+    if (!activeTab || !isSupportedSemanticPath(activeTab.path)) {
+      return null;
+    }
     const client = useSemanticNavigationStore
       .getState()
       .findClientForTab(activeTab.key);
     return client?.getStatus() ?? null;
-  }, [activeTab, clientStatuses]);
+  }, [activeTab, clientStatuses, modelRegistryVersion]);
 
   if (!project || (projectTabs.length === 0 && unavailableTabs.length === 0)) {
     return (

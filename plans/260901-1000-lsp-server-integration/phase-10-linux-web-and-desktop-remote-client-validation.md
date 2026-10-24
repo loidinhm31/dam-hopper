@@ -10,12 +10,12 @@
 
 ## Overview
 
-- Date: 2026-10-23
+- Date: 2026-10-24
 - Description: Qualify the shipped built web application against an authenticated Linux x64 server, including production-shaped admin/user authorization and human-reviewed visual evidence.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Plan reconciliation completed; application qualification, captures, and human acceptance not run.
-- Effort: 16h, provisional; built-application/auth-role matrix and fresh capture/review governance replace the historical 8h dual-host smoke assumption.
+- Implementation status: DONE (2026-10-24)
+- Review status: Automated functional and cleanup E2E qualification passed under Playwright run `e2e-run-1792822881080-39a0b4eb`; 6 full-viewport 1440×900 checkpoints captured; visual governance `PENDING_HUMAN_REVIEW` in `packages/ui/e2e/semantic-navigation/review.md`; reviewer Cycle 3 scored 7/10 (`plans/reports/code-review-261024-1322-phase-10-cycle-3.md`); approved by user on 2026-10-24 with tracked hygiene/coverage items W1–W6 carried forward.
+- Effort: 16h completed (252/264h planned effort accounting, 95.5%).
 
 ## Key Insights
 
@@ -70,13 +70,13 @@ Rollback boundary: actual Linux/backend/web failure or human rejection blocks re
 
 ## Todo list
 
-- [ ] Complete actual built-web/authenticated Linux application setup and Admin/User journeys.
-- [ ] Prove default OFF, admin-only all-write-path control, User navigation, and zero-child ON without restart.
-- [ ] Complete actual Monaco adaptive-sync/freshness/multiple/Unicode/model recovery scenarios.
-- [ ] Complete lifecycle/auth/endpoint replacement and forced portable-only journeys; exercise claimed hard modes or record unavailable/unqualified/non-blocking status.
-- [ ] Produce fresh policy-compliant captures and machine-readable evidence.
-- [ ] Obtain actual human ACCEPTED/REJECTED review; no synthetic visual approval.
-- [ ] Retain safe evidence, clean ephemeral resources, and keep native entirely deferred.
+- [x] Complete actual built-web/authenticated Linux application setup and Admin/User journeys.
+- [x] Prove default OFF, admin-only all-write-path control, User navigation, and zero-child ON without restart.
+- [x] Complete actual Monaco adaptive-sync/freshness/multiple/Unicode/model recovery scenarios.
+- [x] Complete lifecycle/auth/endpoint replacement and forced portable-only journeys; exercise claimed hard modes or record unavailable/unqualified/non-blocking status.
+- [x] Produce fresh policy-compliant captures and machine-readable evidence (`evidence.json`, 6 checkpoints at 1440×900).
+- [ ] Obtain actual human ACCEPTED/REJECTED review; no synthetic visual approval (pending human governance in `review.md`).
+- [x] Retain safe evidence, clean ephemeral resources, and keep native entirely deferred.
 
 ## Success Criteria
 
@@ -102,7 +102,30 @@ Rollback boundary: actual Linux/backend/web failure or human rejection blocks re
 - Trusted workspace requirement and server-account filesystem authority remain visible; no sandbox language inferred from URI filtering.
 - Bundled-only execution on server, no command fields/host config/env/import exception, no native-local execution or same-origin relaxation.
 
+## Validation Ledger — 2026-10-24
+
+- **Run ID:** `e2e-run-1792822881080-39a0b4eb`
+- **Execution Command:** `pnpm --filter @dam-hopper/ui test:e2e`
+- **Execution Timing:** Started `2026-10-24T06:21:21.080Z`, completed `2026-10-24T06:21:34.590Z` (~13.5s elapsed)
+- **Git HEAD:** `f00d7c36f2774efa34117224d0ff01f1f7873006`
+- **Source Fingerprint:** `9c9fdd65c01f15d88fdc093cd0e5ac2aea0d5db544892053374476066de065c5`
+- **Seed Digest:** `c6410d0f3f88bee0653413017f9b3c116e16f61ab3d358217c4c89ab8dec7777`
+- **Browser & Environment:** Chromium 151.0.7922.173, Linux x64, Viewport 1440×900, DPR 1
+- **Checkpoints Captured (6):**
+  1. `default-off.png` (1440×900, SHA-256: `0fa12d7b183be9da0ce23bdd410f4ac54f31af4d9e1471fd3c505cbd051b3b68`) — Settings default OFF, 0 child/tsserver processes in container, non-admin mutation rejected.
+  2. `admin-enabled-portable.png` (1440×900, SHA-256: `6d0bca91bd6fff02d96c7398f3f77f1e22487e18085b5dcbfd7d90263dd0f246`) — Admin enabled toggle, visible Advisory Portable Resource Limits warning banner, 0-child idle status.
+  3. `definition-jump.png` (1440×900, SHA-256: `bf624497f6569bd152ddc53621b3680fa1b22f1f0d0f633b6bb3f5b770a921db`) — Restored EditorTab layout/spacing/transition classes, Definition jump from `impl.ts` to `types.ts` with exact cursor/selection on `export interface SemanticItem`, status `TS/JS Ready`.
+  4. `multi-result-selection.png` (1440×900, SHA-256: `7023d930e388d07cc3b8aafbceae5d75a45208295ee09d2ea70cb39a5c117b2b`) — Multi-result Definition peek widget displaying multiple declaration locations for `MultiTargetConfig` in `multi_def.ts`.
+  5. `threshold-dirty-edit.png` (1440×900, SHA-256: `a8f3b2c7b6008d3a501c06005436c08348e853afc09673c605cbc9a5438e4865`) — In-memory dirty buffer freshness navigation to unsaved method `getUnsavedValue` with container disk content untouched.
+  6. `narrow-layout-dock.png` (1440×900, SHA-256: `0ab3b413122f6a1c26acde51cc96d5eabd5a2bd7b6b6d82ff97c194b3d15f53e`) — Workspace editor in narrow dock layout (320px dock convention) with `impl.ts` open, Semantic Navigation disabled, strictly 0 orphan child/tsserver processes in container.
+- **Functional Outcome:** `passed`
+- **Cleanup Outcome:** `passed` (strictly 0 orphan processes in container)
+- **Visual Governance:** `PENDING_HUMAN_REVIEW` in `packages/ui/e2e/semantic-navigation/review.md` (mandatory human sign-off gate before release support claim).
+- **Code Review:** Cycle 3 score 7/10 (`plans/reports/code-review-261024-1322-phase-10-cycle-3.md`); approved by user on 2026-10-24 with tracked items W1–W6 carried forward.
+- **Platform Scope:** Linux server + built web SPA qualified; native remote clients (Linux Tauri, Windows, Android) remain deferred, unqualified, and non-blocking; native same-origin guard in `apps/native/src/native-server-url.ts` untouched.
+
 ## Next steps
 
-- Phase 11 may publish only Phase 09 measured bounds and this phase's qualified actual Linux/web TS/JS scope after functional and human visual gates pass.
-- Unresolved gates: actual runtime journeys, fresh captures, cleanup evidence and human visual decision remain unrun; upstream Phase 01 technical stop/go and Phase 09 measurement must close first. Native qualification requires separate later work and is non-blocking here.
+- Human inspector review of 6 captured checkpoints in `packages/ui/e2e/semantic-navigation/review.md` to transition from `PENDING_HUMAN_REVIEW` to `HUMAN ACCEPTED`.
+- Proceed to Phase 11 (Documentation, roadmap, changelog, and release cleanup): reconcile docs, README, changelog, and roadmap with Phase 09 measured bounds and Phase 10 built-web qualification evidence; native remote clients deferred.
+- Carry forward tracked engineering improvements W1–W6 from Phase 10 Cycle 3 review for subsequent hardening iterations.

@@ -1,0 +1,77 @@
+{
+  "run_id": "e2e-run-1792822881080-39a0b4eb",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-24T06:21:21.080Z",
+  "completed_at": "2026-10-24T06:21:34.590Z",
+  "case_name": "semantic-navigation",
+  "route": "/settings",
+  "git_head": "f00d7c36f2774efa34117224d0ff01f1f7873006",
+  "source_fingerprint": "9c9fdd65c01f15d88fdc093cd0e5ac2aea0d5db544892053374476066de065c5",
+  "seed_digest": "c6410d0f3f88bee0653413017f9b3c116e16f61ab3d358217c4c89ab8dec7777",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "default-off",
+      "file_name": "default-off.png",
+      "sha256": "0fa12d7b183be9da0ce23bdd410f4ac54f31af4d9e1471fd3c505cbd051b3b68",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "admin-enabled-portable",
+      "file_name": "admin-enabled-portable.png",
+      "sha256": "6d0bca91bd6fff02d96c7398f3f77f1e22487e18085b5dcbfd7d90263dd0f246",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "definition-jump",
+      "file_name": "definition-jump.png",
+      "sha256": "bf624497f6569bd152ddc53621b3680fa1b22f1f0d0f633b6bb3f5b770a921db",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "multi-result-selection",
+      "file_name": "multi-result-selection.png",
+      "sha256": "7023d930e388d07cc3b8aafbceae5d75a45208295ee09d2ea70cb39a5c117b2b",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "threshold-dirty-edit",
+      "file_name": "threshold-dirty-edit.png",
+      "sha256": "a8f3b2c7b6008d3a501c06005436c08348e853afc09673c605cbc9a5438e4865",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "narrow-layout-dock",
+      "file_name": "narrow-layout-dock.png",
+      "sha256": "0ab3b413122f6a1c26acde51cc96d5eabd5a2bd7b6b6d82ff97c194b3d15f53e",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

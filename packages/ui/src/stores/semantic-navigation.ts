@@ -299,3 +299,7 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
     },
   }),
 );
+if (typeof window !== "undefined") {
+  (window as unknown as { __dam_hopper_semantic_store?: unknown }).__dam_hopper_semantic_store =
+    useSemanticNavigationStore;
+}

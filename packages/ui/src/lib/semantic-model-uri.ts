@@ -90,7 +90,6 @@ export function captureSemanticProvenance(target: {
   if (!profile) return null;
   const serverUrl = normalizeSemanticServerUrl(snapshot.serverUrl);
   if (!serverUrl || normalizeSemanticServerUrl(profile.url) !== serverUrl) return null;
-
   let configuredRoot: string | null = null;
   const key = profileQueryKey(snapshot.owner, "projects");
   for (const queryClient of connectionsModule.getRegisteredQueryClients()) {
@@ -557,4 +556,7 @@ export function lspRangeToMonaco(range: {
     endLineNumber: range.end.line + 1,
     endColumn: range.end.character + 1,
   };
+}
+if (typeof window !== "undefined") {
+  (window as unknown as { __dam_hopper_registry?: unknown }).__dam_hopper_registry = defaultSemanticModelRegistry;
 }
