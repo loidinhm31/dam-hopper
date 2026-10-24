@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.platform.editor
 
+import io.github.rosemoe.sora.lang.Language
 import dev.damhopper.nativeapp.features.editor.DocumentBudgetMetrics
 import dev.damhopper.nativeapp.features.editor.DocumentEvent
 import dev.damhopper.nativeapp.features.editor.DocumentSaveSnapshot
@@ -57,6 +58,9 @@ class AndroidEditorDocument(
     private var receipt: SubscriptionReceipt<ContentChangeEvent>? = null
     private var isClosed = false
     var isInputAllowed: () -> Boolean = { true }
+
+    /** Exact UTF-8 size of the content, maintained incrementally from content listener callbacks. */
+    private var utf8Bytes: Long = utf8Size(initialText)
 
     val content: Content = object : Content(initialText, true) {
         override fun undo(): TextRange? {
@@ -212,6 +216,7 @@ class AndroidEditorDocument(
     }
 
     override fun afterDelete(c: Content, sl: Int, sc: Int, el: Int, ec: Int, d: CharSequence) {
+        utf8Bytes -= utf8Size(d)
         if (inReplaceOp) {
             pendingReplaceDeleteChars = d.length
         } else {
@@ -220,6 +225,7 @@ class AndroidEditorDocument(
     }
 
     override fun afterInsert(c: Content, sl: Int, sc: Int, el: Int, ec: Int, i: CharSequence) {
+        utf8Bytes += utf8Size(i)
         val del = if (inReplaceOp) pendingReplaceDeleteChars else 0
         inReplaceOp = false
         pendingReplaceDeleteChars = 0
@@ -452,18 +458,24 @@ class AndroidEditorDocument(
 
     override fun getBudgetMetrics(): DocumentBudgetMetrics {
         return DocumentBudgetMetrics(
-            utf8Length = content.length.toLong(),
+            utf8Length = utf8Bytes,
             undoStackBytes = payloadBytes.sum().toLong(),
             undoStackSize = revStack.size - 1,
             inFlightSnapshotBytes = 0L
         )
     }
 
+    /** Attaches [editor] with the legacy Java/empty language choice; prefer the [Language] overload. */
     fun attachEditor(editor: CodeEditor, useJavaSyntax: Boolean = false) {
+        attachEditor(editor, if (useJavaSyntax) JavaLanguage() else EmptyLanguage())
+    }
+
+    /** Attaches [editor]; [language] is installed before the text so the analyzer resets on empty content. */
+    fun attachEditor(editor: CodeEditor, language: Language) {
         check(!isClosed) { "Cannot attach closed document $id" }
         attachedEditor = editor
         check(editor.isUndoEnabled) { "CodeEditor undoEnabled must be true before setText" }
-        editor.setEditorLanguage(if (useJavaSyntax) JavaLanguage() else EmptyLanguage())
+        editor.setEditorLanguage(language)
         editor.isEditable = !_isReadOnly.value
         editor.setText(content, true, null)
         receipt = editor.subscribeEvent(ContentChangeEvent::class.java) { ev, _ ->
@@ -520,6 +532,24 @@ class AndroidEditorDocument(
     private fun checkNotClosed() {
         check(!isClosed) { "Document $id is closed" }
     }
+}
+
+/**
+ * UTF-8 encoded size of [text]. A surrogate pair counts 2 bytes per UTF-16 unit (4 total, exact);
+ * a lone surrogate over-counts by one byte, which keeps the size gate conservative.
+ */
+internal fun utf8Size(text: CharSequence): Long {
+    var bytes = 0L
+    for (index in 0 until text.length) {
+        val code = text[index].code
+        bytes += when {
+            code < 0x80 -> 1
+            code < 0x800 -> 2
+            code in 0xD800..0xDFFF -> 2
+            else -> 3
+        }
+    }
+    return bytes
 }
 
 /**

@@ -127,14 +127,16 @@ fun EditorTopBar(
                 Text("Find", fontSize = 12.sp, color = DamHopperColors.Primary)
             }
 
-            if (!focusedMode && activeTab != null && FileTierPolicy.isMarkdownFile(activeTab.path)) {
+            if (activeTab != null && (FileTierPolicy.isMarkdownFile(activeTab.path) || FileTierPolicy.isHtmlFile(activeTab.path))) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = onToggleMarkdownPreview,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (activeTab.previewMode) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+                    )
                 ) {
-                    Text(if (activeTab.markdownPreviewMode) "Source" else "Preview", fontSize = 12.sp, color = DamHopperColors.Secondary)
+                    Text(if (activeTab.previewMode) "Source" else "Preview", fontSize = 12.sp, color = DamHopperColors.TextPrimary)
                 }
             }
 

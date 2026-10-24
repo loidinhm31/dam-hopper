@@ -822,9 +822,25 @@ class EditorTabsState(
         }
     }
 
+    /**
+     * Flips preview/source mode for [key]. Touches only the mode flag: content, dirty state,
+     * revision, undo stack and CAS baseline stay untouched.
+     */
     fun toggleMarkdownPreview(key: String) {
         _tabs.value = _tabs.value.map { if (it.key == key) it.copy(markdownPreviewMode = !it.markdownPreviewMode) else it }
         updateMetadataFlow()
+    }
+
+    fun togglePreview(key: String) = toggleMarkdownPreview(key)
+
+    /**
+     * Immutable bounded snapshot of tab [key] for preview renderers, tagged with its document id and revision
+     * so consumers can drop results for superseded revisions via [DocumentPreviewSnapshot.isCurrentFor].
+     */
+    fun previewSnapshot(key: String, maxChars: Int = PREVIEW_SNAPSHOT_MAX_CHARS): DocumentPreviewSnapshot? {
+        val tab = _tabs.value.find { it.key == key } ?: return null
+        val docId = tabDocumentIds[key] ?: return null
+        return buildPreviewSnapshot(docId, tab.modelVersion, tab.content, maxChars)
     }
 
     fun toggleEncryptedSession(key: String) {

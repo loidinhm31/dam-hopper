@@ -89,8 +89,15 @@ data class MediaLease(
         }
     }
 
+    /** Stream path with the ticket segment and any query string masked for diagnostics. */
+    private fun redactedStreamPath(): String {
+        val pathOnly = streamPath.substringBefore('?')
+        val masked = if (ticket.isNotEmpty()) pathOnly.replace(ticket, "[REDACTED]") else pathOnly
+        return if (streamPath.contains('?')) "$masked?[REDACTED]" else masked
+    }
+
     override fun toString(): String =
-        "MediaLease(kind=$kind, ticket=[REDACTED], streamPath='$streamPath', expiresAt=$expiresAtEpochMs, purpose=$purpose, mediaClientId='$mediaClientId', cookie=[REDACTED], ownerRef=$ownerRef)"
+        "MediaLease(kind=$kind, ticket=[REDACTED], streamPath='${redactedStreamPath()}', expiresAt=$expiresAtEpochMs, purpose=$purpose, mediaClientId='$mediaClientId', cookie=[REDACTED], ownerRef=$ownerRef)"
 }
 
 class MediaException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

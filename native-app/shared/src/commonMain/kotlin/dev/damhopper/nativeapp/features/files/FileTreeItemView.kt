@@ -1,7 +1,9 @@
 package dev.damhopper.nativeapp.features.files
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -26,24 +28,31 @@ fun FileTreeNodeRow(
     isSelected: Boolean,
     onToggleFolder: (path: String) -> Unit,
     onSelectNode: (path: String) -> Unit,
+    onHoldNode: (node: FileTreeNode) -> Unit = {},
     modifier: Modifier = Modifier,
     isUnresolved: Boolean = false,
 ) {
     val bgColor = if (isSelected) DamHopperColors.SurfaceVariant else DamHopperColors.Surface
     val indent = (depth * 16).dp
 
+    @OptIn(ExperimentalFoundationApi::class)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 40.dp)
             .background(bgColor)
-            .clickable {
-                onSelectNode(node.path)
-                if (node.isDirectory && isSelected) {
-                    onToggleFolder(node.path)
+            .combinedClickable(
+                onClick = {
+                    onSelectNode(node.path)
+                    if (node.isDirectory && isSelected) {
+                        onToggleFolder(node.path)
+                    }
+                },
+                onLongClick = {
+                    onHoldNode(node)
                 }
-            }
+            )
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .padding(start = indent),
     ) {

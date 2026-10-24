@@ -13,6 +13,13 @@ import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
 import kotlinx.coroutines.launch
+import dev.damhopper.nativeapp.features.media.LocalNativeMediaSurfaceHost
+
+/**
+ * Editor-panel input gate (e.g. closed while a slide-over sidebar covers the editor). Platform native
+ * surfaces read it to suppress IME/hardware input independently of the document's own read-only state.
+ */
+val LocalEditorInputAllowed = compositionLocalOf { true }
 
 @Composable
 fun EditorPanelScreen(
@@ -23,6 +30,9 @@ fun EditorPanelScreen(
     fontSize: Int = 14,
     focusedMode: Boolean = true,
     nativeSurfaceHost: NativeEditorSurfaceHost? = LocalNativeEditorSurfaceHost.current,
+    onToggleSidebar: (() -> Unit)? = null,
+    isSidebarOpen: Boolean = false,
+    isInputAllowed: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -43,6 +53,25 @@ fun EditorPanelScreen(
     val docDirty by (activeDoc?.isDirty ?: fallbackFlow).collectAsState()
     val docCanUndo by (activeDoc?.canUndo ?: fallbackFlow).collectAsState()
     val docCanRedo by (activeDoc?.canRedo ?: fallbackFlow).collectAsState()
+
+    // Preview snapshot: re-evaluated on every document revision. Composition (and collectAsState)
+    // runs on the Main dispatcher, which AndroidEditorDocument snapshot capture requires.
+    val revisionFallback = remember { kotlinx.coroutines.flow.MutableStateFlow(0L) }
+    val docRevision by (activeDoc?.revision ?: revisionFallback).collectAsState()
+    val snapshotProvider = LocalDocumentSnapshotProvider.current
+    val mediaHost = LocalNativeMediaSurfaceHost.current
+    val previewSnapshot = remember(activeTabKey, docRevision, activeTab?.modelVersion, activeTab?.previewMode, snapshotProvider, activeDoc) {
+        val tab = activeTab
+        if (tab == null || !tab.previewMode ||
+            !(FileTierPolicy.isMarkdownFile(tab.path) || FileTierPolicy.isHtmlFile(tab.path))
+        ) {
+            null
+        } else {
+            snapshotProvider?.invoke(PREVIEW_SNAPSHOT_MAX_CHARS)
+                ?.takeIf { activeDoc == null || it.documentId == activeDoc.id }
+                ?: tabsState.previewSnapshot(tab.key)
+        }
+    }
 
     val displayTabs = remember(tabs, activeTabKey, docDirty, activeDoc) {
         if (activeDoc == null) {
@@ -84,6 +113,26 @@ fun EditorPanelScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
+        if (onToggleSidebar != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface).padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onToggleSidebar,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isSidebarOpen) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+                    )
+                ) {
+                    Text(
+                        "📁 Files",
+                        fontSize = 12.sp,
+                        color = if (isSidebarOpen) DamHopperColors.TextPrimary else DamHopperColors.Primary
+                    )
+                }
+            }
+        }
         EditorTopBar(
             tabs = displayTabs,
             activeTabKey = activeTabKey,
@@ -200,13 +249,26 @@ fun EditorPanelScreen(
             }
         } else when {
             activeTab.tier == FileTier.IMAGE || activeTab.tier == FileTier.VIDEO -> {
-                MediaPreviewCard(
-                    tab = activeTab,
-                    onDownloadClicked = onDownloadMedia?.let { cb -> { cb(activeTab) } }
+                val onDownload = onDownloadMedia?.let { cb -> { cb(activeTab) } }
+                if (mediaHost != null) {
+                    mediaHost(activeTab, activeTab.tier == FileTier.IMAGE, Modifier.fillMaxSize(), onDownload)
+                } else {
+                    MediaPreviewCard(
+                        tab = activeTab,
+                        onDownloadClicked = onDownload
+                    )
+                }
+            }
+            activeTab.previewMode && FileTierPolicy.isHtmlFile(activeTab.path) -> {
+                HtmlPreviewView(
+                    content = previewSnapshot?.text ?: capPreviewText(activeTab.content, PREVIEW_SNAPSHOT_MAX_CHARS),
+                    isTruncated = previewSnapshot?.isTruncated ?: (activeTab.content.length > PREVIEW_SNAPSHOT_MAX_CHARS),
                 )
             }
-            activeTab.markdownPreviewMode && FileTierPolicy.isMarkdownFile(activeTab.path) -> {
-                MarkdownPreviewView(markdownContent = activeTab.content)
+            activeTab.previewMode && FileTierPolicy.isMarkdownFile(activeTab.path) -> {
+                MarkdownPreviewView(
+                    markdownContent = previewSnapshot?.text ?: capPreviewText(activeTab.content, PREVIEW_SNAPSHOT_MAX_CHARS),
+                )
             }
             activeTab.tier == FileTier.LARGE -> {
                 LargeFileView(
@@ -231,13 +293,15 @@ fun EditorPanelScreen(
             else -> {
                 val metadata = tabsState.openTabs.collectAsState().value.find { it.relativePath == activeTab.path }
                 val inputAllowed = session?.isInputAllowed?.invoke() ?: tabsState.isInputAllowed()
-                NativeTextEditorView(
-                    document = activeDoc,
-                    metadata = metadata,
-                    isReadOnly = activeTab.tier.isReadOnly || !inputAllowed,
-                    fontSize = fontSize,
-                    nativeSurfaceHost = nativeSurfaceHost
-                )
+                CompositionLocalProvider(LocalEditorInputAllowed provides isInputAllowed) {
+                    NativeTextEditorView(
+                        document = activeDoc,
+                        metadata = metadata,
+                        isReadOnly = activeTab.tier.isReadOnly || !inputAllowed,
+                        fontSize = fontSize,
+                        nativeSurfaceHost = nativeSurfaceHost
+                    )
+                }
             }
         }
 

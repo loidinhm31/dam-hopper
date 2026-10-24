@@ -94,13 +94,22 @@ class WorkbenchJourneysUnitTest {
             File("src/main/kotlin")
         )
 
+        val previewSurfaceFile = "AndroidHtmlSurface.kt"
         for (root in roots) {
             val ktFiles = root.walk().filter { it.extension == "kt" }.toList()
             for (file in ktFiles) {
                 val text = file.readText()
+                if (file.name == previewSurfaceFile) {
+                    // Security check: Dedicated HTML preview surface MUST enforce complete sandboxing
+                    assertTrue(text.contains("javaScriptEnabled = false"), "Preview WebView must disable JavaScript")
+                    assertTrue(text.contains("allowFileAccess = false"), "Preview WebView must disable file access")
+                    assertTrue(text.contains("allowContentAccess = false"), "Preview WebView must disable content access")
+                    assertTrue(text.contains("domStorageEnabled = false"), "Preview WebView must disable DOM storage")
+                    continue
+                }
                 assertFalse(
                     text.contains("android.webkit.WebView") || text.contains("androidx.webkit"),
-                    "Prohibited WebView dependency found in ${file.absolutePath}"
+                    "Prohibited WebView dependency found in ${file.absolutePath}: mobile shell and components must remain native"
                 )
             }
         }

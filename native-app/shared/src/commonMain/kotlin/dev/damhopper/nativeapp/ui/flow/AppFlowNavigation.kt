@@ -33,6 +33,21 @@ class AppFlowNavigation(
     var departureGuard: ((targetStage: AppFlowStage, onProceed: () -> Unit) -> Boolean)? = null
 
     /**
+     * Owned UI back interceptors (e.g. slide-over sidebars). Main-thread only.
+     * Consulted newest-first by [handleBackPress] before stage unwinding.
+     */
+    private val backInterceptors = mutableListOf<() -> Boolean>()
+
+    /**
+     * Registers a back interceptor. It is invoked before stage navigation and returns true when it
+     * consumed the back event. The returned lambda unregisters it; callers MUST invoke it on dispose.
+     */
+    fun registerBackInterceptor(interceptor: () -> Boolean): () -> Unit {
+        backInterceptors.add(interceptor)
+        return { backInterceptors.remove(interceptor) }
+    }
+
+    /**
      * Navigates back to the profile authentication stage.
      */
     fun navigateToProfiles() {
@@ -110,6 +125,10 @@ class AppFlowNavigation(
      * @return True if back event was consumed by the flow navigation; false if unhandled.
      */
     fun handleBackPress(): Boolean {
+        // Snapshot so an interceptor may unregister itself while handling the event.
+        for (interceptor in backInterceptors.asReversed().toList()) {
+            if (interceptor()) return true
+        }
         val current = _state.value
         val targetStage = when (current.stage) {
             AppFlowStage.TERMINAL -> AppFlowStage.PROJECT_LIST

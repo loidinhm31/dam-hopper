@@ -12,94 +12,285 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.damhopper.nativeapp.features.media.MediaLease
 import dev.damhopper.nativeapp.features.media.MediaPurpose
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Binds a player to a display surface regardless of which one arrives first.
+ * Both `onPlayer` and `onSurface` funnel through the single [bind] step, so a surface that
+ * is created before the player (or a player created after the surface) never ends up
+ * audio-only. Losing the surface detaches the player's display.
+ */
+internal class PlayerSurfaceBinder<P : Any, S : Any>(
+    private val attach: (P, S) -> Unit,
+    private val detach: (P) -> Unit,
+) {
+    private var player: P? = null
+    private var surface: S? = null
+
+    @Synchronized
+    fun onPlayer(newPlayer: P?) {
+        player = newPlayer
+        bind()
+    }
+
+    /** Clears the player only if [released] is still the bound one (guards against late cleanup). */
+    @Synchronized
+    fun onPlayerReleased(released: P) {
+        if (player === released) player = null
+    }
+
+    @Synchronized
+    fun onSurface(newSurface: S?) {
+        val current = player
+        surface = newSurface
+        if (newSurface == null && current != null) detach(current) else bind()
+    }
+
+    private fun bind() {
+        val p = player
+        val s = surface
+        if (p != null && s != null) attach(p, s)
+    }
+}
+
+/**
+ * Owns the teardown of one [MediaPlayer] instance. [dispose] pauses and releases the local
+ * player synchronously and immediately; ticket revocation is dispatched on [cleanupScope]
+ * (non-cancellable, bounded by [revokeTimeoutMs]) so network failure or delay can never block
+ * or skip the local release. Idempotent.
+ */
+internal class VideoPlayerCleanup(
+    private val pausePlayer: () -> Unit,
+    private val releasePlayer: () -> Unit,
+    private val revokeTicket: (suspend () -> Unit)?,
+    private val cleanupScope: CoroutineScope,
+    private val revokeTimeoutMs: Long = 3_000L,
+) {
+    private var disposed = false
+
+    @Synchronized
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        runCatching { pausePlayer() }
+        runCatching { releasePlayer() }
+        val revoke = revokeTicket ?: return
+        cleanupScope.launch(NonCancellable) {
+            withTimeoutOrNull(revokeTimeoutMs) {
+                try {
+                    revoke()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Best-effort: the server expires unrevoked tickets.
+                }
+            }
+        }
+    }
+}
+
 /**
  * Native Android video surface rendering ticket-bound video playback using
  * Android MediaPlayer and LeaseMediaDataSource.
  * Zero FAB invariant: controls are hosted inline in the panel.
+ *
+ * - [tabKey] scopes the player's lifetime: leaving composition (tab closed/switched) pauses and
+ *   synchronously releases the player; app `ON_STOP` only pauses.
+ * - [reissueLease] is used for at most one fresh-ticket retry after HTTP 401/403/410.
+ * - [revokeLease] revokes a ticket in the background via [cleanupScope] after local release.
  */
 @Composable
 fun AndroidVideoSurface(
+    tabKey: String,
     client: AndroidMediaClient,
     lease: MediaLease,
+    cleanupScope: CoroutineScope,
     modifier: Modifier = Modifier,
     onDownloadRequested: (() -> Unit)? = null,
+    reissueLease: (suspend () -> MediaLease)? = null,
+    revokeLease: (suspend (MediaLease) -> Unit)? = null,
 ) {
-    var errorMessage by remember(lease.ticket) {
+    var errorMessage by remember(tabKey, lease.ticket) {
         mutableStateOf(
             if (lease.purpose != MediaPurpose.PLAYBACK) {
                 "AndroidVideoSurface requires lease purpose PLAYBACK, got ${lease.purpose}"
             } else null
         )
     }
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    var isPlaying by remember { mutableStateOf(false) }
-    var isPrepared by remember { mutableStateOf(false) }
-    var currentPositionMs by remember { mutableIntStateOf(0) }
-    var durationMs by remember { mutableIntStateOf(0) }
+    var activeLease by remember(tabKey, lease.ticket) { mutableStateOf(lease) }
+    var retryUsed by remember(tabKey) { mutableStateOf(false) }
+    var resumePositionMs by remember(tabKey) { mutableIntStateOf(0) }
+
+    var mediaPlayer by remember(tabKey) { mutableStateOf<MediaPlayer?>(null) }
+    var isPlaying by remember(tabKey) { mutableStateOf(false) }
+    var isPrepared by remember(tabKey) { mutableStateOf(false) }
+    var currentPositionMs by remember(tabKey) { mutableIntStateOf(0) }
+    var durationMs by remember(tabKey) { mutableIntStateOf(0) }
+    var videoAspect by remember(tabKey) { mutableStateOf<Float?>(null) }
+    var dragPosition by remember(tabKey) { mutableStateOf<Float?>(null) }
+
+    val scope = rememberCoroutineScope()
+    val binder = remember(tabKey) {
+        PlayerSurfaceBinder<MediaPlayer, SurfaceHolder>(
+            attach = { player, holder -> runCatching { player.setDisplay(holder) } },
+            detach = { player -> runCatching { player.setDisplay(null) } },
+        )
+    }
+    // Holder of the live player's cleanup so tab disposal, ON_STOP-independent retry and the
+    // effect's own finally all tear down through the same idempotent path.
+    val currentCleanup = remember(tabKey) { arrayOfNulls<VideoPlayerCleanup>(1) }
+
     // Position polling while playing
     LaunchedEffect(isPlaying) {
         while (isPlaying) {
             mediaPlayer?.let { player ->
-                if (isPrepared) {
-                    currentPositionMs = player.currentPosition
+                if (isPrepared && dragPosition == null) {
+                    currentPositionMs = runCatching { player.currentPosition }.getOrDefault(currentPositionMs)
                 }
             }
             delay(500)
         }
     }
 
-    LaunchedEffect(lease.ticket) {
-        val player = MediaPlayer()
-        mediaPlayer = player
-
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    fun tryRecoverWithFreshTicket(status: Int?, resumeMs: Int): Boolean {
+        val reissue = reissueLease
+        if (!isTicketExpiryStatus(status) || retryUsed || reissue == null) return false
+        retryUsed = true
+        resumePositionMs = resumeMs
+        scope.launch {
+            // Local release (and background revocation of the dead ticket) before the new ticket.
+            currentCleanup[0]?.dispose()
             try {
-                val mediaDataSource = client.createMediaDataSource(lease)
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    player.setDataSource(mediaDataSource)
-                    player.setOnPreparedListener { mp ->
-                        isPrepared = true
-                        durationMs = mp.duration
-                    }
-                    player.setOnCompletionListener {
-                        isPlaying = false
-                        currentPositionMs = durationMs
-                    }
-                    player.setOnErrorListener { _, what, extra ->
-                        errorMessage = "MediaPlayer error: what=$what, extra=$extra"
-                        isPlaying = false
-                        true
-                    }
-                    player.prepareAsync()
-                }
+                val fresh = reissue()
+                errorMessage = null
+                activeLease = fresh
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    errorMessage = "Failed to initialize video player: ${e.message}"
+                errorMessage = "Failed to refresh video ticket: ${e.message}"
+            }
+        }
+        return true
+    }
+
+    LaunchedEffect(tabKey, activeLease.ticket) {
+        val playerLease = activeLease
+        if (playerLease.purpose != MediaPurpose.PLAYBACK) return@LaunchedEffect
+        val localPlayer = MediaPlayer()
+        val revoker: (suspend () -> Unit)? = revokeLease?.let { revoke ->
+            val action: suspend () -> Unit = { revoke(playerLease) }
+            action
+        }
+        var dataSource: LeaseMediaDataSource? = null
+        val cleanup = VideoPlayerCleanup(
+            pausePlayer = { if (localPlayer.isPlaying) localPlayer.pause() },
+            releasePlayer = {
+                localPlayer.setOnPreparedListener(null)
+                localPlayer.setOnCompletionListener(null)
+                localPlayer.setOnErrorListener(null)
+                localPlayer.setOnVideoSizeChangedListener(null)
+                try {
+                    localPlayer.setDisplay(null)
+                } catch (_: Exception) {
+                }
+                localPlayer.release()
+                dataSource?.close()
+            },
+            revokeTicket = revoker,
+            cleanupScope = cleanupScope,
+        )
+        currentCleanup[0] = cleanup
+        mediaPlayer = localPlayer
+        isPrepared = false
+        isPlaying = false
+        binder.onPlayer(localPlayer)
+        try {
+            val ds = client.createMediaDataSource(playerLease)
+            dataSource = ds
+            localPlayer.setDataSource(ds)
+            localPlayer.setOnVideoSizeChangedListener { _, w, h ->
+                if (w > 0 && h > 0) videoAspect = w.toFloat() / h.toFloat()
+            }
+            localPlayer.setOnPreparedListener { mp ->
+                isPrepared = true
+                durationMs = mp.duration
+                if (resumePositionMs > 0) {
+                    mp.seekTo(resumePositionMs)
+                    currentPositionMs = resumePositionMs
+                    resumePositionMs = 0
                 }
             }
+            localPlayer.setOnCompletionListener {
+                isPlaying = false
+                currentPositionMs = durationMs
+            }
+            localPlayer.setOnErrorListener { mp, what, extra ->
+                isPlaying = false
+                val resumeAt = runCatching { mp.currentPosition }.getOrDefault(currentPositionMs)
+                if (!tryRecoverWithFreshTicket(ds.lastFailureStatus, resumeAt)) {
+                    errorMessage = "MediaPlayer error: what=$what, extra=$extra"
+                }
+                true
+            }
+            localPlayer.prepareAsync()
+            awaitCancellation()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            isPlaying = false
+            if (!tryRecoverWithFreshTicket(e.mediaHttpStatus(), resumePositionMs)) {
+                errorMessage = "Failed to initialize video player: ${e.message}"
+            }
+        } finally {
+            // Synchronous local release regardless of how this effect ends.
+            cleanup.dispose()
+            binder.onPlayerReleased(localPlayer)
+            if (mediaPlayer === localPlayer) {
+                mediaPlayer = null
+                isPrepared = false
+                isPlaying = false
+            }
+            if (currentCleanup[0] === cleanup) currentCleanup[0] = null
         }
     }
 
-    DisposableEffect(lease.ticket) {
+    // Tab disposal (closed or switched away): pause and synchronously release in onDispose.
+    DisposableEffect(tabKey) {
         onDispose {
-            mediaPlayer?.let { player ->
-                try {
-                    if (player.isPlaying) {
-                        player.stop()
-                    }
-                    player.reset()
-                    player.release()
-                } catch (_: Exception) {}
-            }
+            currentCleanup[0]?.dispose()
+            currentCleanup[0] = null
             mediaPlayer = null
             isPlaying = false
             isPrepared = false
         }
+    }
+
+    // App backgrounded: pause only, keep the player so playback can be resumed.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, tabKey) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                mediaPlayer?.let { player ->
+                    runCatching { if (player.isPlaying) player.pause() }
+                }
+                isPlaying = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Column(
@@ -130,23 +321,24 @@ fun AndroidVideoSurface(
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
+            val aspect = videoAspect
             AndroidView(
                 factory = { context ->
                     SurfaceView(context).apply {
                         holder.addCallback(object : SurfaceHolder.Callback {
                             override fun surfaceCreated(holder: SurfaceHolder) {
-                                mediaPlayer?.setDisplay(holder)
+                                binder.onSurface(holder)
                             }
 
                             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
                             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                mediaPlayer?.setDisplay(null)
+                                binder.onSurface(null)
                             }
                         })
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = if (aspect != null) Modifier.aspectRatio(aspect) else Modifier.fillMaxSize()
             )
 
             if (!isPrepared && errorMessage == null) {
@@ -184,7 +376,7 @@ fun AndroidVideoSurface(
             }
 
             Text(
-                text = "${formatTime(currentPositionMs)} / ${formatTime(durationMs)}",
+                text = "${formatTime(dragPosition?.toInt() ?: currentPositionMs)} / ${formatTime(durationMs)}",
                 style = DamHopperTypography.labelSmall,
                 color = DamHopperColors.TextSecondary
             )
@@ -200,11 +392,16 @@ fun AndroidVideoSurface(
         }
 
         if (durationMs > 0) {
+            // Seeking is throttled: dragging only updates the thumb; the player seeks once on release.
             Slider(
-                value = currentPositionMs.toFloat(),
-                onValueChange = { newPos ->
-                    currentPositionMs = newPos.toInt()
-                    mediaPlayer?.seekTo(newPos.toInt())
+                value = dragPosition ?: currentPositionMs.toFloat(),
+                onValueChange = { dragPosition = it },
+                onValueChangeFinished = {
+                    dragPosition?.let { target ->
+                        currentPositionMs = target.toInt()
+                        mediaPlayer?.seekTo(target.toInt())
+                    }
+                    dragPosition = null
                 },
                 valueRange = 0f..durationMs.toFloat(),
                 modifier = Modifier.fillMaxWidth()

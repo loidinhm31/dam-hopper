@@ -94,6 +94,17 @@ class ProjectWorkspaceState(
     private val _isAuthorityRetired = MutableStateFlow(false)
     val isAuthorityRetired: StateFlow<Boolean> = _isAuthorityRetired.asStateFlow()
 
+    /** Whether the editor-panel file-tree sidebar is open (split view when wide, slide-over when compact). */
+    val isEditorSidebarOpen = MutableStateFlow(false)
+
+    fun toggleEditorSidebar() {
+        isEditorSidebarOpen.value = !isEditorSidebarOpen.value
+    }
+
+    fun setEditorSidebarOpen(open: Boolean) {
+        isEditorSidebarOpen.value = open
+    }
+
     private val _pendingDeparture = MutableStateFlow<WorkspaceDepartureIntent?>(null)
     val pendingDeparture: StateFlow<WorkspaceDepartureIntent?> = _pendingDeparture.asStateFlow()
 

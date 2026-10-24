@@ -386,4 +386,111 @@ class EditorTabsStateTest {
         val ow = state.forceOverwriteTab(key)
         assertTrue(ow is EditorSaveResult.Error)
     }
+
+    private fun serveFile(text: String) {
+        val bytes = text.toByteArray()
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":${bytes.size},"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+    }
+
+    @Test
+    fun testTogglePreviewFlipsModeWithoutMutatingTextRevisionOrDirtyState() = runTest {
+        serveFile("# Title\n\nbody\n")
+        val state = createTabsState()
+        state.openTab(ProjectTargetRef(project = "demo"), "README.md")
+        val key = state.activeTab!!.key
+        state.getSession(key)!!.setText("# Edited\n")
+
+        val before = state.activeTab!!
+        val metaBefore = state.openTabs.value.single()
+        assertTrue(before.isDirty)
+        assertFalse(before.previewMode)
+
+        state.togglePreview(key)
+        val during = state.activeTab!!
+        assertTrue(during.previewMode)
+        assertTrue(during.markdownPreviewMode)
+        assertEquals(before, during.copy(markdownPreviewMode = false))
+        assertEquals(before.content, during.content)
+        assertEquals(before.isDirty, during.isDirty)
+        assertEquals(before.modelVersion, during.modelVersion)
+        assertEquals(before.editEpoch, during.editEpoch)
+        assertEquals(before.mtime, during.mtime)
+        assertEquals(before.savedContent, during.savedContent)
+        val metaDuring = state.openTabs.value.single()
+        assertEquals(metaBefore.currentRevision, metaDuring.currentRevision)
+        assertEquals(metaBefore.savedRevision, metaDuring.savedRevision)
+        assertEquals(metaBefore.isDirty, metaDuring.isDirty)
+        assertTrue(state.getSession(key)!!.canUndo())
+
+        state.toggleMarkdownPreview(key)
+        assertFalse(state.activeTab!!.previewMode)
+        assertEquals(before, state.activeTab)
+    }
+
+    @Test
+    fun testPreviewSnapshotRejectsSupersededRevision() = runTest {
+        serveFile("<p>one</p>\n")
+        val state = createTabsState()
+        state.openTab(ProjectTargetRef(project = "demo"), "index.html")
+        val key = state.activeTab!!.key
+        val docId = state.activeTabId.value!!
+
+        val first = state.previewSnapshot(key)!!
+        assertEquals(docId, first.documentId)
+        assertEquals("<p>one</p>\n", first.text)
+        assertFalse(first.isTruncated)
+        assertTrue(first.isCurrentFor(docId, state.activeTab!!.modelVersion))
+
+        state.getSession(key)!!.setText("<p>two</p>\n")
+        val currentRevision = state.activeTab!!.modelVersion
+        assertNotEquals(first.revision, currentRevision)
+        assertFalse(first.isCurrentFor(docId, currentRevision), "stale snapshot must be rejected")
+
+        val second = state.previewSnapshot(key)!!
+        assertEquals("<p>two</p>\n", second.text)
+        assertTrue(second.isCurrentFor(docId, currentRevision))
+        assertFalse(second.isCurrentFor(docId, first.revision))
+        assertNull(state.previewSnapshot("missing-key"))
+    }
+
+    @Test
+    fun testPreviewSnapshotTruncatesAtCodeUnitCapAndNeverSplitsSurrogates() = runTest {
+        serveFile("a".repeat(20) + "\n")
+        val state = createTabsState()
+        state.openTab(ProjectTargetRef(project = "demo"), "big.html")
+        val key = state.activeTab!!.key
+
+        val truncated = state.previewSnapshot(key, maxChars = 8)!!
+        assertTrue(truncated.isTruncated)
+        assertEquals("a".repeat(8), truncated.text)
+        val whole = state.previewSnapshot(key)!!
+        assertFalse(whole.isTruncated)
+        assertEquals(21, whole.text.length)
+
+        val docId = state.activeTabId.value!!
+        val emoji = "\uD83D\uDE00" // 2 UTF-16 code units
+        val cut = buildPreviewSnapshot(docId, 1L, "ab" + emoji + "cd", maxChars = 3)
+        assertTrue(cut.isTruncated)
+        assertEquals("ab", cut.text)
+        assertEquals("ab$emoji", buildPreviewSnapshot(docId, 1L, "ab" + emoji + "cd", maxChars = 4).text)
+
+        val huge = buildPreviewSnapshot(docId, 1L, "x".repeat(PREVIEW_SNAPSHOT_MAX_CHARS + 1), PREVIEW_SNAPSHOT_MAX_CHARS)
+        assertTrue(huge.isTruncated)
+        assertEquals(1_048_576, huge.text.length)
+        assertEquals(1_048_576, PREVIEW_SNAPSHOT_MAX_CHARS)
+        assertEquals(
+            "Preview truncated to 262,144 characters; view source for complete file.",
+            PREVIEW_TRUNCATION_NOTICE,
+        )
+        val exact = buildPreviewSnapshot(docId, 1L, "x".repeat(PREVIEW_SNAPSHOT_MAX_CHARS), PREVIEW_SNAPSHOT_MAX_CHARS)
+        assertFalse(exact.isTruncated)
+    }
 }

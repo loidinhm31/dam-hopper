@@ -1,7 +1,9 @@
 package dev.damhopper.nativeapp.features.editor
 
+import androidx.compose.runtime.compositionLocalOf
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import kotlinx.serialization.Serializable
+import dev.damhopper.nativeapp.features.workspace.DocumentId
 
 /**
  * Position in a text document (1-indexed line and column).
@@ -116,6 +118,61 @@ data class EditorTab(
 ) {
     val displayName: String
         get() = if (isDirty) "$name *" else name
+
+    /** Single preview-mode state shared by Markdown and HTML previews; aliases [markdownPreviewMode]. */
+    val previewMode: Boolean get() = markdownPreviewMode
+}
+
+/** Maximum preview snapshot capture size in UTF-16 code units (1 MiB, matching FileTierPolicy.NORMAL_MAX_BYTES). */
+const val PREVIEW_SNAPSHOT_MAX_CHARS: Int = 1_048_576
+
+/** Maximum displayed text length in HTML reader view. */
+const val PREVIEW_READER_DISPLAY_MAX_CHARS: Int = 262_144
+
+/** Banner shown when a preview was derived from a truncated snapshot. */
+const val PREVIEW_TRUNCATION_NOTICE: String =
+    "Preview truncated to 262,144 characters; view source for complete file."
+/**
+ * Immutable, bounded text snapshot consumed by preview renderers.
+ * Previews never own text; they render a snapshot tagged with the (documentId, revision) it came from.
+ */
+data class DocumentPreviewSnapshot(
+    val documentId: DocumentId,
+    val revision: Long,
+    val text: String,
+    val isTruncated: Boolean,
+) {
+    /** True only when this snapshot still describes the given document at the given revision. */
+    fun isCurrentFor(documentId: DocumentId, revision: Long): Boolean =
+        this.documentId == documentId && this.revision == revision
+}
+
+/** Supplies a snapshot of the active document capped at [maxChars] UTF-16 code units; null when none. */
+typealias DocumentSnapshotProvider = (maxChars: Int) -> DocumentPreviewSnapshot?
+
+val LocalDocumentSnapshotProvider = compositionLocalOf<DocumentSnapshotProvider?> { null }
+
+/**
+ * Caps [text] at [maxChars] UTF-16 code units. A trailing high surrogate left by the cut is dropped so the
+ * result never ends in half a code point. Returns [text] itself when it already fits.
+ */
+fun capPreviewText(text: String, maxChars: Int): String {
+    val cap = maxChars.coerceAtLeast(0)
+    if (text.length <= cap) return text
+    var end = cap
+    if (end > 0 && text[end - 1].isHighSurrogate()) end--
+    return text.substring(0, end)
+}
+
+/** Builds a snapshot capped at [maxChars] UTF-16 code units; [DocumentPreviewSnapshot.isTruncated] reflects the cut. */
+fun buildPreviewSnapshot(
+    documentId: DocumentId,
+    revision: Long,
+    text: String,
+    maxChars: Int,
+): DocumentPreviewSnapshot {
+    val capped = capPreviewText(text, maxChars)
+    return DocumentPreviewSnapshot(documentId, revision, capped, isTruncated = capped.length != text.length)
 }
 
 /**

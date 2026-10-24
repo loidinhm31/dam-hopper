@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,7 +40,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.features.editor.CloseDecision
 import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
@@ -57,6 +70,22 @@ import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 import kotlinx.coroutines.launch
+
+private val EDITOR_SIDEBAR_WIDTH = 280.dp
+private val EDITOR_SIDEBAR_PINNED_MIN_WIDTH = 600.dp
+
+/** True when the available width pins the file tree beside the editor (split view) instead of a slide-over. */
+fun isEditorSidebarPinned(availableWidth: Dp): Boolean = availableWidth >= EDITOR_SIDEBAR_PINNED_MIN_WIDTH
+
+/**
+ * Background editor input policy: a compact slide-over sidebar covers the editor, so IME and hardware
+ * input must be suppressed while it is open. The pinned split view leaves the editor usable.
+ */
+fun isEditorInputAllowed(isSidebarOpen: Boolean, isPinned: Boolean): Boolean = !isSidebarOpen || isPinned
+
+/** Escape (on key down) dismisses the compact slide-over sidebar. */
+fun isEditorSidebarDismissKey(key: Key, type: KeyEventType): Boolean =
+    key == Key.Escape && type == KeyEventType.KeyDown
 
 /**
  * Focused Project Workspace composable hosting Terminal, Files Explorer, and Native Editor
@@ -229,11 +258,99 @@ fun ProjectWorkspaceScreen(
                 }
 
                 WorkspacePanel.EDITOR -> {
-                    EditorPanelScreen(
-                        tabsState = workspaceState.editorTabsState,
-                        nativeSurfaceHost = nativeSurfaceHost,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    val isSidebarOpen by workspaceState.isEditorSidebarOpen.collectAsState()
+                    // Single BoxWithConstraints: EditorPanelScreen keeps one stable composition slot across
+                    // sidebar toggles and the 600 dp breakpoint, so the native editor view is never remounted.
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val isPinned = isEditorSidebarPinned(maxWidth)
+
+                        DisposableEffect(isSidebarOpen, isPinned, navigation, workspaceState) {
+                            val unregister = if (!isPinned && isSidebarOpen) {
+                                navigation.registerBackInterceptor {
+                                    workspaceState.setEditorSidebarOpen(false)
+                                    true
+                                }
+                            } else {
+                                {}
+                            }
+                            onDispose { unregister() }
+                        }
+
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            if (isPinned && isSidebarOpen) {
+                                Box(modifier = Modifier.width(EDITOR_SIDEBAR_WIDTH).fillMaxHeight()) {
+                                    FocusedFilesExplorerScreen(
+                                        treeState = workspaceState.fileTreeState,
+                                        mutationCoordinator = workspaceState.fileMutationCoordinator,
+                                        onOpenFile = { target, path ->
+                                            coroutineScope.launch {
+                                                workspaceState.editorTabsState.openTab(target, path)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .fillMaxHeight()
+                                        .background(DamHopperColors.Border)
+                                )
+                            }
+
+                            EditorPanelScreen(
+                                tabsState = workspaceState.editorTabsState,
+                                nativeSurfaceHost = nativeSurfaceHost,
+                                onToggleSidebar = { workspaceState.toggleEditorSidebar() },
+                                isSidebarOpen = isSidebarOpen,
+                                isInputAllowed = isEditorInputAllowed(isSidebarOpen, isPinned),
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        }
+
+                        // Slide-over overlay on compact screens
+                        if (!isPinned && isSidebarOpen) {
+                            val sidebarFocusRequester = remember { FocusRequester() }
+                            LaunchedEffect(Unit) {
+                                sidebarFocusRequester.requestFocus()
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .clickable { workspaceState.setEditorSidebarOpen(false) }
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .fillMaxHeight()
+                                    .width(EDITOR_SIDEBAR_WIDTH)
+                                    .background(DamHopperColors.Surface)
+                                    .focusRequester(sidebarFocusRequester)
+                                    .focusable()
+                                    .onPreviewKeyEvent { event ->
+                                        if (isEditorSidebarDismissKey(event.key, event.type)) {
+                                            workspaceState.setEditorSidebarOpen(false)
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                            ) {
+                                FocusedFilesExplorerScreen(
+                                    treeState = workspaceState.fileTreeState,
+                                    mutationCoordinator = workspaceState.fileMutationCoordinator,
+                                    onOpenFile = { target, path ->
+                                        coroutineScope.launch {
+                                            workspaceState.editorTabsState.openTab(target, path)
+                                            workspaceState.setEditorSidebarOpen(false)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -77,7 +77,8 @@ fun FilesPanelScreen(
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     var activeSubTab by remember { mutableStateOf(FilesSubTab.EXPLORER) }
-
+    var contextMenuNode by remember { mutableStateOf<FileTreeNode?>(null) }
+    val transferHost = LocalFileTransferPlatformHost.current
     val rootNode by treeState.root.collectAsState()
     val selectedPath by treeState.selectedPath.collectAsState()
     val showHidden by treeState.showHidden.collectAsState()
@@ -245,6 +246,10 @@ fun FilesPanelScreen(
                                         onOpenFile(treeState.target, path)
                                     }
                                 },
+                                onHoldNode = { node ->
+                                    treeState.selectPath(node.path)
+                                    contextMenuNode = node
+                                },
                             )
                         }
                     }
@@ -326,4 +331,39 @@ fun FilesPanelScreen(
         coroutineScope = coroutineScope,
         showHidden = showHidden,
     )
+
+    contextMenuNode?.let { node ->
+        FileItemActionsModal(
+            node = node,
+            onDismiss = { contextMenuNode = null },
+            onRename = { path ->
+                mutationCoordinator.openRenameDialog(path)
+            },
+            onDelete = { path ->
+                mutationCoordinator.openDeleteDialog(path)
+            },
+            onNewFile = { parentDir ->
+                mutationCoordinator.openCreateFileDialog(parentDir)
+            },
+            onNewFolder = { parentDir ->
+                mutationCoordinator.openCreateDirectoryDialog(parentDir)
+            },
+            onUploadFile = transferHost?.let { host ->
+                { targetDir -> host.onUploadFile(targetDir) }
+            },
+            onDownloadFile = transferHost?.let { host ->
+                { path, filename -> host.onDownloadFile(path, filename) }
+            },
+            onCopyRelativePath = { path ->
+                clipboardManager.setText(AnnotatedString(path))
+                mutationCoordinator.clearFeedbackNotice()
+            },
+            onCopyRemotePath = { path ->
+                mutationCoordinator.copyRemotePath(path) { remotePath ->
+                    clipboardManager.setText(AnnotatedString(remotePath))
+                    onCopyRemotePath?.invoke(remotePath)
+                }
+            }
+        )
+    }
 }

@@ -17,29 +17,68 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /**
+ * HTTP status carried as the cause of a [MediaException], so callers (e.g. the video surface)
+ * can decide on a bounded ticket-expiry retry without parsing messages.
+ */
+internal class MediaHttpStatus(val code: Int, message: String) : IOException(message)
+
+/** Returns the HTTP status recorded anywhere in this throwable's cause chain, if any. */
+internal fun Throwable.mediaHttpStatus(): Int? {
+    var current: Throwable? = this
+    var depth = 0
+    while (current != null && depth < 8) {
+        if (current is MediaHttpStatus) return current.code
+        current = current.cause
+        depth++
+    }
+    return null
+}
+
+/** Statuses that signal an expired/revoked ticket and justify exactly one fresh-ticket retry. */
+internal fun isTicketExpiryStatus(code: Int?): Boolean = code == 401 || code == 403 || code == 410
+
+/**
  * Native Android media client responsible for ticketing, cookie-isolated streaming,
  * HEAD content queries, range-based seek reads, and SAF stream downloads.
  * Strictly enforces origin boundaries and rejects any cross-origin redirects.
+ *
+ * Every lease-bound request is fenced by [activeOwnerSupplier]: the lease's owner must equal the
+ * currently active connection both before the request is sent and after the response arrives,
+ * and owner-scoped in-flight calls are cancelled on retirement ([retireOwner]).
  */
 class AndroidMediaClient(
     val serverBaseUrl: String,
     private val okHttpClient: OkHttpClient = createSecureOkHttpClient(),
+    private val activeOwnerSupplier: () -> ConnectionRef? = { null },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val expectedUri = URI(serverBaseUrl.trimEnd('/'))
 
+    private val activeCallsLock = Any()
+    private val activeCalls = HashMap<ConnectionRef, MutableSet<Call>>()
+    private val retiredOwners = HashSet<ConnectionRef>()
+
     companion object {
         const val MEDIA_SESSION_COOKIE_PREFIX = "damhopper-media-session-"
+
+        /** Hard cap for a fully-buffered image body. */
+        const val MAX_IMAGE_BYTES: Long = 32L * 1024L * 1024L
+
+        private val CONTENT_RANGE_REGEX = Regex("""^bytes (\d+)-(\d+)/(\d+)$""")
+        private val CONTENT_RANGE_UNSATISFIED_REGEX = Regex("""^bytes \*/(\d+)$""")
 
         fun mediaSessionCookieName(mediaClientId: String): String = "$MEDIA_SESSION_COOKIE_PREFIX$mediaClientId"
 
@@ -62,6 +101,7 @@ class AndroidMediaClient(
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
     }
+
     internal fun assertSameOrigin(targetUrl: String) {
         val targetUri = URI(targetUrl)
         if (targetUri.scheme != expectedUri.scheme ||
@@ -71,6 +111,70 @@ class AndroidMediaClient(
             throw MediaException("Origin mismatch or cross-origin redirect rejected: $targetUrl (expected $serverBaseUrl)")
         }
     }
+
+    // ---- Owner-scoped call tracking & retirement -------------------------------------------
+
+    private fun registerCall(ownerRef: ConnectionRef, call: Call) = synchronized(activeCallsLock) {
+        if (ownerRef in retiredOwners) {
+            throw MediaException("Cannot register call for retired connection ${ownerRef.key}")
+        }
+        activeCalls.getOrPut(ownerRef) { mutableSetOf() }.add(call)
+    }
+
+    private fun unregisterCall(ownerRef: ConnectionRef, call: Call) = synchronized(activeCallsLock) {
+        val calls = activeCalls[ownerRef] ?: return@synchronized
+        calls.remove(call)
+        if (calls.isEmpty()) activeCalls.remove(ownerRef)
+    }
+
+    /** Cancels only the in-flight calls belonging to [ownerRef]; other owners are untouched. */
+    fun cancelOwnerCalls(ownerRef: ConnectionRef) {
+        val callsToCancel = synchronized(activeCallsLock) { activeCalls.remove(ownerRef) }
+        callsToCancel?.forEach { runCatching { it.cancel() } }
+    }
+
+    /** Permanently retires [ownerRef]: no new calls may start and in-flight calls are cancelled. */
+    fun retireOwner(ownerRef: ConnectionRef) {
+        synchronized(activeCallsLock) { retiredOwners.add(ownerRef) }
+        cancelOwnerCalls(ownerRef)
+    }
+
+    internal fun isOwnerRetired(ownerRef: ConnectionRef): Boolean =
+        synchronized(activeCallsLock) { ownerRef in retiredOwners }
+
+    internal fun activeCallCount(ownerRef: ConnectionRef): Int =
+        synchronized(activeCallsLock) { activeCalls[ownerRef]?.size ?: 0 }
+
+    /** Throws [MediaException] unless [ownerRef] is the active, non-retired connection. */
+    internal fun assertOwnerActive(ownerRef: ConnectionRef) {
+        if (isOwnerRetired(ownerRef) || ownerRef != activeOwnerSupplier()) {
+            throw MediaException("Stale response for retired connection")
+        }
+    }
+
+    /**
+     * Executes [request] fenced by [ownerRef]: owner is verified before sending and again once
+     * the response arrives (response dropped on mismatch). The call is tracked for owner-scoped
+     * cancellation for its entire lifetime, including body consumption inside [handler].
+     */
+    private fun <T> executeOwned(ownerRef: ConnectionRef, request: Request, handler: (Response) -> T): T {
+        assertOwnerActive(ownerRef)
+        val call = okHttpClient.newCall(request)
+        registerCall(ownerRef, call)
+        try {
+            return call.execute().use { response ->
+                assertOwnerActive(ownerRef)
+                handler(response)
+            }
+        } catch (e: IOException) {
+            if (call.isCanceled()) throw MediaException("Media request cancelled: connection retired", e)
+            throw e
+        } finally {
+            unregisterCall(ownerRef, call)
+        }
+    }
+
+    // ---- Tickets ---------------------------------------------------------------------------
 
     suspend fun issueImageTicket(
         target: ProjectTargetRef,
@@ -96,9 +200,12 @@ class AndroidMediaClient(
             .header("Authorization", "Bearer $bearerToken")
             .build()
 
-        okHttpClient.newCall(request).execute().use { response ->
+        executeOwned(ownerRef, request) { response ->
             if (response.code != 201) {
-                throw MediaException("Failed to issue image ticket: HTTP ${response.code} ${response.message}")
+                throw MediaException(
+                    "Failed to issue image ticket: HTTP ${response.code} ${response.message}",
+                    MediaHttpStatus(response.code, "HTTP ${response.code}"),
+                )
             }
             val respBody = response.body?.string() ?: throw MediaException("Empty response body from image ticket endpoint")
             val ticketResp = json.decodeFromString(IssueImageTicketResponse.serializer(), respBody)
@@ -162,9 +269,12 @@ class AndroidMediaClient(
             .header("Authorization", "Bearer $bearerToken")
             .build()
 
-        okHttpClient.newCall(request).execute().use { response ->
+        executeOwned(ownerRef, request) { response ->
             if (response.code != 201) {
-                throw MediaException("Failed to issue video ticket: HTTP ${response.code} ${response.message}")
+                throw MediaException(
+                    "Failed to issue video ticket: HTTP ${response.code} ${response.message}",
+                    MediaHttpStatus(response.code, "HTTP ${response.code}"),
+                )
             }
             val respBody = response.body?.string() ?: throw MediaException("Empty response body from video ticket endpoint")
             val ticketResp = json.decodeFromString(IssueVideoTicketResponse.serializer(), respBody)
@@ -215,7 +325,16 @@ class AndroidMediaClient(
         okHttpClient.newCall(request).execute().use { _ -> }
     }
 
-    suspend fun fetchImageBytes(lease: MediaLease): ByteArray = withContext(Dispatchers.IO) {
+    // ---- Streaming reads -------------------------------------------------------------------
+
+    /**
+     * Streams the image body into memory, aborting as soon as more than [maxBytes] have been
+     * produced (or the declared Content-Length already exceeds it).
+     */
+    suspend fun fetchImageBytes(
+        lease: MediaLease,
+        maxBytes: Long = MAX_IMAGE_BYTES,
+    ): ByteArray = withContext(Dispatchers.IO) {
         require(lease.kind == MediaKind.IMAGE) { "Lease is not an image lease" }
         val url = "$serverBaseUrl${lease.streamPath}"
         assertSameOrigin(url)
@@ -223,11 +342,33 @@ class AndroidMediaClient(
         val reqBuilder = Request.Builder().url(url).get()
         lease.cookieHeader?.let { reqBuilder.header("Cookie", it) }
 
-        okHttpClient.newCall(reqBuilder.build()).execute().use { response ->
+        executeOwned(lease.ownerRef, reqBuilder.build()) { response ->
             if (!response.isSuccessful) {
-                throw MediaException("Image fetch failed: HTTP ${response.code} ${response.message}")
+                throw MediaException(
+                    "Image fetch failed: HTTP ${response.code} ${response.message}",
+                    MediaHttpStatus(response.code, "HTTP ${response.code}"),
+                )
             }
-            response.body?.bytes() ?: throw MediaException("Empty image body")
+            val body = response.body ?: throw MediaException("Empty image body")
+            val declared = body.contentLength()
+            if (declared > maxBytes) {
+                throw MediaException("Image exceeds size limit of $maxBytes bytes (declared $declared)")
+            }
+            val input = body.byteStream()
+            val out = ByteArrayOutputStream(if (declared in 1..maxBytes) declared.toInt() else 64 * 1024)
+            val chunk = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val read = input.read(chunk)
+                if (read < 0) break
+                total += read
+                if (total > maxBytes) {
+                    throw MediaException("Image exceeds size limit of $maxBytes bytes")
+                }
+                out.write(chunk, 0, read)
+            }
+            assertOwnerActive(lease.ownerRef)
+            out.toByteArray()
         }
     }
 
@@ -238,9 +379,12 @@ class AndroidMediaClient(
         val reqBuilder = Request.Builder().url(url).head()
         lease.cookieHeader?.let { reqBuilder.header("Cookie", it) }
 
-        okHttpClient.newCall(reqBuilder.build()).execute().use { response ->
+        executeOwned(lease.ownerRef, reqBuilder.build()) { response ->
             if (!response.isSuccessful) {
-                throw MediaException("Media HEAD request failed: HTTP ${response.code} ${response.message}")
+                throw MediaException(
+                    "Media HEAD request failed: HTTP ${response.code} ${response.message}",
+                    MediaHttpStatus(response.code, "HTTP ${response.code}"),
+                )
             }
             val length = response.header("Content-Length")?.toLongOrNull() ?: -1L
             val type = response.header("Content-Type")
@@ -248,40 +392,75 @@ class AndroidMediaClient(
         }
     }
 
+    /**
+     * Reads `[start, start + length)` with strict RFC 7233 validation. Returns an empty array at EOF
+     * (416 with `bytes * / total` where start >= total, or a 206 whose total is <= start).
+     *
+     * @throws MediaException on non-206 statuses, malformed/mismatched Content-Range, or body length mismatch.
+     */
     fun readRangeSync(lease: MediaLease, start: Long, length: Int): ByteArray {
+        require(start >= 0) { "start must be non-negative" }
+        require(length > 0) { "length must be positive" }
         val url = "$serverBaseUrl${lease.streamPath}"
         assertSameOrigin(url)
 
-        val end = start + length - 1
+        val requestedEnd = start + length - 1
         val reqBuilder = Request.Builder()
             .url(url)
             .get()
-            .header("Range", "bytes=$start-$end")
-
+            .header("Range", "bytes=$start-$requestedEnd")
         lease.cookieHeader?.let { reqBuilder.header("Cookie", it) }
 
-        okHttpClient.newCall(reqBuilder.build()).execute().use { response ->
-            if (response.code != 206 && response.code != 200) {
-                throw MediaException("Range read failed: HTTP ${response.code} ${response.message}")
+        return executeOwned(lease.ownerRef, reqBuilder.build()) { response ->
+            val contentRange = response.header("Content-Range")?.trim()
+
+            if (response.code == 416) {
+                val total = contentRange?.let { CONTENT_RANGE_UNSATISFIED_REGEX.matchEntire(it) }
+                    ?.groupValues?.get(1)?.toLongOrNull()
+                if (total != null && start >= total) return@executeOwned ByteArray(0)
+                throw MediaException(
+                    "Range not satisfiable: HTTP 416 for bytes=$start-$requestedEnd (Content-Range=$contentRange)",
+                    MediaHttpStatus(416, "HTTP 416"),
+                )
             }
-            val body = response.body ?: return ByteArray(0)
+            if (response.code != 206) {
+                throw MediaException(
+                    "Expected HTTP 206, got ${response.code}",
+                    MediaHttpStatus(response.code, "HTTP ${response.code}"),
+                )
+            }
+
+            val match = contentRange?.let { CONTENT_RANGE_REGEX.matchEntire(it) }
+                ?: throw MediaException("Missing or malformed Content-Range: $contentRange")
+            val returnedStart = match.groupValues[1].toLongOrNull()
+            val returnedEnd = match.groupValues[2].toLongOrNull()
+            val totalLength = match.groupValues[3].toLongOrNull()
+            if (returnedStart == null || returnedEnd == null || totalLength == null) {
+                throw MediaException("Malformed Content-Range: $contentRange")
+            }
+            if (start >= totalLength) return@executeOwned ByteArray(0)
+            if (returnedStart != start) {
+                throw MediaException("Content-Range start $returnedStart != requested start $start")
+            }
+            if (returnedEnd < returnedStart || returnedEnd > requestedEnd || returnedEnd >= totalLength) {
+                throw MediaException("Content-Range end $returnedEnd outside requested interval $start-$requestedEnd/$totalLength")
+            }
+
+            val expected = (returnedEnd - returnedStart + 1).toInt()
+            val body = response.body ?: throw MediaException("Empty range body")
             val input = body.byteStream()
-            if (response.code == 200 && start > 0) {
-                var skipped = 0L
-                while (skipped < start) {
-                    val s = input.skip(start - skipped)
-                    if (s <= 0) break
-                    skipped += s
-                }
-            }
-            val buffer = ByteArray(length)
+            val buffer = ByteArray(expected)
             var totalRead = 0
-            while (totalRead < length) {
-                val read = input.read(buffer, totalRead, length - totalRead)
+            while (totalRead < expected) {
+                val read = input.read(buffer, totalRead, expected - totalRead)
                 if (read < 0) break
                 totalRead += read
             }
-            return if (totalRead == length) buffer else buffer.copyOf(totalRead)
+            if (totalRead != expected || input.read() != -1) {
+                throw MediaException("Range body length mismatch: expected $expected bytes for $contentRange")
+            }
+            assertOwnerActive(lease.ownerRef)
+            buffer
         }
     }
 
@@ -299,7 +478,7 @@ class AndroidMediaClient(
         val reqBuilder = Request.Builder().url(url).get()
         lease.cookieHeader?.let { reqBuilder.header("Cookie", it) }
 
-        okHttpClient.newCall(reqBuilder.build()).execute().use { response ->
+        executeOwned(lease.ownerRef, reqBuilder.build()) { response ->
             if (!response.isSuccessful) {
                 throw MediaException("Media download stream failed: HTTP ${response.code} ${response.message}")
             }
@@ -320,7 +499,7 @@ class AndroidMediaClient(
         }
     }
 
-    suspend fun createMediaDataSource(lease: MediaLease): MediaDataSource {
+    suspend fun createMediaDataSource(lease: MediaLease): LeaseMediaDataSource {
         val (totalSize, _) = fetchMediaHeader(lease)
         return LeaseMediaDataSource(this, lease, totalSize)
     }
@@ -328,7 +507,9 @@ class AndroidMediaClient(
 
 /**
  * Custom MediaDataSource backed by origin-bound, ticketed AndroidMediaClient.
- * Fulfills MediaPlayer seek requests with exact cookie/ticket authorization.
+ * Fulfills MediaPlayer seek requests with exact cookie/ticket authorization, serving reads
+ * from an aligned, bounded LRU block cache (8 x 256 KiB = 2 MiB) so MediaPlayer's many small
+ * reads do not each become an HTTP range request.
  */
 class LeaseMediaDataSource(
     private val client: AndroidMediaClient,
@@ -336,23 +517,79 @@ class LeaseMediaDataSource(
     private val totalSize: Long,
 ) : MediaDataSource() {
 
+    companion object {
+        const val BLOCK_SIZE: Int = 256 * 1024
+        const val MAX_CACHED_BLOCKS: Int = 8
+    }
+
+    private val cacheLock = Any()
+    private val blocks = object : LinkedHashMap<Long, ByteArray>(MAX_CACHED_BLOCKS + 1, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>): Boolean =
+            size > MAX_CACHED_BLOCKS
+    }
+
+    /** HTTP status of the most recent failed read (for single-shot ticket-expiry recovery). */
+    @Volatile
+    var lastFailureStatus: Int? = null
+        private set
+
+    internal fun cachedBlockCount(): Int = synchronized(cacheLock) { blocks.size }
+
     override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
-        if (totalSize in 0..position) return -1
-        val toRead = if (totalSize > 0) minOf(size.toLong(), totalSize - position).toInt() else size
-        if (toRead <= 0) return -1
-        return try {
-            val bytes = client.readRangeSync(lease, position, toRead)
-            if (bytes.isEmpty()) return -1
-            val actualCount = minOf(bytes.size, buffer.size - offset)
-            bytes.copyInto(buffer, destinationOffset = offset, startIndex = 0, endIndex = actualCount)
-            actualCount
+        if (size <= 0) return 0
+        if (position < 0 || (totalSize >= 0 && position >= totalSize)) return -1
+        try {
+            val wanted = if (totalSize >= 0) minOf(size.toLong(), totalSize - position).toInt() else size
+            var copied = 0
+            while (copied < wanted) {
+                val pos = position + copied
+                val blockIndex = pos / BLOCK_SIZE
+                val block = loadBlock(blockIndex)
+                val inBlock = (pos - blockIndex * BLOCK_SIZE).toInt()
+                if (inBlock >= block.size) break // EOF inside (or at the end of) this block
+                val n = minOf(wanted - copied, block.size - inBlock)
+                System.arraycopy(block, inBlock, buffer, offset + copied, n)
+                copied += n
+            }
+            return if (copied == 0) -1 else copied
         } catch (e: Exception) {
+            lastFailureStatus = e.mediaHttpStatus()
+            synchronized(cacheLock) { blocks.clear() }
             throw IOException("Failed to read range at position $position: ${e.message}", e)
         }
     }
+
+    /** Returns the cached block, or fetches it. Owner is re-verified even on cache hits. */
+    private fun loadBlock(blockIndex: Long): ByteArray {
+        client.assertOwnerActive(lease.ownerRef)
+        synchronized(cacheLock) { blocks[blockIndex] }?.let { return it }
+
+        val blockStart = blockIndex * BLOCK_SIZE
+        val len = if (totalSize >= 0) minOf(BLOCK_SIZE.toLong(), totalSize - blockStart).toInt() else BLOCK_SIZE
+        val fetched = if (len <= 0) ByteArray(0) else fillBlock(blockStart, len)
+        if (fetched.isNotEmpty()) {
+            synchronized(cacheLock) { blocks[blockIndex] = fetched }
+        }
+        return fetched
+    }
+
+    /** Reads `len` bytes at `blockStart`, continuing after valid short (partial) 206 responses. */
+    private fun fillBlock(blockStart: Long, len: Int): ByteArray {
+        val out = ByteArray(len)
+        var filled = 0
+        while (filled < len) {
+            val part = client.readRangeSync(lease, blockStart + filled, len - filled)
+            if (part.isEmpty()) break
+            System.arraycopy(part, 0, out, filled, part.size)
+            filled += part.size
+        }
+        return if (filled == len) out else out.copyOf(filled)
+    }
+
     override fun getSize(): Long = totalSize
 
     override fun close() {
-        // Ephemeral lease lifecycle managed externally
+        // Ephemeral lease lifecycle managed externally; drop cached bytes.
+        synchronized(cacheLock) { blocks.clear() }
     }
 }
