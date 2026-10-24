@@ -149,7 +149,7 @@ jobs:
           fi
 
           KEYSTORE_PATH="${RUNNER_TEMP}/damhopper-release.jks"
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          ( umask 077 && echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH" )
           chmod 600 "$KEYSTORE_PATH"
 
           echo "=== Inspecting Release Keystore Entries ==="

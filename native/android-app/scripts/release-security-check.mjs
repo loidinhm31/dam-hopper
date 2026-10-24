@@ -105,11 +105,12 @@ export function validateExportedComponents(manifestXml) {
           (componentName === "dev.damhopper.nativeapp.MainActivity" ||
             componentName === ".MainActivity")) ||
         (componentType.toLowerCase() === "receiver" &&
-          componentName === "androidx.profileinstaller.ProfileInstallReceiver");
+          componentName === "androidx.profileinstaller.ProfileInstallReceiver" &&
+          /android:permission\s*=\s*"android\.permission\.DUMP"/i.test(fullTag));
 
       if (!isAllowed) {
         issues.push(
-          `Unexpected exported ${componentType}: '${componentName}' (only MainActivity and ProfileInstallReceiver are permitted to be exported)`
+          `Unexpected exported ${componentType}: '${componentName}' (only MainActivity and DUMP-permission protected ProfileInstallReceiver are permitted to be exported)`
         );
       }
     }
